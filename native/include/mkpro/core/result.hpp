@@ -250,9 +250,9 @@ struct CompileOptions {
   // When true, the lowering omits the `К {x}` fractional-recovery op that
   // normally restores a dual-use register's data value after its integer part
   // has been retuned to an address. This is only sound when the integer part is
-  // dead at every data read (the reference program relies on exactly this).
-  // Until a local dead-component proof exists, static candidate selection treats
-  // this as dangerous and rejects it rather than relying on the emulator.
+  // erased before every data read (the reference program relies on exactly
+  // this). Static candidate selection treats this as dangerous unless final
+  // artifacts prove the erase happens before any arithmetic consumer.
   bool assume_dead_selector_integer_part = false;
   // Solved computed-dispatch plans (one per rewritten match). Default empty:
   // normal compiles keep the compare-chain lowering untouched.

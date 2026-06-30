@@ -10136,10 +10136,9 @@ void emit_number_or_preload(LoweringContext& context, const std::string& value,
     } else if (selector.has_value() && selector_value.has_value() &&
                fractional_selector_needs_recovery(key, *selector_value)) {
       // Dead-integer-part mode: the recalled value still carries the retuned
-      // integer part. This shape is only selectable when a future local proof
-      // shows every data read is insensitive to that integer component; until
-      // then candidate_needs_static_proof_gate marks it dangerous and the
-      // static gate rejects it rather than asking the emulator.
+      // integer part. This shape is selectable only when final artifacts prove
+      // that component is erased before consumption; otherwise the static gate
+      // rejects the candidate rather than asking the emulator.
       context.optimizations.push_back(OptimizationReport{
           .name = "dead-integer-fractional-selector-use",
           .detail = "Used dual-use R" + register_text_for(context, preload_it->second) +
@@ -40407,6 +40406,18 @@ bool capability_is_active(const std::vector<OptimizationReport>& optimizations,
   });
 }
 
+void append_candidate_report_once(std::vector<CandidateReport>& reports,
+                                  CandidateReport candidate) {
+  const bool exists = std::any_of(
+      reports.begin(), reports.end(), [&](const CandidateReport& existing) {
+        return existing.site == candidate.site && existing.variant == candidate.variant &&
+               existing.steps == candidate.steps && existing.selected == candidate.selected &&
+               existing.reason == candidate.reason;
+      });
+  if (!exists)
+    reports.push_back(std::move(candidate));
+}
+
 OptimizerReport build_optimizer_report(const std::vector<OptimizationReport>& optimizations,
                                        const std::vector<CandidateReport>& candidates,
                                        const std::vector<CandidateReport>& rejected_candidates) {
@@ -41291,8 +41302,12 @@ void populate_public_report(CompileResult& result, const ProgramAst& ast,
   }
   result.candidates =
       build_candidate_reports(result.optimizations, static_cast<int>(result.steps.size()));
-  result.rejected_candidates =
-      build_rejected_candidate_reports(result.optimizations, static_cast<int>(result.steps.size()));
+  std::vector<CandidateReport> rejected_candidates = std::move(result.rejected_candidates);
+  for (CandidateReport& rejected :
+       build_rejected_candidate_reports(result.optimizations, static_cast<int>(result.steps.size()))) {
+    append_candidate_report_once(rejected_candidates, std::move(rejected));
+  }
+  result.rejected_candidates = std::move(rejected_candidates);
   result.machine_features_used = build_machine_features_used(result.optimizations, result.candidates);
   result.proofs = build_proof_report(ast, result.optimizations, options, result.preloads,
                                      result.steps, result.registers);
@@ -42302,9 +42317,10 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         // byte-identical while still letting genuinely over-budget programs
         // (e.g. tic-tac-toe-4x4) reach a smaller listing.
         //
-        // Dead-integer twins still need a static dead-component proof.  Until
-        // that proof exists, the default optimizer rejects them as unproved
-        // dangerous candidates.
+        // Dead-integer twins still need a static dead-component proof. The
+        // current proof accepts only final listings where an existing consumer
+        // erases the retuned integer component before any arithmetic observes
+        // it; unsafe arithmetic consumers stay rejected and are reported.
         if (emit_rescue_twins) {
           std::vector<FractionalConstantSelectorPlan> rescue_plans =
               discover_fractional_constant_selector_plans(probe, selector_program,
@@ -42324,6 +42340,12 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         }
       };
   std::size_t evaluated_candidate_count = 0;
+  std::vector<CandidateReport> search_rejected_candidates;
+  auto attach_search_rejections_to_best = [&]() {
+    for (CandidateReport& rejected : search_rejected_candidates)
+      append_candidate_report_once(best.rejected_candidates, std::move(rejected));
+    search_rejected_candidates.clear();
+  };
   auto evaluate_queued_candidates = [&]() {
     for (; evaluated_candidate_count < candidates.size(); ++evaluated_candidate_count) {
       const CandidateSpec& candidate = candidates.at(evaluated_candidate_count);
@@ -42350,9 +42372,18 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         continue;
       if (candidate_needs_static_proof_gate(candidate.options) &&
           !optimizer_static_gate_accepts(candidate.options, result)) {
+        const std::optional<std::string> rejection_reason =
+            optimizer_static_gate_rejection_reason(candidate.options, result);
+        append_candidate_report_once(search_rejected_candidates,
+                                     CandidateReport{
+                                         .site = "candidate-search",
+                                         .variant = candidate.name,
+                                         .steps = static_cast<int>(result.steps.size()),
+                                         .selected = false,
+                                         .reason = rejection_reason.value_or(
+                                             "static proof gate rejected candidate"),
+                                     });
         if (trace_candidates) {
-          const std::optional<std::string> rejection_reason =
-              optimizer_static_gate_rejection_reason(candidate.options, result);
           std::cerr << "[candidate-trace] reject-unproved #"
                     << (evaluated_candidate_count + 1U) << " " << candidate.name << " steps="
                     << result.steps.size();
@@ -42390,6 +42421,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         .name = "fast-candidate-search",
         .detail = std::move(detail),
     });
+    attach_search_rejections_to_best();
     write_compile_result_cache(source, options, best);
   };
 
@@ -44567,6 +44599,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
               << " best_key=" << implemented_candidate_key(best_options) << "\n";
   }
 
+  attach_search_rejections_to_best();
   write_compile_result_cache(source, options, best);
   return best;
 }

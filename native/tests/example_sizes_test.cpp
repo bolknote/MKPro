@@ -32,7 +32,7 @@ bool has_error_diagnostic(const CompileResult& result) {
                      });
 }
 
-std::size_t example_steps(const std::filesystem::path& path, bool analysis_budgeted) {
+CompileResult compile_example(const std::filesystem::path& path, bool analysis_budgeted) {
   CompileOptions options;
   if (analysis_budgeted) {
     options.analysis = true;
@@ -41,7 +41,20 @@ std::size_t example_steps(const std::filesystem::path& path, bool analysis_budge
   const CompileResult result = compile_source(read_file(path), options);
   require(result.implemented, "native compiler should implement example: " + path.string());
   require(!has_error_diagnostic(result), "example compile diagnostics should not include errors: " + path.string());
-  return result.steps.size();
+  return result;
+}
+
+std::size_t example_steps(const std::filesystem::path& path, bool analysis_budgeted) {
+  return compile_example(path, analysis_budgeted).steps.size();
+}
+
+const CandidateReport* find_candidate(const std::vector<CandidateReport>& candidates,
+                                      const std::string& variant) {
+  const auto it = std::find_if(candidates.begin(), candidates.end(),
+                               [&](const CandidateReport& candidate) {
+                                 return candidate.variant == variant;
+                               });
+  return it == candidates.end() ? nullptr : &*it;
 }
 
 std::vector<std::string> example_file_names(const std::filesystem::path& dir) {
@@ -142,9 +155,19 @@ void example_sizes_match_typescript_baselines() {
                 << std::endl;
     }
     const std::filesystem::path path = pending_root / (name + ".mkpro");
-    const std::size_t actual = example_steps(path, /*analysis_budgeted=*/true);
-    require(actual == expected,
+    const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
+    require(result.steps.size() == expected,
             "pending example " + name + " step count should match TS baseline");
+    if (name == "tic-tac-toe-4x4") {
+      const CandidateReport* rejected_dead_integer =
+          find_candidate(result.rejected_candidates, "fractional-constant-selector-dead-int");
+      require(rejected_dead_integer != nullptr,
+              "tic-tac-toe-4x4 should report rejected dead-integer fractional selector rescue");
+      require(rejected_dead_integer->steps == 129,
+              "tic-tac-toe-4x4 rejected dead-integer fractional selector should show 129 cells");
+      require(rejected_dead_integer->reason.find("before K {x}") != std::string::npos,
+              "tic-tac-toe-4x4 dead-integer rejection should explain the unsafe consumer");
+    }
   }
 }
 
