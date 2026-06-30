@@ -36364,6 +36364,451 @@ void pack_counter_stripes(V2Program& program, std::vector<OptimizationReport>& o
   });
 }
 
+std::vector<const SignPackedStatePlan*> sign_pack_plans_for_state(
+    const std::vector<SignPackedStatePlan>& plans, const std::string& name) {
+  std::vector<const SignPackedStatePlan*> matches;
+  for (const SignPackedStatePlan& plan : plans)
+    if (plan.state == name)
+      matches.push_back(&plan);
+  std::sort(matches.begin(), matches.end(), [](const SignPackedStatePlan* lhs,
+                                               const SignPackedStatePlan* rhs) {
+    return lhs->bit < rhs->bit;
+  });
+  return matches;
+}
+
+const SignPackedStatePlan*
+sign_pack_plan_for_carrier(const std::vector<SignPackedStatePlan>& plans,
+                           const std::string& name) {
+  const auto it = std::find_if(plans.begin(), plans.end(),
+                               [&](const SignPackedStatePlan& plan) {
+                                 return plan.carrier == name;
+                               });
+  return it == plans.end() ? nullptr : &*it;
+}
+
+Expression sign_pack_boolean_read_expression(const std::string& carrier) {
+  return divide_expression(
+      subtract_expression(number_expression("1"), sign_expression(identifier_expression(carrier))),
+      number_expression("2"));
+}
+
+Expression sign_pack_state_read_expression(const std::vector<const SignPackedStatePlan*>& plans) {
+  Expression result = number_expression("0");
+  for (const SignPackedStatePlan* plan : plans) {
+    Expression bit = sign_pack_boolean_read_expression(plan->carrier);
+    if (plan->bit > 0)
+      bit = multiply_expression(number_expression(std::to_string(1 << plan->bit)), std::move(bit));
+    result = add_expression(std::move(result), std::move(bit));
+  }
+  return result;
+}
+
+Expression sign_pack_carrier_read_expression(const std::string& carrier) {
+  return abs_expression(identifier_expression(carrier));
+}
+
+Expression sign_pack_signed_carrier_expression(const std::string& carrier, Expression value) {
+  return multiply_expression(std::move(value), sign_expression(identifier_expression(carrier)));
+}
+
+Expression rewrite_sign_packed_state_expression(
+    Expression expression, const std::vector<SignPackedStatePlan>& plans) {
+  if (expression.kind == "identifier") {
+    const std::vector<const SignPackedStatePlan*> state_plans =
+        sign_pack_plans_for_state(plans, expression.name);
+    if (!state_plans.empty())
+      return sign_pack_state_read_expression(state_plans);
+    if (sign_pack_plan_for_carrier(plans, expression.name) != nullptr)
+      return sign_pack_carrier_read_expression(expression.name);
+    return expression;
+  }
+  if (expression.index != nullptr)
+    expression.index = std::make_shared<Expression>(
+        rewrite_sign_packed_state_expression(*expression.index, plans));
+  if (expression.expr != nullptr)
+    expression.expr =
+        std::make_shared<Expression>(rewrite_sign_packed_state_expression(*expression.expr, plans));
+  if (expression.left != nullptr)
+    expression.left =
+        std::make_shared<Expression>(rewrite_sign_packed_state_expression(*expression.left, plans));
+  if (expression.right != nullptr)
+    expression.right = std::make_shared<Expression>(
+        rewrite_sign_packed_state_expression(*expression.right, plans));
+  for (Expression& arg : expression.args)
+    arg = rewrite_sign_packed_state_expression(std::move(arg), plans);
+  return expression;
+}
+
+std::string rewrite_sign_packed_state_expression_text(
+    const std::string& text, int line, const std::vector<SignPackedStatePlan>& plans) {
+  try {
+    Expression expression = parse_expression(text, line);
+    Expression rewritten = rewrite_sign_packed_state_expression(expression, plans);
+    if (expression_equals(expression, rewritten))
+      return text;
+    return expression_to_source(rewritten);
+  } catch (const std::exception&) {
+    return text;
+  }
+}
+
+V2Predicate rewrite_sign_packed_state_predicate(V2Predicate predicate,
+                                                const std::vector<SignPackedStatePlan>& plans) {
+  predicate.left = rewrite_sign_packed_state_expression_text(predicate.left, 0, plans);
+  predicate.right = rewrite_sign_packed_state_expression_text(predicate.right, 0, plans);
+  predicate.collection = rewrite_sign_packed_state_expression_text(predicate.collection, 0, plans);
+  predicate.item = rewrite_sign_packed_state_expression_text(predicate.item, 0, plans);
+  return predicate;
+}
+
+DisplayItem rewrite_sign_packed_state_display_item(
+    DisplayItem item, const std::vector<SignPackedStatePlan>& plans) {
+  if (item.kind == "source" && !item.expr.has_value()) {
+    const std::vector<const SignPackedStatePlan*> state_plans =
+        sign_pack_plans_for_state(plans, item.name);
+    if (!state_plans.empty()) {
+      item.expr = sign_pack_state_read_expression(state_plans);
+      item.name = expression_to_source(*item.expr);
+    } else if (sign_pack_plan_for_carrier(plans, item.name) != nullptr) {
+      item.expr = sign_pack_carrier_read_expression(item.name);
+      item.name = expression_to_source(*item.expr);
+    }
+    return item;
+  }
+  if (item.expr.has_value()) {
+    item.expr = rewrite_sign_packed_state_expression(std::move(*item.expr), plans);
+    item.name = expression_to_source(*item.expr);
+  }
+  return item;
+}
+
+std::vector<DisplayItem> rewrite_sign_packed_state_display_items(
+    std::vector<DisplayItem> items, const std::vector<SignPackedStatePlan>& plans) {
+  for (DisplayItem& item : items)
+    item = rewrite_sign_packed_state_display_item(std::move(item), plans);
+  return items;
+}
+
+Expression sign_pack_bit_expression(Expression value, int bit) {
+  if (bit == 0) {
+    Expression high = int_expression(divide_expression(value, number_expression("2")));
+    return subtract_expression(std::move(value),
+                               multiply_expression(number_expression("2"), std::move(high)));
+  }
+  Expression shifted =
+      bit == 1 ? divide_expression(std::move(value), number_expression("2"))
+               : divide_expression(std::move(value), number_expression(std::to_string(1 << bit)));
+  Expression high = int_expression(std::move(shifted));
+  if (bit == 1)
+    return high;
+  Expression next =
+      int_expression(divide_expression(high, number_expression("2")));
+  return subtract_expression(std::move(high),
+                             multiply_expression(number_expression("2"), std::move(next)));
+}
+
+Expression sign_pack_boolean_store_expression(const SignPackedStatePlan& plan, Expression value) {
+  Expression sign_selector = subtract_expression(
+      number_expression("1"), multiply_expression(number_expression("2"), std::move(value)));
+  return multiply_expression(sign_pack_carrier_read_expression(plan.carrier),
+                             std::move(sign_selector));
+}
+
+std::optional<Expression> sign_pack_carrier_update_expression(
+    const V2Statement& statement, const SignPackedStatePlan& plan,
+    const std::vector<SignPackedStatePlan>& plans) {
+  if (statement.kind == "v2_update") {
+    const std::optional<double> delta = numeric_self_update_delta(plan.carrier, statement);
+    if (!delta.has_value())
+      return std::nullopt;
+    Expression value = std::fabs(*delta) < 1e-12
+                           ? sign_pack_carrier_read_expression(plan.carrier)
+                           : (*delta > 0.0 ? add_expression(
+                                                  sign_pack_carrier_read_expression(plan.carrier),
+                                                  number_expression(format_number_literal(*delta)))
+                                            : subtract_expression(
+                                                  sign_pack_carrier_read_expression(plan.carrier),
+                                                  number_expression(format_number_literal(-*delta))));
+    return sign_pack_signed_carrier_expression(plan.carrier, std::move(value));
+  }
+  if (statement.kind != "v2_assign" || !statement.expr.has_value())
+    return std::nullopt;
+  Expression value = parse_expression(*statement.expr, statement.line);
+  value = rewrite_sign_packed_state_expression(std::move(value), plans);
+  return sign_pack_signed_carrier_expression(plan.carrier, std::move(value));
+}
+
+std::optional<Expression> sign_pack_single_state_update_expression(
+    const V2Statement& statement, const std::vector<const SignPackedStatePlan*>& state_plans,
+    const std::vector<SignPackedStatePlan>& plans) {
+  if (state_plans.size() != 1U || statement.kind != "v2_assign" || !statement.expr.has_value())
+    return std::nullopt;
+  Expression value = parse_expression(*statement.expr, statement.line);
+  value = rewrite_sign_packed_state_expression(std::move(value), plans);
+  return sign_pack_boolean_store_expression(*state_plans.front(), std::move(value));
+}
+
+void rewrite_sign_packed_state_statement(V2Statement& statement,
+                                         const std::vector<SignPackedStatePlan>& plans);
+
+std::optional<std::vector<V2Statement>> expanded_sign_packed_state_assignment(
+    const V2Statement& statement, const std::vector<SignPackedStatePlan>& plans) {
+  if ((statement.kind != "v2_assign" && statement.kind != "v2_update") ||
+      !statement.target.has_value())
+    return std::nullopt;
+  const std::vector<const SignPackedStatePlan*> state_plans =
+      sign_pack_plans_for_state(plans, *statement.target);
+  if (state_plans.size() < 2U || !statement.expr.has_value())
+    return std::nullopt;
+
+  Expression value;
+  if (statement.kind == "v2_update") {
+    const std::optional<double> delta = numeric_self_update_delta(*statement.target, statement);
+    if (!delta.has_value())
+      return std::nullopt;
+    value = *delta >= 0.0
+                ? add_expression(identifier_expression(*statement.target),
+                                 number_expression(format_number_literal(*delta)))
+                : subtract_expression(identifier_expression(*statement.target),
+                                      number_expression(format_number_literal(-*delta)));
+  } else {
+    value = parse_expression(*statement.expr, statement.line);
+  }
+  value = rewrite_sign_packed_state_expression(std::move(value), plans);
+
+  std::vector<V2Statement> rewritten;
+  rewritten.reserve(state_plans.size());
+  for (const SignPackedStatePlan* plan : state_plans) {
+    V2Statement assign;
+    assign.kind = "v2_assign";
+    assign.target = plan->carrier;
+    Expression bit = sign_pack_bit_expression(value, plan->bit);
+    assign.expr = expression_to_source(sign_pack_boolean_store_expression(*plan, std::move(bit)));
+    assign.line = statement.line;
+    rewritten.push_back(std::move(assign));
+  }
+  return rewritten;
+}
+
+void rewrite_sign_packed_state_statements(std::vector<V2Statement>& statements,
+                                          const std::vector<SignPackedStatePlan>& plans) {
+  std::vector<V2Statement> rewritten;
+  rewritten.reserve(statements.size());
+  for (V2Statement& statement : statements) {
+    if (std::optional<std::vector<V2Statement>> expanded =
+            expanded_sign_packed_state_assignment(statement, plans)) {
+      rewritten.insert(rewritten.end(), expanded->begin(), expanded->end());
+      continue;
+    }
+    rewrite_sign_packed_state_statement(statement, plans);
+    rewritten.push_back(std::move(statement));
+  }
+  statements = std::move(rewritten);
+}
+
+void rewrite_sign_packed_state_action(V2StatementPtr& action,
+                                      const std::vector<SignPackedStatePlan>& plans, int line) {
+  if (action == nullptr)
+    return;
+  std::vector<V2Statement> body = action_to_common_branch_body(action);
+  rewrite_sign_packed_state_statements(body, plans);
+  action = std::make_shared<V2Statement>(statement_from_rewritten_vector(std::move(body), line));
+}
+
+void rewrite_sign_packed_state_statement(V2Statement& statement,
+                                         const std::vector<SignPackedStatePlan>& plans) {
+  if ((statement.kind == "v2_assign" || statement.kind == "v2_update") &&
+      statement.target.has_value()) {
+    const std::vector<const SignPackedStatePlan*> state_plans =
+        sign_pack_plans_for_state(plans, *statement.target);
+    if (!state_plans.empty()) {
+      if (std::optional<Expression> expression =
+              sign_pack_single_state_update_expression(statement, state_plans, plans)) {
+        statement.kind = "v2_assign";
+        statement.target = state_plans.front()->carrier;
+        statement.expr = expression_to_source(*expression);
+        statement.op.reset();
+        return;
+      }
+    }
+    if (const SignPackedStatePlan* plan = sign_pack_plan_for_carrier(plans, *statement.target)) {
+      if (std::optional<Expression> expression =
+              sign_pack_carrier_update_expression(statement, *plan, plans)) {
+        statement.kind = "v2_assign";
+        statement.expr = expression_to_source(*expression);
+        statement.op.reset();
+        return;
+      }
+    }
+  }
+
+  if (statement.target.has_value())
+    statement.target = rewrite_sign_packed_state_expression_text(*statement.target, statement.line,
+                                                                plans);
+  if (statement.expr.has_value())
+    statement.expr =
+        rewrite_sign_packed_state_expression_text(*statement.expr, statement.line, plans);
+  for (std::string& arg : statement.args)
+    arg = rewrite_sign_packed_state_expression_text(arg, statement.line, plans);
+  if (statement.predicate.has_value())
+    statement.predicate = rewrite_sign_packed_state_predicate(*statement.predicate, plans);
+  if (statement.items.has_value())
+    statement.items = rewrite_sign_packed_state_display_items(std::move(*statement.items), plans);
+  for (V2RawInput& input : statement.inputs)
+    input.expr = rewrite_sign_packed_state_expression_text(input.expr, input.line, plans);
+  for (V2RawOutput& output : statement.outputs)
+    output.target = rewrite_sign_packed_state_expression_text(output.target, output.line, plans);
+  rewrite_sign_packed_state_statements(statement.body, plans);
+  rewrite_sign_packed_state_statements(statement.then_body, plans);
+  rewrite_sign_packed_state_statements(statement.else_body, plans);
+  for (V2MatchCase& match_case : statement.cases) {
+    for (std::string& value : match_case.values)
+      value = rewrite_sign_packed_state_expression_text(value, match_case.line, plans);
+    rewrite_sign_packed_state_action(match_case.action, plans, match_case.line);
+  }
+  rewrite_sign_packed_state_action(statement.otherwise, plans, statement.line);
+}
+
+std::optional<double> sign_pack_initial_value(const V2StateField& field) {
+  if (!field.initial.has_value())
+    return std::nullopt;
+  try {
+    return numeric_literal_value(parse_expression(*field.initial, field.line));
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+bool sign_pack_boolean_state_field(const V2StateField& field) {
+  if (field.type == "flag")
+    return true;
+  if ((field.type == "counter" || field.type == "range") && field.min.has_value() &&
+      field.max.has_value()) {
+    return *field.min == 0 && *field.max == 1;
+  }
+  return false;
+}
+
+bool sign_pack_positive_carrier_field(const V2StateField& field) {
+  if ((field.type != "counter" && field.type != "range") || !field.min.has_value() ||
+      !field.max.has_value())
+    return false;
+  return *field.min >= 1 && *field.max <= 99;
+}
+
+bool sign_pack_two_sign_state_field(const V2StateField& field) {
+  if ((field.type != "counter" && field.type != "range") || !field.min.has_value() ||
+      !field.max.has_value())
+    return false;
+  return *field.min == 0 && *field.max >= 2 && *field.max <= 3;
+}
+
+bool sign_pack_plan_valid(const V2Program& program, const SignPackedStatePlan& plan) {
+  if (plan.state.empty() || plan.carrier.empty() || plan.state == plan.carrier || plan.bit < 0 ||
+      plan.bit > 7)
+    return false;
+  const auto state_it =
+      std::find_if(program.state.begin(), program.state.end(),
+                   [&](const V2StateField& field) { return field.name == plan.state; });
+  const auto carrier_it =
+      std::find_if(program.state.begin(), program.state.end(),
+                   [&](const V2StateField& field) { return field.name == plan.carrier; });
+  if (state_it == program.state.end() || carrier_it == program.state.end())
+    return false;
+  const bool boolean_state = sign_pack_boolean_state_field(*state_it);
+  const bool two_sign_state = sign_pack_two_sign_state_field(*state_it);
+  if ((!boolean_state && !two_sign_state) || !sign_pack_positive_carrier_field(*carrier_it))
+    return false;
+  if (boolean_state && plan.bit != 0)
+    return false;
+  if (two_sign_state && plan.bit > 1)
+    return false;
+  const std::set<std::string> displayed = display_source_names(program);
+  if (displayed.contains(plan.state) || displayed.contains(plan.carrier))
+    return false;
+  const std::optional<double> state_initial = sign_pack_initial_value(*state_it);
+  const std::optional<double> carrier_initial = sign_pack_initial_value(*carrier_it);
+  if (!state_initial.has_value() || !carrier_initial.has_value())
+    return false;
+  if (*carrier_initial <= 0.0)
+    return false;
+  if (boolean_state && *state_initial != 0.0 && *state_initial != 1.0)
+    return false;
+  if (two_sign_state && (*state_initial < 0.0 || *state_initial > 3.0 ||
+                         std::fabs(*state_initial - std::round(*state_initial)) >= 1e-12))
+    return false;
+  return true;
+}
+
+void sign_pack_state(V2Program& program, std::vector<OptimizationReport>& optimizations,
+                     const std::vector<SignPackedStatePlan>& requested_plans,
+                     std::string optimization_name) {
+  std::vector<SignPackedStatePlan> plans;
+  std::set<std::pair<std::string, int>> used_state_bits;
+  std::set<std::string> used_carriers;
+  for (const SignPackedStatePlan& plan : requested_plans) {
+    if (!used_state_bits.insert({plan.state, plan.bit}).second ||
+        !used_carriers.insert(plan.carrier).second)
+      continue;
+    if (sign_pack_plan_valid(program, plan))
+      plans.push_back(plan);
+  }
+  if (plans.empty())
+    return;
+
+  std::set<std::string> packed_states;
+  std::map<std::string, const SignPackedStatePlan*> plan_by_carrier;
+  for (const SignPackedStatePlan& plan : plans) {
+    packed_states.insert(plan.state);
+    plan_by_carrier[plan.carrier] = &plan;
+  }
+
+  std::vector<V2StateField> state;
+  state.reserve(program.state.size());
+  for (V2StateField field : program.state) {
+    if (packed_states.contains(field.name))
+      continue;
+    if (const auto carrier_it = plan_by_carrier.find(field.name);
+        carrier_it != plan_by_carrier.end()) {
+      const SignPackedStatePlan& plan = *carrier_it->second;
+      const V2StateField* state_field = nullptr;
+      const auto state_it =
+          std::find_if(program.state.begin(), program.state.end(),
+                       [&](const V2StateField& candidate) { return candidate.name == plan.state; });
+      if (state_it != program.state.end())
+        state_field = &*state_it;
+      const std::optional<double> flag_initial =
+          state_field == nullptr ? std::nullopt : sign_pack_initial_value(*state_field);
+      const std::optional<double> carrier_initial = sign_pack_initial_value(field);
+      if (flag_initial.has_value() && carrier_initial.has_value()) {
+        const int integer_initial = static_cast<int>(std::round(*flag_initial));
+        const bool bit_set = ((integer_initial >> plan.bit) & 1) != 0;
+        const double signed_initial = bit_set ? -*carrier_initial : std::fabs(*carrier_initial);
+        field.initial = format_number_literal(signed_initial);
+      }
+      field.type = "packed";
+      field.min.reset();
+      field.max.reset();
+    }
+    state.push_back(std::move(field));
+  }
+  program.state = std::move(state);
+
+  rewrite_sign_packed_state_statements(program.body, plans);
+  for (V2Rule& rule : program.rules)
+    rewrite_sign_packed_state_statements(rule.body, plans);
+
+  std::vector<std::string> names;
+  names.reserve(plans.size());
+  for (const SignPackedStatePlan& plan : plans)
+    names.push_back(plan.state + "#" + std::to_string(plan.bit) + "@" + plan.carrier);
+  optimizations.push_back(OptimizationReport{
+      .name = std::move(optimization_name),
+      .detail = "Packed state sign(s) " + join_strings(names, ", ") + ".",
+  });
+}
+
 struct TrigFractionalPackPlan {
   std::size_t insert_index = 0;
   std::string packed;
@@ -38580,6 +39025,11 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                 : std::optional<std::vector<std::string>>{options.trig_fractional_pack_names};
         pack_trig_fractional_counters(*ast.v2, context.optimizations, requested_names);
       }
+      if (options.sign_pack_state) {
+        sign_pack_state(*ast.v2, context.optimizations, options.sign_packed_state_plans,
+                        options.sign_packed_state_plans.size() >= 2U ? "sign-pack-state-tuple"
+                                                                     : "sign-pack-state");
+      }
       resolve_constant_indexed_state(*ast.v2, context.optimizations);
       materialize_display_expressions(*ast.v2, context.optimizations,
                                       options.inline_floor_packed_row_expressions);
@@ -39461,7 +39911,8 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.guarded_prologue_gadgets || options.shared_bit_mask_helper_calls ||
          options.compact_bit_mask_helper_body || options.signed_abs_match_pairs ||
          options.synthesize_parametric_siblings || options.pack_counter_stripes ||
-         options.trig_fractional_pack || options.canonicalize_repeated_unary_update_args ||
+         options.trig_fractional_pack || options.sign_pack_state ||
+         options.canonicalize_repeated_unary_update_args ||
          options.x_param_value_functions ||
          options.x_param_y_stack_stored_entry || options.packed_line_family_update_check_tail ||
          options.packed_line_family_mutating_selector_update_check_tail ||
@@ -39474,6 +39925,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.hoist_procs || options.order_procs_by_call_count ||
          !options.proc_layout_strategy.empty() || !options.pack_counter_stripe_names.empty() ||
          !options.trig_fractional_pack_names.empty() ||
+         !options.sign_packed_state_plans.empty() ||
          !options.preloaded_constant_registers.empty() ||
          !options.suppress_constant_preloads.empty() ||
          !options.force_fractional_constant_selector_preloads.empty() ||
@@ -40110,6 +40562,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";synthesize_parametric_siblings=" << options.synthesize_parametric_siblings
       << ";pack_counter_stripes=" << options.pack_counter_stripes
       << ";trig_fractional_pack=" << options.trig_fractional_pack
+      << ";sign_pack_state=" << options.sign_pack_state
       << ";canonicalize_repeated_unary_update_args="
       << options.canonicalize_repeated_unary_update_args
       << ";x_param_value_functions=" << options.x_param_value_functions
@@ -40136,6 +40589,8 @@ std::string reclaim_base_key(const CompileOptions& options) {
     out << ";pack_counter_stripe_name=" << name;
   for (const std::string& name : options.trig_fractional_pack_names)
     out << ";trig_fractional_pack_name=" << name;
+  for (const SignPackedStatePlan& plan : options.sign_packed_state_plans)
+    out << ";sign_packed_state=" << plan.state << "#" << plan.bit << "@" << plan.carrier;
   return out.str();
 }
 
@@ -40411,6 +40866,23 @@ build_candidate_reports(const std::vector<OptimizationReport>& optimizations, in
     add_selected("dispatch@default", "dispatch-default-merge",
                  "merged dispatch cases identical to the default branch", steps);
   }
+  if (has_optimization_named(optimizations, "computed-dispatch")) {
+    add_selected("dispatch@computed", "computed-dispatch-formula",
+                 "address formula solver selected a computed-dispatch rewrite", steps);
+  }
+  if (has_optimization_named(optimizations, "packed-counter-stripes") ||
+      has_optimization_named(optimizations, "decimal-pack-state")) {
+    add_selected("state@decimal-pack", "decimal-pack-state",
+                 "selected decimal-striped state packing rewrite", steps);
+  }
+  if (has_optimization_named(optimizations, "sign-pack-state")) {
+    add_selected("state@sign-pack", "sign-pack-state",
+                 "selected sign-carried boolean state rewrite", steps);
+  }
+  if (has_optimization_named(optimizations, "sign-pack-state-tuple")) {
+    add_selected("state@sign-tuple", "sign-pack-state-tuple",
+                 "selected multi-sign state rewrite", steps);
+  }
   if (has_optimization_named(optimizations, "preloaded-indirect-flow")) {
     add_selected("ir-pass", "preloaded-indirect-flow",
                  "compiler-owned address preload selected for one-cell indirect branch/call", 1);
@@ -40544,11 +41016,11 @@ OptimizerReport build_optimizer_report(const std::vector<OptimizationReport>& op
        {"dispatch-default-merge"}, false,
        "Merges dispatch cases whose bodies are identical to the default branch."},
       {"decimal-packed-state", "state", "documented", {"decimal-digits"},
-       {"decimal-pack-state"}, false,
-       "Considers packing several small non-negative hidden fields into decimal digits of one register."},
+       {"decimal-pack-state", "packed-counter-stripes"}, false,
+       "Packs several small non-negative hidden fields into decimal digits of one register."},
       {"sign-packed-state", "state", "undocumented", {"sign-digits"},
        {"sign-pack-state", "sign-pack-state-tuple"}, false,
-       "Considers carrying boolean state bits in signs of positive hidden counters."},
+       "Carries boolean state bits in signs of positive hidden counters."},
       {"preloaded-indirect-flow", "flow", "undocumented", {"indirect-flow"},
        {"preloaded-indirect-flow"}, false,
        "Uses compiler-owned setup-time branch selectors for one-cell indirect flow."},
@@ -42142,6 +42614,96 @@ bool analysis_two_sign_state_field(const V2StateField& field) {
   return *field.min == 0 && *field.max >= 2 && *field.max <= 3;
 }
 
+std::string sign_pack_plan_label(const SignPackedStatePlan& plan) {
+  return plan.state + "#" + std::to_string(plan.bit) + "@" + plan.carrier;
+}
+
+std::string sign_pack_plan_labels(const std::vector<SignPackedStatePlan>& plans) {
+  std::vector<std::string> labels;
+  labels.reserve(plans.size());
+  for (const SignPackedStatePlan& plan : plans)
+    labels.push_back(sign_pack_plan_label(plan));
+  return join_strings(labels, ", ");
+}
+
+std::vector<SignPackedStatePlan> discover_sign_pack_state_variant_plans(
+    const V2Program& program) {
+  std::vector<SignPackedStatePlan> plans;
+  for (const V2StateField& state : program.state) {
+    if (!analysis_boolean_state_field(state))
+      continue;
+    for (const V2StateField& carrier : program.state) {
+      SignPackedStatePlan plan{.state = state.name, .carrier = carrier.name};
+      if (sign_pack_plan_valid(program, plan))
+        plans.push_back(std::move(plan));
+    }
+  }
+  return plans;
+}
+
+std::vector<std::vector<SignPackedStatePlan>> discover_sign_pack_state_tuple_variant_plans(
+    const V2Program& program) {
+  std::vector<std::vector<SignPackedStatePlan>> result;
+  const std::vector<SignPackedStatePlan> singles = discover_sign_pack_state_variant_plans(program);
+  std::vector<SignPackedStatePlan> tuple;
+  std::set<std::string> used_states;
+  std::set<std::string> used_carriers;
+  for (const SignPackedStatePlan& plan : singles) {
+    if (used_states.contains(plan.state) || used_carriers.contains(plan.carrier))
+      continue;
+    used_states.insert(plan.state);
+    used_carriers.insert(plan.carrier);
+    tuple.push_back(plan);
+    if (tuple.size() == 8U)
+      break;
+  }
+  if (tuple.size() >= 2U)
+    result.push_back(std::move(tuple));
+
+  for (const V2StateField& state : program.state) {
+    if (!analysis_two_sign_state_field(state))
+      continue;
+    std::vector<SignPackedStatePlan> carriers;
+    for (const V2StateField& carrier : program.state) {
+      SignPackedStatePlan bit0{.state = state.name, .carrier = carrier.name, .bit = 0};
+      SignPackedStatePlan bit1{.state = state.name, .carrier = carrier.name, .bit = 1};
+      if (sign_pack_plan_valid(program, bit0) && sign_pack_plan_valid(program, bit1))
+        carriers.push_back(bit0);
+    }
+    if (carriers.size() >= 2U) {
+      result.push_back(std::vector<SignPackedStatePlan>{
+          SignPackedStatePlan{.state = state.name, .carrier = carriers.at(0).carrier, .bit = 0},
+          SignPackedStatePlan{.state = state.name, .carrier = carriers.at(1).carrier, .bit = 1},
+      });
+    }
+  }
+  return result;
+}
+
+std::optional<V2Program> parse_v2_program_for_optimizer_discovery(const std::string& source) {
+  try {
+    ProgramAst ast = parse_program(source);
+    if (ast.v2.has_value())
+      return *ast.v2;
+  } catch (const std::exception&) {
+  }
+  return std::nullopt;
+}
+
+std::vector<SignPackedStatePlan> discover_sign_pack_state_variant_plans(
+    const std::string& source) {
+  const std::optional<V2Program> program = parse_v2_program_for_optimizer_discovery(source);
+  return program.has_value() ? discover_sign_pack_state_variant_plans(*program)
+                             : std::vector<SignPackedStatePlan>{};
+}
+
+std::vector<std::vector<SignPackedStatePlan>> discover_sign_pack_state_tuple_variant_plans(
+    const std::string& source) {
+  const std::optional<V2Program> program = parse_v2_program_for_optimizer_discovery(source);
+  return program.has_value() ? discover_sign_pack_state_tuple_variant_plans(*program)
+                             : std::vector<std::vector<SignPackedStatePlan>>{};
+}
+
 std::string analysis_register_suffix(const std::map<std::string, std::string>& registers,
                                      const std::string& name) {
   const auto it = registers.find(name);
@@ -43469,6 +44031,27 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         "trig-fractional-pack:" + join_strings(names, "+"),
         "Packed counters " + join_strings(names, ", ") +
             " into one A+sin(B) register under fixed angle mode");
+  }
+  for (const SignPackedStatePlan& plan : discover_sign_pack_state_variant_plans(source)) {
+    add_candidate(
+        [plan](CompileOptions& candidate_options) {
+          candidate_options.sign_pack_state = true;
+          candidate_options.sign_packed_state_plans = {plan};
+        },
+        "sign-pack-state",
+        "Packed boolean state " + plan.state + " into the sign of " + plan.carrier,
+        CandidateGate::SizeRescue);
+  }
+  for (const std::vector<SignPackedStatePlan>& plans :
+       discover_sign_pack_state_tuple_variant_plans(source)) {
+    add_candidate(
+        [plans](CompileOptions& candidate_options) {
+          candidate_options.sign_pack_state = true;
+          candidate_options.sign_packed_state_plans = plans;
+        },
+        "sign-pack-state-tuple",
+        "Packed boolean states into sign tuple " + sign_pack_plan_labels(plans),
+        CandidateGate::SizeRescue);
   }
   add_candidate(
       [](CompileOptions& candidate_options) {

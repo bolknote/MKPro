@@ -15,6 +15,7 @@ void computed_dispatch_discovery_keeps_program_correct();
 void guarded_computed_dispatch_default_discovery_keeps_program_correct();
 void optimizer_analysis_reports_sign_pack_and_address_formula_opportunities();
 void optimizer_analysis_reports_decimal_and_multi_sign_pack_opportunities();
+void state_packing_rewrite_options_affect_lowering();
 void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates();
 void optimizer_translation_unit_stays_emulator_free();
 void arithmetic_if_matches_typescript_contract();
@@ -178,6 +179,8 @@ int main(int argc, char** argv) {
        mkpro::tests::optimizer_analysis_reports_sign_pack_and_address_formula_opportunities},
       {"optimizer_analysis_reports_decimal_and_multi_sign_pack_opportunities",
        mkpro::tests::optimizer_analysis_reports_decimal_and_multi_sign_pack_opportunities},
+      {"state_packing_rewrite_options_affect_lowering",
+       mkpro::tests::state_packing_rewrite_options_affect_lowering},
       {"optimizer_static_proof_gate_rejects_unproved_dangerous_candidates",
        mkpro::tests::optimizer_static_proof_gate_rejects_unproved_dangerous_candidates},
       {"optimizer_translation_unit_stays_emulator_free",

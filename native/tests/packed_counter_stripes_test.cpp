@@ -19,6 +19,15 @@ bool has_register_prefix(const CompileResult& result, const std::string& prefix)
                      [&](const auto& entry) { return entry.first.rfind(prefix, 0) == 0; });
 }
 
+const CandidateReport* find_candidate(const std::vector<CandidateReport>& candidates,
+                                      const std::string& variant) {
+  const auto it = std::find_if(candidates.begin(), candidates.end(),
+                               [&](const CandidateReport& candidate) {
+                                 return candidate.variant == variant;
+                               });
+  return it == candidates.end() ? nullptr : &*it;
+}
+
 std::string diagnostics_text(const CompileResult& result) {
   std::string text;
   for (const Diagnostic& diagnostic : result.diagnostics) {
@@ -74,6 +83,10 @@ program DotCounterDisplay {
           "packed counter stripe display should not allocate display-expression scratch");
   require(display_pair.listing.find("__packed_counter_0") != std::string::npos,
           "listing should reference the packed decimal register");
+  const CandidateReport* decimal_pack =
+      find_candidate(display_pair.candidates, "decimal-pack-state");
+  require(decimal_pack != nullptr && decimal_pack->selected,
+          "packed counter stripe rewrite should surface decimal-pack-state as selected");
 
   CompileOptions forced_floor_row_options = options;
   forced_floor_row_options.pack_counter_stripes = true;

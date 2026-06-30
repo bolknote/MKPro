@@ -152,6 +152,12 @@ struct SynthesizedDispatchPlan {
   std::string proof_angle_mode;   // "deg", "rad", or "grd" for proof re-checks
 };
 
+struct SignPackedStatePlan {
+  std::string state;
+  std::string carrier;
+  int bit = 0;
+};
+
 enum class DeliveryMode {
   Manual,
   Loader,
@@ -219,6 +225,7 @@ struct CompileOptions {
   bool synthesize_parametric_siblings = false;
   bool pack_counter_stripes = false;
   bool trig_fractional_pack = false;
+  bool sign_pack_state = false;
   bool canonicalize_repeated_unary_update_args = false;
   bool x_param_value_functions = false;
   bool x_param_y_stack_stored_entry = false;
@@ -261,6 +268,7 @@ struct CompileOptions {
   std::vector<std::string> force_fractional_constant_selector_preloads;
   std::vector<std::string> pack_counter_stripe_names;
   std::vector<std::string> trig_fractional_pack_names;
+  std::vector<SignPackedStatePlan> sign_packed_state_plans;
   std::vector<RegisterShare> forced_register_shares;
 };
 

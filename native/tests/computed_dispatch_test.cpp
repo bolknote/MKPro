@@ -541,6 +541,10 @@ program DispatchProbe {
   if (has_optimization(rescued, "computed-dispatch")) {
     require(has_proof(rescued, "computed-dispatch-targets"),
             "selected computed-dispatch must report its static target proof");
+    const CandidateReport* selected_formula =
+        find_candidate(rescued.candidates, "computed-dispatch-formula");
+    require(selected_formula != nullptr && selected_formula->selected,
+            "selected computed-dispatch must surface computed-dispatch-formula as selected");
   }
 
   // Stage 3: with a contractually fixed angle mode, discovery additionally lets
@@ -577,6 +581,10 @@ program DispatchProbeAngle {
   if (has_optimization(angle_fixed, "computed-dispatch")) {
     require(has_proof(angle_fixed, "computed-dispatch-targets"),
             "selected trig-eligible computed-dispatch must report its static target proof");
+    const CandidateReport* selected_formula =
+        find_candidate(angle_fixed.candidates, "computed-dispatch-formula");
+    require(selected_formula != nullptr && selected_formula->selected,
+            "selected trig-eligible computed-dispatch must surface formula candidate as selected");
   }
 }
 
@@ -780,6 +788,117 @@ program StatePackingOpportunityProbe {
           "decimal-packed-state capability should be considered when an opportunity is reported");
   require(capability_status(result, "sign-packed-state") == "considered",
           "sign-packed-state capability should be considered for multi-sign opportunities");
+}
+
+void state_packing_rewrite_options_affect_lowering() {
+  const std::string source = R"mkpro(
+program SignPackingRewriteProbe {
+  state {
+    flag_a: flag = 1
+    flag_b: flag = 0
+    carry_a: counter 1..9 = 3
+    carry_b: counter 1..9 = 4
+    score: counter 0..99 = 0
+  }
+
+  loop {
+    if flag_a == 1 {
+      score = carry_a
+    }
+    else {
+      score = carry_b
+    }
+    flag_a = 0
+    flag_b = 1 - flag_b
+    carry_a++
+    carry_b--
+    halt(score + carry_a + carry_b + flag_a + flag_b)
+  }
+}
+)mkpro";
+
+  CompileOptions single_options;
+  single_options.sign_pack_state = true;
+  single_options.sign_packed_state_plans = {SignPackedStatePlan{.state = "flag_a",
+                                                                .carrier = "carry_a"}};
+  const CompileResult single = compile_source(source, single_options);
+  require(single.implemented, "forced sign-pack-state rewrite should compile");
+  require(!has_error_diagnostic(single),
+          "forced sign-pack-state rewrite should be diagnostic-free");
+  require(has_optimization(single, "sign-pack-state"),
+          "forced sign-pack-state should report a real rewrite optimization");
+  require(!single.registers.contains("flag_a"),
+          "sign-pack-state rewrite should remove the packed boolean register");
+  require(single.registers.contains("carry_a"),
+          "sign-pack-state rewrite should keep the sign carrier register");
+  const CandidateReport* selected_single = find_candidate(single.candidates, "sign-pack-state");
+  require(selected_single != nullptr && selected_single->selected,
+          "sign-pack-state should surface as a selected candidate after rewrite");
+
+  CompileOptions tuple_options;
+  tuple_options.sign_pack_state = true;
+  tuple_options.sign_packed_state_plans = {
+      SignPackedStatePlan{.state = "flag_a", .carrier = "carry_a"},
+      SignPackedStatePlan{.state = "flag_b", .carrier = "carry_b"},
+  };
+  const CompileResult tuple = compile_source(source, tuple_options);
+  require(tuple.implemented, "forced sign-pack-state-tuple rewrite should compile");
+  require(!has_error_diagnostic(tuple),
+          "forced sign-pack-state-tuple rewrite should be diagnostic-free");
+  require(has_optimization(tuple, "sign-pack-state-tuple"),
+          "forced sign-pack-state-tuple should report a real rewrite optimization");
+  require(!tuple.registers.contains("flag_a") && !tuple.registers.contains("flag_b"),
+          "sign-pack-state-tuple rewrite should remove packed boolean registers");
+  require(tuple.registers.contains("carry_a") && tuple.registers.contains("carry_b"),
+          "sign-pack-state-tuple rewrite should keep both sign carrier registers");
+  const CandidateReport* selected_tuple =
+      find_candidate(tuple.candidates, "sign-pack-state-tuple");
+  require(selected_tuple != nullptr && selected_tuple->selected,
+          "sign-pack-state-tuple should surface as a selected candidate after rewrite");
+
+  const std::string two_bit_source = R"mkpro(
+program TwoBitSignPackingRewriteProbe {
+  state {
+    mode: counter 0..3 = 3
+    carry_a: counter 1..9 = 3
+    carry_b: counter 1..9 = 4
+    score: counter 0..99 = 0
+  }
+
+  loop {
+    if mode == 3 {
+      score = carry_a
+    }
+    else {
+      score = carry_b
+    }
+    match score {
+      0 => mode = 3
+      otherwise => mode = 1
+    }
+    carry_a++
+    carry_b--
+    halt(score + mode + carry_a + carry_b)
+  }
+}
+)mkpro";
+
+  CompileOptions two_bit_options;
+  two_bit_options.sign_pack_state = true;
+  two_bit_options.sign_packed_state_plans = {
+      SignPackedStatePlan{.state = "mode", .carrier = "carry_a", .bit = 0},
+      SignPackedStatePlan{.state = "mode", .carrier = "carry_b", .bit = 1},
+  };
+  const CompileResult two_bit = compile_source(two_bit_source, two_bit_options);
+  require(two_bit.implemented, "forced two-bit sign-pack-state-tuple rewrite should compile");
+  require(!has_error_diagnostic(two_bit),
+          "forced two-bit sign-pack-state-tuple rewrite should be diagnostic-free");
+  require(has_optimization(two_bit, "sign-pack-state-tuple"),
+          "forced two-bit sign-pack-state-tuple should report a real rewrite optimization");
+  require(!two_bit.registers.contains("mode"),
+          "two-bit sign-pack-state-tuple rewrite should remove the 0..3 state register");
+  require(two_bit.registers.contains("carry_a") && two_bit.registers.contains("carry_b"),
+          "two-bit sign-pack-state-tuple rewrite should keep both sign carrier registers");
 }
 
 void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
