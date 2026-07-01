@@ -138,7 +138,11 @@ void compiler_lowers_initial_v2_subset() {
   require(basic.labels.at("__loop_0") == "00", "loop label should resolve to 00");
   require(basic.registers.at("result") == "0", "state field should allocate R0");
   require(basic.registers.at("x") == "1", "first local should allocate R1");
-  require(basic.registers.at("y") == "2", "second local should allocate R2");
+  require(!basic.registers.contains("y"), "second local should stay stack-only");
+  require(has_optimization(basic, "stack-only-state-field"),
+          "basic compile should report stack-only y");
+  require(has_optimization(basic, "stack-carried-read"),
+          "basic compile should report stack-carried read for y");
   require(basic.listing.find("read x") != std::string::npos, "basic listing should include read x");
   require(basic.listing.find("loop back") != std::string::npos,
           "basic listing should include loop back");
@@ -2296,8 +2300,12 @@ program FunctionLocal {
           "native compiler should allocate locals discovered inside function bodies");
   require(function_local.diagnostics.empty(),
           "function-local compile should not report diagnostics");
-  require(function_local.registers.find("scratch") != function_local.registers.end(),
-          "function-local scratch variable should allocate a register");
+  require(function_local.registers.find("scratch") == function_local.registers.end(),
+          "function-local scratch variable should stay stack-only");
+  require(has_optimization(function_local, "stack-only-state-field"),
+          "function-local scratch variable should report stack-only-state-field");
+  require(has_optimization(function_local, "stack-carried-read"),
+          "function-local scratch variable should report stack-carried-read");
   require(function_local.listing.find("read scratch") != std::string::npos,
           "function-local read should lower inside function body");
 
