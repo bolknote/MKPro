@@ -9272,35 +9272,8 @@ std::optional<Expression> stack_analysis_packed_score_accumulator_by_index(
     const V2Statement& statement, const std::string& index_name) {
   if (!statement.target.has_value() || !statement.expr.has_value())
     return std::nullopt;
-  if (statement.kind == "v2_update" && statement.op == "+=") {
-    const Expression expression = parse_expression(*statement.expr, statement.line);
-    if (expression.kind == "call" && lower_ascii(expression.callee) == "packed_score" &&
-        expression.args.size() == 2U && expression.args.at(1).kind == "identifier" &&
-        expression.args.at(1).name == index_name) {
-      return expression.args.at(0);
-    }
-    return std::nullopt;
-  }
-  if (statement.kind != "v2_assign")
-    return std::nullopt;
-  const Expression expression = parse_expression(*statement.expr, statement.line);
-  if (expression.kind != "binary" || expression.op != "+" || expression.left == nullptr ||
-      expression.right == nullptr)
-    return std::nullopt;
-  const Expression target = identifier_expression(*statement.target);
-  const auto packed_score_line = [&](const Expression& candidate) -> std::optional<Expression> {
-    if (candidate.kind == "call" && lower_ascii(candidate.callee) == "packed_score" &&
-        candidate.args.size() == 2U && candidate.args.at(1).kind == "identifier" &&
-        candidate.args.at(1).name == index_name) {
-      return candidate.args.at(0);
-    }
-    return std::nullopt;
-  };
-  if (expression_equals(*expression.left, target))
-    return packed_score_line(*expression.right);
-  if (expression_equals(*expression.right, target))
-    return packed_score_line(*expression.left);
-  return std::nullopt;
+  return x_param_packed_score_accumulator_line_for_analysis(statement, *statement.target,
+                                                           index_name);
 }
 
 bool expression_preserves_previous_x_as_y_for_stack_analysis(const Expression& expression) {

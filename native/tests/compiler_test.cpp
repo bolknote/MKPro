@@ -8725,6 +8725,60 @@ program PackedScoreAffineXParamAccumulator {
           "PackedScoreAffineXParamAccumulator should never fall back to returned-index order");
   require(count_steps_with_comment(packed_score_affine, "packed_score stack accumulator") == 2,
           "PackedScoreAffineXParamAccumulator should emit two stack accumulator adds");
+
+  // compiler.test.ts "keeps X-parameter packed_score indexes stack-only with initial addends"
+  CompileOptions packed_score_initial_addend_options;
+  packed_score_initial_addend_options.analysis = true;
+  const CompileResult packed_score_initial_addend = compile_source(R"mkpro(
+program PackedScoreXParamInitialAddendAccumulator {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    d: packed = 44447.4
+    bonus_c: packed = 1
+    bonus_d: packed = 2
+    x: counter 0..5 = 2
+    y: counter 0..5 = 3
+    line: packed = 0
+    score: packed = 0
+  }
+
+  loop {
+    score = packed_score(a, y) + packed_score(b, x)
+    normalize(x + y)
+    score += sum(bonus_c, packed_score(c, line))
+    normalize(x - y)
+    score = score + bonus_d + packed_score(d, line)
+    halt(score)
+  }
+
+  fn normalize(raw_line) {
+    line = frac((raw_line + 3) / 4) * 4 + 1
+  }
+}
+)mkpro",
+                                                             packed_score_initial_addend_options);
+  require(packed_score_initial_addend.implemented,
+          "PackedScoreXParamInitialAddendAccumulator program should compile");
+  require(optimization_count(packed_score_initial_addend,
+                             "x-param-packed-score-line-stack-accumulate") == 2,
+          "PackedScoreXParamInitialAddendAccumulator should report two line-first stack "
+          "accumulations");
+  require(count_steps_with_comment(packed_score_initial_addend,
+                                   "packed_score returned-index order") == 0,
+          "PackedScoreXParamInitialAddendAccumulator should never fall back to returned-index "
+          "order");
+  require(count_steps_with_comment(packed_score_initial_addend,
+                                   "packed_score stack accumulator") == 2,
+          "PackedScoreXParamInitialAddendAccumulator should emit two stack accumulator adds");
+  require(packed_score_initial_addend.registers.find("line") ==
+              packed_score_initial_addend.registers.end(),
+          "initial-addend X-param packed_score index should remain stack-only");
+  require(count_steps_with_comment(packed_score_initial_addend, "set line") == 0,
+          "initial-addend X-param packed_score index should not be stored");
+  require(count_steps_with_comment(packed_score_initial_addend, "recall line") == 0,
+          "initial-addend X-param packed_score index should not be recalled");
 }
 
 } // namespace mkpro::tests
