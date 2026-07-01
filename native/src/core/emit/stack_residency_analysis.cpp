@@ -1,5 +1,6 @@
 #include "mkpro/core/emit/stack_residency_analysis.hpp"
 
+#include "mkpro/core/emit/lowering_helpers.hpp"
 #include "mkpro/core/parser.hpp"
 
 #include <algorithm>
@@ -214,6 +215,32 @@ bool validate_stack_resident_expression(const Expression& expression,
   return false;
 }
 
+Expression sum_expressions_for_stack_analysis(const std::vector<Expression>& expressions) {
+  if (expressions.empty())
+    return number_expression("0");
+  Expression sum = expressions.front();
+  for (std::size_t index = 1; index < expressions.size(); ++index)
+    sum = add_expression(std::move(sum), expressions.at(index));
+  return sum;
+}
+
+bool expression_duplicates_single_stack_temp(const Expression& expression,
+                                             const std::vector<std::string>& temps) {
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "sum")
+    return expression_duplicates_single_stack_temp(
+        sum_expressions_for_stack_analysis(expression.args), temps);
+  if (temps.size() != 1U || expression.kind != "binary" ||
+      (expression.op != "+" && expression.op != "-" && expression.op != "*" &&
+       expression.op != "/") ||
+      expression.left == nullptr || expression.right == nullptr) {
+    return false;
+  }
+  if (expression_to_json(*expression.left) != expression_to_json(*expression.right))
+    return false;
+  return count_identifier_reads(*expression.left, temps.front()) == 1 &&
+         validate_stack_resident_expression(*expression.left, temps);
+}
+
 bool assign_temp_is_safe(const V2Statement& statement, const std::set<std::string>& targets) {
   if (statement.kind != "v2_assign" || !statement.target.has_value() ||
       !statement.expr.has_value()) {
@@ -336,6 +363,8 @@ int count_identifier_reads(const Expression& expression, const std::string& name
 
 bool can_lower_stack_resident_expression(const Expression& expression,
                                          const std::vector<std::string>& temps) {
+  if (expression_duplicates_single_stack_temp(expression, temps))
+    return true;
   for (const std::string& temp : temps) {
     if (count_identifier_reads(expression, temp) != 1)
       return false;

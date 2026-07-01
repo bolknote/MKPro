@@ -150,6 +150,8 @@ bool statements_contain_return(const std::vector<V2Statement>& statements);
 bool statements_guarantee_return(const std::vector<V2Statement>& statements);
 void validate_v2_function_call_contracts(const V2Program& program,
                                          std::vector<Diagnostic>& diagnostics);
+void validate_startup_stack_input_contracts(const V2Program& program,
+                                            std::vector<Diagnostic>& diagnostics);
 const V2Board* board_for_cells_mask(const LoweringContext& context, const Expression& mask);
 std::optional<Expression> cell_set_mask_expression_for_collection(const LoweringContext& context,
                                                                   const std::string& collection,
@@ -2326,6 +2328,41 @@ void validate_v2_function_call_contracts(const V2Program& program,
   const FunctionCallEdges edges = collect_function_call_edges(program, functions);
   validate_function_tail_recursion(edges, diagnostics);
   validate_function_return_stack_depth(program, functions, edges, diagnostics);
+}
+
+void validate_startup_stack_input_contracts(const V2Program& program,
+                                            std::vector<Diagnostic>& diagnostics) {
+  bool uses_deep_visible_stack = false;
+  bool uses_x2 = false;
+  auto record_stack_source = [&](const std::string& source) {
+    if (source == "Z" || source == "T" || source == "stack.Z" || source == "stack.T")
+      uses_deep_visible_stack = true;
+    if (source == "X2" || source == "stack.X2")
+      uses_x2 = true;
+  };
+
+  for (const V2StateField& field : program.state) {
+    if (field.initial_stack.has_value())
+      record_stack_source(*field.initial_stack);
+    if (!field.bank.has_value() || !field.initial.has_value())
+      continue;
+    const int expected = field.bank->max - field.bank->min + 1;
+    const std::optional<std::vector<std::string>> values =
+        indexed_initializer_list_values(*field.initial, expected);
+    if (!values.has_value())
+      continue;
+    for (const std::string& value : *values)
+      record_stack_source(trim_ascii(value));
+  }
+
+  if (uses_deep_visible_stack && uses_x2) {
+    diagnostics.push_back(diagnostic(
+        DiagnosticSeverity::Error, "native-unsupported",
+        "Startup stack inputs cannot combine stack.X2 with stack.Z or stack.T: the F reverse "
+        "rotations needed for Z/T overwrite the hidden X2 restore context. Use stack.X2 only with "
+        "stack.X/stack.Y, or use visible stack inputs stack.X/stack.Y/stack.Z/stack.T without "
+        "stack.X2."));
+  }
 }
 
 void suppress_packed_score_inline_rules(LoweringContext& context, const V2Program& program) {
@@ -17736,15 +17773,34 @@ bool expression_derives_current_x_identifier(const Expression& expression,
   return false;
 }
 
+bool expression_duplicates_current_x_identifier(const Expression& expression,
+                                                const std::string& target) {
+  if (expression.kind != "binary" ||
+      (expression.op != "+" && expression.op != "*" && expression.op != "-" &&
+       expression.op != "/") ||
+      expression.left == nullptr || expression.right == nullptr) {
+    return false;
+  }
+  if (!expression_equals(*expression.left, *expression.right))
+    return false;
+  if (count_identifier_reads(*expression.left, target) != 1)
+    return false;
+  return expression_derives_current_x_identifier(*expression.left, target) &&
+         expression_pure_for_substitution(*expression.left);
+}
+
 bool expression_consumes_current_x_identifier(const Expression& expression,
                                               const std::string& target) {
-  if (count_identifier_reads(expression, target) != 1)
-    return false;
-  if (expression_derives_current_x_identifier(expression, target))
-    return true;
   if (expression.kind == "call" && lower_ascii(expression.callee) == "sum") {
     return expression_consumes_current_x_identifier(sum_expressions(expression.args), target);
   }
+  const int target_reads = count_identifier_reads(expression, target);
+  if (target_reads == 2 && expression_duplicates_current_x_identifier(expression, target))
+    return true;
+  if (target_reads != 1)
+    return false;
+  if (expression_derives_current_x_identifier(expression, target))
+    return true;
   if (expression.kind != "binary" ||
       (expression.op != "+" && expression.op != "*" && expression.op != "-" &&
        expression.op != "/") ||
@@ -33166,6 +33222,29 @@ bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expres
     mark_current_x(context, expression.name);
     return true;
   }
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "sum") {
+    if (!lower_stack_resident_expression_to_x(context, sum_expressions(expression.args), temps,
+                                              line))
+      return false;
+    context.optimizations.push_back(OptimizationReport{
+        .name = "sum-primitive-lowering",
+        .detail = "Lowered stack-resident sum(...) to an arithmetic addition chain.",
+    });
+    return true;
+  }
+  if (expression.kind == "call" && expression.args.size() == 1U &&
+      stack_expression_references_any_temp(expression.args.front(), temps)) {
+    const std::optional<std::pair<int, std::string>> opcode =
+        x_transform_unary_opcode(expression.callee);
+    if (!opcode.has_value())
+      return false;
+    if (!lower_stack_resident_expression_to_x(context, expression.args.front(), temps, line))
+      return false;
+    context.emitter.emit_op(opcode->first, opcode->second,
+                            "stack-resident " + lower_ascii(expression.callee), line);
+    clear_current_x_facts(context);
+    return true;
+  }
   if (expression.kind == "number" || expression.kind == "string" || expression.kind == "indexed" ||
       expression.kind == "call") {
     const bool stack_temp_call =
@@ -33208,6 +33287,23 @@ bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expres
   const std::optional<std::pair<int, std::string>> opcode = binary_opcode(expression.op);
   if (!opcode.has_value())
     return false;
+
+  if (left_refs && right_refs && expression_equals(*expression.left, *expression.right)) {
+    if (!lower_stack_resident_expression_to_x(context, *expression.left, temps, line))
+      return false;
+    if (expression.op == "*") {
+      context.emitter.emit_op(0x22, "F x^2", "square repeated operand", line);
+      context.optimizations.push_back(OptimizationReport{
+          .name = "square-expression-lowering",
+          .detail = "Squared a repeated stack-resident operand through F x^2.",
+      });
+    } else {
+      context.emitter.emit_op(0x0e, "В↑", "duplicate repeated operand through stack", line);
+      context.emitter.emit_op(opcode->first, opcode->second, "expr " + opcode->second, line);
+    }
+    clear_current_x_facts(context);
+    return true;
+  }
 
   if (left_refs && right_refs && expression.left->kind == "identifier" &&
       expression.right->kind == "identifier") {
@@ -35974,6 +36070,12 @@ std::optional<std::string> stack_preload_source(const std::string& value) {
     return "X";
   if (value == "stack.Y")
     return "Y";
+  if (value == "stack.Z")
+    return "Z";
+  if (value == "stack.T")
+    return "T";
+  if (value == "stack.X2")
+    return "X2";
   return std::nullopt;
 }
 
@@ -36069,7 +36171,7 @@ bool preload_is_display_literal_setup(const PreloadReport& preload) {
 bool preload_requires_generated_setup_program(const PreloadReport& preload) {
   if (preload.setup_expression || preload.setup_target_name.has_value())
     return true;
-  if (preload.value == "stack.X" || preload.value == "stack.Y")
+  if (stack_preload_source(preload.value).has_value())
     return true;
   if (executable_setup_value(preload.value).has_value())
     return false;
@@ -36088,7 +36190,7 @@ bool preload_is_internal_collection_setup(const PreloadReport& preload) {
 bool preload_must_reach_generated_setup_program(const PreloadReport& preload) {
   if (preload.setup_expression || preload.setup_target_name.has_value())
     return true;
-  if (preload.value == "stack.X" || preload.value == "stack.Y")
+  if (stack_preload_source(preload.value).has_value())
     return true;
   if (preload.value == "random()" || preload.value.starts_with("random("))
     return true;
@@ -41176,6 +41278,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
 
   validate_v2_return_contracts(*ast.v2, result.diagnostics);
   validate_v2_function_call_contracts(*ast.v2, result.diagnostics);
+  validate_startup_stack_input_contracts(*ast.v2, result.diagnostics);
   if (has_errors(result.diagnostics)) {
     result.implemented = false;
     return result;
@@ -42059,17 +42162,17 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
     if (!preload_register_present(stop_tail_preloads, preload.register_name))
       add_unique_preload(preload);
   }
-  result.manual_setup_inputs =
-      collect_manual_setup_inputs(*ast.v2, context.registers, result.preloads);
   auto add_stack_setup_program_preload = [&](const std::string& register_name,
                                              const std::string& value,
                                              const std::string& target_name) {
-    add_unique_setup_program_preload(PreloadReport{
+    const PreloadReport preload{
         .register_name = register_name,
         .value = value,
         .counts_against_program = false,
         .setup_target_name = target_name,
-    });
+    };
+    add_unique_setup_program_preload(preload);
+    add_unique_preload(preload);
   };
   for (const V2StateField& field : ast.v2->state) {
     if (field.initial_stack.has_value()) {
@@ -42085,7 +42188,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         for (int index = field.bank->min; index <= field.bank->max; ++index) {
           const std::string value =
               trim_ascii(values->at(static_cast<std::size_t>(index - field.bank->min)));
-          if (value != "stack.X" && value != "stack.Y")
+          if (!stack_preload_source(value).has_value())
             continue;
           const std::string element = state_bank_element_name(field, index);
           const auto register_it = context.registers.find(element);
@@ -42095,6 +42198,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       }
     }
   }
+  result.manual_setup_inputs =
+      collect_manual_setup_inputs(*ast.v2, context.registers, result.preloads);
   std::optional<std::string> expected_mode;
   if (ast.v2->expected_mode.has_value())
     expected_mode = ast.v2->expected_mode->mode;

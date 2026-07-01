@@ -296,7 +296,7 @@ These transformations run on source constructs before machine lowering:
 - `show-read-stored-indirect-decrement-underflow` — selected only by full-program rescue: for stored-input variants whose counter lives in R0..R3, uses `К П->X r` to mutate the counter, immediately recalls the counter for the `< 0` test, and restores the stored input through `П->X input`. This preserves ordinary counter storage while removing the explicit `1; -; X->П counter` sequence.
 - `show-read-stored-decrement-recall-sync` — speculative size-rescue variant for the stored-input path: restores the already stored input with `П->X` instead of `X↔Y`, keeping the same local cell count while exposing a real X2 sync for downstream recall/dot optimizations.
 - `show-read-stack-stop-risk-lowering` — a generalized "stack-stop fusion": when a single plain `show` source value (`stake`) is combined with a freshly read input across the stop, it keeps `stake` in `Y`, transforms the input in `X`, and computes the result directly on the stack with no input register. It recognizes any pure shape `wrap*( stake (op) g(input) )` where `op` is `+`/`-`/`*`/`/` (non-commutative ops keep `stake` on the left so they map to the machine's `Y op X` order), `g(input)` is a chain of single-argument X-transform intrinsics over the input (e.g. `sin`, `cos`, `tg`, `sqrt`) optionally fused with one single-digit additive/scaling constant, and `wrap*` is an outer chain of X-transform intrinsics (e.g. `int`, `frac`). The input leaf may be a direct `sin(read())` or a stored input field, avoiding a source-visible throwaway field. The classic `int(stake * (1 + sin(read())))` robber-fight idiom is the canonical case and lowers byte-for-byte identically; the generalization never grows a program because every accepted form reuses the same kept-in-`Y` stack sequence.
-- `loop-carried-prompt-x` — for loops shaped as `show(screen); key = read()` where every non-terminal branch assigns the next `screen`, removes the register-backed prompt state and leaves the next visible value in `X` for the loop-back stop. If the prompt starts from `stack.X` / `stack.Y`, an allocated sibling field initialized from the same stack slot can seed the first prompt.
+- `loop-carried-prompt-x` — for loops shaped as `show(screen); key = read()` where every non-terminal branch assigns the next `screen`, removes the register-backed prompt state and leaves the next visible value in `X` for the loop-back stop. If the prompt starts from a startup stack input (`stack.X`, `stack.Y`, `stack.Z`, or `stack.T`), an allocated sibling field initialized from the same stack slot can seed the first prompt.
 - `loop-carried-prompt-input-branch` — after a loop-carried prompt stop, branches directly on the read key with no extra store when the branch condition consumes only that input.
 - `loop-carried-prompt-input-dispatch` — after a loop-carried prompt stop, dispatches directly on the read key with no intermediate variable, while preserving the prompt flow across loop back-edge.
 - `loop-carried-prompt-decrement-underflow` — after a loop-carried prompt stop, handles scalar or constant-indexed `resource--; if resource < 0 ...` patterns by checking underflow in-line. It keeps the input value in `Y`, emits `F x<0` branch flow, and restores `X/Y` state only where required for the next prompt consumer.
@@ -918,7 +918,11 @@ Display rewrites are separated into strategy selection + body lowering.
   update lowerings keep their own stricter paths. Explicit `sum(...)`
   consumers use the same scheduler when exactly one argument depends on the
   carried value and the other arguments are simple stack loads, so variadic
-  accumulator syntax does not force a temporary store. Branch consumers can test
+  accumulator syntax does not force a temporary store. Repeated arithmetic
+  consumers such as `tmp / tmp`, including the equivalent `sum(tmp, tmp)` form,
+  may duplicate the current `X` through the stack (`В↑`) or use `F x^2` for
+  `tmp * tmp`, avoiding both the temp store and the temp recall while still
+  preserving the hardware `X1`/hidden-X2 side-effect model. Branch consumers can test
   the carried value directly for conservative compare shapes, but they yield to
   cheaper single-use guard substitution and dedicated domain-error guard fusions.
 - `bit-mask-decade-scale` / `bit-mask-decade-index-preload` — chooses the
@@ -1295,7 +1299,7 @@ Display rewrites are separated into strategy selection + body lowering.
   uses the copied or exchanged `Y` value and shape as the new visible `X`, while
   hidden X2 remains the old tail; this keeps decimal and structural first-digit
   splice proofs aligned with both immediate and delayed stack-copy contexts.
-- `stack-resident-temps` — keeps up to four consecutive single-use temps on the stack, using `В↑` lifts and restore sequences (`X↔Y` / `F reverse`) before direct stack-based consumers.
+- `stack-resident-temps` — keeps up to four consecutive single-use temps on the stack, using `В↑` lifts and restore sequences (`X↔Y` / `F reverse`) before direct stack-based consumers. The stack expression lowerer handles `sum(...)` as the same addition tree, can duplicate one repeated stack-resident operand through `В↑` or `F x^2`, and applies one-argument calculator transforms such as `frac(a)` directly after restoring the temp instead of recalling it from memory.
 - `stack-resident-indexed-temp` — keeps a single-use temp in X across one indexed compound store `cells[i] op= temp` when the temp is consumed exactly once and selector/index setup is not temp-dependent.
 - `stack-resident-control-flow` — marks stack-temp fusion that crosses stack-preserving `if` / `while` / `dispatch` regions; these regions cannot clobber live temps and the lowering rebuilds stack state if the region requires it.
 - `dead-temp-store` — removes temporary stores after their last read when no longer needed.

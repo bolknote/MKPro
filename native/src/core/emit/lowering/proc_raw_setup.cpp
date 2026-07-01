@@ -533,6 +533,58 @@ std::string setup_display_literal_comment(const PreloadReport& preload) {
                                                          : setup_store_comment(preload);
 }
 
+bool is_stack_preload_value(const std::string& value) {
+  return value == "stack.X" || value == "stack.Y" || value == "stack.Z" ||
+         value == "stack.T" || value == "stack.X2";
+}
+
+std::optional<int> visible_stack_preload_reverse_count(const std::string& value) {
+  if (value == "stack.X")
+    return 0;
+  if (value == "stack.Y")
+    return std::nullopt;
+  if (value == "stack.Z")
+    return 2;
+  if (value == "stack.T")
+    return 3;
+  return std::nullopt;
+}
+
+void emit_visible_stack_preload_setup(MachineEmitter& setup, const PreloadReport& preload) {
+  const std::string target = setup_target_name(preload);
+  if (preload.value == "stack.Y") {
+    setup.emit_op(0x14, "X↔Y", "setup " + target + " from stack.Y", std::nullopt, true);
+    return;
+  }
+  const std::optional<int> reverse_count = visible_stack_preload_reverse_count(preload.value);
+  if (!reverse_count.has_value())
+    return;
+  for (int index = 0; index < *reverse_count; ++index) {
+    setup.emit_op(0x25, "F reverse",
+                  index == 0 ? "setup " + target + " from " + preload.value
+                             : "continue setup " + target + " from " + preload.value,
+                  std::nullopt, true);
+  }
+}
+
+void emit_visible_stack_preload_restore(MachineEmitter& setup, const PreloadReport& preload) {
+  const std::string target = setup_target_name(preload);
+  if (preload.value == "stack.Y") {
+    setup.emit_op(0x14, "X↔Y", "restore stack.X after " + target, std::nullopt, true);
+    return;
+  }
+  const std::optional<int> reverse_count = visible_stack_preload_reverse_count(preload.value);
+  if (!reverse_count.has_value() || *reverse_count == 0)
+    return;
+  const int restore_count = 4 - *reverse_count;
+  for (int index = 0; index < restore_count; ++index) {
+    setup.emit_op(0x25, "F reverse",
+                  index == 0 ? "restore stack.X after " + target
+                             : "continue restore stack.X after " + target,
+                  std::nullopt, true);
+  }
+}
+
 void emit_setup_recall(MachineEmitter& setup, const std::string& register_name,
                        std::string comment) {
   const int reg_index = register_index(register_name);
@@ -561,14 +613,14 @@ void emit_negative_zero_degree_setup(MachineEmitter& setup, const std::string& r
 }
 
 bool emit_stack_preload_setup(MachineEmitter& setup, const PreloadReport& preload) {
-  if (preload.value != "stack.X" && preload.value != "stack.Y")
+  if (!is_stack_preload_value(preload.value))
     return false;
   const std::string target = setup_target_name(preload);
-  if (preload.value == "stack.Y")
-    setup.emit_op(0x14, "X↔Y", "setup " + target + " from stack.Y", std::nullopt, true);
+  emit_visible_stack_preload_setup(setup, preload);
+  if (preload.value == "stack.X2")
+    setup.emit_op(0x0a, ".", "setup " + target + " from stack.X2", std::nullopt, true);
   emit_setup_store(setup, preload.register_name, "setup " + target);
-  if (preload.value == "stack.Y")
-    setup.emit_op(0x14, "X↔Y", "restore stack.X after " + target, std::nullopt, true);
+  emit_visible_stack_preload_restore(setup, preload);
   return true;
 }
 
@@ -1373,8 +1425,8 @@ indexed_setup_preload_group_at(const std::vector<PreloadReport>& preloads,
   if (index >= preloads.size() || consumed.contains(index))
     return std::nullopt;
   const PreloadReport& first = preloads.at(index);
-  if (!first.setup_target_name.has_value() || first.value == "stack.X" ||
-      first.value == "stack.Y" || has_executable_setup_number_value(first.value))
+  if (!first.setup_target_name.has_value() || is_stack_preload_value(first.value) ||
+      has_executable_setup_number_value(first.value))
     return std::nullopt;
 
   IndexedSetupPreloadGroup group;
@@ -1386,8 +1438,8 @@ indexed_setup_preload_group_at(const std::vector<PreloadReport>& preloads,
   std::size_t cursor = index + 1U;
   while (cursor < preloads.size() && !consumed.contains(cursor)) {
     const PreloadReport& candidate = preloads.at(cursor);
-    if (!candidate.setup_target_name.has_value() || candidate.value == "stack.X" ||
-        candidate.value == "stack.Y" || has_executable_setup_number_value(candidate.value) ||
+    if (!candidate.setup_target_name.has_value() || is_stack_preload_value(candidate.value) ||
+        has_executable_setup_number_value(candidate.value) ||
         candidate.value != first.value) {
       break;
     }
@@ -1957,13 +2009,13 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
            preload.value.find(')') != std::string::npos;
   };
   auto executable_setup_preload = [&](const PreloadReport& preload) {
-    return !preload.setup_expression && preload.value != "stack.X" && preload.value != "stack.Y" &&
+    return !preload.setup_expression && !is_stack_preload_value(preload.value) &&
            !call_like_setup_value(preload);
   };
   auto deferred_direct_setup_preload = [&](const PreloadReport& preload) {
     const bool call_like = preload.value.find('(') != std::string::npos ||
                            preload.value.find(')') != std::string::npos;
-    return preload.setup_expression && preload.value != "stack.X" && preload.value != "stack.Y" &&
+    return preload.setup_expression && !is_stack_preload_value(preload.value) &&
            !call_like;
   };
   std::vector<std::size_t> preload_order;
@@ -1981,15 +2033,22 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
     return !executable_setup_preload(preload) && !deferred_direct_setup_preload(preload) &&
            preload.value == stack_value;
   };
-  if (expected_mode.has_value()) {
+  const bool has_stack_preload =
+      std::any_of(preloads.begin(), preloads.end(), [](const PreloadReport& preload) {
+        return is_stack_preload_value(preload.value);
+      });
+  auto push_stack_setup_preloads = [&](const std::string& stack_value) {
     for (std::size_t index = 0; index < preloads.size(); ++index) {
-      if (is_stack_setup_preload(preloads.at(index), "stack.Y"))
+      if (is_stack_setup_preload(preloads.at(index), stack_value))
         push_preload_order(index);
     }
-    for (std::size_t index = 0; index < preloads.size(); ++index) {
-      if (is_stack_setup_preload(preloads.at(index), "stack.X"))
-        push_preload_order(index);
-    }
+  };
+  if (expected_mode.has_value() || has_stack_preload) {
+    push_stack_setup_preloads("stack.Y");
+    push_stack_setup_preloads("stack.Z");
+    push_stack_setup_preloads("stack.T");
+    push_stack_setup_preloads("stack.X");
+    push_stack_setup_preloads("stack.X2");
   }
   for (std::size_t index = 0; index < preloads.size(); ++index) {
     if (executable_setup_preload(preloads.at(index)) &&
@@ -2006,20 +2065,32 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
       push_preload_order(index);
   }
   for (std::size_t index = 0; index < preloads.size(); ++index) {
+    if (is_stack_setup_preload(preloads.at(index), "stack.Z"))
+      push_preload_order(index);
+  }
+  for (std::size_t index = 0; index < preloads.size(); ++index) {
+    if (is_stack_setup_preload(preloads.at(index), "stack.T"))
+      push_preload_order(index);
+  }
+  for (std::size_t index = 0; index < preloads.size(); ++index) {
     if (is_stack_setup_preload(preloads.at(index), "stack.X"))
+      push_preload_order(index);
+  }
+  for (std::size_t index = 0; index < preloads.size(); ++index) {
+    if (is_stack_setup_preload(preloads.at(index), "stack.X2"))
       push_preload_order(index);
   }
   for (std::size_t index = 0; index < preloads.size(); ++index) {
     if (!executable_setup_preload(preloads.at(index)) &&
         !deferred_direct_setup_preload(preloads.at(index)) &&
-        preloads.at(index).value != "stack.Y" && preloads.at(index).value != "stack.X" &&
+        !is_stack_preload_value(preloads.at(index).value) &&
         is_indexed_setup_group_start(index))
       push_preload_order(index);
   }
   for (std::size_t index = 0; index < preloads.size(); ++index) {
     if (!executable_setup_preload(preloads.at(index)) &&
         !deferred_direct_setup_preload(preloads.at(index)) &&
-        preloads.at(index).value != "stack.Y" && preloads.at(index).value != "stack.X" &&
+        !is_stack_preload_value(preloads.at(index).value) &&
         !is_indexed_setup_group_start(index))
       push_preload_order(index);
   }
@@ -2078,8 +2149,12 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
     const PreloadReport& preload = preloads.at(index);
     const bool from_stack_x = preload.value == "stack.X";
     const bool from_stack_y = preload.value == "stack.Y";
-    if (expected_mode.has_value() && !expected_mode_guard_emitted && !from_stack_x &&
-        !from_stack_y) {
+    const bool from_stack_z = preload.value == "stack.Z";
+    const bool from_stack_t = preload.value == "stack.T";
+    const bool from_stack_x2 = preload.value == "stack.X2";
+    const bool from_stack = from_stack_x || from_stack_y || from_stack_z || from_stack_t ||
+                            from_stack_x2;
+    if (expected_mode.has_value() && !expected_mode_guard_emitted && !from_stack) {
       flush_numeric_segment();
       emit_expected_mode_setup_check(setup, optimizations, *expected_mode);
       expected_mode_guard_emitted = true;
@@ -2132,7 +2207,7 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
       emit_negative_zero_degree_setup(setup, preload.register_name);
       continue;
     }
-    if (!from_stack_x && !from_stack_y && !preload.setup_expression) {
+    if (!from_stack && !preload.setup_expression) {
       const std::optional<double> target_number = executable_setup_number(preload.value);
       if (target_number.has_value() && *target_number < 0.0) {
         std::optional<std::size_t> source_index;
@@ -2243,7 +2318,7 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
             continue;
           const PreloadReport& count_preload = preloads.at(candidate);
           if (count_preload.register_name == count_register_it->second &&
-              (count_preload.value == "stack.X" || count_preload.value == "stack.Y")) {
+              is_stack_preload_value(count_preload.value)) {
             count_source_preload_index = candidate;
             break;
           }
@@ -2284,7 +2359,7 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
         continue;
       }
     }
-    if (!from_stack_x && !from_stack_y && !has_executable_setup_number_value(preload.value)) {
+    if (!from_stack && !has_executable_setup_number_value(preload.value)) {
       bool emitted_display_literal_preload = false;
       if (const std::optional<FirstSpliceDisplayLiteralProgram> first_splice =
               preferred_first_splice_display_literal_program(preload.value)) {
@@ -2316,10 +2391,12 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
         continue;
       }
     }
-    if (from_stack_y)
-      setup.emit_op(0x14, "X↔Y", "setup " + setup_target_name(preload) + " from stack.Y",
+    if (from_stack)
+      emit_visible_stack_preload_setup(setup, preload);
+    if (from_stack_x2)
+      setup.emit_op(0x0a, ".", "setup " + setup_target_name(preload) + " from stack.X2",
                     std::nullopt, true);
-    if (!from_stack_x && !from_stack_y)
+    if (!from_stack)
       setup.emit_number(executable_setup_value(preload.value).value_or(preload.value));
     std::vector<std::string> stored_registers;
     std::set<std::string> seen_registers;
@@ -2338,13 +2415,12 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
       setup.emit_op(0x40 + reg_index, "X->П " + register_name,
                     setup_store_comment(preloads.at(other)), std::nullopt, true);
     }
-    if (!from_stack_x && !from_stack_y) {
+    if (!from_stack) {
       report_duplicate_preload_store_reuse(optimizations, preload.value, stored_registers,
                                            target_count, preload.register_name);
     }
-    if (from_stack_y)
-      setup.emit_op(0x14, "X↔Y", "restore stack.X after " + setup_target_name(preload),
-                    std::nullopt, true);
+    if (from_stack)
+      emit_visible_stack_preload_restore(setup, preload);
   }
   flush_numeric_segment();
   if (setup_r0_dirty)

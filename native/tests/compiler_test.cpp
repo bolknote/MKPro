@@ -4898,11 +4898,13 @@ program StackSetup {
   state {
     x: counter 0..9 = stack.X
     y: counter 0..9 = stack.Y
-    z: counter 0..9 = 0
+    z: counter 0..9 = stack.Z
+    t: counter 0..9 = stack.T
+    zero: counter 0..9 = 0
   }
 
   loop {
-    halt(x + y + z)
+    halt(x + y + z + t + zero)
   }
 }
 )mkpro");
@@ -4915,17 +4917,77 @@ program StackSetup {
           "setup should move stack.Y into X before storing Y-sourced fields");
   require(stack_setup.setup_listing.find("restore stack.X after y") != std::string::npos,
           "setup should restore stack.X after Y-sourced fields");
+  require(stack_setup.setup_listing.find("setup z from stack.Z") != std::string::npos,
+          "setup should rotate stack.Z into X before storing Z-sourced fields");
+  require(stack_setup.setup_listing.find("restore stack.X after z") != std::string::npos,
+          "setup should restore stack.X after Z-sourced fields");
+  require(stack_setup.setup_listing.find("setup t from stack.T") != std::string::npos,
+          "setup should rotate stack.T into X before storing T-sourced fields");
+  require(stack_setup.setup_listing.find("restore stack.X after t") != std::string::npos,
+          "setup should restore stack.X after T-sourced fields");
   bool found_stack_x = false;
   bool found_stack_y = false;
+  bool found_stack_z = false;
+  bool found_stack_t = false;
   bool found_zero_state = false;
   for (const PreloadReport& preload : stack_setup.preloads) {
     found_stack_x = found_stack_x || preload.value == "stack.X";
     found_stack_y = found_stack_y || preload.value == "stack.Y";
+    found_stack_z = found_stack_z || preload.value == "stack.Z";
+    found_stack_t = found_stack_t || preload.value == "stack.T";
     found_zero_state = found_zero_state || preload.value == "0";
   }
   require(found_stack_x, "preload report should include stack.X state");
   require(found_stack_y, "preload report should include stack.Y state");
+  require(found_stack_z, "preload report should include stack.Z state");
+  require(found_stack_t, "preload report should include stack.T state");
   require(found_zero_state, "preload report should include numeric state initializer");
+
+  const CompileResult stack_x2_setup = compile_source(R"mkpro(
+program StackX2Setup {
+  state {
+    x: counter 0..9 = stack.X
+    y: counter 0..9 = stack.Y
+    hidden: counter 0..9 = stack.X2
+  }
+
+  loop {
+    halt(x + y + hidden)
+  }
+}
+)mkpro");
+  require(stack_x2_setup.implemented, "native compiler should lower stack.X2 setup state");
+  require(stack_x2_setup.diagnostics.empty(),
+          "stack.X2 setup compile should not report diagnostics");
+  require(stack_x2_setup.setup_listing.find("setup hidden from stack.X2") != std::string::npos,
+          "setup should restore stack.X2 through dot before storing X2-sourced fields");
+  bool found_stack_x2 = false;
+  for (const PreloadReport& preload : stack_x2_setup.preloads)
+    found_stack_x2 = found_stack_x2 || preload.value == "stack.X2";
+  require(found_stack_x2, "preload report should include stack.X2 state");
+
+  const CompileResult invalid_stack_x2_deep_setup = compile_source(R"mkpro(
+program BadStackX2DeepSetup {
+  state {
+    z: counter 0..9 = stack.Z
+    hidden: counter 0..9 = stack.X2
+  }
+
+  loop {
+    halt(z + hidden)
+  }
+}
+)mkpro");
+  require(!invalid_stack_x2_deep_setup.implemented,
+          "native compiler should reject stack.Z/T mixed with stack.X2");
+  require(std::any_of(invalid_stack_x2_deep_setup.diagnostics.begin(),
+                      invalid_stack_x2_deep_setup.diagnostics.end(),
+                      [](const Diagnostic& diagnostic) {
+                        return diagnostic.severity == DiagnosticSeverity::Error &&
+                               diagnostic.message.find("cannot combine stack.X2 with stack.Z") !=
+                                   std::string::npos;
+                      }),
+          "stack.Z/T plus stack.X2 rejection should explain the X2 context conflict");
 
   const CompileResult bank_stack_setup = compile_source(R"mkpro(
 program BankStackSetup {
@@ -4950,6 +5012,65 @@ program BankStackSetup {
   }
   require(bank_stack_x_preloads == 2,
           "state-bank stack setup should initialize every bank element");
+
+  const CompileResult indexed_stack_setup = compile_source(R"mkpro(
+program IndexedStackSetup {
+  state {
+    slots: packed[1..4] = [stack.X, stack.Z, stack.T, stack.Y]
+  }
+
+  loop {
+    halt(slots[1] + slots[2] + slots[3] + slots[4])
+  }
+}
+)mkpro");
+  require(indexed_stack_setup.implemented,
+          "native compiler should lower indexed state stack setup");
+  require(indexed_stack_setup.diagnostics.empty(),
+          "indexed stack setup compile should not report diagnostics");
+  bool indexed_stack_x = false;
+  bool indexed_stack_y = false;
+  bool indexed_stack_z = false;
+  bool indexed_stack_t = false;
+  for (const PreloadReport& preload : indexed_stack_setup.preloads) {
+    indexed_stack_x = indexed_stack_x || preload.value == "stack.X";
+    indexed_stack_y = indexed_stack_y || preload.value == "stack.Y";
+    indexed_stack_z = indexed_stack_z || preload.value == "stack.Z";
+    indexed_stack_t = indexed_stack_t || preload.value == "stack.T";
+  }
+  require(indexed_stack_x, "indexed setup should include stack.X list item");
+  require(indexed_stack_y, "indexed setup should include stack.Y list item");
+  require(indexed_stack_z, "indexed setup should include stack.Z list item");
+  require(indexed_stack_t, "indexed setup should include stack.T list item");
+  require(indexed_stack_setup.setup_listing.find("setup slots_2 from stack.Z") !=
+              std::string::npos,
+          "indexed setup should rotate stack.Z before storing the list item");
+  require(indexed_stack_setup.setup_listing.find("setup slots_3 from stack.T") !=
+              std::string::npos,
+          "indexed setup should rotate stack.T before storing the list item");
+
+  const CompileResult indexed_stack_x2_setup = compile_source(R"mkpro(
+program IndexedStackX2Setup {
+  state {
+    slots: packed[1..2] = [stack.X, stack.X2]
+  }
+
+  loop {
+    halt(slots[1] + slots[2])
+  }
+}
+)mkpro");
+  require(indexed_stack_x2_setup.implemented,
+          "native compiler should lower indexed stack.X2 setup");
+  require(indexed_stack_x2_setup.diagnostics.empty(),
+          "indexed stack.X2 setup compile should not report diagnostics");
+  bool indexed_stack_x2 = false;
+  for (const PreloadReport& preload : indexed_stack_x2_setup.preloads)
+    indexed_stack_x2 = indexed_stack_x2 || preload.value == "stack.X2";
+  require(indexed_stack_x2, "indexed setup should include stack.X2 list item");
+  require(indexed_stack_x2_setup.setup_listing.find("setup slots_2 from stack.X2") !=
+              std::string::npos,
+          "indexed setup should restore stack.X2 before storing the list item");
 
   const CompileResult cells_random_setup = compile_source(R"mkpro(
 program CellsRandomSetup {

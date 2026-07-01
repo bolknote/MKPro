@@ -1,4 +1,5 @@
 #include "mkpro/core/emit/lowering/proc_raw_setup.hpp"
+#include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
 
@@ -16,6 +17,14 @@ bool has_setup_optimization_detail(const SetupProgramReport& report, const std::
                      [&](const OptimizationReport& item) {
                        return item.name == name && item.detail.find(detail) != std::string::npos;
                      });
+}
+
+std::vector<int> step_opcodes(const std::vector<ResolvedStep>& steps) {
+  std::vector<int> codes;
+  codes.reserve(steps.size());
+  for (const ResolvedStep& step : steps)
+    codes.push_back(step.opcode);
+  return codes;
 }
 
 } // namespace
@@ -119,6 +128,78 @@ void setup_program_matches_typescript_contract() {
               stack_setup_it < stack_guard_it && stack_guard_it < numeric_setup_it,
           "expected mode setup guard should run immediately after stack input setup and before "
           "other state preload setup");
+
+  const SetupProgramReport x2_guarded_preload_report =
+      core::emit::lowering::compile_setup_program_with_preloads(
+          {},
+          {},
+          {
+              PreloadReport{.register_name = "0", .value = "stack.X2"},
+              PreloadReport{.register_name = "1", .value = "stack.X"},
+              PreloadReport{.register_name = "2", .value = "100"},
+          },
+          options, "rad");
+  const auto x_store_it =
+      std::find_if(x2_guarded_preload_report.steps.begin(),
+                   x2_guarded_preload_report.steps.end(),
+                   [](const ResolvedStep& step) { return step.comment == "setup R1"; });
+  const auto x2_restore_it =
+      std::find_if(x2_guarded_preload_report.steps.begin(),
+                   x2_guarded_preload_report.steps.end(), [](const ResolvedStep& step) {
+                     return step.opcode == 0x0a && step.comment == "setup R0 from stack.X2";
+                   });
+  const auto x2_store_it =
+      std::find_if(x2_guarded_preload_report.steps.begin(),
+                   x2_guarded_preload_report.steps.end(),
+                   [](const ResolvedStep& step) { return step.comment == "setup R0"; });
+  const auto x2_guard_it =
+      std::find_if(x2_guarded_preload_report.steps.begin(),
+                   x2_guarded_preload_report.steps.end(), [](const ResolvedStep& step) {
+                     return step.comment == "expected_mode(\"rad\") domain guard";
+                   });
+  const auto x2_numeric_setup_it =
+      std::find_if(x2_guarded_preload_report.steps.begin(),
+                   x2_guarded_preload_report.steps.end(),
+                   [](const ResolvedStep& step) { return step.comment == "setup R2"; });
+  require(x_store_it != x2_guarded_preload_report.steps.end() &&
+              x2_restore_it != x2_guarded_preload_report.steps.end() &&
+              x2_store_it != x2_guarded_preload_report.steps.end() &&
+              x2_guard_it != x2_guarded_preload_report.steps.end() &&
+              x2_numeric_setup_it != x2_guarded_preload_report.steps.end() &&
+              x_store_it < x2_restore_it && x2_restore_it < x2_store_it &&
+              x2_store_it < x2_guard_it && x2_guard_it < x2_numeric_setup_it,
+          "stack.X2 setup should run after stack.X storage and before mode/numeric setup");
+
+  const SetupProgramReport full_stack_report =
+      core::emit::lowering::compile_setup_program_with_preloads(
+          {},
+          {},
+          {
+              PreloadReport{.register_name = "0", .value = "stack.X"},
+              PreloadReport{.register_name = "1", .value = "stack.Y"},
+              PreloadReport{.register_name = "2", .value = "stack.Z"},
+              PreloadReport{.register_name = "3", .value = "stack.T"},
+              PreloadReport{.register_name = "5", .value = "99"},
+          },
+          options);
+  emulator::MK61 calc;
+  calc.set_register("x", "11");
+  calc.set_register("y", "22");
+  calc.set_register("z", "33");
+  calc.set_register("t", "44");
+  calc.load_program(step_opcodes(full_stack_report.steps));
+  calc.press_sequence({"В/О", "С/П"});
+  const emulator::RunResult full_stack_run = calc.run_until_stable(500, 5);
+  require(full_stack_run.stopped, "full stack setup program should stop");
+  const std::string stored_x = calc.read_register("0");
+  const std::string stored_y = calc.read_register("1");
+  const std::string stored_z = calc.read_register("2");
+  const std::string stored_t = calc.read_register("3");
+  require(stored_x == "11,", "stack.X setup should store initial X, got " + stored_x);
+  require(stored_y == "22,", "stack.Y setup should store initial Y, got " + stored_y);
+  require(stored_z == "33,", "stack.Z setup should store initial Z, got " + stored_z);
+  require(stored_t == "44,", "stack.T setup should store initial T, got " + stored_t);
+  require(calc.read_register("5") == "99,", "numeric setup should still run after stack setup");
 }
 
 } // namespace mkpro::tests
