@@ -1474,9 +1474,18 @@ bool expression_is_zero_literal_syntax(const Expression& expression) {
   return value.has_value() && std::abs(*value) < 1e-12;
 }
 
-bool collect_stack_accumulator_sum_terms_syntax(
-    const Expression& expression, const std::function<bool(const Expression&)>& term_safe,
-    int& count) {
+bool expression_is_identifier_named(const Expression& expression, const std::string& name);
+
+bool collect_stack_accumulator_target_sum_terms_with_initial_syntax(
+    const Expression& expression, const std::string& target,
+    const std::function<bool(const Expression&)>& term_safe, int& count, bool& saw_target,
+    bool& has_initial) {
+  if (expression_is_identifier_named(expression, target)) {
+    if (saw_target)
+      return false;
+    saw_target = true;
+    return true;
+  }
   if (expression_is_zero_literal_syntax(expression))
     return true;
   if (term_safe(expression)) {
@@ -1485,20 +1494,38 @@ bool collect_stack_accumulator_sum_terms_syntax(
   }
   if (expression.kind == "call" && lower_ascii(expression.callee) == "sum") {
     return std::all_of(expression.args.begin(), expression.args.end(), [&](const Expression& arg) {
-      return collect_stack_accumulator_sum_terms_syntax(arg, term_safe, count);
+      return collect_stack_accumulator_target_sum_terms_with_initial_syntax(
+          arg, target, term_safe, count, saw_target, has_initial);
     });
   }
-  if (expression.kind != "binary" || expression.op != "+" || expression.left == nullptr ||
-      expression.right == nullptr) {
+  if (expression.kind == "binary" && expression.op == "+" && expression.left != nullptr &&
+      expression.right != nullptr) {
+    return collect_stack_accumulator_target_sum_terms_with_initial_syntax(
+               *expression.left, target, term_safe, count, saw_target, has_initial) &&
+           collect_stack_accumulator_target_sum_terms_with_initial_syntax(
+               *expression.right, target, term_safe, count, saw_target, has_initial);
+  }
+  if (expression_contains_identifier(expression, target) ||
+      expression_contains_packed_score_call_for_accumulator(expression) ||
+      !expression_preserves_previous_x_as_y_for_stack_analysis(expression)) {
     return false;
   }
-  return collect_stack_accumulator_sum_terms_syntax(*expression.left, term_safe, count) &&
-         collect_stack_accumulator_sum_terms_syntax(*expression.right, term_safe, count);
+  has_initial = true;
+  return true;
 }
 
-bool collect_packed_score_sum_terms_syntax(const Expression& expression, int& count) {
-  return collect_stack_accumulator_sum_terms_syntax(
-      expression, packed_score_accumulator_term_syntax_safe, count);
+int packed_score_target_sum_terms_with_initial_syntax_count(const Expression& expression,
+                                                            const std::string& target) {
+  int count = 0;
+  bool saw_target = false;
+  bool has_initial = false;
+  (void)has_initial;
+  if (!collect_stack_accumulator_target_sum_terms_with_initial_syntax(
+          expression, target, packed_score_accumulator_term_syntax_safe, count, saw_target,
+          has_initial)) {
+    return 0;
+  }
+  return saw_target ? count : 0;
 }
 
 bool collect_stack_accumulator_sum_terms_with_initial_syntax(
@@ -1558,8 +1585,6 @@ int packed_score_accumulator_eligible_call_count(const Expression& expression) {
   return count;
 }
 
-bool expression_is_identifier_named(const Expression& expression, const std::string& name);
-
 std::optional<std::string> packed_score_sequence_start_syntax(const V2Statement& statement,
                                                               int& count) {
   if (!statement.target.has_value() || !statement.expr.has_value()) {
@@ -1572,8 +1597,12 @@ std::optional<std::string> packed_score_sequence_start_syntax(const V2Statement&
   count = 0;
 
   if (statement.kind == "v2_assign") {
-    if (expression_contains_identifier(expression, target.name))
+    if (expression_contains_identifier(expression, target.name)) {
+      count = packed_score_target_sum_terms_with_initial_syntax_count(expression, target.name);
+      if (count > 0)
+        return target.name;
       return std::nullopt;
+    }
     if (expression_is_zero_literal_syntax(expression))
       return target.name;
     bool has_initial = false;
@@ -1609,42 +1638,13 @@ int packed_score_sequence_accumulator_syntax_count(const V2Statement& statement,
   const Expression expression = parse_expression(*statement.expr, statement.line);
   if (statement.kind == "v2_update" && statement.op.has_value() && *statement.op == "+=") {
     int count = 0;
-    return collect_packed_score_sum_terms_syntax(expression, count) ? count : 0;
+    bool has_initial = false;
+    return collect_packed_score_sum_terms_with_initial_syntax(expression, count, has_initial)
+               ? count
+               : 0;
   }
-  if (statement.kind == "v2_assign" && expression.kind == "call" &&
-      lower_ascii(expression.callee) == "sum") {
-    bool saw_target = false;
-    int total = 0;
-    for (const Expression& arg : expression.args) {
-      if (expression_is_identifier_named(arg, target)) {
-        if (saw_target)
-          return 0;
-        saw_target = true;
-        continue;
-      }
-      if (expression_contains_identifier(arg, target))
-        return 0;
-      int count = 0;
-      if (!collect_packed_score_sum_terms_syntax(arg, count))
-        return 0;
-      total += count;
-    }
-    return saw_target ? total : 0;
-  }
-  if (statement.kind != "v2_assign" || expression.kind != "binary" || expression.op != "+" ||
-      expression.left == nullptr || expression.right == nullptr) {
-    return 0;
-  }
-  int count = 0;
-  if (expression_is_identifier_named(*expression.left, target) &&
-      collect_packed_score_sum_terms_syntax(*expression.right, count)) {
-    return count;
-  }
-  count = 0;
-  if (expression_is_identifier_named(*expression.right, target) &&
-      collect_packed_score_sum_terms_syntax(*expression.left, count)) {
-    return count;
-  }
+  if (statement.kind == "v2_assign")
+    return packed_score_target_sum_terms_with_initial_syntax_count(expression, target);
   return 0;
 }
 
@@ -17215,10 +17215,20 @@ std::optional<PackedScoreTerm> packed_score_accumulator_expression_term(
   return term;
 }
 
+void append_stack_accumulator_initial(std::optional<Expression>& initial,
+                                      const Expression& expression);
+
 template <typename Term, typename Matcher, typename ZeroMatcher>
-bool collect_stack_accumulator_sum_terms(const Expression& expression, const Matcher& matcher,
-                                         const ZeroMatcher& zero_matcher,
-                                         std::vector<Term>& terms) {
+bool collect_stack_accumulator_target_sum_terms_with_initial(
+    const Expression& expression, const std::string& target, const Matcher& matcher,
+    const ZeroMatcher& zero_matcher, std::vector<Term>& terms,
+    std::optional<Expression>& initial, bool& saw_target) {
+  if (expression_is_identifier_named(expression, target)) {
+    if (saw_target)
+      return false;
+    saw_target = true;
+    return true;
+  }
   if (zero_matcher(expression))
     return true;
   if (const std::optional<Term> term = matcher(expression); term.has_value()) {
@@ -17227,17 +17237,24 @@ bool collect_stack_accumulator_sum_terms(const Expression& expression, const Mat
   }
   if (expression.kind == "call" && lower_ascii(expression.callee) == "sum") {
     return std::all_of(expression.args.begin(), expression.args.end(), [&](const Expression& arg) {
-      return collect_stack_accumulator_sum_terms<Term>(arg, matcher, zero_matcher, terms);
+      return collect_stack_accumulator_target_sum_terms_with_initial<Term>(
+          arg, target, matcher, zero_matcher, terms, initial, saw_target);
     });
   }
-  if (expression.kind != "binary" || expression.op != "+" || expression.left == nullptr ||
-      expression.right == nullptr) {
+  if (expression.kind == "binary" && expression.op == "+" && expression.left != nullptr &&
+      expression.right != nullptr) {
+    return collect_stack_accumulator_target_sum_terms_with_initial<Term>(
+               *expression.left, target, matcher, zero_matcher, terms, initial, saw_target) &&
+           collect_stack_accumulator_target_sum_terms_with_initial<Term>(
+               *expression.right, target, matcher, zero_matcher, terms, initial, saw_target);
+  }
+  if (expression_contains_identifier(expression, target) ||
+      expression_contains_packed_score_call_for_accumulator(expression) ||
+      !expression_preserves_previous_x_as_y_for_stack_analysis(expression)) {
     return false;
   }
-  return collect_stack_accumulator_sum_terms<Term>(*expression.left, matcher, zero_matcher,
-                                                   terms) &&
-         collect_stack_accumulator_sum_terms<Term>(*expression.right, matcher, zero_matcher,
-                                                   terms);
+  append_stack_accumulator_initial(initial, expression);
+  return true;
 }
 
 void append_stack_accumulator_initial(std::optional<Expression>& initial,
@@ -17280,22 +17297,6 @@ bool collect_stack_accumulator_sum_terms_with_initial(const Expression& expressi
   }
   append_stack_accumulator_initial(initial, expression);
   return true;
-}
-
-bool collect_packed_score_sum_terms(const LoweringContext& context, const Expression& expression,
-                                    std::vector<PackedScoreTerm>& terms) {
-  std::optional<Expression> initial;
-  return collect_stack_accumulator_sum_terms_with_initial<PackedScoreTerm>(
-      expression,
-      [&](const Expression& item) {
-        return packed_score_accumulator_expression_term(context, item);
-      },
-      [&](const Expression& item) {
-        const std::optional<double> value = numeric_value_of_expression(context, item);
-        return value.has_value() && std::abs(*value) < 1e-12;
-      },
-      terms, initial) &&
-         !initial.has_value();
 }
 
 bool collect_packed_score_sum_terms_with_initial(LoweringContext& context,
@@ -17393,9 +17394,11 @@ struct StackAccumulatorSequenceStart {
   std::optional<Expression> initial;
 };
 
-template <typename Term, typename Collector>
+template <typename Term, typename InitialCollector, typename TargetInitialCollector>
 std::optional<StackAccumulatorSequenceStart> stack_accumulator_sequence_start_terms(
-    LoweringContext& context, const V2Statement& statement, const Collector& collect_terms,
+    LoweringContext& context, const V2Statement& statement,
+    const InitialCollector& collect_terms,
+    const TargetInitialCollector& collect_target_terms,
     std::vector<Term>& terms) {
   if (!statement.target.has_value() || !statement.expr.has_value() ||
       context.constants.contains(*statement.target)) {
@@ -17407,8 +17410,22 @@ std::optional<StackAccumulatorSequenceStart> stack_accumulator_sequence_start_te
   const Expression expression = parse_expression(*statement.expr, statement.line);
 
   if (statement.kind == "v2_assign") {
-    if (expression_contains_identifier(expression, target.name))
-      return std::nullopt;
+    if (expression_contains_identifier(expression, target.name)) {
+      std::vector<Term> collected;
+      std::optional<Expression> initial;
+      if (!collect_target_terms(expression, target.name, collected, initial) ||
+          collected.empty()) {
+        return std::nullopt;
+      }
+      Expression update_initial = identifier_expression(target.name);
+      if (initial.has_value())
+        update_initial = add_expression(std::move(update_initial), *initial);
+      terms.insert(terms.end(), collected.begin(), collected.end());
+      return StackAccumulatorSequenceStart{
+          .target = target.name,
+          .initial = std::move(update_initial),
+      };
+    }
     if (expression_is_zero_literal_syntax(expression))
       return StackAccumulatorSequenceStart{.target = target.name};
     std::vector<Term> collected;
@@ -17439,11 +17456,13 @@ std::optional<StackAccumulatorSequenceStart> stack_accumulator_sequence_start_te
   return std::nullopt;
 }
 
-template <typename Term, typename Collector>
+template <typename Term, typename InitialCollector, typename TargetInitialCollector>
 bool collect_stack_accumulator_sequence_terms(const V2Statement& statement,
                                               const std::string& target,
-                                              const Collector& collect_terms,
-                                              std::vector<Term>& terms) {
+                                              const InitialCollector& collect_terms,
+                                              const TargetInitialCollector& collect_target_terms,
+                                              std::vector<Term>& terms,
+                                              std::optional<Expression>& initial) {
   if (!statement.target.has_value() || !statement.expr.has_value())
     return false;
   const Expression target_expression = parse_expression(*statement.target, statement.line);
@@ -17453,46 +17472,22 @@ bool collect_stack_accumulator_sequence_terms(const V2Statement& statement,
   const Expression expression = parse_expression(*statement.expr, statement.line);
   std::vector<Term> collected;
   if (statement.kind == "v2_update" && statement.op.has_value() && *statement.op == "+=") {
-    if (!collect_terms(expression, collected) || collected.empty())
+    std::optional<Expression> collected_initial;
+    if (!collect_terms(expression, collected, collected_initial) || collected.empty())
       return false;
+    if (collected_initial.has_value())
+      append_stack_accumulator_initial(initial, *collected_initial);
     terms.insert(terms.end(), collected.begin(), collected.end());
     return true;
   }
-  if (statement.kind == "v2_assign" && expression.kind == "call" &&
-      lower_ascii(expression.callee) == "sum") {
-    bool saw_target = false;
-    std::vector<Term> total;
-    for (const Expression& arg : expression.args) {
-      if (expression_is_identifier_named(arg, target)) {
-        if (saw_target)
-          return false;
-        saw_target = true;
-        continue;
-      }
-      if (expression_contains_identifier(arg, target))
-        return false;
-      std::vector<Term> collected_arg;
-      if (!collect_terms(arg, collected_arg))
-        return false;
-      total.insert(total.end(), collected_arg.begin(), collected_arg.end());
+  if (statement.kind == "v2_assign") {
+    std::optional<Expression> collected_initial;
+    if (!collect_target_terms(expression, target, collected, collected_initial) ||
+        collected.empty()) {
+      return false;
     }
-    if (!saw_target || total.empty())
-      return false;
-    terms.insert(terms.end(), total.begin(), total.end());
-    return true;
-  }
-  if (statement.kind != "v2_assign" || expression.kind != "binary" || expression.op != "+" ||
-      expression.left == nullptr || expression.right == nullptr) {
-    return false;
-  }
-  if (expression_is_identifier_named(*expression.left, target) &&
-      collect_terms(*expression.right, collected) && !collected.empty()) {
-    terms.insert(terms.end(), collected.begin(), collected.end());
-    return true;
-  }
-  collected.clear();
-  if (expression_is_identifier_named(*expression.right, target) &&
-      collect_terms(*expression.left, collected) && !collected.empty()) {
+    if (collected_initial.has_value())
+      append_stack_accumulator_initial(initial, *collected_initial);
     terms.insert(terms.end(), collected.begin(), collected.end());
     return true;
   }
@@ -17506,18 +17501,57 @@ std::optional<StackAccumulatorSequenceStart> packed_score_sequence_start_terms(
                                  std::optional<Expression>& initial) {
     return collect_packed_score_sum_terms_with_initial(context, expression, collected, initial);
   };
-  return stack_accumulator_sequence_start_terms(context, statement, collect_terms, terms);
+  const auto collect_target_terms = [&](const Expression& expression,
+                                        const std::string& target,
+                                        std::vector<PackedScoreTerm>& collected,
+                                        std::optional<Expression>& initial) {
+    bool saw_target = false;
+    const bool ok = collect_stack_accumulator_target_sum_terms_with_initial<PackedScoreTerm>(
+        expression, target,
+        [&](const Expression& item) {
+          return packed_score_accumulator_expression_term(context, item);
+        },
+        [&](const Expression& item) {
+          const std::optional<double> value = numeric_value_of_expression(context, item);
+          return value.has_value() && std::abs(*value) < 1e-12;
+        },
+        collected, initial, saw_target);
+    return ok && saw_target;
+  };
+  return stack_accumulator_sequence_start_terms(context, statement, collect_terms,
+                                                collect_target_terms, terms);
 }
 
 bool collect_packed_score_sequence_accumulator_terms(LoweringContext& context,
                                                      const V2Statement& statement,
                                                      const std::string& target,
-                                                     std::vector<PackedScoreTerm>& terms) {
+                                                     std::vector<PackedScoreTerm>& terms,
+                                                     std::optional<Expression>& initial) {
   const auto collect_terms = [&](const Expression& expression,
-                                 std::vector<PackedScoreTerm>& collected) {
-    return collect_packed_score_sum_terms(context, expression, collected);
+                                 std::vector<PackedScoreTerm>& collected,
+                                 std::optional<Expression>& collected_initial) {
+    return collect_packed_score_sum_terms_with_initial(context, expression, collected,
+                                                       collected_initial);
   };
-  return collect_stack_accumulator_sequence_terms(statement, target, collect_terms, terms);
+  const auto collect_target_terms = [&](const Expression& expression,
+                                        const std::string& target_name,
+                                        std::vector<PackedScoreTerm>& collected,
+                                        std::optional<Expression>& collected_initial) {
+    bool saw_target = false;
+    const bool ok = collect_stack_accumulator_target_sum_terms_with_initial<PackedScoreTerm>(
+        expression, target_name,
+        [&](const Expression& item) {
+          return packed_score_accumulator_expression_term(context, item);
+        },
+        [&](const Expression& item) {
+          const std::optional<double> value = numeric_value_of_expression(context, item);
+          return value.has_value() && std::abs(*value) < 1e-12;
+        },
+        collected, collected_initial, saw_target);
+    return ok && saw_target;
+  };
+  return collect_stack_accumulator_sequence_terms(statement, target, collect_terms,
+                                                  collect_target_terms, terms, initial);
 }
 
 bool expression_derives_current_x_identifier(const Expression& expression,
@@ -17644,7 +17678,7 @@ bool lower_packed_score_sequence_accumulator_run(LoweringContext& context,
     return false;
 
   std::vector<PackedScoreTerm> terms;
-  const std::optional<StackAccumulatorSequenceStart> sequence_start =
+  std::optional<StackAccumulatorSequenceStart> sequence_start =
       packed_score_sequence_start_terms(context, statements.at(start), terms);
   if (!sequence_start.has_value())
     return false;
@@ -17653,7 +17687,8 @@ bool lower_packed_score_sequence_accumulator_run(LoweringContext& context,
   std::size_t run = 1;
   while (start + run < statements.size()) {
     if (!collect_packed_score_sequence_accumulator_terms(context, statements.at(start + run),
-                                                         target, terms)) {
+                                                         target, terms,
+                                                         sequence_start->initial)) {
       break;
     }
     ++run;
@@ -17821,6 +17856,65 @@ bool lower_stack_carried_assignment_run(LoweringContext& context,
   context.optimizations.push_back(OptimizationReport{
       .name = "stack-carried-assignment",
       .detail = "Kept " + target.name +
+                " in X for the immediately following consumer instead of storing it.",
+  });
+  consumed = 1;
+  return true;
+}
+
+bool lower_stack_carried_update_run(LoweringContext& context,
+                                    const std::vector<V2Statement>& statements,
+                                    std::size_t start, std::size_t& consumed) {
+  consumed = 0;
+  if (start + 1U >= statements.size())
+    return false;
+  const V2Statement& update = statements.at(start);
+  if (update.kind != "v2_update" || !update.target.has_value() || !update.expr.has_value() ||
+      !update.op.has_value() || context.constants.contains(*update.target) ||
+      context.stack_only_state_fields.contains(*update.target)) {
+    return false;
+  }
+  if (*update.op != "+=" && *update.op != "-=")
+    return false;
+
+  Expression target;
+  Expression delta;
+  try {
+    target = parse_expression(*update.target, update.line);
+    delta = parse_expression(*update.expr, update.line);
+  } catch (const std::exception&) {
+    return false;
+  }
+  if (target.kind != "identifier" || !context.register_index_by_name.contains(target.name))
+    return false;
+  if (is_coord_list_state_name(context, target.name) ||
+      is_segmented_cells_name(context, target.name) ||
+      is_cells_state_name(context, target.name) ||
+      context.scaled_coord_cell_names.contains(target.name)) {
+    return false;
+  }
+  if (is_numeric_literal_value(delta, 1))
+    return false;
+
+  const V2Statement& consumer = statements.at(start + 1U);
+  if (consumer.kind == "v2_if")
+    return false;
+  if (!statement_directly_consumes_current_x_identifier(context, consumer, target.name))
+    return false;
+  if (!stack_carried_assignment_future_safe(context, statements, start, start + 1U, target.name))
+    return false;
+
+  Expression base = identifier_expression(target.name);
+  Expression update_expression = *update.op == "+="
+                                     ? add_expression(std::move(base), std::move(delta))
+                                     : subtract_expression(std::move(base), std::move(delta));
+  if (!lower_expression_to_x(context, update_expression))
+    return false;
+  mark_current_x(context, target.name);
+  context.emitter.current_x_known_zero = false;
+  context.optimizations.push_back(OptimizationReport{
+      .name = "stack-carried-update",
+      .detail = "Kept updated " + target.name +
                 " in X for the immediately following consumer instead of storing it.",
   });
   consumed = 1;
@@ -33821,6 +33915,15 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (lower_stack_carried_assignment_run(context, statements, index,
                                            stack_carried_assignment_consumed)) {
       index += stack_carried_assignment_consumed - 1U;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+
+    std::size_t stack_carried_update_consumed = 0;
+    if (lower_stack_carried_update_run(context, statements, index,
+                                       stack_carried_update_consumed)) {
+      index += stack_carried_update_consumed - 1U;
       continue;
     }
     if (has_errors(context.diagnostics))

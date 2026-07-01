@@ -329,6 +329,156 @@ program PackedScoreSumContinuationStatementAccumulator {
   require(count_steps_with_comment(sum_continuation_sequence, "recall score") == 0,
           "sum-continuation accumulator should keep score on the stack instead of recalling it");
 
+  const CompileResult continuation_with_initial = compile_source(R"mkpro(
+program PackedScoreContinuationInitialAccumulator {
+  state {
+    line: packed = 44444.4
+    slot_a: counter 0..7 = 4
+    slot_b: counter 0..7 = 5
+    slot_c: counter 0..7 = 6
+    slot_d: counter 0..7 = 7
+    score: packed = 0
+    bonus_a: packed = 2
+    bonus_b: packed = 3
+  }
+  loop {
+    score = packed_score(line, slot_a)
+    score = sum(score, bonus_a, packed_score(line, slot_b))
+    score += sum(bonus_b, packed_score(line, slot_c), packed_score(line, slot_d))
+    halt(score)
+  }
+}
+)mkpro",
+                                                               pinned_options());
+  require(continuation_with_initial.implemented,
+          "native compiler should lower continuation packed_score accumulators with initial "
+          "addends");
+  require(continuation_with_initial.diagnostics.empty(),
+          "continuation packed_score initial addends should not report diagnostics");
+  require(has_optimization(continuation_with_initial,
+                           "packed-score-sequence-stack-accumulator"),
+          "continuation packed_score initial addends should report sequence stack lowering");
+  require(count_optimization(continuation_with_initial, "packed-score-stack-helper-call") == 0,
+          "continuation packed_score initial addends should not use standalone helper calls");
+  require(count_packed_score_helper_jumps(continuation_with_initial) == 0,
+          "continuation packed_score initial addends should not emit standalone helper calls");
+  require(count_packed_score_accumulator_helper_jumps(continuation_with_initial) == 4,
+          "continuation packed_score initial addends should emit four accumulator helper calls");
+  require(count_steps_with_comment(continuation_with_initial, "set score") == 0,
+          "continuation initial addends should keep score on the stack for the direct consumer");
+  require(count_steps_with_comment(continuation_with_initial, "recall score") == 0,
+          "continuation initial addends should not recall the stack-resident score");
+  require(count_steps_with_comment(continuation_with_initial, "recall bonus_a") == 1 &&
+              count_steps_with_comment(continuation_with_initial, "recall bonus_b") == 1,
+          "continuation initial addends should fold both bonuses into the initial accumulator");
+
+  const CompileResult nested_binary_continuation = compile_source(R"mkpro(
+program PackedScoreNestedBinaryContinuation {
+  state {
+    line: packed = 44444.4
+    slot_a: counter 0..7 = 4
+    slot_b: counter 0..7 = 5
+    slot_c: counter 0..7 = 6
+    score: packed = 0
+  }
+  loop {
+    score = packed_score(line, slot_a)
+    score = score + packed_score(line, slot_b) + packed_score(line, slot_c)
+    halt(score)
+  }
+}
+)mkpro",
+                                                                pinned_options());
+  require(nested_binary_continuation.implemented,
+          "native compiler should lower nested binary packed_score continuations");
+  require(nested_binary_continuation.diagnostics.empty(),
+          "nested binary packed_score continuation should not report diagnostics");
+  require(has_optimization(nested_binary_continuation,
+                           "packed-score-sequence-stack-accumulator"),
+          "nested binary packed_score continuation should report sequence accumulator lowering");
+  require(count_optimization(nested_binary_continuation, "packed-score-stack-helper-call") == 0,
+          "nested binary packed_score continuation should not use standalone helper calls");
+  require(count_packed_score_helper_jumps(nested_binary_continuation) == 0,
+          "nested binary packed_score continuation should not emit standalone helper calls");
+  require(count_packed_score_accumulator_helper_jumps(nested_binary_continuation) == 3,
+          "nested binary packed_score continuation should emit three accumulator helper calls");
+  require(count_steps_with_comment(nested_binary_continuation, "set score") == 0,
+          "nested binary accumulator should keep score on the stack for the direct consumer");
+  require(count_steps_with_comment(nested_binary_continuation, "recall score") == 0,
+          "nested binary continuation should reuse the stack accumulator instead of recalling it");
+
+  const CompileResult self_assignment_accumulator = compile_source(R"mkpro(
+program PackedScoreSelfAssignmentAccumulator {
+  state {
+    line: packed = 44444.4
+    slot_a: counter 0..7 = 4
+    slot_b: counter 0..7 = 5
+    slot_c: counter 0..7 = 6
+    score: packed = 7
+  }
+  loop {
+    score = score + packed_score(line, slot_a) + packed_score(line, slot_b) + packed_score(line, slot_c)
+    halt(score)
+  }
+}
+)mkpro",
+                                                                pinned_options());
+  require(self_assignment_accumulator.implemented,
+          "native compiler should lower self-referential packed_score accumulator assignment");
+  require(self_assignment_accumulator.diagnostics.empty(),
+          "self-referential packed_score accumulator should not report diagnostics");
+  require(has_optimization(self_assignment_accumulator,
+                           "packed-score-assignment-stack-accumulator"),
+          "self-referential packed_score accumulator should report assignment stack lowering");
+  require(count_optimization(self_assignment_accumulator, "packed-score-stack-helper-call") == 0,
+          "self-referential packed_score accumulator should not use standalone helper calls");
+  require(count_packed_score_helper_jumps(self_assignment_accumulator) == 0,
+          "self-referential packed_score accumulator should not emit standalone helper calls");
+  require(count_packed_score_accumulator_helper_jumps(self_assignment_accumulator) == 3,
+          "self-referential packed_score accumulator should emit three accumulator helper calls");
+  require(count_steps_with_comment(self_assignment_accumulator, "set score") == 0,
+          "self-referential accumulator should keep score on the stack for the direct consumer");
+  require(count_steps_with_comment(self_assignment_accumulator, "recall score") == 1,
+          "self-referential accumulator should recall the incoming score exactly once");
+
+  const CompileResult self_assignment_with_initial = compile_source(R"mkpro(
+program PackedScoreSelfAssignmentInitialAccumulator {
+  state {
+    line: packed = 44444.4
+    slot_a: counter 0..7 = 4
+    slot_b: counter 0..7 = 5
+    slot_c: counter 0..7 = 6
+    score: packed = 7
+    bonus: packed = 3
+  }
+  loop {
+    score = sum(score, bonus, packed_score(line, slot_a), packed_score(line, slot_b), packed_score(line, slot_c))
+    halt(score)
+  }
+}
+)mkpro",
+                                                               pinned_options());
+  require(self_assignment_with_initial.implemented,
+          "native compiler should lower self-referential packed_score assignment with an initial "
+          "addend");
+  require(self_assignment_with_initial.diagnostics.empty(),
+          "self-referential packed_score initial addend should not report diagnostics");
+  require(has_optimization(self_assignment_with_initial,
+                           "packed-score-assignment-stack-accumulator"),
+          "self-referential packed_score initial addend should report assignment stack lowering");
+  require(count_optimization(self_assignment_with_initial, "packed-score-stack-helper-call") == 0,
+          "self-referential packed_score initial addend should not use standalone helper calls");
+  require(count_packed_score_helper_jumps(self_assignment_with_initial) == 0,
+          "self-referential packed_score initial addend should not emit standalone helper calls");
+  require(count_packed_score_accumulator_helper_jumps(self_assignment_with_initial) == 3,
+          "self-referential packed_score initial addend should emit three accumulator helper calls");
+  require(count_steps_with_comment(self_assignment_with_initial, "set score") == 0,
+          "self-referential initial addend accumulator should keep score on the stack");
+  require(count_steps_with_comment(self_assignment_with_initial, "recall score") == 1,
+          "self-referential initial addend should recall the incoming score exactly once");
+  require(count_steps_with_comment(self_assignment_with_initial, "recall bonus") == 1,
+          "self-referential initial addend should fold bonus into the initial accumulator once");
+
   const CompileResult zero_started_sequence = compile_source(R"mkpro(
 program PackedScoreZeroStartedStatementAccumulator {
   state {

@@ -751,12 +751,42 @@ program StackCarriedUpdateConsumer {
             "update consumer should keep tmp in X for the following += update");
     require(has_optimization(result, "stack-current-x-scheduling"),
             "update consumer should reuse tmp already in X while updating score");
+    require(has_optimization(result, "stack-carried-update"),
+            "update consumer should keep the updated score in X for halt(score)");
     require(count_steps_with_comment(result, "set tmp") == 0,
             "stack-carried update consumer should not store tmp");
     require(count_steps_with_comment(result, "recall tmp") == 0,
             "stack-carried update consumer should not recall tmp");
-    require(count_steps_with_comment(result, "set score") == 1,
-            "stack-carried update consumer should still store the updated state");
+    require(count_steps_with_comment(result, "set score") == 0,
+            "stack-carried update consumer should not store immediately consumed score");
+    require(count_steps_with_comment(result, "recall score") == 1,
+            "stack-carried update consumer should recall score only to compute the update");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedDirectUpdateConsumer {
+  state {
+    score: packed = 10
+    delta: packed = 4
+  }
+
+  loop {
+    score += delta
+    halt(score)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried direct update consumer");
+    require(has_optimization(result, "stack-carried-update"),
+            "direct update consumer should keep updated score in X for halt(score)");
+    require(count_steps_with_comment(result, "set score") == 0,
+            "direct update consumer should not store immediately consumed score");
+    require(count_steps_with_comment(result, "recall score") == 1,
+            "direct update consumer should recall score only to compute the update");
+    require(count_steps_with_comment(result, "recall delta") == 1,
+            "direct update consumer should recall delta once");
   }
 
   {
@@ -782,6 +812,8 @@ program StackCarriedUnaryUpdateConsumer {
             "unary update consumer should keep tmp in X for the following -= update");
     require(has_optimization(result, "stack-current-x-scheduling"),
             "unary update consumer should reuse tmp already in X while updating score");
+    require(has_optimization(result, "stack-carried-update"),
+            "unary update consumer should keep the updated score in X for halt(score)");
     require(count_steps_with_comment(result, "set tmp") == 0,
             "stack-carried unary update consumer should not store tmp");
     require(count_steps_with_comment(result, "recall tmp") == 0,
@@ -790,8 +822,10 @@ program StackCarriedUnaryUpdateConsumer {
             "stack-carried unary update consumer should derive frac() from current X");
     require(count_steps_with_comment(result, "current-X operand order") == 1,
             "unary -= update consumer should swap stack order without recalling tmp");
-    require(count_steps_with_comment(result, "set score") == 1,
-            "stack-carried unary update consumer should still store the updated state");
+    require(count_steps_with_comment(result, "set score") == 0,
+            "stack-carried unary update consumer should not store immediately consumed score");
+    require(count_steps_with_comment(result, "recall score") == 1,
+            "stack-carried unary update consumer should recall score only to compute the update");
   }
 
   {
