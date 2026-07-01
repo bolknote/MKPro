@@ -122,6 +122,18 @@ const SizeOpportunityReport* find_size_opportunity(const CompileResult& result,
   return it == result.size_attribution.opportunities.end() ? nullptr : &*it;
 }
 
+const SizeNextActionSummaryReport* find_size_next_action(const CompileResult& result,
+                                                         const std::string& source,
+                                                         const std::string& action) {
+  const auto it = std::find_if(result.size_attribution.next_actions.begin(),
+                               result.size_attribution.next_actions.end(),
+                               [&](const SizeNextActionSummaryReport& next_action) {
+                                 return next_action.source == source &&
+                                        next_action.action == action;
+                               });
+  return it == result.size_attribution.next_actions.end() ? nullptr : &*it;
+}
+
 } // namespace
 
 void stack_residency_matches_typescript_contract() {
@@ -310,6 +322,15 @@ program StackHelperAbiAggregation {
                 opportunity->details.contains("stackEntryCandidateCallSites") &&
                 opportunity->details.at("stackEntryCandidateCallSites") == "2",
             "stack helper ABI opportunity should rank repeated sites by net savings");
+    const SizeNextActionSummaryReport* cost_action = find_size_next_action(
+        result, "costModelAction", "implement-stack-argument-helper-entry");
+    require(cost_action != nullptr && cost_action->opportunities == 1 &&
+                cost_action->potential_savings == 1 && cost_action->best_savings == 1 &&
+                cost_action->best_variant == "stack-helper-abi" &&
+                cost_action->best_blocker_kind == "stack-helper-abi" &&
+                cost_action->best_details.contains("costModelAction"),
+            "positive stack helper ABI opportunity should rank the concrete implementation "
+            "action");
   }
 
   {

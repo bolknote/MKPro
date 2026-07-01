@@ -70,10 +70,12 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   saving in that alternative group instead of summing mutually exclusive
   rejected candidates. The companion `nextActions` array aggregates positive-savings
   opportunities by structured `requiredAction`, `layoutAction`,
-  `safeSavingsAction`, and `candidateDiscoveryAction` details, so
+  `safeSavingsAction`, `candidateDiscoveryAction`, and `costModelAction` details, so
   the report can rank concrete compiler-side moves such as preserving
   fractional erasure before arithmetic, relayout/code-data-overlay work, or
-  broadening candidate discovery beyond already-existing flow targets
+  broadening candidate discovery beyond already-existing flow targets, or
+  implementing a stack-argument helper entry once the entry-body cost model says
+  it is net-positive,
   instead of leaving them buried inside free-form rejection text.
   Dead-integer fractional-selector blockers append the same
   actionable selector/layout hints to `reason` and expose them as structured

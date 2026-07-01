@@ -46168,6 +46168,10 @@ SizeAttributionReport build_size_attribution_report(
         discovery_it != opportunity.details.end()) {
       add_next_action(opportunity, "candidateDiscoveryAction", discovery_it->second, index);
     }
+    if (const auto cost_it = opportunity.details.find("costModelAction");
+        cost_it != opportunity.details.end()) {
+      add_next_action(opportunity, "costModelAction", cost_it->second, index);
+    }
   }
   report.next_actions.reserve(next_action_summaries.size());
   for (auto& [unused, summary] : next_action_summaries) {
