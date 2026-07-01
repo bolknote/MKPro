@@ -45122,6 +45122,32 @@ size_opportunity_details(const CandidateReport& candidate,
   }
   if (candidate.variant == "fractional-constant-selector-dead-int" &&
       reason.find("before K {x}") != std::string::npos) {
+    constexpr std::string_view kSourcePrefix =
+        "dead-integer fractional selector source ";
+    constexpr std::string_view kReaches = " reaches ";
+    constexpr std::string_view kBeforeErase = " before K {x}";
+    if (reason.rfind(kSourcePrefix, 0) == 0) {
+      const std::size_t source_start = kSourcePrefix.size();
+      const std::size_t reaches = reason.find(kReaches, source_start);
+      if (reaches != std::string::npos && reaches > source_start) {
+        details.emplace("fractionalSelectorSource",
+                        reason.substr(source_start, reaches - source_start));
+        const std::size_t consumer_start = reaches + kReaches.size();
+        const std::size_t before_erase = reason.find(kBeforeErase, consumer_start);
+        if (before_erase != std::string::npos && before_erase > consumer_start) {
+          details.emplace("fractionalSelectorConsumer",
+                          reason.substr(consumer_start, before_erase - consumer_start));
+          const std::size_t kind_start = reason.find("(", before_erase + kBeforeErase.size());
+          const std::size_t kind_end =
+              kind_start == std::string::npos ? std::string::npos : reason.find(")", kind_start);
+          if (kind_start != std::string::npos && kind_end != std::string::npos &&
+              kind_end > kind_start + 1U) {
+            details.emplace("consumerKind", reason.substr(kind_start + 1U,
+                                                          kind_end - kind_start - 1U));
+          }
+        }
+      }
+    }
     const std::string blocker = size_opportunity_blocker_kind(candidate);
     details.emplace("integerPartStatus", "live-before-fractional-erase");
     details.emplace("selectorDataUse", blocker);

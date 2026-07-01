@@ -359,7 +359,11 @@ void example_sizes_match_typescript_baselines() {
                   dead_integer_opportunity->details.contains("selectorTarget") &&
                   dead_integer_opportunity->details.contains("naturalTarget") &&
                   dead_integer_opportunity->details.contains("recoveryFreeLayout") &&
+                  dead_integer_opportunity->details.contains("fractionalSelectorSource") &&
+                  dead_integer_opportunity->details.contains("fractionalSelectorConsumer") &&
+                  dead_integer_opportunity->details.contains("consumerKind") &&
                   dead_integer_opportunity->details.contains("integerPartStatus") &&
+                  dead_integer_opportunity->details.contains("selectorDataUse") &&
                   dead_integer_opportunity->details.contains("requiredAction") &&
                   dead_integer_opportunity->details.contains("currentNaturalTargetFlowCount") &&
                   dead_integer_opportunity->details.contains("currentNaturalTargetOccupant") &&
@@ -369,6 +373,10 @@ void example_sizes_match_typescript_baselines() {
               "tic-tac-toe-4x4 size opportunity should expose structured selector-layout "
               "details");
       require(dead_integer_opportunity->details.at("proofDisposition") == "not-proof-only" &&
+                  !dead_integer_opportunity->details.at("fractionalSelectorSource").empty() &&
+                  !dead_integer_opportunity->details.at("fractionalSelectorConsumer").empty() &&
+                  dead_integer_opportunity->details.at("consumerKind") == "data arithmetic" &&
+                  dead_integer_opportunity->details.at("selectorDataUse") == "data-arithmetic" &&
                   dead_integer_opportunity->details.at("requiredAction") ==
                       "keep-fractional-erase-before-data-arithmetic" &&
                   dead_integer_opportunity->details.at("currentNaturalTargetFlowCount") == "0" &&
