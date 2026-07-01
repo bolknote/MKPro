@@ -46105,6 +46105,8 @@ SizeAttributionReport build_size_attribution_report(
     helper.details["registerStoreCells"] = std::to_string(helper.register_store_cells);
     helper.details["registerTrafficOccurrences"] =
         std::to_string(helper.register_traffic_occurrences);
+    helper.details["registerTrafficEstimateKind"] = "gross-local-helper-traffic";
+    helper.details["registerTrafficProofStatus"] = "missing-callsite-stack-value-proof";
     const auto names_it = helper_register_traffic_names.find(helper.label);
     if (names_it != helper_register_traffic_names.end()) {
       helper.details["registerTrafficNames"] =
@@ -46228,6 +46230,11 @@ SizeAttributionReport build_size_attribution_report(
     details["helperCallSiteCells"] = std::to_string(helper.call_site_cells);
     details["candidateBasis"] = "avoid-helper-local-register-traffic";
     details["savingsModel"] = "gross-helper-register-traffic-before-callsite-proof";
+    details["estimateKind"] = "gross-upper-bound";
+    details["candidateStepsStatus"] = "synthetic-upper-bound-not-compiled";
+    details["sizeImpactStatus"] = "blocked-unmeasured";
+    details["netSavingsStatus"] = "unproved-before-callsite-stack-proof";
+    details["measurementBasis"] = "summed-helper-local-recall-store-cells";
     details["proofStatus"] = "missing-callsite-stack-value-proof";
     details["requiredAction"] = "value-aware-stack-register-scheduling";
     details["schedulerScope"] = "helper-entry-and-callsite-stack-values";

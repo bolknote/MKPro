@@ -366,6 +366,12 @@ void example_sizes_match_typescript_baselines() {
                   cell_mask_helper->details.contains("registerTrafficAction") &&
                   cell_mask_helper->details.at("registerTrafficAction") ==
                       "try-value-aware-stack-register-scheduling" &&
+                  cell_mask_helper->details.contains("registerTrafficEstimateKind") &&
+                  cell_mask_helper->details.at("registerTrafficEstimateKind") ==
+                      "gross-local-helper-traffic" &&
+                  cell_mask_helper->details.contains("registerTrafficProofStatus") &&
+                  cell_mask_helper->details.at("registerTrafficProofStatus") ==
+                      "missing-callsite-stack-value-proof" &&
                   cell_mask_helper->details.contains("registerTrafficNames") &&
                   cell_mask_helper->details.at("registerTrafficNames").find("x") !=
                       std::string::npos &&
@@ -392,6 +398,18 @@ void example_sizes_match_typescript_baselines() {
                   cell_mask_register_traffic->details.contains("savingsModel") &&
                   cell_mask_register_traffic->details.at("savingsModel") ==
                       "gross-helper-register-traffic-before-callsite-proof" &&
+                  cell_mask_register_traffic->details.contains("estimateKind") &&
+                  cell_mask_register_traffic->details.at("estimateKind") ==
+                      "gross-upper-bound" &&
+                  cell_mask_register_traffic->details.contains("candidateStepsStatus") &&
+                  cell_mask_register_traffic->details.at("candidateStepsStatus") ==
+                      "synthetic-upper-bound-not-compiled" &&
+                  cell_mask_register_traffic->details.contains("sizeImpactStatus") &&
+                  cell_mask_register_traffic->details.at("sizeImpactStatus") ==
+                      "blocked-unmeasured" &&
+                  cell_mask_register_traffic->details.contains("netSavingsStatus") &&
+                  cell_mask_register_traffic->details.at("netSavingsStatus") ==
+                      "unproved-before-callsite-stack-proof" &&
                   cell_mask_register_traffic->details.contains("proofStatus") &&
                   cell_mask_register_traffic->details.at("proofStatus") ==
                       "missing-callsite-stack-value-proof" &&
@@ -659,6 +677,8 @@ void example_sizes_match_typescript_baselines() {
                   value_aware_scheduler_blocker->best_savings >=
                       cell_mask_helper->register_traffic_cells &&
                   value_aware_scheduler_blocker->best_variant == "helper-register-traffic" &&
+                  value_aware_scheduler_blocker->best_details.contains("estimateKind") &&
+                  value_aware_scheduler_blocker->best_details.contains("sizeImpactStatus") &&
                   value_aware_scheduler_blocker->best_details.contains("proofStatus") &&
                   value_aware_scheduler_blocker->best_details.contains("schedulerScope") &&
                   value_aware_scheduler_blocker->best_details.contains("registerTrafficBreakdown"),
@@ -723,6 +743,9 @@ void example_sizes_match_typescript_baselines() {
                       "value-aware-stack-register-scheduler" &&
                   value_aware_scheduler_action->best_variant == "helper-register-traffic" &&
                   value_aware_scheduler_action->best_details.contains("savingsModel") &&
+                  value_aware_scheduler_action->best_details.contains("estimateKind") &&
+                  value_aware_scheduler_action->best_details.contains("candidateStepsStatus") &&
+                  value_aware_scheduler_action->best_details.contains("sizeImpactStatus") &&
                   value_aware_scheduler_action->best_details.contains("schedulerScope") &&
                   value_aware_scheduler_action->best_details.contains("proofStatus") &&
                   value_aware_scheduler_action->best_details.contains("registerTrafficBreakdown"),

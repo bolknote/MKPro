@@ -900,6 +900,7 @@ void print_human_analysis_report(const mkpro::CompileResult& result) {
         std::cout << " blocker=" << opportunity.blocker_kind;
       print_size_detail_suffix(opportunity.details,
                                {"helperLabel", "registerTrafficNames", "requiredAction",
+                                "estimateKind", "candidateStepsStatus", "sizeImpactStatus",
                                 "registerTrafficBreakdown", "layoutAction", "safeSavingsAction",
                                 "candidateDiscoveryAction"});
       if (!opportunity.reason.empty())
@@ -970,6 +971,7 @@ void print_human_analysis_report(const mkpro::CompileResult& result) {
         std::cout << " at " << action.best_site;
       print_size_detail_suffix(action.best_details,
                                {"helperLabel", "registerTrafficNames", "registerTrafficBreakdown",
+                                "estimateKind", "candidateStepsStatus", "sizeImpactStatus",
                                 "layoutAction", "safeSavingsAction", "candidateDiscoveryAction"});
       if (!action.best_reason.empty())
         std::cout << " - " << action.best_reason;
