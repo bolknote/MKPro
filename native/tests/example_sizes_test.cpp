@@ -350,15 +350,19 @@ void example_sizes_match_typescript_baselines() {
                   stack_helper_abi->details.at("grossMaterializeCells") == "2" &&
                   stack_helper_abi->details.contains("entryOverheadStatus") &&
                   stack_helper_abi->details.at("entryOverheadStatus") ==
-                      "unmodeled-stack-entry-helper-cost" &&
+                      "estimated-stack-entry-helper-cost" &&
+                  stack_helper_abi->details.contains("estimatedStackEntryOverheadCells") &&
+                  stack_helper_abi->details.at("estimatedStackEntryOverheadCells") == "3" &&
+                  stack_helper_abi->details.contains("estimatedNetSavings") &&
+                  stack_helper_abi->details.at("estimatedNetSavings") == "-1" &&
                   stack_helper_abi->details.contains("netSavingsStatus") &&
                   stack_helper_abi->details.at("netSavingsStatus") ==
-                      "gross-only-before-entry-cost" &&
+                      "estimated-negative-after-entry-cost" &&
                   stack_helper_abi->details.contains("costModelAction") &&
                   stack_helper_abi->details.at("costModelAction") ==
-                      "model-stack-entry-helper-body-cost",
+                      "find-more-stack-entry-call-sites-or-inline-helper",
               "tic-tac-toe-4x4 stack-helper ABI blocker should distinguish gross materialization "
-              "savings from unmodeled stack-entry body cost");
+              "savings from estimated stack-entry body cost");
       const SizeOpportunityReport* stack_helper_abi_opportunity =
           find_size_opportunity(result, "stack-helper-abi");
       require(stack_helper_abi_opportunity != nullptr &&
@@ -378,7 +382,12 @@ void example_sizes_match_typescript_baselines() {
                       "gross-materialization-only" &&
                   stack_helper_abi_opportunity->details.contains("costModelAction") &&
                   stack_helper_abi_opportunity->details.at("costModelAction") ==
-                      "model-stack-entry-helper-body-cost" &&
+                      "find-more-stack-entry-call-sites-or-inline-helper" &&
+                  stack_helper_abi_opportunity->details.contains("estimatedNetSavings") &&
+                  stack_helper_abi_opportunity->details.at("estimatedNetSavings") == "-1" &&
+                  stack_helper_abi_opportunity->details.contains("estimatedCandidateSteps") &&
+                  stack_helper_abi_opportunity->details.at("estimatedCandidateSteps") ==
+                      std::to_string(static_cast<int>(result.steps.size()) + 1) &&
                   stack_helper_abi_opportunity->details.contains("requiredAction") &&
                   stack_helper_abi_opportunity->details.at("requiredAction") ==
                       "stack-argument-helper-entry",

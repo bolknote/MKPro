@@ -45445,6 +45445,68 @@ int detail_int_or_zero(const std::map<std::string, std::string>& details,
   }
 }
 
+std::vector<std::string>
+comma_separated_detail_values(const std::map<std::string, std::string>& details,
+                              const std::string& key) {
+  std::vector<std::string> values;
+  const auto it = details.find(key);
+  if (it == details.end())
+    return values;
+  std::size_t cursor = 0;
+  while (cursor <= it->second.size()) {
+    const std::size_t comma = it->second.find(',', cursor);
+    const std::string value =
+        trim_ascii(it->second.substr(cursor, comma == std::string::npos ? std::string::npos
+                                                                        : comma - cursor));
+    if (!value.empty())
+      values.push_back(value);
+    if (comma == std::string::npos)
+      break;
+    cursor = comma + 1U;
+  }
+  return values;
+}
+
+std::optional<int>
+estimated_stack_entry_helper_overhead_cells(const std::map<std::string, std::string>& details) {
+  const auto expression_it = details.find("expression");
+  if (expression_it == details.end())
+    return std::nullopt;
+  const std::vector<std::string> temps = comma_separated_detail_values(details, "temps");
+  if (temps.size() != 2U)
+    return std::nullopt;
+
+  try {
+    const int line = detail_int_or_zero(details, "line");
+    const Expression expression = parse_expression(expression_it->second, line);
+    if (expression.kind == "call" && lower_ascii(expression.callee) == "cell_mask" &&
+        expression.args.size() == 2U && expression.args.at(0).kind == "identifier" &&
+        expression.args.at(1).kind == "identifier" && expression.args.at(0).name == temps.at(0) &&
+        expression.args.at(1).name == temps.at(1)) {
+      // Regular cell_mask helpers start with recall(first), 10^x, recall(second).
+      // A stack-entry caller already has X=second/Y=first, so the alternate
+      // entry needs X<->Y, 10^x, X<->Y before it can share the helper tail.
+      return 3;
+    }
+  } catch (const std::exception&) {
+  }
+  return std::nullopt;
+}
+
+std::string net_savings_status_for_estimate(int estimated_net_savings) {
+  if (estimated_net_savings > 0)
+    return "estimated-positive-after-entry-cost";
+  if (estimated_net_savings == 0)
+    return "estimated-break-even-after-entry-cost";
+  return "estimated-negative-after-entry-cost";
+}
+
+std::string cost_model_action_for_estimate(int estimated_net_savings) {
+  if (estimated_net_savings > 0)
+    return "implement-stack-argument-helper-entry";
+  return "find-more-stack-entry-call-sites-or-inline-helper";
+}
+
 std::string size_report_ratio_text(int numerator, int denominator) {
   if (denominator <= 0)
     return "0";
@@ -45810,6 +45872,15 @@ SizeAttributionReport build_size_attribution_report(
     details.emplace("entryOverheadStatus", "unmodeled-stack-entry-helper-cost");
     details.emplace("netSavingsStatus", "gross-only-before-entry-cost");
     details.emplace("costModelAction", "model-stack-entry-helper-body-cost");
+    if (const std::optional<int> overhead =
+            estimated_stack_entry_helper_overhead_cells(details)) {
+      const int estimated_net_savings = materialize_cells - *overhead;
+      details["estimatedStackEntryOverheadCells"] = std::to_string(*overhead);
+      details["estimatedNetSavings"] = std::to_string(estimated_net_savings);
+      details["entryOverheadStatus"] = "estimated-stack-entry-helper-cost";
+      details["netSavingsStatus"] = net_savings_status_for_estimate(estimated_net_savings);
+      details["costModelAction"] = cost_model_action_for_estimate(estimated_net_savings);
+    }
     report.abi_blockers.push_back(SizeAbiBlockerReport{
         .kind = details.contains("kind") ? details.at("kind") : std::string("stack-helper-abi"),
         .label = details.contains("expression") ? details.at("expression")
@@ -45841,6 +45912,14 @@ SizeAttributionReport build_size_attribution_report(
     details.emplace("requiredAction", "stack-argument-helper-entry");
     details.emplace("candidateBasis", "avoid-materializing-stack-resident-temps");
     details.emplace("savingsModel", "gross-materialization-only");
+    if (const auto net_it = details.find("estimatedNetSavings");
+        net_it != details.end()) {
+      try {
+        details.emplace("estimatedCandidateSteps",
+                        std::to_string(current_steps - std::stoi(net_it->second)));
+      } catch (const std::exception&) {
+      }
+    }
     report.opportunities.push_back(SizeOpportunityReport{
         .site = "abi",
         .variant = blocker.kind,
