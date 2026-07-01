@@ -45881,27 +45881,74 @@ SizeAttributionReport build_size_attribution_report(
               return left.name < right.name;
             });
 
+  struct AbiBlockerAggregate {
+    std::string kind;
+    std::string label;
+    std::string reason;
+    int first_line = 0;
+    int last_line = 0;
+    int materialize_cells = 0;
+    int call_sites = 0;
+    std::map<std::string, std::string> details;
+  };
+  std::map<std::string, AbiBlockerAggregate> abi_blocker_aggregates;
   for (const OptimizationReport& optimization : optimizations) {
     if (optimization.name != "stack-resident-helper-abi-blocked")
       continue;
     std::map<std::string, std::string> details =
         semicolon_key_value_details(optimization.detail);
     const int materialize_cells = detail_int_or_zero(details, "materializeCells");
-    constexpr int kStackEntryCandidateCallSites = 1;
-    details.emplace("grossMaterializeCells", std::to_string(materialize_cells));
-    details.emplace("stackEntryCandidateCallSites",
-                    std::to_string(kStackEntryCandidateCallSites));
-    details.emplace("materializeCellsPerCallSite", std::to_string(materialize_cells));
-    details.emplace("entryOverheadStatus", "unmodeled-stack-entry-helper-cost");
-    details.emplace("netSavingsStatus", "gross-only-before-entry-cost");
-    details.emplace("costModelAction", "model-stack-entry-helper-body-cost");
+    const std::string kind =
+        details.contains("kind") ? details.at("kind") : std::string("stack-helper-abi");
+    const std::string label =
+        details.contains("expression") ? details.at("expression")
+                                       : std::string("stack-resident expression helper");
+    const std::string temps = details.contains("temps") ? details.at("temps") : std::string();
+    const std::string aggregate_key = kind + "\x1f" + label + "\x1f" + temps;
+    AbiBlockerAggregate& aggregate = abi_blocker_aggregates[aggregate_key];
+    if (aggregate.call_sites == 0) {
+      aggregate.kind = kind;
+      aggregate.label = label;
+      aggregate.reason = "shared expression helper has only register-entry ABI for "
+                         "stack-resident temps";
+      aggregate.details = std::move(details);
+      aggregate.first_line = detail_int_or_zero(aggregate.details, "line");
+      aggregate.last_line = aggregate.first_line;
+    } else {
+      const int line = detail_int_or_zero(details, "line");
+      if (line > 0) {
+        aggregate.first_line =
+            aggregate.first_line == 0 ? line : std::min(aggregate.first_line, line);
+        aggregate.last_line = std::max(aggregate.last_line, line);
+      }
+    }
+    aggregate.materialize_cells += materialize_cells;
+    ++aggregate.call_sites;
+  }
+  for (auto& [unused, aggregate] : abi_blocker_aggregates) {
+    (void)unused;
+    std::map<std::string, std::string>& details = aggregate.details;
+    const int materialize_cells = aggregate.materialize_cells;
+    details["grossMaterializeCells"] = std::to_string(materialize_cells);
+    details["stackEntryCandidateCallSites"] = std::to_string(aggregate.call_sites);
+    details["materializeCellsPerCallSite"] =
+        size_report_ratio_text(materialize_cells, aggregate.call_sites);
+    if (aggregate.first_line > 0)
+      details["firstLine"] = std::to_string(aggregate.first_line);
+    if (aggregate.last_line > 0)
+      details["lastLine"] = std::to_string(aggregate.last_line);
+    details["entryOverheadStatus"] = "unmodeled-stack-entry-helper-cost";
+    details["netSavingsStatus"] = "gross-only-before-entry-cost";
+    details["costModelAction"] = "model-stack-entry-helper-body-cost";
     if (const std::optional<int> overhead =
             estimated_stack_entry_helper_overhead_cells(details)) {
       const int estimated_net_savings = materialize_cells - *overhead;
       const int break_even_call_sites =
-          materialize_cells > 0 ? (*overhead + materialize_cells - 1) / materialize_cells : 0;
+          materialize_cells > 0
+              ? ((*overhead * aggregate.call_sites) + materialize_cells - 1) / materialize_cells
+              : 0;
       const int additional_call_sites =
-          std::max(0, break_even_call_sites - kStackEntryCandidateCallSites);
+          std::max(0, break_even_call_sites - aggregate.call_sites);
       details["estimatedStackEntryOverheadCells"] = std::to_string(*overhead);
       details["estimatedNetSavings"] = std::to_string(estimated_net_savings);
       details["estimatedEntryOverheadAmortization"] = "shared-helper-entry-body";
@@ -45912,13 +45959,12 @@ SizeAttributionReport build_size_attribution_report(
       details["costModelAction"] = cost_model_action_for_estimate(estimated_net_savings);
     }
     report.abi_blockers.push_back(SizeAbiBlockerReport{
-        .kind = details.contains("kind") ? details.at("kind") : std::string("stack-helper-abi"),
-        .label = details.contains("expression") ? details.at("expression")
-                                                : std::string("stack-resident expression helper"),
-        .line = detail_int_or_zero(details, "line"),
+        .kind = aggregate.kind,
+        .label = aggregate.label,
+        .line = aggregate.first_line,
         .materialize_cells = materialize_cells,
-        .reason = "shared expression helper has only register-entry ABI for stack-resident temps",
-        .details = std::move(details),
+        .reason = aggregate.reason,
+        .details = std::move(aggregate.details),
     });
   }
   std::sort(report.abi_blockers.begin(), report.abi_blockers.end(),

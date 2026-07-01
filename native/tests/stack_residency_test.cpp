@@ -60,6 +60,15 @@ CompileResult compile_stack_variant(const std::string& source, bool stack_reside
   return compile_source(source, options);
 }
 
+CompileResult compile_stack_analysis(const std::string& source) {
+  CompileOptions options;
+  options.analysis = true;
+  options.budget = 999999;
+  options.stack_resident_temps = true;
+  options.disable_candidate_search = true;
+  return compile_source(source, options);
+}
+
 CompileResult compile_with_candidates(const std::string& source) {
   CompileOptions options;
   options.budget = 999999;
@@ -90,6 +99,27 @@ int count_steps_with_comment(const CompileResult& result, const std::string& com
       std::count_if(result.steps.begin(), result.steps.end(), [&](const ResolvedStep& step) {
         return step.comment.has_value() && *step.comment == comment;
       }));
+}
+
+const SizeAbiBlockerReport* find_size_abi_blocker(const CompileResult& result,
+                                                  const std::string& kind,
+                                                  const std::string& label) {
+  const auto it = std::find_if(result.size_attribution.abi_blockers.begin(),
+                               result.size_attribution.abi_blockers.end(),
+                               [&](const SizeAbiBlockerReport& blocker) {
+                                 return blocker.kind == kind && blocker.label == label;
+                               });
+  return it == result.size_attribution.abi_blockers.end() ? nullptr : &*it;
+}
+
+const SizeOpportunityReport* find_size_opportunity(const CompileResult& result,
+                                                   const std::string& variant) {
+  const auto it = std::find_if(result.size_attribution.opportunities.begin(),
+                               result.size_attribution.opportunities.end(),
+                               [&](const SizeOpportunityReport& opportunity) {
+                                 return opportunity.variant == variant;
+                               });
+  return it == result.size_attribution.opportunities.end() ? nullptr : &*it;
 }
 
 } // namespace
@@ -202,6 +232,84 @@ program DualStack {
     require(has_optimization(result, "stack-resident-temps"),
             "stack-resident dual-temp add should report stack-resident-temps");
     require(result.steps.size() < 20, "stack-resident dual-temp add should stay compact");
+  }
+
+  {
+    const CompileResult result = compile_stack_analysis(R"mkpro(
+program StackHelperAbiAggregation {
+  state {
+    x: counter 1..4 = 1
+    y: counter 1..4 = 2
+    sx: counter 1..4 = 1
+    sy: counter 1..4 = 1
+    line: packed = 0
+    out: packed = 0
+  }
+
+  loop {
+    part_a()
+    part_b()
+    halt(out)
+  }
+
+  fn part_a() {
+    sx = x
+    sy = y
+    line = cell_mask(sx, sy)
+    out += line
+    sx = x
+    sy = y
+    line = cell_mask(sx, sy)
+    out += line
+  }
+
+  fn part_b() {
+    sx = x
+    sy = y
+    line = cell_mask(sx, sy)
+    out += line
+    sx = x
+    sy = y
+    line = cell_mask(sx, sy)
+    out += line
+  }
+}
+)mkpro");
+    require_clean_compile(result, "stack helper ABI aggregation");
+    require(count_steps_with_comment(result, "expr cell_mask(sx, sy)") >= 4,
+            "aggregation fixture should reuse the shared cell_mask helper");
+    const SizeAbiBlockerReport* blocker =
+        find_size_abi_blocker(result, "stack-helper-abi", "cell_mask(sx, sy)");
+    require(blocker != nullptr, "size attribution should report stack helper ABI blockers");
+    require(blocker->materialize_cells == 4 &&
+                blocker->details.contains("stackEntryCandidateCallSites") &&
+                blocker->details.at("stackEntryCandidateCallSites") == "2" &&
+                blocker->details.contains("grossMaterializeCells") &&
+                blocker->details.at("grossMaterializeCells") == "4" &&
+                blocker->details.contains("materializeCellsPerCallSite") &&
+                blocker->details.at("materializeCellsPerCallSite") == "2" &&
+                blocker->details.contains("estimatedStackEntryOverheadCells") &&
+                blocker->details.at("estimatedStackEntryOverheadCells") == "3" &&
+                blocker->details.contains("estimatedNetSavings") &&
+                blocker->details.at("estimatedNetSavings") == "1" &&
+                blocker->details.contains("estimatedBreakEvenCallSites") &&
+                blocker->details.at("estimatedBreakEvenCallSites") == "2" &&
+                blocker->details.contains("additionalCallSitesToBreakEven") &&
+                blocker->details.at("additionalCallSitesToBreakEven") == "0" &&
+                blocker->details.contains("firstLine") &&
+                blocker->details.contains("lastLine") &&
+                blocker->details.contains("costModelAction") &&
+                blocker->details.at("costModelAction") ==
+                    "implement-stack-argument-helper-entry",
+            "repeated stack helper ABI report should amortize the shared stack-entry body");
+    const SizeOpportunityReport* opportunity = find_size_opportunity(result, "stack-helper-abi");
+    require(opportunity != nullptr && opportunity->savings == 1 &&
+                opportunity->candidate_steps == static_cast<int>(result.steps.size()) - 1 &&
+                opportunity->details.contains("estimatedNetSavings") &&
+                opportunity->details.at("estimatedNetSavings") == "1" &&
+                opportunity->details.contains("stackEntryCandidateCallSites") &&
+                opportunity->details.at("stackEntryCandidateCallSites") == "2",
+            "stack helper ABI opportunity should rank repeated sites by net savings");
   }
 
   {

@@ -50,7 +50,10 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   the number of candidate stack-entry call sites currently observed, the
   estimated shared entry-body overhead, break-even call-site count, and the
   required compiler action (`stack-argument-helper-entry`) without silently
-  treating the current byte count as a complete value-scheduler win.
+  treating the current byte count as a complete value-scheduler win. Matching
+  helper ABI blockers are aggregated by helper expression and stack temp set, so
+  a shared stack-entry body is amortized across all observed call sites before
+  the blocker is ranked as a positive or negative size opportunity.
   Opportunity rows include a structural
   `blockerKind` (for example `data-arithmetic`,
   `indirect-address-control-use`, `missing-proof`, or `nonwinning-candidate`)
