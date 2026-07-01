@@ -837,6 +837,42 @@ program XParamCurrentXIdentifier {
       has_optimization_detail(x_param_current_x_identifier, "x-param-proc-call", "already in X"),
       "identifier-shaped X-parameter call should report already-in-X reuse");
 
+  const CompileResult stack_carried_x_param_invoke = compile_source(R"mkpro(
+program StackCarriedXParamInvoke {
+  state {
+    x: counter 0..5 = 2
+    y: counter 0..5 = 3
+    tmp: packed = 0
+    line: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    normalize(tmp)
+    tmp = x - y
+    normalize(tmp)
+    halt(line)
+  }
+
+  fn normalize(raw_line) {
+    line = frac((raw_line + 3) / 4) * 4 + 1
+  }
+}
+)mkpro");
+  require(stack_carried_x_param_invoke.implemented,
+          "native compiler should carry assignment values into X-parameter invokes");
+  require(stack_carried_x_param_invoke.diagnostics.empty(),
+          "stack-carried X-parameter invoke program should not report diagnostics");
+  require(has_optimization(stack_carried_x_param_invoke, "stack-carried-assignment"),
+          "assignment feeding an X-parameter invoke should report stack-carried-assignment");
+  require(has_optimization_detail(stack_carried_x_param_invoke, "x-param-proc-call",
+                                  "already in X"),
+          "stack-carried X-parameter invoke should call with the argument already in X");
+  require(count_steps_with_comment(stack_carried_x_param_invoke, "set tmp") == 0,
+          "stack-carried X-parameter invoke should not store the temporary");
+  require(count_steps_with_comment(stack_carried_x_param_invoke, "recall tmp") == 0,
+          "stack-carried X-parameter invoke should not recall the temporary");
+
   const CompileResult repeated_x_param_decay = compile_source(R"mkpro(
 program RepeatedXParamDecay {
   state {

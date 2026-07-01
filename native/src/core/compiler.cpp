@@ -18021,6 +18021,16 @@ bool statement_directly_consumes_current_x_identifier(LoweringContext& context,
       return !statements_read_identifier_before_write(context, statement.then_body, target) &&
              !statements_read_identifier_before_write(context, statement.else_body, target);
     }
+    if (statement.kind == "v2_invoke" && statement.name.has_value() &&
+        statement.args.size() == 1U) {
+      const auto rule_it = context.rules.find(*statement.name);
+      if (rule_it == context.rules.end() || rule_it->second == nullptr ||
+          statements_read_identifier_before_write(context, rule_it->second->body, target)) {
+        return false;
+      }
+      return expression_consumes_current_x_identifier(
+          parse_expression(statement.args.front(), statement.line), target);
+    }
   } catch (const std::exception&) {
   }
   return false;
