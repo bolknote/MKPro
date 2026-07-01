@@ -426,6 +426,7 @@ void example_sizes_match_typescript_baselines() {
                   dead_integer_opportunity->details.contains("integerPartStatus") &&
                   dead_integer_opportunity->details.contains("selectorDataUse") &&
                   dead_integer_opportunity->details.contains("requiredAction") &&
+                  dead_integer_opportunity->details.contains("savingsAggregation") &&
                   dead_integer_opportunity->details.contains("integerPartConsumerOpcode") &&
                   dead_integer_opportunity->details.contains("fractionalEraseOpcode") &&
                   dead_integer_opportunity->details.contains("integerPartHazard") &&
@@ -443,6 +444,8 @@ void example_sizes_match_typescript_baselines() {
                   dead_integer_opportunity->details.at("selectorDataUse") == "data-arithmetic" &&
                   dead_integer_opportunity->details.at("requiredAction") ==
                       "keep-fractional-erase-before-data-arithmetic" &&
+                  dead_integer_opportunity->details.at("savingsAggregation") ==
+                      "alternative-candidate" &&
                   dead_integer_opportunity->details.at("integerPartConsumerOpcode") ==
                       dead_integer_opportunity->details.at("fractionalSelectorConsumer") &&
                   dead_integer_opportunity->details.at("fractionalEraseOpcode") == "K {x}" &&
@@ -500,8 +503,8 @@ void example_sizes_match_typescript_baselines() {
       const SizeBlockerSummaryReport* data_arithmetic_blocker =
           find_size_blocker(result, "data-arithmetic");
       require(data_arithmetic_blocker != nullptr &&
-                  data_arithmetic_blocker->opportunities >= 1 &&
-                  data_arithmetic_blocker->potential_savings >= 1 &&
+                  data_arithmetic_blocker->opportunities == 2 &&
+                  data_arithmetic_blocker->potential_savings == 1 &&
                   data_arithmetic_blocker->best_savings == 1 &&
                   data_arithmetic_blocker->best_variant ==
                       "fractional-constant-selector-dead-int" &&
@@ -526,8 +529,8 @@ void example_sizes_match_typescript_baselines() {
               "ABI savings as a positive optimizer blocker");
       const SizeNextActionSummaryReport* required_action = find_size_next_action(
           result, "requiredAction", "keep-fractional-erase-before-data-arithmetic");
-      require(required_action != nullptr && required_action->opportunities >= 1 &&
-                  required_action->potential_savings >= 1 &&
+      require(required_action != nullptr && required_action->opportunities == 2 &&
+                  required_action->potential_savings == 1 &&
                   required_action->best_savings == 1 &&
                   required_action->best_blocker_kind == "data-arithmetic" &&
                   required_action->best_variant == "fractional-constant-selector-dead-int" &&
@@ -536,8 +539,8 @@ void example_sizes_match_typescript_baselines() {
               "blocked positive-savings candidates");
       const SizeNextActionSummaryReport* layout_action = find_size_next_action(
           result, "layoutAction", "relayout-or-overlay-flow-to-natural-target");
-      require(layout_action != nullptr && layout_action->opportunities >= 1 &&
-                  layout_action->potential_savings >= 1 &&
+      require(layout_action != nullptr && layout_action->opportunities == 2 &&
+                  layout_action->potential_savings == 1 &&
                   layout_action->best_savings == 1 &&
                   layout_action->best_blocker_kind == "data-arithmetic" &&
                   layout_action->best_details.contains("layoutAction") &&

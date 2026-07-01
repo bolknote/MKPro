@@ -45507,6 +45507,28 @@ std::string cost_model_action_for_estimate(int estimated_net_savings) {
   return "find-more-stack-entry-call-sites-or-inline-helper";
 }
 
+bool size_opportunity_uses_alternative_savings(const SizeOpportunityReport& opportunity) {
+  const auto it = opportunity.details.find("savingsAggregation");
+  return it != opportunity.details.end() && it->second == "alternative-candidate";
+}
+
+std::string size_opportunity_potential_group(const SizeOpportunityReport& opportunity,
+                                             const std::string& summary_key,
+                                             std::size_t opportunity_index) {
+  if (size_opportunity_uses_alternative_savings(opportunity))
+    return "alternative\x1f" + opportunity.site + "\x1f" + summary_key;
+  return "additive\x1f" + std::to_string(opportunity_index);
+}
+
+int sum_grouped_potential_savings(const std::map<std::string, int>& group_savings) {
+  int total = 0;
+  for (const auto& [unused, savings] : group_savings) {
+    (void)unused;
+    total += savings;
+  }
+  return total;
+}
+
 std::string size_report_ratio_text(int numerator, int denominator) {
   if (denominator <= 0)
     return "0";
@@ -45976,6 +45998,19 @@ SizeAttributionReport build_size_attribution_report(
   for (const CandidateReport& candidate : rejected_candidates) {
     if (candidate.steps <= 0)
       continue;
+    std::map<std::string, std::string> details =
+        size_opportunity_details(candidate, flow_stats, occupant_by_address,
+                                 occupant_kind_by_address,
+                                 operand_executable_by_address,
+                                 operand_flow_target_by_address,
+                                 operand_owner_by_address,
+                                 next_executable_by_address,
+                                 next_occupant_by_address,
+                                 overlay_compatibility_by_address,
+                                 overlay_blocker_by_address,
+                                 overlay_action_by_address);
+    if (candidate.site == "candidate-search" || candidate.site == "layout")
+      details.emplace("savingsAggregation", "alternative-candidate");
     report.opportunities.push_back(SizeOpportunityReport{
         .site = candidate.site,
         .variant = candidate.variant,
@@ -45984,17 +46019,7 @@ SizeAttributionReport build_size_attribution_report(
         .savings = current_steps - candidate.steps,
         .reason = candidate.reason,
         .blocker_kind = size_opportunity_blocker_kind(candidate),
-        .details =
-            size_opportunity_details(candidate, flow_stats, occupant_by_address,
-                                     occupant_kind_by_address,
-                                     operand_executable_by_address,
-                                     operand_flow_target_by_address,
-                                     operand_owner_by_address,
-                                     next_executable_by_address,
-                                     next_occupant_by_address,
-                                     overlay_compatibility_by_address,
-                                     overlay_blocker_by_address,
-                                     overlay_action_by_address),
+        .details = std::move(details),
     });
   }
   std::sort(report.opportunities.begin(), report.opportunities.end(),
@@ -46007,7 +46032,9 @@ SizeAttributionReport build_size_attribution_report(
             });
 
   std::map<std::string, SizeBlockerSummaryReport> blocker_summaries;
-  for (const SizeOpportunityReport& opportunity : report.opportunities) {
+  std::map<std::string, std::map<std::string, int>> blocker_group_savings;
+  for (std::size_t index = 0; index < report.opportunities.size(); ++index) {
+    const SizeOpportunityReport& opportunity = report.opportunities.at(index);
     if (opportunity.savings <= 0)
       continue;
     const std::string blocker =
@@ -46016,7 +46043,9 @@ SizeAttributionReport build_size_attribution_report(
     if (summary.blocker_kind.empty())
       summary.blocker_kind = blocker;
     ++summary.opportunities;
-    summary.potential_savings += opportunity.savings;
+    const std::string group = size_opportunity_potential_group(opportunity, blocker, index);
+    int& group_savings = blocker_group_savings[blocker][group];
+    group_savings = std::max(group_savings, opportunity.savings);
     if (opportunity.savings > summary.best_savings) {
       summary.best_savings = opportunity.savings;
       summary.best_site = opportunity.site;
@@ -46027,7 +46056,7 @@ SizeAttributionReport build_size_attribution_report(
   }
   report.blockers.reserve(blocker_summaries.size());
   for (auto& [unused, summary] : blocker_summaries) {
-    (void)unused;
+    summary.potential_savings = sum_grouped_potential_savings(blocker_group_savings[unused]);
     report.blockers.push_back(std::move(summary));
   }
   std::sort(report.blockers.begin(), report.blockers.end(),
@@ -46040,17 +46069,22 @@ SizeAttributionReport build_size_attribution_report(
             });
 
   std::map<std::string, SizeNextActionSummaryReport> next_action_summaries;
+  std::map<std::string, std::map<std::string, int>> next_action_group_savings;
   auto add_next_action = [&](const SizeOpportunityReport& opportunity, const std::string& source,
-                             const std::string& action) {
+                             const std::string& action, std::size_t opportunity_index) {
     if (action.empty())
       return;
-    SizeNextActionSummaryReport& summary = next_action_summaries[source + "\x1f" + action];
+    const std::string summary_key = source + "\x1f" + action;
+    SizeNextActionSummaryReport& summary = next_action_summaries[summary_key];
     if (summary.action.empty()) {
       summary.source = source;
       summary.action = action;
     }
     ++summary.opportunities;
-    summary.potential_savings += opportunity.savings;
+    const std::string group =
+        size_opportunity_potential_group(opportunity, summary_key, opportunity_index);
+    int& group_savings = next_action_group_savings[summary_key][group];
+    group_savings = std::max(group_savings, opportunity.savings);
     if (opportunity.savings > summary.best_savings) {
       summary.best_savings = opportunity.savings;
       summary.best_site = opportunity.site;
@@ -46060,21 +46094,22 @@ SizeAttributionReport build_size_attribution_report(
       summary.best_details = opportunity.details;
     }
   };
-  for (const SizeOpportunityReport& opportunity : report.opportunities) {
+  for (std::size_t index = 0; index < report.opportunities.size(); ++index) {
+    const SizeOpportunityReport& opportunity = report.opportunities.at(index);
     if (opportunity.savings <= 0)
       continue;
     if (const auto required_it = opportunity.details.find("requiredAction");
         required_it != opportunity.details.end()) {
-      add_next_action(opportunity, "requiredAction", required_it->second);
+      add_next_action(opportunity, "requiredAction", required_it->second, index);
     }
     if (const auto layout_it = opportunity.details.find("layoutAction");
         layout_it != opportunity.details.end()) {
-      add_next_action(opportunity, "layoutAction", layout_it->second);
+      add_next_action(opportunity, "layoutAction", layout_it->second, index);
     }
   }
   report.next_actions.reserve(next_action_summaries.size());
   for (auto& [unused, summary] : next_action_summaries) {
-    (void)unused;
+    summary.potential_savings = sum_grouped_potential_savings(next_action_group_savings[unused]);
     report.next_actions.push_back(std::move(summary));
   }
   std::sort(report.next_actions.begin(), report.next_actions.end(),

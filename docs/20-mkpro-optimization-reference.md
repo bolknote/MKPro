@@ -60,7 +60,10 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   `blockerKind`; `bestReason` carries the largest local proof gap in that
   blocker class, and `potentialSavings` is a prioritization signal across
   alternative candidates, not a claim that all savings are independently
-  additive. The companion `nextActions` array aggregates positive-savings
+  additive. Whole-program candidate-search and layout alternatives carry
+  `savingsAggregation=alternative-candidate`, so summaries count the best
+  saving in that alternative group instead of summing mutually exclusive
+  rejected candidates. The companion `nextActions` array aggregates positive-savings
   opportunities by structured `requiredAction` and `layoutAction` details, so
   the report can rank concrete compiler-side moves such as preserving
   fractional erasure before arithmetic or relayout/code-data-overlay work
