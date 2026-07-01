@@ -65,10 +65,15 @@ std::string run_compiled_with_preloads(const CompileResult& result) {
   return compact(calc.display_text());
 }
 
-std::string run_indirect_jump_from_e_with_preload(const std::string& value) {
+std::string run_indirect_jump_side_effect_from_e_with_preload(const std::string& value) {
   emulator::MK61 calc;
-  const emulator::ProgramLoadResult loaded =
-      calc.load_program({0x8e, 0x01, 0x50, 0x02, 0x50, 0x03, 0x04, 0x50});
+  std::vector<int> program(60, 0);
+  program.at(0) = 0x8e;   // K БП E
+  program.at(1) = 0x50;   // fallback stop
+  program.at(6) = 0x04;   // target-side digit
+  program.at(7) = 0x50;   // target-side stop
+  program.at(53) = 0x09;  // long-side command executed before address 06
+  const emulator::ProgramLoadResult loaded = calc.load_program(program);
   require(loaded.diagnostics.empty(), "indirect jump probe should load into emulator");
   calc.set_register("E", emulator_preload_value(value));
   calc.press_sequence({"В/О", "С/П"});
@@ -428,9 +433,10 @@ program SentinelDecimalPack {
   require(sentinel_display.find("29,") != std::string::npos,
           "sentinel decimal pack should preserve yy=29 when xx has leading zeros, got " +
               sentinel_display);
-  const std::string indirect_jump_display = run_indirect_jump_from_e_with_preload("100FF");
-  require(indirect_jump_display.find("4,") != std::string::npos,
-          "sentinel dual mask/scale value should remain usable as indirect jump target 06, got " +
+  const std::string indirect_jump_display =
+      run_indirect_jump_side_effect_from_e_with_preload("100FF");
+  require(indirect_jump_display.find("94,") != std::string::npos,
+          "sentinel dual mask/scale indirect jump should execute address 53 before 06, got " +
               indirect_jump_display);
 }
 
