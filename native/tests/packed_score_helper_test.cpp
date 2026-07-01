@@ -247,6 +247,41 @@ program PackedScoreDirectExpressionAccumulatorWithInitial {
                                    "packed_score accumulator zero") == 0,
           "initial-addend packed_score expression should use the addend as accumulator");
 
+  const CompileResult direct_expression_sum_with_indexed_initial = compile_source(R"mkpro(
+program PackedScoreDirectExpressionAccumulatorWithIndexedInitial {
+  state {
+    bonus: packed[1..4] = [1, 2, 3, 4]
+    selector: counter 1..4 = 2
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+  }
+  loop {
+    halt(sum(bonus[selector], packed_score(a, 1), packed_score(b, 2), packed_score(c, 3)))
+  }
+}
+)mkpro",
+                                                                           pinned_options());
+
+  require(direct_expression_sum_with_indexed_initial.implemented,
+          "native compiler should lower packed_score expressions with an indexed initial addend");
+  require(direct_expression_sum_with_indexed_initial.diagnostics.empty(),
+          "indexed-initial packed_score expression compile should not report diagnostics");
+  require(has_optimization(direct_expression_sum_with_indexed_initial,
+                           "packed-score-sum-accumulator"),
+          "indexed-initial packed_score expression should report accumulator lowering");
+  require(count_optimization(direct_expression_sum_with_indexed_initial,
+                             "packed-score-stack-helper-call") == 0,
+          "indexed-initial packed_score expression should not use standalone helper calls");
+  require(count_packed_score_helper_jumps(direct_expression_sum_with_indexed_initial) == 0,
+          "indexed-initial packed_score expression should not emit standalone helper calls");
+  require(count_packed_score_accumulator_helper_jumps(
+              direct_expression_sum_with_indexed_initial) == 3,
+          "indexed-initial packed_score expression should emit three accumulator helper calls");
+  require(count_steps_with_comment(direct_expression_sum_with_indexed_initial,
+                                   "packed_score accumulator zero") == 0,
+          "indexed-initial packed_score expression should use the addend as accumulator");
+
   const CompileResult direct_expression_sum_with_expression_index = compile_source(R"mkpro(
 program PackedScoreDirectExpressionAccumulatorWithExpressionIndex {
   state {

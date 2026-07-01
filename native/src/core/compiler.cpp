@@ -1476,6 +1476,14 @@ bool expression_is_zero_literal_syntax(const Expression& expression) {
   return value.has_value() && std::abs(*value) < 1e-12;
 }
 
+bool stack_accumulator_initial_addend_can_start(const Expression& expression) {
+  if (!expression_pure_for_substitution(expression))
+    return false;
+  std::vector<const Expression*> calls;
+  collect_expression_calls(expression, calls);
+  return calls.empty();
+}
+
 bool expression_is_identifier_named(const Expression& expression, const std::string& name);
 
 bool collect_stack_accumulator_target_sum_terms_with_initial_syntax(
@@ -1508,8 +1516,11 @@ bool collect_stack_accumulator_target_sum_terms_with_initial_syntax(
                *expression.right, target, term_safe, count, saw_target, has_initial);
   }
   if (expression_contains_identifier(expression, target) ||
-      expression_contains_packed_score_call_for_accumulator(expression) ||
-      !expression_preserves_previous_x_as_y_for_stack_analysis(expression)) {
+      expression_contains_packed_score_call_for_accumulator(expression)) {
+    return false;
+  }
+  if (!expression_preserves_previous_x_as_y_for_stack_analysis(expression) &&
+      !(count == 0 && stack_accumulator_initial_addend_can_start(expression))) {
     return false;
   }
   has_initial = true;
@@ -1552,8 +1563,11 @@ bool collect_stack_accumulator_sum_terms_with_initial_syntax(
            collect_stack_accumulator_sum_terms_with_initial_syntax(*expression.right, term_safe,
                                                                    count, has_initial);
   }
-  if (expression_contains_packed_score_call_for_accumulator(expression) ||
-      !expression_preserves_previous_x_as_y_for_stack_analysis(expression)) {
+  if (expression_contains_packed_score_call_for_accumulator(expression)) {
+    return false;
+  }
+  if (!expression_preserves_previous_x_as_y_for_stack_analysis(expression) &&
+      !(count == 0 && stack_accumulator_initial_addend_can_start(expression))) {
     return false;
   }
   has_initial = true;
@@ -17510,8 +17524,11 @@ bool collect_stack_accumulator_target_sum_terms_with_initial(
                *expression.right, target, matcher, zero_matcher, terms, initial, saw_target);
   }
   if (expression_contains_identifier(expression, target) ||
-      expression_contains_packed_score_call_for_accumulator(expression) ||
-      !expression_preserves_previous_x_as_y_for_stack_analysis(expression)) {
+      expression_contains_packed_score_call_for_accumulator(expression)) {
+    return false;
+  }
+  if (!expression_preserves_previous_x_as_y_for_stack_analysis(expression) &&
+      !(terms.empty() && stack_accumulator_initial_addend_can_start(expression))) {
     return false;
   }
   append_stack_accumulator_initial(initial, expression);
@@ -17552,8 +17569,11 @@ bool collect_stack_accumulator_sum_terms_with_initial(const Expression& expressi
            collect_stack_accumulator_sum_terms_with_initial<Term>(*expression.right, matcher,
                                                                   zero_matcher, terms, initial);
   }
-  if (expression_contains_packed_score_call_for_accumulator(expression) ||
-      !expression_preserves_previous_x_as_y_for_stack_analysis(expression)) {
+  if (expression_contains_packed_score_call_for_accumulator(expression)) {
+    return false;
+  }
+  if (!expression_preserves_previous_x_as_y_for_stack_analysis(expression) &&
+      !(terms.empty() && stack_accumulator_initial_addend_can_start(expression))) {
     return false;
   }
   append_stack_accumulator_initial(initial, expression);
