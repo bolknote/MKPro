@@ -717,6 +717,16 @@ const char* yes_no(bool value) {
   return value ? "yes" : "no";
 }
 
+void print_size_detail_suffix(const std::map<std::string, std::string>& details,
+                              const std::vector<std::string_view>& keys) {
+  for (std::string_view key : keys) {
+    const auto it = details.find(std::string(key));
+    if (it == details.end() || it->second.empty())
+      continue;
+    std::cout << " " << key << "=" << it->second;
+  }
+}
+
 void print_human_analysis_report(const mkpro::CompileResult& result) {
   std::cout << "\n## Optimizer Report\n";
   std::cout << "automatic: " << yes_no(result.optimizer.automatic)
@@ -888,6 +898,9 @@ void print_human_analysis_report(const mkpro::CompileResult& result) {
                 << " savings=" << opportunity.savings;
       if (!opportunity.blocker_kind.empty())
         std::cout << " blocker=" << opportunity.blocker_kind;
+      print_size_detail_suffix(opportunity.details,
+                               {"helperLabel", "registerTrafficNames", "requiredAction",
+                                "layoutAction", "safeSavingsAction", "candidateDiscoveryAction"});
       if (!opportunity.reason.empty())
         std::cout << " - " << opportunity.reason;
       std::cout << "\n";
@@ -954,6 +967,9 @@ void print_human_analysis_report(const mkpro::CompileResult& result) {
         std::cout << " via " << action.best_variant;
       if (!action.best_site.empty())
         std::cout << " at " << action.best_site;
+      print_size_detail_suffix(action.best_details,
+                               {"helperLabel", "registerTrafficNames", "layoutAction",
+                                "safeSavingsAction", "candidateDiscoveryAction"});
       if (!action.best_reason.empty())
         std::cout << " - " << action.best_reason;
       std::cout << "\n";
