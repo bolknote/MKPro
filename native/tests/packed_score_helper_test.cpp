@@ -822,7 +822,7 @@ program PackedScoreXParamInitialAddendAccumulatorHelper {
           "cells");
 
   const CompileResult mixed = compile_source(R"mkpro(
-program PackedScoreMixedAccumulatorFallback {
+program PackedScoreMixedAccumulatorSingletonReuse {
   state {
     a: packed = 44444.4
     b: packed = 44445.4
@@ -839,16 +839,20 @@ program PackedScoreMixedAccumulatorFallback {
 }
 )mkpro",
                                              pinned_options());
-  require(mixed.implemented, "mixed accumulator/helper program should compile");
-  require(mixed.diagnostics.empty(), "mixed accumulator/helper program should not report diagnostics");
+  require(mixed.implemented, "mixed accumulator/singleton program should compile");
+  require(mixed.diagnostics.empty(),
+          "mixed accumulator/singleton program should not report diagnostics");
   require(has_optimization(mixed, "packed-score-accumulator-helper"),
-          "mixed repeated packed_score should keep the accumulator helper body");
-  require(has_optimization(mixed, "packed-score-stack-helper"),
-          "mixed repeated packed_score should keep the standalone helper fallback");
-  require(count_packed_score_accumulator_helper_jumps(mixed) == 3,
-          "mixed repeated packed_score should emit three accumulator helper calls");
-  require(count_packed_score_helper_jumps(mixed) == 1,
-          "mixed repeated packed_score should emit one standalone helper call");
+          "mixed packed_score should keep the accumulator helper body");
+  require(!has_optimization(mixed, "packed-score-stack-helper"),
+          "mixed packed_score should not need the standalone helper fallback");
+  require(count_optimization(mixed, "packed-score-stack-helper-call") == 0,
+          "mixed packed_score should not call the standalone helper fallback");
+  require(count_packed_score_accumulator_helper_jumps(mixed) == 4,
+          "mixed packed_score should emit accumulator helper calls for the three-term group and "
+          "the singleton");
+  require(count_packed_score_helper_jumps(mixed) == 0,
+          "mixed packed_score should not emit standalone helper calls");
 
   CompileOptions search_options;
   search_options.analysis = true;

@@ -9917,6 +9917,11 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
       packed_score_accumulator_eligible_call_count_in_program(program);
   context.use_packed_score_accumulator_helper =
       context.packed_score_accumulator_helpers && accumulator_packed_score_calls >= 3;
+  const int non_accumulator_group_packed_score_calls =
+      std::max(0, packed_score_calls - accumulator_packed_score_calls);
+  context.use_packed_score_accumulator_for_singletons =
+      context.use_packed_score_accumulator_helper &&
+      non_accumulator_group_packed_score_calls <= 7;
   context.use_packed_score_helper = packed_score_calls >= 3;
   context.removable_coord_lists = collect_removable_coord_list_names(program);
   context.scaled_coord_lists = collect_scaled_coord_list_names(context, program);
@@ -17644,7 +17649,8 @@ bool lower_packed_score_sum_accumulator_to_x(LoweringContext& context,
   std::optional<Expression> initial;
   if (!collect_packed_score_sum_terms_with_initial(context, expression, terms, initial) ||
       (terms.size() < 3U &&
-       !(terms.size() >= 2U && context.use_packed_score_accumulator_helper))) {
+       !(terms.size() >= 2U && context.use_packed_score_accumulator_helper) &&
+       !(terms.size() == 1U && context.use_packed_score_accumulator_for_singletons))) {
     return false;
   }
 
@@ -20996,7 +21002,9 @@ bool lower_expression_to_x(LoweringContext& context, const Expression& expressio
   }
 
   if ((expression.kind == "binary" ||
-       (expression.kind == "call" && lower_ascii(expression.callee) == "sum")) &&
+       (expression.kind == "call" &&
+        (lower_ascii(expression.callee) == "sum" ||
+         lower_ascii(expression.callee) == "packed_score"))) &&
       lower_packed_score_sum_accumulator_to_x(context, expression)) {
     return true;
   }
