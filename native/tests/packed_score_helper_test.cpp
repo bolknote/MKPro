@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <string>
+#include <vector>
 
 namespace mkpro::tests {
 
@@ -39,6 +40,25 @@ int count_steps_with_comment(const CompileResult& result, const std::string& com
       std::count_if(result.steps.begin(), result.steps.end(), [&](const ResolvedStep& step) {
         return step.comment.has_value() && *step.comment == comment;
       }));
+}
+
+const CandidateReport* find_candidate(const std::vector<CandidateReport>& candidates,
+                                      const std::string& variant) {
+  const auto it = std::find_if(candidates.begin(), candidates.end(),
+                               [&](const CandidateReport& candidate) {
+                                 return candidate.variant == variant;
+                               });
+  return it == candidates.end() ? nullptr : &*it;
+}
+
+const SizeOpportunityReport* find_size_opportunity(const CompileResult& result,
+                                                   const std::string& variant) {
+  const auto it = std::find_if(result.size_attribution.opportunities.begin(),
+                               result.size_attribution.opportunities.end(),
+                               [&](const SizeOpportunityReport& opportunity) {
+                                 return opportunity.variant == variant;
+                               });
+  return it == result.size_attribution.opportunities.end() ? nullptr : &*it;
 }
 
 // Pin the shared-helper / direct-call (ПП) structure this suite verifies by
@@ -754,6 +774,46 @@ program PackedScoreMixedAccumulatorFallback {
           "mixed repeated packed_score should emit three accumulator helper calls");
   require(count_packed_score_helper_jumps(mixed) == 1,
           "mixed repeated packed_score should emit one standalone helper call");
+
+  CompileOptions search_options;
+  search_options.analysis = true;
+  search_options.budget = 999999;
+  const CompileResult searched_mixed = compile_source(R"mkpro(
+program PackedScoreMixedAccumulatorFallback {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    d: packed = 44447.4
+    value: packed = 0
+    extra: packed = 0
+  }
+  loop {
+    value = packed_score(a, 1) + packed_score(b, 2) + packed_score(c, 3)
+    extra = packed_score(d, 4)
+    halt(value + extra)
+  }
+}
+)mkpro",
+                                                    search_options);
+  require(searched_mixed.implemented,
+          "analysis candidate search should compile the mixed packed_score program");
+  require(searched_mixed.diagnostics.empty(),
+          "analysis candidate search should not report diagnostics for mixed packed_score");
+  const CandidateReport* rejected_accumulator = find_candidate(
+      searched_mixed.rejected_candidates, "packed-score-accumulator-aggressive-post-layout");
+  require(rejected_accumulator != nullptr,
+          "analysis should keep the nonwinning packed_score accumulator candidate visible");
+  require(rejected_accumulator->steps >= static_cast<int>(searched_mixed.steps.size()),
+          "reported packed_score accumulator candidate should not hide a smaller listing");
+  require(rejected_accumulator->reason.find("final candidate-search result") != std::string::npos,
+          "reported packed_score accumulator candidate should explain that it lost final search");
+  const SizeOpportunityReport* accumulator_opportunity =
+      find_size_opportunity(searched_mixed, "packed-score-accumulator-aggressive-post-layout");
+  require(accumulator_opportunity != nullptr,
+          "size attribution should surface the nonwinning packed_score accumulator candidate");
+  require(accumulator_opportunity->candidate_steps == rejected_accumulator->steps,
+          "size attribution should preserve the packed_score accumulator candidate size");
 }
 
 } // namespace mkpro::tests

@@ -43431,7 +43431,9 @@ void append_candidate_report_once(std::vector<CandidateReport>& reports,
 }
 
 bool should_report_nonwinning_candidate(std::string_view name) {
-  return name == "packed-line-family-update-check-tail" ||
+  return name == "packed-score-accumulator-helper" ||
+         name == "packed-score-accumulator-aggressive-post-layout" ||
+         name == "packed-line-family-update-check-tail" ||
          name == "packed-line-family-mutating-selector-update-check-tail" ||
          name == "packed-line-family-borrowed-mutating-selector-update-check-tail";
 }
@@ -47191,7 +47193,23 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       };
   std::size_t evaluated_candidate_count = 0;
   std::vector<CandidateReport> search_rejected_candidates;
+  std::vector<CandidateReport> search_candidate_cost_reports;
+  auto has_detailed_search_rejection = [&](const CandidateReport& candidate) {
+    return std::any_of(search_rejected_candidates.begin(), search_rejected_candidates.end(),
+                       [&](const CandidateReport& rejected) {
+                         return rejected.variant == candidate.variant &&
+                                rejected.steps == candidate.steps;
+                       });
+  };
   auto attach_search_rejections_to_best = [&]() {
+    for (CandidateReport& considered : search_candidate_cost_reports) {
+      if (has_optimization_named(best.optimizations, considered.variant) ||
+          has_detailed_search_rejection(considered)) {
+        continue;
+      }
+      append_candidate_report_once(best.rejected_candidates, std::move(considered));
+    }
+    search_candidate_cost_reports.clear();
     for (CandidateReport& rejected : search_rejected_candidates)
       append_candidate_report_once(best.rejected_candidates, std::move(rejected));
     search_rejected_candidates.clear();
@@ -47218,20 +47236,20 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
                   << candidate.name << " implemented=" << (result.implemented ? "yes" : "no")
                   << " steps=" << result.steps.size() << "\n";
       }
+      if (options.analysis && result.implemented &&
+          should_report_nonwinning_candidate(candidate.name)) {
+        append_candidate_report_once(
+            search_candidate_cost_reports,
+            CandidateReport{
+                .site = "candidate-search",
+                .variant = candidate.name,
+                .steps = static_cast<int>(result.steps.size()),
+                .selected = false,
+                .reason =
+                    "not selected because it did not improve the final candidate-search result",
+            });
+      }
       if (!candidate_beats_best(result, best)) {
-        if (options.analysis && result.implemented &&
-            should_report_nonwinning_candidate(candidate.name)) {
-          append_candidate_report_once(
-              search_rejected_candidates,
-              CandidateReport{
-                  .site = "candidate-search",
-                  .variant = candidate.name,
-                  .steps = static_cast<int>(result.steps.size()),
-                  .selected = false,
-                  .reason = "not selected because it did not improve the current best during "
-                            "candidate search",
-              });
-        }
         continue;
       }
       if (candidate_needs_static_proof_gate(candidate.options) &&
