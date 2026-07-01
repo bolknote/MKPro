@@ -35610,6 +35610,8 @@ std::optional<std::string> stack_preload_source(const std::string& value) {
     return "X";
   if (value == "stack.Y")
     return "Y";
+  if (value == "stack.X2")
+    return "X2";
   return std::nullopt;
 }
 
@@ -35705,7 +35707,7 @@ bool preload_is_display_literal_setup(const PreloadReport& preload) {
 bool preload_requires_generated_setup_program(const PreloadReport& preload) {
   if (preload.setup_expression || preload.setup_target_name.has_value())
     return true;
-  if (preload.value == "stack.X" || preload.value == "stack.Y")
+  if (stack_preload_source(preload.value).has_value())
     return true;
   if (executable_setup_value(preload.value).has_value())
     return false;
@@ -35724,7 +35726,7 @@ bool preload_is_internal_collection_setup(const PreloadReport& preload) {
 bool preload_must_reach_generated_setup_program(const PreloadReport& preload) {
   if (preload.setup_expression || preload.setup_target_name.has_value())
     return true;
-  if (preload.value == "stack.X" || preload.value == "stack.Y")
+  if (stack_preload_source(preload.value).has_value())
     return true;
   if (preload.value == "random()" || preload.value.starts_with("random("))
     return true;
@@ -41695,17 +41697,17 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
     if (!preload_register_present(stop_tail_preloads, preload.register_name))
       add_unique_preload(preload);
   }
-  result.manual_setup_inputs =
-      collect_manual_setup_inputs(*ast.v2, context.registers, result.preloads);
   auto add_stack_setup_program_preload = [&](const std::string& register_name,
                                              const std::string& value,
                                              const std::string& target_name) {
-    add_unique_setup_program_preload(PreloadReport{
+    const PreloadReport preload{
         .register_name = register_name,
         .value = value,
         .counts_against_program = false,
         .setup_target_name = target_name,
-    });
+    };
+    add_unique_setup_program_preload(preload);
+    add_unique_preload(preload);
   };
   for (const V2StateField& field : ast.v2->state) {
     if (field.initial_stack.has_value()) {
@@ -41721,7 +41723,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         for (int index = field.bank->min; index <= field.bank->max; ++index) {
           const std::string value =
               trim_ascii(values->at(static_cast<std::size_t>(index - field.bank->min)));
-          if (value != "stack.X" && value != "stack.Y")
+          if (!stack_preload_source(value).has_value())
             continue;
           const std::string element = state_bank_element_name(field, index);
           const auto register_it = context.registers.find(element);
@@ -41731,6 +41733,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       }
     }
   }
+  result.manual_setup_inputs =
+      collect_manual_setup_inputs(*ast.v2, context.registers, result.preloads);
   std::optional<std::string> expected_mode;
   if (ast.v2->expected_mode.has_value())
     expected_mode = ast.v2->expected_mode->mode;

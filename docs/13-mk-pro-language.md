@@ -329,7 +329,7 @@ state {
 The list length must match the inclusive bank range. Each item is lowered as the
 initial value for the corresponding bank element, so `walls[1]`, `walls[2]`, and
 `walls[3]` stay ordinary indexed state at runtime. List items may also use
-`stack.X` or `stack.Y` when one bank element is manually entered before the
+`stack.X`, `stack.Y`, or `stack.X2` when one bank element is manually entered before the
 setup program runs.
 
 Both forms lower to contiguous calculator registers. A constant index such as
@@ -364,15 +364,18 @@ When a loop stores through a running pointer and then increments it, for example
 `slots[pointer + 1] = value` followed by `pointer++`, the compiler may fuse the
 pair into one preincrement indirect store when the bank layout allows it.
 
-Initial values can come from the startup stack registers `stack.X` and
-`stack.Y`, for games where the player enters setup values before running the
-program:
+Initial values can come from the startup stack/display registers `stack.X`,
+`stack.Y`, and `stack.X2`, for games where the player enters setup values
+before running the program. `stack.X2` restores the hidden display-side X2 value
+with `.` during setup, so it is consumed before numeric setup literals that
+would overwrite the X2 restore context:
 
 ```mkpro
-state {
-  pos: coord(cave) = stack.X
-  food: counter 0..99 = stack.Y
-}
+  state {
+    pos: coord(cave) = stack.X
+    food: counter 0..99 = stack.Y
+    seed: counter 0..99 = stack.X2
+  }
 ```
 
 This is a startup convention, not general register binding. Memory registers

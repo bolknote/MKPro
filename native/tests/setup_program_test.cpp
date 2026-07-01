@@ -119,6 +119,47 @@ void setup_program_matches_typescript_contract() {
               stack_setup_it < stack_guard_it && stack_guard_it < numeric_setup_it,
           "expected mode setup guard should run immediately after stack input setup and before "
           "other state preload setup");
+
+  const SetupProgramReport x2_guarded_preload_report =
+      core::emit::lowering::compile_setup_program_with_preloads(
+          {},
+          {},
+          {
+              PreloadReport{.register_name = "0", .value = "stack.X2"},
+              PreloadReport{.register_name = "1", .value = "stack.X"},
+              PreloadReport{.register_name = "2", .value = "100"},
+          },
+          options, "rad");
+  const auto x_store_it =
+      std::find_if(x2_guarded_preload_report.steps.begin(),
+                   x2_guarded_preload_report.steps.end(),
+                   [](const ResolvedStep& step) { return step.comment == "setup R1"; });
+  const auto x2_restore_it =
+      std::find_if(x2_guarded_preload_report.steps.begin(),
+                   x2_guarded_preload_report.steps.end(), [](const ResolvedStep& step) {
+                     return step.opcode == 0x0a && step.comment == "setup R0 from stack.X2";
+                   });
+  const auto x2_store_it =
+      std::find_if(x2_guarded_preload_report.steps.begin(),
+                   x2_guarded_preload_report.steps.end(),
+                   [](const ResolvedStep& step) { return step.comment == "setup R0"; });
+  const auto x2_guard_it =
+      std::find_if(x2_guarded_preload_report.steps.begin(),
+                   x2_guarded_preload_report.steps.end(), [](const ResolvedStep& step) {
+                     return step.comment == "expected_mode(\"rad\") domain guard";
+                   });
+  const auto x2_numeric_setup_it =
+      std::find_if(x2_guarded_preload_report.steps.begin(),
+                   x2_guarded_preload_report.steps.end(),
+                   [](const ResolvedStep& step) { return step.comment == "setup R2"; });
+  require(x_store_it != x2_guarded_preload_report.steps.end() &&
+              x2_restore_it != x2_guarded_preload_report.steps.end() &&
+              x2_store_it != x2_guarded_preload_report.steps.end() &&
+              x2_guard_it != x2_guarded_preload_report.steps.end() &&
+              x2_numeric_setup_it != x2_guarded_preload_report.steps.end() &&
+              x_store_it < x2_restore_it && x2_restore_it < x2_store_it &&
+              x2_store_it < x2_guard_it && x2_guard_it < x2_numeric_setup_it,
+          "stack.X2 setup should run after stack.X storage and before mode/numeric setup");
 }
 
 } // namespace mkpro::tests

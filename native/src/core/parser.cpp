@@ -1591,8 +1591,11 @@ private:
         field.initial_stack = "X";
       } else if (initial == "stack.Y") {
         field.initial_stack = "Y";
+      } else if (initial == "stack.X2") {
+        field.initial_stack = "X2";
       } else if (initial.rfind("stack.", 0) == 0) {
-        throw ParseError("Use 'stack.X' or 'stack.Y' for startup stack values", line.line);
+        throw ParseError("Use 'stack.X', 'stack.Y', or 'stack.X2' for startup stack values",
+                         line.line);
       } else {
         field.initial = initial;
       }

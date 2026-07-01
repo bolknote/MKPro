@@ -151,6 +151,21 @@ program Demo {
           "stack.X initializer should parse as initialStack");
   require(rich_program.states.at(0).fields.at(4).initial_stack == "X",
           "generic state should preserve stack.X initial source");
+
+  const ProgramAst stack_x2_program = parse_program(R"mkpro(
+program StackX2 {
+  state {
+    seed: counter 0..99 = stack.X2
+  }
+  loop {
+    halt(seed)
+  }
+}
+)mkpro");
+  require(stack_x2_program.v2->state.at(0).initial_stack == "X2",
+          "stack.X2 initializer should parse as initialStack");
+  require(stack_x2_program.states.at(0).fields.at(0).initial_stack == "X2",
+          "generic state should preserve stack.X2 initial source");
   const V2Statement& loop = rich_program.v2->body.at(0);
   require(loop.body.at(0).kind == "v2_show", "show should parse");
   require(loop.body.at(0).items->at(0).kind == "literal", "display literal should parse");
@@ -200,7 +215,7 @@ program BadStack {
   }
 }
 )mkpro",
-                          "Use 'stack.X' or 'stack.Y'");
+                          "Use 'stack.X', 'stack.Y', or 'stack.X2'");
 
   const ProgramAst raw_program = parse_program(R"mkpro(
 program RawDemo {
