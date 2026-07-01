@@ -746,6 +746,8 @@ dedicated MK-61 `F 10^x` opcode, just like `pow10(exponent)`.
 used by board and packed-row logic throughout the examples. Constant decimal
 powers such as `pow10(4)` and literal `10000` are materialized through MK-61
 `F 10^x` when that is shorter than digit entry.
+`sum(a, b, ...)` is variadic addition sugar. It lowers like an ordinary `+`
+chain, but optimizer passes can recognize it as an explicit accumulator shape.
 `1 / x` lowers through the MK-61 reciprocal opcode (`F 1/x`), matching
 `inv(x)`.
 `max(a, b)` is the two-argument comparator helper (`К max`). `min(a, b)` is
@@ -1025,8 +1027,8 @@ match key {
   `cos`, `digit_add`, `digit_at`, `digit_set`, `entered`, `eq_any`, `exp`,
   `frac`, `from_min`, `from_sec`, `inv`, `int`, `lg`, `ln`, `line_count`, `max`,
   `neighbor_count`, `near_any`, `packed_add`, `packed_digit`, `packed_score`,
-  `pi`, `pow`, `pow10`, `random`, `sign`, `sin`, `sqr`, `sqrt`, `tg`, `to_min`,
-  `to_sec`.
+  `pi`, `pow`, `pow10`, `random`, `sign`, `sin`, `sqr`, `sqrt`, `sum`, `tg`,
+  `to_min`, `to_sec`.
 - contracted `raw { ... }` blocks for explicit MK-61 command sequences
 
 Assignments, updates, comparison predicates, function parameters, loops, and

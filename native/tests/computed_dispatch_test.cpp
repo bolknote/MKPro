@@ -1261,6 +1261,48 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
                .has_value(),
           "accepted dead-integer fractional selector elision should not report a rejection reason");
 
+  CompileResult safe_stored_dead_integer_result = forward_result;
+  safe_stored_dead_integer_result.optimizations.push_back(
+      optimization_report("dead-integer-fractional-selector-use"));
+  safe_stored_dead_integer_result.steps.push_back(
+      resolved_step(0x69, "preload const 3.123456; fractional selector source 0.123456"));
+  safe_stored_dead_integer_result.steps.push_back(resolved_step(0x49, "set saved selector"));
+  safe_stored_dead_integer_result.steps.push_back(resolved_step(0x35, "frac()"));
+  safe_stored_dead_integer_result.steps.push_back(resolved_step(0x69, "recall saved selector"));
+  safe_stored_dead_integer_result.steps.push_back(resolved_step(0x35, "frac()"));
+  require(optimizer_static_proof_gate_accepts_for_testing(safe_dead_integer_options,
+                                                          safe_stored_dead_integer_result),
+          "dead-integer fractional selector elision should accept direct store forwarding when "
+          "the live X value and every later recall are immediately erased");
+
+  CompileResult safe_stored_address_use_result = safe_stored_dead_integer_result;
+  safe_stored_address_use_result.steps.insert(
+      safe_stored_address_use_result.steps.end() - 2,
+      resolved_step_with_mnemonic(0x89, "К БП 9", indirect_target_comment("9", "3", target)));
+  require(optimizer_static_proof_gate_accepts_for_testing(safe_dead_integer_options,
+                                                          safe_stored_address_use_result),
+          "dead-integer fractional selector elision should allow proved stored selector address "
+          "uses while still requiring data recalls to be erased");
+
+  CompileResult unsafe_stored_unmarked_address_use_result = safe_stored_dead_integer_result;
+  unsafe_stored_unmarked_address_use_result.steps.insert(
+      unsafe_stored_unmarked_address_use_result.steps.end() - 2,
+      resolved_step_with_mnemonic(0x89, "К БП 9", "stored selector address use"));
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              safe_dead_integer_options, unsafe_stored_unmarked_address_use_result),
+          "dead-integer fractional selector elision must reject stored selector address uses "
+          "without a final indirect-target proof artifact");
+  const std::optional<std::string> unsafe_stored_unmarked_address_use_reason =
+      optimizer_static_proof_gate_rejection_reason_for_testing(
+          safe_dead_integer_options, unsafe_stored_unmarked_address_use_result);
+  require(unsafe_stored_unmarked_address_use_reason.has_value() &&
+              unsafe_stored_unmarked_address_use_reason->find("stored in R9 reaches К БП 9 "
+                                                              "before K {x}") !=
+                  std::string::npos &&
+              unsafe_stored_unmarked_address_use_reason->find("(indirect address/control use)") !=
+                  std::string::npos,
+          "dead-integer rejection reason must identify unproved stored-selector address uses");
+
   CompileResult unsafe_dead_integer_result = safe_dead_integer_result;
   unsafe_dead_integer_result.steps.back() = resolved_step(0x12, "expr *");
   require(!optimizer_static_proof_gate_accepts_for_testing(safe_dead_integer_options,
@@ -1272,8 +1314,56 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
                                                                unsafe_dead_integer_result);
   require(unsafe_dead_integer_reason.has_value() &&
               unsafe_dead_integer_reason->find("reaches expr * before K {x}") !=
+                  std::string::npos &&
+              unsafe_dead_integer_reason->find("(data arithmetic)") != std::string::npos,
+          "dead-integer rejection reason must identify arithmetic consumers before fractional "
+          "erase");
+
+  CompileResult unsafe_stored_live_x_result = safe_stored_dead_integer_result;
+  unsafe_stored_live_x_result.steps.at(unsafe_stored_live_x_result.steps.size() - 3U) =
+      resolved_step(0x12, "expr *");
+  require(!optimizer_static_proof_gate_accepts_for_testing(safe_dead_integer_options,
+                                                           unsafe_stored_live_x_result),
+          "dead-integer fractional selector elision must reject direct store forwarding unless "
+          "the still-live X value is erased immediately after the store");
+  const std::optional<std::string> unsafe_stored_live_x_reason =
+      optimizer_static_proof_gate_rejection_reason_for_testing(
+          safe_dead_integer_options, unsafe_stored_live_x_result);
+  require(unsafe_stored_live_x_reason.has_value() &&
+              unsafe_stored_live_x_reason->find("is stored before expr * instead of immediate "
+                                                "K {x}") != std::string::npos,
+          "dead-integer rejection reason must identify unsafe live-X use after store");
+
+  CompileResult unsafe_stored_recall_result = safe_stored_dead_integer_result;
+  unsafe_stored_recall_result.steps.back() = resolved_step(0x12, "expr *");
+  require(!optimizer_static_proof_gate_accepts_for_testing(safe_dead_integer_options,
+                                                           unsafe_stored_recall_result),
+          "dead-integer fractional selector elision must reject stored selector recalls that are "
+          "consumed before K {x}");
+  const std::optional<std::string> unsafe_stored_recall_reason =
+      optimizer_static_proof_gate_rejection_reason_for_testing(
+          safe_dead_integer_options, unsafe_stored_recall_result);
+  require(unsafe_stored_recall_reason.has_value() &&
+              unsafe_stored_recall_reason->find("stored in R9 reaches expr * before K {x}") !=
                   std::string::npos,
-          "dead-integer rejection reason must identify the first consumer before fractional erase");
+          "dead-integer rejection reason must identify unsafe stored-register consumers");
+
+  CompileResult unsafe_dead_integer_flow_result = safe_dead_integer_result;
+  unsafe_dead_integer_flow_result.steps.back() =
+      resolved_step_with_mnemonic(0x89, "К БП 9", "indirect flow before erase");
+  require(!optimizer_static_proof_gate_accepts_for_testing(safe_dead_integer_options,
+                                                           unsafe_dead_integer_flow_result),
+          "dead-integer fractional selector elision must reject indirect flow before K {x} erases "
+          "the retuned integer part");
+  const std::optional<std::string> unsafe_dead_integer_flow_reason =
+      optimizer_static_proof_gate_rejection_reason_for_testing(
+          safe_dead_integer_options, unsafe_dead_integer_flow_result);
+  require(unsafe_dead_integer_flow_reason.has_value() &&
+              unsafe_dead_integer_flow_reason->find("reaches К БП 9 before K {x}") !=
+                  std::string::npos &&
+              unsafe_dead_integer_flow_reason->find("(indirect address/control use)") !=
+                  std::string::npos,
+          "dead-integer rejection reason must classify indirect flow before fractional erase");
 
   CompileResult forward_fractional_result = forward_result;
   forward_fractional_result.optimizations.push_back(
@@ -1719,6 +1809,14 @@ void optimizer_translation_unit_stays_emulator_free() {
           "ProofReport must mirror the suppressed-preload verifier result");
   require(proof_report_source.find("preloaded_constant_registers_proved") != std::string::npos,
           "ProofReport must mirror the explicit-preload verifier result");
+  require(proof_report_source.find("address_code_overlay_artifacts_proved") != std::string::npos,
+          "ProofReport must mirror the address/code overlay final-artifact verifier result");
+  require(proof_report_source.find("has_optimization_named(optimizations, \"address-code-overlay\")") ==
+              std::string::npos,
+          "ProofReport must not trust the address-code-overlay optimization label as proof");
+  require(proof_report_source.find("Final address/code overlay artifacts matched") !=
+              std::string::npos,
+          "ProofReport detail must describe address/code overlay proof as final-artifact based");
   const std::string fractional_verifier_source = required_source_range_after(
       compiler_code, "bool has_fractional_selector_recovery_step",
       "bool fractional_selector_data_values_proved",

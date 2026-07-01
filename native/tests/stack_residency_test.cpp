@@ -85,6 +85,13 @@ bool has_optimization(const CompileResult& result, const std::string& name) {
                      [&](const OptimizationReport& item) { return item.name == name; });
 }
 
+int count_steps_with_comment(const CompileResult& result, const std::string& comment) {
+  return static_cast<int>(
+      std::count_if(result.steps.begin(), result.steps.end(), [&](const ResolvedStep& step) {
+        return step.comment.has_value() && *step.comment == comment;
+      }));
+}
+
 } // namespace
 
 void stack_residency_matches_typescript_contract() {
@@ -195,6 +202,822 @@ program DualStack {
     require(has_optimization(result, "stack-resident-temps"),
             "stack-resident dual-temp add should report stack-resident-temps");
     require(result.steps.size() < 20, "stack-resident dual-temp add should stay compact");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedImmediateConsumer {
+  state {
+    x: packed = 2
+    y: packed = 3
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    halt(tmp)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried immediate consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "immediate consumer should keep tmp in X instead of storing it");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-carried immediate consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-carried immediate consumer should not recall tmp");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedExpressionConsumer {
+  state {
+    x: packed = 2
+    y: packed = 3
+    z: packed = 4
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    halt(tmp + z)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried expression consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "expression consumer should keep tmp in X instead of storing it");
+    require(has_optimization(result, "stack-current-x-scheduling"),
+            "expression consumer should reuse tmp already in X for the following expression");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-carried expression consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-carried expression consumer should not recall tmp");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedInlineExpressionOperandConsumer {
+  state {
+    x: packed = 2
+    y: packed = 3
+    z: packed = 4
+    w: packed = 5
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    halt(tmp + (z + w))
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried inline expression operand consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "inline expression operand consumer should keep tmp in X");
+    require(has_optimization(result, "stack-current-x-scheduling"),
+            "inline expression operand consumer should reuse tmp while lowering the other "
+            "operand inline");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "inline expression operand consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "inline expression operand consumer should not recall tmp");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedRightInlineExpressionOperandConsumer {
+  state {
+    x: packed = 8
+    y: packed = 3
+    z: packed = 20
+    w: packed = 7
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    halt((z + w) - tmp)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried right inline expression operand consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "right inline expression operand consumer should keep tmp in X");
+    require(has_optimization(result, "stack-current-x-scheduling"),
+            "right inline expression operand consumer should reuse tmp for a noncommutative "
+            "expression");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "right inline expression operand consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "right inline expression operand consumer should not recall tmp");
+    require(count_steps_with_comment(result, "current-X operand order") == 1,
+            "right inline expression operand consumer should swap after lowering the other "
+            "operand");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedUnaryConsumer {
+  state {
+    x: packed = 2
+    y: packed = 3
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    halt(-tmp)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried unary consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "unary consumer should keep tmp in X instead of storing it");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-carried unary consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-carried unary consumer should not recall tmp");
+    require(count_steps_with_comment(result, "unary minus") == 1,
+            "stack-carried unary consumer should apply unary minus to the current X value");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedUnaryBuiltinConsumer {
+  state {
+    x: packed = -8
+    y: packed = 3
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    halt(abs(tmp))
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried unary builtin consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "unary builtin consumer should keep tmp in X instead of storing it");
+    require(has_optimization(result, "current-x-unary-derivation"),
+            "unary builtin consumer should derive abs() from current X");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-carried unary builtin consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-carried unary builtin consumer should not recall tmp");
+    require(count_steps_with_comment(result, "current-X abs") == 1,
+            "stack-carried unary builtin consumer should apply abs() to current X");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedUnaryDerivationBinaryConsumer {
+  state {
+    x: packed = -8
+    y: packed = 3
+    z: packed = 4
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x * y
+    halt(abs(tmp) + z)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried unary derivation binary consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "unary derivation binary consumer should keep tmp in X instead of storing it");
+    require(has_optimization(result, "stack-current-x-scheduling"),
+            "unary derivation binary consumer should report current-X scheduling");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-carried unary derivation binary consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-carried unary derivation binary consumer should not recall tmp");
+    require(count_steps_with_comment(result, "current-X abs") == 1,
+            "stack-carried unary derivation binary consumer should derive abs() from current X");
+    require(count_steps_with_comment(result, "expr +") == 1,
+            "stack-carried unary derivation binary consumer should emit one addition");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedLeftNonCommutativeConsumer {
+  state {
+    x: packed = 8
+    y: packed = 3
+    z: packed = 2
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    halt(tmp - z)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried left noncommutative consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "left noncommutative consumer should keep tmp in X instead of storing it");
+    require(has_optimization(result, "stack-current-x-scheduling"),
+            "left noncommutative consumer should report current-X scheduling");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-carried left noncommutative consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-carried left noncommutative consumer should not recall tmp");
+    require(count_steps_with_comment(result, "expr -") == 1,
+            "stack-carried left noncommutative consumer should emit one subtraction");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedRightNonCommutativeConsumer {
+  state {
+    x: packed = 8
+    y: packed = 3
+    z: packed = 20
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    halt(z - tmp)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried right noncommutative consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "right noncommutative consumer should keep tmp in X instead of storing it");
+    require(has_optimization(result, "stack-current-x-scheduling"),
+            "right noncommutative consumer should report current-X scheduling");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-carried right noncommutative consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-carried right noncommutative consumer should not recall tmp");
+    require(count_steps_with_comment(result, "current-X operand order") == 1,
+            "right noncommutative consumer should swap stack order without recalling tmp");
+    require(count_steps_with_comment(result, "expr -") == 1,
+            "stack-carried right noncommutative consumer should emit one subtraction");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedRightUnaryDerivationNonCommutativeConsumer {
+  state {
+    x: packed = 8.75
+    y: packed = 3
+    z: packed = 20
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    halt(z - frac(tmp))
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried right unary derivation noncommutative consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "right unary derivation noncommutative consumer should keep tmp in X");
+    require(has_optimization(result, "stack-current-x-scheduling"),
+            "right unary derivation noncommutative consumer should report current-X scheduling");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "right unary derivation noncommutative consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "right unary derivation noncommutative consumer should not recall tmp");
+    require(count_steps_with_comment(result, "current-X frac") == 1,
+            "right unary derivation noncommutative consumer should derive frac() from current X");
+    require(count_steps_with_comment(result, "current-X operand order") == 1,
+            "right unary derivation noncommutative consumer should swap stack order");
+    require(count_steps_with_comment(result, "expr -") == 1,
+            "right unary derivation noncommutative consumer should emit one subtraction");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedAssignmentConsumer {
+  state {
+    x: packed = 2
+    y: packed = 3
+    scale: packed = 4
+    tmp: packed = 0
+    out: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    out = tmp * scale
+    halt(out)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried assignment consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "assignment consumer should keep tmp in X for the following expression");
+    require(has_optimization(result, "stack-current-x-scheduling"),
+            "assignment consumer should reuse tmp already in X for the assigned expression");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-carried assignment consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-carried assignment consumer should not recall tmp");
+    require(count_steps_with_comment(result, "set out") == 0,
+            "immediately consumed assignment output should also stay in X");
+    require(count_steps_with_comment(result, "recall out") == 0,
+            "immediately consumed assignment output should not be recalled");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedUnaryAssignmentConsumer {
+  state {
+    x: packed = 2
+    y: packed = 3
+    tmp: packed = 0
+    out: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    out = -tmp
+    halt(out)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried unary assignment consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "unary assignment consumer should keep tmp in X for the following expression");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-carried unary assignment consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-carried unary assignment consumer should not recall tmp");
+    require(count_steps_with_comment(result, "unary minus") == 1,
+            "stack-carried unary assignment consumer should apply unary minus to current X");
+    require(count_steps_with_comment(result, "set out") == 0,
+            "immediately consumed unary assignment output should also stay in X");
+    require(count_steps_with_comment(result, "recall out") == 0,
+            "immediately consumed unary assignment output should not be recalled");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedUnaryBuiltinAssignmentConsumer {
+  state {
+    x: packed = 8.75
+    y: packed = 3
+    tmp: packed = 0
+    out: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    out = frac(tmp)
+    halt(out)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried unary builtin assignment consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "unary builtin assignment consumer should keep tmp in X for the following expression");
+    require(has_optimization(result, "current-x-unary-derivation"),
+            "unary builtin assignment consumer should derive frac() from current X");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-carried unary builtin assignment consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-carried unary builtin assignment consumer should not recall tmp");
+    require(count_steps_with_comment(result, "current-X frac") == 1,
+            "stack-carried unary builtin assignment consumer should apply frac() to current X");
+    require(count_steps_with_comment(result, "set out") == 0,
+            "immediately consumed unary builtin assignment output should also stay in X");
+    require(count_steps_with_comment(result, "recall out") == 0,
+            "immediately consumed unary builtin assignment output should not be recalled");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedSumConsumer {
+  state {
+    x: packed = 2
+    y: packed = 3
+    left: packed = 10
+    right: packed = 20
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    halt(sum(left, tmp, right))
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried sum consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "sum consumer should keep tmp in X for the following sum(...) expression");
+    require(has_optimization(result, "sum-primitive-lowering"),
+            "sum consumer should lower through the explicit sum primitive");
+    require(has_optimization(result, "stack-current-x-scheduling"),
+            "sum consumer should reuse tmp already in X inside the addition chain");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-carried sum consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-carried sum consumer should not recall tmp");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedSumInlineExpressionConsumer {
+  state {
+    x: packed = 2
+    y: packed = 3
+    left: packed = 10
+    right: packed = 20
+    tail: packed = 5
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    halt(sum(left + tail, tmp, right))
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried sum inline expression consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "sum inline expression consumer should keep tmp in X");
+    require(has_optimization(result, "sum-primitive-lowering"),
+            "sum inline expression consumer should lower through the explicit sum primitive");
+    require(has_optimization(result, "stack-current-x-scheduling"),
+            "sum inline expression consumer should reuse tmp inside the addition chain");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-carried sum inline expression consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-carried sum inline expression consumer should not recall tmp");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedRepeatedSumConsumerRejected {
+  state {
+    x: packed = 2
+    y: packed = 3
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    halt(sum(tmp, tmp))
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried repeated sum consumer rejection");
+    require(!has_optimization(result, "stack-carried-assignment"),
+            "sum consumer should reject repeated current-X reads without an explicit duplicate");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedRightDivisionAssignmentConsumer {
+  state {
+    x: packed = 8
+    y: packed = 2
+    z: packed = 100
+    tmp: packed = 0
+    out: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    out = z / tmp
+    halt(out)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried right division assignment consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "right division assignment consumer should keep tmp in X for the following expression");
+    require(has_optimization(result, "stack-current-x-scheduling"),
+            "right division assignment consumer should report current-X scheduling");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-carried right division assignment consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-carried right division assignment consumer should not recall tmp");
+    require(count_steps_with_comment(result, "current-X operand order") == 1,
+            "right division assignment consumer should swap stack order without recalling tmp");
+    require(count_steps_with_comment(result, "expr /") == 1,
+            "stack-carried right division assignment consumer should emit one division");
+    require(count_steps_with_comment(result, "set out") == 0,
+            "immediately consumed division assignment output should also stay in X");
+    require(count_steps_with_comment(result, "recall out") == 0,
+            "immediately consumed division assignment output should not be recalled");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedUpdateConsumer {
+  state {
+    x: packed = 2
+    y: packed = 3
+    score: packed = 10
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    score += tmp
+    halt(score)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried update consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "update consumer should keep tmp in X for the following += update");
+    require(has_optimization(result, "stack-current-x-scheduling"),
+            "update consumer should reuse tmp already in X while updating score");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-carried update consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-carried update consumer should not recall tmp");
+    require(count_steps_with_comment(result, "set score") == 1,
+            "stack-carried update consumer should still store the updated state");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedUnaryUpdateConsumer {
+  state {
+    x: packed = 2.75
+    y: packed = 3
+    score: packed = 10
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    score -= frac(tmp)
+    halt(score)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried unary update consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "unary update consumer should keep tmp in X for the following -= update");
+    require(has_optimization(result, "stack-current-x-scheduling"),
+            "unary update consumer should reuse tmp already in X while updating score");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-carried unary update consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-carried unary update consumer should not recall tmp");
+    require(count_steps_with_comment(result, "current-X frac") == 1,
+            "stack-carried unary update consumer should derive frac() from current X");
+    require(count_steps_with_comment(result, "current-X operand order") == 1,
+            "unary -= update consumer should swap stack order without recalling tmp");
+    require(count_steps_with_comment(result, "set score") == 1,
+            "stack-carried unary update consumer should still store the updated state");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedReadAssignmentConsumer {
+  state {
+    key: packed = 0
+    base: packed = 9
+    out: packed = 0
+  }
+
+  loop {
+    key = read()
+    out = base - key
+    halt(out)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried read assignment consumer");
+    require(has_optimization(result, "stack-carried-read"),
+            "read consumer should keep key in X for the following expression");
+    require(has_optimization(result, "stack-current-x-scheduling"),
+            "read consumer should reuse key already in X");
+    require(count_steps_with_comment(result, "read key") == 1,
+            "stack-carried read consumer should not store key");
+    require(count_steps_with_comment(result, "recall key") == 0,
+            "stack-carried read consumer should not recall key");
+    require(count_steps_with_comment(result, "set out") == 0,
+            "immediately consumed read-derived assignment should stay in X");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedReadFutureReadRejected {
+  state {
+    key: packed = 0
+    base: packed = 9
+    out: packed = 0
+  }
+
+  loop {
+    key = read()
+    out = base - key
+    halt(key + out)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried read future-read rejection");
+    require(!has_optimization(result, "stack-carried-read"),
+            "future read before write should keep the read target stored");
+    require(has_optimization(result, "intent-read-lowering"),
+            "stored read path should still report intent-read-lowering");
+    require(count_steps_with_comment(result, "read key") == 2,
+            "future read before write should emit both the read stop and key store");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedIfZeroConsumer {
+  state {
+    x: packed = 2
+    y: packed = -2
+    score: packed = 0
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    if tmp == 0 {
+      score += 1
+    }
+    halt(score)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried if-zero consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "if-zero consumer should keep tmp in X for the following branch");
+    require(has_optimization(result, "zero-condition-test"),
+            "if-zero consumer should branch directly on the current X value");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-carried if-zero consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-carried if-zero consumer should not recall tmp");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedIfEqualityConsumer {
+  state {
+    x: packed = 2
+    y: packed = 3
+    target: packed = 5
+    score: packed = 0
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    if target == tmp {
+      score += 1
+    }
+    halt(score)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried if-equality consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "if-equality consumer should keep tmp in X for the following branch");
+    require(has_optimization(result, "condition-current-x-reuse"),
+            "if-equality consumer should compare against the current X value");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-carried if-equality consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-carried if-equality consumer should not recall tmp");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedIfInlineExpressionConsumer {
+  state {
+    x: packed = 2
+    y: packed = 3
+    z: packed = 4
+    w: packed = 1
+    score: packed = 0
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    if tmp == z + w {
+      score += 1
+    }
+    halt(score)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried if inline expression consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "if inline expression consumer should keep tmp in X for the following branch");
+    require(has_optimization(result, "condition-current-x-reuse"),
+            "if inline expression consumer should compare the inline operand against current X");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "if inline expression consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "if inline expression consumer should not recall tmp");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedIfBodyReadBeforeWriteRejected {
+  state {
+    command: packed = 7
+    step: packed = 0
+  }
+
+  loop {
+    step = command - 5
+    if step == 0 {
+      halt(0)
+    } else {
+      step = int(1 / step)
+      halt(step)
+    }
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried if body read before write rejection");
+    require(!has_optimization(result, "stack-carried-assignment"),
+            "branch body read before write should keep the temporary stored");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedRepeatedConsumerRejected {
+  state {
+    x: packed = 2
+    y: packed = 3
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    halt(tmp / tmp)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried repeated consumer rejection");
+    require(!has_optimization(result, "stack-carried-assignment"),
+            "repeated expression consumer should not be accepted without an explicit duplicate");
+    require(count_steps_with_comment(result, "duplicate repeated operand through stack") == 1,
+            "repeated expression consumer should duplicate the stored value through the stack");
+    require(count_steps_with_comment(result, "expr /") == 1,
+            "repeated expression consumer should emit one division after duplication");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedLoopPrefixRead {
+  state {
+    x: packed = 2
+    y: packed = 3
+    tmp: packed = 0
+  }
+
+  loop {
+    show(tmp)
+    tmp = x + y
+    halt(tmp)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried loop prefix read");
+    require(!has_optimization(result, "stack-carried-assignment"),
+            "loop-carried read before the next write should keep the tmp store");
+    require(count_steps_with_comment(result, "set tmp") == 1,
+            "loop-carried read before write should store tmp");
   }
 
   {

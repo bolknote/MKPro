@@ -173,6 +173,7 @@ struct LoweringContext {
   int bit_mask_helper_calls = 0;
   int bit_mask_condition_helper_calls = 0;
   std::optional<std::string> packed_score_helper;
+  std::optional<std::string> packed_score_accumulator_helper;
   std::map<std::string, std::string> spatial_sum_helper_labels;
   std::map<std::string, SpatialHitHelperRequest> spatial_hit_helpers;
   std::vector<std::string> spatial_hit_helper_order;
@@ -228,6 +229,8 @@ struct LoweringContext {
   bool segmented_bitplanes = false;
   bool segmented_line_count_scan = false;
   bool use_packed_score_helper = false;
+  bool packed_score_accumulator_helpers = false;
+  bool use_packed_score_accumulator_helper = false;
   bool stack_resident_temps = false;
   bool setup_only_counted_loop_init = false;
   bool x_param_value_functions = false;

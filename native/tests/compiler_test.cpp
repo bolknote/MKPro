@@ -1762,8 +1762,10 @@ program PackedScoreHelper {
           "native compiler should lower repeated packed_score calls");
   require(packed_score_helper.diagnostics.empty(),
           "repeated packed_score compile should not report diagnostics");
-  require(packed_score_helper.listing.find("packed_score helper") != std::string::npos,
-          "three packed_score calls should use the shared stack helper");
+  require(packed_score_helper.listing.find("packed_score accumulator helper") != std::string::npos,
+          "three packed_score calls should use the stack accumulator helper");
+  require(has_optimization(packed_score_helper, "packed-score-sequence-stack-accumulator"),
+          "three statement-level packed_score calls should report sequence accumulator lowering");
 
   const CompileResult packed_line_score_proc = compile_source(R"mkpro(
 program PackedLineScoreProc {
@@ -4130,7 +4132,7 @@ program CoordListSpatial {
   loop {
     cell = read()
     if cell in foxes {
-      bearing = 9
+      show(9)
     }
     bearing = line_count(foxes, cell)
     halt(bearing)
@@ -4146,15 +4148,20 @@ program CoordListSpatial {
   require(coord_list_spatial.registers.find("__coord_list_foxes_0") !=
               coord_list_spatial.registers.end(),
           "coord_list should allocate scalar item registers");
-  require(coord_list_spatial.listing.find("coord_list hit compare") != std::string::npos,
+  const auto has_coord_list_listing = [&](const std::string& ordinary,
+                                          const std::string& fused) {
+    return coord_list_spatial.listing.find(ordinary) != std::string::npos ||
+           coord_list_spatial.listing.find(fused) != std::string::npos;
+  };
+  require(has_coord_list_listing("coord_list hit compare", "coord_list fused hit compare"),
           "coord_list membership should compare scalar item registers");
-  require(coord_list_spatial.listing.find("coord_list same column") != std::string::npos,
+  require(has_coord_list_listing("coord_list same column", "coord_list fused same column"),
           "coord_list line_count should test columns");
-  require(coord_list_spatial.listing.find("coord_list same row") != std::string::npos,
+  require(has_coord_list_listing("coord_list same row", "coord_list fused same row"),
           "coord_list line_count should test rows");
-  require(coord_list_spatial.listing.find("coord_list same diagonal") != std::string::npos,
+  require(has_coord_list_listing("coord_list same diagonal", "coord_list fused same diagonal"),
           "coord_list line_count should test diagonals");
-  require(coord_list_spatial.listing.find("coord_list line_count total") != std::string::npos,
+  require(has_coord_list_listing("coord_list line_count total", "coord_list fused total"),
           "coord_list line_count should accumulate visible items");
 
   CompileOptions spatial_options;
@@ -5586,7 +5593,7 @@ program ContainsPredicate {
     unless cell in occupied {
       misses += 1
     }
-    halt(hits)
+    halt(hits + misses)
   }
 }
 )mkpro");

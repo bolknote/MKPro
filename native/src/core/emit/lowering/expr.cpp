@@ -80,6 +80,79 @@ bool is_simple_stack_load(const Expression& expression) {
   return expression.kind == "identifier" || expression.kind == "number";
 }
 
+const std::map<std::string, std::pair<int, std::string>>& current_x_unary_opcodes() {
+  static const std::map<std::string, std::pair<int, std::string>> opcodes = {
+      {"abs", {0x31, "К |x|"}},     {"sign", {0x32, "К ЗН"}},     {"int", {0x34, "К [x]"}},
+      {"frac", {0x35, "К {x}"}},    {"sqr", {0x22, "F x^2"}},     {"inv", {0x23, "F 1/x"}},
+      {"sqrt", {0x21, "F sqrt"}},   {"lg", {0x17, "F lg"}},       {"ln", {0x18, "F ln"}},
+      {"sin", {0x1c, "F sin"}},     {"cos", {0x1d, "F cos"}},     {"tg", {0x1e, "F tg"}},
+      {"asin", {0x19, "F sin^-1"}}, {"acos", {0x1a, "F cos^-1"}}, {"atg", {0x1b, "F tg^-1"}},
+      {"exp", {0x16, "F e^x"}},     {"pow10", {0x15, "F 10^x"}},  {"bit_not", {0x3a, "К ИНВ"}},
+  };
+  return opcodes;
+}
+
+bool expression_preserves_previous_x_as_y_for_current_x_operand(const Expression& expression) {
+  if (is_simple_stack_load(expression))
+    return true;
+  if (expression.kind == "unary")
+    return expression.op == "-" && expression.expr != nullptr &&
+           expression_preserves_previous_x_as_y_for_current_x_operand(*expression.expr);
+  if (expression.kind == "binary") {
+    return (expression.op == "+" || expression.op == "-" || expression.op == "*" ||
+            expression.op == "/") &&
+           expression.left != nullptr && expression.right != nullptr &&
+           expression_preserves_previous_x_as_y_for_current_x_operand(*expression.left) &&
+           expression_preserves_previous_x_as_y_for_current_x_operand(*expression.right);
+  }
+  if (expression.kind == "call") {
+    return expression.args.size() == 1U && current_x_unary_opcodes().contains(lower_ascii(expression.callee)) &&
+           expression_preserves_previous_x_as_y_for_current_x_operand(expression.args.front());
+  }
+  return false;
+}
+
+bool expression_contains_current_x_name(ExpressionEmitApi& api, const Expression& expression) {
+  if (expression.kind == "identifier")
+    return current_x_holds_name(api, expression.name);
+  if (expression.kind == "indexed")
+    return expression.index != nullptr &&
+           expression_contains_current_x_name(api, *expression.index);
+  if (expression.kind == "unary")
+    return expression.expr != nullptr &&
+           expression_contains_current_x_name(api, *expression.expr);
+  if (expression.kind == "binary")
+    return expression.left != nullptr && expression.right != nullptr &&
+           (expression_contains_current_x_name(api, *expression.left) ||
+            expression_contains_current_x_name(api, *expression.right));
+  if (expression.kind == "call") {
+    return std::any_of(expression.args.begin(), expression.args.end(), [&](const Expression& arg) {
+      return expression_contains_current_x_name(api, arg);
+    });
+  }
+  return false;
+}
+
+bool lower_current_x_preserving_operand_to_x(ExpressionEmitApi& api, LoweringContext& context,
+                                             const Expression& expression) {
+  if (!expression_preserves_previous_x_as_y_for_current_x_operand(expression) ||
+      expression_contains_current_x_name(api, expression)) {
+    return false;
+  }
+  if (is_simple_stack_load(expression))
+    return api.lower_expression_to_x(expression);
+
+  const bool previous_expression_helper = context.emitting_expression_helper;
+  context.emitting_expression_helper = true;
+  const bool lowered = api.lower_expression_to_x(expression);
+  context.emitting_expression_helper = previous_expression_helper;
+  return lowered;
+}
+
+bool compile_current_x_derivation(
+    ExpressionEmitApi& api, const Expression& expression,
+    const std::map<std::string, std::pair<int, std::string>>& unary_opcodes);
+
 bool lower_commutative_with_current_x(ExpressionEmitApi& api, LoweringContext& context,
                                       const Expression& expression, int opcode) {
   if (!api.emitter.current_x_variable.has_value() || expression.left == nullptr ||
@@ -87,9 +160,11 @@ bool lower_commutative_with_current_x(ExpressionEmitApi& api, LoweringContext& c
     return false;
   }
 
-  if ((expression.left->kind == "identifier" && current_x_holds_name(api, expression.left->name) &&
-       is_simple_stack_load(*expression.right))) {
-    if (!api.lower_expression_to_x(*expression.right))
+  const auto& unary_opcodes = current_x_unary_opcodes();
+  if (expression_preserves_previous_x_as_y_for_current_x_operand(*expression.right) &&
+      !expression_contains_current_x_name(api, *expression.right) &&
+      compile_current_x_derivation(api, *expression.left, unary_opcodes)) {
+    if (!lower_current_x_preserving_operand_to_x(api, context, *expression.right))
       return false;
     api.emitter.emit_op(opcode, expression.op, "expr " + expression.op);
     api.emitter.current_x_variable.reset();
@@ -101,10 +176,10 @@ bool lower_commutative_with_current_x(ExpressionEmitApi& api, LoweringContext& c
     return true;
   }
 
-  if ((expression.right->kind == "identifier" &&
-       current_x_holds_name(api, expression.right->name) &&
-       is_simple_stack_load(*expression.left))) {
-    if (!api.lower_expression_to_x(*expression.left))
+  if (expression_preserves_previous_x_as_y_for_current_x_operand(*expression.left) &&
+      !expression_contains_current_x_name(api, *expression.left) &&
+      compile_current_x_derivation(api, *expression.right, unary_opcodes)) {
+    if (!lower_current_x_preserving_operand_to_x(api, context, *expression.left))
       return false;
     api.emitter.emit_op(opcode, expression.op, "expr " + expression.op);
     api.emitter.current_x_variable.reset();
@@ -112,6 +187,48 @@ bool lower_commutative_with_current_x(ExpressionEmitApi& api, LoweringContext& c
     context.optimizations.push_back(OptimizationReport{
         .name = "stack-current-x-scheduling",
         .detail = "Reused current X for commutative " + expression.op + ".",
+    });
+    return true;
+  }
+
+  return false;
+}
+
+bool lower_noncommutative_with_current_x(ExpressionEmitApi& api, LoweringContext& context,
+                                         const Expression& expression, int opcode) {
+  if (!api.emitter.current_x_variable.has_value() || expression.left == nullptr ||
+      expression.right == nullptr || (expression.op != "-" && expression.op != "/")) {
+    return false;
+  }
+
+  const auto& unary_opcodes = current_x_unary_opcodes();
+  if (expression_preserves_previous_x_as_y_for_current_x_operand(*expression.right) &&
+      !expression_contains_current_x_name(api, *expression.right) &&
+      compile_current_x_derivation(api, *expression.left, unary_opcodes)) {
+    if (!lower_current_x_preserving_operand_to_x(api, context, *expression.right))
+      return false;
+    api.emitter.emit_op(opcode, expression.op, "expr " + expression.op);
+    api.emitter.current_x_variable.reset();
+    api.emitter.current_x_aliases.clear();
+    context.optimizations.push_back(OptimizationReport{
+        .name = "stack-current-x-scheduling",
+        .detail = "Reused current X as the left operand for " + expression.op + ".",
+    });
+    return true;
+  }
+
+  if (expression_preserves_previous_x_as_y_for_current_x_operand(*expression.left) &&
+      !expression_contains_current_x_name(api, *expression.left) &&
+      compile_current_x_derivation(api, *expression.right, unary_opcodes)) {
+    if (!lower_current_x_preserving_operand_to_x(api, context, *expression.left))
+      return false;
+    api.emitter.emit_op(0x14, "<->", "current-X operand order");
+    api.emitter.emit_op(opcode, expression.op, "expr " + expression.op);
+    api.emitter.current_x_variable.reset();
+    api.emitter.current_x_aliases.clear();
+    context.optimizations.push_back(OptimizationReport{
+        .name = "stack-current-x-scheduling",
+        .detail = "Reused current X as the right operand for " + expression.op + ".",
     });
     return true;
   }
@@ -216,8 +333,10 @@ bool lower_commutative_call_with_current_x(
     const std::map<std::string, std::pair<int, std::string>>& unary_opcodes) {
   const Expression& left = expression.args.at(0);
   const Expression& right = expression.args.at(1);
-  if (is_simple_stack_load(right) && compile_current_x_derivation(api, left, unary_opcodes)) {
-    if (!api.lower_expression_to_x(right))
+  if (expression_preserves_previous_x_as_y_for_current_x_operand(right) &&
+      !expression_contains_current_x_name(api, right) &&
+      compile_current_x_derivation(api, left, unary_opcodes)) {
+    if (!lower_current_x_preserving_operand_to_x(api, context, right))
       return false;
     api.emitter.emit_op(opcode.first, opcode.second, lower_ascii(expression.callee) + "()");
     api.emitter.current_x_variable.reset();
@@ -229,8 +348,10 @@ bool lower_commutative_call_with_current_x(
     });
     return true;
   }
-  if (is_simple_stack_load(left) && compile_current_x_derivation(api, right, unary_opcodes)) {
-    if (!api.lower_expression_to_x(left))
+  if (expression_preserves_previous_x_as_y_for_current_x_operand(left) &&
+      !expression_contains_current_x_name(api, left) &&
+      compile_current_x_derivation(api, right, unary_opcodes)) {
+    if (!lower_current_x_preserving_operand_to_x(api, context, left))
       return false;
     api.emitter.emit_op(opcode.first, opcode.second, lower_ascii(expression.callee) + "()");
     api.emitter.current_x_variable.reset();
@@ -501,23 +622,6 @@ bool lower_binary_expression_to_x(ExpressionEmitApi& api, LoweringContext& conte
     return true;
   }
 
-  if ((expression.op == "+" || expression.op == "*") &&
-      lower_commutative_with_current_x(api, context, expression,
-                                       expression.op == "+" ? 0x10 : 0x12)) {
-    return true;
-  }
-
-  if (expression.op == "/" && is_numeric_value(context, *expression.left, 1.0)) {
-    if (!api.lower_expression_to_x(*expression.right))
-      return false;
-    api.emitter.emit_op(0x23, "F 1/x", "reciprocal division");
-    context.optimizations.push_back(OptimizationReport{
-        .name = "reciprocal-division-lowering",
-        .detail = "Lowered reciprocal division through F 1/x.",
-    });
-    return true;
-  }
-
   if (expression.op == "*" && expression_equals(*expression.left, *expression.right) &&
       is_pure_expression(*expression.left)) {
     if (!api.lower_expression_to_x(*expression.left))
@@ -533,7 +637,7 @@ bool lower_binary_expression_to_x(ExpressionEmitApi& api, LoweringContext& conte
   const auto duplicated_opcode_it = arithmetic_opcodes.find(expression.op);
   if (duplicated_opcode_it != arithmetic_opcodes.end() &&
       expression_equals(*expression.left, *expression.right) &&
-      is_pure_expression(*expression.left) && estimate_expression_cost(*expression.left) > 1) {
+      is_pure_expression(*expression.left)) {
     if (!api.lower_expression_to_x(*expression.left))
       return false;
     api.emitter.emit_op(0x0e, "В↑", "duplicate repeated operand through stack");
@@ -545,6 +649,29 @@ bool lower_binary_expression_to_x(ExpressionEmitApi& api, LoweringContext& conte
         .detail = "Duplicated " + expression_to_intent_text(*expression.left) +
                   " through the stack (В↑) for " + expression.op +
                   " instead of recomputing it.",
+    });
+    return true;
+  }
+
+  if ((expression.op == "+" || expression.op == "*") &&
+      lower_commutative_with_current_x(api, context, expression,
+                                       expression.op == "+" ? 0x10 : 0x12)) {
+    return true;
+  }
+
+  if ((expression.op == "-" || expression.op == "/") &&
+      lower_noncommutative_with_current_x(api, context, expression,
+                                          expression.op == "-" ? 0x11 : 0x13)) {
+    return true;
+  }
+
+  if (expression.op == "/" && is_numeric_value(context, *expression.left, 1.0)) {
+    if (!api.lower_expression_to_x(*expression.right))
+      return false;
+    api.emitter.emit_op(0x23, "F 1/x", "reciprocal division");
+    context.optimizations.push_back(OptimizationReport{
+        .name = "reciprocal-division-lowering",
+        .detail = "Lowered reciprocal division through F 1/x.",
     });
     return true;
   }
@@ -813,14 +940,7 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
     return true;
   }
 
-  const std::map<std::string, std::pair<int, std::string>> unary_opcodes = {
-      {"abs", {0x31, "К |x|"}},     {"sign", {0x32, "К ЗН"}},     {"int", {0x34, "К [x]"}},
-      {"frac", {0x35, "К {x}"}},    {"sqr", {0x22, "F x^2"}},     {"inv", {0x23, "F 1/x"}},
-      {"sqrt", {0x21, "F sqrt"}},   {"lg", {0x17, "F lg"}},       {"ln", {0x18, "F ln"}},
-      {"sin", {0x1c, "F sin"}},     {"cos", {0x1d, "F cos"}},     {"tg", {0x1e, "F tg"}},
-      {"asin", {0x19, "F sin^-1"}}, {"acos", {0x1a, "F cos^-1"}}, {"atg", {0x1b, "F tg^-1"}},
-      {"exp", {0x16, "F e^x"}},     {"pow10", {0x15, "F 10^x"}},  {"bit_not", {0x3a, "К ИНВ"}},
-  };
+  const auto& unary_opcodes = current_x_unary_opcodes();
   const auto unary_it = unary_opcodes.find(callee);
   if (unary_it != unary_opcodes.end()) {
     if (expression.args.size() != 1) {

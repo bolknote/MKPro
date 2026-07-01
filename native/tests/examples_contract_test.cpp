@@ -224,6 +224,8 @@ void compiler_examples_match_typescript_contract() {
     require(has_machine_feature(result, "code-data-overlay"),
             "human.mkpro should report code-data-overlay machine feature use");
     require(has_proof(result, "value-ranges"), "human.mkpro should report value-range proofs");
+    require(has_proof(result, "code-data-overlay"),
+            "human.mkpro should report code-data-overlay final-artifact proof");
     // The TS oracle surfaces, for human.mkpro, a "numeric-dispatch-residual-chain" optimization
     // label plus "dark-indirect-table" / "super-dark-dispatch" considered-but-rejected dispatch
     // candidates (mirroring selectDispatchCandidate). These are report-only entries; the emitted

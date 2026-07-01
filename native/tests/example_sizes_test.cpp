@@ -57,6 +57,47 @@ const CandidateReport* find_candidate(const std::vector<CandidateReport>& candid
   return it == candidates.end() ? nullptr : &*it;
 }
 
+const SizeAttributionEntry* find_size_entry(const CompileResult& result,
+                                            const std::string& kind,
+                                            const std::string& label) {
+  const auto it = std::find_if(result.size_attribution.entries.begin(),
+                               result.size_attribution.entries.end(),
+                               [&](const SizeAttributionEntry& entry) {
+                                 return entry.kind == kind && entry.label == label;
+                               });
+  return it == result.size_attribution.entries.end() ? nullptr : &*it;
+}
+
+const SizeOpportunityReport* find_size_opportunity(const CompileResult& result,
+                                                   const std::string& variant) {
+  const auto it = std::find_if(result.size_attribution.opportunities.begin(),
+                               result.size_attribution.opportunities.end(),
+                               [&](const SizeOpportunityReport& opportunity) {
+                                 return opportunity.variant == variant;
+                               });
+  return it == result.size_attribution.opportunities.end() ? nullptr : &*it;
+}
+
+const SizeBlockerSummaryReport* find_size_blocker(const CompileResult& result,
+                                                  const std::string& blocker_kind) {
+  const auto it = std::find_if(result.size_attribution.blockers.begin(),
+                               result.size_attribution.blockers.end(),
+                               [&](const SizeBlockerSummaryReport& blocker) {
+                                 return blocker.blocker_kind == blocker_kind;
+                               });
+  return it == result.size_attribution.blockers.end() ? nullptr : &*it;
+}
+
+const SizeSpillSummaryReport* find_size_spill(const CompileResult& result,
+                                              const std::string& name) {
+  const auto it = std::find_if(result.size_attribution.spills.begin(),
+                               result.size_attribution.spills.end(),
+                               [&](const SizeSpillSummaryReport& spill) {
+                                 return spill.name == name;
+                               });
+  return it == result.size_attribution.spills.end() ? nullptr : &*it;
+}
+
 bool has_optimization(const CompileResult& result, const std::string& name) {
   return std::any_of(result.optimizations.begin(), result.optimizations.end(),
                      [&](const OptimizationReport& optimization) {
@@ -183,6 +224,78 @@ void example_sizes_match_typescript_baselines() {
               "tic-tac-toe-4x4 rejected dead-integer fractional selector should show 140 cells");
       require(rejected_dead_integer->reason.find("before K {x}") != std::string::npos,
               "tic-tac-toe-4x4 dead-integer rejection should explain the unsafe consumer");
+      require(rejected_dead_integer->reason.find("consumerAddress=") != std::string::npos &&
+                  rejected_dead_integer->reason.find("selectorTarget=") != std::string::npos &&
+                  rejected_dead_integer->reason.find("naturalTarget=") != std::string::npos,
+              "tic-tac-toe-4x4 dead-integer rejection should expose selector/layout context");
+      require(result.size_attribution.total_cells == static_cast<int>(result.steps.size()),
+              "tic-tac-toe-4x4 size attribution should report the final cell count");
+      const SizeAttributionEntry* candidate_score =
+          find_size_entry(result, "helper-region", "packed-line score accumulator helper");
+      require(candidate_score != nullptr && candidate_score->cells >= 8 &&
+                  candidate_score->detail.find("calls=") != std::string::npos,
+              "tic-tac-toe-4x4 size attribution should expose the packed_score helper body");
+      const SizeAttributionEntry* cell_mask =
+          find_size_entry(result, "helper-region", "expr cell_mask(x, y)");
+      require(cell_mask != nullptr && cell_mask->cells >= 8,
+              "tic-tac-toe-4x4 size attribution should expose the cell_mask helper body");
+      const SizeAttributionEntry* cell_mask_calls =
+          find_size_entry(result, "helper-call-sites", "expr cell_mask(x, y)");
+      require(cell_mask_calls != nullptr && cell_mask_calls->cells == 6 &&
+                  cell_mask_calls->occurrences == 3 &&
+                  cell_mask_calls->detail.find("target=") != std::string::npos,
+              "tic-tac-toe-4x4 size attribution should expose the cell_mask call-site cost");
+      const SizeAttributionEntry* packed_score_calls =
+          find_size_entry(result, "helper-call-sites", "packed-line score accumulator helper");
+      require(packed_score_calls != nullptr && packed_score_calls->cells == 4 &&
+                  packed_score_calls->occurrences == 2 &&
+                  packed_score_calls->detail.find("target=") != std::string::npos,
+              "tic-tac-toe-4x4 size attribution should expose the packed_score call-site cost");
+      const SizeAttributionEntry* recall_occupied =
+          find_size_entry(result, "listing", "recall occupied");
+      require(recall_occupied != nullptr && recall_occupied->cells >= 1,
+              "tic-tac-toe-4x4 size attribution should expose recall costs by state name");
+      const SizeAttributionEntry* set_occupied =
+          find_size_entry(result, "listing", "set occupied");
+      require(set_occupied != nullptr && set_occupied->cells >= 1,
+              "tic-tac-toe-4x4 size attribution should expose store costs by state name");
+      const SizeSpillSummaryReport* occupied_spill = find_size_spill(result, "occupied");
+      require(occupied_spill != nullptr && occupied_spill->total_cells >= 4 &&
+                  occupied_spill->recall_cells >= 3 && occupied_spill->store_cells >= 1,
+              "tic-tac-toe-4x4 size attribution should summarize recall/store spill costs by "
+              "state name");
+      const SizeOpportunityReport* dead_integer_opportunity =
+          find_size_opportunity(result, "fractional-constant-selector-dead-int");
+      require(dead_integer_opportunity != nullptr && dead_integer_opportunity->savings == 1 &&
+                  dead_integer_opportunity->blocker_kind == "data-arithmetic" &&
+                  dead_integer_opportunity->reason.find("before K {x}") != std::string::npos &&
+                  dead_integer_opportunity->reason.find("consumerAddress=") !=
+                      std::string::npos,
+              "tic-tac-toe-4x4 size attribution should expose the blocked 140-cell rescue");
+      require(dead_integer_opportunity->details.contains("consumerAddress") &&
+                  dead_integer_opportunity->details.contains("selectorTarget") &&
+                  dead_integer_opportunity->details.contains("naturalTarget") &&
+                  dead_integer_opportunity->details.contains("recoveryFreeLayout"),
+              "tic-tac-toe-4x4 size opportunity should expose structured selector-layout "
+              "details");
+      const SizeBlockerSummaryReport* data_arithmetic_blocker =
+          find_size_blocker(result, "data-arithmetic");
+      require(data_arithmetic_blocker != nullptr &&
+                  data_arithmetic_blocker->opportunities >= 1 &&
+                  data_arithmetic_blocker->potential_savings >= 1 &&
+                  data_arithmetic_blocker->best_savings == 1 &&
+                  data_arithmetic_blocker->best_variant ==
+                      "fractional-constant-selector-dead-int" &&
+                  data_arithmetic_blocker->best_reason.find("before K {x}") !=
+                      std::string::npos &&
+                  data_arithmetic_blocker->best_reason.find("naturalTarget=") !=
+                      std::string::npos,
+              "tic-tac-toe-4x4 size attribution should summarize positive-savings proof "
+              "blockers by blockerKind");
+      require(data_arithmetic_blocker->best_details.contains("naturalTarget") &&
+                  data_arithmetic_blocker->best_details.contains("selectorTarget"),
+              "tic-tac-toe-4x4 size blocker summary should keep structured best blocker "
+              "details");
     }
   }
 }

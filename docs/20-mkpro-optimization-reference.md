@@ -34,6 +34,30 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
 - `report.proofs` — explicit proofs that some rewrites depended on.
 - `report.machineFeaturesUsed` — machine-feature tactics enabled by successful transformations.
 - `report.preloads` and `report.setupProgram` — auto-initialization strategy.
+- `report.sizeAttribution` — final helper/body/call-site costs and rejected
+  size opportunities. Listing entries preserve source-level `recall name` and
+  `set name` labels, so register spill costs can be traced to concrete state
+  values before scheduler work. Opportunity rows include a structural
+  `blockerKind` (for example `data-arithmetic`,
+  `indirect-address-control-use`, `missing-proof`, or `nonwinning-candidate`)
+  so blocked savings can be grouped by the proof gap instead of reading
+  free-form rejection text. The companion `spills` array aggregates direct
+  register `recall name`, `set name`, and `read name` store costs by state name,
+  giving the value-aware scheduler a concrete spill ranking. The companion
+  `blockers` array aggregates only positive-savings rejected opportunities by
+  `blockerKind`; `bestReason` carries the largest local proof gap in that
+  blocker class, and `potentialSavings` is a prioritization signal across
+  alternative candidates, not a claim that all savings are independently
+  additive. Dead-integer fractional-selector blockers append the same
+  actionable selector/layout hints to `reason` and expose them as structured
+  JSON under `details` / `bestDetails`: `consumerAddress` identifies the final
+  data consumer that would observe the retuned integer part, `selectorTarget`
+  is the address target packed into the preload, and `naturalTarget` is the
+  recovery-free target naturally encoded by the fractional literal. A
+  `recoveryFreeLayout=natural-target` hint means the proof is correctly
+  rejecting data arithmetic today; a future layout/selector pass would need to
+  align the flow target to the natural fractional target instead of weakening
+  the proof.
 - X2-blocker taxonomy. Residual `recall->restore` leftovers are classified by
   blocker: `x2`, `stack`, `stack+x2`, `visible-x`, `x2-proof`, `no-proof`,
   `no-plan`, or `other`. `visible-x` means the recall is still needed to load the
@@ -702,7 +726,7 @@ Display rewrites are separated into strategy selection + body lowering.
 
 - `small-set-primitive-lowering` — replaces small multi-way boolean/state sets with dense arithmetic chains.
 - `packed-grid-primitive-lowering` — maps packed grid and digit helper operations into bit masks and add/sub-style forms. The square-board helpers are width-parametric: the coordinate wrap (`grid_norm` / `positiveGridNorm`, i.e. `% width`) and the right-diagonal fold (`+ width`) derive exactly from the board width and default to the shipped 4-wide grid. The fractional cell-mask packing constant (`10^x + floor(10^(y * K_width))`) is hardware-fitted per width — its digits encode each row's collision-free nibble offsets — so it lives in a verified width-keyed table (`cellMaskRowConstant`) with only the on-hardware-verified `width: 4` entry. Ordinary membership/update operations for exact `board(1..4, 1..4)` `cells(...)` collections are lowered through this verified `cell_mask(x, y)` family instead of the generic zero-based `bit_mask(index)` helper; other board shapes stay on their existing paths unless their packed mask constants are separately verified. Other widths derive their structural macros automatically but require a verified fractional constant before they can lower (`cell_mask` refuses to fabricate one), the same honest limit as the decimal-series emitter.
-- `packed-score-stack-helper` — when `packed_score(value, index)` appears at least three times, lowering emits one shared stack helper for the packed-line scoring kernel. Call sites load `value` and `index`, then call the helper, which performs `10^index`, division, fractional extraction, centering around `0.41200076`, and squaring. This shares the arithmetic across different line/index arguments without depending on a specific game or procedure layout. `x-param-packed-score-accumulate` extends the same helper when an X-parameter procedure has just returned the needed index in `X` and the accumulator is still live under it: the line value is loaded, `X↔Y` restores the helper argument order, and the helper result is added to the stack-resident accumulator without recalling it. When the line value is a simple stack load and the X-parameter index producer preserves the caller stack, `x-param-packed-score-line-stack-accumulate` loads the line value before producing the index, so the helper entry already has `X=index`, `Y=line`, and the accumulator below them; this removes the later `X↔Y` while keeping the rule independent of any particular game. The X-parameter argument can be a small stack-preserving arithmetic chain such as `x + y - 1`, not only a single binary operation; the stack-only proof and code generator use the same recognizer so registerless temporaries are kept only when the lowering can actually preserve the caller accumulator in `Y`.
+- `packed-score-stack-helper` — when `packed_score(value, index)` appears at least three times, lowering emits one shared stack helper for the packed-line scoring kernel. Call sites load `value` and `index`, then call the helper, which performs `10^index`, division, fractional extraction, centering around `0.41200076`, and squaring. This shares the arithmetic across different line/index arguments without depending on a specific game or procedure layout. Sum/assignment accumulator lowering accepts stack-preserving `value` and `index` expressions such as `a + b` or `x + y - 1`, not only direct register/literal loads, when the same stack analysis proves that the previous `X` remains in `Y` under the computed argument. Expression accumulation recognizes both binary `+` trees and explicit `sum(...)` calls, so `sum(base, packed_score(...), packed_score(...), ...)` uses the same accumulator pipeline instead of becoming ordinary standalone helper calls. Expression and statement-sequence accumulation can start either from an additive initial expression such as `base + packed_score(...) + ...`, an explicit zero/assignment, or an existing state value in `score += packed_score(...)`, so repeated updates do not need to store and recall `score` between terms. `x-param-packed-score-accumulate` extends the same helper when an X-parameter procedure has just returned the needed index in `X` and the accumulator is still live under it: the line value is loaded, `X↔Y` restores the helper argument order, and the helper result is added to the stack-resident accumulator without recalling it. When the line value is a simple stack load and the X-parameter index producer preserves the caller stack, `x-param-packed-score-line-stack-accumulate` loads the line value before producing the index, so the helper entry already has `X=index`, `Y=line`, and the accumulator below them; this removes the later `X↔Y` while keeping the rule independent of any particular game. If enough returned-index tails are present, the same eligibility scan enables the accumulator helper for them too, so the helper consumes the parked accumulator directly and no separate `+` cell is emitted at those call sites. The X-parameter argument can be a small stack-preserving arithmetic chain such as `x + y - 1`, not only a single binary operation; the stack-only proof and code generator use the same recognizer so registerless temporaries are kept only when the lowering can actually preserve the caller accumulator in `Y`.
 - `stack-only-state-field` — proves declared state fields whose every access is consumed by stack-current lowering, X-parameter/Y-carried packed updates, X-parameter packed-score accumulation, or a returned-value `max(candidate, best)` tie-update branch. Such a field remains a source-level name but receives no MK-61 register; assignments leave the value in `X`, procedure return tracking carries it to the caller, and any uncovered memory read/store prevents the proof. Covered reads alone are not enough: at least one covered assignment or return producer must exist, so an initialized state field used as a packed-index input still keeps storage unless the stack path actually supplies it. The packed-score proof also follows the common shape where an X-parameter helper such as a normalizer returns an index in `X` while the accumulator survives in `Y`. This frees registers for higher-value constants such as packed win masks without changing source-visible state.
 - `x-param-y-stack-stored-entry` / `x-param-y-stack-multi-entry` — optional size-rescue layout for procedures whose X parameter is copied into state and whose next packed update consumes another value carried on the stack. The ordinary entry still accepts `X=parameter, Y=packed-index`; the candidate also emits a secondary entry after the parameter store and swap. Call sites that can safely store the parameter first and then produce the packed index in `X` jump to that secondary entry (`x-param-y-stack-stored-entry-call`). The paired `indexed-packed-x-stack-pow10-delta` lowering performs the packed digit update from an index already in `X`, without the normal `X↔Y`; terminal packed fractional-report tails can now expose the same secondary entry and continue into the `indexed-packed-fractional-report-x2-tail` restore path. This is not enabled unconditionally: the extra label and changed addresses can lose more indirect-flow packing than the local prologue skip saves, so full-program candidate selection decides whether to keep it.
 - `packed-line-family-layout` — detects packed banks that are both updated through `packed_add(...)` (optionally followed by the fractional report check) and scored through `packed_score(...)` across at least four distinct bank elements. The candidate report now distinguishes the broad bank-level proof from the full kernel proof: when the update helper, four-slot update/check walker, normalizer, and score walker line up structurally, the rejected-candidate reason names those procedures and slots. The first active lowering in this family is `packed-line-family-score-accumulator`: for source-shaped score procedures with two direct line scores and two diagonal scores (`a+b` / `a-b`) through the same normalizer, the compiler emits a local accumulated `packed_score` helper. The helper keeps the candidate score below the line/index arguments on the stack and performs the final `+` inside the helper, while one diagonal path calls a shared middle-entry tail and the other falls through into it. If every selected caller reaches the score procedure with a proved zero already in `X`, `zero-accumulator-proc-entry` can enter after the explicit zero literal and let CFG cleanup remove the now-unreachable initializer. `packed-line-family-update-check-tail` is a speculative structural lowering for the paired marker/update side: it can suppress the generic update procedure and place a local shared update/check tail after the marker so the last marker path falls through into it; when this shape compiles but loses whole-program size selection, analysis reports it as a nonwinning candidate instead of silently dropping it. `packed-line-family-mutating-selector-update-check-tail` is the stronger descending-bank form: when the marker walks slots such as `7,6,5,4`, the selector variable is preferentially allocated to `R0..R3`, initialized to one past the first slot, and each `К X->П r` indirect store both writes the updated packed bank element and pre-decrements the selector. `packed-line-family-borrowed-mutating-selector-update-check-tail` keeps the source selector's normal allocation and instead borrows a low register whose owner is dead at every marker call continuation; this mirrors hand listings that temporarily reuse a saved-coordinate register as an indirect selector without permanently moving the source variable. The proof is structural: it requires a physical contiguous bank, a strictly descending slot sequence, stack-preserving line-index expressions, normalizers that preserve the caller's parked `Y`, no reads of the borrowed owner in the marker/update/normalizer cluster, and call-site continuations that do not read the owner before it is rewritten. Whole-program selection keeps these only when final size wins. The remaining source-listing gap is broader multi-entry layout sharing between the update/check tail and the score walker.
@@ -822,12 +846,24 @@ Display rewrites are separated into strategy selection + body lowering.
 - `inequality-zero-false-branch` — feeds `known-zero-reuse` after a false
   `!= 0` branch, avoiding a fresh zero literal or `Cx`.
 - `zero-reuse` — similarly reuses zero in multiple places when liveness is confirmed.
-- `stack-current-x-scheduling` — reorders current-X operations to avoid extra push/pop-like steps.
+- `stack-current-x-scheduling` — reorders current-X operations to avoid extra
+  push/pop-like steps. `stack-carried-read` is the read-side form: a `read()`
+  result may stay only in `X` for the immediately following expression, update,
+  branch, or display consumer when the rest of the block does not read that
+  source name before it is overwritten.
   Single-use stack temps are kept only when the value is not read before a later
   write on the remaining local path; visible state values (`show`, `halt`,
   `pause`, `return`) keep their store if they are read elsewhere. When a shared
   expression helper is already profitable, it wins over the local stack-temp
-  rewrite so repeated tails remain shareable.
+  rewrite so repeated tails remain shareable. Scalar `+=`/`-=` consumers can
+  also use a carried current-X temp when the update delta is the temp itself or
+  a unary current-X derivation such as `frac(tmp)`, while collection-specific
+  update lowerings keep their own stricter paths. Explicit `sum(...)`
+  consumers use the same scheduler when exactly one argument depends on the
+  carried value and the other arguments are simple stack loads, so variadic
+  accumulator syntax does not force a temporary store. Branch consumers can test
+  the carried value directly for conservative compare shapes, but they yield to
+  cheaper single-use guard substitution and dedicated domain-error guard fusions.
 - `bit-mask-decade-scale` / `bit-mask-decade-index-preload` — chooses the
   cheaper fractional-nibble bit-mask placement form. `10^int(q) * 10` wins when
   `10` is already preloaded by spatial coordinate code; `10^(int(q) + 1)` wins
@@ -2754,12 +2790,17 @@ as both data and address with no recovery tax).
 
 The native optimizer treats `-dead-int` as a dangerous proof-gated form: it is
 generated only as a last-ditch candidate and enters the static proof gate via
-`assume_dead_selector_integer_part`.  The only currently accepted local proof is
-the narrow final-artifact shape `recall retuned selector; К {x}`, which erases
-the retuned integer component before any consumer can observe it. Other
-dead-integer candidates, including arithmetic uses such as `recall; *`, remain
-rejected until their own local dead-component proof exists. The emulator is not
-used to bless this candidate.
+`assume_dead_selector_integer_part`. Accepted local proofs are final-artifact
+shapes where the retuned selector is either immediately erased
+(`recall retuned selector; К {x}`) or forwarded through a direct register store
+whose live X value is immediately erased and whose later direct recalls are also
+immediately followed by `К {x}` before any overwrite. Stored selectors may be
+used as address/control selectors only when that final indirect step carries the
+same `indirect-target` proof artifact that the indirect-flow verifier checks;
+unmarked indirect uses remain rejected. Other dead-integer candidates, including
+arithmetic uses such as `recall; *` or stored recalls consumed before `К {x}`,
+remain rejected until their own local dead-component proof exists. The emulator
+is not used to bless this candidate.
 
 ## Emulator decoupling
 

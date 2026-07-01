@@ -99,7 +99,7 @@
    37 | 34    | К [x]                   | int()
    38 | 49    | X→П 9                   | set scratch
    39 | 67    | П→X 7                   | recall cells_7
-   40 | 69    | П→X 9                   | recall scratch
+   40 | 14    | ↔                       | current-X operand order
    41 | 11    | −                       | expr -
    42 | 47    | X→П 7                   | set cells_7
    43 | 21    | F √                     | domain-error guard trap

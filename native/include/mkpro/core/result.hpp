@@ -92,6 +92,57 @@ struct CandidateReport {
   std::string reason;
 };
 
+struct SizeAttributionEntry {
+  std::string kind;
+  std::string label;
+  int cells = 0;
+  int occurrences = 0;
+  int first_address = 0;
+  int last_address = 0;
+  std::string detail;
+};
+
+struct SizeOpportunityReport {
+  std::string site;
+  std::string variant;
+  int current_steps = 0;
+  int candidate_steps = 0;
+  int savings = 0;
+  std::string reason;
+  std::string blocker_kind;
+  std::map<std::string, std::string> details;
+};
+
+struct SizeBlockerSummaryReport {
+  std::string blocker_kind;
+  int opportunities = 0;
+  int potential_savings = 0;
+  int best_savings = 0;
+  std::string best_site;
+  std::string best_variant;
+  std::string best_reason;
+  std::map<std::string, std::string> best_details;
+};
+
+struct SizeSpillSummaryReport {
+  std::string name;
+  int total_cells = 0;
+  int recall_cells = 0;
+  int store_cells = 0;
+  int recall_occurrences = 0;
+  int store_occurrences = 0;
+  int first_address = 0;
+  int last_address = 0;
+};
+
+struct SizeAttributionReport {
+  int total_cells = 0;
+  std::vector<SizeAttributionEntry> entries;
+  std::vector<SizeOpportunityReport> opportunities;
+  std::vector<SizeBlockerSummaryReport> blockers;
+  std::vector<SizeSpillSummaryReport> spills;
+};
+
 // Human-readable proof report derived from local verifier results. This is an
 // output artifact only: optimizer candidate selection must re-run the relevant
 // verifier at the optimization boundary and must not trust caller-supplied
@@ -226,6 +277,7 @@ struct CompileOptions {
   bool pack_counter_stripes = false;
   bool trig_fractional_pack = false;
   bool sign_pack_state = false;
+  bool packed_score_accumulator_helpers = false;
   bool canonicalize_repeated_unary_update_args = false;
   bool x_param_value_functions = false;
   bool x_param_y_stack_stored_entry = false;
@@ -286,6 +338,7 @@ struct CompileResult {
   std::optional<ReferenceReport> reference;
   OptimizerReport optimizer;
   IrReport ir;
+  SizeAttributionReport size_attribution;
   std::vector<CandidateReport> candidates;
   std::vector<MachineFeatureUseReport> machine_features_used;
   std::vector<ProofReport> proofs;
