@@ -45308,6 +45308,13 @@ void add_size_opportunity_flow_target_details(
       details["safeSelectorCandidateAction"] =
           natural_present ? "prove-or-reuse-natural-target-flow"
                           : "create-natural-target-flow-or-code-data-overlay";
+      details["candidateDiscoveryScope"] = "existing-direct-flow-targets";
+      details["candidateDiscoveryStatus"] =
+          natural_present ? "covered-by-direct-flow-target-scan"
+                          : "blocked-by-direct-flow-target-scan";
+      details["candidateDiscoveryAction"] =
+          natural_present ? "reuse-existing-natural-target-plan"
+                          : "allow-natural-target-layout-candidate";
     }
   }
 }
@@ -46124,6 +46131,10 @@ SizeAttributionReport build_size_attribution_report(
     if (const auto safe_it = opportunity.details.find("safeSavingsAction");
         safe_it != opportunity.details.end()) {
       add_next_action(opportunity, "safeSavingsAction", safe_it->second, index);
+    }
+    if (const auto discovery_it = opportunity.details.find("candidateDiscoveryAction");
+        discovery_it != opportunity.details.end()) {
+      add_next_action(opportunity, "candidateDiscoveryAction", discovery_it->second, index);
     }
   }
   report.next_actions.reserve(next_action_summaries.size());

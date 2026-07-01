@@ -64,10 +64,11 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   `savingsAggregation=alternative-candidate`, so summaries count the best
   saving in that alternative group instead of summing mutually exclusive
   rejected candidates. The companion `nextActions` array aggregates positive-savings
-  opportunities by structured `requiredAction`, `layoutAction`, and
-  `safeSavingsAction` details, so
+  opportunities by structured `requiredAction`, `layoutAction`,
+  `safeSavingsAction`, and `candidateDiscoveryAction` details, so
   the report can rank concrete compiler-side moves such as preserving
-  fractional erasure before arithmetic or relayout/code-data-overlay work
+  fractional erasure before arithmetic, relayout/code-data-overlay work, or
+  broadening candidate discovery beyond already-existing flow targets
   instead of leaving them buried inside free-form rejection text.
   Dead-integer fractional-selector blockers append the same
   actionable selector/layout hints to `reason` and expose them as structured
@@ -92,7 +93,11 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   `safeSelectorTarget` name that concrete layout/proof path. `safeSelectorCandidateStatus`
   and `safeSelectorCandidateAction` then say whether candidate search can reuse an existing
   natural-target flow or needs new layout / code-data-overlay work before that safe selector
-  can be generated. `currentNaturalTargetFlowCount` /
+  can be generated. `candidateDiscoveryScope`, `candidateDiscoveryStatus`, and
+  `candidateDiscoveryAction` say whether the current selector plan discovery
+  was limited to existing direct-flow targets and which general candidate
+  generator work is needed before a missing natural target can be tried.
+  `currentNaturalTargetFlowCount` /
   `currentNaturalTargetStableFlowCount` and the matching
   `currentSelectorTarget*` fields count direct-flow references to those targets
   in the current selected listing. `layoutDisposition` / `layoutAction` then say

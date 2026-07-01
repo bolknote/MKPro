@@ -433,6 +433,9 @@ void example_sizes_match_typescript_baselines() {
                   dead_integer_opportunity->details.contains("safeSelectorTarget") &&
                   dead_integer_opportunity->details.contains("safeSelectorCandidateStatus") &&
                   dead_integer_opportunity->details.contains("safeSelectorCandidateAction") &&
+                  dead_integer_opportunity->details.contains("candidateDiscoveryScope") &&
+                  dead_integer_opportunity->details.contains("candidateDiscoveryStatus") &&
+                  dead_integer_opportunity->details.contains("candidateDiscoveryAction") &&
                   dead_integer_opportunity->details.contains("integerPartConsumerOpcode") &&
                   dead_integer_opportunity->details.contains("fractionalEraseOpcode") &&
                   dead_integer_opportunity->details.contains("integerPartHazard") &&
@@ -464,6 +467,12 @@ void example_sizes_match_typescript_baselines() {
                       "missing-natural-target-flow" &&
                   dead_integer_opportunity->details.at("safeSelectorCandidateAction") ==
                       "create-natural-target-flow-or-code-data-overlay" &&
+                  dead_integer_opportunity->details.at("candidateDiscoveryScope") ==
+                      "existing-direct-flow-targets" &&
+                  dead_integer_opportunity->details.at("candidateDiscoveryStatus") ==
+                      "blocked-by-direct-flow-target-scan" &&
+                  dead_integer_opportunity->details.at("candidateDiscoveryAction") ==
+                      "allow-natural-target-layout-candidate" &&
                   dead_integer_opportunity->details.at("integerPartConsumerOpcode") ==
                       dead_integer_opportunity->details.at("fractionalSelectorConsumer") &&
                   dead_integer_opportunity->details.at("fractionalEraseOpcode") == "K {x}" &&
@@ -576,6 +585,17 @@ void example_sizes_match_typescript_baselines() {
                   safe_savings_action->best_details.contains("safeSelectorCandidateStatus"),
               "tic-tac-toe-4x4 size attribution should aggregate recovery-free natural-target "
               "selector moves separately from proof-only action labels");
+      const SizeNextActionSummaryReport* discovery_action = find_size_next_action(
+          result, "candidateDiscoveryAction", "allow-natural-target-layout-candidate");
+      require(discovery_action != nullptr && discovery_action->opportunities == 2 &&
+                  discovery_action->potential_savings == 1 &&
+                  discovery_action->best_savings == 1 &&
+                  discovery_action->best_blocker_kind == "data-arithmetic" &&
+                  discovery_action->best_details.contains("candidateDiscoveryScope") &&
+                  discovery_action->best_details.contains("candidateDiscoveryStatus") &&
+                  discovery_action->best_details.contains("safeSelectorCandidateAction"),
+              "tic-tac-toe-4x4 size attribution should aggregate candidate-discovery work "
+              "needed before natural-target selector candidates can be generated");
       const SizeNextActionSummaryReport* stack_helper_action = find_size_next_action(
           result, "requiredAction", "stack-argument-helper-entry");
       require(stack_helper_action == nullptr,
