@@ -45365,8 +45365,11 @@ size_opportunity_details(const CandidateReport& candidate,
         const std::size_t consumer_start = reaches + kReaches.size();
         const std::size_t before_erase = reason.find(kBeforeErase, consumer_start);
         if (before_erase != std::string::npos && before_erase > consumer_start) {
-          details.emplace("fractionalSelectorConsumer",
-                          reason.substr(consumer_start, before_erase - consumer_start));
+          const std::string consumer =
+              reason.substr(consumer_start, before_erase - consumer_start);
+          details.emplace("fractionalSelectorConsumer", consumer);
+          details.emplace("integerPartConsumerOpcode", consumer);
+          details.emplace("fractionalEraseOpcode", "K {x}");
           const std::size_t kind_start = reason.find("(", before_erase + kBeforeErase.size());
           const std::size_t kind_end =
               kind_start == std::string::npos ? std::string::npos : reason.find(")", kind_start);
@@ -45384,12 +45387,15 @@ size_opportunity_details(const CandidateReport& candidate,
     if (blocker == "data-arithmetic") {
       details.emplace("proofDisposition", "not-proof-only");
       details.emplace("requiredAction", "keep-fractional-erase-before-data-arithmetic");
+      details.emplace("integerPartHazard", "arithmetic-before-fractional-erase");
     } else if (blocker == "indirect-address-control-use") {
       details.emplace("proofDisposition", "needs-final-indirect-target-artifact");
       details.emplace("requiredAction", "prove-indirect-target-or-erase-before-use");
+      details.emplace("integerPartHazard", "indirect-control-before-fractional-erase");
     } else {
       details.emplace("proofDisposition", "needs-local-dead-integer-proof");
       details.emplace("requiredAction", "erase-before-data-consumption");
+      details.emplace("integerPartHazard", "data-consumption-before-fractional-erase");
     }
   }
   add_size_opportunity_flow_target_details(details, flow_stats, occupant_by_address,

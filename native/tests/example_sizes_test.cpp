@@ -396,6 +396,9 @@ void example_sizes_match_typescript_baselines() {
                   dead_integer_opportunity->details.contains("integerPartStatus") &&
                   dead_integer_opportunity->details.contains("selectorDataUse") &&
                   dead_integer_opportunity->details.contains("requiredAction") &&
+                  dead_integer_opportunity->details.contains("integerPartConsumerOpcode") &&
+                  dead_integer_opportunity->details.contains("fractionalEraseOpcode") &&
+                  dead_integer_opportunity->details.contains("integerPartHazard") &&
                   dead_integer_opportunity->details.contains("currentNaturalTargetFlowCount") &&
                   dead_integer_opportunity->details.contains("currentNaturalTargetOccupant") &&
                   dead_integer_opportunity->details.contains("currentNaturalTargetOccupantKind") &&
@@ -410,6 +413,11 @@ void example_sizes_match_typescript_baselines() {
                   dead_integer_opportunity->details.at("selectorDataUse") == "data-arithmetic" &&
                   dead_integer_opportunity->details.at("requiredAction") ==
                       "keep-fractional-erase-before-data-arithmetic" &&
+                  dead_integer_opportunity->details.at("integerPartConsumerOpcode") ==
+                      dead_integer_opportunity->details.at("fractionalSelectorConsumer") &&
+                  dead_integer_opportunity->details.at("fractionalEraseOpcode") == "K {x}" &&
+                  dead_integer_opportunity->details.at("integerPartHazard") ==
+                      "arithmetic-before-fractional-erase" &&
                   dead_integer_opportunity->details.at("currentNaturalTargetFlowCount") == "0" &&
                   dead_integer_opportunity->details.at("currentNaturalTargetOccupant") != "none" &&
                   dead_integer_opportunity->details.at("currentNaturalTargetOccupantKind") !=
