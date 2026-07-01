@@ -18473,7 +18473,7 @@ bool lower_stack_carried_update_run(LoweringContext& context,
   }
 
   const V2Statement& consumer = statements.at(start + 1U);
-  if (consumer.kind == "v2_if")
+  if (consumer.kind == "v2_if" && statements_are_domain_error_trap(context, consumer.then_body))
     return false;
   if (!statement_directly_consumes_current_x_identifier(context, consumer, target.name))
     return false;

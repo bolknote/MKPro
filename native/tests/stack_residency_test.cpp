@@ -1028,6 +1028,36 @@ program StackCarriedDirectUpdateConsumer {
 
   {
     const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedUpdateBranchConsumer {
+  state {
+    score: packed = 10
+    delta: packed = 4
+    target: packed = 14
+  }
+
+  loop {
+    score += delta
+    if score == target {
+      halt(1)
+    }
+    halt(0)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried update branch consumer");
+    require(has_optimization(result, "stack-carried-update"),
+            "branch consumer should keep updated score in X for the following condition");
+    require(has_optimization(result, "condition-current-x-reuse"),
+            "branch consumer should compare the updated score from current X");
+    require(count_steps_with_comment(result, "set score") == 0,
+            "branch-consumed update should not store the updated score");
+    require(count_steps_with_comment(result, "recall score") == 1,
+            "branch-consumed update should recall score only to compute the update");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
 program StackCarriedDelayedUpdateConsumer {
   state {
     score: packed = 10

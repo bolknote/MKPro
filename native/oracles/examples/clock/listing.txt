@@ -68,10 +68,9 @@
    24 | 00    | 0                       | set minute
    25 | 44    | X→П 4                   | set minute
    26 | D5    | К П→X 5                 | increment hour
-   27 | 65    | П→X 5                   | recall hour
-   28 | 6C    | П→X c                   | preload const 24
-   29 | 11    | −                       | condition compare
-   30 | 97    | К x≥0 7                 | false branch for >=; preloaded R7=B2 indirect-target=0 indirect flow
-   31 | 00    | 0                       | set hour
-   32 | 45    | X→П 5                   | set hour
-   33 | 87    | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow
+   27 | 6C    | П→X c                   | preload const 24
+   28 | 11    | −                       | condition compare
+   29 | 97    | К x≥0 7                 | false branch for >=; preloaded R7=B2 indirect-target=0 indirect flow
+   30 | 00    | 0                       | set hour
+   31 | 45    | X→П 5                   | set hour
+   32 | 87    | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow
