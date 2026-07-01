@@ -897,7 +897,11 @@ Display rewrites are separated into strategy selection + body lowering.
   update lowerings keep their own stricter paths. Explicit `sum(...)`
   consumers use the same scheduler when exactly one argument depends on the
   carried value and the other arguments are simple stack loads, so variadic
-  accumulator syntax does not force a temporary store. Branch consumers can test
+  accumulator syntax does not force a temporary store. Repeated arithmetic
+  consumers such as `tmp / tmp` may duplicate the current `X` through the stack
+  (`В↑`) or use `F x^2` for `tmp * tmp`, avoiding both the temp store and the
+  temp recall while still preserving the hardware `X1`/hidden-X2 side-effect
+  model. Branch consumers can test
   the carried value directly for conservative compare shapes, but they yield to
   cheaper single-use guard substitution and dedicated domain-error guard fusions.
 - `bit-mask-decade-scale` / `bit-mask-decade-index-preload` — chooses the

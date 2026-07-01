@@ -1007,7 +1007,7 @@ program StackCarriedIfBodyReadBeforeWriteRejected {
 
   {
     const CompileResult result = compile_stack_variant(R"mkpro(
-program StackCarriedRepeatedConsumerRejected {
+program StackCarriedRepeatedConsumer {
   state {
     x: packed = 2
     y: packed = 3
@@ -1021,13 +1021,48 @@ program StackCarriedRepeatedConsumerRejected {
 }
 )mkpro",
                                                        false);
-    require_clean_compile(result, "stack-carried repeated consumer rejection");
-    require(!has_optimization(result, "stack-carried-assignment"),
-            "repeated expression consumer should not be accepted without an explicit duplicate");
+    require_clean_compile(result, "stack-carried repeated consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "repeated expression consumer should keep tmp in X and duplicate it explicitly");
+    require(has_optimization(result, "stack-current-x-scheduling"),
+            "repeated expression consumer should report current-X stack scheduling");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "repeated expression consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "repeated expression consumer should not recall tmp");
     require(count_steps_with_comment(result, "duplicate repeated operand through stack") == 1,
-            "repeated expression consumer should duplicate the stored value through the stack");
+            "repeated expression consumer should duplicate the current X value through the stack");
     require(count_steps_with_comment(result, "expr /") == 1,
             "repeated expression consumer should emit one division after duplication");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedRepeatedSquareConsumer {
+  state {
+    x: packed = 2
+    y: packed = 3
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    halt(tmp * tmp)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried repeated square consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "repeated square consumer should keep tmp in X");
+    require(has_optimization(result, "square-expression-lowering"),
+            "repeated square consumer should use F x^2 instead of a register spill");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "repeated square consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "repeated square consumer should not recall tmp");
+    require(count_steps_with_comment(result, "square repeated operand") == 1,
+            "repeated square consumer should square the current X value");
   }
 
   {

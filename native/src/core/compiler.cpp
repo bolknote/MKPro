@@ -17567,9 +17567,28 @@ bool expression_derives_current_x_identifier(const Expression& expression,
   return false;
 }
 
+bool expression_duplicates_current_x_identifier(const Expression& expression,
+                                                const std::string& target) {
+  if (expression.kind != "binary" ||
+      (expression.op != "+" && expression.op != "*" && expression.op != "-" &&
+       expression.op != "/") ||
+      expression.left == nullptr || expression.right == nullptr) {
+    return false;
+  }
+  if (!expression_equals(*expression.left, *expression.right))
+    return false;
+  if (count_identifier_reads(*expression.left, target) != 1)
+    return false;
+  return expression_derives_current_x_identifier(*expression.left, target) &&
+         expression_pure_for_substitution(*expression.left);
+}
+
 bool expression_consumes_current_x_identifier(const Expression& expression,
                                               const std::string& target) {
-  if (count_identifier_reads(expression, target) != 1)
+  const int target_reads = count_identifier_reads(expression, target);
+  if (target_reads == 2 && expression_duplicates_current_x_identifier(expression, target))
+    return true;
+  if (target_reads != 1)
     return false;
   if (expression_derives_current_x_identifier(expression, target))
     return true;
