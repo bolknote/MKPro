@@ -45912,11 +45912,15 @@ SizeAttributionReport build_size_attribution_report(
     details.emplace("requiredAction", "stack-argument-helper-entry");
     details.emplace("candidateBasis", "avoid-materializing-stack-resident-temps");
     details.emplace("savingsModel", "gross-materialization-only");
+    int opportunity_savings = blocker.materialize_cells;
+    int opportunity_candidate_steps = current_steps - blocker.materialize_cells;
     if (const auto net_it = details.find("estimatedNetSavings");
         net_it != details.end()) {
       try {
-        details.emplace("estimatedCandidateSteps",
-                        std::to_string(current_steps - std::stoi(net_it->second)));
+        opportunity_savings = std::stoi(net_it->second);
+        opportunity_candidate_steps = current_steps - opportunity_savings;
+        details["savingsModel"] = "estimated-net-after-entry-cost";
+        details.emplace("estimatedCandidateSteps", std::to_string(opportunity_candidate_steps));
       } catch (const std::exception&) {
       }
     }
@@ -45924,8 +45928,8 @@ SizeAttributionReport build_size_attribution_report(
         .site = "abi",
         .variant = blocker.kind,
         .current_steps = current_steps,
-        .candidate_steps = current_steps - blocker.materialize_cells,
-        .savings = blocker.materialize_cells,
+        .candidate_steps = opportunity_candidate_steps,
+        .savings = opportunity_savings,
         .reason = blocker.reason,
         .blocker_kind = blocker.kind,
         .details = std::move(details),

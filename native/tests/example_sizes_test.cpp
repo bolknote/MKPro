@@ -367,9 +367,9 @@ void example_sizes_match_typescript_baselines() {
           find_size_opportunity(result, "stack-helper-abi");
       require(stack_helper_abi_opportunity != nullptr &&
                   stack_helper_abi_opportunity->site == "abi" &&
-                  stack_helper_abi_opportunity->savings == stack_helper_abi->materialize_cells &&
+                  stack_helper_abi_opportunity->savings == -1 &&
                   stack_helper_abi_opportunity->candidate_steps ==
-                      static_cast<int>(result.steps.size()) - stack_helper_abi->materialize_cells &&
+                      static_cast<int>(result.steps.size()) + 1 &&
                   stack_helper_abi_opportunity->blocker_kind == "stack-helper-abi" &&
                   stack_helper_abi_opportunity->details.contains("abiStatus") &&
                   stack_helper_abi_opportunity->details.at("abiStatus") ==
@@ -379,7 +379,9 @@ void example_sizes_match_typescript_baselines() {
                       "avoid-materializing-stack-resident-temps" &&
                   stack_helper_abi_opportunity->details.contains("savingsModel") &&
                   stack_helper_abi_opportunity->details.at("savingsModel") ==
-                      "gross-materialization-only" &&
+                      "estimated-net-after-entry-cost" &&
+                  stack_helper_abi_opportunity->details.contains("grossMaterializeCells") &&
+                  stack_helper_abi_opportunity->details.at("grossMaterializeCells") == "2" &&
                   stack_helper_abi_opportunity->details.contains("costModelAction") &&
                   stack_helper_abi_opportunity->details.at("costModelAction") ==
                       "find-more-stack-entry-call-sites-or-inline-helper" &&
@@ -391,8 +393,8 @@ void example_sizes_match_typescript_baselines() {
                   stack_helper_abi_opportunity->details.contains("requiredAction") &&
                   stack_helper_abi_opportunity->details.at("requiredAction") ==
                       "stack-argument-helper-entry",
-              "tic-tac-toe-4x4 size attribution should rank the stack-helper ABI blocker as a "
-              "positive-savings optimizer opportunity");
+              "tic-tac-toe-4x4 size attribution should keep the stack-helper ABI blocker visible "
+              "while ranking it by estimated net savings");
       const SizeAttributionEntry* recall_occupied =
           find_size_entry(result, "listing", "recall occupied");
       require(recall_occupied != nullptr && recall_occupied->cells >= 1,
@@ -519,17 +521,9 @@ void example_sizes_match_typescript_baselines() {
               "details");
       const SizeBlockerSummaryReport* stack_helper_abi_blocker =
           find_size_blocker(result, "stack-helper-abi");
-      require(stack_helper_abi_blocker != nullptr &&
-                  stack_helper_abi_blocker->opportunities >= 1 &&
-                  stack_helper_abi_blocker->potential_savings >=
-                      stack_helper_abi->materialize_cells &&
-                  stack_helper_abi_blocker->best_savings == stack_helper_abi->materialize_cells &&
-                  stack_helper_abi_blocker->best_variant == "stack-helper-abi" &&
-                  stack_helper_abi_blocker->best_details.contains("requiredAction") &&
-                  stack_helper_abi_blocker->best_details.at("requiredAction") ==
-                      "stack-argument-helper-entry",
-              "tic-tac-toe-4x4 size attribution should summarize stack-helper ABI savings as a "
-              "real optimizer blocker");
+      require(stack_helper_abi_blocker == nullptr,
+              "tic-tac-toe-4x4 size attribution should not summarize net-negative stack-helper "
+              "ABI savings as a positive optimizer blocker");
       const SizeNextActionSummaryReport* required_action = find_size_next_action(
           result, "requiredAction", "keep-fractional-erase-before-data-arithmetic");
       require(required_action != nullptr && required_action->opportunities >= 1 &&
@@ -552,15 +546,9 @@ void example_sizes_match_typescript_baselines() {
               "actions for blocked positive-savings candidates");
       const SizeNextActionSummaryReport* stack_helper_action = find_size_next_action(
           result, "requiredAction", "stack-argument-helper-entry");
-      require(stack_helper_action != nullptr && stack_helper_action->opportunities >= 1 &&
-                  stack_helper_action->potential_savings >=
-                      stack_helper_abi->materialize_cells &&
-                  stack_helper_action->best_savings == stack_helper_abi->materialize_cells &&
-                  stack_helper_action->best_blocker_kind == "stack-helper-abi" &&
-                  stack_helper_action->best_variant == "stack-helper-abi" &&
-                  stack_helper_action->best_details.contains("candidateBasis"),
-              "tic-tac-toe-4x4 size attribution should point stack-resident helper materialization "
-              "at the stack-entry ABI implementation action");
+      require(stack_helper_action == nullptr,
+              "tic-tac-toe-4x4 size attribution should not rank net-negative stack-entry ABI "
+              "implementation as a positive next action");
     }
   }
 }
