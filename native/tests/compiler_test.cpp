@@ -1884,6 +1884,47 @@ program PackedLineScoreProcSumSyntax {
   require(has_optimization(packed_line_score_proc_sum, "packed-line-family-score-accumulator"),
           "sum(...) four-term packed_score procedure should report the accumulator strategy");
 
+  const CompileResult packed_line_score_proc_sum_zero = compile_source(R"mkpro(
+program PackedLineScoreProcSumZeroSyntax {
+  state {
+    lines: packed[4..7] = [44444.4, 44444.4, 44444.4, 44444.4]
+    x: counter 0..5 = 4
+    y: counter 0..5 = 4
+    line: packed = 0
+    score: packed = 0
+  }
+
+  fn score_move() {
+    score = sum(0, packed_score(lines[7], x), packed_score(lines[6], y))
+    normalize(x + y)
+    score = sum(score, 0, packed_score(lines[5], line))
+    normalize(x - y)
+    score += sum(0, packed_score(lines[4], line))
+  }
+
+  fn normalize(raw_line) {
+    line = frac((raw_line + 3) / 4) * 4 + 1
+  }
+
+  loop {
+    score_move()
+    halt(score)
+  }
+}
+)mkpro");
+  require(packed_line_score_proc_sum_zero.implemented,
+          "native compiler should lower zero-padded sum(...) packed-line score procedure shape");
+  require(packed_line_score_proc_sum_zero.diagnostics.empty(),
+          "zero-padded sum(...) packed-line score procedure compile should not report diagnostics");
+  require(packed_line_score_proc_sum_zero.listing.find("packed-line score helper accumulate") !=
+              std::string::npos,
+          "zero-padded sum(...) four-term packed_score procedure should use the packed-line "
+          "accumulator helper");
+  require(has_optimization(packed_line_score_proc_sum_zero,
+                           "packed-line-family-score-accumulator"),
+          "zero-padded sum(...) four-term packed_score procedure should report the accumulator "
+          "strategy");
+
   const CompileResult packed_line_stack_score = compile_source(R"mkpro(
 program PackedLineStackScore {
   state {
