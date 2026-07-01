@@ -355,6 +355,17 @@ void example_sizes_match_typescript_baselines() {
                   stack_helper_abi->details.at("estimatedStackEntryOverheadCells") == "3" &&
                   stack_helper_abi->details.contains("estimatedNetSavings") &&
                   stack_helper_abi->details.at("estimatedNetSavings") == "-1" &&
+                  stack_helper_abi->details.contains("stackEntryCandidateCallSites") &&
+                  stack_helper_abi->details.at("stackEntryCandidateCallSites") == "1" &&
+                  stack_helper_abi->details.contains("materializeCellsPerCallSite") &&
+                  stack_helper_abi->details.at("materializeCellsPerCallSite") == "2" &&
+                  stack_helper_abi->details.contains("estimatedEntryOverheadAmortization") &&
+                  stack_helper_abi->details.at("estimatedEntryOverheadAmortization") ==
+                      "shared-helper-entry-body" &&
+                  stack_helper_abi->details.contains("estimatedBreakEvenCallSites") &&
+                  stack_helper_abi->details.at("estimatedBreakEvenCallSites") == "2" &&
+                  stack_helper_abi->details.contains("additionalCallSitesToBreakEven") &&
+                  stack_helper_abi->details.at("additionalCallSitesToBreakEven") == "1" &&
                   stack_helper_abi->details.contains("netSavingsStatus") &&
                   stack_helper_abi->details.at("netSavingsStatus") ==
                       "estimated-negative-after-entry-cost" &&
@@ -387,6 +398,18 @@ void example_sizes_match_typescript_baselines() {
                       "find-more-stack-entry-call-sites-or-inline-helper" &&
                   stack_helper_abi_opportunity->details.contains("estimatedNetSavings") &&
                   stack_helper_abi_opportunity->details.at("estimatedNetSavings") == "-1" &&
+                  stack_helper_abi_opportunity->details.contains(
+                      "stackEntryCandidateCallSites") &&
+                  stack_helper_abi_opportunity->details.at("stackEntryCandidateCallSites") ==
+                      "1" &&
+                  stack_helper_abi_opportunity->details.contains(
+                      "estimatedBreakEvenCallSites") &&
+                  stack_helper_abi_opportunity->details.at("estimatedBreakEvenCallSites") ==
+                      "2" &&
+                  stack_helper_abi_opportunity->details.contains(
+                      "additionalCallSitesToBreakEven") &&
+                  stack_helper_abi_opportunity->details.at("additionalCallSitesToBreakEven") ==
+                      "1" &&
                   stack_helper_abi_opportunity->details.contains("estimatedCandidateSteps") &&
                   stack_helper_abi_opportunity->details.at("estimatedCandidateSteps") ==
                       std::to_string(static_cast<int>(result.steps.size()) + 1) &&

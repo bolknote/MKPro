@@ -47,8 +47,10 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   The `abiBlockers` array reports cases where such a stack-resident caller
   already exists, but the shared helper only has a register-entry ABI; those rows
   identify the source expression, line, materialization cost of the safe fallback,
-  and the required compiler action (`stack-argument-helper-entry`) without
-  silently treating the current byte count as a complete value-scheduler win.
+  the number of candidate stack-entry call sites currently observed, the
+  estimated shared entry-body overhead, break-even call-site count, and the
+  required compiler action (`stack-argument-helper-entry`) without silently
+  treating the current byte count as a complete value-scheduler win.
   Opportunity rows include a structural
   `blockerKind` (for example `data-arithmetic`,
   `indirect-address-control-use`, `missing-proof`, or `nonwinning-candidate`)

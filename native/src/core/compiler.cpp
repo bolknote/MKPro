@@ -45887,15 +45887,26 @@ SizeAttributionReport build_size_attribution_report(
     std::map<std::string, std::string> details =
         semicolon_key_value_details(optimization.detail);
     const int materialize_cells = detail_int_or_zero(details, "materializeCells");
+    constexpr int kStackEntryCandidateCallSites = 1;
     details.emplace("grossMaterializeCells", std::to_string(materialize_cells));
+    details.emplace("stackEntryCandidateCallSites",
+                    std::to_string(kStackEntryCandidateCallSites));
+    details.emplace("materializeCellsPerCallSite", std::to_string(materialize_cells));
     details.emplace("entryOverheadStatus", "unmodeled-stack-entry-helper-cost");
     details.emplace("netSavingsStatus", "gross-only-before-entry-cost");
     details.emplace("costModelAction", "model-stack-entry-helper-body-cost");
     if (const std::optional<int> overhead =
             estimated_stack_entry_helper_overhead_cells(details)) {
       const int estimated_net_savings = materialize_cells - *overhead;
+      const int break_even_call_sites =
+          materialize_cells > 0 ? (*overhead + materialize_cells - 1) / materialize_cells : 0;
+      const int additional_call_sites =
+          std::max(0, break_even_call_sites - kStackEntryCandidateCallSites);
       details["estimatedStackEntryOverheadCells"] = std::to_string(*overhead);
       details["estimatedNetSavings"] = std::to_string(estimated_net_savings);
+      details["estimatedEntryOverheadAmortization"] = "shared-helper-entry-body";
+      details["estimatedBreakEvenCallSites"] = std::to_string(break_even_call_sites);
+      details["additionalCallSitesToBreakEven"] = std::to_string(additional_call_sites);
       details["entryOverheadStatus"] = "estimated-stack-entry-helper-cost";
       details["netSavingsStatus"] = net_savings_status_for_estimate(estimated_net_savings);
       details["costModelAction"] = cost_model_action_for_estimate(estimated_net_savings);
