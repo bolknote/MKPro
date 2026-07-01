@@ -166,6 +166,26 @@ program StackX2 {
           "stack.X2 initializer should parse as initialStack");
   require(stack_x2_program.states.at(0).fields.at(0).initial_stack == "X2",
           "generic state should preserve stack.X2 initial source");
+
+  const ProgramAst stack_zt_program = parse_program(R"mkpro(
+program StackZT {
+  state {
+    middle: counter 0..99 = stack.Z
+    deep: counter 0..99 = stack.T
+  }
+  loop {
+    halt(middle + deep)
+  }
+}
+)mkpro");
+  require(stack_zt_program.v2->state.at(0).initial_stack == "Z",
+          "stack.Z initializer should parse as initialStack");
+  require(stack_zt_program.v2->state.at(1).initial_stack == "T",
+          "stack.T initializer should parse as initialStack");
+  require(stack_zt_program.states.at(0).fields.at(0).initial_stack == "Z",
+          "generic state should preserve stack.Z initial source");
+  require(stack_zt_program.states.at(0).fields.at(1).initial_stack == "T",
+          "generic state should preserve stack.T initial source");
   const V2Statement& loop = rich_program.v2->body.at(0);
   require(loop.body.at(0).kind == "v2_show", "show should parse");
   require(loop.body.at(0).items->at(0).kind == "literal", "display literal should parse");
@@ -208,14 +228,14 @@ program Queries {
   require_throws_contains(R"mkpro(
 program BadStack {
   state {
-    x: counter 0..9 = stack.Z
+    x: counter 0..9 = stack.Q
   }
   loop {
     halt(x)
   }
 }
 )mkpro",
-                          "Use 'stack.X', 'stack.Y', or 'stack.X2'");
+                          "Use 'stack.X', 'stack.Y', 'stack.Z', 'stack.T', or 'stack.X2'");
 
   const ProgramAst raw_program = parse_program(R"mkpro(
 program RawDemo {

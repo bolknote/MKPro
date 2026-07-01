@@ -534,7 +534,55 @@ std::string setup_display_literal_comment(const PreloadReport& preload) {
 }
 
 bool is_stack_preload_value(const std::string& value) {
-  return value == "stack.X" || value == "stack.Y" || value == "stack.X2";
+  return value == "stack.X" || value == "stack.Y" || value == "stack.Z" ||
+         value == "stack.T" || value == "stack.X2";
+}
+
+std::optional<int> visible_stack_preload_reverse_count(const std::string& value) {
+  if (value == "stack.X")
+    return 0;
+  if (value == "stack.Y")
+    return std::nullopt;
+  if (value == "stack.Z")
+    return 2;
+  if (value == "stack.T")
+    return 3;
+  return std::nullopt;
+}
+
+void emit_visible_stack_preload_setup(MachineEmitter& setup, const PreloadReport& preload) {
+  const std::string target = setup_target_name(preload);
+  if (preload.value == "stack.Y") {
+    setup.emit_op(0x14, "X↔Y", "setup " + target + " from stack.Y", std::nullopt, true);
+    return;
+  }
+  const std::optional<int> reverse_count = visible_stack_preload_reverse_count(preload.value);
+  if (!reverse_count.has_value())
+    return;
+  for (int index = 0; index < *reverse_count; ++index) {
+    setup.emit_op(0x25, "F reverse",
+                  index == 0 ? "setup " + target + " from " + preload.value
+                             : "continue setup " + target + " from " + preload.value,
+                  std::nullopt, true);
+  }
+}
+
+void emit_visible_stack_preload_restore(MachineEmitter& setup, const PreloadReport& preload) {
+  const std::string target = setup_target_name(preload);
+  if (preload.value == "stack.Y") {
+    setup.emit_op(0x14, "X↔Y", "restore stack.X after " + target, std::nullopt, true);
+    return;
+  }
+  const std::optional<int> reverse_count = visible_stack_preload_reverse_count(preload.value);
+  if (!reverse_count.has_value() || *reverse_count == 0)
+    return;
+  const int restore_count = 4 - *reverse_count;
+  for (int index = 0; index < restore_count; ++index) {
+    setup.emit_op(0x25, "F reverse",
+                  index == 0 ? "restore stack.X after " + target
+                             : "continue restore stack.X after " + target,
+                  std::nullopt, true);
+  }
 }
 
 void emit_setup_recall(MachineEmitter& setup, const std::string& register_name,
@@ -568,13 +616,11 @@ bool emit_stack_preload_setup(MachineEmitter& setup, const PreloadReport& preloa
   if (!is_stack_preload_value(preload.value))
     return false;
   const std::string target = setup_target_name(preload);
-  if (preload.value == "stack.Y")
-    setup.emit_op(0x14, "X↔Y", "setup " + target + " from stack.Y", std::nullopt, true);
+  emit_visible_stack_preload_setup(setup, preload);
   if (preload.value == "stack.X2")
     setup.emit_op(0x0a, ".", "setup " + target + " from stack.X2", std::nullopt, true);
   emit_setup_store(setup, preload.register_name, "setup " + target);
-  if (preload.value == "stack.Y")
-    setup.emit_op(0x14, "X↔Y", "restore stack.X after " + target, std::nullopt, true);
+  emit_visible_stack_preload_restore(setup, preload);
   return true;
 }
 
@@ -1987,9 +2033,9 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
     return !executable_setup_preload(preload) && !deferred_direct_setup_preload(preload) &&
            preload.value == stack_value;
   };
-  const bool has_stack_x2_preload =
+  const bool has_stack_preload =
       std::any_of(preloads.begin(), preloads.end(), [](const PreloadReport& preload) {
-        return preload.value == "stack.X2";
+        return is_stack_preload_value(preload.value);
       });
   auto push_stack_setup_preloads = [&](const std::string& stack_value) {
     for (std::size_t index = 0; index < preloads.size(); ++index) {
@@ -1997,8 +2043,10 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
         push_preload_order(index);
     }
   };
-  if (expected_mode.has_value() || has_stack_x2_preload) {
+  if (expected_mode.has_value() || has_stack_preload) {
     push_stack_setup_preloads("stack.Y");
+    push_stack_setup_preloads("stack.Z");
+    push_stack_setup_preloads("stack.T");
     push_stack_setup_preloads("stack.X");
     push_stack_setup_preloads("stack.X2");
   }
@@ -2014,6 +2062,14 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
   }
   for (std::size_t index = 0; index < preloads.size(); ++index) {
     if (is_stack_setup_preload(preloads.at(index), "stack.Y"))
+      push_preload_order(index);
+  }
+  for (std::size_t index = 0; index < preloads.size(); ++index) {
+    if (is_stack_setup_preload(preloads.at(index), "stack.Z"))
+      push_preload_order(index);
+  }
+  for (std::size_t index = 0; index < preloads.size(); ++index) {
+    if (is_stack_setup_preload(preloads.at(index), "stack.T"))
       push_preload_order(index);
   }
   for (std::size_t index = 0; index < preloads.size(); ++index) {
@@ -2093,8 +2149,11 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
     const PreloadReport& preload = preloads.at(index);
     const bool from_stack_x = preload.value == "stack.X";
     const bool from_stack_y = preload.value == "stack.Y";
+    const bool from_stack_z = preload.value == "stack.Z";
+    const bool from_stack_t = preload.value == "stack.T";
     const bool from_stack_x2 = preload.value == "stack.X2";
-    const bool from_stack = from_stack_x || from_stack_y || from_stack_x2;
+    const bool from_stack = from_stack_x || from_stack_y || from_stack_z || from_stack_t ||
+                            from_stack_x2;
     if (expected_mode.has_value() && !expected_mode_guard_emitted && !from_stack) {
       flush_numeric_segment();
       emit_expected_mode_setup_check(setup, optimizations, *expected_mode);
@@ -2332,9 +2391,8 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
         continue;
       }
     }
-    if (from_stack_y)
-      setup.emit_op(0x14, "X↔Y", "setup " + setup_target_name(preload) + " from stack.Y",
-                    std::nullopt, true);
+    if (from_stack)
+      emit_visible_stack_preload_setup(setup, preload);
     if (from_stack_x2)
       setup.emit_op(0x0a, ".", "setup " + setup_target_name(preload) + " from stack.X2",
                     std::nullopt, true);
@@ -2361,9 +2419,8 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
       report_duplicate_preload_store_reuse(optimizations, preload.value, stored_registers,
                                            target_count, preload.register_name);
     }
-    if (from_stack_y)
-      setup.emit_op(0x14, "X↔Y", "restore stack.X after " + setup_target_name(preload),
-                    std::nullopt, true);
+    if (from_stack)
+      emit_visible_stack_preload_restore(setup, preload);
   }
   flush_numeric_segment();
   if (setup_r0_dirty)

@@ -150,6 +150,8 @@ bool statements_contain_return(const std::vector<V2Statement>& statements);
 bool statements_guarantee_return(const std::vector<V2Statement>& statements);
 void validate_v2_function_call_contracts(const V2Program& program,
                                          std::vector<Diagnostic>& diagnostics);
+void validate_startup_stack_input_contracts(const V2Program& program,
+                                            std::vector<Diagnostic>& diagnostics);
 const V2Board* board_for_cells_mask(const LoweringContext& context, const Expression& mask);
 std::optional<Expression> cell_set_mask_expression_for_collection(const LoweringContext& context,
                                                                   const std::string& collection,
@@ -2210,6 +2212,41 @@ void validate_v2_function_call_contracts(const V2Program& program,
   const FunctionCallEdges edges = collect_function_call_edges(program, functions);
   validate_function_tail_recursion(edges, diagnostics);
   validate_function_return_stack_depth(program, functions, edges, diagnostics);
+}
+
+void validate_startup_stack_input_contracts(const V2Program& program,
+                                            std::vector<Diagnostic>& diagnostics) {
+  bool uses_deep_visible_stack = false;
+  bool uses_x2 = false;
+  auto record_stack_source = [&](const std::string& source) {
+    if (source == "Z" || source == "T" || source == "stack.Z" || source == "stack.T")
+      uses_deep_visible_stack = true;
+    if (source == "X2" || source == "stack.X2")
+      uses_x2 = true;
+  };
+
+  for (const V2StateField& field : program.state) {
+    if (field.initial_stack.has_value())
+      record_stack_source(*field.initial_stack);
+    if (!field.bank.has_value() || !field.initial.has_value())
+      continue;
+    const int expected = field.bank->max - field.bank->min + 1;
+    const std::optional<std::vector<std::string>> values =
+        indexed_initializer_list_values(*field.initial, expected);
+    if (!values.has_value())
+      continue;
+    for (const std::string& value : *values)
+      record_stack_source(trim_ascii(value));
+  }
+
+  if (uses_deep_visible_stack && uses_x2) {
+    diagnostics.push_back(diagnostic(
+        DiagnosticSeverity::Error, "native-unsupported",
+        "Startup stack inputs cannot combine stack.X2 with stack.Z or stack.T: the F reverse "
+        "rotations needed for Z/T overwrite the hidden X2 restore context. Use stack.X2 only with "
+        "stack.X/stack.Y, or use visible stack inputs stack.X/stack.Y/stack.Z/stack.T without "
+        "stack.X2."));
+  }
 }
 
 void suppress_packed_score_inline_rules(LoweringContext& context, const V2Program& program) {
@@ -35650,6 +35687,10 @@ std::optional<std::string> stack_preload_source(const std::string& value) {
     return "X";
   if (value == "stack.Y")
     return "Y";
+  if (value == "stack.Z")
+    return "Z";
+  if (value == "stack.T")
+    return "T";
   if (value == "stack.X2")
     return "X2";
   return std::nullopt;
@@ -40854,6 +40895,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
 
   validate_v2_return_contracts(*ast.v2, result.diagnostics);
   validate_v2_function_call_contracts(*ast.v2, result.diagnostics);
+  validate_startup_stack_input_contracts(*ast.v2, result.diagnostics);
   if (has_errors(result.diagnostics)) {
     result.implemented = false;
     return result;
