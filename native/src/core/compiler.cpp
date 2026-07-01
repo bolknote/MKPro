@@ -45501,6 +45501,25 @@ SizeAttributionReport build_size_attribution_report(
             });
 
   const int current_steps = static_cast<int>(steps.size());
+  report.opportunities.reserve(rejected_candidates.size() + report.abi_blockers.size());
+  for (const SizeAbiBlockerReport& blocker : report.abi_blockers) {
+    if (blocker.materialize_cells <= 0)
+      continue;
+    std::map<std::string, std::string> details = blocker.details;
+    details.emplace("abiStatus", "missing-stack-argument-entry");
+    details.emplace("requiredAction", "stack-argument-helper-entry");
+    details.emplace("candidateBasis", "avoid-materializing-stack-resident-temps");
+    report.opportunities.push_back(SizeOpportunityReport{
+        .site = "abi",
+        .variant = blocker.kind,
+        .current_steps = current_steps,
+        .candidate_steps = current_steps - blocker.materialize_cells,
+        .savings = blocker.materialize_cells,
+        .reason = blocker.reason,
+        .blocker_kind = blocker.kind,
+        .details = std::move(details),
+    });
+  }
   const std::map<int, SizeReportFlowTargetStats> flow_stats =
       size_report_flow_target_stats(steps);
   std::map<int, std::string> occupant_by_address;
@@ -45539,7 +45558,6 @@ SizeAttributionReport build_size_attribution_report(
           size_report_target_overlay_action(steps, index);
     }
   }
-  report.opportunities.reserve(rejected_candidates.size());
   for (const CandidateReport& candidate : rejected_candidates) {
     if (candidate.steps <= 0)
       continue;

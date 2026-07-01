@@ -334,6 +334,25 @@ void example_sizes_match_typescript_baselines() {
                       "stack-argument-helper-entry",
               "tic-tac-toe-4x4 size attribution should expose the stack-resident helper ABI "
               "blocker instead of hiding it behind stack-resident-temps");
+      const SizeOpportunityReport* stack_helper_abi_opportunity =
+          find_size_opportunity(result, "stack-helper-abi");
+      require(stack_helper_abi_opportunity != nullptr &&
+                  stack_helper_abi_opportunity->site == "abi" &&
+                  stack_helper_abi_opportunity->savings == stack_helper_abi->materialize_cells &&
+                  stack_helper_abi_opportunity->candidate_steps ==
+                      static_cast<int>(result.steps.size()) - stack_helper_abi->materialize_cells &&
+                  stack_helper_abi_opportunity->blocker_kind == "stack-helper-abi" &&
+                  stack_helper_abi_opportunity->details.contains("abiStatus") &&
+                  stack_helper_abi_opportunity->details.at("abiStatus") ==
+                      "missing-stack-argument-entry" &&
+                  stack_helper_abi_opportunity->details.contains("candidateBasis") &&
+                  stack_helper_abi_opportunity->details.at("candidateBasis") ==
+                      "avoid-materializing-stack-resident-temps" &&
+                  stack_helper_abi_opportunity->details.contains("requiredAction") &&
+                  stack_helper_abi_opportunity->details.at("requiredAction") ==
+                      "stack-argument-helper-entry",
+              "tic-tac-toe-4x4 size attribution should rank the stack-helper ABI blocker as a "
+              "positive-savings optimizer opportunity");
       const SizeAttributionEntry* recall_occupied =
           find_size_entry(result, "listing", "recall occupied");
       require(recall_occupied != nullptr && recall_occupied->cells >= 1,
@@ -450,6 +469,19 @@ void example_sizes_match_typescript_baselines() {
                   data_arithmetic_blocker->best_details.contains("currentNaturalTargetOccupantKind"),
               "tic-tac-toe-4x4 size blocker summary should keep structured best blocker "
               "details");
+      const SizeBlockerSummaryReport* stack_helper_abi_blocker =
+          find_size_blocker(result, "stack-helper-abi");
+      require(stack_helper_abi_blocker != nullptr &&
+                  stack_helper_abi_blocker->opportunities >= 1 &&
+                  stack_helper_abi_blocker->potential_savings >=
+                      stack_helper_abi->materialize_cells &&
+                  stack_helper_abi_blocker->best_savings == stack_helper_abi->materialize_cells &&
+                  stack_helper_abi_blocker->best_variant == "stack-helper-abi" &&
+                  stack_helper_abi_blocker->best_details.contains("requiredAction") &&
+                  stack_helper_abi_blocker->best_details.at("requiredAction") ==
+                      "stack-argument-helper-entry",
+              "tic-tac-toe-4x4 size attribution should summarize stack-helper ABI savings as a "
+              "real optimizer blocker");
       const SizeNextActionSummaryReport* required_action = find_size_next_action(
           result, "requiredAction", "keep-fractional-erase-before-data-arithmetic");
       require(required_action != nullptr && required_action->opportunities >= 1 &&
@@ -470,6 +502,17 @@ void example_sizes_match_typescript_baselines() {
                   layout_action->best_details.contains("layoutConflictKind"),
               "tic-tac-toe-4x4 size attribution should aggregate layout/code-data overlay next "
               "actions for blocked positive-savings candidates");
+      const SizeNextActionSummaryReport* stack_helper_action = find_size_next_action(
+          result, "requiredAction", "stack-argument-helper-entry");
+      require(stack_helper_action != nullptr && stack_helper_action->opportunities >= 1 &&
+                  stack_helper_action->potential_savings >=
+                      stack_helper_abi->materialize_cells &&
+                  stack_helper_action->best_savings == stack_helper_abi->materialize_cells &&
+                  stack_helper_action->best_blocker_kind == "stack-helper-abi" &&
+                  stack_helper_action->best_variant == "stack-helper-abi" &&
+                  stack_helper_action->best_details.contains("candidateBasis"),
+              "tic-tac-toe-4x4 size attribution should point stack-resident helper materialization "
+              "at the stack-entry ABI implementation action");
     }
   }
 }
