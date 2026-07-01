@@ -45439,6 +45439,95 @@ int detail_int_or_zero(const std::map<std::string, std::string>& details,
   }
 }
 
+std::string size_report_ratio_text(int numerator, int denominator) {
+  if (denominator <= 0)
+    return "0";
+  if (numerator % denominator == 0)
+    return std::to_string(numerator / denominator);
+  return std::to_string(numerator) + "/" + std::to_string(denominator);
+}
+
+struct PackedScoreAccumulatorHelperUsage {
+  int terms = 0;
+  int groups = 0;
+  int x_param_terms = 0;
+  int shared_tail_terms = 0;
+};
+
+int packed_score_accumulator_terms_from_detail(const OptimizationReport& optimization) {
+  static const std::regex numeric_terms(
+      R"((?:Lowered|Accumulated)\s+(\d+)\s+packed_score\(\)\s+terms)");
+  std::smatch match;
+  if (std::regex_search(optimization.detail, match, numeric_terms)) {
+    try {
+      return std::stoi(match[1].str());
+    } catch (const std::exception&) {
+      return 0;
+    }
+  }
+  if (optimization.name == "packed-line-family-score-accumulator" &&
+      optimization.detail.find("Accumulated four packed_score() terms") != std::string::npos) {
+    return 4;
+  }
+  if (optimization.name == "x-param-packed-score-line-stack-accumulate")
+    return 1;
+  return 0;
+}
+
+std::map<std::string, PackedScoreAccumulatorHelperUsage>
+packed_score_accumulator_helper_usage_by_label(
+    const std::vector<OptimizationReport>& optimizations) {
+  std::map<std::string, PackedScoreAccumulatorHelperUsage> usage_by_label;
+  for (const OptimizationReport& optimization : optimizations) {
+    if (optimization.name == "packed-score-accumulator-helper")
+      continue;
+    const int terms = packed_score_accumulator_terms_from_detail(optimization);
+    if (terms <= 0)
+      continue;
+    const bool packed_line = optimization.name == "packed-line-family-score-accumulator";
+    const std::string label =
+        packed_line ? "packed-line score accumulator helper" : "packed_score accumulator helper";
+    PackedScoreAccumulatorHelperUsage& usage = usage_by_label[label];
+    usage.terms += terms;
+    ++usage.groups;
+    if (optimization.name == "x-param-packed-score-line-stack-accumulate")
+      usage.x_param_terms += terms;
+    if (packed_line)
+      usage.shared_tail_terms += terms;
+  }
+  return usage_by_label;
+}
+
+void attach_packed_score_accumulator_helper_details(
+    std::map<std::string, SizeHelperSummaryReport>& helper_summaries,
+    const std::vector<OptimizationReport>& optimizations) {
+  const std::map<std::string, PackedScoreAccumulatorHelperUsage> usage_by_label =
+      packed_score_accumulator_helper_usage_by_label(optimizations);
+  for (const auto& [label, usage] : usage_by_label) {
+    auto helper_it = helper_summaries.find(label);
+    if (helper_it == helper_summaries.end())
+      continue;
+    SizeHelperSummaryReport& helper = helper_it->second;
+    helper.details["role"] = "packed-score-accumulator";
+    helper.details["accumulatorTerms"] = std::to_string(usage.terms);
+    helper.details["accumulatorGroups"] = std::to_string(usage.groups);
+    helper.details["bodyCells"] = std::to_string(helper.body_cells);
+    helper.details["callSiteCells"] = std::to_string(helper.call_site_cells);
+    helper.details["callOccurrences"] = std::to_string(helper.call_occurrences);
+    helper.details["totalCells"] = std::to_string(helper.total_cells);
+    helper.details["callCellsPerOccurrence"] =
+        size_report_ratio_text(helper.call_site_cells, helper.call_occurrences);
+    helper.details["bodyCellsPerAccumulatorTerm"] =
+        size_report_ratio_text(helper.body_cells, usage.terms);
+    if (label == "packed_score accumulator helper")
+      helper.details["selectionThresholdTerms"] = "3";
+    if (usage.x_param_terms > 0)
+      helper.details["xParamTerms"] = std::to_string(usage.x_param_terms);
+    if (usage.shared_tail_terms > 0)
+      helper.details["sharedTailTerms"] = std::to_string(usage.shared_tail_terms);
+  }
+}
+
 SizeAttributionReport build_size_attribution_report(
     const std::vector<ResolvedStep>& steps,
     const std::vector<CandidateReport>& rejected_candidates,
@@ -45610,6 +45699,7 @@ SizeAttributionReport build_size_attribution_report(
     }
     summary.total_cells = summary.body_cells + summary.call_site_cells;
   }
+  attach_packed_score_accumulator_helper_details(helper_summaries, optimizations);
   report.helpers.reserve(helper_summaries.size());
   for (auto& [unused, summary] : helper_summaries) {
     (void)unused;

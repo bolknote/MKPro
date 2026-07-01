@@ -61,6 +61,16 @@ const SizeOpportunityReport* find_size_opportunity(const CompileResult& result,
   return it == result.size_attribution.opportunities.end() ? nullptr : &*it;
 }
 
+const SizeHelperSummaryReport* find_size_helper(const CompileResult& result,
+                                                const std::string& label) {
+  const auto it = std::find_if(result.size_attribution.helpers.begin(),
+                               result.size_attribution.helpers.end(),
+                               [&](const SizeHelperSummaryReport& helper) {
+                                 return helper.label == label;
+                               });
+  return it == result.size_attribution.helpers.end() ? nullptr : &*it;
+}
+
 // Pin the shared-helper / direct-call (ПП) structure this suite verifies by
 // suppressing the default-on aggressive post-layout indirect-flow repacking.
 CompileOptions pinned_options() {
@@ -101,6 +111,20 @@ program PackedScoreDirectExpressionAccumulator {
           "direct packed_score expression should not emit standalone helper calls");
   require(count_packed_score_accumulator_helper_jumps(direct_expression_sum) == 3,
           "direct packed_score expression should emit three accumulator helper calls");
+  const SizeHelperSummaryReport* direct_accumulator_helper =
+      find_size_helper(direct_expression_sum, "packed_score accumulator helper");
+  require(direct_accumulator_helper != nullptr,
+          "direct packed_score expression should expose accumulator helper size summary");
+  require(direct_accumulator_helper->details.contains("role") &&
+              direct_accumulator_helper->details.at("role") == "packed-score-accumulator" &&
+              direct_accumulator_helper->details.contains("accumulatorTerms") &&
+              direct_accumulator_helper->details.at("accumulatorTerms") == "3" &&
+              direct_accumulator_helper->details.contains("selectionThresholdTerms") &&
+              direct_accumulator_helper->details.at("selectionThresholdTerms") == "3" &&
+              direct_accumulator_helper->details.contains("bodyCells") &&
+              direct_accumulator_helper->details.contains("callSiteCells") &&
+              direct_accumulator_helper->details.contains("callCellsPerOccurrence"),
+          "direct packed_score helper summary should expose accumulator cost and threshold details");
 
   const CompileResult repeated_expression_sum = compile_source(R"mkpro(
 program PackedScoreRepeatedExpressionAccumulator {

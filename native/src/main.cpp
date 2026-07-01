@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -283,6 +284,19 @@ void print_json_candidate_reports(const std::vector<mkpro::CandidateReport>& can
   std::cout << indent.substr(0, indent.size() - 2U) << "]";
 }
 
+void print_json_string_map(const std::map<std::string, std::string>& values) {
+  std::cout << "{";
+  std::size_t index = 0;
+  for (const auto& [key, value] : values) {
+    if (index++ > 0)
+      std::cout << ", ";
+    print_json_string(std::cout, key);
+    std::cout << ": ";
+    print_json_string(std::cout, value);
+  }
+  std::cout << "}";
+}
+
 void print_json_size_attribution(const mkpro::SizeAttributionReport& report, std::string indent) {
   std::cout << "{\n";
   std::cout << indent << "  \"totalCells\": " << report.total_cells;
@@ -316,6 +330,10 @@ void print_json_size_attribution(const mkpro::SizeAttributionReport& report, std
     std::cout << ", \"callOccurrences\": " << helper.call_occurrences;
     std::cout << ", \"firstAddress\": " << helper.first_address;
     std::cout << ", \"lastAddress\": " << helper.last_address;
+    if (!helper.details.empty()) {
+      std::cout << ", \"details\": ";
+      print_json_string_map(helper.details);
+    }
     std::cout << "}" << (index + 1U == report.helpers.size() ? "" : ",") << "\n";
   }
   std::cout << indent << "  ],\n";
@@ -346,16 +364,8 @@ void print_json_size_attribution(const mkpro::SizeAttributionReport& report, std
     std::cout << ", \"line\": " << blocker.line;
     std::cout << ", \"materializeCells\": " << blocker.materialize_cells;
     if (!blocker.details.empty()) {
-      std::cout << ", \"details\": {";
-      std::size_t detail_index = 0;
-      for (const auto& [key, value] : blocker.details) {
-        if (detail_index++ > 0)
-          std::cout << ", ";
-        print_json_string(std::cout, key);
-        std::cout << ": ";
-        print_json_string(std::cout, value);
-      }
-      std::cout << "}";
+      std::cout << ", \"details\": ";
+      print_json_string_map(blocker.details);
     }
     std::cout << ", \"reason\": ";
     print_json_string(std::cout, blocker.reason);
@@ -377,16 +387,8 @@ void print_json_size_attribution(const mkpro::SizeAttributionReport& report, std
       print_json_string(std::cout, opportunity.blocker_kind);
     }
     if (!opportunity.details.empty()) {
-      std::cout << ", \"details\": {";
-      std::size_t detail_index = 0;
-      for (const auto& [key, value] : opportunity.details) {
-        if (detail_index++ > 0)
-          std::cout << ", ";
-        print_json_string(std::cout, key);
-        std::cout << ": ";
-        print_json_string(std::cout, value);
-      }
-      std::cout << "}";
+      std::cout << ", \"details\": ";
+      print_json_string_map(opportunity.details);
     }
     std::cout << ", \"reason\": ";
     print_json_string(std::cout, opportunity.reason);
@@ -807,7 +809,18 @@ void print_human_analysis_report(const mkpro::CompileResult& result) {
                 << " body=" << helper.body_cells
                 << " calls=" << helper.call_site_cells
                 << " callOccurrences=" << helper.call_occurrences
-                << " range=" << helper.first_address << ".." << helper.last_address << "\n";
+                << " range=" << helper.first_address << ".." << helper.last_address;
+      if (!helper.details.empty()) {
+        std::cout << " details={";
+        std::size_t detail_index = 0;
+        for (const auto& [key, value] : helper.details) {
+          if (detail_index++ > 0)
+            std::cout << ", ";
+          std::cout << key << "=" << value;
+        }
+        std::cout << "}";
+      }
+      std::cout << "\n";
       ++printed;
     }
   }

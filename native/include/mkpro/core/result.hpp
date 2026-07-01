@@ -157,6 +157,7 @@ struct SizeHelperSummaryReport {
   int call_occurrences = 0;
   int first_address = 0;
   int last_address = 0;
+  std::map<std::string, std::string> details;
 };
 
 struct SizeHelperSpillSummaryReport {

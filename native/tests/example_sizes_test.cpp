@@ -305,6 +305,18 @@ void example_sizes_match_typescript_baselines() {
                       candidate_score->cells + packed_score_calls->cells,
               "tic-tac-toe-4x4 size attribution should summarize packed_score helper body and "
               "call-site costs");
+      require(packed_score_helper->details.contains("role") &&
+                  packed_score_helper->details.at("role") == "packed-score-accumulator" &&
+                  packed_score_helper->details.contains("accumulatorTerms") &&
+                  packed_score_helper->details.at("accumulatorTerms") == "4" &&
+                  packed_score_helper->details.contains("sharedTailTerms") &&
+                  packed_score_helper->details.at("sharedTailTerms") == "4" &&
+                  packed_score_helper->details.contains("bodyCells") &&
+                  packed_score_helper->details.contains("callSiteCells") &&
+                  packed_score_helper->details.contains("callOccurrences") &&
+                  packed_score_helper->details.contains("bodyCellsPerAccumulatorTerm"),
+              "tic-tac-toe-4x4 packed_score helper summary should expose accumulator term and "
+              "cost details");
       const SizeHelperSummaryReport* cell_mask_helper =
           find_size_helper(result, "expr cell_mask(x, y)");
       require(cell_mask_helper != nullptr && cell_mask_helper->body_cells == cell_mask->cells &&
