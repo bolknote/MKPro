@@ -636,6 +636,44 @@ program PackedScoreAccumulatorReusesPaidHelperForPair {
   require(count_steps_with_comment(paid_helper_pair, "set extra") == 0,
           "already-paid packed_score pair should keep extra on the stack for the direct consumer");
 
+  const CompileResult planned_helper_pair_first = compile_source(R"mkpro(
+program PackedScoreAccumulatorReusesPlannedHelperForEarlierPair {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    d: packed = 44447.4
+    e: packed = 44448.4
+    value: packed = 0
+    extra: packed = 0
+  }
+  loop {
+    extra = packed_score(d, 4) + packed_score(e, 5)
+    value = packed_score(a, 1) + packed_score(b, 2) + packed_score(c, 3)
+    halt(value + extra)
+  }
+}
+)mkpro",
+                                                           pinned_options());
+  require(planned_helper_pair_first.implemented,
+          "native compiler should reuse a planned packed_score accumulator helper before the "
+          "3-term group creates it");
+  require(planned_helper_pair_first.diagnostics.empty(),
+          "planned packed_score pair compile should not report diagnostics");
+  require(has_optimization(planned_helper_pair_first, "packed-score-accumulator-helper"),
+          "planned packed_score pair should keep the accumulator helper body");
+  require(has_optimization(planned_helper_pair_first, "packed-score-sum-accumulator"),
+          "planned packed_score pair should lower the earlier pair as an expression accumulator");
+  require(count_optimization(planned_helper_pair_first, "packed-score-stack-helper-call") == 0,
+          "planned packed_score pair should not introduce the standalone helper");
+  require(count_packed_score_helper_jumps(planned_helper_pair_first) == 0,
+          "planned packed_score pair should not emit standalone helper calls");
+  require(count_packed_score_accumulator_helper_jumps(planned_helper_pair_first) == 5,
+          "planned packed_score pair should emit accumulator helper calls for all five terms");
+  require(count_steps_with_comment(planned_helper_pair_first, "set extra") == 1,
+          "planned packed_score pair should store the earlier extra once before the later "
+          "accumulator overwrites X/Y");
+
   const CompileResult x_param_sequence = compile_source(R"mkpro(
 program PackedScoreXParamAccumulatorHelper {
   state {

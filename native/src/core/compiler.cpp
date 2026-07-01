@@ -17644,7 +17644,7 @@ bool lower_packed_score_sum_accumulator_to_x(LoweringContext& context,
   std::optional<Expression> initial;
   if (!collect_packed_score_sum_terms_with_initial(context, expression, terms, initial) ||
       (terms.size() < 3U &&
-       !(terms.size() >= 2U && context.packed_score_accumulator_helper.has_value()))) {
+       !(terms.size() >= 2U && context.use_packed_score_accumulator_helper))) {
     return false;
   }
 
@@ -18076,9 +18076,9 @@ bool lower_packed_score_sequence_accumulator_run(LoweringContext& context,
       next_index < statements.size() &&
       statement_directly_consumes_current_x_identifier(context, statements.at(next_index),
                                                        target);
-  const bool reuse_paid_accumulator_helper =
-      terms.size() >= 2U && context.packed_score_accumulator_helper.has_value();
-  if ((terms.size() < 3U && !reuse_paid_accumulator_helper) ||
+  const bool reuse_planned_accumulator_helper =
+      terms.size() >= 2U && context.use_packed_score_accumulator_helper;
+  if ((terms.size() < 3U && !reuse_planned_accumulator_helper) ||
       (run < 2U && !stack_only_target && !direct_consumer))
     return false;
 
