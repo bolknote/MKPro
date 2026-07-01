@@ -316,6 +316,174 @@ program StackCarriedExpressionConsumer {
 
   {
     const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedRegisterPressure {
+  state {
+    v0: packed = 1
+    v1: packed = 2
+    v2: packed = 3
+    v3: packed = 4
+    v4: packed = 5
+    v5: packed = 6
+    v6: packed = 7
+    v7: packed = 8
+    v8: packed = 9
+    v9: packed = 10
+    v10: packed = 11
+    v11: packed = 12
+    v12: packed = 13
+    v13: packed = 14
+    v14: packed = 15
+  }
+
+  loop {
+    tmp = v0 + v1
+    halt(sum(tmp, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14))
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried register pressure");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "register-pressure temp should use stack-carried assignment");
+    require(has_optimization(result, "stack-only-state-field"),
+            "register-pressure temp should be proven stack-only before allocation");
+    require(!result.registers.contains("tmp"),
+            "register-pressure stack-only temp should not allocate a physical register");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "register-pressure stack-only temp should not be stored");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "register-pressure stack-only temp should not be recalled");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedReadRegisterPressure {
+  state {
+    v0: packed = 1
+    v1: packed = 2
+    v2: packed = 3
+    v3: packed = 4
+    v4: packed = 5
+    v5: packed = 6
+    v6: packed = 7
+    v7: packed = 8
+    v8: packed = 9
+    v9: packed = 10
+    v10: packed = 11
+    v11: packed = 12
+    v12: packed = 13
+    v13: packed = 14
+    v14: packed = 15
+  }
+
+  loop {
+    key = read()
+    halt(sum(key, v0, v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14))
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried read register pressure");
+    require(has_optimization(result, "stack-carried-read"),
+            "register-pressure read target should use stack-carried read");
+    require(has_optimization(result, "stack-only-state-field"),
+            "register-pressure read target should be proven stack-only before allocation");
+    require(!result.registers.contains("key"),
+            "register-pressure read target should not allocate a physical register");
+    require(count_steps_with_comment(result, "read key") == 1,
+            "register-pressure read target should not emit a following store");
+    require(count_steps_with_comment(result, "recall key") == 0,
+            "register-pressure read target should not be recalled");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedShowReadRegisterPressure {
+  state {
+    v0: packed = 1
+    v1: packed = 2
+    v2: packed = 3
+    v3: packed = 4
+    v4: packed = 5
+    v5: packed = 6
+    v6: packed = 7
+    v7: packed = 8
+    v8: packed = 9
+    v9: packed = 10
+    v10: packed = 11
+    v11: packed = 12
+    v12: packed = 13
+    v13: packed = 14
+    v14: packed = 15
+  }
+
+  loop {
+    show(v0)
+    key = read()
+    if key != 1 {
+      halt(v1)
+    }
+    show(v2)
+    key = read()
+    if key != 3 {
+      halt(v3)
+    }
+    halt(sum(v2, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14))
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried show/read register pressure");
+    require(has_optimization(result, "show-read-fusion"),
+            "register-pressure show/read target should still fuse show and read");
+    require(has_optimization(result, "stack-carried-read"),
+            "register-pressure show/read target should be carried from the fused stop");
+    require(has_optimization(result, "stack-only-state-field"),
+            "register-pressure show/read target should be proven stack-only before allocation");
+    require(!result.registers.contains("key"),
+            "register-pressure show/read target should not allocate a physical register");
+    require(count_steps_with_comment(result, "read key") == 0,
+            "register-pressure show/read target should not be stored");
+    require(count_steps_with_comment(result, "recall key") == 0,
+            "register-pressure show/read target should not be recalled");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program ShowReadWithoutRegisterPressureKeepsStore {
+  state {
+    screen: packed = 1
+  }
+
+  loop {
+    show(screen)
+    key = read()
+    if key != 1 {
+      halt(screen)
+    }
+    show(screen)
+    key = read()
+    if key != 2 {
+      halt(screen)
+    }
+    halt(0)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "show/read without register pressure");
+    require(has_optimization(result, "show-read-fusion"),
+            "non-pressure show/read target should still fuse show and read");
+    require(!has_optimization(result, "stack-carried-read"),
+            "non-pressure show/read target should not use the separator-costly stack-only path");
+    require(!has_optimization(result, "stack-only-state-field"),
+            "non-pressure show/read target should keep ordinary storage");
+    require(result.registers.contains("key"),
+            "non-pressure show/read target should keep a physical register");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
 program StackCarriedInlineExpressionOperandConsumer {
   state {
     x: packed = 2

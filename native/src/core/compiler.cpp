@@ -9392,7 +9392,7 @@ bool stack_only_covered_run_writes_target(const std::vector<V2Statement>& statem
     if (current >= statements.size())
       break;
     const V2Statement& statement = statements.at(current);
-    if (statement.kind == "v2_assign" && statement.target == name)
+    if ((statement.kind == "v2_assign" || statement.kind == "v2_read") && statement.target == name)
       return true;
     if (statement.kind == "v2_invoke" && statement.name.has_value() &&
         return_only_procs.contains(*statement.name))
@@ -9474,19 +9474,109 @@ bool following_x_param_packed_score_accumulator_run(
   return false;
 }
 
+bool statement_directly_consumes_current_x_identifier(LoweringContext& context,
+                                                      const V2Statement& statement,
+                                                      const std::string& target);
+bool expression_has_target_aware_assignment_lowering(const LoweringContext& context,
+                                                     const Expression& expression);
+bool statements_read_identifier_before_write(LoweringContext& context,
+                                             const std::vector<V2Statement>& statements,
+                                             const std::string& name);
+
+int stack_only_stack_carried_assignment_run(LoweringContext& context,
+                                            const std::vector<V2Statement>& statements,
+                                            std::size_t index, const std::string& name) {
+  if (index + 1U >= statements.size())
+    return 0;
+  const V2Statement& statement = statements.at(index);
+  if (statement.kind != "v2_assign" || statement.target != name || !statement.expr.has_value())
+    return 0;
+  try {
+    const Expression target = parse_expression(*statement.target, statement.line);
+    const Expression expression = parse_expression(*statement.expr, statement.line);
+    if (target.kind != "identifier" || expression_contains_identifier(expression, name) ||
+        expression_has_target_aware_assignment_lowering(context, expression)) {
+      return 0;
+    }
+  } catch (const std::exception&) {
+    return 0;
+  }
+  return statement_directly_consumes_current_x_identifier(context, statements.at(index + 1U), name)
+             ? 2
+             : 0;
+}
+
+int stack_only_stack_carried_read_run(LoweringContext& context,
+                                      const std::vector<V2Statement>& statements,
+                                      std::size_t index, const std::string& name) {
+  if (index + 1U >= statements.size())
+    return 0;
+  const V2Statement& read = statements.at(index);
+  if (read.kind != "v2_read" || read.target != name || context.constants.contains(name) ||
+      context.scaled_coord_cell_names.contains(name) || context.cave_sketch_shape ||
+      context.lunar_shape) {
+    return 0;
+  }
+  const V2Statement& consumer = statements.at(index + 1U);
+  if (consumer.kind == "v2_match" ||
+      !statement_directly_consumes_current_x_identifier(context, consumer, name)) {
+    return 0;
+  }
+  const std::vector<V2Statement> tail(
+      statements.begin() + static_cast<std::vector<V2Statement>::difference_type>(index + 2U),
+      statements.end());
+  return statements_read_identifier_before_write(context, tail, name) ? 0 : 2;
+}
+
+int stack_only_stack_carried_show_read_run(LoweringContext& context,
+                                           const std::vector<V2Statement>& statements,
+                                           std::size_t index, const std::string& name) {
+  if (index + 2U >= statements.size())
+    return 0;
+  const V2Statement& show = statements.at(index);
+  const V2Statement& read = statements.at(index + 1U);
+  if (show.kind != "v2_show" || read.kind != "v2_read" || read.target != name ||
+      context.constants.contains(name) || context.scaled_coord_cell_names.contains(name) ||
+      context.cave_sketch_shape || context.lunar_shape) {
+    return 0;
+  }
+  const V2Statement& consumer = statements.at(index + 2U);
+  if (consumer.kind == "v2_match" ||
+      !statement_directly_consumes_current_x_identifier(context, consumer, name)) {
+    return 0;
+  }
+  const std::vector<V2Statement> tail(
+      statements.begin() + static_cast<std::vector<V2Statement>::difference_type>(index + 3U),
+      statements.end());
+  return statements_read_identifier_before_write(context, tail, name) ? 0 : 3;
+}
+
 int stack_only_covered_run(
-    const LoweringContext& context, const V2Program& program,
+    LoweringContext& context, const V2Program& program,
     const std::vector<V2Statement>& statements, std::size_t index, const std::string& name,
     const std::map<std::string, XParamProcLowering>& x_param_procs,
     const std::map<std::string, XParamYStackProcLowering>& y_stack_procs,
-    const std::set<std::string>& return_only_procs) {
+    const std::set<std::string>& return_only_procs, bool allow_stack_carried_local,
+    bool allow_stack_carried_show_read_local) {
   const V2Statement& statement = statements.at(index);
   const V2Statement* next = index + 1U < statements.size() ? &statements.at(index + 1U) : nullptr;
   const V2Statement* third = index + 2U < statements.size() ? &statements.at(index + 2U) : nullptr;
   const V2Statement* fourth =
       index + 3U < statements.size() ? &statements.at(index + 3U) : nullptr;
 
+  if (allow_stack_carried_show_read_local) {
+    const int show_read = stack_only_stack_carried_show_read_run(context, statements, index, name);
+    if (show_read > 0)
+      return show_read;
+  }
+
   if (statement.kind == "v2_assign" && statement.target == name && statement.expr.has_value()) {
+    if (allow_stack_carried_local) {
+      const int stack_carried =
+          stack_only_stack_carried_assignment_run(context, statements, index, name);
+      if (stack_carried > 0)
+        return stack_carried;
+    }
     if (next != nullptr && stack_analysis_bit_or_test_and_set_branch(context, program, statement,
                                                                      *next))
       return 2;
@@ -9522,6 +9612,14 @@ int stack_only_covered_run(
 
   if (indexed_packed_pow10_delta_stack_index_name_for_analysis(statement) == name)
     return 1;
+
+  const bool read_was_preceded_by_show =
+      index > 0U && statement.kind == "v2_read" && statements.at(index - 1U).kind == "v2_show";
+  if (allow_stack_carried_local && !read_was_preceded_by_show) {
+    const int stack_read = stack_only_stack_carried_read_run(context, statements, index, name);
+    if (stack_read > 0)
+      return stack_read;
+  }
 
   if (statement.kind == "v2_invoke" && statement.name.has_value()) {
     const int consumed = stack_only_call_return_consumer_run(program, statements, index, name,
@@ -9605,11 +9703,59 @@ int stack_only_covered_run(
   return 0;
 }
 
+void collect_stack_only_assignment_candidates_from_statement(const V2Statement& statement,
+                                                             std::set<std::string>& candidates) {
+  if (statement.kind == "v2_assign" || statement.kind == "v2_read") {
+    if (const std::optional<std::string> target = scalar_statement_target_name(statement);
+        target.has_value() && !target->starts_with("__")) {
+      candidates.insert(*target);
+    }
+  }
+  for (const V2Statement& child : statement.body)
+    collect_stack_only_assignment_candidates_from_statement(child, candidates);
+  for (const V2Statement& child : statement.then_body)
+    collect_stack_only_assignment_candidates_from_statement(child, candidates);
+  for (const V2Statement& child : statement.else_body)
+    collect_stack_only_assignment_candidates_from_statement(child, candidates);
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr)
+      collect_stack_only_assignment_candidates_from_statement(*match_case.action, candidates);
+  }
+  if (statement.otherwise != nullptr)
+    collect_stack_only_assignment_candidates_from_statement(*statement.otherwise, candidates);
+}
+
+std::set<std::string> collect_stack_only_candidate_names(const V2Program& program) {
+  std::set<std::string> candidates;
+  for (const V2StateField& field : program.state) {
+    if (!field.implicit)
+      candidates.insert(field.name);
+  }
+  for (const V2Statement& statement : program.body)
+    collect_stack_only_assignment_candidates_from_statement(statement, candidates);
+  for (const V2Rule& rule : program.rules) {
+    for (const V2Statement& statement : rule.body)
+      collect_stack_only_assignment_candidates_from_statement(statement, candidates);
+  }
+  return candidates;
+}
+
 std::set<std::string> collect_stack_only_state_fields(LoweringContext& context,
                                                       const V2Program& program) {
   std::set<std::string> result;
+  std::set<std::string> explicit_state_names;
   for (const V2StateField& field : program.state) {
-    const std::string& name = field.name;
+    if (!field.implicit)
+      explicit_state_names.insert(field.name);
+  }
+  const bool register_pressure_for_show_read_local =
+      explicit_state_names.size() >= core::register_order_indices().size();
+  for (const std::string& name : collect_stack_only_candidate_names(program)) {
+    if (context.constants.contains(name) || context.loop_prompt_initials.contains(name) ||
+        is_domain_name(context, name) || is_coord_list_state_name(context, name) ||
+        is_segmented_cells_name(context, name)) {
+      continue;
+    }
     const std::set<std::string> return_only_procs =
         stack_only_return_procs_for_target(program, name, context.x_param_procs);
     bool covered = false;
@@ -9618,10 +9764,15 @@ std::set<std::string> collect_stack_only_state_fields(LoweringContext& context,
                                    const std::optional<std::string>& current_rule) -> bool {
       for (std::size_t index = 0; index < statements.size(); ++index) {
         const V2Statement& statement = statements.at(index);
+        const bool allow_stack_carried_local = !explicit_state_names.contains(name);
+        const bool allow_stack_carried_show_read_local =
+            allow_stack_carried_local && register_pressure_for_show_read_local;
         const int covered_run = stack_only_covered_run(context, program, statements, index, name,
                                                        context.x_param_procs,
                                                        context.x_param_y_stack_procs,
-                                                       return_only_procs);
+                                                       return_only_procs,
+                                                       allow_stack_carried_local,
+                                                       allow_stack_carried_show_read_local);
         if (covered_run > 0) {
           covered = true;
           if (stack_only_covered_run_writes_target(statements, index, covered_run, name,
@@ -18179,6 +18330,8 @@ bool lower_stack_carried_assignment_run(LoweringContext& context,
     return false;
   mark_current_x(context, target.name);
   context.emitter.current_x_known_zero = false;
+  if (context.stack_only_state_fields.contains(target.name))
+    report_stack_only_state_field(context, target.name, assignment.line);
   context.optimizations.push_back(OptimizationReport{
       .name = "stack-carried-assignment",
       .detail = "Kept " + target.name +
@@ -18250,6 +18403,8 @@ bool lower_delayed_stack_carried_assignment_run(LoweringContext& context,
     return false;
   mark_current_x(context, target.name);
   context.emitter.current_x_known_zero = false;
+  if (context.stack_only_state_fields.contains(target.name))
+    report_stack_only_state_field(context, target.name, assignment.line);
   context.optimizations.push_back(OptimizationReport{
       .name = "stack-carried-assignment-delayed",
       .detail = "Delayed pure assignment to " + target.name +
@@ -18445,6 +18600,8 @@ bool lower_stack_carried_read_run(LoweringContext& context,
   context.emitter.emit_op(0x50, "С/П", "read " + *read.target, read.line);
   context.emitter.machine_entry_open = true;
   mark_current_x(context, *read.target);
+  if (context.stack_only_state_fields.contains(*read.target))
+    report_stack_only_state_field(context, *read.target, read.line);
   context.optimizations.push_back(OptimizationReport{
       .name = "stack-carried-read",
       .detail = "Kept read target " + *read.target +
@@ -30361,6 +30518,59 @@ bool lower_show_read_fusion(LoweringContext& context, const V2Statement& show,
   return true;
 }
 
+bool lower_stack_only_show_read_consumer_run(LoweringContext& context,
+                                             const std::vector<V2Statement>& statements,
+                                             std::size_t start, std::size_t& consumed) {
+  consumed = 0;
+  if (start + 2U >= statements.size())
+    return false;
+
+  const V2Statement& show = statements.at(start);
+  const V2Statement& read = statements.at(start + 1U);
+  if (show.kind != "v2_show" || read.kind != "v2_read" || !read.target.has_value() ||
+      !context.stack_only_state_fields.contains(*read.target) ||
+      context.constants.contains(*read.target) ||
+      context.scaled_coord_cell_names.contains(*read.target)) {
+    return false;
+  }
+  if (context.cave_sketch_shape || context.lunar_shape)
+    return false;
+
+  const V2Statement& consumer = statements.at(start + 2U);
+  if (consumer.kind == "v2_match" ||
+      !statement_directly_consumes_current_x_identifier(context, consumer, *read.target)) {
+    return false;
+  }
+
+  const std::vector<V2Statement> tail(
+      statements.begin() + static_cast<std::vector<V2Statement>::difference_type>(start + 3U),
+      statements.end());
+  if (statements_read_identifier_before_write(context, tail, *read.target))
+    return false;
+
+  if (show.target.has_value()) {
+    if (!lower_pause_statement(context, show))
+      return false;
+  } else if (!lower_display_statement(context, show)) {
+    return false;
+  }
+
+  context.emitter.machine_entry_open = true;
+  mark_current_x(context, *read.target);
+  report_stack_only_state_field(context, *read.target, read.line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "show-read-fusion",
+      .detail = "Fused show(...) and read " + *read.target + " into one calculator stop.",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = "stack-carried-read",
+      .detail = "Kept read target " + *read.target +
+                " in X after show for the immediately following consumer instead of storing it.",
+  });
+  consumed = 2;
+  return true;
+}
+
 bool lower_read_transform_tail_from_current_x(LoweringContext& context,
                                               const Expression& expression, int source_line);
 
@@ -34755,6 +34965,14 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     std::size_t show_sequence_consumed = 0;
     if (lower_show_sequence_read(context, statements, index, show_sequence_consumed)) {
       index += show_sequence_consumed - 1U;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    std::size_t stack_only_show_read_consumed = 0;
+    if (lower_stack_only_show_read_consumer_run(context, statements, index,
+                                               stack_only_show_read_consumed)) {
+      index += stack_only_show_read_consumed - 1U;
       continue;
     }
     if (has_errors(context.diagnostics))
