@@ -53,7 +53,11 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   treating the current byte count as a complete value-scheduler win. Matching
   helper ABI blockers are aggregated by helper expression and stack temp set, so
   a shared stack-entry body is amortized across all observed call sites before
-  the blocker is ranked as a positive or negative size opportunity.
+  the blocker is ranked as a positive or negative size opportunity. For a helper
+  that must keep its existing register-entry callers, the overhead includes both
+  the stack-entry prologue and the branch needed to share the ordinary helper
+  tail; a two-argument `cell_mask` helper therefore needs three stack-entry call
+  sites before the entry-body cost is net-positive.
   Opportunity rows include a structural
   `blockerKind` (for example `data-arithmetic`,
   `indirect-address-control-use`, `missing-proof`, or `nonwinning-candidate`)

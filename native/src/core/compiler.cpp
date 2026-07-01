@@ -45482,8 +45482,10 @@ estimated_stack_entry_helper_overhead_cells(const std::map<std::string, std::str
         expression.args.at(1).name == temps.at(1)) {
       // Regular cell_mask helpers start with recall(first), 10^x, recall(second).
       // A stack-entry caller already has X=second/Y=first, so the alternate
-      // entry needs X<->Y, 10^x, X<->Y before it can share the helper tail.
-      return 3;
+      // entry needs X<->Y, 10^x, X<->Y. Keeping the ordinary register entry
+      // requires a branch around one entry prologue so both entries can share
+      // the same tail.
+      return 5;
     }
   } catch (const std::exception&) {
   }

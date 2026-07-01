@@ -261,6 +261,7 @@ program StackHelperAbiAggregation {
   loop {
     part_a()
     part_b()
+    part_c()
     halt(out)
   }
 
@@ -285,27 +286,38 @@ program StackHelperAbiAggregation {
     line = cell_mask(sx, sy)
     out += line
   }
+
+  fn part_c() {
+    sx = x
+    sy = y
+    line = cell_mask(sx, sy)
+    out += line
+    sx = x
+    sy = y
+    line = cell_mask(sx, sy)
+    out += line
+  }
 }
 )mkpro");
     require_clean_compile(result, "stack helper ABI aggregation");
-    require(count_steps_with_comment(result, "expr cell_mask(sx, sy)") >= 4,
+    require(count_steps_with_comment(result, "expr cell_mask(sx, sy)") >= 6,
             "aggregation fixture should reuse the shared cell_mask helper");
     const SizeAbiBlockerReport* blocker =
         find_size_abi_blocker(result, "stack-helper-abi", "cell_mask(sx, sy)");
     require(blocker != nullptr, "size attribution should report stack helper ABI blockers");
-    require(blocker->materialize_cells == 4 &&
+    require(blocker->materialize_cells == 6 &&
                 blocker->details.contains("stackEntryCandidateCallSites") &&
-                blocker->details.at("stackEntryCandidateCallSites") == "2" &&
+                blocker->details.at("stackEntryCandidateCallSites") == "3" &&
                 blocker->details.contains("grossMaterializeCells") &&
-                blocker->details.at("grossMaterializeCells") == "4" &&
+                blocker->details.at("grossMaterializeCells") == "6" &&
                 blocker->details.contains("materializeCellsPerCallSite") &&
                 blocker->details.at("materializeCellsPerCallSite") == "2" &&
                 blocker->details.contains("estimatedStackEntryOverheadCells") &&
-                blocker->details.at("estimatedStackEntryOverheadCells") == "3" &&
+                blocker->details.at("estimatedStackEntryOverheadCells") == "5" &&
                 blocker->details.contains("estimatedNetSavings") &&
                 blocker->details.at("estimatedNetSavings") == "1" &&
                 blocker->details.contains("estimatedBreakEvenCallSites") &&
-                blocker->details.at("estimatedBreakEvenCallSites") == "2" &&
+                blocker->details.at("estimatedBreakEvenCallSites") == "3" &&
                 blocker->details.contains("additionalCallSitesToBreakEven") &&
                 blocker->details.at("additionalCallSitesToBreakEven") == "0" &&
                 blocker->details.contains("firstLine") &&
@@ -320,7 +332,7 @@ program StackHelperAbiAggregation {
                 opportunity->details.contains("estimatedNetSavings") &&
                 opportunity->details.at("estimatedNetSavings") == "1" &&
                 opportunity->details.contains("stackEntryCandidateCallSites") &&
-                opportunity->details.at("stackEntryCandidateCallSites") == "2",
+                opportunity->details.at("stackEntryCandidateCallSites") == "3",
             "stack helper ABI opportunity should rank repeated sites by net savings");
     const SizeNextActionSummaryReport* cost_action = find_size_next_action(
         result, "costModelAction", "implement-stack-argument-helper-entry");
