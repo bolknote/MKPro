@@ -18604,14 +18604,35 @@ bool lower_stack_carried_read_run(LoweringContext& context,
 
 std::optional<std::pair<PackedScoreTerm, PackedScoreTerm>>
 packed_score_pair(const Expression& expression, int line) {
-  if (expression.kind != "binary" || expression.op != "+" || expression.left == nullptr ||
-      expression.right == nullptr)
+  std::optional<PackedScoreTerm> first;
+  std::optional<PackedScoreTerm> second;
+  if (expression.kind == "binary" && expression.op == "+" && expression.left != nullptr &&
+      expression.right != nullptr) {
+    first = packed_score_term(*expression.left, line);
+    second = packed_score_term(*expression.right, line);
+  } else if (expression.kind == "call" && lower_ascii(expression.callee) == "sum" &&
+             expression.args.size() == 2U) {
+    first = packed_score_term(expression.args.at(0), line);
+    second = packed_score_term(expression.args.at(1), line);
+  } else {
     return std::nullopt;
-  const std::optional<PackedScoreTerm> first = packed_score_term(*expression.left, line);
-  const std::optional<PackedScoreTerm> second = packed_score_term(*expression.right, line);
+  }
   if (!first.has_value() || !second.has_value())
     return std::nullopt;
   return std::pair{*first, *second};
+}
+
+std::optional<PackedScoreTerm> packed_score_single_sum_term(const Expression& expression,
+                                                            int line) {
+  if (const std::optional<PackedScoreTerm> term = packed_score_term(expression, line);
+      term.has_value()) {
+    return term;
+  }
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "sum" &&
+      expression.args.size() == 1U) {
+    return packed_score_term(expression.args.front(), line);
+  }
+  return std::nullopt;
 }
 
 std::optional<PackedScoreTerm> packed_score_accumulator_term(const V2Statement& statement,
@@ -18621,7 +18642,7 @@ std::optional<PackedScoreTerm> packed_score_accumulator_term(const V2Statement& 
     return std::nullopt;
   if (statement.kind == "v2_update" && statement.op == "+=") {
     const Expression expression = parse_expression(*statement.expr, statement.line);
-    std::optional<PackedScoreTerm> term = packed_score_term(expression, statement.line);
+    std::optional<PackedScoreTerm> term = packed_score_single_sum_term(expression, statement.line);
     if (term.has_value() && term->index.kind == "identifier" && term->index.name == index_name)
       return term;
   }
@@ -18637,6 +18658,22 @@ std::optional<PackedScoreTerm> packed_score_accumulator_term(const V2Statement& 
       }
       if (expression_equals(*expression.right, target)) {
         std::optional<PackedScoreTerm> term = packed_score_term(*expression.left, statement.line);
+        if (term.has_value() && term->index.kind == "identifier" && term->index.name == index_name)
+          return term;
+      }
+    }
+    if (expression.kind == "call" && lower_ascii(expression.callee) == "sum" &&
+        expression.args.size() == 2U) {
+      const Expression target = identifier_expression(score);
+      if (expression_equals(expression.args.at(0), target)) {
+        std::optional<PackedScoreTerm> term =
+            packed_score_single_sum_term(expression.args.at(1), statement.line);
+        if (term.has_value() && term->index.kind == "identifier" && term->index.name == index_name)
+          return term;
+      }
+      if (expression_equals(expression.args.at(1), target)) {
+        std::optional<PackedScoreTerm> term =
+            packed_score_single_sum_term(expression.args.at(0), statement.line);
         if (term.has_value() && term->index.kind == "identifier" && term->index.name == index_name)
           return term;
       }
