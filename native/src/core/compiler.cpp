@@ -45805,12 +45805,17 @@ SizeAttributionReport build_size_attribution_report(
       continue;
     std::map<std::string, std::string> details =
         semicolon_key_value_details(optimization.detail);
+    const int materialize_cells = detail_int_or_zero(details, "materializeCells");
+    details.emplace("grossMaterializeCells", std::to_string(materialize_cells));
+    details.emplace("entryOverheadStatus", "unmodeled-stack-entry-helper-cost");
+    details.emplace("netSavingsStatus", "gross-only-before-entry-cost");
+    details.emplace("costModelAction", "model-stack-entry-helper-body-cost");
     report.abi_blockers.push_back(SizeAbiBlockerReport{
         .kind = details.contains("kind") ? details.at("kind") : std::string("stack-helper-abi"),
         .label = details.contains("expression") ? details.at("expression")
                                                 : std::string("stack-resident expression helper"),
         .line = detail_int_or_zero(details, "line"),
-        .materialize_cells = detail_int_or_zero(details, "materializeCells"),
+        .materialize_cells = materialize_cells,
         .reason = "shared expression helper has only register-entry ABI for stack-resident temps",
         .details = std::move(details),
     });
@@ -45835,6 +45840,7 @@ SizeAttributionReport build_size_attribution_report(
     details.emplace("abiStatus", "missing-stack-argument-entry");
     details.emplace("requiredAction", "stack-argument-helper-entry");
     details.emplace("candidateBasis", "avoid-materializing-stack-resident-temps");
+    details.emplace("savingsModel", "gross-materialization-only");
     report.opportunities.push_back(SizeOpportunityReport{
         .site = "abi",
         .variant = blocker.kind,

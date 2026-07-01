@@ -346,6 +346,19 @@ void example_sizes_match_typescript_baselines() {
                       "stack-argument-helper-entry",
               "tic-tac-toe-4x4 size attribution should expose the stack-resident helper ABI "
               "blocker instead of hiding it behind stack-resident-temps");
+      require(stack_helper_abi->details.contains("grossMaterializeCells") &&
+                  stack_helper_abi->details.at("grossMaterializeCells") == "2" &&
+                  stack_helper_abi->details.contains("entryOverheadStatus") &&
+                  stack_helper_abi->details.at("entryOverheadStatus") ==
+                      "unmodeled-stack-entry-helper-cost" &&
+                  stack_helper_abi->details.contains("netSavingsStatus") &&
+                  stack_helper_abi->details.at("netSavingsStatus") ==
+                      "gross-only-before-entry-cost" &&
+                  stack_helper_abi->details.contains("costModelAction") &&
+                  stack_helper_abi->details.at("costModelAction") ==
+                      "model-stack-entry-helper-body-cost",
+              "tic-tac-toe-4x4 stack-helper ABI blocker should distinguish gross materialization "
+              "savings from unmodeled stack-entry body cost");
       const SizeOpportunityReport* stack_helper_abi_opportunity =
           find_size_opportunity(result, "stack-helper-abi");
       require(stack_helper_abi_opportunity != nullptr &&
@@ -360,6 +373,12 @@ void example_sizes_match_typescript_baselines() {
                   stack_helper_abi_opportunity->details.contains("candidateBasis") &&
                   stack_helper_abi_opportunity->details.at("candidateBasis") ==
                       "avoid-materializing-stack-resident-temps" &&
+                  stack_helper_abi_opportunity->details.contains("savingsModel") &&
+                  stack_helper_abi_opportunity->details.at("savingsModel") ==
+                      "gross-materialization-only" &&
+                  stack_helper_abi_opportunity->details.contains("costModelAction") &&
+                  stack_helper_abi_opportunity->details.at("costModelAction") ==
+                      "model-stack-entry-helper-body-cost" &&
                   stack_helper_abi_opportunity->details.contains("requiredAction") &&
                   stack_helper_abi_opportunity->details.at("requiredAction") ==
                       "stack-argument-helper-entry",
