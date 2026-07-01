@@ -1087,6 +1087,41 @@ program StackCarriedDelayedUpdateConsumer {
 
   {
     const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedDelayedUpdateBranchConsumer {
+  state {
+    score: packed = 10
+    delta: packed = 4
+    gate: packed = 0
+    target: packed = 14
+  }
+
+  loop {
+    score += delta
+    if gate == 0 {
+    }
+    if score == target {
+      halt(1)
+    }
+    halt(0)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "delayed stack-carried update branch consumer");
+    require(has_optimization(result, "stack-carried-update-delayed"),
+            "safe intervening control flow should delay the update until the branch consumer");
+    require(has_optimization(result, "condition-current-x-reuse"),
+            "delayed branch consumer should compare the updated score from current X");
+    require(count_steps_with_comment(result, "set score") == 0,
+            "delayed branch-consumed update should not store the updated score");
+    require(count_steps_with_comment(result, "recall score") == 1,
+            "delayed branch-consumed update should recall score only to compute the update");
+    require(count_steps_with_comment(result, "recall delta") == 1,
+            "delayed branch-consumed update should recall delta once");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
 program StackCarriedDelayedUpdateRejectsDeltaWrite {
   state {
     score: packed = 10
