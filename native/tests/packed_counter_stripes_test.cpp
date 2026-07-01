@@ -1,9 +1,12 @@
 #include "mkpro/compiler.hpp"
+#include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <string>
+#include <vector>
 
 namespace mkpro::tests {
 
@@ -22,6 +25,55 @@ bool has_register_prefix(const CompileResult& result, const std::string& prefix)
 bool has_preload_value(const CompileResult& result, const std::string& value) {
   return std::any_of(result.preloads.begin(), result.preloads.end(),
                      [&](const PreloadReport& preload) { return preload.value == value; });
+}
+
+std::string compact(std::string value) {
+  std::string out;
+  for (const char ch : value) {
+    if (ch != ' ' && ch != '\t' && ch != '\n' && ch != '\r')
+      out.push_back(ch);
+  }
+  return out;
+}
+
+std::string emulator_preload_value(std::string value) {
+  for (char& ch : value) {
+    if (std::toupper(static_cast<unsigned char>(ch)) == 'F')
+      ch = '_';
+  }
+  return value;
+}
+
+std::vector<int> step_opcodes(const CompileResult& result) {
+  std::vector<int> opcodes;
+  opcodes.reserve(result.steps.size());
+  for (const ResolvedStep& step : result.steps)
+    opcodes.push_back(step.opcode);
+  return opcodes;
+}
+
+std::string run_compiled_with_preloads(const CompileResult& result) {
+  emulator::MK61 calc;
+  const emulator::ProgramLoadResult loaded = calc.load_program(step_opcodes(result));
+  require(loaded.diagnostics.empty(), "compiled program should load into emulator");
+  for (const PreloadReport& preload : result.preloads)
+    calc.set_register(preload.register_name, emulator_preload_value(preload.value));
+  calc.press_sequence({"В/О", "С/П"});
+  const emulator::RunResult run = calc.run_until_stable(700, 5);
+  require(run.stopped, "compiled program should stop in emulator");
+  return compact(calc.display_text());
+}
+
+bool has_contiguous_opcodes(const CompileResult& result, const std::vector<int>& opcodes) {
+  const std::vector<int> actual = step_opcodes(result);
+  if (actual.size() < opcodes.size())
+    return false;
+  for (std::size_t index = 0; index + opcodes.size() <= actual.size(); ++index) {
+    if (std::equal(opcodes.begin(), opcodes.end(),
+                   actual.begin() + static_cast<std::vector<int>::difference_type>(index)))
+      return true;
+  }
+  return false;
 }
 
 bool has_decimal_extract_preload_sequence(const CompileResult& result) {
@@ -264,6 +316,82 @@ program WidePackedCounters {
           "forced fixed-width counter packing should remove lives");
   require(!wide.registers.contains("room"),
           "forced fixed-width counter packing should remove room");
+}
+
+void sentinel_decimal_pack_matches_strategy_contract() {
+  CompileOptions logical_options;
+  logical_options.analysis = true;
+  logical_options.budget = 999;
+  logical_options.disable_candidate_search = true;
+  const CompileResult logical = compile_source(R"mkpro(
+program LogicalPackedFieldExtract {
+  state {
+    packed: packed = 1002943
+    __packed_counter_mask_0: packed = 800FF077
+  }
+
+  loop {
+    halt(int(frac(bit_and(packed, __packed_counter_mask_0)) * pow10(4)))
+  }
+}
+)mkpro",
+                                               logical_options);
+  require(logical.implemented, "logical packed field extract should compile");
+  require(logical.diagnostics.empty(),
+          "logical packed field extract should not report diagnostics: " +
+              diagnostics_text(logical));
+  require(has_optimization(logical, "logical-packed-field-extract"),
+          "logical packed field expression should use the focused mask lowering");
+  require(has_preload_value(logical, "800FF077"),
+          "logical packed field mask should remain a setup/preload value");
+  require(has_contiguous_opcodes(logical, {0x37, 0x35, 0x04, 0x15, 0x12, 0x34}),
+          "logical packed field extract should emit K AND, frac, 4, F10x, multiply, int");
+  const std::string logical_display = run_compiled_with_preloads(logical);
+  require(logical_display.find("29,") != std::string::npos,
+          "logical packed field extract should recover YY=29 through emulator, got " +
+              logical_display);
+
+  CompileOptions sentinel_options = logical_options;
+  sentinel_options.sentinel_decimal_pack = true;
+  sentinel_options.sentinel_decimal_pack_names = {"xx", "yy", "zz"};
+  const CompileResult sentinel = compile_source(R"mkpro(
+program SentinelDecimalPack {
+  state {
+    xx: counter 0..99 = 0
+    yy: counter 0..99 = 29
+    zz: counter 0..99 = 43
+  }
+
+  loop {
+    halt(yy)
+  }
+}
+)mkpro",
+                                                sentinel_options);
+  require(sentinel.implemented, "sentinel decimal pack should compile");
+  require(sentinel.diagnostics.empty(),
+          "sentinel decimal pack should not report diagnostics: " + diagnostics_text(sentinel));
+  require(has_optimization(sentinel, "sentinel-decimal-pack"),
+          "forced sentinel decimal packing should report sentinel-decimal-pack");
+  require(has_optimization(sentinel, "logical-packed-field-extract"),
+          "sentinel middle field read should use logical mask extraction");
+  require(sentinel.registers.contains("__packed_counter_0"),
+          "sentinel decimal pack should allocate __packed_counter_0");
+  require(sentinel.registers.contains("__packed_counter_mask_0"),
+          "sentinel decimal pack should allocate a hidden mask register");
+  require(!sentinel.registers.contains("xx"), "sentinel decimal pack should remove xx");
+  require(!sentinel.registers.contains("yy"), "sentinel decimal pack should remove yy");
+  require(!sentinel.registers.contains("zz"), "sentinel decimal pack should remove zz");
+  require(has_preload_value(sentinel, "1002943"),
+          "sentinel decimal pack should store leading-one form 1002943");
+  require(has_preload_value(sentinel, "800FF077"),
+          "sentinel decimal pack should preload the logical mask");
+  require(has_contiguous_opcodes(sentinel, {0x37, 0x35, 0x04, 0x15, 0x12, 0x34}),
+          "sentinel middle field read should emit the logical mask sequence");
+  const std::string sentinel_display = run_compiled_with_preloads(sentinel);
+  require(sentinel_display.find("29,") != std::string::npos,
+          "sentinel decimal pack should preserve yy=29 when xx has leading zeros, got " +
+              sentinel_display);
 }
 
 } // namespace mkpro::tests

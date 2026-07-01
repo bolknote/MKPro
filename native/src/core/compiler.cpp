@@ -19879,6 +19879,137 @@ bool lower_call_to_x(LoweringContext& context, const Expression& expression) {
   return true;
 }
 
+struct LogicalPackedFieldExtractMatch {
+  Expression value;
+  Expression mask;
+  int scale_exp = 0;
+  bool truncate = false;
+};
+
+bool expression_looks_like_logical_mask(const Expression& expression) {
+  if (expression.kind != "identifier")
+    return false;
+  const std::string name = lower_ascii(expression.name);
+  return expression.name.rfind("__packed_counter_mask_", 0) == 0 ||
+         name.find("mask") != std::string::npos;
+}
+
+std::optional<int> literal_pow10_exponent(const Expression& expression) {
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "pow10" &&
+      expression.args.size() == 1U) {
+    const std::optional<double> exponent = numeric_literal_value(expression.args.front());
+    if (!exponent.has_value())
+      return std::nullopt;
+    const double rounded = std::round(*exponent);
+    if (std::fabs(*exponent - rounded) >= 1e-12 || rounded < 0.0 || rounded > 8.0)
+      return std::nullopt;
+    return static_cast<int>(rounded);
+  }
+
+  const std::optional<double> scale = numeric_literal_value(expression);
+  if (!scale.has_value())
+    return std::nullopt;
+  const double rounded = std::round(*scale);
+  if (std::fabs(*scale - rounded) >= 1e-12 || rounded <= 0.0 ||
+      rounded > static_cast<double>(std::numeric_limits<long long>::max())) {
+    return std::nullopt;
+  }
+  return positive_power_of_ten_exponent(static_cast<long long>(rounded));
+}
+
+std::optional<std::pair<Expression, Expression>>
+match_frac_bit_and_expression(const Expression& expression) {
+  if (expression.kind != "call" || lower_ascii(expression.callee) != "frac" ||
+      expression.args.size() != 1U) {
+    return std::nullopt;
+  }
+  const Expression& bit_and = expression.args.front();
+  if (bit_and.kind != "call" || lower_ascii(bit_and.callee) != "bit_and" ||
+      bit_and.args.size() != 2U) {
+    return std::nullopt;
+  }
+  const Expression& left = bit_and.args.at(0);
+  const Expression& right = bit_and.args.at(1);
+  const bool left_mask = expression_looks_like_logical_mask(left);
+  const bool right_mask = expression_looks_like_logical_mask(right);
+  if (!left_mask && !right_mask)
+    return std::nullopt;
+  if (left_mask && !right_mask)
+    return std::pair<Expression, Expression>{right, left};
+  return std::pair<Expression, Expression>{left, right};
+}
+
+std::optional<LogicalPackedFieldExtractMatch>
+match_logical_packed_field_extract(const Expression& expression) {
+  const Expression* current = &expression;
+  bool truncate = false;
+  if (current->kind == "call" && lower_ascii(current->callee) == "int" &&
+      current->args.size() == 1U) {
+    truncate = true;
+    current = &current->args.front();
+  }
+
+  if (current->kind != "binary" || current->op != "*" || current->left == nullptr ||
+      current->right == nullptr) {
+    return std::nullopt;
+  }
+
+  const std::optional<std::pair<Expression, Expression>> left_mask =
+      match_frac_bit_and_expression(*current->left);
+  const std::optional<std::pair<Expression, Expression>> right_mask =
+      match_frac_bit_and_expression(*current->right);
+  if (left_mask.has_value()) {
+    const std::optional<int> scale_exp = literal_pow10_exponent(*current->right);
+    if (scale_exp.has_value()) {
+      return LogicalPackedFieldExtractMatch{
+          .value = left_mask->first,
+          .mask = left_mask->second,
+          .scale_exp = *scale_exp,
+          .truncate = truncate,
+      };
+    }
+  }
+  if (right_mask.has_value()) {
+    const std::optional<int> scale_exp = literal_pow10_exponent(*current->left);
+    if (scale_exp.has_value()) {
+      return LogicalPackedFieldExtractMatch{
+          .value = right_mask->first,
+          .mask = right_mask->second,
+          .scale_exp = *scale_exp,
+          .truncate = truncate,
+      };
+    }
+  }
+  return std::nullopt;
+}
+
+bool lower_logical_packed_field_extract_to_x(LoweringContext& context,
+                                             const Expression& expression) {
+  const std::optional<LogicalPackedFieldExtractMatch> match =
+      match_logical_packed_field_extract(expression);
+  if (!match.has_value())
+    return false;
+  if (!lower_expression_to_x(context, match->value))
+    return false;
+  if (!lower_expression_to_x(context, match->mask))
+    return false;
+  context.emitter.emit_op(0x37, "К ∧", "logical packed field mask");
+  context.emitter.emit_op(0x35, "К {x}", "logical packed field fraction");
+  emit_number_or_preload(context, std::to_string(match->scale_exp),
+                         "logical packed field scale");
+  context.emitter.emit_op(0x15, "F 10^x", "logical packed field scale");
+  context.emitter.emit_op(0x12, "*", "logical packed field extract");
+  if (match->truncate)
+    context.emitter.emit_op(0x34, "К [x]", "logical packed field integer");
+  clear_current_x_facts(context);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "logical-packed-field-extract",
+      .detail = "Lowered " + expression_to_source(expression) +
+                " through a preloaded logical mask.",
+  });
+  return true;
+}
+
 bool lower_expression_to_x(LoweringContext& context, const Expression& expression,
                            bool allow_constant_fold) {
   if (context.emitter.current_x_expression != nullptr &&
@@ -19930,6 +20061,9 @@ bool lower_expression_to_x(LoweringContext& context, const Expression& expressio
       lower_packed_score_sum_accumulator_to_x(context, expression)) {
     return true;
   }
+
+  if (lower_logical_packed_field_extract_to_x(context, expression))
+    return true;
 
   if (allow_constant_fold && expression.kind != "number" && expression.kind != "identifier") {
     const std::optional<double> folded = numeric_value_of_expression(context, expression);
@@ -36495,11 +36629,18 @@ struct PackedCounterStripe {
   double scale = 1.0;
   int width = 1;
   std::string kind;
+  std::optional<std::string> logical_mask;
+  int logical_scale_exp = 0;
 };
 
 struct PackedCounterCompactDisplay {
   std::string left;
   std::string right;
+};
+
+struct PackedCounterAuxField {
+  std::string name;
+  std::string initial;
 };
 
 struct PackedCounterStripePlan {
@@ -36508,6 +36649,9 @@ struct PackedCounterStripePlan {
   std::vector<PackedCounterStripe> stripes;
   std::string initial;
   std::optional<PackedCounterCompactDisplay> compact_decimal_display;
+  bool sentinel_decimal = false;
+  std::vector<PackedCounterAuxField> auxiliary_fields;
+  std::string optimization_name = "packed-counter-stripes";
 };
 
 struct PackedCounterFieldCandidate {
@@ -36811,7 +36955,8 @@ void collect_packed_counter_used_names_from_statement(const V2Statement& stateme
     collect_packed_counter_used_names_from_statement(*statement.otherwise, used);
 }
 
-std::string fresh_packed_counter_name(const V2Program& program) {
+std::string fresh_packed_counter_prefixed_name(const V2Program& program,
+                                               const std::string& prefix) {
   std::set<std::string> used;
   for (const V2StateField& field : program.state)
     used.insert(field.name);
@@ -36825,15 +36970,54 @@ std::string fresh_packed_counter_name(const V2Program& program) {
   for (const V2Statement& statement : program.body)
     collect_packed_counter_used_names_from_statement(statement, used);
   for (int index = 0;; ++index) {
-    const std::string candidate = "__packed_counter_" + std::to_string(index);
+    const std::string candidate = prefix + std::to_string(index);
     if (!used.contains(candidate))
       return candidate;
   }
 }
 
+std::string fresh_packed_counter_name(const V2Program& program) {
+  return fresh_packed_counter_prefixed_name(program, "__packed_counter_");
+}
+
+std::string fresh_packed_counter_mask_name(const V2Program& program, int index) {
+  std::string candidate = "__packed_counter_mask_" + std::to_string(index);
+  std::set<std::string> used;
+  for (const V2StateField& field : program.state)
+    used.insert(field.name);
+  for (const V2Rule& rule : program.rules) {
+    used.insert(rule.name);
+    for (const std::string& param : rule.params)
+      used.insert(param);
+    for (const V2Statement& statement : rule.body)
+      collect_packed_counter_used_names_from_statement(statement, used);
+  }
+  for (const V2Statement& statement : program.body)
+    collect_packed_counter_used_names_from_statement(statement, used);
+  while (used.contains(candidate)) {
+    ++index;
+    candidate = "__packed_counter_mask_" + std::to_string(index);
+  }
+  return candidate;
+}
+
 std::optional<std::string> packed_counter_initial(const std::vector<const V2StateField*>& fields,
                                                   const std::vector<PackedCounterStripe>& stripes) {
   double initial = 0.0;
+  for (std::size_t index = 0; index < fields.size(); ++index) {
+    const std::optional<double> value = packed_counter_initial_value(*fields.at(index));
+    if (!value.has_value())
+      return std::nullopt;
+    initial += *value * stripes.at(index).scale;
+  }
+  return format_number_literal(initial);
+}
+
+std::optional<std::string>
+sentinel_packed_counter_initial(const std::vector<const V2StateField*>& fields,
+                                const std::vector<PackedCounterStripe>& stripes,
+                                int total_width) {
+  double initial = std::pow(10.0, static_cast<double>(total_width));
   for (std::size_t index = 0; index < fields.size(); ++index) {
     const std::optional<double> value = packed_counter_initial_value(*fields.at(index));
     if (!value.has_value())
@@ -37043,6 +37227,84 @@ build_packed_counter_storage_stripe_plan(const V2Program& program,
   };
 }
 
+std::optional<PackedCounterStripePlan>
+build_sentinel_decimal_pack_storage_plan(
+    const V2Program& program, const std::vector<PackedCounterFieldCandidate>& selected) {
+  if (selected.size() < 2U)
+    return std::nullopt;
+  const std::vector<PackedCounterFieldCandidate> ordered =
+      order_packed_counter_stripe_fields(program, selected);
+
+  std::vector<const V2StateField*> fields;
+  fields.reserve(ordered.size());
+  std::vector<int> widths;
+  widths.reserve(ordered.size());
+  for (const PackedCounterFieldCandidate& candidate : ordered) {
+    if (candidate.field == nullptr)
+      return std::nullopt;
+    const std::optional<int> width = decimal_counter_width(*candidate.field);
+    if (!width.has_value())
+      return std::nullopt;
+    fields.push_back(candidate.field);
+    widths.push_back(*width);
+  }
+
+  const int total_width = std::accumulate(widths.begin(), widths.end(), 0);
+  if (total_width <= 0 || total_width + 1 > kMaxPackedCounterStripeDigits)
+    return std::nullopt;
+
+  std::vector<std::string> names;
+  names.reserve(fields.size());
+  for (const V2StateField* field : fields)
+    names.push_back(field->name);
+  if (!packed_counter_usages_ok(program, names))
+    return std::nullopt;
+
+  int remaining_width = total_width;
+  std::vector<PackedCounterStripe> stripes;
+  stripes.reserve(fields.size());
+  std::vector<PackedCounterAuxField> auxiliary_fields;
+  for (std::size_t index = 0; index < fields.size(); ++index) {
+    remaining_width -= widths.at(index);
+    PackedCounterStripe stripe{
+        .name = fields.at(index)->name,
+        .scale = std::pow(10.0, static_cast<double>(remaining_width)),
+        .width = widths.at(index),
+        .kind = index == 0U ? "sentinel-major" : "digit",
+    };
+    if (fields.size() == 3U && widths.at(0) == 2 && widths.at(1) == 2 && widths.at(2) == 2 &&
+        index == 1U) {
+      stripe.logical_mask = fresh_packed_counter_mask_name(program, 0);
+      stripe.logical_scale_exp = 4;
+      auxiliary_fields.push_back(PackedCounterAuxField{
+          .name = *stripe.logical_mask,
+          .initial = "800FF077",
+      });
+    }
+    stripes.push_back(std::move(stripe));
+  }
+
+  std::optional<std::string> initial =
+      sentinel_packed_counter_initial(fields, stripes, total_width);
+  if (!initial.has_value())
+    return std::nullopt;
+
+  const auto min_it = std::min_element(
+      ordered.begin(), ordered.end(),
+      [](const PackedCounterFieldCandidate& left, const PackedCounterFieldCandidate& right) {
+        return left.index < right.index;
+      });
+  return PackedCounterStripePlan{
+      .insert_index = min_it == ordered.end() ? 0U : min_it->index,
+      .packed = fresh_packed_counter_name(program),
+      .stripes = std::move(stripes),
+      .initial = *initial,
+      .sentinel_decimal = true,
+      .auxiliary_fields = std::move(auxiliary_fields),
+      .optimization_name = "sentinel-decimal-pack",
+  };
+}
+
 void collect_packed_counter_storage_combinations(
     const V2Program& program, const std::vector<PackedCounterFieldCandidate>& candidates,
     std::size_t size, std::size_t start, std::vector<PackedCounterFieldCandidate>& prefix,
@@ -37108,6 +37370,67 @@ std::vector<PackedCounterStripePlan> select_packed_counter_storage_stripe_plans(
   return plans;
 }
 
+std::vector<PackedCounterStripePlan> select_sentinel_decimal_pack_storage_plans(
+    const V2Program& program, const std::optional<std::vector<std::string>>& requested_names) {
+  std::vector<PackedCounterStripePlan> plans;
+  const std::set<std::string> display_sources = display_source_names(program);
+
+  std::vector<PackedCounterFieldCandidate> candidates;
+  for (std::size_t index = 0; index < program.state.size(); ++index) {
+    const V2StateField& field = program.state.at(index);
+    if (decimal_counter_width(field).has_value() &&
+        (!display_sources.contains(field.name) ||
+         field_used_as_packed_row_floor_display(program, field.name))) {
+      candidates.push_back(PackedCounterFieldCandidate{.field = &field, .index = index});
+    }
+  }
+
+  if (requested_names.has_value()) {
+    std::vector<PackedCounterFieldCandidate> selected;
+    selected.reserve(requested_names->size());
+    for (const std::string& name : *requested_names) {
+      const auto it = std::find_if(
+          candidates.begin(), candidates.end(), [&](const PackedCounterFieldCandidate& candidate) {
+            return candidate.field != nullptr && candidate.field->name == name;
+          });
+      if (it != candidates.end())
+        selected.push_back(*it);
+    }
+    const std::set<std::string> requested(requested_names->begin(), requested_names->end());
+    if (selected.size() == requested.size()) {
+      if (std::optional<PackedCounterStripePlan> plan =
+              build_sentinel_decimal_pack_storage_plan(program, selected)) {
+        plans.push_back(std::move(*plan));
+      }
+    }
+    return plans;
+  }
+
+  const std::size_t upper =
+      std::min(candidates.size(), static_cast<std::size_t>(kMaxPackedCounterStripeDigits - 1));
+  for (std::size_t size = 2; size <= upper; ++size) {
+    std::vector<PackedCounterFieldCandidate> prefix;
+    std::function<void(std::size_t, std::size_t)> collect =
+        [&](std::size_t start, std::size_t target_size) {
+          if (prefix.size() == target_size) {
+            if (std::optional<PackedCounterStripePlan> plan =
+                    build_sentinel_decimal_pack_storage_plan(program, prefix)) {
+              plans.push_back(std::move(*plan));
+            }
+            return;
+          }
+          const std::size_t remaining = target_size - prefix.size();
+          for (std::size_t index = start; index <= candidates.size() - remaining; ++index) {
+            prefix.push_back(candidates.at(index));
+            collect(index + 1U, target_size);
+            prefix.pop_back();
+          }
+        };
+    collect(0, size);
+  }
+  return plans;
+}
+
 std::optional<PackedCounterStripePlan>
 select_packed_counter_stripe_plan(const V2Program& program, bool include_storage_pairs,
                                   const std::optional<std::vector<std::string>>& requested_names) {
@@ -37124,6 +37447,13 @@ select_packed_counter_stripe_plan(const V2Program& program, bool include_storage
     return std::nullopt;
   const std::vector<PackedCounterStripePlan> plans =
       select_packed_counter_storage_stripe_plans(program, std::nullopt);
+  return plans.empty() ? std::nullopt : std::optional<PackedCounterStripePlan>{plans.front()};
+}
+
+std::optional<PackedCounterStripePlan> select_sentinel_decimal_pack_plan(
+    const V2Program& program, const std::optional<std::vector<std::string>>& requested_names) {
+  const std::vector<PackedCounterStripePlan> plans =
+      select_sentinel_decimal_pack_storage_plans(program, requested_names);
   return plans.empty() ? std::nullopt : std::optional<PackedCounterStripePlan>{plans.front()};
 }
 
@@ -37171,6 +37501,34 @@ discover_packed_counter_stripe_variant_names(const std::string& source) {
   return result;
 }
 
+std::vector<std::vector<std::string>>
+discover_sentinel_decimal_pack_variant_names(const std::string& source) {
+  ProgramAst ast;
+  try {
+    ast = parse_program(source);
+  } catch (const std::exception&) {
+    return {};
+  }
+  if (!ast.v2.has_value())
+    return {};
+
+  std::set<std::string> seen;
+  std::vector<std::vector<std::string>> result;
+  for (const PackedCounterStripePlan& plan :
+       select_sentinel_decimal_pack_storage_plans(*ast.v2, std::nullopt)) {
+    std::vector<std::string> names;
+    names.reserve(plan.stripes.size());
+    for (const PackedCounterStripe& stripe : plan.stripes)
+      names.push_back(stripe.name);
+    const std::string key = packed_counter_stripe_name_key(names);
+    if (seen.contains(key))
+      continue;
+    seen.insert(key);
+    result.push_back(std::move(names));
+  }
+  return result;
+}
+
 const PackedCounterStripe* packed_counter_stripe_named(const PackedCounterStripePlan& plan,
                                                        const std::string& name) {
   const auto it =
@@ -37185,7 +37543,7 @@ Expression packed_counter_expr(const PackedCounterStripePlan& plan) {
 
 Expression packed_counter_stripe_selector_expr(const PackedCounterStripePlan& plan,
                                                const PackedCounterStripe& stripe) {
-  if (stripe.kind == "major")
+  if (stripe.kind == "major" || stripe.kind == "sentinel-major")
     return packed_counter_expr(plan);
   const double next_scale = stripe.scale * std::pow(10.0, static_cast<double>(stripe.width));
   Expression shifted =
@@ -37198,6 +37556,19 @@ Expression packed_counter_stripe_selector_expr(const PackedCounterStripePlan& pl
 
 Expression packed_counter_extract_expr(const PackedCounterStripePlan& plan,
                                        const PackedCounterStripe& stripe) {
+  if (stripe.logical_mask.has_value()) {
+    return int_expression(multiply_expression(
+        frac_expression(call_expression(
+            "bit_and", {packed_counter_expr(plan), identifier_expression(*stripe.logical_mask)})),
+        pow10_expression(number_expression(std::to_string(stripe.logical_scale_exp)))));
+  }
+  if (stripe.kind == "sentinel-major") {
+    const double sentinel = std::pow(10.0, static_cast<double>(stripe.width));
+    return subtract_expression(
+        int_expression(divide_expression(packed_counter_expr(plan),
+                                         number_expression(format_number_literal(stripe.scale)))),
+        number_expression(format_number_literal(sentinel)));
+  }
   if (stripe.kind == "major") {
     return int_expression(divide_expression(
         packed_counter_expr(plan), number_expression(format_number_literal(stripe.scale))));
@@ -37264,6 +37635,8 @@ std::optional<V2Predicate> rewrite_packed_counter_comparison(const std::string& 
     return std::nullopt;
   const PackedCounterStripe* stripe = packed_counter_stripe_named(plan, source.name);
   if (stripe == nullptr)
+    return std::nullopt;
+  if (plan.sentinel_decimal)
     return std::nullopt;
   const std::optional<double> value = numeric_literal_value(comparand);
   if (!value.has_value() || std::fabs(*value - std::round(*value)) >= 1e-12)
@@ -37456,6 +37829,59 @@ void rewrite_packed_counter_statement(V2Statement& statement, const PackedCounte
     rewrite_packed_counter_statement(*statement.otherwise, plan);
 }
 
+void apply_packed_counter_stripe_plan(V2Program& program,
+                                      std::vector<OptimizationReport>& optimizations,
+                                      const PackedCounterStripePlan& plan) {
+  const std::set<std::string> removed_names = [&] {
+    std::set<std::string> names;
+    for (const PackedCounterStripe& stripe : plan.stripes)
+      names.insert(stripe.name);
+    return names;
+  }();
+
+  V2StateField packed_field;
+  packed_field.name = plan.packed;
+  packed_field.type = "packed";
+  packed_field.initial = plan.initial;
+  packed_field.line =
+      program.state.empty()
+          ? program.line
+          : program.state.at(std::min(plan.insert_index, program.state.size() - 1U)).line;
+
+  std::vector<V2StateField> state;
+  state.reserve(program.state.size() - removed_names.size() + 1U + plan.auxiliary_fields.size());
+  for (std::size_t index = 0; index < program.state.size(); ++index) {
+    if (index == plan.insert_index) {
+      state.push_back(packed_field);
+      for (const PackedCounterAuxField& auxiliary : plan.auxiliary_fields) {
+        V2StateField auxiliary_field;
+        auxiliary_field.name = auxiliary.name;
+        auxiliary_field.type = "packed";
+        auxiliary_field.initial = auxiliary.initial;
+        auxiliary_field.line = packed_field.line;
+        state.push_back(std::move(auxiliary_field));
+      }
+    }
+    if (!removed_names.contains(program.state.at(index).name))
+      state.push_back(std::move(program.state.at(index)));
+  }
+  program.state = std::move(state);
+
+  rewrite_packed_counter_statements(program.body, plan);
+  for (V2Rule& rule : program.rules)
+    rewrite_packed_counter_statements(rule.body, plan);
+
+  std::vector<std::string> names;
+  names.reserve(plan.stripes.size());
+  for (const PackedCounterStripe& stripe : plan.stripes)
+    names.push_back(stripe.name);
+  optimizations.push_back(OptimizationReport{
+      .name = plan.optimization_name,
+      .detail = "Packed counters " + join_strings(names, ", ") + " into " + plan.packed +
+                (plan.sentinel_decimal ? " with a leading decimal sentinel." : "."),
+  });
+}
+
 void pack_counter_stripes(V2Program& program, std::vector<OptimizationReport>& optimizations,
                           bool include_storage_pairs,
                           const std::optional<std::vector<std::string>>& requested_names) {
@@ -37463,45 +37889,17 @@ void pack_counter_stripes(V2Program& program, std::vector<OptimizationReport>& o
       select_packed_counter_stripe_plan(program, include_storage_pairs, requested_names);
   if (!plan.has_value())
     return;
+  apply_packed_counter_stripe_plan(program, optimizations, *plan);
+}
 
-  const std::set<std::string> removed_names = [&] {
-    std::set<std::string> names;
-    for (const PackedCounterStripe& stripe : plan->stripes)
-      names.insert(stripe.name);
-    return names;
-  }();
-
-  V2StateField packed_field;
-  packed_field.name = plan->packed;
-  packed_field.type = "packed";
-  packed_field.initial = plan->initial;
-  packed_field.line =
-      program.state.empty()
-          ? program.line
-          : program.state.at(std::min(plan->insert_index, program.state.size() - 1U)).line;
-
-  std::vector<V2StateField> state;
-  state.reserve(program.state.size() - removed_names.size() + 1U);
-  for (std::size_t index = 0; index < program.state.size(); ++index) {
-    if (index == plan->insert_index)
-      state.push_back(packed_field);
-    if (!removed_names.contains(program.state.at(index).name))
-      state.push_back(std::move(program.state.at(index)));
-  }
-  program.state = std::move(state);
-
-  rewrite_packed_counter_statements(program.body, *plan);
-  for (V2Rule& rule : program.rules)
-    rewrite_packed_counter_statements(rule.body, *plan);
-
-  std::vector<std::string> names;
-  names.reserve(plan->stripes.size());
-  for (const PackedCounterStripe& stripe : plan->stripes)
-    names.push_back(stripe.name);
-  optimizations.push_back(OptimizationReport{
-      .name = "packed-counter-stripes",
-      .detail = "Packed counters " + join_strings(names, ", ") + " into " + plan->packed + ".",
-  });
+void pack_sentinel_decimal_counters(
+    V2Program& program, std::vector<OptimizationReport>& optimizations,
+    const std::optional<std::vector<std::string>>& requested_names) {
+  std::optional<PackedCounterStripePlan> plan =
+      select_sentinel_decimal_pack_plan(program, requested_names);
+  if (!plan.has_value())
+    return;
+  apply_packed_counter_stripe_plan(program, optimizations, *plan);
 }
 
 std::vector<const SignPackedStatePlan*> sign_pack_plans_for_state(
@@ -40159,6 +40557,13 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                 : std::optional<std::vector<std::string>>{options.pack_counter_stripe_names};
         pack_counter_stripes(*ast.v2, context.optimizations, true, requested_names);
       }
+      if (options.sentinel_decimal_pack) {
+        const std::optional<std::vector<std::string>> requested_names =
+            options.sentinel_decimal_pack_names.empty()
+                ? std::nullopt
+                : std::optional<std::vector<std::string>>{options.sentinel_decimal_pack_names};
+        pack_sentinel_decimal_counters(*ast.v2, context.optimizations, requested_names);
+      }
       if (options.trig_fractional_pack) {
         const std::optional<std::vector<std::string>> requested_names =
             options.trig_fractional_pack_names.empty()
@@ -41052,7 +41457,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.guarded_prologue_gadgets || options.shared_bit_mask_helper_calls ||
          options.compact_bit_mask_helper_body || options.signed_abs_match_pairs ||
          options.synthesize_parametric_siblings || options.pack_counter_stripes ||
-         options.trig_fractional_pack || options.sign_pack_state ||
+         options.sentinel_decimal_pack || options.trig_fractional_pack || options.sign_pack_state ||
          options.packed_score_accumulator_helpers ||
          options.canonicalize_repeated_unary_update_args ||
          options.x_param_value_functions ||
@@ -41066,6 +41471,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.dead_source_residual_temp_reuse || options.hoist_shared_helpers ||
          options.hoist_procs || options.order_procs_by_call_count ||
          !options.proc_layout_strategy.empty() || !options.pack_counter_stripe_names.empty() ||
+         !options.sentinel_decimal_pack_names.empty() ||
          !options.trig_fractional_pack_names.empty() ||
          !options.sign_packed_state_plans.empty() ||
          !options.preloaded_constant_registers.empty() ||
@@ -41705,6 +42111,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";signed_abs_match_pairs=" << options.signed_abs_match_pairs
       << ";synthesize_parametric_siblings=" << options.synthesize_parametric_siblings
       << ";pack_counter_stripes=" << options.pack_counter_stripes
+      << ";sentinel_decimal_pack=" << options.sentinel_decimal_pack
       << ";trig_fractional_pack=" << options.trig_fractional_pack
       << ";sign_pack_state=" << options.sign_pack_state
       << ";packed_score_accumulator_helpers=" << options.packed_score_accumulator_helpers
@@ -41732,6 +42139,8 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";proc_layout_strategy=" << options.proc_layout_strategy;
   for (const std::string& name : options.pack_counter_stripe_names)
     out << ";pack_counter_stripe_name=" << name;
+  for (const std::string& name : options.sentinel_decimal_pack_names)
+    out << ";sentinel_decimal_pack_name=" << name;
   for (const std::string& name : options.trig_fractional_pack_names)
     out << ";trig_fractional_pack_name=" << name;
   for (const SignPackedStatePlan& plan : options.sign_packed_state_plans)
@@ -42020,6 +42429,10 @@ build_candidate_reports(const std::vector<OptimizationReport>& optimizations, in
     add_selected("state@decimal-pack", "decimal-pack-state",
                  "selected decimal-striped state packing rewrite", steps);
   }
+  if (has_optimization_named(optimizations, "sentinel-decimal-pack")) {
+    add_selected("state@decimal-pack", "sentinel-decimal-pack",
+                 "selected leading-sentinel decimal state packing rewrite", steps);
+  }
   if (has_optimization_named(optimizations, "sign-pack-state")) {
     add_selected("state@sign-pack", "sign-pack-state",
                  "selected sign-carried boolean state rewrite", steps);
@@ -42161,7 +42574,7 @@ OptimizerReport build_optimizer_report(const std::vector<OptimizationReport>& op
        {"dispatch-default-merge"}, false,
        "Merges dispatch cases whose bodies are identical to the default branch."},
       {"decimal-packed-state", "state", "documented", {"decimal-digits"},
-       {"decimal-pack-state", "packed-counter-stripes"}, false,
+       {"decimal-pack-state", "packed-counter-stripes", "sentinel-decimal-pack"}, false,
        "Packs several small non-negative hidden fields into decimal digits of one register."},
       {"sign-packed-state", "state", "undocumented", {"sign-digits"},
        {"sign-pack-state", "sign-pack-state-tuple"}, false,
@@ -45923,6 +46336,10 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       [](CompileOptions& candidate_options) { candidate_options.pack_counter_stripes = true; },
       "packed-counter-stripes",
       "Packed compatible fixed-width counters into one hidden decimal-striped register");
+  add_candidate(
+      [](CompileOptions& candidate_options) { candidate_options.sentinel_decimal_pack = true; },
+      "sentinel-decimal-pack",
+      "Packed compatible fixed-width counters into one leading-sentinel decimal register");
   if (may_use_packed_score_accumulator) {
     add_candidate(
         [](CompileOptions& candidate_options) {
@@ -45951,6 +46368,16 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         "packed-counter-stripes:" + join_strings(names, "+"),
         "Packed counters " + join_strings(names, ", ") +
             " into one hidden decimal-striped register");
+  }
+  for (const std::vector<std::string>& names : discover_sentinel_decimal_pack_variant_names(source)) {
+    add_candidate(
+        [names](CompileOptions& candidate_options) {
+          candidate_options.sentinel_decimal_pack = true;
+          candidate_options.sentinel_decimal_pack_names = names;
+        },
+        "sentinel-decimal-pack:" + join_strings(names, "+"),
+        "Packed counters " + join_strings(names, ", ") +
+            " into one leading-sentinel decimal register");
   }
   for (const std::vector<std::string>& names : discover_trig_fractional_pack_variant_names(source)) {
     add_candidate(
@@ -46418,6 +46845,10 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         [](CompileOptions& candidate_options) { candidate_options.pack_counter_stripes = true; },
         "packed-counter-stripes",
         "Packed compatible fixed-width counters into one hidden decimal-striped register");
+    add_candidate(
+        [](CompileOptions& candidate_options) { candidate_options.sentinel_decimal_pack = true; },
+        "sentinel-decimal-pack",
+        "Packed compatible fixed-width counters into one leading-sentinel decimal register");
     for (const std::vector<std::string>& names :
          discover_packed_counter_stripe_variant_names(source)) {
       add_candidate(
@@ -46428,6 +46859,17 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
           "packed-counter-stripes:" + join_strings(names, "+"),
           "Packed counters " + join_strings(names, ", ") +
               " into one hidden decimal-striped register");
+    }
+    for (const std::vector<std::string>& names :
+         discover_sentinel_decimal_pack_variant_names(source)) {
+      add_candidate(
+          [names](CompileOptions& candidate_options) {
+            candidate_options.sentinel_decimal_pack = true;
+            candidate_options.sentinel_decimal_pack_names = names;
+          },
+          "sentinel-decimal-pack:" + join_strings(names, "+"),
+          "Packed counters " + join_strings(names, ", ") +
+              " into one leading-sentinel decimal register");
     }
     for (const std::vector<std::string>& names :
          discover_trig_fractional_pack_variant_names(source)) {
@@ -47533,6 +47975,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
           [](CompileOptions& o) { o.signed_abs_match_pairs = true; },
           [](CompileOptions& o) { o.synthesize_parametric_siblings = true; },
           [](CompileOptions& o) { o.pack_counter_stripes = true; },
+          [](CompileOptions& o) { o.sentinel_decimal_pack = true; },
           [](CompileOptions& o) { o.canonicalize_repeated_unary_update_args = true; },
           [](CompileOptions& o) { o.x_param_value_functions = true; },
           [](CompileOptions& o) { o.x_param_y_stack_stored_entry = true; },

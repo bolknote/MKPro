@@ -257,6 +257,30 @@ bool is_numeric_literal_text(const std::string& text) {
   return std::regex_match(trim(text), pattern);
 }
 
+bool is_machine_numeric_literal_continue(unsigned char ch) {
+  return std::isdigit(ch) != 0 || ch == '_' || (ch >= 'A' && ch <= 'F') ||
+         (ch >= 'a' && ch <= 'f');
+}
+
+bool is_machine_numeric_literal_text(const std::string& text) {
+  const std::string value = trim(text);
+  if (value.empty())
+    return false;
+  std::size_t index = value.front() == '-' ? 1U : 0U;
+  if (index >= value.size() || std::isdigit(static_cast<unsigned char>(value.at(index))) == 0)
+    return false;
+
+  bool saw_machine_digit = false;
+  for (; index < value.size(); ++index) {
+    const unsigned char ch = static_cast<unsigned char>(value.at(index));
+    if (!is_machine_numeric_literal_continue(ch) && ch != '.')
+      return false;
+    saw_machine_digit =
+        saw_machine_digit || ch == '_' || (ch >= 'A' && ch <= 'F') || (ch >= 'a' && ch <= 'f');
+  }
+  return saw_machine_digit;
+}
+
 std::optional<std::pair<std::string, std::string>> parse_call(const std::string& text) {
   std::size_t index = 0;
   while (index < text.size() && std::isspace(static_cast<unsigned char>(text.at(index))) != 0) {
@@ -456,6 +480,10 @@ std::vector<std::string> tokenize_expression(const std::string& source, int line
         if (digits == index)
           index = exponent;
       }
+      while (index < source.size() &&
+             is_machine_numeric_literal_continue(static_cast<unsigned char>(source.at(index)))) {
+        ++index;
+      }
       tokens.push_back(source.substr(start, index - start));
       continue;
     }
@@ -544,7 +572,8 @@ private:
       expr.text = parse_quoted_text(token, line_, "expression");
       return expr;
     }
-    if (is_numeric_literal_text(token) && token.front() != '-') {
+    if ((is_numeric_literal_text(token) || is_machine_numeric_literal_text(token)) &&
+        token.front() != '-') {
       Expression expr;
       expr.kind = "number";
       expr.raw = token;

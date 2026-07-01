@@ -281,6 +281,7 @@ These transformations run on source constructs before machine lowering:
 - `intent-read-lowering` — inlines direct `read()`-driven arguments when they are used to initialize x-param stake/sin procs and related intent states.
 - `intent-domain-lowering` — normalizes special intent types into a base form for later compilation.
 - `packed-counter-stripes` — packs dense counters into a shorter representation.
+- `sentinel-decimal-pack` — packs dense counters with a leading decimal sentinel to preserve leading-zero fields.
 - `x-param-state-elision` — removes redundant transition states when rule/function parameters are consumed directly from `X`.
 - `tail-copy-assignment-fusion` — merges copy assignments in tail blocks into one write pass.
 - `if-chain-dispatch-canonicalization` — turns long `if` / inverted `if !=` chains that test the same deterministic expression against constants into a single dispatch template.
@@ -428,7 +429,7 @@ initialization, then try a specific procedure layout." The common axes are:
 
 - **Feature toggles**: `domain-error-guards`, `show-read-guarded-transfer`,
   `counted-loop-unroll`, `setup-counted-loop`, `stack-resident-temps`,
-  `x-param-value-function`, `packed-counter-stripes`, and
+  `x-param-value-function`, `packed-counter-stripes`, `sentinel-decimal-pack`, and
   `inline-floor-packed-row-expression`.
 - **Canonicalization/support toggles**: `free-residual-dispatch-scratch`,
   `if-chain-dispatch-canonicalization`, `repeated-unary-update-arg-temp`,
@@ -503,6 +504,7 @@ committed example oracles under `native/oracles/`.
 - `signed-abs-shared-bit-helper-hoisted-proc-layout` — combines signed abs/sign candidate with hoisted helper/procedure layout.
 - `comparison-guarded-update-selector` — candidate that tries abs/sign comparison masks for guarded arithmetic updates after full layout, so locally longer branchless forms are adopted only when they pay back globally.
 - `packed-counter-stripes` — candidate that packs compatible fixed-width counters into one striped register.
+- `sentinel-decimal-pack` — candidate that stores fixed-width non-negative counters as a leading-sentinel decimal value such as `1XXYYZZ`, so leading-zero fields remain distinguishable. For the common three two-digit field shape, the middle field can be read with a preloaded logical mask; the sentinel shifts the mask relative to the non-sentinel trick, so `1XXYYZZ` uses `800FF077` with `pow10(4)` for `YY`.
 - `trig-fractional-pack` — candidate gated by `expected_mode_only("grd")` or `expected_mode_only("deg")` that packs one non-negative major counter and one small minor counter as `A + sin(B)`, with reads rewritten through integer/fractional extraction and minor self-updates re-encoded with `sin`. Automatic discovery is limited to small, unambiguous pair sets; use the parameterized candidate when probing a specific pair.
 - `repeated-unary-update-arg-temp` — candidate that routes repeated X-transform unary-call arguments through one hidden scratch so repeated helper tails can be shared; only attempted when a cheap structural scan finds a routable-unary shape that repeats within some statement list.
 - `x-param-value-function` — candidate that passes simple positive-modulo value-function arguments through `X` instead of allocating a parameter register.
@@ -510,6 +512,7 @@ committed example oracles under `native/oracles/`.
 - `x-param-value-function-unary-arg-temp-coalesce` — additionally enables copy coalescing for the same value-function / unary-call scratch shape.
 - `x-param-unary-arg-shared-call-hoisted-proc` — combines X-parameter value functions, repeated unary-call scratch canonicalization, shared call-body helper extraction, and front-hoisted helper/procedure layout. This lets repeated straight-line bodies that contain direct calls become one hoisted helper after their arguments have been made structurally identical.
 - `packed-counter-stripes:<id+id+…>` — parameterized variant for each packed stripe set combination.
+- `sentinel-decimal-pack:<id+id+…>` — parameterized variant for each leading-sentinel decimal stripe set combination.
 - `trig-fractional-pack:<major+minor>` — parameterized variant for each compatible `A + sin(B)` counter pair.
 - `counted-loop-unroll` — candidate that fully unrolls small constant-trip counted loops.
 - `startup-aware-constant-preloads` — candidate balancing main/ setup constant trade-offs.

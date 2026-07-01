@@ -96,6 +96,7 @@ void mk61_trig_calculate_matches_rom_values();
 void opcode_catalog_matches_typescript_contract();
 void oracle_index_loads_committed_artifacts();
 void packed_counter_stripes_match_typescript_contract();
+void sentinel_decimal_pack_matches_strategy_contract();
 void packed_display_helpers_match_typescript_contract();
 void packed_score_helpers_match_typescript_contract();
 void parser_matches_initial_v2_source_contract();
@@ -335,6 +336,8 @@ int main(int argc, char** argv) {
        mkpro::tests::oracle_index_loads_committed_artifacts},
       {"packed_counter_stripes_match_typescript_contract",
        mkpro::tests::packed_counter_stripes_match_typescript_contract},
+      {"sentinel_decimal_pack_matches_strategy_contract",
+       mkpro::tests::sentinel_decimal_pack_matches_strategy_contract},
       {"packed_display_helpers_match_typescript_contract",
        mkpro::tests::packed_display_helpers_match_typescript_contract},
       {"packed_score_helpers_match_typescript_contract",

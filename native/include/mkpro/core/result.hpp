@@ -275,6 +275,7 @@ struct CompileOptions {
   bool signed_abs_match_pairs = false;
   bool synthesize_parametric_siblings = false;
   bool pack_counter_stripes = false;
+  bool sentinel_decimal_pack = false;
   bool trig_fractional_pack = false;
   bool sign_pack_state = false;
   bool packed_score_accumulator_helpers = false;
@@ -319,6 +320,7 @@ struct CompileOptions {
   std::vector<SynthesizedDispatchPlan> synthesized_dispatch_plans;
   std::vector<std::string> force_fractional_constant_selector_preloads;
   std::vector<std::string> pack_counter_stripe_names;
+  std::vector<std::string> sentinel_decimal_pack_names;
   std::vector<std::string> trig_fractional_pack_names;
   std::vector<SignPackedStatePlan> sign_packed_state_plans;
   std::vector<RegisterShare> forced_register_shares;
