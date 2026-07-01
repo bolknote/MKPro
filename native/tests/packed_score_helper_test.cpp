@@ -599,6 +599,43 @@ program PackedScoreUpdateStartedStatementAccumulator {
   require(count_steps_with_comment(update_started_sequence, "set score") == 0,
           "immediately consumed update-started accumulator should not store score");
 
+  const CompileResult paid_helper_pair = compile_source(R"mkpro(
+program PackedScoreAccumulatorReusesPaidHelperForPair {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    d: packed = 44447.4
+    e: packed = 44448.4
+    value: packed = 0
+    extra: packed = 0
+  }
+  loop {
+    value = packed_score(a, 1) + packed_score(b, 2) + packed_score(c, 3)
+    extra = packed_score(d, 4) + packed_score(e, 5)
+    halt(value + extra)
+  }
+}
+)mkpro",
+                                                     pinned_options());
+  require(paid_helper_pair.implemented,
+          "native compiler should reuse an already-paid packed_score accumulator helper");
+  require(paid_helper_pair.diagnostics.empty(),
+          "already-paid packed_score pair compile should not report diagnostics");
+  require(has_optimization(paid_helper_pair, "packed-score-accumulator-helper"),
+          "already-paid packed_score pair should keep the accumulator helper body");
+  require(has_optimization(paid_helper_pair, "packed-score-assignment-stack-accumulator"),
+          "already-paid packed_score pair should lower the pair as a stack accumulator");
+  require(count_optimization(paid_helper_pair, "packed-score-stack-helper-call") == 0,
+          "already-paid packed_score pair should not introduce the standalone helper");
+  require(count_packed_score_helper_jumps(paid_helper_pair) == 0,
+          "already-paid packed_score pair should not emit standalone helper calls");
+  require(count_packed_score_accumulator_helper_jumps(paid_helper_pair) == 5,
+          "already-paid packed_score pair should emit accumulator helper calls for all five "
+          "terms");
+  require(count_steps_with_comment(paid_helper_pair, "set extra") == 0,
+          "already-paid packed_score pair should keep extra on the stack for the direct consumer");
+
   const CompileResult x_param_sequence = compile_source(R"mkpro(
 program PackedScoreXParamAccumulatorHelper {
   state {
