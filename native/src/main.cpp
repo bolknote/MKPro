@@ -304,6 +304,64 @@ void print_json_size_attribution(const mkpro::SizeAttributionReport& report, std
     std::cout << "}" << (index + 1U == report.entries.size() ? "" : ",") << "\n";
   }
   std::cout << indent << "  ],\n";
+  std::cout << indent << "  \"helpers\": [\n";
+  for (std::size_t index = 0; index < report.helpers.size(); ++index) {
+    const auto& helper = report.helpers.at(index);
+    std::cout << indent << "    {\"label\": ";
+    print_json_string(std::cout, helper.label);
+    std::cout << ", \"totalCells\": " << helper.total_cells;
+    std::cout << ", \"bodyCells\": " << helper.body_cells;
+    std::cout << ", \"callSiteCells\": " << helper.call_site_cells;
+    std::cout << ", \"bodyOccurrences\": " << helper.body_occurrences;
+    std::cout << ", \"callOccurrences\": " << helper.call_occurrences;
+    std::cout << ", \"firstAddress\": " << helper.first_address;
+    std::cout << ", \"lastAddress\": " << helper.last_address;
+    std::cout << "}" << (index + 1U == report.helpers.size() ? "" : ",") << "\n";
+  }
+  std::cout << indent << "  ],\n";
+  std::cout << indent << "  \"helperSpills\": [\n";
+  for (std::size_t index = 0; index < report.helper_spills.size(); ++index) {
+    const auto& spill = report.helper_spills.at(index);
+    std::cout << indent << "    {\"helperLabel\": ";
+    print_json_string(std::cout, spill.helper_label);
+    std::cout << ", \"name\": ";
+    print_json_string(std::cout, spill.name);
+    std::cout << ", \"totalCells\": " << spill.total_cells;
+    std::cout << ", \"recallCells\": " << spill.recall_cells;
+    std::cout << ", \"storeCells\": " << spill.store_cells;
+    std::cout << ", \"recallOccurrences\": " << spill.recall_occurrences;
+    std::cout << ", \"storeOccurrences\": " << spill.store_occurrences;
+    std::cout << ", \"firstAddress\": " << spill.first_address;
+    std::cout << ", \"lastAddress\": " << spill.last_address;
+    std::cout << "}" << (index + 1U == report.helper_spills.size() ? "" : ",") << "\n";
+  }
+  std::cout << indent << "  ],\n";
+  std::cout << indent << "  \"abiBlockers\": [\n";
+  for (std::size_t index = 0; index < report.abi_blockers.size(); ++index) {
+    const auto& blocker = report.abi_blockers.at(index);
+    std::cout << indent << "    {\"kind\": ";
+    print_json_string(std::cout, blocker.kind);
+    std::cout << ", \"label\": ";
+    print_json_string(std::cout, blocker.label);
+    std::cout << ", \"line\": " << blocker.line;
+    std::cout << ", \"materializeCells\": " << blocker.materialize_cells;
+    if (!blocker.details.empty()) {
+      std::cout << ", \"details\": {";
+      std::size_t detail_index = 0;
+      for (const auto& [key, value] : blocker.details) {
+        if (detail_index++ > 0)
+          std::cout << ", ";
+        print_json_string(std::cout, key);
+        std::cout << ": ";
+        print_json_string(std::cout, value);
+      }
+      std::cout << "}";
+    }
+    std::cout << ", \"reason\": ";
+    print_json_string(std::cout, blocker.reason);
+    std::cout << "}" << (index + 1U == report.abi_blockers.size() ? "" : ",") << "\n";
+  }
+  std::cout << indent << "  ],\n";
   std::cout << indent << "  \"opportunities\": [\n";
   for (std::size_t index = 0; index < report.opportunities.size(); ++index) {
     const auto& opportunity = report.opportunities.at(index);
@@ -383,6 +441,47 @@ void print_json_size_attribution(const mkpro::SizeAttributionReport& report, std
       std::cout << "}";
     }
     std::cout << "}" << (index + 1U == report.blockers.size() ? "" : ",") << "\n";
+  }
+  std::cout << indent << "  ],\n";
+  std::cout << indent << "  \"nextActions\": [\n";
+  for (std::size_t index = 0; index < report.next_actions.size(); ++index) {
+    const auto& action = report.next_actions.at(index);
+    std::cout << indent << "    {\"source\": ";
+    print_json_string(std::cout, action.source);
+    std::cout << ", \"action\": ";
+    print_json_string(std::cout, action.action);
+    std::cout << ", \"opportunities\": " << action.opportunities;
+    std::cout << ", \"potentialSavings\": " << action.potential_savings;
+    std::cout << ", \"bestSavings\": " << action.best_savings;
+    if (!action.best_site.empty()) {
+      std::cout << ", \"bestSite\": ";
+      print_json_string(std::cout, action.best_site);
+    }
+    if (!action.best_variant.empty()) {
+      std::cout << ", \"bestVariant\": ";
+      print_json_string(std::cout, action.best_variant);
+    }
+    if (!action.best_blocker_kind.empty()) {
+      std::cout << ", \"bestBlockerKind\": ";
+      print_json_string(std::cout, action.best_blocker_kind);
+    }
+    if (!action.best_reason.empty()) {
+      std::cout << ", \"bestReason\": ";
+      print_json_string(std::cout, action.best_reason);
+    }
+    if (!action.best_details.empty()) {
+      std::cout << ", \"bestDetails\": {";
+      std::size_t detail_index = 0;
+      for (const auto& [key, value] : action.best_details) {
+        if (detail_index++ > 0)
+          std::cout << ", ";
+        print_json_string(std::cout, key);
+        std::cout << ": ";
+        print_json_string(std::cout, value);
+      }
+      std::cout << "}";
+    }
+    std::cout << "}" << (index + 1U == report.next_actions.size() ? "" : ",") << "\n";
   }
   std::cout << indent << "  ]\n";
   std::cout << indent.substr(0, indent.size() - 2U) << "}";
@@ -695,6 +794,63 @@ void print_human_analysis_report(const mkpro::CompileResult& result) {
     }
   }
 
+  std::cout << "\n### Size Helpers\n";
+  if (result.size_attribution.helpers.empty()) {
+    std::cout << "(none)\n";
+  } else {
+    std::size_t printed = 0;
+    for (const auto& helper : result.size_attribution.helpers) {
+      if (printed >= 12U)
+        break;
+      std::cout << "- " << helper.label
+                << " total=" << helper.total_cells
+                << " body=" << helper.body_cells
+                << " calls=" << helper.call_site_cells
+                << " callOccurrences=" << helper.call_occurrences
+                << " range=" << helper.first_address << ".." << helper.last_address << "\n";
+      ++printed;
+    }
+  }
+
+  std::cout << "\n### Size Helper Spills\n";
+  if (result.size_attribution.helper_spills.empty()) {
+    std::cout << "(none)\n";
+  } else {
+    std::size_t printed = 0;
+    for (const auto& spill : result.size_attribution.helper_spills) {
+      if (printed >= 12U)
+        break;
+      std::cout << "- " << spill.helper_label << " :: " << spill.name
+                << " total=" << spill.total_cells
+                << " recalls=" << spill.recall_cells
+                << " stores=" << spill.store_cells
+                << " occurrences=" << (spill.recall_occurrences + spill.store_occurrences)
+                << " range=" << spill.first_address << ".." << spill.last_address << "\n";
+      ++printed;
+    }
+  }
+
+  std::cout << "\n### Size ABI Blockers\n";
+  if (result.size_attribution.abi_blockers.empty()) {
+    std::cout << "(none)\n";
+  } else {
+    std::size_t printed = 0;
+    for (const auto& blocker : result.size_attribution.abi_blockers) {
+      if (printed >= 12U)
+        break;
+      std::cout << "- " << blocker.kind << " :: " << blocker.label
+                << " line=" << blocker.line
+                << " materializeCells=" << blocker.materialize_cells;
+      const auto action = blocker.details.find("requiredAction");
+      if (action != blocker.details.end())
+        std::cout << " requiredAction=" << action->second;
+      if (!blocker.reason.empty())
+        std::cout << " - " << blocker.reason;
+      std::cout << "\n";
+      ++printed;
+    }
+  }
+
   std::cout << "\n### Size Opportunities\n";
   if (result.size_attribution.opportunities.empty()) {
     std::cout << "(none)\n";
@@ -752,6 +908,31 @@ void print_human_analysis_report(const mkpro::CompileResult& result) {
         std::cout << " at " << blocker.best_site;
       if (!blocker.best_reason.empty())
         std::cout << " - " << blocker.best_reason;
+      std::cout << "\n";
+      ++printed;
+    }
+  }
+
+  std::cout << "\n### Size Next Actions\n";
+  if (result.size_attribution.next_actions.empty()) {
+    std::cout << "(none)\n";
+  } else {
+    std::size_t printed = 0;
+    for (const auto& action : result.size_attribution.next_actions) {
+      if (printed >= 12U)
+        break;
+      std::cout << "- " << action.source << "=" << action.action
+                << " opportunities=" << action.opportunities
+                << " potentialSavings=" << action.potential_savings
+                << " best=" << action.best_savings;
+      if (!action.best_blocker_kind.empty())
+        std::cout << " blocker=" << action.best_blocker_kind;
+      if (!action.best_variant.empty())
+        std::cout << " via " << action.best_variant;
+      if (!action.best_site.empty())
+        std::cout << " at " << action.best_site;
+      if (!action.best_reason.empty())
+        std::cout << " - " << action.best_reason;
       std::cout << "\n";
       ++printed;
     }

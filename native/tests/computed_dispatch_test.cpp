@@ -1286,6 +1286,31 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
           "dead-integer fractional selector elision should accept a proved direct indirect jump "
           "that consumes the integer part only as an address");
 
+  CompileResult direct_dead_integer_memory_result = safe_dead_integer_result;
+  direct_dead_integer_memory_result.steps.back() = resolved_step_with_mnemonic(
+      0xd9, "К П->X 9", "indexed recall cells; indirect-memory-targets=3");
+  require(optimizer_static_proof_gate_accepts_for_testing(safe_dead_integer_options,
+                                                          direct_dead_integer_memory_result),
+          "dead-integer fractional selector elision should accept a proved direct indirect-memory "
+          "recall that consumes the integer part only as an address");
+
+  CompileResult mismatched_dead_integer_memory_result = safe_dead_integer_result;
+  mismatched_dead_integer_memory_result.steps.back() = resolved_step_with_mnemonic(
+      0xd9, "К П->X 9", "indexed recall cells; indirect-memory-targets=4");
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              safe_dead_integer_options, mismatched_dead_integer_memory_result),
+          "dead-integer fractional selector elision must reject indirect-memory recall targets "
+          "that do not match the carrier integer part");
+  const std::optional<std::string> mismatched_dead_integer_memory_reason =
+      optimizer_static_proof_gate_rejection_reason_for_testing(
+          safe_dead_integer_options, mismatched_dead_integer_memory_result);
+  require(mismatched_dead_integer_memory_reason.has_value() &&
+              mismatched_dead_integer_memory_reason->find("reaches К П->X 9 before K {x}") !=
+                  std::string::npos &&
+              mismatched_dead_integer_memory_reason->find("(indirect memory recall use)") !=
+                  std::string::npos,
+          "dead-integer rejection reason must classify mismatched indirect-memory recalls");
+
   CompileResult direct_dead_integer_call_result = direct_dead_integer_jump_result;
   direct_dead_integer_call_result.steps.back() = resolved_step_with_mnemonic(
       0xa9, "К ПП 9", indirect_target_comment("9", "3.123456",
@@ -1317,6 +1342,51 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
                                                           safe_stored_address_use_result),
           "dead-integer fractional selector elision should allow proved stored selector address "
           "uses while still requiring data recalls to be erased");
+
+  CompileResult safe_stored_memory_recall_result = safe_stored_dead_integer_result;
+  safe_stored_memory_recall_result.steps.insert(
+      safe_stored_memory_recall_result.steps.end() - 2,
+      resolved_step_with_mnemonic(0xd9, "К П->X 9",
+                                  "indexed recall cells; indirect-memory-targets=3"));
+  require(optimizer_static_proof_gate_accepts_for_testing(safe_dead_integer_options,
+                                                          safe_stored_memory_recall_result),
+          "dead-integer fractional selector elision should allow proved stored selector "
+          "indirect-memory recalls while still requiring data recalls to be erased");
+
+  CompileResult safe_stored_immediate_memory_recall_result = forward_result;
+  safe_stored_immediate_memory_recall_result.optimizations.push_back(
+      optimization_report("dead-integer-fractional-selector-use"));
+  safe_stored_immediate_memory_recall_result.steps.push_back(
+      resolved_step(0x69, "preload const 3.123456; fractional selector source 0.123456"));
+  safe_stored_immediate_memory_recall_result.steps.push_back(
+      resolved_step(0x49, "set saved selector"));
+  safe_stored_immediate_memory_recall_result.steps.push_back(resolved_step_with_mnemonic(
+      0xd9, "К П->X 9", "indexed recall cells; indirect-memory-targets=3"));
+  safe_stored_immediate_memory_recall_result.steps.push_back(
+      resolved_step(0x69, "recall saved selector"));
+  safe_stored_immediate_memory_recall_result.steps.push_back(resolved_step(0x35, "frac()"));
+  require(optimizer_static_proof_gate_accepts_for_testing(
+              safe_dead_integer_options, safe_stored_immediate_memory_recall_result),
+          "dead-integer fractional selector elision should accept a stored selector that is "
+          "immediately consumed by a proved indirect-memory recall because that overwrites live X");
+
+  CompileResult unsafe_stored_immediate_jump_result = safe_stored_immediate_memory_recall_result;
+  unsafe_stored_immediate_jump_result.steps.at(unsafe_stored_immediate_jump_result.steps.size() -
+                                               3U) =
+      resolved_step_with_mnemonic(0x89, "К БП 9", indirect_target_comment("9", "3", target));
+  require(!optimizer_static_proof_gate_accepts_for_testing(safe_dead_integer_options,
+                                                           unsafe_stored_immediate_jump_result),
+          "dead-integer fractional selector elision must reject a stored selector immediately "
+          "used by indirect flow because the live X carrier is not overwritten");
+  const std::optional<std::string> unsafe_stored_immediate_jump_reason =
+      optimizer_static_proof_gate_rejection_reason_for_testing(
+          safe_dead_integer_options, unsafe_stored_immediate_jump_result);
+  require(unsafe_stored_immediate_jump_reason.has_value() &&
+              unsafe_stored_immediate_jump_reason->find("is stored before К БП 9 instead of "
+                                                        "immediate K {x}") !=
+                  std::string::npos,
+          "dead-integer rejection reason should keep distinguishing unsafe live-X flow after "
+          "a selector store");
 
   CompileResult unsafe_stored_unmarked_address_use_result = safe_stored_dead_integer_result;
   unsafe_stored_unmarked_address_use_result.steps.insert(

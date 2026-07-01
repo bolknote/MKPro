@@ -231,6 +231,63 @@ program StackCarriedImmediateConsumer {
 
   {
     const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedDelayedThroughSafeControlFlow {
+  state {
+    x: packed = 2
+    y: packed = 3
+    z: packed = 0
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    if z == 0 {
+    }
+    halt(tmp + z)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "delayed stack-carried assignment");
+    require(has_optimization(result, "stack-carried-assignment-delayed"),
+            "safe intervening control flow should delay the assignment until its consumer");
+    require(has_optimization(result, "stack-current-x-scheduling"),
+            "delayed assignment consumer should reuse tmp from current X");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "delayed stack-carried assignment should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "delayed stack-carried assignment should not recall tmp");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedDelayedRejectsOperandWrite {
+  state {
+    x: packed = 2
+    y: packed = 3
+    z: packed = 4
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    x += 1
+    halt(tmp + z)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "delayed stack-carried assignment operand write reject");
+    require(!has_optimization(result, "stack-carried-assignment-delayed"),
+            "delayed assignment must reject intervening writes to producer operands");
+    require(count_steps_with_comment(result, "set tmp") == 1,
+            "unsafe delayed assignment should keep the original tmp store");
+    require(count_steps_with_comment(result, "recall tmp") == 1,
+            "unsafe delayed assignment should recall the stored tmp");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
 program StackCarriedExpressionConsumer {
   state {
     x: packed = 2
@@ -787,6 +844,58 @@ program StackCarriedDirectUpdateConsumer {
             "direct update consumer should recall score only to compute the update");
     require(count_steps_with_comment(result, "recall delta") == 1,
             "direct update consumer should recall delta once");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedUnitIncrementConsumer {
+  state {
+    score: packed = 10
+  }
+
+  loop {
+    score += 1
+    halt(score)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried unit increment consumer");
+    require(has_optimization(result, "stack-carried-update"),
+            "unit increment consumer should keep updated score in X for halt(score)");
+    require(count_steps_with_comment(result, "set score") == 0,
+            "unit increment consumer should not store immediately consumed score");
+    require(count_steps_with_comment(result, "recall score") == 1,
+            "unit increment consumer should recall score only to compute the update");
+    require(count_steps_with_comment(result, "expr +") == 1,
+            "unit increment consumer should still emit the arithmetic increment");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedIndirectUnitDecrementConsumer {
+  state {
+    score: counter 1..14 = 10
+  }
+
+  loop {
+    score -= 1
+    halt(score)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried indirect unit decrement consumer");
+    require(has_optimization(result, "indirect-incdec-counter"),
+            "unit decrement consumer should keep the compact indirect decrement");
+    require(has_optimization(result, "stack-carried-update"),
+            "unit decrement consumer should keep decremented score in X for halt(score)");
+    require(count_steps_with_comment(result, "decrement score") == 1,
+            "unit decrement consumer should emit one indirect decrement");
+    require(count_steps_with_comment(result, "set score") == 0,
+            "unit decrement consumer should not add a store after indirect decrement");
+    require(count_steps_with_comment(result, "recall score") == 0,
+            "unit decrement consumer should not recall decremented score for halt(score)");
   }
 
   {

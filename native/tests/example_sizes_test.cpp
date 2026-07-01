@@ -98,6 +98,50 @@ const SizeSpillSummaryReport* find_size_spill(const CompileResult& result,
   return it == result.size_attribution.spills.end() ? nullptr : &*it;
 }
 
+const SizeHelperSummaryReport* find_size_helper(const CompileResult& result,
+                                                const std::string& label) {
+  const auto it = std::find_if(result.size_attribution.helpers.begin(),
+                               result.size_attribution.helpers.end(),
+                               [&](const SizeHelperSummaryReport& helper) {
+                                 return helper.label == label;
+                               });
+  return it == result.size_attribution.helpers.end() ? nullptr : &*it;
+}
+
+const SizeHelperSpillSummaryReport* find_size_helper_spill(const CompileResult& result,
+                                                           const std::string& helper_label,
+                                                           const std::string& name) {
+  const auto it = std::find_if(result.size_attribution.helper_spills.begin(),
+                               result.size_attribution.helper_spills.end(),
+                               [&](const SizeHelperSpillSummaryReport& spill) {
+                                 return spill.helper_label == helper_label && spill.name == name;
+                               });
+  return it == result.size_attribution.helper_spills.end() ? nullptr : &*it;
+}
+
+const SizeAbiBlockerReport* find_size_abi_blocker(const CompileResult& result,
+                                                  const std::string& kind,
+                                                  const std::string& label) {
+  const auto it = std::find_if(result.size_attribution.abi_blockers.begin(),
+                               result.size_attribution.abi_blockers.end(),
+                               [&](const SizeAbiBlockerReport& blocker) {
+                                 return blocker.kind == kind && blocker.label == label;
+                               });
+  return it == result.size_attribution.abi_blockers.end() ? nullptr : &*it;
+}
+
+const SizeNextActionSummaryReport* find_size_next_action(const CompileResult& result,
+                                                         const std::string& source,
+                                                         const std::string& action) {
+  const auto it = std::find_if(result.size_attribution.next_actions.begin(),
+                               result.size_attribution.next_actions.end(),
+                               [&](const SizeNextActionSummaryReport& next_action) {
+                                 return next_action.source == source &&
+                                        next_action.action == action;
+                               });
+  return it == result.size_attribution.next_actions.end() ? nullptr : &*it;
+}
+
 bool has_optimization(const CompileResult& result, const std::string& name) {
   return std::any_of(result.optimizations.begin(), result.optimizations.end(),
                      [&](const OptimizationReport& optimization) {
@@ -251,6 +295,45 @@ void example_sizes_match_typescript_baselines() {
                   packed_score_calls->occurrences == 2 &&
                   packed_score_calls->detail.find("target=") != std::string::npos,
               "tic-tac-toe-4x4 size attribution should expose the packed_score call-site cost");
+      const SizeHelperSummaryReport* packed_score_helper =
+          find_size_helper(result, "packed-line score accumulator helper");
+      require(packed_score_helper != nullptr &&
+                  packed_score_helper->body_cells == candidate_score->cells &&
+                  packed_score_helper->call_site_cells == packed_score_calls->cells &&
+                  packed_score_helper->call_occurrences == packed_score_calls->occurrences &&
+                  packed_score_helper->total_cells ==
+                      candidate_score->cells + packed_score_calls->cells,
+              "tic-tac-toe-4x4 size attribution should summarize packed_score helper body and "
+              "call-site costs");
+      const SizeHelperSummaryReport* cell_mask_helper =
+          find_size_helper(result, "expr cell_mask(x, y)");
+      require(cell_mask_helper != nullptr && cell_mask_helper->body_cells == cell_mask->cells &&
+                  cell_mask_helper->call_site_cells == cell_mask_calls->cells &&
+                  cell_mask_helper->call_occurrences == cell_mask_calls->occurrences &&
+                  cell_mask_helper->total_cells == cell_mask->cells + cell_mask_calls->cells,
+              "tic-tac-toe-4x4 size attribution should summarize cell_mask helper body and "
+              "call-site costs");
+      const SizeHelperSpillSummaryReport* cell_mask_x_spill =
+          find_size_helper_spill(result, "expr cell_mask(x, y)", "x");
+      const SizeHelperSpillSummaryReport* cell_mask_y_spill =
+          find_size_helper_spill(result, "expr cell_mask(x, y)", "y");
+      require(cell_mask_x_spill != nullptr && cell_mask_x_spill->recall_cells >= 1 &&
+                  cell_mask_x_spill->store_cells == 0,
+              "tic-tac-toe-4x4 size attribution should expose x recalls inside the cell_mask "
+              "helper body");
+      require(cell_mask_y_spill != nullptr && cell_mask_y_spill->recall_cells >= 1 &&
+                  cell_mask_y_spill->store_cells == 0,
+              "tic-tac-toe-4x4 size attribution should expose y recalls inside the cell_mask "
+              "helper body");
+      const SizeAbiBlockerReport* stack_helper_abi = find_size_abi_blocker(
+          result, "stack-helper-abi", "cell_mask(x, y)");
+      require(stack_helper_abi != nullptr && stack_helper_abi->line == 103 &&
+                  stack_helper_abi->materialize_cells == 2 &&
+                  stack_helper_abi->details.contains("requiredAction") &&
+                  stack_helper_abi->details.at("requiredAction") ==
+                      "stack-argument-helper-entry",
+              "tic-tac-toe-4x4 size attribution should expose the stack-resident helper ABI "
+              "blocker instead of hiding it behind stack-resident-temps");
       const SizeAttributionEntry* recall_occupied =
           find_size_entry(result, "listing", "recall occupied");
       require(recall_occupied != nullptr && recall_occupied->cells >= 1,
@@ -359,6 +442,26 @@ void example_sizes_match_typescript_baselines() {
                   data_arithmetic_blocker->best_details.contains("currentNaturalTargetOccupantKind"),
               "tic-tac-toe-4x4 size blocker summary should keep structured best blocker "
               "details");
+      const SizeNextActionSummaryReport* required_action = find_size_next_action(
+          result, "requiredAction", "keep-fractional-erase-before-data-arithmetic");
+      require(required_action != nullptr && required_action->opportunities >= 1 &&
+                  required_action->potential_savings >= 1 &&
+                  required_action->best_savings == 1 &&
+                  required_action->best_blocker_kind == "data-arithmetic" &&
+                  required_action->best_variant == "fractional-constant-selector-dead-int" &&
+                  required_action->best_details.contains("requiredAction"),
+              "tic-tac-toe-4x4 size attribution should aggregate required compiler actions for "
+              "blocked positive-savings candidates");
+      const SizeNextActionSummaryReport* layout_action = find_size_next_action(
+          result, "layoutAction", "relayout-or-overlay-flow-to-natural-target");
+      require(layout_action != nullptr && layout_action->opportunities >= 1 &&
+                  layout_action->potential_savings >= 1 &&
+                  layout_action->best_savings == 1 &&
+                  layout_action->best_blocker_kind == "data-arithmetic" &&
+                  layout_action->best_details.contains("layoutAction") &&
+                  layout_action->best_details.contains("layoutConflictKind"),
+              "tic-tac-toe-4x4 size attribution should aggregate layout/code-data overlay next "
+              "actions for blocked positive-savings candidates");
     }
   }
 }

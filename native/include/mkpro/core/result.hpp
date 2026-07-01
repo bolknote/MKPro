@@ -124,6 +124,19 @@ struct SizeBlockerSummaryReport {
   std::map<std::string, std::string> best_details;
 };
 
+struct SizeNextActionSummaryReport {
+  std::string source;
+  std::string action;
+  int opportunities = 0;
+  int potential_savings = 0;
+  int best_savings = 0;
+  std::string best_site;
+  std::string best_variant;
+  std::string best_blocker_kind;
+  std::string best_reason;
+  std::map<std::string, std::string> best_details;
+};
+
 struct SizeSpillSummaryReport {
   std::string name;
   int total_cells = 0;
@@ -135,11 +148,47 @@ struct SizeSpillSummaryReport {
   int last_address = 0;
 };
 
+struct SizeHelperSummaryReport {
+  std::string label;
+  int total_cells = 0;
+  int body_cells = 0;
+  int call_site_cells = 0;
+  int body_occurrences = 0;
+  int call_occurrences = 0;
+  int first_address = 0;
+  int last_address = 0;
+};
+
+struct SizeHelperSpillSummaryReport {
+  std::string helper_label;
+  std::string name;
+  int total_cells = 0;
+  int recall_cells = 0;
+  int store_cells = 0;
+  int recall_occurrences = 0;
+  int store_occurrences = 0;
+  int first_address = 0;
+  int last_address = 0;
+};
+
+struct SizeAbiBlockerReport {
+  std::string kind;
+  std::string label;
+  int line = 0;
+  int materialize_cells = 0;
+  std::string reason;
+  std::map<std::string, std::string> details;
+};
+
 struct SizeAttributionReport {
   int total_cells = 0;
   std::vector<SizeAttributionEntry> entries;
+  std::vector<SizeHelperSummaryReport> helpers;
+  std::vector<SizeHelperSpillSummaryReport> helper_spills;
+  std::vector<SizeAbiBlockerReport> abi_blockers;
   std::vector<SizeOpportunityReport> opportunities;
   std::vector<SizeBlockerSummaryReport> blockers;
+  std::vector<SizeNextActionSummaryReport> next_actions;
   std::vector<SizeSpillSummaryReport> spills;
 };
 

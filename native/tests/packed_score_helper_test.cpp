@@ -82,6 +82,35 @@ program PackedScoreDirectExpressionAccumulator {
   require(count_packed_score_accumulator_helper_jumps(direct_expression_sum) == 3,
           "direct packed_score expression should emit three accumulator helper calls");
 
+  const CompileResult repeated_expression_sum = compile_source(R"mkpro(
+program PackedScoreRepeatedExpressionAccumulator {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+  }
+  loop {
+    preview(sum(packed_score(a, 1), packed_score(b, 2), packed_score(c, 3)))
+    halt(sum(packed_score(a, 1), packed_score(b, 2), packed_score(c, 3)))
+  }
+}
+)mkpro",
+                                                         pinned_options());
+  require(repeated_expression_sum.implemented,
+          "native compiler should lower repeated packed_score sums");
+  require(repeated_expression_sum.diagnostics.empty(),
+          "repeated packed_score sums should not report diagnostics");
+  require(has_optimization(repeated_expression_sum, "packed-score-sum-accumulator"),
+          "repeated packed_score sums should prefer accumulator lowering");
+  require(count_optimization(repeated_expression_sum, "expression-helper-call") == 0,
+          "repeated packed_score sums should not be captured by generic expression helpers");
+  require(count_optimization(repeated_expression_sum, "packed-score-stack-helper-call") == 0,
+          "repeated packed_score sums should not use standalone packed_score helper calls");
+  require(count_packed_score_helper_jumps(repeated_expression_sum) == 0,
+          "repeated packed_score sums should not emit standalone helper calls");
+  require(count_packed_score_accumulator_helper_jumps(repeated_expression_sum) == 6,
+          "repeated packed_score sums should emit accumulator helper calls for both sums");
+
   const CompileResult explicit_sum_expression = compile_source(R"mkpro(
 program PackedScoreExplicitSumAccumulator {
   state {
@@ -593,6 +622,109 @@ program PackedScoreXParamAccumulatorHelper {
           "x-param packed_score sequence should not use the standalone helper fallback");
   require(count_steps_with_comment(x_param_sequence, "packed_score stack accumulator") == 0,
           "x-param packed_score sequence should not need separate accumulator add cells");
+
+  const CompileResult x_param_expression_line_sequence = compile_source(R"mkpro(
+program PackedScoreXParamExpressionLineAccumulatorHelper {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    offset_a: packed = 1
+    offset_b: packed = 2
+    offset_c: packed = 3
+    x: counter 0..7 = 2
+    y: counter 0..7 = 3
+    line: packed = 0
+    score: packed = 0
+  }
+  loop {
+    score = 0
+    normalize(x + y)
+    score += packed_score(a + offset_a, line)
+    normalize(x - y)
+    score += packed_score(b + offset_b, line)
+    normalize(y + 1)
+    score += packed_score(c + offset_c, line)
+    halt(score)
+  }
+
+  fn normalize(raw_line) {
+    line = frac((raw_line + 3) / 4) * 4 + 1
+  }
+}
+)mkpro",
+                                                                 pinned_options());
+  require(x_param_expression_line_sequence.implemented,
+          "x-param packed_score expression-line accumulator-helper program should compile");
+  require(x_param_expression_line_sequence.diagnostics.empty(),
+          "x-param packed_score expression-line compile should not report diagnostics");
+  require(count_optimization(x_param_expression_line_sequence,
+                             "x-param-packed-score-line-stack-accumulate") == 3,
+          "x-param packed_score expression-line sequence should keep returned-index updates "
+          "stack-carried");
+  require(count_packed_score_accumulator_helper_jumps(x_param_expression_line_sequence) == 3,
+          "x-param packed_score expression-line sequence should call the accumulator helper for "
+          "each term");
+  require(count_packed_score_helper_jumps(x_param_expression_line_sequence) == 0,
+          "x-param packed_score expression-line sequence should not use the standalone helper "
+          "fallback");
+  require(count_steps_with_comment(x_param_expression_line_sequence,
+                                   "packed_score stack accumulator") == 0,
+          "x-param packed_score expression-line sequence should not need separate accumulator add "
+          "cells");
+
+  const CompileResult x_param_initial_addend_sequence = compile_source(R"mkpro(
+program PackedScoreXParamInitialAddendAccumulatorHelper {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    bonus_a: packed = 1
+    bonus_b: packed = 2
+    bonus_c: packed = 3
+    offset_a: packed = 1
+    offset_b: packed = 2
+    offset_c: packed = 3
+    x: counter 0..7 = 2
+    y: counter 0..7 = 3
+    line: packed = 0
+    score: packed = 0
+  }
+  loop {
+    score = 0
+    normalize(x + y)
+    score += sum(bonus_a, packed_score(a + offset_a, line))
+    normalize(x - y)
+    score = sum(score, bonus_b, packed_score(b + offset_b, line))
+    normalize(y + 1)
+    score = score + bonus_c + packed_score(c + offset_c, line)
+    halt(score)
+  }
+
+  fn normalize(raw_line) {
+    line = frac((raw_line + 3) / 4) * 4 + 1
+  }
+}
+)mkpro",
+                                                                 pinned_options());
+  require(x_param_initial_addend_sequence.implemented,
+          "x-param packed_score initial-addend accumulator-helper program should compile");
+  require(x_param_initial_addend_sequence.diagnostics.empty(),
+          "x-param packed_score initial-addend compile should not report diagnostics");
+  require(count_optimization(x_param_initial_addend_sequence,
+                             "x-param-packed-score-line-stack-accumulate") == 3,
+          "x-param packed_score initial-addend sequence should keep returned-index updates "
+          "stack-carried");
+  require(count_packed_score_accumulator_helper_jumps(x_param_initial_addend_sequence) == 3,
+          "x-param packed_score initial-addend sequence should call the accumulator helper for "
+          "each term");
+  require(count_packed_score_helper_jumps(x_param_initial_addend_sequence) == 0,
+          "x-param packed_score initial-addend sequence should not use the standalone helper "
+          "fallback");
+  require(count_steps_with_comment(x_param_initial_addend_sequence,
+                                   "packed_score stack accumulator") == 0,
+          "x-param packed_score initial-addend sequence should not need separate accumulator add "
+          "cells");
 
   const CompileResult mixed = compile_source(R"mkpro(
 program PackedScoreMixedAccumulatorFallback {
