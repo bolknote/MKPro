@@ -101,6 +101,15 @@ int count_steps_with_comment(const CompileResult& result, const std::string& com
       }));
 }
 
+int count_steps_with_comment_prefix_and_opcode(const CompileResult& result,
+                                               const std::string& prefix, int opcode) {
+  return static_cast<int>(
+      std::count_if(result.steps.begin(), result.steps.end(), [&](const ResolvedStep& step) {
+        return step.opcode == opcode && step.comment.has_value() &&
+               step.comment->starts_with(prefix);
+      }));
+}
+
 const SizeAbiBlockerReport* find_size_abi_blocker(const CompileResult& result,
                                                   const std::string& kind,
                                                   const std::string& label) {
@@ -247,7 +256,7 @@ program DualStack {
   }
 
   {
-    const CompileResult result = compile_stack_analysis(R"mkpro(
+    const std::string stack_helper_abi_source = R"mkpro(
 program StackHelperAbiAggregation {
   state {
     x: counter 1..4 = 1
@@ -298,7 +307,8 @@ program StackHelperAbiAggregation {
     out += line
   }
 }
-)mkpro");
+)mkpro";
+    const CompileResult result = compile_stack_analysis(stack_helper_abi_source);
     require_clean_compile(result, "stack helper ABI aggregation");
     require(count_steps_with_comment(result, "expr cell_mask(sx, sy)") >= 6,
             "aggregation fixture should reuse the shared cell_mask helper");
@@ -343,6 +353,26 @@ program StackHelperAbiAggregation {
                 cost_action->best_details.contains("costModelAction"),
             "positive stack helper ABI opportunity should rank the concrete implementation "
             "action");
+
+    CompileOptions stack_entry_options;
+    stack_entry_options.analysis = true;
+    stack_entry_options.budget = 999999;
+    stack_entry_options.stack_resident_temps = true;
+    stack_entry_options.stack_argument_helper_entries = true;
+    stack_entry_options.disable_candidate_search = true;
+    const CompileResult stack_entry = compile_source(stack_helper_abi_source, stack_entry_options);
+    require_clean_compile(stack_entry, "stack helper argument-entry variant");
+    require(has_optimization(stack_entry, "expression-helper-stack-entry"),
+            "stack helper argument-entry variant should emit a secondary helper entry");
+    require(has_optimization(stack_entry, "expression-helper-stack-entry-call"),
+            "stack helper argument-entry variant should call the secondary helper entry");
+    require(count_steps_with_comment_prefix_and_opcode(
+                stack_entry, "expr cell_mask(sx, sy) stack entry", 0x53) == 3,
+            "stack helper argument-entry variant should route stack-resident cell_mask calls "
+            "through the secondary entry");
+    require(find_size_abi_blocker(stack_entry, "stack-helper-abi", "cell_mask(sx, sy)") ==
+                nullptr,
+            "stack helper argument-entry variant should satisfy the stack-helper ABI blocker");
   }
 
   {

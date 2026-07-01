@@ -71,6 +71,7 @@ using core::emit::bit_membership_expression;
 using core::emit::board_cell_expression;
 using core::emit::call_expression;
 using core::emit::cell_mask_expression;
+using core::emit::cell_mask_row_constant;
 using core::emit::decimal_display_literal_number;
 using core::emit::display_cells_literal;
 using core::emit::display_literal_cells;
@@ -20331,6 +20332,36 @@ const ExpressionHelperRequest* shared_expression_helper(LoweringContext& context
   return ensure_expression_helper(context, expression);
 }
 
+bool expression_is_cell_mask_of_stack_temps(const Expression& expression,
+                                            const std::vector<std::string>& temps) {
+  return temps.size() == 2U && expression.kind == "call" &&
+         lower_ascii(expression.callee) == "cell_mask" && expression.args.size() == 2U &&
+         expression.args.at(0).kind == "identifier" &&
+         expression.args.at(1).kind == "identifier" &&
+         expression.args.at(0).name == temps.at(0) && expression.args.at(1).name == temps.at(1);
+}
+
+std::string expression_helper_stack_entry_label(const ExpressionHelperRequest& helper) {
+  return helper.label + "_stack_entry";
+}
+
+ExpressionHelperStackEntryRequest& ensure_expression_helper_stack_entry(
+    LoweringContext& context, const ExpressionHelperRequest& helper,
+    const std::vector<std::string>& temps) {
+  ExpressionHelperStackEntryRequest& entry = context.expression_helper_stack_entries[helper.key];
+  if (entry.key.empty()) {
+    entry = ExpressionHelperStackEntryRequest{
+        .key = helper.key,
+        .helper_label = helper.label,
+        .entry_label = expression_helper_stack_entry_label(helper),
+        .first = temps.at(0),
+        .second = temps.at(1),
+    };
+  }
+  ++entry.call_sites;
+  return entry;
+}
+
 bool lower_random_integer_call_to_x(LoweringContext& context, const Expression& expression) {
   if (lower_ascii(expression.callee) != "int" || expression.args.size() != 1 ||
       !expression_contains_valid_random(expression.args.front())) {
@@ -33573,6 +33604,31 @@ bool stack_expression_references_any_temp(const Expression& expression,
   });
 }
 
+bool lower_stack_argument_expression_helper_call(LoweringContext& context,
+                                                 const Expression& expression,
+                                                 const std::vector<std::string>& temps,
+                                                 int line) {
+  if (!context.stack_argument_helper_entries ||
+      !expression_is_cell_mask_of_stack_temps(expression, temps)) {
+    return false;
+  }
+  const ExpressionHelperRequest* helper = shared_expression_helper(context, expression);
+  if (helper == nullptr)
+    return false;
+  ExpressionHelperStackEntryRequest& entry =
+      ensure_expression_helper_stack_entry(context, *helper, temps);
+  context.emitter.emit_jump(0x53, "ПП", entry.entry_label,
+                            "expr " + expression_to_source(expression) + " stack entry", line);
+  clear_current_x_facts(context);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "expression-helper-stack-entry-call",
+      .detail = "Entered shared helper for " + expression_to_source(expression) +
+                " with " + entry.second + " in X and " + entry.first + " in Y at line " +
+                std::to_string(line) + ".",
+  });
+  return true;
+}
+
 bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expression& expression,
                                           const std::vector<std::string>& temps, int line) {
   if (expression.kind == "identifier") {
@@ -33609,6 +33665,10 @@ bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expres
   }
   if (expression.kind == "number" || expression.kind == "string" || expression.kind == "indexed" ||
       expression.kind == "call") {
+    if (expression.kind == "call" &&
+        lower_stack_argument_expression_helper_call(context, expression, temps, line)) {
+      return true;
+    }
     const bool stack_temp_call =
         expression.kind == "call" && stack_expression_references_any_temp(expression, temps);
     const std::size_t before = context.emitter.items.size();
@@ -35278,6 +35338,38 @@ bool lower_random_cell_helpers(LoweringContext& context) {
   return true;
 }
 
+bool lower_cell_mask_expression_helper_with_stack_entry(
+    LoweringContext& context, const ExpressionHelperRequest& helper,
+    const ExpressionHelperStackEntryRequest& entry) {
+  if (!expression_is_cell_mask_of_stack_temps(helper.expr, {entry.first, entry.second}))
+    return false;
+  const int line = helper.line;
+  const std::string tail_label = helper.label + "_stack_tail";
+
+  if (!lower_expression_to_x(context, helper.expr.args.at(0)))
+    return false;
+  context.emitter.emit_op(0x15, "F 10^x", "pow10()", line);
+  clear_current_x_facts(context);
+  if (!lower_expression_to_x(context, helper.expr.args.at(1)))
+    return false;
+  context.emitter.emit_jump(0x51, "БП", tail_label, "expression helper stack-entry tail", line);
+
+  context.emitter.emit_label(entry.entry_label, {.hidden = true});
+  context.emitter.emit_op(0x14, "X↔Y", "expression helper stack-entry x", line);
+  context.emitter.emit_op(0x15, "F 10^x", "expression helper stack-entry pow10", line);
+  context.emitter.emit_op(0x14, "X↔Y", "expression helper stack-entry y", line);
+
+  context.emitter.emit_label(tail_label, {.hidden = true});
+  emit_number_or_preload(context, format_number_literal(cell_mask_row_constant(4)), std::nullopt,
+                         line);
+  context.emitter.emit_op(0x12, "*", "expr *", line);
+  context.emitter.emit_op(0x15, "F 10^x", "pow10()", line);
+  context.emitter.emit_op(0x34, "К [x]", "int()", line);
+  context.emitter.emit_op(0x10, "+", "expr +", line);
+  clear_current_x_facts(context);
+  return true;
+}
+
 bool lower_expression_helpers(LoweringContext& context) {
   for (const ExpressionHelperRequest& helper : context.expression_helpers) {
     context.emitter.emit_label(
@@ -35285,7 +35377,12 @@ bool lower_expression_helpers(LoweringContext& context) {
         {.procedure_boundary = "start", .procedure_name = helper.label, .hidden = true});
     const bool previous = context.emitting_expression_helper;
     context.emitting_expression_helper = true;
-    const bool lowered = lower_expression_to_x(context, helper.expr);
+    const auto stack_entry_it = context.expression_helper_stack_entries.find(helper.key);
+    const bool lowered =
+        stack_entry_it == context.expression_helper_stack_entries.end()
+            ? lower_expression_to_x(context, helper.expr)
+            : lower_cell_mask_expression_helper_with_stack_entry(context, helper,
+                                                                 stack_entry_it->second);
     context.emitting_expression_helper = previous;
     if (!lowered)
       return false;
@@ -35294,6 +35391,14 @@ bool lower_expression_helpers(LoweringContext& context) {
         .name = "expression-helper",
         .detail = "Emitted shared helper for " + expression_to_source(helper.expr) + ".",
     });
+    if (stack_entry_it != context.expression_helper_stack_entries.end()) {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "expression-helper-stack-entry",
+          .detail = "Emitted stack-argument entry for " + expression_to_source(helper.expr) +
+                    " after " + std::to_string(stack_entry_it->second.call_sites) +
+                    " stack-resident call site(s).",
+      });
+    }
   }
   return true;
 }
@@ -41671,6 +41776,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   context.segmented_bitplanes = options.segmented_bitplanes;
   context.segmented_line_count_scan = options.segmented_line_count_scan;
   context.stack_resident_temps = options.stack_resident_temps;
+  context.stack_argument_helper_entries = options.stack_argument_helper_entries;
   context.setup_only_counted_loop_init = options.setup_only_counted_loop_init;
   context.x_param_value_functions = options.x_param_value_functions;
   context.x_param_y_stack_stored_entry = options.x_param_y_stack_stored_entry;
@@ -42635,6 +42741,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.preloaded_indirect_flow || options.forward_indirect_flow ||
          options.runtime_indirect_call_flow ||
          options.general_constant_preloads || options.stack_resident_temps ||
+         options.stack_argument_helper_entries ||
          options.share_random_cell || options.startup_aware_constant_preloads ||
          options.guarded_prologue_gadgets || options.shared_bit_mask_helper_calls ||
          options.compact_bit_mask_helper_body || options.signed_abs_match_pairs ||
@@ -43285,6 +43392,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";general_constant_preloads=" << options.general_constant_preloads
       << ";startup_aware_constant_preloads=" << options.startup_aware_constant_preloads
       << ";stack_resident_temps=" << options.stack_resident_temps
+      << ";stack_argument_helper_entries=" << options.stack_argument_helper_entries
       << ";share_random_cell=" << options.share_random_cell
       << ";startup_aware_constant_preloads=" << options.startup_aware_constant_preloads
       << ";guarded_prologue_gadgets=" << options.guarded_prologue_gadgets

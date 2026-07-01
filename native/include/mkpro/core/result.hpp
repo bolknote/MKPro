@@ -336,6 +336,7 @@ struct CompileOptions {
   bool canonicalize_repeated_unary_update_args = false;
   bool x_param_value_functions = false;
   bool x_param_y_stack_stored_entry = false;
+  bool stack_argument_helper_entries = false;
   bool packed_line_family_update_check_tail = false;
   bool packed_line_family_mutating_selector_update_check_tail = false;
   bool packed_line_family_borrowed_mutating_selector_update_check_tail = false;
