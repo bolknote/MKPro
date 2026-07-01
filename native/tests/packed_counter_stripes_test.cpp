@@ -1,4 +1,5 @@
 #include "mkpro/compiler.hpp"
+#include "mkpro/core/register_allocator.hpp"
 #include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
@@ -64,14 +65,27 @@ std::string run_compiled_with_preloads(const CompileResult& result) {
   return compact(calc.display_text());
 }
 
-bool has_contiguous_opcodes(const CompileResult& result, const std::vector<int>& opcodes) {
-  const std::vector<int> actual = step_opcodes(result);
-  if (actual.size() < opcodes.size())
-    return false;
-  for (std::size_t index = 0; index + opcodes.size() <= actual.size(); ++index) {
-    if (std::equal(opcodes.begin(), opcodes.end(),
-                   actual.begin() + static_cast<std::vector<int>::difference_type>(index)))
+bool has_logical_extract_preloaded_scale_sequence(const CompileResult& result,
+                                                  const std::string& scale) {
+  for (std::size_t index = 0; index + 4U < result.steps.size(); ++index) {
+    const ResolvedStep& bit_and = result.steps.at(index);
+    const ResolvedStep& frac = result.steps.at(index + 1U);
+    const ResolvedStep& scale_recall = result.steps.at(index + 2U);
+    const ResolvedStep& multiply = result.steps.at(index + 3U);
+    const ResolvedStep& integer = result.steps.at(index + 4U);
+    if (bit_and.opcode != 0x37 || frac.opcode != 0x35 || scale_recall.opcode < 0x60 ||
+        scale_recall.opcode > 0x6e || multiply.opcode != 0x12 || integer.opcode != 0x34) {
+      continue;
+    }
+    if (!scale_recall.comment.has_value() || *scale_recall.comment != "logical packed field scale")
+      continue;
+    const std::string recalled_register = core::register_name_for_index(scale_recall.opcode - 0x60);
+    if (std::any_of(result.preloads.begin(), result.preloads.end(),
+                    [&](const PreloadReport& preload) {
+                      return preload.value == scale && preload.register_name == recalled_register;
+                    })) {
       return true;
+    }
   }
   return false;
 }
@@ -342,10 +356,14 @@ program LogicalPackedFieldExtract {
               diagnostics_text(logical));
   require(has_optimization(logical, "logical-packed-field-extract"),
           "logical packed field expression should use the focused mask lowering");
+  require(has_optimization(logical, "logical-packed-field-scale-preload"),
+          "logical packed field expression should reuse a preloaded scale when available");
   require(has_preload_value(logical, "800FF077"),
           "logical packed field mask should remain a setup/preload value");
-  require(has_contiguous_opcodes(logical, {0x37, 0x35, 0x04, 0x15, 0x12, 0x34}),
-          "logical packed field extract should emit K AND, frac, 4, F10x, multiply, int");
+  require(has_preload_value(logical, "10000"),
+          "logical packed field scale should be available as a setup/preload value");
+  require(has_logical_extract_preloaded_scale_sequence(logical, "10000"),
+          "logical packed field extract should emit K AND, frac, recalled scale, multiply, int");
   const std::string logical_display = run_compiled_with_preloads(logical);
   require(logical_display.find("29,") != std::string::npos,
           "logical packed field extract should recover YY=29 through emulator, got " +
@@ -375,6 +393,8 @@ program SentinelDecimalPack {
           "forced sentinel decimal packing should report sentinel-decimal-pack");
   require(has_optimization(sentinel, "logical-packed-field-extract"),
           "sentinel middle field read should use logical mask extraction");
+  require(has_optimization(sentinel, "logical-packed-field-scale-preload"),
+          "sentinel middle field read should reuse a preloaded scale");
   require(sentinel.registers.contains("__packed_counter_0"),
           "sentinel decimal pack should allocate __packed_counter_0");
   require(sentinel.registers.contains("__packed_counter_mask_0"),
@@ -386,8 +406,10 @@ program SentinelDecimalPack {
           "sentinel decimal pack should store leading-one form 1002943");
   require(has_preload_value(sentinel, "800FF077"),
           "sentinel decimal pack should preload the logical mask");
-  require(has_contiguous_opcodes(sentinel, {0x37, 0x35, 0x04, 0x15, 0x12, 0x34}),
-          "sentinel middle field read should emit the logical mask sequence");
+  require(has_preload_value(sentinel, "10000"),
+          "sentinel decimal pack should preload the logical scale");
+  require(has_logical_extract_preloaded_scale_sequence(sentinel, "10000"),
+          "sentinel middle field read should emit the logical mask plus recalled scale sequence");
   const std::string sentinel_display = run_compiled_with_preloads(sentinel);
   require(sentinel_display.find("29,") != std::string::npos,
           "sentinel decimal pack should preserve yy=29 when xx has leading zeros, got " +

@@ -275,9 +275,68 @@ void example_sizes_match_typescript_baselines() {
       require(dead_integer_opportunity->details.contains("consumerAddress") &&
                   dead_integer_opportunity->details.contains("selectorTarget") &&
                   dead_integer_opportunity->details.contains("naturalTarget") &&
-                  dead_integer_opportunity->details.contains("recoveryFreeLayout"),
+                  dead_integer_opportunity->details.contains("recoveryFreeLayout") &&
+                  dead_integer_opportunity->details.contains("integerPartStatus") &&
+                  dead_integer_opportunity->details.contains("requiredAction") &&
+                  dead_integer_opportunity->details.contains("currentNaturalTargetFlowCount") &&
+                  dead_integer_opportunity->details.contains("currentNaturalTargetOccupant") &&
+                  dead_integer_opportunity->details.contains("currentNaturalTargetOccupantKind") &&
+                  dead_integer_opportunity->details.contains("layoutConflictKind") &&
+                  dead_integer_opportunity->details.contains("layoutAction"),
               "tic-tac-toe-4x4 size opportunity should expose structured selector-layout "
               "details");
+      require(dead_integer_opportunity->details.at("proofDisposition") == "not-proof-only" &&
+                  dead_integer_opportunity->details.at("requiredAction") ==
+                      "keep-fractional-erase-before-data-arithmetic" &&
+                  dead_integer_opportunity->details.at("currentNaturalTargetFlowCount") == "0" &&
+                  dead_integer_opportunity->details.at("currentNaturalTargetOccupant") != "none" &&
+                  dead_integer_opportunity->details.at("currentNaturalTargetOccupantKind") !=
+                      "none" &&
+                  dead_integer_opportunity->details.at("layoutAction") ==
+                      "relayout-or-overlay-flow-to-natural-target",
+              "tic-tac-toe-4x4 dead-integer arithmetic blocker should say this needs codegen or "
+              "layout work instead of proof weakening");
+      const bool has_operand_conflict =
+          std::any_of(result.size_attribution.opportunities.begin(),
+                      result.size_attribution.opportunities.end(),
+                      [](const SizeOpportunityReport& opportunity) {
+                        if (opportunity.variant != "fractional-constant-selector-dead-int")
+                          return false;
+                        const auto kind = opportunity.details.find(
+                            "currentNaturalTargetOccupantKind");
+                        const auto conflict = opportunity.details.find("layoutConflictKind");
+                        const auto executable =
+                            opportunity.details.find("currentNaturalTargetOperandExecutable");
+                        const auto flow_target =
+                            opportunity.details.find("currentNaturalTargetOperandFlowTarget");
+                        const auto next_executable =
+                            opportunity.details.find("currentNaturalTargetNextExecutable");
+                        const auto next =
+                            opportunity.details.find("currentNaturalTargetNextOccupant");
+                        const auto compatibility =
+                            opportunity.details.find("currentNaturalTargetOverlayCompatibility");
+                        const auto blocker =
+                            opportunity.details.find("currentNaturalTargetOverlayBlocker");
+                        const auto action =
+                            opportunity.details.find("currentNaturalTargetOverlayAction");
+                        return kind != opportunity.details.end() && conflict != opportunity.details.end() &&
+                               executable != opportunity.details.end() &&
+                               flow_target != opportunity.details.end() &&
+                               next_executable != opportunity.details.end() &&
+                               next != opportunity.details.end() &&
+                               compatibility != opportunity.details.end() &&
+                               blocker != opportunity.details.end() &&
+                               action != opportunity.details.end() &&
+                               kind->second == "address-operand" &&
+                               conflict->second == "code-data-overlay-candidate" &&
+                               compatibility->second == "next-opcode-mismatch" &&
+                               blocker->second == "overlaid-opcode-would-retarget-owner-branch" &&
+                               action->second ==
+                                   "relayout-owner-branch-or-place-compatible-executable";
+                      });
+      require(has_operand_conflict,
+              "tic-tac-toe-4x4 size attribution should classify natural-target address-byte "
+              "conflicts as code-data overlay candidates and expose local opcode compatibility");
       const SizeBlockerSummaryReport* data_arithmetic_blocker =
           find_size_blocker(result, "data-arithmetic");
       require(data_arithmetic_blocker != nullptr &&
@@ -293,7 +352,11 @@ void example_sizes_match_typescript_baselines() {
               "tic-tac-toe-4x4 size attribution should summarize positive-savings proof "
               "blockers by blockerKind");
       require(data_arithmetic_blocker->best_details.contains("naturalTarget") &&
-                  data_arithmetic_blocker->best_details.contains("selectorTarget"),
+                  data_arithmetic_blocker->best_details.contains("selectorTarget") &&
+                  data_arithmetic_blocker->best_details.contains("requiredAction") &&
+                  data_arithmetic_blocker->best_details.contains("currentNaturalTargetFlowCount") &&
+                  data_arithmetic_blocker->best_details.contains("currentNaturalTargetOccupant") &&
+                  data_arithmetic_blocker->best_details.contains("currentNaturalTargetOccupantKind"),
               "tic-tac-toe-4x4 size blocker summary should keep structured best blocker "
               "details");
     }

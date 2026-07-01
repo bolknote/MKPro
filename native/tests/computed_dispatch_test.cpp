@@ -1261,6 +1261,40 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
                .has_value(),
           "accepted dead-integer fractional selector elision should not report a rejection reason");
 
+  const std::optional<int> direct_dead_integer_target =
+      core::resolve_flow_target("9", 3.123456);
+  require(direct_dead_integer_target.has_value(),
+          "dead-integer selector target should resolve statically");
+  CompileOptions direct_dead_integer_options = forward_options;
+  direct_dead_integer_options.assume_dead_selector_integer_part = true;
+  direct_dead_integer_options.fractional_constant_selectors.push_back(
+      FractionalConstantSelectorPlan{.value = "0.123456",
+                                     .target = *direct_dead_integer_target});
+  CompileResult direct_dead_integer_jump_result;
+  direct_dead_integer_jump_result.optimizations.push_back(
+      optimization_report("preloaded-indirect-flow"));
+  direct_dead_integer_jump_result.optimizations.push_back(
+      optimization_report("dead-integer-fractional-selector-use"));
+  direct_dead_integer_jump_result.preloads.push_back(flow_preload("9", "3.123456"));
+  direct_dead_integer_jump_result.steps.push_back(resolved_step_with_mnemonic(
+      0x69, "П->X 9", "preload const 3.123456; fractional selector source 0.123456"));
+  direct_dead_integer_jump_result.steps.push_back(resolved_step_with_mnemonic(
+      0x89, "К БП 9", indirect_target_comment("9", "3.123456",
+                                               *direct_dead_integer_target)));
+  require(optimizer_static_proof_gate_accepts_for_testing(direct_dead_integer_options,
+                                                          direct_dead_integer_jump_result),
+          "dead-integer fractional selector elision should accept a proved direct indirect jump "
+          "that consumes the integer part only as an address");
+
+  CompileResult direct_dead_integer_call_result = direct_dead_integer_jump_result;
+  direct_dead_integer_call_result.steps.back() = resolved_step_with_mnemonic(
+      0xa9, "К ПП 9", indirect_target_comment("9", "3.123456",
+                                               *direct_dead_integer_target));
+  require(!optimizer_static_proof_gate_accepts_for_testing(direct_dead_integer_options,
+                                                           direct_dead_integer_call_result),
+          "dead-integer fractional selector elision must still reject direct indirect calls "
+          "because control returns with the un-erased X value potentially live");
+
   CompileResult safe_stored_dead_integer_result = forward_result;
   safe_stored_dead_integer_result.optimizations.push_back(
       optimization_report("dead-integer-fractional-selector-use"));

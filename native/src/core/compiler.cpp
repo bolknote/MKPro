@@ -1611,6 +1611,26 @@ int packed_score_sequence_accumulator_syntax_count(const V2Statement& statement,
     int count = 0;
     return collect_packed_score_sum_terms_syntax(expression, count) ? count : 0;
   }
+  if (statement.kind == "v2_assign" && expression.kind == "call" &&
+      lower_ascii(expression.callee) == "sum") {
+    bool saw_target = false;
+    int total = 0;
+    for (const Expression& arg : expression.args) {
+      if (expression_is_identifier_named(arg, target)) {
+        if (saw_target)
+          return 0;
+        saw_target = true;
+        continue;
+      }
+      if (expression_contains_identifier(arg, target))
+        return 0;
+      int count = 0;
+      if (!collect_packed_score_sum_terms_syntax(arg, count))
+        return 0;
+      total += count;
+    }
+    return saw_target ? total : 0;
+  }
   if (statement.kind != "v2_assign" || expression.kind != "binary" || expression.op != "+" ||
       expression.left == nullptr || expression.right == nullptr) {
     return 0;
@@ -12135,6 +12155,12 @@ struct OrderedStringSet {
   }
 };
 
+std::optional<std::string> positive_power_of_ten_value_for_exponent(int exponent) {
+  if (exponent < 0 || exponent > 8)
+    return std::nullopt;
+  return "1" + std::string(static_cast<std::size_t>(exponent), '0');
+}
+
 template <typename ValueSet>
 void collect_preload_literal_occurrence(const std::string& raw, ValueSet& values,
                                         std::map<std::string, int>& occurrences) {
@@ -12142,6 +12168,10 @@ void collect_preload_literal_occurrence(const std::string& raw, ValueSet& values
   values.insert(value);
   ++occurrences[value];
 }
+
+void collect_logical_packed_field_extract_scale_literals_from_statements(
+    const std::vector<V2Statement>& statements, OrderedStringSet& values,
+    std::map<std::string, int>& occurrences);
 
 template <typename ValueSet>
 void collect_preload_number_literals(const Expression& expression, ValueSet& values,
@@ -13032,12 +13062,16 @@ std::vector<std::string> collect_preload_constant_values(const LoweringContext& 
                                                          occurrences);
   collect_derived_preload_number_literals_from_statements(context, program.body, values,
                                                           occurrences);
+  collect_logical_packed_field_extract_scale_literals_from_statements(program.body, values,
+                                                                      occurrences);
   for (const V2Rule& rule : program.rules) {
     collect_preload_number_literals_from_statements(rule.body, values, occurrences);
     collect_domain_random_preload_literals_from_statements(context, rule.body, values,
                                                            occurrences);
     collect_derived_preload_number_literals_from_statements(context, rule.body, values,
                                                             occurrences);
+    collect_logical_packed_field_extract_scale_literals_from_statements(rule.body, values,
+                                                                        occurrences);
   }
   for (const std::string& value :
        core::emit::display_constant_preload_values_for_program(context, program)) {
@@ -17424,6 +17458,29 @@ bool collect_stack_accumulator_sequence_terms(const V2Statement& statement,
     terms.insert(terms.end(), collected.begin(), collected.end());
     return true;
   }
+  if (statement.kind == "v2_assign" && expression.kind == "call" &&
+      lower_ascii(expression.callee) == "sum") {
+    bool saw_target = false;
+    std::vector<Term> total;
+    for (const Expression& arg : expression.args) {
+      if (expression_is_identifier_named(arg, target)) {
+        if (saw_target)
+          return false;
+        saw_target = true;
+        continue;
+      }
+      if (expression_contains_identifier(arg, target))
+        return false;
+      std::vector<Term> collected_arg;
+      if (!collect_terms(arg, collected_arg))
+        return false;
+      total.insert(total.end(), collected_arg.begin(), collected_arg.end());
+    }
+    if (!saw_target || total.empty())
+      return false;
+    terms.insert(terms.end(), total.begin(), total.end());
+    return true;
+  }
   if (statement.kind != "v2_assign" || expression.kind != "binary" || expression.op != "+" ||
       expression.left == nullptr || expression.right == nullptr) {
     return false;
@@ -19983,6 +20040,113 @@ match_logical_packed_field_extract(const Expression& expression) {
   return std::nullopt;
 }
 
+void collect_logical_packed_field_extract_scale_literals(const Expression& expression,
+                                                        OrderedStringSet& values,
+                                                        std::map<std::string, int>& occurrences) {
+  if (const std::optional<LogicalPackedFieldExtractMatch> match =
+          match_logical_packed_field_extract(expression)) {
+    if (const std::optional<std::string> scale =
+            positive_power_of_ten_value_for_exponent(match->scale_exp)) {
+      collect_preload_literal_occurrence(*scale, values, occurrences);
+    }
+    return;
+  }
+
+  if (expression.index != nullptr)
+    collect_logical_packed_field_extract_scale_literals(*expression.index, values, occurrences);
+  if (expression.expr != nullptr)
+    collect_logical_packed_field_extract_scale_literals(*expression.expr, values, occurrences);
+  if (expression.left != nullptr)
+    collect_logical_packed_field_extract_scale_literals(*expression.left, values, occurrences);
+  if (expression.right != nullptr)
+    collect_logical_packed_field_extract_scale_literals(*expression.right, values, occurrences);
+  for (const Expression& arg : expression.args)
+    collect_logical_packed_field_extract_scale_literals(arg, values, occurrences);
+}
+
+void collect_logical_packed_field_extract_scale_literals_from_text(
+    const std::optional<std::string>& text, int source_line, OrderedStringSet& values,
+    std::map<std::string, int>& occurrences) {
+  if (!text.has_value() || trim_ascii(*text).empty())
+    return;
+  try {
+    collect_logical_packed_field_extract_scale_literals(parse_expression(*text, source_line),
+                                                        values, occurrences);
+  } catch (const std::exception&) {
+  }
+}
+
+void collect_logical_packed_field_extract_scale_literals_from_predicate(
+    const std::optional<V2Predicate>& predicate, int source_line, OrderedStringSet& values,
+    std::map<std::string, int>& occurrences) {
+  if (!predicate.has_value())
+    return;
+  collect_logical_packed_field_extract_scale_literals_from_text(predicate->left, source_line,
+                                                               values, occurrences);
+  collect_logical_packed_field_extract_scale_literals_from_text(predicate->right, source_line,
+                                                               values, occurrences);
+  collect_logical_packed_field_extract_scale_literals_from_text(predicate->collection, source_line,
+                                                               values, occurrences);
+  collect_logical_packed_field_extract_scale_literals_from_text(predicate->item, source_line,
+                                                               values, occurrences);
+}
+
+void collect_logical_packed_field_extract_scale_literals_from_display_items(
+    const std::vector<DisplayItem>& items, OrderedStringSet& values,
+    std::map<std::string, int>& occurrences) {
+  for (const DisplayItem& item : items) {
+    if (item.expr.has_value())
+      collect_logical_packed_field_extract_scale_literals(*item.expr, values, occurrences);
+  }
+}
+
+void collect_logical_packed_field_extract_scale_literals_from_statements(
+    const std::vector<V2Statement>& statements, OrderedStringSet& values,
+    std::map<std::string, int>& occurrences) {
+  for (const V2Statement& statement : statements) {
+    collect_logical_packed_field_extract_scale_literals_from_text(statement.expr, statement.line,
+                                                                 values, occurrences);
+    collect_logical_packed_field_extract_scale_literals_from_text(statement.target, statement.line,
+                                                                 values, occurrences);
+    collect_logical_packed_field_extract_scale_literals_from_predicate(statement.predicate,
+                                                                       statement.line, values,
+                                                                       occurrences);
+    if (statement.items.has_value()) {
+      collect_logical_packed_field_extract_scale_literals_from_display_items(
+          *statement.items, values, occurrences);
+    }
+    for (const V2RawInput& input : statement.inputs) {
+      collect_logical_packed_field_extract_scale_literals_from_text(input.expr, input.line, values,
+                                                                   occurrences);
+    }
+    for (const std::string& arg : statement.args) {
+      collect_logical_packed_field_extract_scale_literals_from_text(arg, statement.line, values,
+                                                                   occurrences);
+    }
+    for (const V2MatchCase& match_case : statement.cases) {
+      for (const std::string& value : match_case.values) {
+        collect_logical_packed_field_extract_scale_literals_from_text(value, match_case.line,
+                                                                     values, occurrences);
+      }
+      if (match_case.action != nullptr) {
+        collect_logical_packed_field_extract_scale_literals_from_statements(
+            {*match_case.action}, values, occurrences);
+      }
+    }
+    if (statement.otherwise != nullptr) {
+      collect_logical_packed_field_extract_scale_literals_from_statements({*statement.otherwise},
+                                                                         values, occurrences);
+    }
+    if (statement.kind != "v2_while")
+      collect_logical_packed_field_extract_scale_literals_from_statements(statement.body, values,
+                                                                         occurrences);
+    collect_logical_packed_field_extract_scale_literals_from_statements(statement.then_body,
+                                                                       values, occurrences);
+    collect_logical_packed_field_extract_scale_literals_from_statements(statement.else_body,
+                                                                       values, occurrences);
+  }
+}
+
 bool lower_logical_packed_field_extract_to_x(LoweringContext& context,
                                              const Expression& expression) {
   const std::optional<LogicalPackedFieldExtractMatch> match =
@@ -19995,9 +20159,20 @@ bool lower_logical_packed_field_extract_to_x(LoweringContext& context,
     return false;
   context.emitter.emit_op(0x37, "К ∧", "logical packed field mask");
   context.emitter.emit_op(0x35, "К {x}", "logical packed field fraction");
-  emit_number_or_preload(context, std::to_string(match->scale_exp),
-                         "logical packed field scale");
-  context.emitter.emit_op(0x15, "F 10^x", "logical packed field scale");
+  const std::optional<std::string> scale =
+      positive_power_of_ten_value_for_exponent(match->scale_exp);
+  if (scale.has_value() && has_preloaded_number(context, *scale)) {
+    emit_number_or_preload(context, *scale, "logical packed field scale");
+    context.optimizations.push_back(OptimizationReport{
+        .name = "logical-packed-field-scale-preload",
+        .detail = "Reused preloaded " + *scale +
+                  " as the logical packed field scale factor.",
+    });
+  } else {
+    emit_number_or_preload(context, std::to_string(match->scale_exp),
+                           "logical packed field scale exponent");
+    context.emitter.emit_op(0x15, "F 10^x", "logical packed field scale");
+  }
   context.emitter.emit_op(0x12, "*", "logical packed field extract");
   if (match->truncate)
     context.emitter.emit_op(0x34, "К [x]", "logical packed field integer");
@@ -43290,6 +43465,13 @@ bool dead_integer_fractional_selector_indirect_use_proved(const ResolvedStep& st
   return preloaded_selector_annotation_from_comment(step.comment, *register_name).has_value();
 }
 
+bool dead_integer_fractional_selector_direct_jump_use_proved(const ResolvedStep& step,
+                                                             int register_index) {
+  if (step.opcode < 0x80 || step.opcode > 0x8e)
+    return false;
+  return dead_integer_fractional_selector_indirect_use_proved(step, register_index);
+}
+
 constexpr int kDeadIntegerFractionalEraseOpcode = 0x35;  // К {x}
 
 std::string dead_integer_fractional_selector_next_step_name(const ResolvedStep& step) {
@@ -43462,6 +43644,12 @@ std::optional<std::string> dead_integer_fractional_selector_uses_rejection_reaso
       proved_values.insert(normalized_source);
       continue;
     }
+    const int source_register = steps.at(index).opcode - 0x60;
+    if (dead_integer_fractional_selector_direct_jump_use_proved(steps.at(index + 1U),
+                                                                source_register)) {
+      proved_values.insert(normalized_source);
+      continue;
+    }
     const auto target_it = selector_targets.find(normalized_source);
     const std::optional<int> selector_target =
         target_it == selector_targets.end() ? std::nullopt
@@ -43628,8 +43816,8 @@ std::vector<ProofReport> build_proof_report(const ProgramAst& ast,
         .status = "proved",
         .detail =
             "Every dead-integer fractional-selector recall is either immediately erased by K {x} "
-            "or stored only into registers whose live X value and later recalls are erased before "
-            "consumption.",
+            "or used only as a proved indirect jump selector / stored selector whose live X value "
+            "and later data recalls are erased before consumption.",
     });
   }
   if (suppressed_constant_preloads_proved(options, preloads)) {
@@ -43905,7 +44093,209 @@ std::string size_opportunity_blocker_kind(const CandidateReport& candidate) {
   return "unknown";
 }
 
-std::map<std::string, std::string> size_opportunity_details(const CandidateReport& candidate) {
+struct SizeReportFlowTargetStats {
+  int count = 0;
+  int stable_without_retarget_count = 0;
+};
+
+std::map<int, SizeReportFlowTargetStats>
+size_report_flow_target_stats(const std::vector<ResolvedStep>& steps) {
+  std::map<int, SizeReportFlowTargetStats> stats;
+  for (std::size_t index = 0; index + 1U < steps.size(); ++index) {
+    if (!opcode_by_code(steps.at(index).opcode).takes_address)
+      continue;
+    const int target = formal_address_info(steps.at(index + 1U).opcode).actual;
+    if (target < 0 || target > 104) {
+      ++index;
+      continue;
+    }
+    SizeReportFlowTargetStats& current = stats[target];
+    ++current.count;
+    if (steps.at(index + 1U).address > target)
+      ++current.stable_without_retarget_count;
+    ++index;
+  }
+  return stats;
+}
+
+std::string size_report_target_occupant_text(const ResolvedStep& step) {
+  std::string text = step.mnemonic.empty() ? opcode_by_code(step.opcode).name : step.mnemonic;
+  if (text.empty())
+    text = "opcode " + std::to_string(step.opcode);
+  if (step.comment.has_value() && !step.comment->empty())
+    text += ": " + *step.comment;
+  return text;
+}
+
+std::string size_report_target_occupant_kind(const std::vector<ResolvedStep>& steps,
+                                             std::size_t index) {
+  if (index > 0) {
+    const ResolvedStep& previous = steps.at(index - 1U);
+    if (previous.address + 1 == steps.at(index).address &&
+        opcode_by_code(previous.opcode).takes_address) {
+      return "address-operand";
+    }
+  }
+  if (opcode_by_code(steps.at(index).opcode).takes_address)
+    return "address-taking-opcode";
+  if (steps.at(index).opcode == 0x50)
+    return "stop";
+  if (steps.at(index).opcode == 0x52)
+    return "return";
+  return "instruction";
+}
+
+std::string size_report_opcode_text(int opcode) {
+  std::string text = opcode_by_code(opcode).name;
+  if (text.empty())
+    text = "opcode " + std::to_string(opcode);
+  return text;
+}
+
+std::string size_report_target_overlay_compatibility(const std::vector<ResolvedStep>& steps,
+                                                     std::size_t index) {
+  if (size_report_target_occupant_kind(steps, index) != "address-operand")
+    return "not-address-operand";
+  if (index + 1U >= steps.size())
+    return "no-next-cell";
+  const int operand_opcode = steps.at(index).opcode;
+  const int target_actual = formal_address_info(operand_opcode).actual;
+  const int next_opcode = steps.at(index + 1U).opcode;
+  if (next_opcode == operand_opcode)
+    return "next-opcode-byte-match";
+  try {
+    if (formal_address_info(next_opcode).actual == target_actual)
+      return "next-formal-address-compatible";
+  } catch (const std::exception&) {
+  }
+  return "next-opcode-mismatch";
+}
+
+std::string size_report_target_overlay_blocker(const std::vector<ResolvedStep>& steps,
+                                               std::size_t index) {
+  const std::string compatibility = size_report_target_overlay_compatibility(steps, index);
+  if (compatibility == "next-opcode-byte-match" ||
+      compatibility == "next-formal-address-compatible") {
+    return "none";
+  }
+  if (compatibility == "next-opcode-mismatch")
+    return "overlaid-opcode-would-retarget-owner-branch";
+  return compatibility;
+}
+
+std::string size_report_target_overlay_action(const std::vector<ResolvedStep>& steps,
+                                              std::size_t index) {
+  const std::string compatibility = size_report_target_overlay_compatibility(steps, index);
+  if (compatibility == "next-opcode-byte-match")
+    return "existing-address-code-overlay-byte-match-shape";
+  if (compatibility == "next-formal-address-compatible")
+    return "existing-address-code-overlay-formal-alias-shape";
+  if (compatibility == "next-opcode-mismatch")
+    return "relayout-owner-branch-or-place-compatible-executable";
+  return "no-address-code-overlay-shape";
+}
+
+void add_size_opportunity_flow_target_details(
+    std::map<std::string, std::string>& details,
+    const std::map<int, SizeReportFlowTargetStats>& flow_stats,
+    const std::map<int, std::string>& occupant_by_address,
+    const std::map<int, std::string>& occupant_kind_by_address,
+    const std::map<int, std::string>& operand_executable_by_address,
+    const std::map<int, std::string>& operand_flow_target_by_address,
+    const std::map<int, std::string>& operand_owner_by_address,
+    const std::map<int, std::string>& next_executable_by_address,
+    const std::map<int, std::string>& next_occupant_by_address,
+    const std::map<int, std::string>& overlay_compatibility_by_address,
+    const std::map<int, std::string>& overlay_blocker_by_address,
+    const std::map<int, std::string>& overlay_action_by_address) {
+  const auto add_target_stats = [&](const std::string& detail_prefix,
+                                    const std::string& target_key) {
+    const auto target_it = details.find(target_key);
+    if (target_it == details.end())
+      return false;
+    const std::optional<int> target = parse_reference_address(target_it->second);
+    if (!target.has_value())
+      return false;
+    const auto stats_it = flow_stats.find(*target);
+    const SizeReportFlowTargetStats stats =
+        stats_it == flow_stats.end() ? SizeReportFlowTargetStats{} : stats_it->second;
+    details["current" + detail_prefix + "FlowCount"] = std::to_string(stats.count);
+    details["current" + detail_prefix + "StableFlowCount"] =
+        std::to_string(stats.stable_without_retarget_count);
+    const auto occupant_it = occupant_by_address.find(*target);
+    details["current" + detail_prefix + "Occupant"] =
+        occupant_it == occupant_by_address.end() ? std::string("none") : occupant_it->second;
+    const auto kind_it = occupant_kind_by_address.find(*target);
+    details["current" + detail_prefix + "OccupantKind"] =
+        kind_it == occupant_kind_by_address.end() ? std::string("none") : kind_it->second;
+    if (kind_it != occupant_kind_by_address.end() && kind_it->second == "address-operand") {
+      const auto executable_it = operand_executable_by_address.find(*target);
+      details["current" + detail_prefix + "OperandExecutable"] =
+          executable_it == operand_executable_by_address.end() ? std::string("unknown")
+                                                               : executable_it->second;
+      const auto flow_target_it = operand_flow_target_by_address.find(*target);
+      details["current" + detail_prefix + "OperandFlowTarget"] =
+          flow_target_it == operand_flow_target_by_address.end() ? std::string("unknown")
+                                                                 : flow_target_it->second;
+      const auto owner_it = operand_owner_by_address.find(*target);
+      details["current" + detail_prefix + "OperandOwner"] =
+          owner_it == operand_owner_by_address.end() ? std::string("unknown") : owner_it->second;
+      const auto next_executable_it = next_executable_by_address.find(*target);
+      details["current" + detail_prefix + "NextExecutable"] =
+          next_executable_it == next_executable_by_address.end() ? std::string("none")
+                                                                 : next_executable_it->second;
+      const auto next_it = next_occupant_by_address.find(*target);
+      details["current" + detail_prefix + "NextOccupant"] =
+          next_it == next_occupant_by_address.end() ? std::string("none") : next_it->second;
+      const auto compatibility_it = overlay_compatibility_by_address.find(*target);
+      details["current" + detail_prefix + "OverlayCompatibility"] =
+          compatibility_it == overlay_compatibility_by_address.end()
+              ? std::string("unknown")
+              : compatibility_it->second;
+      const auto blocker_it = overlay_blocker_by_address.find(*target);
+      details["current" + detail_prefix + "OverlayBlocker"] =
+          blocker_it == overlay_blocker_by_address.end() ? std::string("unknown")
+                                                         : blocker_it->second;
+      const auto action_it = overlay_action_by_address.find(*target);
+      details["current" + detail_prefix + "OverlayAction"] =
+          action_it == overlay_action_by_address.end() ? std::string("unknown")
+                                                       : action_it->second;
+    }
+    return stats.count > 0;
+  };
+
+  const bool natural_present = add_target_stats("NaturalTarget", "naturalTarget");
+  (void)add_target_stats("SelectorTarget", "selectorTarget");
+  if (details.find("proofDisposition") != details.end() &&
+      details["proofDisposition"] == "not-proof-only") {
+    details["layoutDisposition"] =
+        natural_present ? "natural-target-has-flow" : "natural-target-has-no-flow";
+    details["layoutAction"] =
+        natural_present ? "prefer-existing-natural-target-flow"
+                        : "relayout-or-overlay-flow-to-natural-target";
+    const std::string occupant_kind =
+        details.contains("currentNaturalTargetOccupantKind")
+            ? details["currentNaturalTargetOccupantKind"]
+            : std::string("none");
+    details["layoutConflictKind"] =
+        occupant_kind == "address-operand" ? "code-data-overlay-candidate"
+                                           : "occupied-target-cell";
+  }
+}
+
+std::map<std::string, std::string>
+size_opportunity_details(const CandidateReport& candidate,
+                         const std::map<int, SizeReportFlowTargetStats>& flow_stats,
+                         const std::map<int, std::string>& occupant_by_address,
+                         const std::map<int, std::string>& occupant_kind_by_address,
+                         const std::map<int, std::string>& operand_executable_by_address,
+                         const std::map<int, std::string>& operand_flow_target_by_address,
+                         const std::map<int, std::string>& operand_owner_by_address,
+                         const std::map<int, std::string>& next_executable_by_address,
+                         const std::map<int, std::string>& next_occupant_by_address,
+                         const std::map<int, std::string>& overlay_compatibility_by_address,
+                         const std::map<int, std::string>& overlay_blocker_by_address,
+                         const std::map<int, std::string>& overlay_action_by_address) {
   std::map<std::string, std::string> details;
   const std::string& reason = candidate.reason;
   std::size_t cursor = 0;
@@ -43939,6 +44329,32 @@ std::map<std::string, std::string> size_opportunity_details(const CandidateRepor
       details[key] = reason.substr(value_start, value_end - value_start);
     cursor = value_end == value_start ? equals + 1U : value_end;
   }
+  if (candidate.variant == "fractional-constant-selector-dead-int" &&
+      reason.find("before K {x}") != std::string::npos) {
+    const std::string blocker = size_opportunity_blocker_kind(candidate);
+    details.emplace("integerPartStatus", "live-before-fractional-erase");
+    details.emplace("selectorDataUse", blocker);
+    if (blocker == "data-arithmetic") {
+      details.emplace("proofDisposition", "not-proof-only");
+      details.emplace("requiredAction", "keep-fractional-erase-before-data-arithmetic");
+    } else if (blocker == "indirect-address-control-use") {
+      details.emplace("proofDisposition", "needs-final-indirect-target-artifact");
+      details.emplace("requiredAction", "prove-indirect-target-or-erase-before-use");
+    } else {
+      details.emplace("proofDisposition", "needs-local-dead-integer-proof");
+      details.emplace("requiredAction", "erase-before-data-consumption");
+    }
+  }
+  add_size_opportunity_flow_target_details(details, flow_stats, occupant_by_address,
+                                           occupant_kind_by_address,
+                                           operand_executable_by_address,
+                                           operand_flow_target_by_address,
+                                           operand_owner_by_address,
+                                           next_executable_by_address,
+                                           next_occupant_by_address,
+                                           overlay_compatibility_by_address,
+                                           overlay_blocker_by_address,
+                                           overlay_action_by_address);
   return details;
 }
 
@@ -44117,6 +44533,44 @@ SizeAttributionReport build_size_attribution_report(
             });
 
   const int current_steps = static_cast<int>(steps.size());
+  const std::map<int, SizeReportFlowTargetStats> flow_stats =
+      size_report_flow_target_stats(steps);
+  std::map<int, std::string> occupant_by_address;
+  std::map<int, std::string> occupant_kind_by_address;
+  std::map<int, std::string> operand_executable_by_address;
+  std::map<int, std::string> operand_flow_target_by_address;
+  std::map<int, std::string> operand_owner_by_address;
+  std::map<int, std::string> next_executable_by_address;
+  std::map<int, std::string> next_occupant_by_address;
+  std::map<int, std::string> overlay_compatibility_by_address;
+  std::map<int, std::string> overlay_blocker_by_address;
+  std::map<int, std::string> overlay_action_by_address;
+  for (std::size_t index = 0; index < steps.size(); ++index) {
+    const ResolvedStep& step = steps.at(index);
+    occupant_by_address[step.address] = size_report_target_occupant_text(step);
+    const std::string kind = size_report_target_occupant_kind(steps, index);
+    occupant_kind_by_address[step.address] = kind;
+    if (kind == "address-operand") {
+      operand_executable_by_address[step.address] = size_report_opcode_text(step.opcode);
+      operand_flow_target_by_address[step.address] =
+          safe_format_label_address(formal_address_info(step.opcode).actual);
+      if (index > 0)
+        operand_owner_by_address[step.address] =
+            size_report_target_occupant_text(steps.at(index - 1U));
+      if (index + 1U < steps.size()) {
+        next_executable_by_address[step.address] =
+            size_report_opcode_text(steps.at(index + 1U).opcode);
+        next_occupant_by_address[step.address] =
+            size_report_target_occupant_text(steps.at(index + 1U));
+      }
+      overlay_compatibility_by_address[step.address] =
+          size_report_target_overlay_compatibility(steps, index);
+      overlay_blocker_by_address[step.address] =
+          size_report_target_overlay_blocker(steps, index);
+      overlay_action_by_address[step.address] =
+          size_report_target_overlay_action(steps, index);
+    }
+  }
   report.opportunities.reserve(rejected_candidates.size());
   for (const CandidateReport& candidate : rejected_candidates) {
     if (candidate.steps <= 0)
@@ -44129,7 +44583,17 @@ SizeAttributionReport build_size_attribution_report(
         .savings = current_steps - candidate.steps,
         .reason = candidate.reason,
         .blocker_kind = size_opportunity_blocker_kind(candidate),
-        .details = size_opportunity_details(candidate),
+        .details =
+            size_opportunity_details(candidate, flow_stats, occupant_by_address,
+                                     occupant_kind_by_address,
+                                     operand_executable_by_address,
+                                     operand_flow_target_by_address,
+                                     operand_owner_by_address,
+                                     next_executable_by_address,
+                                     next_occupant_by_address,
+                                     overlay_compatibility_by_address,
+                                     overlay_blocker_by_address,
+                                     overlay_action_by_address),
     });
   }
   std::sort(report.opportunities.begin(), report.opportunities.end(),

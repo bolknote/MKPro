@@ -294,6 +294,41 @@ program PackedScoreStatementAccumulator {
   require(count_packed_score_accumulator_helper_jumps(statement_sequence) == 3,
           "statement-level packed_score accumulation should emit three accumulator helper calls");
 
+  const CompileResult sum_continuation_sequence = compile_source(R"mkpro(
+program PackedScoreSumContinuationStatementAccumulator {
+  state {
+    line: packed = 44444.4
+    slot: counter 0..7 = 4
+    score: packed = 0
+  }
+  loop {
+    score = packed_score(line, slot)
+    score = sum(score, packed_score(line, slot), 0)
+    score = sum(packed_score(line, slot), score)
+    halt(score)
+  }
+}
+)mkpro",
+                                                                 pinned_options());
+  require(sum_continuation_sequence.implemented,
+          "native compiler should lower sum(score, packed_score(...)) continuations");
+  require(sum_continuation_sequence.diagnostics.empty(),
+          "sum-continuation packed_score accumulation should not report diagnostics");
+  require(has_optimization(sum_continuation_sequence,
+                           "packed-score-sequence-stack-accumulator"),
+          "sum-continuation packed_score accumulation should report sequence accumulator "
+          "lowering");
+  require(count_optimization(sum_continuation_sequence, "packed-score-stack-helper-call") == 0,
+          "sum-continuation packed_score accumulation should not use standalone helper calls");
+  require(count_packed_score_helper_jumps(sum_continuation_sequence) == 0,
+          "sum-continuation packed_score accumulation should not emit standalone helper calls");
+  require(count_packed_score_accumulator_helper_jumps(sum_continuation_sequence) == 3,
+          "sum-continuation packed_score accumulation should emit three accumulator helper calls");
+  require(count_steps_with_comment(sum_continuation_sequence, "set score") == 0,
+          "immediately consumed sum-continuation accumulator should not store score");
+  require(count_steps_with_comment(sum_continuation_sequence, "recall score") == 0,
+          "sum-continuation accumulator should keep score on the stack instead of recalling it");
+
   const CompileResult zero_started_sequence = compile_source(R"mkpro(
 program PackedScoreZeroStartedStatementAccumulator {
   state {
