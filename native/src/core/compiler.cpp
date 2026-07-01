@@ -17585,6 +17585,9 @@ bool expression_duplicates_current_x_identifier(const Expression& expression,
 
 bool expression_consumes_current_x_identifier(const Expression& expression,
                                               const std::string& target) {
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "sum") {
+    return expression_consumes_current_x_identifier(sum_expressions(expression.args), target);
+  }
   const int target_reads = count_identifier_reads(expression, target);
   if (target_reads == 2 && expression_duplicates_current_x_identifier(expression, target))
     return true;
@@ -17592,9 +17595,6 @@ bool expression_consumes_current_x_identifier(const Expression& expression,
     return false;
   if (expression_derives_current_x_identifier(expression, target))
     return true;
-  if (expression.kind == "call" && lower_ascii(expression.callee) == "sum") {
-    return expression_consumes_current_x_identifier(sum_expressions(expression.args), target);
-  }
   if (expression.kind != "binary" ||
       (expression.op != "+" && expression.op != "*" && expression.op != "-" &&
        expression.op != "/") ||
@@ -32833,6 +32833,29 @@ bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expres
     mark_current_x(context, expression.name);
     return true;
   }
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "sum") {
+    if (!lower_stack_resident_expression_to_x(context, sum_expressions(expression.args), temps,
+                                              line))
+      return false;
+    context.optimizations.push_back(OptimizationReport{
+        .name = "sum-primitive-lowering",
+        .detail = "Lowered stack-resident sum(...) to an arithmetic addition chain.",
+    });
+    return true;
+  }
+  if (expression.kind == "call" && expression.args.size() == 1U &&
+      stack_expression_references_any_temp(expression.args.front(), temps)) {
+    const std::optional<std::pair<int, std::string>> opcode =
+        x_transform_unary_opcode(expression.callee);
+    if (!opcode.has_value())
+      return false;
+    if (!lower_stack_resident_expression_to_x(context, expression.args.front(), temps, line))
+      return false;
+    context.emitter.emit_op(opcode->first, opcode->second,
+                            "stack-resident " + lower_ascii(expression.callee), line);
+    clear_current_x_facts(context);
+    return true;
+  }
   if (expression.kind == "number" || expression.kind == "string" || expression.kind == "indexed" ||
       expression.kind == "call") {
     return lower_expression_to_x(context, expression);
@@ -32853,6 +32876,23 @@ bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expres
   const std::optional<std::pair<int, std::string>> opcode = binary_opcode(expression.op);
   if (!opcode.has_value())
     return false;
+
+  if (left_refs && right_refs && expression_equals(*expression.left, *expression.right)) {
+    if (!lower_stack_resident_expression_to_x(context, *expression.left, temps, line))
+      return false;
+    if (expression.op == "*") {
+      context.emitter.emit_op(0x22, "F x^2", "square repeated operand", line);
+      context.optimizations.push_back(OptimizationReport{
+          .name = "square-expression-lowering",
+          .detail = "Squared a repeated stack-resident operand through F x^2.",
+      });
+    } else {
+      context.emitter.emit_op(0x0e, "В↑", "duplicate repeated operand through stack", line);
+      context.emitter.emit_op(opcode->first, opcode->second, "expr " + opcode->second, line);
+    }
+    clear_current_x_facts(context);
+    return true;
+  }
 
   if (left_refs && right_refs && expression.left->kind == "identifier" &&
       expression.right->kind == "identifier") {

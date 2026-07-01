@@ -671,7 +671,7 @@ program StackCarriedSumInlineExpressionConsumer {
 
   {
     const CompileResult result = compile_stack_variant(R"mkpro(
-program StackCarriedRepeatedSumConsumerRejected {
+program StackCarriedRepeatedSumConsumer {
   state {
     x: packed = 2
     y: packed = 3
@@ -685,9 +685,21 @@ program StackCarriedRepeatedSumConsumerRejected {
 }
 )mkpro",
                                                        false);
-    require_clean_compile(result, "stack-carried repeated sum consumer rejection");
-    require(!has_optimization(result, "stack-carried-assignment"),
-            "sum consumer should reject repeated current-X reads without an explicit duplicate");
+    require_clean_compile(result, "stack-carried repeated sum consumer");
+    require(has_optimization(result, "stack-carried-assignment"),
+            "sum consumer should keep repeated current-X reads and duplicate explicitly");
+    require(has_optimization(result, "sum-primitive-lowering"),
+            "repeated sum consumer should lower through the explicit sum primitive");
+    require(has_optimization(result, "stack-current-x-scheduling"),
+            "repeated sum consumer should report current-X stack scheduling");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "repeated sum consumer should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "repeated sum consumer should not recall tmp");
+    require(count_steps_with_comment(result, "duplicate repeated operand through stack") == 1,
+            "repeated sum consumer should duplicate the current X value through the stack");
+    require(count_steps_with_comment(result, "expr +") == 2,
+            "repeated sum consumer should emit one source addition and one duplicated addition");
   }
 
   {
@@ -1172,6 +1184,68 @@ program CrossFlowIf {
     require_clean_compile(result, "stack-resident control-flow fusion");
     require(has_optimization(result, "stack-resident-control-flow"),
             "stack-resident control-flow fusion should report stack-resident-control-flow");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackResidentRepeatedSumControlFlow {
+  state {
+    x: packed = 2
+    gate: packed = 0
+    z: packed = 0
+  }
+  loop {
+    a = x
+    if gate == 1 {
+      loop {
+      }
+    }
+    z = sum(a, a)
+    halt(z)
+  }
+}
+)mkpro",
+                                                       true);
+    require_clean_compile(result, "stack-resident repeated sum control-flow");
+    require(has_optimization(result, "stack-resident-control-flow"),
+            "single temp across control flow should stay stack-resident");
+    require(has_optimization(result, "sum-primitive-lowering"),
+            "stack-resident repeated sum should lower through sum(...)");
+    require(count_steps_with_comment(result, "duplicate repeated operand through stack") == 1,
+            "stack-resident repeated sum should duplicate the restored temp through the stack");
+    require(count_steps_with_comment(result, "recall a") == 0,
+            "stack-resident repeated sum should not recall the temp from memory");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackResidentUnaryCallControlFlow {
+  state {
+    x: packed = 8.75
+    y: packed = 3
+    gate: packed = 0
+    z: packed = 0
+  }
+  loop {
+    a = x
+    b = y
+    if gate == 1 {
+      loop {
+      }
+    }
+    z = frac(a) + b
+    halt(z)
+  }
+}
+)mkpro",
+                                                       true);
+    require_clean_compile(result, "stack-resident unary call control-flow");
+    require(has_optimization(result, "stack-resident-control-flow"),
+            "unary call over stack temps should stay stack-resident across control flow");
+    require(count_steps_with_comment(result, "stack-resident frac") == 1,
+            "stack-resident unary call should apply frac() to the restored stack temp");
+    require(count_steps_with_comment(result, "recall a") == 0,
+            "stack-resident unary call should not recall the temp from memory");
   }
 }
 

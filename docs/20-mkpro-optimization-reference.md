@@ -898,10 +898,10 @@ Display rewrites are separated into strategy selection + body lowering.
   consumers use the same scheduler when exactly one argument depends on the
   carried value and the other arguments are simple stack loads, so variadic
   accumulator syntax does not force a temporary store. Repeated arithmetic
-  consumers such as `tmp / tmp` may duplicate the current `X` through the stack
-  (`В↑`) or use `F x^2` for `tmp * tmp`, avoiding both the temp store and the
-  temp recall while still preserving the hardware `X1`/hidden-X2 side-effect
-  model. Branch consumers can test
+  consumers such as `tmp / tmp`, including the equivalent `sum(tmp, tmp)` form,
+  may duplicate the current `X` through the stack (`В↑`) or use `F x^2` for
+  `tmp * tmp`, avoiding both the temp store and the temp recall while still
+  preserving the hardware `X1`/hidden-X2 side-effect model. Branch consumers can test
   the carried value directly for conservative compare shapes, but they yield to
   cheaper single-use guard substitution and dedicated domain-error guard fusions.
 - `bit-mask-decade-scale` / `bit-mask-decade-index-preload` — chooses the
@@ -1278,7 +1278,7 @@ Display rewrites are separated into strategy selection + body lowering.
   uses the copied or exchanged `Y` value and shape as the new visible `X`, while
   hidden X2 remains the old tail; this keeps decimal and structural first-digit
   splice proofs aligned with both immediate and delayed stack-copy contexts.
-- `stack-resident-temps` — keeps up to four consecutive single-use temps on the stack, using `В↑` lifts and restore sequences (`X↔Y` / `F reverse`) before direct stack-based consumers.
+- `stack-resident-temps` — keeps up to four consecutive single-use temps on the stack, using `В↑` lifts and restore sequences (`X↔Y` / `F reverse`) before direct stack-based consumers. The stack expression lowerer handles `sum(...)` as the same addition tree, can duplicate one repeated stack-resident operand through `В↑` or `F x^2`, and applies one-argument calculator transforms such as `frac(a)` directly after restoring the temp instead of recalling it from memory.
 - `stack-resident-indexed-temp` — keeps a single-use temp in X across one indexed compound store `cells[i] op= temp` when the temp is consumed exactly once and selector/index setup is not temp-dependent.
 - `stack-resident-control-flow` — marks stack-temp fusion that crosses stack-preserving `if` / `while` / `dispatch` regions; these regions cannot clobber live temps and the lowering rebuilds stack state if the region requires it.
 - `dead-temp-store` — removes temporary stores after their last read when no longer needed.
