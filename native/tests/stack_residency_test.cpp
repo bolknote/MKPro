@@ -860,6 +860,58 @@ program StackCarriedDirectUpdateConsumer {
 
   {
     const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedDelayedUpdateConsumer {
+  state {
+    score: packed = 10
+    delta: packed = 4
+    gate: packed = 0
+  }
+
+  loop {
+    score += delta
+    if gate == 0 {
+    }
+    halt(score)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "delayed stack-carried update consumer");
+    require(has_optimization(result, "stack-carried-update-delayed"),
+            "safe intervening control flow should delay the update until its consumer");
+    require(count_steps_with_comment(result, "set score") == 0,
+            "delayed stack-carried update should not store the updated score");
+    require(count_steps_with_comment(result, "recall score") == 1,
+            "delayed stack-carried update should recall score only to compute the update");
+    require(count_steps_with_comment(result, "recall delta") == 1,
+            "delayed stack-carried update should recall delta once");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedDelayedUpdateRejectsDeltaWrite {
+  state {
+    score: packed = 10
+    delta: packed = 4
+  }
+
+  loop {
+    score += delta
+    delta += 1
+    halt(score)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "delayed stack-carried update delta write reject");
+    require(!has_optimization(result, "stack-carried-update-delayed"),
+            "delayed update must reject intervening writes to delta operands");
+    require(count_steps_with_comment(result, "set score") == 1,
+            "unsafe delayed update should keep the original score store");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
 program StackCarriedUnitIncrementConsumer {
   state {
     score: packed = 10

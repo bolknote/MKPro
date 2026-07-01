@@ -18255,6 +18255,26 @@ bool lower_delayed_stack_carried_assignment_run(LoweringContext& context,
   return true;
 }
 
+bool lower_stack_carried_update_expression_to_x(LoweringContext& context,
+                                                const std::string& target, Expression delta,
+                                                const std::string& op, int line) {
+  const bool unit_update = is_numeric_literal_value(delta, 1);
+  Expression base = identifier_expression(target);
+  Expression update_expression = op == "+"
+                                     ? add_expression(std::move(base), std::move(delta))
+                                     : subtract_expression(std::move(base), std::move(delta));
+  if (unit_update && op == "+") {
+    if (!lower_increment_update(context, target, line) &&
+        !lower_expression_to_x(context, update_expression)) {
+      return false;
+    }
+    return true;
+  }
+  if (unit_update && op == "-" && can_lower_indirect_decrement_update(context, target, line))
+    return lower_decrement_update(context, target, "set ", line);
+  return lower_expression_to_x(context, update_expression);
+}
+
 bool lower_stack_carried_update_run(LoweringContext& context,
                                     const std::vector<V2Statement>& statements,
                                     std::size_t start, std::size_t& consumed) {
@@ -18295,21 +18315,8 @@ bool lower_stack_carried_update_run(LoweringContext& context,
   if (!stack_carried_assignment_future_safe(context, statements, start, start + 1U, target.name))
     return false;
 
-  const bool unit_update = is_numeric_literal_value(delta, 1);
-  Expression base = identifier_expression(target.name);
-  Expression update_expression = *update.op == "+="
-                                     ? add_expression(std::move(base), std::move(delta))
-                                     : subtract_expression(std::move(base), std::move(delta));
-  if (unit_update && *update.op == "+=") {
-    if (!lower_increment_update(context, target.name, update.line) &&
-        !lower_expression_to_x(context, update_expression)) {
-      return false;
-    }
-  } else if (unit_update && *update.op == "-=" &&
-             can_lower_indirect_decrement_update(context, target.name, update.line)) {
-    if (!lower_decrement_update(context, target.name, "set ", update.line))
-      return false;
-  } else if (!lower_expression_to_x(context, update_expression)) {
+  if (!lower_stack_carried_update_expression_to_x(context, target.name, std::move(delta),
+                                                  *update.op == "+=" ? "+" : "-", update.line)) {
     return false;
   }
   mark_current_x(context, target.name);
@@ -18320,6 +18327,86 @@ bool lower_stack_carried_update_run(LoweringContext& context,
                 " in X for the immediately following consumer instead of storing it.",
   });
   consumed = 1;
+  return true;
+}
+
+bool lower_delayed_stack_carried_update_run(LoweringContext& context,
+                                            const std::vector<V2Statement>& statements,
+                                            std::size_t start, std::size_t& consumed) {
+  consumed = 0;
+  if (start + 2U >= statements.size())
+    return false;
+  const V2Statement& update = statements.at(start);
+  if (update.kind != "v2_update" || !update.target.has_value() || !update.expr.has_value() ||
+      !update.op.has_value() || context.constants.contains(*update.target) ||
+      context.stack_only_state_fields.contains(*update.target)) {
+    return false;
+  }
+  if (*update.op != "+=" && *update.op != "-=")
+    return false;
+
+  Expression target;
+  Expression delta;
+  try {
+    target = parse_expression(*update.target, update.line);
+    delta = parse_expression(*update.expr, update.line);
+  } catch (const std::exception&) {
+    return false;
+  }
+  if (target.kind != "identifier" || !context.register_index_by_name.contains(target.name) ||
+      expression_contains_identifier(delta, target.name) ||
+      !expression_pure_for_substitution(delta)) {
+    return false;
+  }
+  if (is_coord_list_state_name(context, target.name) ||
+      is_segmented_cells_name(context, target.name) ||
+      is_cells_state_name(context, target.name) ||
+      context.scaled_coord_cell_names.contains(target.name)) {
+    return false;
+  }
+
+  const std::set<std::string> dependencies = expression_identifier_deps(delta);
+  if (dependencies.contains(target.name))
+    return false;
+
+  std::size_t consumer_index = start + 1U;
+  while (consumer_index < statements.size() &&
+         !statement_directly_consumes_current_x_identifier(context, statements.at(consumer_index),
+                                                           target.name)) {
+    if (!can_delay_stack_carried_assignment_past(context, statements.at(consumer_index),
+                                                 target.name, dependencies)) {
+      return false;
+    }
+    ++consumer_index;
+  }
+  if (consumer_index >= statements.size() || consumer_index == start + 1U)
+    return false;
+
+  const V2Statement& consumer = statements.at(consumer_index);
+  if (consumer.kind == "v2_if" || count_identifier_reads_in_statement(consumer, target.name) != 1)
+    return false;
+  if (!stack_carried_assignment_future_safe(context, statements, start, consumer_index,
+                                            target.name)) {
+    return false;
+  }
+
+  const std::vector<V2Statement> delayed_prefix(
+      statements.begin() + static_cast<std::vector<V2Statement>::difference_type>(start + 1U),
+      statements.begin() + static_cast<std::vector<V2Statement>::difference_type>(consumer_index));
+  if (!lower_statement_block(context, delayed_prefix))
+    return false;
+  if (!lower_stack_carried_update_expression_to_x(context, target.name, std::move(delta),
+                                                  *update.op == "+=" ? "+" : "-", update.line)) {
+    return false;
+  }
+  mark_current_x(context, target.name);
+  context.emitter.current_x_known_zero = false;
+  context.optimizations.push_back(OptimizationReport{
+      .name = "stack-carried-update-delayed",
+      .detail = "Delayed update to " + target.name +
+                " until its next proven stack consumer instead of storing it.",
+  });
+  consumed = consumer_index - start;
   return true;
 }
 
@@ -34402,6 +34489,15 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
       return false;
 
     std::size_t stack_carried_update_consumed = 0;
+    if (lower_delayed_stack_carried_update_run(context, statements, index,
+                                               stack_carried_update_consumed)) {
+      index += stack_carried_update_consumed - 1U;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+
+    stack_carried_update_consumed = 0;
     if (lower_stack_carried_update_run(context, statements, index,
                                        stack_carried_update_consumed)) {
       index += stack_carried_update_consumed - 1U;
