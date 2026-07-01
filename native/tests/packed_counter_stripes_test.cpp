@@ -65,6 +65,18 @@ std::string run_compiled_with_preloads(const CompileResult& result) {
   return compact(calc.display_text());
 }
 
+std::string run_indirect_jump_from_e_with_preload(const std::string& value) {
+  emulator::MK61 calc;
+  const emulator::ProgramLoadResult loaded =
+      calc.load_program({0x8e, 0x01, 0x50, 0x02, 0x50, 0x03, 0x04, 0x50});
+  require(loaded.diagnostics.empty(), "indirect jump probe should load into emulator");
+  calc.set_register("E", emulator_preload_value(value));
+  calc.press_sequence({"В/О", "С/П"});
+  const emulator::RunResult run = calc.run_until_stable(700, 5);
+  require(run.stopped, "indirect jump probe should stop in emulator");
+  return compact(calc.display_text());
+}
+
 bool has_logical_extract_preloaded_scale_sequence(const CompileResult& result,
                                                   const std::string& scale) {
   for (std::size_t index = 0; index + 4U < result.steps.size(); ++index) {
@@ -393,27 +405,33 @@ program SentinelDecimalPack {
           "forced sentinel decimal packing should report sentinel-decimal-pack");
   require(has_optimization(sentinel, "logical-packed-field-extract"),
           "sentinel middle field read should use logical mask extraction");
-  require(has_optimization(sentinel, "logical-packed-field-scale-preload"),
-          "sentinel middle field read should reuse a preloaded scale");
+  require(has_optimization(sentinel, "logical-packed-field-dual-mask-scale"),
+          "sentinel middle field read should reuse the mask register as the scale");
   require(sentinel.registers.contains("__packed_counter_0"),
           "sentinel decimal pack should allocate __packed_counter_0");
   require(sentinel.registers.contains("__packed_counter_mask_0"),
-          "sentinel decimal pack should allocate a hidden mask register");
+          "sentinel decimal pack should allocate a hidden mask/scale register");
   require(!sentinel.registers.contains("xx"), "sentinel decimal pack should remove xx");
   require(!sentinel.registers.contains("yy"), "sentinel decimal pack should remove yy");
   require(!sentinel.registers.contains("zz"), "sentinel decimal pack should remove zz");
   require(has_preload_value(sentinel, "1002943"),
           "sentinel decimal pack should store leading-one form 1002943");
-  require(has_preload_value(sentinel, "800FF077"),
-          "sentinel decimal pack should preload the logical mask");
-  require(has_preload_value(sentinel, "10000"),
-          "sentinel decimal pack should preload the logical scale");
-  require(has_logical_extract_preloaded_scale_sequence(sentinel, "10000"),
-          "sentinel middle field read should emit the logical mask plus recalled scale sequence");
+  require(has_preload_value(sentinel, "100FF"),
+          "sentinel decimal pack should preload the dual logical mask/scale");
+  require(!has_preload_value(sentinel, "800FF077"),
+          "sentinel decimal pack should not need the wider standalone logical mask");
+  require(!has_preload_value(sentinel, "10000"),
+          "sentinel decimal pack should not need a separate logical scale");
+  require(has_logical_extract_preloaded_scale_sequence(sentinel, "100FF"),
+          "sentinel middle field read should emit the dual mask plus recalled scale sequence");
   const std::string sentinel_display = run_compiled_with_preloads(sentinel);
   require(sentinel_display.find("29,") != std::string::npos,
           "sentinel decimal pack should preserve yy=29 when xx has leading zeros, got " +
               sentinel_display);
+  const std::string indirect_jump_display = run_indirect_jump_from_e_with_preload("100FF");
+  require(indirect_jump_display.find("4,") != std::string::npos,
+          "sentinel dual mask/scale value should remain usable as indirect jump target 06, got " +
+              indirect_jump_display);
 }
 
 } // namespace mkpro::tests

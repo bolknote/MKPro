@@ -19939,7 +19939,8 @@ bool lower_call_to_x(LoweringContext& context, const Expression& expression) {
 struct LogicalPackedFieldExtractMatch {
   Expression value;
   Expression mask;
-  int scale_exp = 0;
+  std::optional<int> scale_exp;
+  std::optional<Expression> scale;
   bool truncate = false;
 };
 
@@ -20021,7 +20022,15 @@ match_logical_packed_field_extract(const Expression& expression) {
       return LogicalPackedFieldExtractMatch{
           .value = left_mask->first,
           .mask = left_mask->second,
-          .scale_exp = *scale_exp,
+          .scale_exp = scale_exp,
+          .truncate = truncate,
+      };
+    }
+    if (expression_equals(*current->right, left_mask->second)) {
+      return LogicalPackedFieldExtractMatch{
+          .value = left_mask->first,
+          .mask = left_mask->second,
+          .scale = left_mask->second,
           .truncate = truncate,
       };
     }
@@ -20032,7 +20041,15 @@ match_logical_packed_field_extract(const Expression& expression) {
       return LogicalPackedFieldExtractMatch{
           .value = right_mask->first,
           .mask = right_mask->second,
-          .scale_exp = *scale_exp,
+          .scale_exp = scale_exp,
+          .truncate = truncate,
+      };
+    }
+    if (expression_equals(*current->left, right_mask->second)) {
+      return LogicalPackedFieldExtractMatch{
+          .value = right_mask->first,
+          .mask = right_mask->second,
+          .scale = right_mask->second,
           .truncate = truncate,
       };
     }
@@ -20045,9 +20062,11 @@ void collect_logical_packed_field_extract_scale_literals(const Expression& expre
                                                         std::map<std::string, int>& occurrences) {
   if (const std::optional<LogicalPackedFieldExtractMatch> match =
           match_logical_packed_field_extract(expression)) {
-    if (const std::optional<std::string> scale =
-            positive_power_of_ten_value_for_exponent(match->scale_exp)) {
-      collect_preload_literal_occurrence(*scale, values, occurrences);
+    if (match->scale_exp.has_value()) {
+      if (const std::optional<std::string> scale =
+              positive_power_of_ten_value_for_exponent(*match->scale_exp)) {
+        collect_preload_literal_occurrence(*scale, values, occurrences);
+      }
     }
     return;
   }
@@ -20159,19 +20178,32 @@ bool lower_logical_packed_field_extract_to_x(LoweringContext& context,
     return false;
   context.emitter.emit_op(0x37, "К ∧", "logical packed field mask");
   context.emitter.emit_op(0x35, "К {x}", "logical packed field fraction");
-  const std::optional<std::string> scale =
-      positive_power_of_ten_value_for_exponent(match->scale_exp);
-  if (scale.has_value() && has_preloaded_number(context, *scale)) {
-    emit_number_or_preload(context, *scale, "logical packed field scale");
+  if (match->scale.has_value()) {
+    if (!lower_expression_to_x(context, *match->scale))
+      return false;
+    if (!context.emitter.items.empty())
+      context.emitter.items.back().comment = "logical packed field scale";
     context.optimizations.push_back(OptimizationReport{
-        .name = "logical-packed-field-scale-preload",
-        .detail = "Reused preloaded " + *scale +
-                  " as the logical packed field scale factor.",
+        .name = "logical-packed-field-dual-mask-scale",
+        .detail = "Reused the logical mask register as the packed field scale factor.",
     });
+  } else if (match->scale_exp.has_value()) {
+    const std::optional<std::string> scale =
+        positive_power_of_ten_value_for_exponent(*match->scale_exp);
+    if (scale.has_value() && has_preloaded_number(context, *scale)) {
+      emit_number_or_preload(context, *scale, "logical packed field scale");
+      context.optimizations.push_back(OptimizationReport{
+          .name = "logical-packed-field-scale-preload",
+          .detail = "Reused preloaded " + *scale +
+                    " as the logical packed field scale factor.",
+      });
+    } else {
+      emit_number_or_preload(context, std::to_string(*match->scale_exp),
+                             "logical packed field scale exponent");
+      context.emitter.emit_op(0x15, "F 10^x", "logical packed field scale");
+    }
   } else {
-    emit_number_or_preload(context, std::to_string(match->scale_exp),
-                           "logical packed field scale exponent");
-    context.emitter.emit_op(0x15, "F 10^x", "logical packed field scale");
+    return false;
   }
   context.emitter.emit_op(0x12, "*", "logical packed field extract");
   if (match->truncate)
@@ -36805,6 +36837,7 @@ struct PackedCounterStripe {
   int width = 1;
   std::string kind;
   std::optional<std::string> logical_mask;
+  std::optional<std::string> logical_scale;
   int logical_scale_exp = 0;
 };
 
@@ -37450,10 +37483,10 @@ build_sentinel_decimal_pack_storage_plan(
     if (fields.size() == 3U && widths.at(0) == 2 && widths.at(1) == 2 && widths.at(2) == 2 &&
         index == 1U) {
       stripe.logical_mask = fresh_packed_counter_mask_name(program, 0);
-      stripe.logical_scale_exp = 4;
+      stripe.logical_scale = stripe.logical_mask;
       auxiliary_fields.push_back(PackedCounterAuxField{
           .name = *stripe.logical_mask,
-          .initial = "800FF077",
+          .initial = "100FF",
       });
     }
     stripes.push_back(std::move(stripe));
@@ -37732,10 +37765,14 @@ Expression packed_counter_stripe_selector_expr(const PackedCounterStripePlan& pl
 Expression packed_counter_extract_expr(const PackedCounterStripePlan& plan,
                                        const PackedCounterStripe& stripe) {
   if (stripe.logical_mask.has_value()) {
+    const Expression scale = stripe.logical_scale.has_value()
+                                 ? identifier_expression(*stripe.logical_scale)
+                                 : pow10_expression(
+                                       number_expression(std::to_string(stripe.logical_scale_exp)));
     return int_expression(multiply_expression(
         frac_expression(call_expression(
             "bit_and", {packed_counter_expr(plan), identifier_expression(*stripe.logical_mask)})),
-        pow10_expression(number_expression(std::to_string(stripe.logical_scale_exp)))));
+        scale));
   }
   if (stripe.kind == "sentinel-major") {
     const double sentinel = std::pow(10.0, static_cast<double>(stripe.width));
