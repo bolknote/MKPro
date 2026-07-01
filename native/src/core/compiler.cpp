@@ -18230,6 +18230,8 @@ bool lower_delayed_stack_carried_assignment_run(LoweringContext& context,
   const V2Statement& consumer = statements.at(consumer_index);
   if (consumer.kind == "v2_if" && statements_are_domain_error_trap(context, consumer.then_body))
     return false;
+  if (count_identifier_reads_in_statement(consumer, target.name) != 1)
+    return false;
   if (!stack_carried_assignment_future_safe(context, statements, start, consumer_index,
                                             target.name)) {
     return false;

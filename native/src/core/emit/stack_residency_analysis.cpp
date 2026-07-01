@@ -76,11 +76,29 @@ bool expression_text_references_identifier(const std::optional<std::string>& tex
   return expression_text_references_identifier(*text, name, line);
 }
 
+bool target_text_reads_identifier(const std::optional<std::string>& text,
+                                  const std::string& name, int line) {
+  if (!text.has_value())
+    return false;
+  const std::optional<Expression> expression = parse_expression_or_none(*text, line);
+  if (!expression.has_value() || expression->kind == "identifier")
+    return false;
+  return expression_references_identifier(*expression, name);
+}
+
+bool statement_writes_identifier(const V2Statement& statement, const std::string& name) {
+  if (statement.kind != "v2_assign" || !statement.target.has_value())
+    return false;
+  const std::optional<Expression> target = parse_expression_or_none(*statement.target,
+                                                                    statement.line);
+  return target.has_value() && target->kind == "identifier" && target->name == name;
+}
+
 bool statements_read_identifier(const std::vector<V2Statement>& statements,
                                 const std::string& name);
 
 bool statement_reads_identifier(const V2Statement& statement, const std::string& name) {
-  if (expression_text_references_identifier(statement.target, name, statement.line) ||
+  if (target_text_reads_identifier(statement.target, name, statement.line) ||
       expression_text_references_identifier(statement.expr, name, statement.line)) {
     return true;
   }
@@ -388,7 +406,7 @@ std::vector<StackResidentRestoreOp> stack_resident_restore_ops(std::size_t temp_
 bool statement_preserves_stack_residency(const V2Statement& statement,
                                          const std::set<std::string>& protected_temps) {
   for (const std::string& temp : protected_temps) {
-    if (statement_reads_identifier(statement, temp))
+    if (statement_writes_identifier(statement, temp) || statement_reads_identifier(statement, temp))
       return false;
   }
   if (statement.kind == "v2_if") {
