@@ -427,6 +427,10 @@ void example_sizes_match_typescript_baselines() {
                   dead_integer_opportunity->details.contains("selectorDataUse") &&
                   dead_integer_opportunity->details.contains("requiredAction") &&
                   dead_integer_opportunity->details.contains("savingsAggregation") &&
+                  dead_integer_opportunity->details.contains("proofOnlySavingsStatus") &&
+                  dead_integer_opportunity->details.contains("safeSavingsAction") &&
+                  dead_integer_opportunity->details.contains("safeSelectorStrategy") &&
+                  dead_integer_opportunity->details.contains("safeSelectorTarget") &&
                   dead_integer_opportunity->details.contains("integerPartConsumerOpcode") &&
                   dead_integer_opportunity->details.contains("fractionalEraseOpcode") &&
                   dead_integer_opportunity->details.contains("integerPartHazard") &&
@@ -446,6 +450,14 @@ void example_sizes_match_typescript_baselines() {
                       "keep-fractional-erase-before-data-arithmetic" &&
                   dead_integer_opportunity->details.at("savingsAggregation") ==
                       "alternative-candidate" &&
+                  dead_integer_opportunity->details.at("proofOnlySavingsStatus") ==
+                      "blocked-by-data-arithmetic" &&
+                  dead_integer_opportunity->details.at("safeSavingsAction") ==
+                      "align-selector-flow-to-natural-target" &&
+                  dead_integer_opportunity->details.at("safeSelectorStrategy") ==
+                      "recovery-free-natural-fractional-selector" &&
+                  dead_integer_opportunity->details.at("safeSelectorTarget") ==
+                      dead_integer_opportunity->details.at("naturalTarget") &&
                   dead_integer_opportunity->details.at("integerPartConsumerOpcode") ==
                       dead_integer_opportunity->details.at("fractionalSelectorConsumer") &&
                   dead_integer_opportunity->details.at("fractionalEraseOpcode") == "K {x}" &&
@@ -547,6 +559,16 @@ void example_sizes_match_typescript_baselines() {
                   layout_action->best_details.contains("layoutConflictKind"),
               "tic-tac-toe-4x4 size attribution should aggregate layout/code-data overlay next "
               "actions for blocked positive-savings candidates");
+      const SizeNextActionSummaryReport* safe_savings_action = find_size_next_action(
+          result, "safeSavingsAction", "align-selector-flow-to-natural-target");
+      require(safe_savings_action != nullptr && safe_savings_action->opportunities == 2 &&
+                  safe_savings_action->potential_savings == 1 &&
+                  safe_savings_action->best_savings == 1 &&
+                  safe_savings_action->best_blocker_kind == "data-arithmetic" &&
+                  safe_savings_action->best_details.contains("safeSelectorTarget") &&
+                  safe_savings_action->best_details.contains("safeSelectorStrategy"),
+              "tic-tac-toe-4x4 size attribution should aggregate recovery-free natural-target "
+              "selector moves separately from proof-only action labels");
       const SizeNextActionSummaryReport* stack_helper_action = find_size_next_action(
           result, "requiredAction", "stack-argument-helper-entry");
       require(stack_helper_action == nullptr,

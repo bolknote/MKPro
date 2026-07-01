@@ -45388,6 +45388,13 @@ size_opportunity_details(const CandidateReport& candidate,
       details.emplace("proofDisposition", "not-proof-only");
       details.emplace("requiredAction", "keep-fractional-erase-before-data-arithmetic");
       details.emplace("integerPartHazard", "arithmetic-before-fractional-erase");
+      details.emplace("proofOnlySavingsStatus", "blocked-by-data-arithmetic");
+      if (details.contains("recoveryFreeLayout") &&
+          details["recoveryFreeLayout"] == "natural-target" && details.contains("naturalTarget")) {
+        details.emplace("safeSavingsAction", "align-selector-flow-to-natural-target");
+        details.emplace("safeSelectorStrategy", "recovery-free-natural-fractional-selector");
+        details.emplace("safeSelectorTarget", details["naturalTarget"]);
+      }
     } else if (blocker == "indirect-address-control-use") {
       details.emplace("proofDisposition", "needs-final-indirect-target-artifact");
       details.emplace("requiredAction", "prove-indirect-target-or-erase-before-use");
@@ -46105,6 +46112,10 @@ SizeAttributionReport build_size_attribution_report(
     if (const auto layout_it = opportunity.details.find("layoutAction");
         layout_it != opportunity.details.end()) {
       add_next_action(opportunity, "layoutAction", layout_it->second, index);
+    }
+    if (const auto safe_it = opportunity.details.find("safeSavingsAction");
+        safe_it != opportunity.details.end()) {
+      add_next_action(opportunity, "safeSavingsAction", safe_it->second, index);
     }
   }
   report.next_actions.reserve(next_action_summaries.size());

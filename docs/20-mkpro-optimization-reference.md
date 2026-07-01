@@ -64,7 +64,8 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   `savingsAggregation=alternative-candidate`, so summaries count the best
   saving in that alternative group instead of summing mutually exclusive
   rejected candidates. The companion `nextActions` array aggregates positive-savings
-  opportunities by structured `requiredAction` and `layoutAction` details, so
+  opportunities by structured `requiredAction`, `layoutAction`, and
+  `safeSavingsAction` details, so
   the report can rank concrete compiler-side moves such as preserving
   fractional erasure before arithmetic or relayout/code-data-overlay work
   instead of leaving them buried inside free-form rejection text.
@@ -84,7 +85,11 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   cases where safety cannot be fixed by widening the proof alone, and
   `requiredAction` names the next compiler-side move, such as keeping the
   fractional erase before data arithmetic or proving a final indirect-target
-  artifact for address-only use. `currentNaturalTargetFlowCount` /
+  artifact for address-only use. When a recovery-free selector could avoid the
+  unsafe integer component by using the literal's natural target,
+  `safeSavingsAction=align-selector-flow-to-natural-target`,
+  `safeSelectorStrategy=recovery-free-natural-fractional-selector`, and
+  `safeSelectorTarget` name that concrete layout/proof path. `currentNaturalTargetFlowCount` /
   `currentNaturalTargetStableFlowCount` and the matching
   `currentSelectorTarget*` fields count direct-flow references to those targets
   in the current selected listing. `layoutDisposition` / `layoutAction` then say
