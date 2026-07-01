@@ -45720,6 +45720,20 @@ std::string size_report_ratio_text(int numerator, int denominator) {
   return std::to_string(numerator) + "/" + std::to_string(denominator);
 }
 
+std::string size_report_helper_spill_breakdown(
+    const std::vector<SizeHelperSpillSummaryReport>& spills) {
+  std::vector<std::string> parts;
+  parts.reserve(spills.size());
+  for (const SizeHelperSpillSummaryReport& spill : spills) {
+    parts.push_back(spill.name + ":" + std::to_string(spill.total_cells) + "c/" +
+                    std::to_string(spill.recall_cells) + "r/" +
+                    std::to_string(spill.store_cells) + "s@" +
+                    safe_format_label_address(spill.first_address) + ".." +
+                    safe_format_label_address(spill.last_address));
+  }
+  return join_strings(parts, ";");
+}
+
 struct PackedScoreAccumulatorHelperUsage {
   int terms = 0;
   int groups = 0;
@@ -46070,6 +46084,7 @@ SizeAttributionReport build_size_attribution_report(
   for (std::size_t index = 0; index < report.helpers.size(); ++index)
     helper_summary_by_label.emplace(report.helpers.at(index).label, index);
   std::map<std::string, std::set<std::string>> helper_register_traffic_names;
+  std::map<std::string, std::vector<SizeHelperSpillSummaryReport>> helper_register_traffic_spills;
   for (const SizeHelperSpillSummaryReport& spill : report.helper_spills) {
     const auto helper_it = helper_summary_by_label.find(spill.helper_label);
     if (helper_it == helper_summary_by_label.end())
@@ -46080,6 +46095,7 @@ SizeAttributionReport build_size_attribution_report(
     helper.register_store_cells += spill.store_cells;
     helper.register_traffic_occurrences += spill.recall_occurrences + spill.store_occurrences;
     helper_register_traffic_names[helper.label].insert(spill.name);
+    helper_register_traffic_spills[helper.label].push_back(spill);
   }
   for (SizeHelperSummaryReport& helper : report.helpers) {
     if (helper.register_traffic_cells <= 0)
@@ -46095,6 +46111,10 @@ SizeAttributionReport build_size_attribution_report(
           join_strings(std::vector<std::string>(names_it->second.begin(), names_it->second.end()),
                        ",");
     }
+    const auto spills_it = helper_register_traffic_spills.find(helper.label);
+    if (spills_it != helper_register_traffic_spills.end())
+      helper.details["registerTrafficBreakdown"] =
+          size_report_helper_spill_breakdown(spills_it->second);
     helper.details["registerTrafficAction"] = "try-value-aware-stack-register-scheduling";
   }
 

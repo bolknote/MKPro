@@ -370,6 +370,11 @@ void example_sizes_match_typescript_baselines() {
                   cell_mask_helper->details.at("registerTrafficNames").find("x") !=
                       std::string::npos &&
                   cell_mask_helper->details.at("registerTrafficNames").find("y") !=
+                      std::string::npos &&
+                  cell_mask_helper->details.contains("registerTrafficBreakdown") &&
+                  cell_mask_helper->details.at("registerTrafficBreakdown").find("x:") !=
+                      std::string::npos &&
+                  cell_mask_helper->details.at("registerTrafficBreakdown").find("y:") !=
                       std::string::npos,
               "tic-tac-toe-4x4 helper summary should aggregate helper-local register traffic "
               "for value-aware scheduler attribution");
@@ -397,6 +402,11 @@ void example_sizes_match_typescript_baselines() {
                   cell_mask_register_traffic->details.at("registerTrafficNames").find("x") !=
                       std::string::npos &&
                   cell_mask_register_traffic->details.at("registerTrafficNames").find("y") !=
+                      std::string::npos &&
+                  cell_mask_register_traffic->details.contains("registerTrafficBreakdown") &&
+                  cell_mask_register_traffic->details.at("registerTrafficBreakdown").find("x:") !=
+                      std::string::npos &&
+                  cell_mask_register_traffic->details.at("registerTrafficBreakdown").find("y:") !=
                       std::string::npos,
               "tic-tac-toe-4x4 size attribution should rank helper-local register traffic as a "
               "gross value-aware scheduler opportunity");
@@ -650,7 +660,8 @@ void example_sizes_match_typescript_baselines() {
                       cell_mask_helper->register_traffic_cells &&
                   value_aware_scheduler_blocker->best_variant == "helper-register-traffic" &&
                   value_aware_scheduler_blocker->best_details.contains("proofStatus") &&
-                  value_aware_scheduler_blocker->best_details.contains("schedulerScope"),
+                  value_aware_scheduler_blocker->best_details.contains("schedulerScope") &&
+                  value_aware_scheduler_blocker->best_details.contains("registerTrafficBreakdown"),
               "tic-tac-toe-4x4 size attribution should summarize helper-local register traffic "
               "as a value-aware stack/register scheduler blocker");
       const SizeNextActionSummaryReport* required_action = find_size_next_action(
@@ -713,7 +724,8 @@ void example_sizes_match_typescript_baselines() {
                   value_aware_scheduler_action->best_variant == "helper-register-traffic" &&
                   value_aware_scheduler_action->best_details.contains("savingsModel") &&
                   value_aware_scheduler_action->best_details.contains("schedulerScope") &&
-                  value_aware_scheduler_action->best_details.contains("proofStatus"),
+                  value_aware_scheduler_action->best_details.contains("proofStatus") &&
+                  value_aware_scheduler_action->best_details.contains("registerTrafficBreakdown"),
               "tic-tac-toe-4x4 size attribution should rank value-aware stack/register "
               "scheduling as a next action when helper-local register traffic is visible");
     }
