@@ -431,6 +431,8 @@ void example_sizes_match_typescript_baselines() {
                   dead_integer_opportunity->details.contains("safeSavingsAction") &&
                   dead_integer_opportunity->details.contains("safeSelectorStrategy") &&
                   dead_integer_opportunity->details.contains("safeSelectorTarget") &&
+                  dead_integer_opportunity->details.contains("safeSelectorCandidateStatus") &&
+                  dead_integer_opportunity->details.contains("safeSelectorCandidateAction") &&
                   dead_integer_opportunity->details.contains("integerPartConsumerOpcode") &&
                   dead_integer_opportunity->details.contains("fractionalEraseOpcode") &&
                   dead_integer_opportunity->details.contains("integerPartHazard") &&
@@ -458,6 +460,10 @@ void example_sizes_match_typescript_baselines() {
                       "recovery-free-natural-fractional-selector" &&
                   dead_integer_opportunity->details.at("safeSelectorTarget") ==
                       dead_integer_opportunity->details.at("naturalTarget") &&
+                  dead_integer_opportunity->details.at("safeSelectorCandidateStatus") ==
+                      "missing-natural-target-flow" &&
+                  dead_integer_opportunity->details.at("safeSelectorCandidateAction") ==
+                      "create-natural-target-flow-or-code-data-overlay" &&
                   dead_integer_opportunity->details.at("integerPartConsumerOpcode") ==
                       dead_integer_opportunity->details.at("fractionalSelectorConsumer") &&
                   dead_integer_opportunity->details.at("fractionalEraseOpcode") == "K {x}" &&
@@ -566,7 +572,8 @@ void example_sizes_match_typescript_baselines() {
                   safe_savings_action->best_savings == 1 &&
                   safe_savings_action->best_blocker_kind == "data-arithmetic" &&
                   safe_savings_action->best_details.contains("safeSelectorTarget") &&
-                  safe_savings_action->best_details.contains("safeSelectorStrategy"),
+                  safe_savings_action->best_details.contains("safeSelectorStrategy") &&
+                  safe_savings_action->best_details.contains("safeSelectorCandidateStatus"),
               "tic-tac-toe-4x4 size attribution should aggregate recovery-free natural-target "
               "selector moves separately from proof-only action labels");
       const SizeNextActionSummaryReport* stack_helper_action = find_size_next_action(

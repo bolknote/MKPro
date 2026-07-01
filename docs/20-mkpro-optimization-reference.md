@@ -89,7 +89,10 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   unsafe integer component by using the literal's natural target,
   `safeSavingsAction=align-selector-flow-to-natural-target`,
   `safeSelectorStrategy=recovery-free-natural-fractional-selector`, and
-  `safeSelectorTarget` name that concrete layout/proof path. `currentNaturalTargetFlowCount` /
+  `safeSelectorTarget` name that concrete layout/proof path. `safeSelectorCandidateStatus`
+  and `safeSelectorCandidateAction` then say whether candidate search can reuse an existing
+  natural-target flow or needs new layout / code-data-overlay work before that safe selector
+  can be generated. `currentNaturalTargetFlowCount` /
   `currentNaturalTargetStableFlowCount` and the matching
   `currentSelectorTarget*` fields count direct-flow references to those targets
   in the current selected listing. `layoutDisposition` / `layoutAction` then say

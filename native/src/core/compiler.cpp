@@ -45301,6 +45301,14 @@ void add_size_opportunity_flow_target_details(
     details["layoutConflictKind"] =
         occupant_kind == "address-operand" ? "code-data-overlay-candidate"
                                            : "occupied-target-cell";
+    if (details.find("safeSavingsAction") != details.end() &&
+        details["safeSavingsAction"] == "align-selector-flow-to-natural-target") {
+      details["safeSelectorCandidateStatus"] =
+          natural_present ? "natural-target-flow-present" : "missing-natural-target-flow";
+      details["safeSelectorCandidateAction"] =
+          natural_present ? "prove-or-reuse-natural-target-flow"
+                          : "create-natural-target-flow-or-code-data-overlay";
+    }
   }
 }
 
