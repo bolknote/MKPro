@@ -78,6 +78,21 @@ const SizeOpportunityReport* find_size_opportunity(const CompileResult& result,
   return it == result.size_attribution.opportunities.end() ? nullptr : &*it;
 }
 
+const SizeOpportunityReport* find_size_opportunity_detail(const CompileResult& result,
+                                                          const std::string& variant,
+                                                          const std::string& key,
+                                                          const std::string& value) {
+  const auto it = std::find_if(result.size_attribution.opportunities.begin(),
+                               result.size_attribution.opportunities.end(),
+                               [&](const SizeOpportunityReport& opportunity) {
+                                 const auto detail = opportunity.details.find(key);
+                                 return opportunity.variant == variant &&
+                                        detail != opportunity.details.end() &&
+                                        detail->second == value;
+                               });
+  return it == result.size_attribution.opportunities.end() ? nullptr : &*it;
+}
+
 const SizeBlockerSummaryReport* find_size_blocker(const CompileResult& result,
                                                   const std::string& blocker_kind) {
   const auto it = std::find_if(result.size_attribution.blockers.begin(),
@@ -358,6 +373,33 @@ void example_sizes_match_typescript_baselines() {
                       std::string::npos,
               "tic-tac-toe-4x4 helper summary should aggregate helper-local register traffic "
               "for value-aware scheduler attribution");
+      const SizeOpportunityReport* cell_mask_register_traffic = find_size_opportunity_detail(
+          result, "helper-register-traffic", "helperLabel", "expr cell_mask(x, y)");
+      require(cell_mask_register_traffic != nullptr &&
+                  cell_mask_register_traffic->site == "helper" &&
+                  cell_mask_register_traffic->savings ==
+                      cell_mask_helper->register_traffic_cells &&
+                  cell_mask_register_traffic->candidate_steps ==
+                      static_cast<int>(result.steps.size()) -
+                          cell_mask_helper->register_traffic_cells &&
+                  cell_mask_register_traffic->blocker_kind ==
+                      "value-aware-stack-register-scheduler" &&
+                  cell_mask_register_traffic->details.contains("savingsModel") &&
+                  cell_mask_register_traffic->details.at("savingsModel") ==
+                      "gross-helper-register-traffic-before-callsite-proof" &&
+                  cell_mask_register_traffic->details.contains("proofStatus") &&
+                  cell_mask_register_traffic->details.at("proofStatus") ==
+                      "missing-callsite-stack-value-proof" &&
+                  cell_mask_register_traffic->details.contains("requiredAction") &&
+                  cell_mask_register_traffic->details.at("requiredAction") ==
+                      "value-aware-stack-register-scheduling" &&
+                  cell_mask_register_traffic->details.contains("registerTrafficNames") &&
+                  cell_mask_register_traffic->details.at("registerTrafficNames").find("x") !=
+                      std::string::npos &&
+                  cell_mask_register_traffic->details.at("registerTrafficNames").find("y") !=
+                      std::string::npos,
+              "tic-tac-toe-4x4 size attribution should rank helper-local register traffic as a "
+              "gross value-aware scheduler opportunity");
       const SizeAbiBlockerReport* stack_helper_abi = find_size_abi_blocker(
           result, "stack-helper-abi", "cell_mask(x, y)");
       require(stack_helper_abi != nullptr && stack_helper_abi->line == 103 &&
@@ -598,6 +640,19 @@ void example_sizes_match_typescript_baselines() {
       require(stack_helper_abi_blocker == nullptr,
               "tic-tac-toe-4x4 size attribution should not summarize net-negative stack-helper "
               "ABI savings as a positive optimizer blocker");
+      const SizeBlockerSummaryReport* value_aware_scheduler_blocker =
+          find_size_blocker(result, "value-aware-stack-register-scheduler");
+      require(value_aware_scheduler_blocker != nullptr &&
+                  value_aware_scheduler_blocker->opportunities >= 1 &&
+                  value_aware_scheduler_blocker->potential_savings >=
+                      cell_mask_helper->register_traffic_cells &&
+                  value_aware_scheduler_blocker->best_savings >=
+                      cell_mask_helper->register_traffic_cells &&
+                  value_aware_scheduler_blocker->best_variant == "helper-register-traffic" &&
+                  value_aware_scheduler_blocker->best_details.contains("proofStatus") &&
+                  value_aware_scheduler_blocker->best_details.contains("schedulerScope"),
+              "tic-tac-toe-4x4 size attribution should summarize helper-local register traffic "
+              "as a value-aware stack/register scheduler blocker");
       const SizeNextActionSummaryReport* required_action = find_size_next_action(
           result, "requiredAction", "keep-fractional-erase-before-data-arithmetic");
       require(required_action != nullptr && required_action->opportunities == 2 &&
@@ -645,6 +700,22 @@ void example_sizes_match_typescript_baselines() {
       require(stack_helper_action == nullptr,
               "tic-tac-toe-4x4 size attribution should not rank net-negative stack-entry ABI "
               "implementation as a positive next action");
+      const SizeNextActionSummaryReport* value_aware_scheduler_action = find_size_next_action(
+          result, "requiredAction", "value-aware-stack-register-scheduling");
+      require(value_aware_scheduler_action != nullptr &&
+                  value_aware_scheduler_action->opportunities >= 1 &&
+                  value_aware_scheduler_action->potential_savings >=
+                      cell_mask_helper->register_traffic_cells &&
+                  value_aware_scheduler_action->best_savings >=
+                      cell_mask_helper->register_traffic_cells &&
+                  value_aware_scheduler_action->best_blocker_kind ==
+                      "value-aware-stack-register-scheduler" &&
+                  value_aware_scheduler_action->best_variant == "helper-register-traffic" &&
+                  value_aware_scheduler_action->best_details.contains("savingsModel") &&
+                  value_aware_scheduler_action->best_details.contains("schedulerScope") &&
+                  value_aware_scheduler_action->best_details.contains("proofStatus"),
+              "tic-tac-toe-4x4 size attribution should rank value-aware stack/register "
+              "scheduling as a next action when helper-local register traffic is visible");
     }
   }
 }

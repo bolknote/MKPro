@@ -46088,7 +46088,33 @@ SizeAttributionReport build_size_attribution_report(
             });
 
   const int current_steps = static_cast<int>(steps.size());
-  report.opportunities.reserve(rejected_candidates.size() + report.abi_blockers.size());
+  report.opportunities.reserve(rejected_candidates.size() + report.abi_blockers.size() +
+                               report.helpers.size());
+  for (const SizeHelperSummaryReport& helper : report.helpers) {
+    if (helper.register_traffic_cells <= 0)
+      continue;
+    std::map<std::string, std::string> details = helper.details;
+    details["helperLabel"] = helper.label;
+    details["helperTotalCells"] = std::to_string(helper.total_cells);
+    details["helperBodyCells"] = std::to_string(helper.body_cells);
+    details["helperCallSiteCells"] = std::to_string(helper.call_site_cells);
+    details["candidateBasis"] = "avoid-helper-local-register-traffic";
+    details["savingsModel"] = "gross-helper-register-traffic-before-callsite-proof";
+    details["proofStatus"] = "missing-callsite-stack-value-proof";
+    details["requiredAction"] = "value-aware-stack-register-scheduling";
+    details["schedulerScope"] = "helper-entry-and-callsite-stack-values";
+    report.opportunities.push_back(SizeOpportunityReport{
+        .site = "helper",
+        .variant = "helper-register-traffic",
+        .current_steps = current_steps,
+        .candidate_steps = current_steps - helper.register_traffic_cells,
+        .savings = helper.register_traffic_cells,
+        .reason = "helper-local register traffic requires value-aware stack/register scheduling "
+                  "proof before it can be removed",
+        .blocker_kind = "value-aware-stack-register-scheduler",
+        .details = std::move(details),
+    });
+  }
   for (const SizeAbiBlockerReport& blocker : report.abi_blockers) {
     if (blocker.materialize_cells <= 0)
       continue;
