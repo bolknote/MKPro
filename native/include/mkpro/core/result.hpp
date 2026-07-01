@@ -155,6 +155,10 @@ struct SizeHelperSummaryReport {
   int call_site_cells = 0;
   int body_occurrences = 0;
   int call_occurrences = 0;
+  int register_traffic_cells = 0;
+  int register_recall_cells = 0;
+  int register_store_cells = 0;
+  int register_traffic_occurrences = 0;
   int first_address = 0;
   int last_address = 0;
   std::map<std::string, std::string> details;

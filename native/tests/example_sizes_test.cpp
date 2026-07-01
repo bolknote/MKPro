@@ -337,6 +337,27 @@ void example_sizes_match_typescript_baselines() {
                   cell_mask_y_spill->store_cells == 0,
               "tic-tac-toe-4x4 size attribution should expose y recalls inside the cell_mask "
               "helper body");
+      require(cell_mask_helper->register_traffic_cells ==
+                      cell_mask_x_spill->total_cells + cell_mask_y_spill->total_cells &&
+                  cell_mask_helper->register_recall_cells ==
+                      cell_mask_x_spill->recall_cells + cell_mask_y_spill->recall_cells &&
+                  cell_mask_helper->register_store_cells ==
+                      cell_mask_x_spill->store_cells + cell_mask_y_spill->store_cells &&
+                  cell_mask_helper->register_traffic_occurrences ==
+                      cell_mask_x_spill->recall_occurrences +
+                          cell_mask_y_spill->recall_occurrences +
+                          cell_mask_x_spill->store_occurrences +
+                          cell_mask_y_spill->store_occurrences &&
+                  cell_mask_helper->details.contains("registerTrafficAction") &&
+                  cell_mask_helper->details.at("registerTrafficAction") ==
+                      "try-value-aware-stack-register-scheduling" &&
+                  cell_mask_helper->details.contains("registerTrafficNames") &&
+                  cell_mask_helper->details.at("registerTrafficNames").find("x") !=
+                      std::string::npos &&
+                  cell_mask_helper->details.at("registerTrafficNames").find("y") !=
+                      std::string::npos,
+              "tic-tac-toe-4x4 helper summary should aggregate helper-local register traffic "
+              "for value-aware scheduler attribution");
       const SizeAbiBlockerReport* stack_helper_abi = find_size_abi_blocker(
           result, "stack-helper-abi", "cell_mask(x, y)");
       require(stack_helper_abi != nullptr && stack_helper_abi->line == 103 &&

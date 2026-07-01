@@ -328,6 +328,10 @@ void print_json_size_attribution(const mkpro::SizeAttributionReport& report, std
     std::cout << ", \"callSiteCells\": " << helper.call_site_cells;
     std::cout << ", \"bodyOccurrences\": " << helper.body_occurrences;
     std::cout << ", \"callOccurrences\": " << helper.call_occurrences;
+    std::cout << ", \"registerTrafficCells\": " << helper.register_traffic_cells;
+    std::cout << ", \"registerRecallCells\": " << helper.register_recall_cells;
+    std::cout << ", \"registerStoreCells\": " << helper.register_store_cells;
+    std::cout << ", \"registerTrafficOccurrences\": " << helper.register_traffic_occurrences;
     std::cout << ", \"firstAddress\": " << helper.first_address;
     std::cout << ", \"lastAddress\": " << helper.last_address;
     if (!helper.details.empty()) {
@@ -808,8 +812,13 @@ void print_human_analysis_report(const mkpro::CompileResult& result) {
                 << " total=" << helper.total_cells
                 << " body=" << helper.body_cells
                 << " calls=" << helper.call_site_cells
-                << " callOccurrences=" << helper.call_occurrences
-                << " range=" << helper.first_address << ".." << helper.last_address;
+                << " callOccurrences=" << helper.call_occurrences;
+      if (helper.register_traffic_cells > 0) {
+        std::cout << " registerTraffic=" << helper.register_traffic_cells
+                  << " recalls=" << helper.register_recall_cells
+                  << " stores=" << helper.register_store_cells;
+      }
+      std::cout << " range=" << helper.first_address << ".." << helper.last_address;
       if (!helper.details.empty()) {
         std::cout << " details={";
         std::size_t detail_index = 0;

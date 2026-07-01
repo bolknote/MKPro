@@ -45958,6 +45958,37 @@ SizeAttributionReport build_size_attribution_report(
                 return left.helper_label < right.helper_label;
               return left.name < right.name;
             });
+  std::map<std::string, std::size_t> helper_summary_by_label;
+  for (std::size_t index = 0; index < report.helpers.size(); ++index)
+    helper_summary_by_label.emplace(report.helpers.at(index).label, index);
+  std::map<std::string, std::set<std::string>> helper_register_traffic_names;
+  for (const SizeHelperSpillSummaryReport& spill : report.helper_spills) {
+    const auto helper_it = helper_summary_by_label.find(spill.helper_label);
+    if (helper_it == helper_summary_by_label.end())
+      continue;
+    SizeHelperSummaryReport& helper = report.helpers.at(helper_it->second);
+    helper.register_traffic_cells += spill.total_cells;
+    helper.register_recall_cells += spill.recall_cells;
+    helper.register_store_cells += spill.store_cells;
+    helper.register_traffic_occurrences += spill.recall_occurrences + spill.store_occurrences;
+    helper_register_traffic_names[helper.label].insert(spill.name);
+  }
+  for (SizeHelperSummaryReport& helper : report.helpers) {
+    if (helper.register_traffic_cells <= 0)
+      continue;
+    helper.details["registerTrafficCells"] = std::to_string(helper.register_traffic_cells);
+    helper.details["registerRecallCells"] = std::to_string(helper.register_recall_cells);
+    helper.details["registerStoreCells"] = std::to_string(helper.register_store_cells);
+    helper.details["registerTrafficOccurrences"] =
+        std::to_string(helper.register_traffic_occurrences);
+    const auto names_it = helper_register_traffic_names.find(helper.label);
+    if (names_it != helper_register_traffic_names.end()) {
+      helper.details["registerTrafficNames"] =
+          join_strings(std::vector<std::string>(names_it->second.begin(), names_it->second.end()),
+                       ",");
+    }
+    helper.details["registerTrafficAction"] = "try-value-aware-stack-register-scheduling";
+  }
 
   struct AbiBlockerAggregate {
     std::string kind;
