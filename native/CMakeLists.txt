@@ -74,6 +74,7 @@ add_library(mkpro_core STATIC
   src/core/passes/register_coalesce.cpp
   src/core/passes/redundant_prologue.cpp
   src/core/passes/return_suffix_gadget.cpp
+  src/core/passes/return_trampoline.cpp
   src/core/passes/return_zero_jump.cpp
   src/core/passes/shared_call_tail.cpp
   src/core/passes/shared_straight_line_helper.cpp

@@ -22,6 +22,7 @@
 #include "mkpro/core/passes/redundant_prologue.hpp"
 #include "mkpro/core/passes/register_coalesce.hpp"
 #include "mkpro/core/passes/return_suffix_gadget.hpp"
+#include "mkpro/core/passes/return_trampoline.hpp"
 #include "mkpro/core/passes/return_zero_jump.hpp"
 #include "mkpro/core/passes/shared_call_tail.hpp"
 #include "mkpro/core/passes/shared_straight_line_helper.hpp"
@@ -111,6 +112,7 @@ const std::vector<IrPass>& pass_pipeline() {
       shared_straight_line_helper_pass(),
       callee_hole_straight_line_helper_pass(),
       return_zero_jump_pass(),
+      return_trampoline_pass(),
       store_recall_peephole_pass(),
       pre_shift_stack_lift_pass(),
       jump_to_next_threading_pass(),

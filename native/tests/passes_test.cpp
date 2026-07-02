@@ -11,6 +11,7 @@
 #include "mkpro/core/passes/preloaded_indirect_flow.hpp"
 #include "mkpro/core/passes/redundant_prologue.hpp"
 #include "mkpro/core/passes/return_suffix_gadget.hpp"
+#include "mkpro/core/passes/return_trampoline.hpp"
 #include "mkpro/core/passes/return_zero_jump.hpp"
 #include "mkpro/core/passes/shared_call_tail.hpp"
 #include "mkpro/core/passes/shared_straight_line_helper.hpp"
@@ -298,6 +299,11 @@ core::passes::PassResult run_shared_straight_line_helper(const std::vector<IrOp>
 core::passes::PassResult run_return_zero_jump(const std::vector<IrOp>& ops) {
   const CompileOptions options;
   return core::passes::return_zero_jump(ops, core::passes::PassContext{.options = options});
+}
+
+core::passes::PassResult run_return_trampoline(const std::vector<IrOp>& ops) {
+  const CompileOptions options;
+  return core::passes::return_trampoline(ops, core::passes::PassContext{.options = options});
 }
 
 core::passes::PassResult run_store_recall_peephole(const std::vector<IrOp>& ops) {
@@ -945,6 +951,51 @@ void pass_pipeline_matches_initial_typescript_contract() {
     const core::passes::PassResult with_call =
         run_return_zero_jump({plain(0x01), call_to("proc"), jump_to("start"), label("start")});
     require(with_call.applied == 0, "return-zero-jump ignored call safety guard");
+  }
+
+  {
+    const std::vector<IrOp> program = {
+        label("ret0"), ret(), plain(0x01),
+        cjump_to("==0", 0x57, "ret0"), plain(0x02),
+        jump_to("ret0"), stop("halt"),
+    };
+    const core::passes::PassResult result = run_return_trampoline(program);
+    require(result.applied == 2,
+            "return-trampoline did not replace both direct branches to В/О@00");
+    require(result.ops.at(3).kind == IrKind::IndirectCondJump,
+            "return-trampoline did not emit indirect conditional jump");
+    require(result.ops.at(3).opcode == 0xe7,
+            "return-trampoline used the wrong indirect conditional opcode");
+    require(result.ops.at(5).kind == IrKind::IndirectJump,
+            "return-trampoline did not emit indirect jump");
+    require(result.ops.at(5).opcode == 0x87,
+            "return-trampoline used the wrong indirect jump opcode");
+    require(result.preloads.size() == 1, "return-trampoline did not report selector preload");
+    require(result.preloads.at(0).register_name == "7" && result.preloads.at(0).value == "B2",
+            "return-trampoline picked the wrong return-zero selector preload");
+    require(!result.preloads.at(0).counts_against_program,
+            "return-trampoline selector preload should not count against program cells");
+    require(result.optimizations.size() == 1, "return-trampoline did not report optimization");
+    require(result.optimizations.at(0).name == "return-trampoline",
+            "return-trampoline reported wrong optimization name");
+    require(machine_cell_count(result.ops) == machine_cell_count(program) - 2,
+            "return-trampoline did not save one cell per rewritten branch");
+  }
+
+  {
+    const core::passes::PassResult result =
+        run_return_trampoline({label("zero"), plain(0x01), jump_to("zero")});
+    require(result.applied == 0,
+            "return-trampoline optimized without В/О in physical cell 00");
+  }
+
+  {
+    const core::passes::PassResult result =
+        run_return_trampoline({label("ret0"), ret(), plain(0x01),
+                               cjump_to("==0", 0x57, "ret0"), numeric_jump(6),
+                               stop("halt")});
+    require(result.applied == 0,
+            "return-trampoline shifted code before a later absolute numeric target");
   }
 
   {

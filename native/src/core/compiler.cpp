@@ -45013,6 +45013,10 @@ build_candidate_reports(const std::vector<OptimizationReport>& optimizations, in
     add_selected("ir-pass", "preloaded-indirect-flow",
                  "compiler-owned address preload selected for one-cell indirect branch/call", 1);
   }
+  if (has_optimization_named(optimizations, "return-trampoline")) {
+    add_selected("ir-pass", "return-trampoline",
+                 "compiler-owned selector routes direct branches to В/О at cell 00", 1);
+  }
   if (has_optimization_named(optimizations, "preloaded-super-dark-flow")) {
     add_selected("ir-pass", "preloaded-super-dark-flow",
                  "compiler-owned FA..FF preload selected for one-command super-dark flow", 1);
@@ -45152,6 +45156,9 @@ OptimizerReport build_optimizer_report(const std::vector<OptimizationReport>& op
       {"preloaded-indirect-flow", "flow", "undocumented", {"indirect-flow"},
        {"preloaded-indirect-flow"}, false,
        "Uses compiler-owned setup-time branch selectors for one-cell indirect flow."},
+      {"return-trampoline", "flow", "undocumented", {"indirect-flow"},
+       {"return-trampoline"}, false,
+       "Routes branches to an existing В/О in physical cell 00 through one-cell indirect flow."},
       {"post-layout-stop-tail-reuse", "layout", "undocumented", {"indirect-flow"},
        {"post-layout-stop-tail-reuse", "post-layout-existing-selector-flow"}, false,
        "Reuses post-layout stop tails and existing selectors after final address proofs."},
@@ -45214,7 +45221,7 @@ build_machine_features_used(const std::vector<OptimizationReport>& optimizations
   if (has_optimization_named(optimizations, "address-code-overlay"))
     add("code-data-overlay", "layout",
         "Layout marked address cells as reusable code/data overlay candidates.");
-  if (has_any_optimization_named(optimizations, {"preloaded-indirect-flow",
+  if (has_any_optimization_named(optimizations, {"preloaded-indirect-flow", "return-trampoline",
                                                  "post-layout-existing-selector-flow"}))
     add("indirect-flow", "optimizer",
         "Optimizer selected register-held branch addresses for one-cell indirect flow.");
