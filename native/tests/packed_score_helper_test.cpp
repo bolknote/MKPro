@@ -777,6 +777,56 @@ program PackedScoreXParamAccumulatorHelper {
   require(count_steps_with_comment(x_param_sequence, "packed_score stack accumulator") == 0,
           "x-param packed_score sequence should not need separate accumulator add cells");
 
+  const CompileResult x_param_mixed_prefix_sequence = compile_source(R"mkpro(
+program PackedScoreXParamMixedPrefixAccumulatorHelper {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    d: packed = 44447.4
+    bonus: packed = 3
+    x: counter 0..7 = 2
+    y: counter 0..7 = 3
+    line: packed = 0
+    score: packed = 0
+  }
+  loop {
+    score = 0
+    normalize(x + y)
+    score += sum(bonus, packed_score(a, 1), packed_score(b, line))
+    normalize(x - y)
+    score = score + packed_score(c, 2) + packed_score(d, line)
+    halt(score)
+  }
+
+  fn normalize(raw_line) {
+    line = frac((raw_line + 3) / 4) * 4 + 1
+  }
+}
+)mkpro",
+                                                                  pinned_options());
+  require(x_param_mixed_prefix_sequence.implemented,
+          "x-param mixed-prefix packed_score accumulator-helper program should compile");
+  require(x_param_mixed_prefix_sequence.diagnostics.empty(),
+          "x-param mixed-prefix packed_score compile should not report diagnostics");
+  require(count_optimization(x_param_mixed_prefix_sequence,
+                             "x-param-packed-score-line-stack-accumulate") == 2,
+          "x-param mixed-prefix packed_score sequence should keep both returned-index updates "
+          "stack-carried");
+  require(count_packed_score_accumulator_helper_jumps(x_param_mixed_prefix_sequence) == 4,
+          "x-param mixed-prefix packed_score sequence should call the accumulator helper for "
+          "prefix and returned-index terms");
+  require(count_packed_score_helper_jumps(x_param_mixed_prefix_sequence) == 0,
+          "x-param mixed-prefix packed_score sequence should not use the standalone helper "
+          "fallback");
+  require(count_steps_with_comment(x_param_mixed_prefix_sequence,
+                                   "packed_score stack accumulator") == 0,
+          "x-param mixed-prefix packed_score sequence should not need separate accumulator add "
+          "cells");
+  require(count_steps_with_comment(x_param_mixed_prefix_sequence, "set line") == 0 &&
+              count_steps_with_comment(x_param_mixed_prefix_sequence, "recall line") == 0,
+          "x-param mixed-prefix packed_score sequence should keep returned indexes stack-only");
+
   const CompileResult x_param_expression_line_sequence = compile_source(R"mkpro(
 program PackedScoreXParamExpressionLineAccumulatorHelper {
   state {
