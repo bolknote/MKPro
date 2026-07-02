@@ -323,36 +323,33 @@ program StackHelperAbiAggregation {
                 blocker->details.contains("materializeCellsPerCallSite") &&
                 blocker->details.at("materializeCellsPerCallSite") == "2" &&
                 blocker->details.contains("estimatedStackEntryOverheadCells") &&
-                blocker->details.at("estimatedStackEntryOverheadCells") == "5" &&
+                blocker->details.at("estimatedStackEntryOverheadCells") == "11" &&
                 blocker->details.contains("estimatedNetSavings") &&
-                blocker->details.at("estimatedNetSavings") == "1" &&
+                blocker->details.at("estimatedNetSavings") == "-5" &&
                 blocker->details.contains("estimatedBreakEvenCallSites") &&
-                blocker->details.at("estimatedBreakEvenCallSites") == "3" &&
+                blocker->details.at("estimatedBreakEvenCallSites") == "6" &&
                 blocker->details.contains("additionalCallSitesToBreakEven") &&
-                blocker->details.at("additionalCallSitesToBreakEven") == "0" &&
+                blocker->details.at("additionalCallSitesToBreakEven") == "3" &&
                 blocker->details.contains("firstLine") &&
                 blocker->details.contains("lastLine") &&
                 blocker->details.contains("costModelAction") &&
                 blocker->details.at("costModelAction") ==
-                    "implement-stack-argument-helper-entry",
-            "repeated stack helper ABI report should amortize the shared stack-entry body");
+                    "find-more-stack-entry-call-sites-or-inline-helper",
+            "repeated stack helper ABI report should keep current stack-entry cost conservative");
     const SizeOpportunityReport* opportunity = find_size_opportunity(result, "stack-helper-abi");
-    require(opportunity != nullptr && opportunity->savings == 1 &&
-                opportunity->candidate_steps == static_cast<int>(result.steps.size()) - 1 &&
+    require(opportunity != nullptr && opportunity->savings == -5 &&
+                opportunity->candidate_steps == static_cast<int>(result.steps.size()) + 5 &&
                 opportunity->details.contains("estimatedNetSavings") &&
-                opportunity->details.at("estimatedNetSavings") == "1" &&
+                opportunity->details.at("estimatedNetSavings") == "-5" &&
                 opportunity->details.contains("stackEntryCandidateCallSites") &&
                 opportunity->details.at("stackEntryCandidateCallSites") == "3",
-            "stack helper ABI opportunity should rank repeated sites by net savings");
+            "stack helper ABI opportunity should expose repeated sites without ranking them as a "
+            "size win");
     const SizeNextActionSummaryReport* cost_action = find_size_next_action(
         result, "costModelAction", "implement-stack-argument-helper-entry");
-    require(cost_action != nullptr && cost_action->opportunities == 1 &&
-                cost_action->potential_savings == 1 && cost_action->best_savings == 1 &&
-                cost_action->best_variant == "stack-helper-abi" &&
-                cost_action->best_blocker_kind == "stack-helper-abi" &&
-                cost_action->best_details.contains("costModelAction"),
-            "positive stack helper ABI opportunity should rank the concrete implementation "
-            "action");
+    require(cost_action == nullptr,
+            "negative stack helper ABI estimate should not rank implementation as a positive "
+            "next action");
 
     CompileOptions stack_entry_options;
     stack_entry_options.analysis = true;
