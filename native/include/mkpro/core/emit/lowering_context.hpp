@@ -247,6 +247,7 @@ struct LoweringContext {
   bool setup_only_counted_loop_init = false;
   bool x_param_value_functions = false;
   bool x_param_y_stack_stored_entry = false;
+  bool canonicalize_packed_line_bank_walks = false;
   bool packed_line_family_update_check_tail = false;
   bool packed_line_family_mutating_selector_update_check_tail = false;
   bool packed_line_family_borrowed_mutating_selector_update_check_tail = false;

@@ -1,5 +1,7 @@
 #include "mkpro/core/passes/cfg.hpp"
 
+#include "mkpro/core/passes/helpers.hpp"
+
 #include <algorithm>
 #include <string>
 #include <variant>
@@ -140,6 +142,10 @@ std::vector<std::vector<CfgEdge>> build_cfg_edges(const std::vector<IrOp>& ops,
     case IrKind::IndirectJump:
       if (const std::optional<int> target = known_indirect_flow_target(op)) {
         jump_to_address(*target);
+      } else if (const std::vector<std::string> labels = computed_dispatch_target_labels(op);
+                 !labels.empty()) {
+        for (const std::string& label : labels)
+          jump_to(IrTarget{label});
       } else {
         unknown_indirect_flow();
       }
@@ -147,6 +153,10 @@ std::vector<std::vector<CfgEdge>> build_cfg_edges(const std::vector<IrOp>& ops,
     case IrKind::IndirectCall:
       if (const std::optional<int> target = known_indirect_flow_target(op)) {
         jump_to_address(*target);
+      } else if (const std::vector<std::string> labels = computed_dispatch_target_labels(op);
+                 !labels.empty()) {
+        for (const std::string& label : labels)
+          jump_to(IrTarget{label});
       } else {
         unknown_indirect_flow();
       }
@@ -156,6 +166,10 @@ std::vector<std::vector<CfgEdge>> build_cfg_edges(const std::vector<IrOp>& ops,
     case IrKind::IndirectCondJump:
       if (const std::optional<int> target = known_indirect_flow_target(op)) {
         jump_to_address(*target);
+      } else if (const std::vector<std::string> labels = computed_dispatch_target_labels(op);
+                 !labels.empty()) {
+        for (const std::string& label : labels)
+          jump_to(IrTarget{label});
       } else {
         unknown_indirect_flow();
       }

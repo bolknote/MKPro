@@ -8891,6 +8891,36 @@ indexed_packed_pow10_delta_stack_index_name_for_analysis(const V2Statement& stat
   return pow10_index_name_from_stack_term_for_analysis(*expression.right);
 }
 
+// score += packed_score(bank[selector], index) reads its pow10 index exactly
+// once, so the Y-stack machinery can carry the index on the stack the same way
+// it does for the packed_add delta shape.
+std::optional<std::string> packed_score_y_stack_index_name_for_analysis(
+    const V2Statement& statement) {
+  if (statement.kind != "v2_update" || statement.op != "+=" || !statement.target.has_value() ||
+      !statement.expr.has_value())
+    return std::nullopt;
+  try {
+    const Expression target = parse_expression(*statement.target, statement.line);
+    if (target.kind != "identifier")
+      return std::nullopt;
+    const Expression expression = parse_expression(*statement.expr, statement.line);
+    if (expression.kind != "call" || lower_ascii(expression.callee) != "packed_score" ||
+        expression.args.size() != 2U)
+      return std::nullopt;
+    const Expression& bank = expression.args.at(0);
+    const Expression& index = expression.args.at(1);
+    if (bank.kind != "indexed" || bank.index == nullptr || bank.index->kind != "identifier")
+      return std::nullopt;
+    if (index.kind != "identifier" || index.name == bank.index->name ||
+        index.name == target.name) {
+      return std::nullopt;
+    }
+    return index.name;
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
 std::optional<bool> statement_first_y_stack_access(const V2Program& program,
                                                    const V2Statement& statement,
                                                    const std::string& name,
@@ -9126,15 +9156,18 @@ bool all_x_param_calls_have_y_stack_producer(const V2Program& program, const std
 }
 
 std::map<std::string, XParamYStackProcLowering> collect_x_param_y_stack_proc_lowerings(
-    const V2Program& program, const std::map<std::string, XParamProcLowering>& x_param_procs) {
+    const V2Program& program, const std::map<std::string, XParamProcLowering>& x_param_procs,
+    bool allow_packed_score_index) {
   std::map<std::string, XParamYStackProcLowering> result;
   for (const V2Rule& rule : program.rules) {
     const auto lowering_it = x_param_procs.find(rule.name);
     if (lowering_it == x_param_procs.end() || lowering_it->second.kind != "copy" ||
         rule.body.size() < 2)
       continue;
-    const std::optional<std::string> y_name =
+    std::optional<std::string> y_name =
         indexed_packed_pow10_delta_stack_index_name_for_analysis(rule.body.at(1));
+    if (!y_name.has_value() && allow_packed_score_index)
+      y_name = packed_score_y_stack_index_name_for_analysis(rule.body.at(1));
     if (!y_name.has_value())
       continue;
     if (count_identifier_reads_in_statements(rule.body, *y_name) != 1)
@@ -9677,6 +9710,9 @@ int stack_only_covered_run(
 
   if (indexed_packed_pow10_delta_stack_index_name_for_analysis(statement) == name)
     return 1;
+  if (context.canonicalize_packed_line_bank_walks &&
+      packed_score_y_stack_index_name_for_analysis(statement) == name)
+    return 1;
 
   const bool read_was_preceded_by_show =
       index > 0U && statement.kind == "v2_read" && statements.at(index - 1U).kind == "v2_show";
@@ -10084,8 +10120,8 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   context.proc_call_counts = collect_rule_call_counts(program);
   context.inline_statement_rules = compiler_inline_statement_rule_names(context, program);
   context.x_param_procs = collect_x_param_proc_lowerings(program, context.inline_statement_rules);
-  context.x_param_y_stack_procs =
-      collect_x_param_y_stack_proc_lowerings(program, context.x_param_procs);
+  context.x_param_y_stack_procs = collect_x_param_y_stack_proc_lowerings(
+      program, context.x_param_procs, context.canonicalize_packed_line_bank_walks);
   context.ephemeral_input_targets = collect_ephemeral_input_targets(program);
   for (const auto& [unused_prompt, input] : context.loop_prompt_inputs) {
     (void)unused_prompt;
@@ -27896,6 +27932,54 @@ bool lower_x_param_value_scratch_assignment(LoweringContext& context, const V2St
   return true;
 }
 
+// score += packed_score(bank[selector], index) with the index carried in Y at
+// procedure entry: consume the stack-resident index instead of recalling it
+// from a register, so the walk call sites stay free of index stores.
+bool lower_packed_score_y_stack_update(LoweringContext& context, const V2Statement& statement) {
+  if (!context.canonicalize_packed_line_bank_walks)
+    return false;
+  const std::optional<std::string> index_name =
+      packed_score_y_stack_index_name_for_analysis(statement);
+  if (!index_name.has_value() || context.current_y_variable != *index_name)
+    return false;
+  const Expression expression = parse_expression(*statement.expr, statement.line);
+  const Expression& bank = expression.args.at(0);
+  const std::string& score = *statement.target;
+  if (context.stack_only_state_fields.contains(score) ||
+      !context.register_index_by_name.contains(score))
+    return false;
+  const std::optional<PreparedIndexedSelector> prepared =
+      prepare_indirect_index_selector(context, bank, statement.line);
+  if (!prepared.has_value())
+    return false;
+
+  context.emitter.emit_op(0x14, "X<->Y", "packed-score y-stack index", statement.line);
+  context.emitter.emit_op(0x15, "F 10^x", "packed-score y-stack pow10", statement.line);
+  context.emitter.emit_op(
+      0xd0 + register_index_for(context, prepared->selector),
+      "К П->X " + register_text_for(context, prepared->selector),
+      indexed_memory_comment_or_action(context, "indexed recall", bank, *prepared),
+      statement.line);
+  context.emitter.emit_op(0x14, "X<->Y", "packed-score y-stack digit order", statement.line);
+  context.emitter.emit_op(0x13, "/", "packed-score y-stack digit extract", statement.line);
+  context.emitter.emit_op(0x35, "К {x}", "packed-score y-stack frac", statement.line);
+  emit_number_or_preload(context, "0.41200076");
+  context.emitter.emit_op(0x11, "-", "packed-score y-stack center", statement.line);
+  context.emitter.emit_op(0x22, "F x^2", "packed-score y-stack square", statement.line);
+  emit_recall(context, score);
+  context.emitter.emit_op(0x10, "+", "packed-score y-stack accumulate", statement.line);
+  clear_current_x_facts(context);
+  emit_store(context, score, "set " + score);
+  context.current_y_variable.reset();
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-score-y-stack-accumulator",
+      .detail = "Consumed " + *index_name + " carried in Y as the packed_score index for " +
+                bank_member_key(bank.base, bank.field) + " at line " +
+                std::to_string(statement.line) + ".",
+  });
+  return true;
+}
+
 bool lower_update_statement(LoweringContext& context, const V2Statement& statement) {
   const bool entered_with_errors = has_errors(context.diagnostics);
 
@@ -27906,6 +27990,9 @@ bool lower_update_statement(LoweringContext& context, const V2Statement& stateme
                                              "Cannot assign to const '" + *statement.target + "'"));
     return false;
   }
+
+  if (lower_packed_score_y_stack_update(context, statement))
+    return true;
 
   const Expression target_expression = parse_expression(*statement.target, statement.line);
   if (target_expression.kind == "identifier" &&
@@ -38443,6 +38530,7 @@ struct ScoreBankWalkMatch {
   std::string normalizer;
   std::string score_leaf;
   std::string slot_param;
+  std::string selector;
   Expression first_line;
   Expression second_line;
   Expression diagonal_add_arg;
@@ -38531,12 +38619,17 @@ bool detect_score_bank_walk(const V2Program& program, const V2Rule& rule,
 V2Rule make_score_bank_walk_leaf(const ScoreBankWalkMatch& match) {
   const Expression packed_score_call =
       call_expression("packed_score", {indexed_bank_slot(match.bank_name,
-                                                         identifier_expression(match.slot_param)),
+                                                         identifier_expression(match.selector)),
                                        identifier_expression(match.line_name)});
   V2Rule leaf;
   leaf.name = match.score_leaf;
   leaf.params = {match.slot_param};
   leaf.line = match.line;
+  // Consume the slot from X into a dedicated selector first (the x-param
+  // "copy" shape), so call sites pass the slot literal through the stack
+  // exactly like the mark-side leaf and the two walks stay mergeable.
+  leaf.body.push_back(make_assign_statement(match.selector,
+                                            identifier_expression(match.slot_param), match.line));
   leaf.body.push_back(make_update_statement(match.score, "+=", packed_score_call, match.line));
   return leaf;
 }
@@ -38567,7 +38660,9 @@ void canonicalize_packed_line_bank_walks(V2Program& program,
     return;
 
   const std::string slot_param = "__bank_slot";
-  if (program_declares_name(program, slot_param))
+  const std::string score_selector = "__score_slot";
+  if (program_declares_name(program, slot_param) ||
+      program_declares_name(program, score_selector))
     return;
 
   std::vector<std::string> rewritten_markers;
@@ -38633,12 +38728,14 @@ void canonicalize_packed_line_bank_walks(V2Program& program,
       continue;
     match.score_leaf = fresh_callable_name(used_names, "__score_one", 0);
     match.slot_param = slot_param;
+    match.selector = score_selector;
     new_leaves.push_back(make_score_bank_walk_leaf(match));
     rule.body = build_explicit_score_walk_body(match);
     rewritten_scorers.push_back(rule.name);
   }
   if (!new_leaves.empty()) {
     ensure_implicit_param_state_field(program, slot_param, new_leaves.front().line);
+    ensure_implicit_param_state_field(program, score_selector, new_leaves.front().line);
     for (V2Rule& leaf : new_leaves)
       program.rules.push_back(std::move(leaf));
   }
@@ -42920,6 +43017,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   context.setup_only_counted_loop_init = options.setup_only_counted_loop_init;
   context.x_param_value_functions = options.x_param_value_functions;
   context.x_param_y_stack_stored_entry = options.x_param_y_stack_stored_entry;
+  context.canonicalize_packed_line_bank_walks = options.canonicalize_packed_line_bank_walks;
   context.packed_line_family_update_check_tail = options.packed_line_family_update_check_tail;
   context.packed_line_family_mutating_selector_update_check_tail =
       options.packed_line_family_mutating_selector_update_check_tail;
