@@ -9491,6 +9491,29 @@ bool statements_read_identifier_before_write(LoweringContext& context,
                                              const std::vector<V2Statement>& statements,
                                              const std::string& name);
 
+int stack_only_call_return_direct_consumer_run(LoweringContext& context,
+                                               const V2Program& program,
+                                               const std::vector<V2Statement>& statements,
+                                               std::size_t index,
+                                               const std::string& name,
+                                               const std::string& proc_name) {
+  if (index + 1U >= statements.size())
+    return 0;
+  const V2Statement& statement = statements.at(index);
+  if (statement.kind != "v2_invoke" || !statement.name.has_value() || *statement.name != proc_name)
+    return 0;
+  const auto proc_it = std::find_if(program.rules.begin(), program.rules.end(),
+                                    [&](const V2Rule& rule) { return rule.name == proc_name; });
+  if (proc_it == program.rules.end())
+    return 0;
+  const std::optional<std::string> return_x = proc_return_x_variable_for_analysis(*proc_it);
+  if (return_x != name)
+    return 0;
+  return statement_directly_consumes_current_x_identifier(context, statements.at(index + 1U), name)
+             ? 2
+             : 0;
+}
+
 int stack_only_stack_carried_assignment_run(LoweringContext& context,
                                             const std::vector<V2Statement>& statements,
                                             std::size_t index, const std::string& name) {
@@ -9634,6 +9657,10 @@ int stack_only_covered_run(
                                                             *statement.name);
     if (consumed > 0)
       return consumed;
+    const int direct_consumer = stack_only_call_return_direct_consumer_run(
+        context, program, statements, index, name, *statement.name);
+    if (direct_consumer > 0)
+      return direct_consumer;
   }
 
   const int accumulator = stack_only_x_param_packed_score_accumulator_run(
@@ -34313,9 +34340,8 @@ bool lower_stack_only_call_return_consumer_run(LoweringContext& context,
   if (index + 1U >= statements.size())
     return false;
   const V2Statement& call = statements.at(index);
-  const V2Statement& assignment = statements.at(index + 1U);
-  if (call.kind != "v2_invoke" || !call.name.has_value() || assignment.kind != "v2_assign" ||
-      !assignment.target.has_value() || !assignment.expr.has_value())
+  const V2Statement& consumer = statements.at(index + 1U);
+  if (call.kind != "v2_invoke" || !call.name.has_value())
     return false;
   const auto rule_it = context.rules.find(*call.name);
   if (rule_it == context.rules.end() || rule_it->second == nullptr)
@@ -34324,24 +34350,44 @@ bool lower_stack_only_call_return_consumer_run(LoweringContext& context,
       proc_return_x_variable(context, *rule_it->second);
   if (!returned.has_value() || !context.stack_only_state_fields.contains(*returned))
     return false;
-  const Expression expression = parse_expression(*assignment.expr, assignment.line);
-  if (!stack_analysis_bit_or_update(expression, *assignment.target, *returned))
-    return false;
 
-  if (!lower_statement(context, call, &assignment))
+  if (consumer.kind == "v2_assign" && consumer.target.has_value() &&
+      consumer.expr.has_value()) {
+    const Expression expression = parse_expression(*consumer.expr, consumer.line);
+    if (stack_analysis_bit_or_update(expression, *consumer.target, *returned)) {
+      if (!lower_statement(context, call, &consumer))
+        return false;
+      if (context.emitter.current_x_variable != *returned &&
+          !context.emitter.current_x_aliases.contains(*returned)) {
+        mark_current_x(context, *returned);
+      }
+      emit_recall(context, *consumer.target);
+      context.emitter.emit_op(0x38, "К ∨", "bit_or()", consumer.line);
+      context.emitter.current_x_variable.reset();
+      context.emitter.current_x_expression.reset();
+      context.emitter.current_x_aliases.clear();
+      context.emitter.current_x_known_zero = false;
+      emit_store(context, *consumer.target, "set " + *consumer.target);
+      consumed = 2;
+      return true;
+    }
+  }
+
+  if (!statement_directly_consumes_current_x_identifier(context, consumer, *returned))
+    return false;
+  if (!lower_statement(context, call, &consumer))
     return false;
   if (context.emitter.current_x_variable != *returned &&
       !context.emitter.current_x_aliases.contains(*returned)) {
     mark_current_x(context, *returned);
   }
-  emit_recall(context, *assignment.target);
-  context.emitter.emit_op(0x38, "К ∨", "bit_or()", assignment.line);
-  context.emitter.current_x_variable.reset();
-  context.emitter.current_x_expression.reset();
-  context.emitter.current_x_aliases.clear();
   context.emitter.current_x_known_zero = false;
-  emit_store(context, *assignment.target, "set " + *assignment.target);
-  consumed = 2;
+  context.optimizations.push_back(OptimizationReport{
+      .name = "stack-carried-return",
+      .detail = "Kept returned " + *returned + " from " + *call.name +
+                " in X for the immediately following consumer.",
+  });
+  consumed = 1;
   return true;
 }
 

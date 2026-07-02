@@ -774,6 +774,41 @@ program StackCarriedUnaryBuiltinConsumer {
 
   {
     const CompileResult result = compile_stack_variant(R"mkpro(
+program StackOnlyXParamReturnDirectHaltConsumer {
+  state {
+    x: packed = 2
+    y: packed = 3
+    line: packed = 0
+  }
+
+  fn normalize(raw_line) {
+    line = frac((raw_line + 3) / 4) * 4 + 1
+  }
+
+  loop {
+    normalize(x + y)
+    halt(line + 1)
+    normalize(x - y)
+    halt(line + 2)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-only X-param return direct halt consumer");
+    require(has_optimization(result, "stack-carried-return"),
+            "direct halt consumer should keep returned line in X");
+    require(has_optimization(result, "stack-only-state-field"),
+            "direct halt consumer should prove returned line stack-only");
+    require(!result.registers.contains("line"),
+            "direct halt consumer should not allocate a register for line");
+    require(count_steps_with_comment(result, "set line") == 0,
+            "direct halt consumer should not store line");
+    require(count_steps_with_comment(result, "recall line") == 0,
+            "direct halt consumer should not recall line");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
 program StackCarriedUnaryDerivationBinaryConsumer {
   state {
     x: packed = -8
