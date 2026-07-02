@@ -165,6 +165,7 @@ add_executable(mkpro_tests
   tests/emulator_mk61_test.cpp
   tests/emulator_near_any_helper_test.cpp
   tests/emulator_number_entry_concat_test.cpp
+  tests/emulator_packed_line_family_test.cpp
   tests/emulator_packed_position_test.cpp
   tests/emulator_recall_side_effects_test.cpp
   tests/emulator_regression_test.cpp

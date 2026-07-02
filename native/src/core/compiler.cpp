@@ -19009,6 +19009,29 @@ bool lower_packed_line_family_score_rule(LoweringContext& context, const V2Rule&
   if (!match.has_value())
     return false;
 
+  // Each diagonal line value is pushed under its index before the shared tail
+  // runs, so it must lower as a single stack lift (one recall or one digit).
+  const auto diagonal_line_value_single_lift = [&](const Expression& line_value) -> bool {
+    if (line_value.kind == "number")
+      return true;
+    if (line_value.kind == "identifier")
+      return context.register_index_by_name.contains(line_value.name);
+    if (line_value.kind == "indexed" && line_value.index != nullptr) {
+      const std::optional<int> index = numeric_index_value(*line_value.index);
+      const auto bank_it =
+          context.state_banks.find(bank_member_key(line_value.base, line_value.field));
+      if (!index.has_value() || bank_it == context.state_banks.end() ||
+          bank_it->second == nullptr || !bank_it->second->bank.has_value())
+        return false;
+      return context.register_index_by_name.contains(
+          state_bank_element_name(*bank_it->second, *index));
+    }
+    return false;
+  };
+  if (!diagonal_line_value_single_lift(match->diagonal_add.line_value) ||
+      !diagonal_line_value_single_lift(match->diagonal_sub.line_value))
+    return false;
+
   const std::string helper = context.emitter.fresh_label("packed_line_family_score_accumulator");
   auto emit_score = [&](const PackedScoreTerm& term) -> bool {
     if (!lower_expression_to_x(context, term.line_value))
@@ -19034,6 +19057,8 @@ bool lower_packed_line_family_score_rule(LoweringContext& context, const V2Rule&
     return false;
 
   const std::string tail = context.emitter.fresh_label("packed_line_family_score_tail");
+  if (!lower_expression_to_x(context, match->diagonal_add.line_value))
+    return false;
   if (!lower_expression_to_x(context, match->partial))
     return false;
   context.emitter.emit_jump(0x53, "ПП", tail, "packed-line shared diagonal score",
@@ -19041,6 +19066,8 @@ bool lower_packed_line_family_score_rule(LoweringContext& context, const V2Rule&
   mark_current_x(context, match->score);
   context.emitter.current_x_known_zero = false;
 
+  if (!lower_expression_to_x(context, match->diagonal_sub.line_value))
+    return false;
   if (!lower_expression_to_x(context, match->partial))
     return false;
   context.emitter.emit_op(0x0b, "/-/", "packed-line negative diagonal index",
@@ -19422,6 +19449,11 @@ bool lower_indexed_packed_pow10_delta_statement(LoweringContext& context,
     }
   }
 
+  // The update term is factor * 10^index. When the index is not carried on the
+  // stack it has to be recalled from its register before the pow10 scaling, so
+  // a stack-only index without a register cannot take this path.
+  if (!context.register_index_by_name.contains(index_name))
+    return false;
   const std::optional<PreparedIndexedSelector> prepared_selector =
       prepare_indirect_index_selector(context, target, statement.line);
   if (!prepared_selector.has_value())
@@ -19432,8 +19464,13 @@ bool lower_indexed_packed_pow10_delta_statement(LoweringContext& context,
                               context, "indexed packed digit update base", target,
                               *prepared_selector),
                           statement.line);
+  clear_current_x_facts(context);
+  emit_recall(context, index_name);
+  context.emitter.emit_op(0x15, "F 10^x", "indexed packed digit pow10", statement.line);
+  clear_current_x_facts(context);
   if (!lower_expression_to_x(context, factor))
     return false;
+  context.emitter.emit_op(0x12, "*", "indexed packed digit delta", statement.line);
   const std::optional<std::pair<int, std::string>> opcode = binary_opcode(op);
   if (!opcode.has_value())
     return false;
@@ -29506,11 +29543,90 @@ bool lower_self_decrement_indexed_fractional_report_tail_rule(LoweringContext& c
       target.index->kind != "identifier" || target.index->name != selector)
     return false;
 
-  if (!lower_statement(context, decrement, nullptr))
+  const std::optional<std::tuple<std::string, std::string, Expression>> delta =
+      indexed_packed_pow10_delta_update(target,
+                                        parse_expression(*assign.expr, assign.line));
+  if (!delta.has_value())
     return false;
-  if (!lower_indexed_packed_pow10_delta_report_branch(context, assign, branch,
-                                                      /*proc_tail_x2=*/true))
+  const std::string& index_name = std::get<1>(*delta);
+  // A stack-only pow10 index is carried into this rule in X by every call
+  // site (that is exactly what made it stack-only). The decrement below is
+  // emitted by hand so the index provably survives in Y, where the
+  // pow10-delta lowering picks it up. A register-backed index is recalled by
+  // the generic pow10-delta path instead; anything else cannot be lowered.
+  const bool stack_carried_index = !context.register_index_by_name.contains(index_name) &&
+                                   context.stack_only_state_fields.contains(index_name);
+  if (!stack_carried_index && !context.register_index_by_name.contains(index_name))
     return false;
+  if (stack_carried_index &&
+      !direct_physical_indexed_selector_register(context, target, selector).has_value())
+    return false;
+
+  if (stack_carried_index) {
+    emit_recall(context, selector);
+    context.emitter.emit_number("1");
+    if (!context.emitter.items.empty())
+      context.emitter.items.back().comment = "self-decrement " + selector;
+    context.emitter.emit_op(0x11, "-", "self-decrement " + selector, decrement.line);
+    clear_current_x_facts(context);
+    emit_store(context, selector, "set " + selector);
+    context.current_y_variable = index_name;
+  } else if (!lower_statement(context, decrement, nullptr)) {
+    return false;
+  }
+  const bool lowered = lower_indexed_packed_pow10_delta_report_branch(context, assign, branch,
+                                                                      /*proc_tail_x2=*/true);
+  if (stack_carried_index)
+    context.current_y_variable.reset();
+  return lowered;
+}
+
+// Lowers a no-argument rule whose whole body is an indexed pow10-delta update
+// (optionally preceded by a unit decrement of the target selector) with a
+// stack-only index. Every call site materializes the index into X right
+// before the call (that is what made it stack-only, see
+// no_arg_invoke_consumes_stack_carried_packed_digit_index), so the update can
+// consume it from X directly or from Y after the selector decrement.
+bool lower_stack_carried_packed_digit_index_rule(LoweringContext& context, const V2Rule& rule) {
+  if (!rule.params.empty() || rule.body.empty() || rule.body.size() > 2)
+    return false;
+  const V2Statement& assign = rule.body.back();
+  const std::optional<std::string> index_name =
+      indexed_packed_pow10_delta_stack_index_name_for_analysis(assign);
+  if (!index_name.has_value() || !assign.target.has_value())
+    return false;
+  if (context.register_index_by_name.contains(*index_name) ||
+      !context.stack_only_state_fields.contains(*index_name))
+    return false;
+  const Expression target = parse_expression(*assign.target, assign.line);
+  const std::optional<std::string> direct_selector = direct_indexed_selector_name(target);
+  if (!direct_selector.has_value() || *direct_selector == *index_name ||
+      !direct_physical_indexed_selector_register(context, target, *direct_selector).has_value())
+    return false;
+  if (rule.body.size() == 2U) {
+    const V2Statement& decrement = rule.body.front();
+    if (!statement_is_unit_decrement(decrement) || decrement.target != *direct_selector)
+      return false;
+    emit_recall(context, *direct_selector);
+    context.emitter.emit_number("1");
+    if (!context.emitter.items.empty())
+      context.emitter.items.back().comment = "self-decrement " + *direct_selector;
+    context.emitter.emit_op(0x11, "-", "self-decrement " + *direct_selector, decrement.line);
+    clear_current_x_facts(context);
+    emit_store(context, *direct_selector, "set " + *direct_selector);
+    context.current_y_variable = *index_name;
+  } else {
+    mark_current_x(context, *index_name);
+  }
+  const bool lowered = lower_indexed_packed_pow10_delta_statement(context, assign);
+  context.current_y_variable.reset();
+  if (!lowered) {
+    context.diagnostics.push_back(
+        diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                   "Cannot lower stack-carried packed digit update in '" + rule.name + "'"));
+    return false;
+  }
+  context.emitter.emit_op(0x52, "В/О", "implicit return from proc", rule.line);
   return true;
 }
 
@@ -29707,6 +29823,9 @@ bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
   }
 
   if (lower_self_decrement_indexed_fractional_report_tail_rule(context, rule))
+    return true;
+
+  if (lower_stack_carried_packed_digit_index_rule(context, rule))
     return true;
 
   if (!lower_statement_block(context, rule.body))

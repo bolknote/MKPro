@@ -213,7 +213,7 @@ void example_sizes_match_typescript_baselines() {
       {"wumpus", 105},
   };
   const std::map<std::string, std::size_t> PENDING_BASELINE{
-      {"tic-tac-toe-4x4", 136},
+      {"tic-tac-toe-4x4", 141},
   };
 
   const std::filesystem::path root = std::filesystem::current_path();
@@ -299,7 +299,7 @@ void example_sizes_match_typescript_baselines() {
               "tic-tac-toe-4x4 size attribution should expose the cell_mask call-site cost");
       const SizeAttributionEntry* packed_score_calls =
           find_size_entry(result, "helper-call-sites", "packed-line score accumulator helper");
-      require(packed_score_calls != nullptr && packed_score_calls->cells == 4 &&
+      require(packed_score_calls != nullptr && packed_score_calls->cells == 2 &&
                   packed_score_calls->occurrences == 2 &&
                   packed_score_calls->detail.find("target=") != std::string::npos,
               "tic-tac-toe-4x4 size attribution should expose the packed_score call-site cost");
@@ -392,10 +392,6 @@ void example_sizes_match_typescript_baselines() {
           find_size_helper(result, "candidate_score zero-accumulator entry");
       require(candidate_score_zero != nullptr &&
                   candidate_score_zero->details.contains("valueAwareStackInputNames") &&
-                  candidate_score_zero->details.at("valueAwareStackInputNames")
-                          .find("lines_6") != std::string::npos &&
-                  candidate_score_zero->details.at("valueAwareStackInputNames")
-                          .find("lines_7") != std::string::npos &&
                   candidate_score_zero->details.at("valueAwareStackInputNames").find("x") !=
                       std::string::npos &&
                   candidate_score_zero->details.at("valueAwareStackInputNames").find("y") !=
@@ -406,6 +402,17 @@ void example_sizes_match_typescript_baselines() {
                   !candidate_score_zero->details.contains("valueAwareStateOutputNames"),
               "tic-tac-toe-4x4 candidate_score helper should classify helper-local traffic as "
               "stack input candidates for the value-aware scheduler");
+      // Since the score-accumulator fix, the packed-line body (with its
+      // lines_4..lines_7 recalls) lays out inside the normalize region.
+      const SizeHelperSummaryReport* normalize_helper = find_size_helper(result, "normalize");
+      require(normalize_helper != nullptr &&
+                  normalize_helper->details.contains("valueAwareStackInputNames") &&
+                  normalize_helper->details.at("valueAwareStackInputNames").find("lines_4") !=
+                      std::string::npos &&
+                  normalize_helper->details.at("valueAwareStackInputNames").find("lines_7") !=
+                      std::string::npos,
+              "tic-tac-toe-4x4 normalize helper should carry the packed-line bank recalls after "
+              "the score-accumulator fix");
       const SizeHelperSummaryReport* mark_lines_helper =
           find_size_helper(result, "mark_lines_and_check");
       require(mark_lines_helper != nullptr &&
@@ -622,8 +629,6 @@ void example_sizes_match_typescript_baselines() {
                   value_aware_scheduler_blocker->best_details.contains(
                       "valueAwareStackInputNames") &&
                   value_aware_scheduler_blocker->best_details.contains(
-                      "valueAwareStateOutputNames") &&
-                  value_aware_scheduler_blocker->best_details.contains(
                       "valueAwareSchedulerTrafficShape"),
               "tic-tac-toe-4x4 size attribution should summarize helper-local register traffic "
               "as a value-aware stack/register scheduler blocker");
@@ -673,8 +678,6 @@ void example_sizes_match_typescript_baselines() {
                   value_aware_scheduler_action->best_details.contains(
                       "valueAwareStackInputNames") &&
                   value_aware_scheduler_action->best_details.contains(
-                      "valueAwareStateOutputNames") &&
-                  value_aware_scheduler_action->best_details.contains(
                       "valueAwareSchedulerTrafficShape"),
               "tic-tac-toe-4x4 size attribution should rank value-aware stack/register "
               "scheduling as a next action when helper-local register traffic is visible");
@@ -686,8 +689,7 @@ void example_sizes_match_typescript_baselines() {
                       candidate_score_zero->register_traffic_cells +
                           cell_mask_helper->register_traffic_cells &&
                   stack_input_scheduler_action->best_details.contains("helperLabel") &&
-                  stack_input_scheduler_action->best_details.at("helperLabel") ==
-                      "candidate_score zero-accumulator entry" &&
+                  stack_input_scheduler_action->best_details.at("helperLabel") == "normalize" &&
                   stack_input_scheduler_action->best_details.contains(
                       "valueAwareSchedulerTrafficShape") &&
                   stack_input_scheduler_action->best_details.at(

@@ -55,6 +55,7 @@ void emulator_log_selector_premise_matches_typescript_contract();
 void emulator_mk61_execution_matches_typescript_contract();
 void emulator_near_any_helper_matches_typescript_contract();
 void emulator_number_entry_concat_matches_typescript_contract();
+void emulator_packed_line_family_pow10_semantics_match_generic_lowering();
 void emulator_packed_position_facts_match_typescript_contract();
 void emulator_recall_side_effects_match_typescript_contract();
 void emulator_regression_matches_typescript_contract();
@@ -258,6 +259,8 @@ int main(int argc, char** argv) {
        mkpro::tests::emulator_near_any_helper_matches_typescript_contract},
       {"emulator_number_entry_concat_matches_typescript_contract",
        mkpro::tests::emulator_number_entry_concat_matches_typescript_contract},
+      {"emulator_packed_line_family_pow10_semantics_match_generic_lowering",
+       mkpro::tests::emulator_packed_line_family_pow10_semantics_match_generic_lowering},
       {"emulator_packed_position_facts_match_typescript_contract",
        mkpro::tests::emulator_packed_position_facts_match_typescript_contract},
       {"emulator_recall_side_effects_match_typescript_contract",
