@@ -213,7 +213,7 @@ void example_sizes_match_typescript_baselines() {
       {"wumpus", 105},
   };
   const std::map<std::string, std::size_t> PENDING_BASELINE{
-      {"tic-tac-toe-4x4", 137},
+      {"tic-tac-toe-4x4", 136},
   };
 
   const std::filesystem::path root = std::filesystem::current_path();
@@ -277,21 +277,14 @@ void example_sizes_match_typescript_baselines() {
               "smaller candidate");
       const CandidateReport* rejected_dead_integer =
           find_candidate(result.rejected_candidates, "fractional-constant-selector-dead-int");
-      require(rejected_dead_integer != nullptr,
-              "tic-tac-toe-4x4 should report rejected dead-integer fractional selector rescue");
-      require(rejected_dead_integer->steps == 136,
-              "tic-tac-toe-4x4 rejected dead-integer fractional selector should show 136 cells");
-      require(rejected_dead_integer->reason.find("before K {x}") != std::string::npos,
-              "tic-tac-toe-4x4 dead-integer rejection should explain the unsafe consumer");
-      require(rejected_dead_integer->reason.find("consumerAddress=") != std::string::npos &&
-                  rejected_dead_integer->reason.find("selectorTarget=") != std::string::npos &&
-                  rejected_dead_integer->reason.find("naturalTarget=") != std::string::npos,
-              "tic-tac-toe-4x4 dead-integer rejection should expose selector/layout context");
+      require(rejected_dead_integer == nullptr,
+              "tic-tac-toe-4x4 should not report the unsafe dead-integer selector once the safe "
+              "selector-layout refinement reaches the same size");
       require(result.size_attribution.total_cells == static_cast<int>(result.steps.size()),
               "tic-tac-toe-4x4 size attribution should report the final cell count");
       const SizeAttributionEntry* candidate_score =
           find_size_entry(result, "helper-region", "packed-line score accumulator helper");
-      require(candidate_score != nullptr && candidate_score->cells >= 8 &&
+      require(candidate_score != nullptr && candidate_score->cells >= 5 &&
                   candidate_score->detail.find("calls=") != std::string::npos,
               "tic-tac-toe-4x4 size attribution should expose the packed_score helper body");
       const SizeAttributionEntry* cell_mask =
@@ -433,13 +426,9 @@ void example_sizes_match_typescript_baselines() {
                   mark_one_helper->details.contains("selectorBoundRegisterTrafficNames") &&
                   mark_one_helper->details.at("selectorBoundRegisterTrafficNames") == "slot" &&
                   mark_one_helper->details.contains("selectorBoundRegisterTrafficCells") &&
-                  mark_one_helper->details.at("selectorBoundRegisterTrafficCells") == "3" &&
+                  mark_one_helper->details.at("selectorBoundRegisterTrafficCells") == "2" &&
                   mark_one_helper->details.contains("valueAwareRegisterTrafficNames") &&
                   mark_one_helper->details.at("valueAwareRegisterTrafficNames").find("slot") ==
-                      std::string::npos &&
-                  mark_one_helper->details.at("valueAwareRegisterTrafficNames").find("x") !=
-                      std::string::npos &&
-                  mark_one_helper->details.at("valueAwareRegisterTrafficNames").find("y") !=
                       std::string::npos &&
                   mark_one_helper->details.at("valueAwareRegisterTrafficNames")
                           .find("best_score") != std::string::npos,
@@ -448,10 +437,12 @@ void example_sizes_match_typescript_baselines() {
       const SizeOpportunityReport* mark_one_register_traffic = find_size_opportunity_detail(
           result, "helper-register-traffic", "helperLabel", "mark_one");
       require(mark_one_register_traffic != nullptr &&
-                  mark_one_register_traffic->savings == 8 &&
+                  mark_one_register_traffic->savings == 1 &&
                   mark_one_register_traffic->details.contains("registerTrafficNames") &&
                   mark_one_register_traffic->details.at("registerTrafficNames").find("slot") ==
                       std::string::npos &&
+                  mark_one_register_traffic->details.at("registerTrafficNames")
+                          .find("best_score") != std::string::npos &&
                   mark_one_register_traffic->details.contains(
                       "selectorBoundRegisterTrafficNames") &&
                   mark_one_register_traffic->details.at("selectorBoundRegisterTrafficNames") ==
@@ -554,134 +545,14 @@ void example_sizes_match_typescript_baselines() {
               "state name");
       const SizeOpportunityReport* dead_integer_opportunity =
           find_size_opportunity(result, "fractional-constant-selector-dead-int");
-      require(dead_integer_opportunity != nullptr && dead_integer_opportunity->savings == 1 &&
-                  dead_integer_opportunity->blocker_kind == "data-arithmetic" &&
-                  dead_integer_opportunity->reason.find("before K {x}") != std::string::npos &&
-                  dead_integer_opportunity->reason.find("consumerAddress=") !=
-                      std::string::npos,
-              "tic-tac-toe-4x4 size attribution should expose the blocked 136-cell rescue");
-      require(dead_integer_opportunity->details.contains("consumerAddress") &&
-                  dead_integer_opportunity->details.contains("selectorTarget") &&
-                  dead_integer_opportunity->details.contains("naturalTarget") &&
-                  dead_integer_opportunity->details.contains("recoveryFreeLayout") &&
-                  dead_integer_opportunity->details.contains("fractionalSelectorSource") &&
-                  dead_integer_opportunity->details.contains("fractionalSelectorConsumer") &&
-                  dead_integer_opportunity->details.contains("consumerKind") &&
-                  dead_integer_opportunity->details.contains("integerPartStatus") &&
-                  dead_integer_opportunity->details.contains("selectorDataUse") &&
-                  dead_integer_opportunity->details.contains("requiredAction") &&
-                  dead_integer_opportunity->details.contains("savingsAggregation") &&
-                  dead_integer_opportunity->details.contains("proofOnlySavingsStatus") &&
-                  dead_integer_opportunity->details.contains("safeSavingsAction") &&
-                  dead_integer_opportunity->details.contains("safeSelectorStrategy") &&
-                  dead_integer_opportunity->details.contains("safeSelectorTarget") &&
-                  dead_integer_opportunity->details.contains("safeSelectorCandidateStatus") &&
-                  dead_integer_opportunity->details.contains("safeSelectorCandidateAction") &&
-                  dead_integer_opportunity->details.contains("candidateDiscoveryScope") &&
-                  dead_integer_opportunity->details.contains("candidateDiscoveryStatus") &&
-                  dead_integer_opportunity->details.contains("candidateDiscoveryAction") &&
-                  dead_integer_opportunity->details.contains("integerPartConsumerOpcode") &&
-                  dead_integer_opportunity->details.contains("fractionalEraseOpcode") &&
-                  dead_integer_opportunity->details.contains("integerPartHazard") &&
-                  dead_integer_opportunity->details.contains("currentNaturalTargetFlowCount") &&
-                  dead_integer_opportunity->details.contains("currentNaturalTargetOccupant") &&
-                  dead_integer_opportunity->details.contains("currentNaturalTargetOccupantKind") &&
-                  dead_integer_opportunity->details.contains("layoutConflictKind") &&
-                  dead_integer_opportunity->details.contains("layoutAction"),
-              "tic-tac-toe-4x4 size opportunity should expose structured selector-layout "
-              "details");
-      require(dead_integer_opportunity->details.at("proofDisposition") == "not-proof-only" &&
-                  !dead_integer_opportunity->details.at("fractionalSelectorSource").empty() &&
-                  !dead_integer_opportunity->details.at("fractionalSelectorConsumer").empty() &&
-                  dead_integer_opportunity->details.at("consumerKind") == "data arithmetic" &&
-                  dead_integer_opportunity->details.at("selectorDataUse") == "data-arithmetic" &&
-                  dead_integer_opportunity->details.at("requiredAction") ==
-                      "keep-fractional-erase-before-data-arithmetic" &&
-                  dead_integer_opportunity->details.at("savingsAggregation") ==
-                      "alternative-candidate" &&
-                  dead_integer_opportunity->details.at("proofOnlySavingsStatus") ==
-                      "blocked-by-data-arithmetic" &&
-                  dead_integer_opportunity->details.at("safeSavingsAction") ==
-                      "align-selector-flow-to-natural-target" &&
-                  dead_integer_opportunity->details.at("safeSelectorStrategy") ==
-                      "recovery-free-natural-fractional-selector" &&
-                  dead_integer_opportunity->details.at("safeSelectorTarget") ==
-                      dead_integer_opportunity->details.at("naturalTarget") &&
-                  dead_integer_opportunity->details.at("safeSelectorCandidateStatus") ==
-                      "missing-natural-target-flow" &&
-                  dead_integer_opportunity->details.at("safeSelectorCandidateAction") ==
-                      "create-natural-target-flow-or-code-data-overlay" &&
-                  dead_integer_opportunity->details.at("candidateDiscoveryScope") ==
-                      "existing-direct-flow-targets" &&
-                  dead_integer_opportunity->details.at("candidateDiscoveryStatus") ==
-                      "blocked-by-direct-flow-target-scan" &&
-                  dead_integer_opportunity->details.at("candidateDiscoveryAction") ==
-                      "allow-natural-target-layout-candidate" &&
-                  dead_integer_opportunity->details.at("integerPartConsumerOpcode") ==
-                      dead_integer_opportunity->details.at("fractionalSelectorConsumer") &&
-                  dead_integer_opportunity->details.at("fractionalEraseOpcode") == "K {x}" &&
-                  dead_integer_opportunity->details.at("integerPartHazard") ==
-                      "arithmetic-before-fractional-erase" &&
-                  dead_integer_opportunity->details.at("currentNaturalTargetFlowCount") == "0" &&
-                  dead_integer_opportunity->details.at("currentNaturalTargetOccupant") != "none" &&
-                  dead_integer_opportunity->details.at("currentNaturalTargetOccupantKind") !=
-                      "none" &&
-                  dead_integer_opportunity->details.at("layoutAction") ==
-                      "relayout-or-overlay-flow-to-natural-target",
-              "tic-tac-toe-4x4 dead-integer arithmetic blocker should say this needs codegen or "
-              "layout work instead of proof weakening");
-      const bool has_occupied_target_conflict =
-          std::any_of(result.size_attribution.opportunities.begin(),
-                      result.size_attribution.opportunities.end(),
-                      [](const SizeOpportunityReport& opportunity) {
-                        if (opportunity.variant != "fractional-constant-selector-dead-int")
-                          return false;
-                        const auto kind = opportunity.details.find(
-                            "currentNaturalTargetOccupantKind");
-                        const auto conflict = opportunity.details.find("layoutConflictKind");
-                        const auto disposition = opportunity.details.find("layoutDisposition");
-                        const auto flow_count =
-                            opportunity.details.find("currentNaturalTargetFlowCount");
-                        const auto selector_kind =
-                            opportunity.details.find("currentSelectorTargetOccupantKind");
-                        const auto selector_flow_count =
-                            opportunity.details.find("currentSelectorTargetFlowCount");
-                        return kind != opportunity.details.end() && conflict != opportunity.details.end() &&
-                               disposition != opportunity.details.end() &&
-                               flow_count != opportunity.details.end() &&
-                               selector_kind != opportunity.details.end() &&
-                               selector_flow_count != opportunity.details.end() &&
-                               kind->second == "instruction" &&
-                               conflict->second == "occupied-target-cell" &&
-                               disposition->second == "natural-target-has-no-flow" &&
-                               flow_count->second == "0" && !selector_kind->second.empty() &&
-                               !selector_flow_count->second.empty();
-                      });
-      require(has_occupied_target_conflict,
-              "tic-tac-toe-4x4 size attribution should classify occupied natural-target cells "
-              "and expose selector flow context");
+      require(dead_integer_opportunity == nullptr,
+              "tic-tac-toe-4x4 should not keep the unsafe dead-integer selector as a positive "
+              "size opportunity after the safe selector-layout candidate reaches 136 cells");
       const SizeBlockerSummaryReport* data_arithmetic_blocker =
           find_size_blocker(result, "data-arithmetic");
-      require(data_arithmetic_blocker != nullptr &&
-                  data_arithmetic_blocker->opportunities == 5 &&
-                  data_arithmetic_blocker->potential_savings == 1 &&
-                  data_arithmetic_blocker->best_savings == 1 &&
-                  data_arithmetic_blocker->best_variant ==
-                      "fractional-constant-selector-dead-int" &&
-                  data_arithmetic_blocker->best_reason.find("before K {x}") !=
-                      std::string::npos &&
-                  data_arithmetic_blocker->best_reason.find("naturalTarget=") !=
-                      std::string::npos,
-              "tic-tac-toe-4x4 size attribution should summarize positive-savings proof "
-              "blockers by blockerKind");
-      require(data_arithmetic_blocker->best_details.contains("naturalTarget") &&
-                  data_arithmetic_blocker->best_details.contains("selectorTarget") &&
-                  data_arithmetic_blocker->best_details.contains("requiredAction") &&
-                  data_arithmetic_blocker->best_details.contains("currentNaturalTargetFlowCount") &&
-                  data_arithmetic_blocker->best_details.contains("currentNaturalTargetOccupant") &&
-                  data_arithmetic_blocker->best_details.contains("currentNaturalTargetOccupantKind"),
-              "tic-tac-toe-4x4 size blocker summary should keep structured best blocker "
-              "details");
+      require(data_arithmetic_blocker == nullptr,
+              "tic-tac-toe-4x4 should not summarize dead-integer data arithmetic as a positive "
+              "blocker once the safe 136-cell selector-layout candidate is selected");
       const SizeBlockerSummaryReport* stack_helper_abi_blocker =
           find_size_blocker(result, "stack-helper-abi");
       require(stack_helper_abi_blocker == nullptr,
@@ -705,46 +576,24 @@ void example_sizes_match_typescript_baselines() {
               "as a value-aware stack/register scheduler blocker");
       const SizeNextActionSummaryReport* required_action = find_size_next_action(
           result, "requiredAction", "keep-fractional-erase-before-data-arithmetic");
-      require(required_action != nullptr && required_action->opportunities == 5 &&
-                  required_action->potential_savings == 1 &&
-                  required_action->best_savings == 1 &&
-                  required_action->best_blocker_kind == "data-arithmetic" &&
-                  required_action->best_variant == "fractional-constant-selector-dead-int" &&
-                  required_action->best_details.contains("requiredAction"),
-              "tic-tac-toe-4x4 size attribution should aggregate required compiler actions for "
-              "blocked positive-savings candidates");
+      require(required_action == nullptr,
+              "tic-tac-toe-4x4 should not rank dead-integer fractional erase ordering as a "
+              "positive next action after the safe selector-layout candidate reaches 136 cells");
       const SizeNextActionSummaryReport* layout_action = find_size_next_action(
           result, "layoutAction", "relayout-or-overlay-flow-to-natural-target");
-      require(layout_action != nullptr && layout_action->opportunities == 5 &&
-                  layout_action->potential_savings == 1 &&
-                  layout_action->best_savings == 1 &&
-                  layout_action->best_blocker_kind == "data-arithmetic" &&
-                  layout_action->best_details.contains("layoutAction") &&
-                  layout_action->best_details.contains("layoutConflictKind"),
-              "tic-tac-toe-4x4 size attribution should aggregate layout/code-data overlay next "
-              "actions for blocked positive-savings candidates");
+      require(layout_action == nullptr,
+              "tic-tac-toe-4x4 should not rank dead-integer natural-target relayout as a "
+              "positive next action after the safe selector-layout candidate reaches 136 cells");
       const SizeNextActionSummaryReport* safe_savings_action = find_size_next_action(
           result, "safeSavingsAction", "align-selector-flow-to-natural-target");
-      require(safe_savings_action != nullptr && safe_savings_action->opportunities == 5 &&
-                  safe_savings_action->potential_savings == 1 &&
-                  safe_savings_action->best_savings == 1 &&
-                  safe_savings_action->best_blocker_kind == "data-arithmetic" &&
-                  safe_savings_action->best_details.contains("safeSelectorTarget") &&
-                  safe_savings_action->best_details.contains("safeSelectorStrategy") &&
-                  safe_savings_action->best_details.contains("safeSelectorCandidateStatus"),
-              "tic-tac-toe-4x4 size attribution should aggregate recovery-free natural-target "
-              "selector moves separately from proof-only action labels");
+      require(safe_savings_action == nullptr,
+              "tic-tac-toe-4x4 should not rank dead-integer natural-target selector alignment "
+              "after the safe selector-layout candidate reaches 136 cells");
       const SizeNextActionSummaryReport* discovery_action = find_size_next_action(
           result, "candidateDiscoveryAction", "allow-natural-target-layout-candidate");
-      require(discovery_action != nullptr && discovery_action->opportunities == 5 &&
-                  discovery_action->potential_savings == 1 &&
-                  discovery_action->best_savings == 1 &&
-                  discovery_action->best_blocker_kind == "data-arithmetic" &&
-                  discovery_action->best_details.contains("candidateDiscoveryScope") &&
-                  discovery_action->best_details.contains("candidateDiscoveryStatus") &&
-                  discovery_action->best_details.contains("safeSelectorCandidateAction"),
-              "tic-tac-toe-4x4 size attribution should aggregate candidate-discovery work "
-              "needed before natural-target selector candidates can be generated");
+      require(discovery_action == nullptr,
+              "tic-tac-toe-4x4 should not rank dead-integer natural-target candidate discovery "
+              "after the safe selector-layout candidate reaches 136 cells");
       const SizeNextActionSummaryReport* stack_helper_action = find_size_next_action(
           result, "requiredAction", "stack-argument-helper-entry");
       require(stack_helper_action == nullptr,

@@ -74,7 +74,7 @@
    03 |  42  | X→П 2                   | set y
    04 |  69  | П→X 9                   | recall occupied
    05 |  53  | ПП                      | expr cell_mask(x, y)
-   06 |  7F  | >7F                     | expr cell_mask(x, y)
+   06 |  7E  | >7E                     | expr cell_mask(x, y)
    07 |  38  | К ∨                     | bit_or test-and-set value
    08 |  49  | X→П 9                   | bit_or test-and-set occupied
    09 |  11  | −                       | bit_or test-and-set changed
@@ -85,18 +85,18 @@
    14 |  8B  | К БП b                  | if end; preloaded Rb=0.41200076 indirect-target=0 indirect flow
    15 |  32  | К ЗН                    | bit_or test-and-set mark_sign = -1
    16 |  53  | ПП                      | proc call mark_lines_and_check
-   17 |  83  | 83                      | proc call mark_lines_and_check
+   17 |  91  | 91                      | proc call mark_lines_and_check
    18 |  04  | 4                       |
    19 |  42  | X→П 2                   | set y
    20 |  04  | 4                       |
    21 |  41  | X→П 1                   | set x
    22 |  69  | П→X 9                   | recall occupied
    23 |  53  | ПП                      | expr cell_mask(x, y)
-   24 |  7F  | >7F                     | expr cell_mask(x, y)
+   24 |  7E  | >7E                     | expr cell_mask(x, y)
    25 |  37  | К ∧                     | bit_and()
    26 |  EC  | К x=0 c                 | false branch for ==; reused preloaded Rc=38.22600029 indirect-target=38 direct flow
    27 |  53  | ПП                      | proc call candidate_score zero-accumulator entry
-   28 |  A2  | A2                      | proc call candidate_score zero-accumulator entry
+   28 |  67  | 67                      | proc call candidate_score zero-accumulator entry
    29 |  60  | П→X 0                   | recall best_score
    30 |  36  | К max                   | max-assignment update
    31 |  40  | X→П 0                   | set best_score
@@ -118,90 +118,89 @@
    47 |  6D  | П→X d                   | recall slot
    48 |  63  | П→X 3                   | recall best_y
    49 |  53  | ПП                      | expr cell_mask(x, y)
-   50 |  7F  | >7F                     | expr cell_mask(x, y)
+   50 |  7E  | >7E                     | expr cell_mask(x, y)
    51 |  69  | П→X 9                   | recall occupied
    52 |  38  | К ∨                     | bit_or()
    53 |  49  | X→П 9                   | set occupied
    54 |  01  | 1                       |
    55 |  51  | БП                      | empty-stack tail call mark_lines_and_check; empty-return-stack loop head
-   56 |  83  | 83                      | call function mark_lines_and_check
-   57 |  6D  | П→X d                   | recall slot
-   58 |  01  | 1                       |
-   59 |  11  | −                       | expr -
-   60 |  4D  | X→П d                   | set slot
-   61 |  DD  | К П→X d                 | indexed packed digit update base lines; indirect-memory-targets=4,5,6,7
-   62 |  60  | П→X 0                   | recall best_score
-   63 |  10  | +                       | indexed packed digit update
-   64 |  BD  | К X→П d                 | indexed set lines; indirect-memory-targets=4,5,6,7
-   65 |  68  | П→X 8                   | preload const 88888834
-   66 |  37  | К ∧                     | updated packed fractional report mask
-   67 |  35  | К {x}                   | updated packed fractional report predicate
-   68 |  5E  | F x=0                   | true branch for packed fractional report !=
-   69 |  71  | 71                      | true branch for packed fractional report !=
-   70 |  52  | В/О                     | packed fractional report return
-   71 |  0A  | .                       | updated packed fractional report X2 restore
-   72 |  50  | С/П                     | halt
-   73 |  03  | 3                       |
-   74 |  10  | +                       | x-param expr +
-   75 |  04  | 4                       |
-   76 |  13  | ÷                       | x-param expr /
-   77 |  35  | К {x}                   | x-param frac()
-   78 |  04  | 4                       |
-   79 |  12  | ×                       | x-param expr *
-   80 |  01  | 1                       |
-   81 |  10  | +                       | x-param expr +
-   82 |  52  | В/О                     | implicit return from proc
-   83 |  40  | X→П 0                   | set best_score from X parameter
-   84 |  08  | 8                       |
-   85 |  4D  | X→П d                   | set slot
-   86 |  61  | П→X 1                   | recall x
-   87 |  AE  | К ПП e                  | proc call mark_one; preloaded Re=57 indirect-target=57 indirect flow
-   88 |  62  | П→X 2                   | recall y
-   89 |  AE  | К ПП e                  | proc call mark_one; preloaded Re=57 indirect-target=57 indirect flow
-   90 |  61  | П→X 1                   | recall x
-   91 |  62  | П→X 2                   | recall y
-   92 |  10  | +                       | expr +
-   93 |  53  | ПП                      | call function normalize
-   94 |  73  | 73                      | call function normalize
-   95 |  AE  | К ПП e                  | proc call mark_one; preloaded Re=57 indirect-target=57 indirect flow
-   96 |  61  | П→X 1                   | recall x
+   56 |  91  | 91                      | call function mark_lines_and_check
+   57 |  03  | 3                       |
+   58 |  10  | +                       | x-param expr +
+   59 |  04  | 4                       |
+   60 |  13  | ÷                       | x-param expr /
+   61 |  35  | К {x}                   | x-param frac()
+   62 |  04  | 4                       |
+   63 |  12  | ×                       | x-param expr *
+   64 |  01  | 1                       |
+   65 |  10  | +                       | x-param expr +
+   66 |  52  | В/О                     | implicit return from proc
+   67 |  67  | П→X 7                   | recall lines_7
+   68 |  61  | П→X 1                   | recall x
+   69 |  53  | ПП                      | packed-line score accumulator helper
+   70 |  83  | 83                      | packed-line score accumulator helper
+   71 |  66  | П→X 6                   | recall lines_6
+   72 |  62  | П→X 2                   | recall y
+   73 |  53  | ПП                      | packed-line score accumulator helper
+   74 |  83  | 83                      | packed-line score accumulator helper
+   75 |  62  | П→X 2                   | recall y
+   76 |  53  | ПП                      | packed-line shared diagonal score
+   77 |  80  | 80                      | packed-line shared diagonal score
+   78 |  62  | П→X 2                   | recall y
+   79 |  0B  | /-/                     | packed-line negative diagonal index
+   80 |  61  | П→X 1                   | recall x
+   81 |  10  | +                       | packed-line diagonal index
+   82 |  AE  | К ПП e                  | proc call normalize; preloaded Re=57 indirect-target=57 indirect flow
+   83 |  15  | F 10ˣ                   | packed-line score helper pow10
+   84 |  13  | ÷                       | packed-line score helper divide
+   85 |  35  | К {x}                   | packed-line score helper frac
+   86 |  6B  | П→X b                   | preload const 0.41200076
+   87 |  11  | −                       | packed-line score helper center
+   88 |  22  | F x²                    | packed-line score helper square
+   89 |  10  | +                       | packed-line score helper accumulate
+   90 |  52  | В/О                     | packed-line score helper return
+   91 |  40  | X→П 0                   | set best_score from X parameter
+   92 |  08  | 8                       |
+   93 |  4D  | X→П d                   | set slot
+   94 |  61  | П→X 1                   | recall x
+   95 |  53  | ПП                      | proc call mark_one
+   96 |  6E  | >6E                     | proc call mark_one
    97 |  62  | П→X 2                   | recall y
-   98 |  11  | −                       | expr -
-   99 |  53  | ПП                      | call function normalize
-   A0 |  73  | 73                      | call function normalize
-   A1 |  8E  | К БП e                  | tail call mark_one; preloaded Re=57 indirect-target=57 indirect flow
-   A2 |  67  | П→X 7                   | recall lines_7
-   A3 |  61  | П→X 1                   | recall x
-   A4 |  53  | ПП                      | packed-line score accumulator helper
-  >69 |  77  | >77                     | packed-line score accumulator helper
-  >6A |  66  | П→X 6                   | recall lines_6
+   98 |  53  | ПП                      | proc call mark_one
+   99 |  6E  | >6E                     | proc call mark_one
+   A0 |  61  | П→X 1                   | recall x
+   A1 |  62  | П→X 2                   | recall y
+   A2 |  10  | +                       | expr +
+   A3 |  AE  | К ПП e                  | proc call normalize; preloaded Re=57 indirect-target=57 indirect flow
+   A4 |  53  | ПП                      | proc call mark_one
+  >69 |  6E  | >6E                     | proc call mark_one
+  >6A |  61  | П→X 1                   | recall x
   >6B |  62  | П→X 2                   | recall y
-  >6C |  53  | ПП                      | packed-line score accumulator helper
-  >6D |  77  | >77                     | packed-line score accumulator helper
-  >6E |  62  | П→X 2                   | recall y
-  >6F |  53  | ПП                      | packed-line shared diagonal score
-  >70 |  73  | >73                     | packed-line shared diagonal score
-  >71 |  62  | П→X 2                   | recall y
-  >72 |  0B  | /-/                     | packed-line negative diagonal index
-  >73 |  61  | П→X 1                   | recall x
-  >74 |  10  | +                       | packed-line diagonal index
-  >75 |  53  | ПП                      | proc call normalize
-  >76 |  73  | 73                      | proc call normalize
-  >77 |  15  | F 10ˣ                   | packed-line score helper pow10
-  >78 |  13  | ÷                       | packed-line score helper divide
-  >79 |  35  | К {x}                   | packed-line score helper frac
-  >7A |  6B  | П→X b                   | preload const 0.41200076
-  >7B |  11  | −                       | packed-line score helper center
-  >7C |  22  | F x²                    | packed-line score helper square
-  >7D |  10  | +                       | packed-line score helper accumulate
-  >7E |  52  | В/О                     | packed-line score helper return
-  >7F |  61  | П→X 1                   | recall x
-  >80 |  15  | F 10ˣ                   | pow10()
-  >81 |  62  | П→X 2                   | recall y
-  >82 |  6C  | П→X c                   | preload const 40.22600029; fractional selector source 0.22600029
-  >83 |  35  | К {x}                   | fractional selector const 0.22600029
-  >84 |  12  | ×                       | expr *
-  >85 |  15  | F 10ˣ                   | pow10()
-  >86 |  34  | К [x]                   | int()
-  >87 |  10  | +                       | expr +
-  >88 |  52  | В/О                     | expression helper return
+  >6C |  11  | −                       | expr -
+  >6D |  AE  | К ПП e                  | proc call normalize; preloaded Re=57 indirect-target=57 indirect flow
+  >6E |  6D  | П→X d                   | recall slot
+  >6F |  01  | 1                       |
+  >70 |  11  | −                       | expr -
+  >71 |  4D  | X→П d                   | set slot
+  >72 |  DD  | К П→X d                 | indexed packed digit update base lines; indirect-memory-targets=4,5,6,7
+  >73 |  60  | П→X 0                   | recall best_score
+  >74 |  10  | +                       | indexed packed digit update
+  >75 |  BD  | К X→П d                 | indexed set lines; indirect-memory-targets=4,5,6,7
+  >76 |  68  | П→X 8                   | preload const 88888834
+  >77 |  37  | К ∧                     | updated packed fractional report mask
+  >78 |  35  | К {x}                   | updated packed fractional report predicate
+  >79 |  5E  | F x=0                   | true branch for packed fractional report !=
+  >7A |  7C  | >7C                     | true branch for packed fractional report !=
+  >7B |  52  | В/О                     | packed fractional report return
+  >7C |  0A  | .                       | updated packed fractional report X2 restore
+  >7D |  50  | С/П                     | halt
+  >7E |  61  | П→X 1                   | recall x
+  >7F |  15  | F 10ˣ                   | pow10()
+  >80 |  62  | П→X 2                   | recall y
+  >81 |  6C  | П→X c                   | preload const 40.22600029; fractional selector source 0.22600029
+  >82 |  35  | К {x}                   | fractional selector const 0.22600029
+  >83 |  12  | ×                       | expr *
+  >84 |  15  | F 10ˣ                   | pow10()
+  >85 |  34  | К [x]                   | int()
+  >86 |  10  | +                       | expr +
+  >87 |  52  | В/О                     | expression helper return

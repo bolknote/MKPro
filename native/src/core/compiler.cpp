@@ -48314,12 +48314,37 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
           if (plain_plans.size() > limit)
             plain_plans.resize(limit);
           for (const FractionalConstantSelectorPlan& plan : plain_plans) {
-            const std::string key = implemented_candidate_key(base_options) +
-                                    "|fractional:" + normalize_number_key(plan.value) + ":" +
-                                    std::to_string(plan.target);
-            if (!tried.insert(key).second)
-              continue;
-            add_configured_candidate(base_options_for_plan(plan), name, detail(plan));
+            CompileOptions candidate_options = base_options_for_plan(plan);
+            const std::string key = implemented_candidate_key(candidate_options);
+            if (tried.insert(key).second)
+              add_configured_candidate(std::move(candidate_options), name, detail(plan));
+
+            CompileOptions refined_options = base_options_for_plan(plan);
+            if (refined_options.tail_branch_inversion) {
+              bool changed = false;
+              if (!refined_options.stack_resident_temps) {
+                refined_options.stack_resident_temps = true;
+                changed = true;
+              }
+              if (refined_options.order_procs_by_call_count) {
+                refined_options.order_procs_by_call_count = false;
+                changed = true;
+              }
+              if (refined_options.proc_layout_strategy != "reverse") {
+                refined_options.proc_layout_strategy = "reverse";
+                changed = true;
+              }
+              if (changed) {
+                const std::string refined_key = implemented_candidate_key(refined_options);
+                if (tried.insert(refined_key).second) {
+                  add_configured_candidate(
+                      std::move(refined_options), name,
+                      detail(plan) +
+                          " with stack-resident temporaries and reverse procedure layout",
+                      CandidateGate::SizeRescue);
+                }
+              }
+            }
           }
         }
 
