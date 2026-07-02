@@ -58,7 +58,19 @@ void emulator_number_entry_concat_matches_typescript_contract();
 void emulator_packed_line_family_pow10_semantics_match_generic_lowering();
 void emulator_packed_position_facts_match_typescript_contract();
 void emulator_recall_side_effects_match_typescript_contract();
-void emulator_regression_matches_typescript_contract();
+void emulator_regression_opcode_and_stop_flow_matches_typescript_contract();
+void emulator_regression_example_loads(const std::string& example_file);
+void emulator_regression_pending_optimizer_source_stays_before_loading(
+    const std::string& source_file);
+void emulator_regression_basic_scenario_matches_typescript_contract();
+void emulator_regression_boot_scenarios_match_typescript_contract();
+void emulator_regression_human_paths_match_typescript_contract();
+void emulator_regression_tiny_game_drain_path_matches_typescript_contract();
+void emulator_regression_stack_stop_risk_matches_typescript_contract();
+void emulator_regression_cos_stack_stop_matches_typescript_contract();
+void emulator_regression_resource_underflow_matches_typescript_contract();
+void emulator_regression_wumpus_setup_matches_typescript_contract();
+void emulator_regression_wumpus_arrow_exhaustion_matches_typescript_contract();
 void emulator_rom_tables_match_typescript_contract();
 void emulator_stack_dup_equivalence_matches_typescript_contract();
 void emulator_stack_resident_equivalence_matches_typescript_contract();
@@ -268,8 +280,26 @@ int main(int argc, char** argv) {
        mkpro::tests::emulator_packed_position_facts_match_typescript_contract},
       {"emulator_recall_side_effects_match_typescript_contract",
        mkpro::tests::emulator_recall_side_effects_match_typescript_contract},
-      {"emulator_regression_matches_typescript_contract",
-       mkpro::tests::emulator_regression_matches_typescript_contract},
+      {"emulator_regression_opcode_and_stop_flow_matches_typescript_contract",
+       mkpro::tests::emulator_regression_opcode_and_stop_flow_matches_typescript_contract},
+      {"emulator_regression_basic_scenario_matches_typescript_contract",
+       mkpro::tests::emulator_regression_basic_scenario_matches_typescript_contract},
+      {"emulator_regression_boot_scenarios_match_typescript_contract",
+       mkpro::tests::emulator_regression_boot_scenarios_match_typescript_contract},
+      {"emulator_regression_human_paths_match_typescript_contract",
+       mkpro::tests::emulator_regression_human_paths_match_typescript_contract},
+      {"emulator_regression_tiny_game_drain_path_matches_typescript_contract",
+       mkpro::tests::emulator_regression_tiny_game_drain_path_matches_typescript_contract},
+      {"emulator_regression_stack_stop_risk_matches_typescript_contract",
+       mkpro::tests::emulator_regression_stack_stop_risk_matches_typescript_contract},
+      {"emulator_regression_cos_stack_stop_matches_typescript_contract",
+       mkpro::tests::emulator_regression_cos_stack_stop_matches_typescript_contract},
+      {"emulator_regression_resource_underflow_matches_typescript_contract",
+       mkpro::tests::emulator_regression_resource_underflow_matches_typescript_contract},
+      {"emulator_regression_wumpus_setup_matches_typescript_contract",
+       mkpro::tests::emulator_regression_wumpus_setup_matches_typescript_contract},
+      {"emulator_regression_wumpus_arrow_exhaustion_matches_typescript_contract",
+       mkpro::tests::emulator_regression_wumpus_arrow_exhaustion_matches_typescript_contract},
       {"emulator_rom_tables_match_typescript_contract",
        mkpro::tests::emulator_rom_tables_match_typescript_contract},
       {"emulator_stack_dup_equivalence_matches_typescript_contract",
@@ -459,6 +489,8 @@ int main(int argc, char** argv) {
 
   std::string filter;
   std::string exact;
+  std::string load_example;
+  std::string pending_optimizer_source;
   bool list = false;
   for (int i = 1; i < argc; ++i) {
     const std::string argument = argv[i];
@@ -474,12 +506,63 @@ int main(int argc, char** argv) {
       exact = argv[++i];
       continue;
     }
+    if (argument == "--load-example") {
+      if (i + 1 >= argc) {
+        std::cerr << "--load-example requires an example path" << std::endl;
+        return 2;
+      }
+      load_example = argv[++i];
+      continue;
+    }
+    if (argument == "--pending-optimizer-source") {
+      if (i + 1 >= argc) {
+        std::cerr << "--pending-optimizer-source requires a source path" << std::endl;
+        return 2;
+      }
+      pending_optimizer_source = argv[++i];
+      continue;
+    }
     if (filter.empty()) {
       filter = argument;
       continue;
     }
     std::cerr << "Unexpected native test argument: " << argument << std::endl;
     return 2;
+  }
+
+  const int custom_modes = (load_example.empty() ? 0 : 1) +
+                           (pending_optimizer_source.empty() ? 0 : 1);
+  if (custom_modes > 0) {
+    if (custom_modes > 1 || list || !filter.empty() || !exact.empty()) {
+      std::cerr << "Custom native test modes cannot be combined with other selectors"
+                << std::endl;
+      return 2;
+    }
+
+    const auto started = std::chrono::steady_clock::now();
+    const std::string name =
+        !load_example.empty()
+            ? "emulator_regression_example_loads:" + load_example
+            : "emulator_regression_pending_optimizer_source_stays_before_loading:" +
+                  pending_optimizer_source;
+    try {
+      if (!load_example.empty()) {
+        mkpro::tests::emulator_regression_example_loads(load_example);
+      } else {
+        mkpro::tests::emulator_regression_pending_optimizer_source_stays_before_loading(
+            pending_optimizer_source);
+      }
+      const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - started);
+      std::cout << "[PASS] " << name << " (" << elapsed.count() << " ms)" << std::endl;
+      return 0;
+    } catch (const std::exception& error) {
+      const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - started);
+      std::cerr << "[FAIL] " << name << " (" << elapsed.count() << " ms): "
+                << error.what() << std::endl;
+      return 1;
+    }
   }
 
   if (list) {

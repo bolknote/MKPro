@@ -314,7 +314,16 @@ set(MKPRO_NATIVE_TEST_NAMES
   emulator_packed_line_family_pow10_semantics_match_generic_lowering
   emulator_packed_position_facts_match_typescript_contract
   emulator_recall_side_effects_match_typescript_contract
-  emulator_regression_matches_typescript_contract
+  emulator_regression_opcode_and_stop_flow_matches_typescript_contract
+  emulator_regression_basic_scenario_matches_typescript_contract
+  emulator_regression_boot_scenarios_match_typescript_contract
+  emulator_regression_human_paths_match_typescript_contract
+  emulator_regression_tiny_game_drain_path_matches_typescript_contract
+  emulator_regression_stack_stop_risk_matches_typescript_contract
+  emulator_regression_cos_stack_stop_matches_typescript_contract
+  emulator_regression_resource_underflow_matches_typescript_contract
+  emulator_regression_wumpus_setup_matches_typescript_contract
+  emulator_regression_wumpus_arrow_exhaustion_matches_typescript_contract
   emulator_rom_tables_match_typescript_contract
   emulator_stack_dup_equivalence_matches_typescript_contract
   emulator_stack_resident_equivalence_matches_typescript_contract
@@ -410,6 +419,71 @@ set(MKPRO_NATIVE_TEST_NAMES
 foreach(test_name IN LISTS MKPRO_NATIVE_TEST_NAMES)
   add_test(NAME "mkpro.${test_name}" COMMAND mkpro_tests --exact "${test_name}")
   set_tests_properties("mkpro.${test_name}" PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+endforeach()
+
+set(MKPRO_EMULATOR_REGRESSION_TEST_NAMES
+  emulator_regression_opcode_and_stop_flow_matches_typescript_contract
+  emulator_regression_basic_scenario_matches_typescript_contract
+  emulator_regression_boot_scenarios_match_typescript_contract
+  emulator_regression_human_paths_match_typescript_contract
+  emulator_regression_tiny_game_drain_path_matches_typescript_contract
+  emulator_regression_stack_stop_risk_matches_typescript_contract
+  emulator_regression_cos_stack_stop_matches_typescript_contract
+  emulator_regression_resource_underflow_matches_typescript_contract
+  emulator_regression_wumpus_setup_matches_typescript_contract
+  emulator_regression_wumpus_arrow_exhaustion_matches_typescript_contract
+)
+foreach(test_name IN LISTS MKPRO_EMULATOR_REGRESSION_TEST_NAMES)
+  set_tests_properties("mkpro.${test_name}" PROPERTIES
+    LABELS "emulator;integration"
+    COST 5
+  )
+endforeach()
+
+file(GLOB MKPRO_EMULATOR_REGRESSION_EXAMPLE_FILES CONFIGURE_DEPENDS
+  "${CMAKE_SOURCE_DIR}/examples/*.mkpro"
+)
+foreach(example_file IN LISTS MKPRO_EMULATOR_REGRESSION_EXAMPLE_FILES)
+  get_filename_component(example_name "${example_file}" NAME_WE)
+  add_test(
+    NAME "mkpro.emulator_regression.example_load.${example_name}"
+    COMMAND mkpro_tests --load-example "${example_file}"
+  )
+  set_tests_properties("mkpro.emulator_regression.example_load.${example_name}" PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    LABELS "emulator;integration;slow"
+    COST 20
+  )
+endforeach()
+
+file(GLOB MKPRO_EMULATOR_REGRESSION_PENDING_OPTIMIZER_FILES CONFIGURE_DEPENDS
+  "${CMAKE_SOURCE_DIR}/examples/pending-optimizer/*.mkpro"
+)
+foreach(source_file IN LISTS MKPRO_EMULATOR_REGRESSION_PENDING_OPTIMIZER_FILES)
+  get_filename_component(source_name "${source_file}" NAME_WE)
+  add_test(
+    NAME "mkpro.emulator_regression.pending_optimizer.${source_name}"
+    COMMAND mkpro_tests --pending-optimizer-source "${source_file}"
+  )
+  set_tests_properties("mkpro.emulator_regression.pending_optimizer.${source_name}" PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    LABELS "emulator;integration;slow"
+    COST 20
+  )
+endforeach()
+
+set(MKPRO_SLOW_EMULATOR_REGRESSION_TEST_NAMES
+  emulator_regression_stack_stop_risk_matches_typescript_contract
+  emulator_regression_cos_stack_stop_matches_typescript_contract
+  emulator_regression_resource_underflow_matches_typescript_contract
+  emulator_regression_wumpus_setup_matches_typescript_contract
+  emulator_regression_wumpus_arrow_exhaustion_matches_typescript_contract
+)
+foreach(test_name IN LISTS MKPRO_SLOW_EMULATOR_REGRESSION_TEST_NAMES)
+  set_tests_properties("mkpro.${test_name}" PROPERTIES
+    LABELS "emulator;integration;slow"
+    COST 20
+  )
 endforeach()
 
 function(mkpro_configure_target target_name)
