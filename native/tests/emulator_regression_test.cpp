@@ -35,26 +35,15 @@ std::vector<int> step_opcodes(const std::vector<ResolvedStep>& steps) {
   return codes;
 }
 
-std::vector<std::filesystem::path> example_files(const std::filesystem::path& root) {
-  std::vector<std::filesystem::path> files;
-  for (const std::filesystem::directory_entry& entry :
-       std::filesystem::directory_iterator(root / "examples")) {
-    if (entry.is_regular_file() && entry.path().extension() == ".mkpro")
-      files.push_back(entry.path());
-  }
-  std::ranges::sort(files);
-  return files;
-}
-
-std::vector<std::filesystem::path> pending_optimizer_files(const std::filesystem::path& root) {
-  std::vector<std::filesystem::path> files;
-  for (const std::filesystem::directory_entry& entry :
-       std::filesystem::directory_iterator(root / "examples" / "pending-optimizer")) {
-    if (entry.is_regular_file() && entry.path().extension() == ".mkpro")
-      files.push_back(entry.path());
-  }
-  std::ranges::sort(files);
-  return files;
+std::filesystem::path resolve_fixture_argument(const std::string& argument,
+                                               const std::filesystem::path& default_directory) {
+  std::filesystem::path path(argument);
+  if (path.is_absolute())
+    return path;
+  const std::filesystem::path root = std::filesystem::current_path();
+  if (path.has_parent_path())
+    return root / path;
+  return root / default_directory / path;
 }
 
 bool has_optimization(const CompileResult& result, const std::string& name) {
@@ -103,12 +92,28 @@ struct Scenario {
   int max_frames = 400;
 };
 
+void run_scenario(const Scenario& scenario) {
+  const std::filesystem::path root = std::filesystem::current_path();
+  const CompileResult result = compile_source(read_text(root / "examples" / scenario.example));
+  require(result.implemented, "scenario should compile: " + scenario.name);
+  emulator::MK61 calc;
+  const emulator::ProgramLoadResult loaded = calc.load_program(step_opcodes(result.steps));
+  require(loaded.diagnostics.empty(), "scenario should load: " + scenario.name);
+  for (const auto& [reg, value] : scenario.registers)
+    calc.set_register(reg, value);
+  calc.press_sequence(scenario.keys);
+  const emulator::RunResult run = calc.run_until_stable(scenario.max_frames, 5);
+  require(run.stopped == scenario.expect_stop, "scenario stopped state mismatch: " + scenario.name);
+  if (!scenario.expect_display_number.empty()) {
+    require(display_is_number(calc.display_text(), scenario.expect_display_number),
+            "scenario display mismatch: " + scenario.name + ", got " + calc.display_text());
+  }
+}
+
 } // namespace
 
-void emulator_regression_matches_typescript_contract() {
+void emulator_regression_opcode_and_stop_flow_matches_typescript_contract() {
   // Traceability: tests/emulator/regression.test.ts
-  const std::filesystem::path root = std::filesystem::current_path();
-
   {
     const OpcodeInfo* opcode = find_opcode_name("FBx");
     require(opcode != nullptr && opcode->code == 0x0f,
@@ -130,92 +135,93 @@ void emulator_regression_matches_typescript_contract() {
             "second consecutive stop should leave PC at the next command, got " +
                 calc.program_counter());
   }
+}
 
-  const std::vector<std::filesystem::path> examples = example_files(root);
-  require(examples.size() >= 5, "emulator regression should see top-level example files");
-  for (const std::filesystem::path& file : examples) {
-    const CompileResult result = compile_source(read_text(file));
-    require(result.implemented, "example should compile for emulator loading: " + file.string());
-    const std::vector<int> codes = step_opcodes(result.steps);
-    emulator::MK61 calc;
-    const emulator::ProgramLoadResult loaded = calc.load_program(codes);
-    require(loaded.diagnostics.empty(),
-            "example should load into emulator without diagnostics: " + file.string());
-    require(calc.read_program_codes(static_cast<int>(codes.size())) == codes,
-            "example program memory should round-trip after load: " + file.string());
-  }
+void emulator_regression_example_loads(const std::string& example_file) {
+  // Traceability: tests/emulator/regression.test.ts
+  const std::filesystem::path file = resolve_fixture_argument(example_file, "examples");
+  const CompileResult result = compile_source(read_text(file));
+  require(result.implemented, "example should compile for emulator loading: " + file.string());
+  const std::vector<int> codes = step_opcodes(result.steps);
+  emulator::MK61 calc;
+  const emulator::ProgramLoadResult loaded = calc.load_program(codes);
+  require(loaded.diagnostics.empty(),
+          "example should load into emulator without diagnostics: " + file.string());
+  require(calc.read_program_codes(static_cast<int>(codes.size())) == codes,
+          "example program memory should round-trip after load: " + file.string());
+}
 
-  for (const std::filesystem::path& file : pending_optimizer_files(root)) {
-    CompileOptions options;
-    options.budget = 999;
-    const CompileResult result = compile_source(read_text(file), options);
-    require(!diagnostics_contain(result, "real rule lowerers before code generation"),
-            "pending optimizer should stay before emulator loading: " + file.string());
-  }
+void emulator_regression_pending_optimizer_source_stays_before_loading(
+    const std::string& source_file) {
+  // Traceability: tests/emulator/regression.test.ts
+  const std::filesystem::path file =
+      resolve_fixture_argument(source_file, "examples/pending-optimizer");
+  CompileOptions options;
+  options.budget = 999;
+  const CompileResult result = compile_source(read_text(file), options);
+  require(!diagnostics_contain(result, "real rule lowerers before code generation"),
+          "pending optimizer should stay before emulator loading: " + file.string());
+}
 
-  const std::vector<Scenario> scenarios = {
-      {
-          .name = "basic input/show/halt cycle",
-          .example = "basic.mkpro",
-          .keys = {"В/О", "С/П", "3", "С/П", "4", "С/П", "С/П"},
-          .expect_display_number = "7",
-      },
-      {
-          .name = "lunar accepts initial state",
-          .example = "lunar.mkpro",
-          .registers = {{"2", "100"}, {"3", "500"}, {"4", "5"}},
-          .keys = {"В/О", "С/П"},
-      },
-      {
-          .name = "tiny-game boots",
-          .example = "tiny-game.mkpro",
-          .keys = {"В/О", "С/П"},
-      },
-      {
-          .name = "human boots",
-          .example = "human.mkpro",
-          .keys = {"В/О", "С/П"},
-      },
-      {
-          .name = "human train path",
-          .example = "human.mkpro",
-          .registers = {{"1", "0"}, {"2", "5"}},
-          .keys = {"В/О", "С/П", "2", "С/П", "С/П"},
-      },
-      {
-          .name = "human spend path",
-          .example = "human.mkpro",
-          .registers = {{"1", "3"}, {"2", "5"}},
-          .keys = {"В/О", "С/П", "8", "С/П", "С/П"},
-      },
-      {
-          .name = "tiny-game drain path",
-          .example = "tiny-game.mkpro",
-          .registers = {{"0", "80000078"}, {"2", "8"}},
-          .keys = {"В/О", "С/П", "4", "С/П", "С/П"},
-      },
-  };
+void emulator_regression_basic_scenario_matches_typescript_contract() {
+  // Traceability: tests/emulator/regression.test.ts
+  run_scenario({
+      .name = "basic input/show/halt cycle",
+      .example = "basic.mkpro",
+      .keys = {"В/О", "С/П", "3", "С/П", "4", "С/П", "С/П"},
+      .expect_display_number = "7",
+  });
+}
 
-  for (const Scenario& scenario : scenarios) {
-    const CompileResult result =
-        compile_source(read_text(root / "examples" / scenario.example));
-    require(result.implemented, "scenario should compile: " + scenario.name);
-    emulator::MK61 calc;
-    const emulator::ProgramLoadResult loaded = calc.load_program(step_opcodes(result.steps));
-    require(loaded.diagnostics.empty(), "scenario should load: " + scenario.name);
-    for (const auto& [reg, value] : scenario.registers)
-      calc.set_register(reg, value);
-    calc.press_sequence(scenario.keys);
-    const emulator::RunResult run = calc.run_until_stable(scenario.max_frames, 5);
-    require(run.stopped == scenario.expect_stop, "scenario stopped state mismatch: " + scenario.name);
-    if (!scenario.expect_display_number.empty()) {
-      require(display_is_number(calc.display_text(), scenario.expect_display_number),
-              "scenario display mismatch: " + scenario.name + ", got " + calc.display_text());
-    }
-  }
+void emulator_regression_boot_scenarios_match_typescript_contract() {
+  // Traceability: tests/emulator/regression.test.ts
+  run_scenario({
+      .name = "lunar accepts initial state",
+      .example = "lunar.mkpro",
+      .registers = {{"2", "100"}, {"3", "500"}, {"4", "5"}},
+      .keys = {"В/О", "С/П"},
+  });
+  run_scenario({
+      .name = "tiny-game boots",
+      .example = "tiny-game.mkpro",
+      .keys = {"В/О", "С/П"},
+  });
+  run_scenario({
+      .name = "human boots",
+      .example = "human.mkpro",
+      .keys = {"В/О", "С/П"},
+  });
+}
 
-  {
-    const std::string source = R"mkpro(
+void emulator_regression_human_paths_match_typescript_contract() {
+  // Traceability: tests/emulator/regression.test.ts
+  run_scenario({
+      .name = "human train path",
+      .example = "human.mkpro",
+      .registers = {{"1", "0"}, {"2", "5"}},
+      .keys = {"В/О", "С/П", "2", "С/П", "С/П"},
+  });
+  run_scenario({
+      .name = "human spend path",
+      .example = "human.mkpro",
+      .registers = {{"1", "3"}, {"2", "5"}},
+      .keys = {"В/О", "С/П", "8", "С/П", "С/П"},
+  });
+}
+
+void emulator_regression_tiny_game_drain_path_matches_typescript_contract() {
+  // Traceability: tests/emulator/regression.test.ts
+  run_scenario({
+      .name = "tiny-game drain path",
+      .example = "tiny-game.mkpro",
+      .registers = {{"0", "80000078"}, {"2", "8"}},
+      .keys = {"В/О", "С/П", "4", "С/П", "С/П"},
+  });
+}
+
+void emulator_regression_stack_stop_risk_matches_typescript_contract() {
+  // Traceability: tests/emulator/regression.test.ts
+  const std::string source = R"mkpro(
 program StackStopRiskProbe {
   state {
     stake_value: counter 0..99 = 2
@@ -235,36 +241,37 @@ program StackStopRiskProbe {
   }
 }
 )mkpro";
-    CompileOptions options;
-    options.analysis = true;
-    options.budget = 999;
-    const CompileResult result = compile_source(source, options);
-    require(result.implemented, "cave robber stack-stop probe should compile");
-    require(has_optimization(result, "show-read-stack-stop-risk-lowering"),
-            "cave robber stack-stop probe should report TS optimization");
+  CompileOptions options;
+  options.analysis = true;
+  options.budget = 999;
+  const CompileResult result = compile_source(source, options);
+  require(result.implemented, "cave robber stack-stop probe should compile");
+  require(has_optimization(result, "show-read-stack-stop-risk-lowering"),
+          "cave robber stack-stop probe should report TS optimization");
 
-    auto run_choice = [&](const std::vector<std::string>& keys) {
-      emulator::MK61 calc;
-      const emulator::ProgramLoadResult loaded = calc.load_program(step_opcodes(result.steps));
-      require(loaded.diagnostics.empty(), "cave robber probe should load");
-      for (const PreloadReport& preload : result.preloads)
-        calc.set_register(preload.register_name, preload.value);
-      calc.press_sequence({"В/О", "С/П"});
-      require(calc.run_until_stable(500, 6).stopped, "cave robber probe should stop on stake");
-      require(display_is_number(calc.display_text(), "2"), "cave robber probe should display stake");
-      calc.press_sequence(keys);
-      require(calc.run_until_stable(500, 6).stopped, "cave robber probe should stop after choice");
-      return calc.display_text();
-    };
+  auto run_choice = [&](const std::vector<std::string>& keys) {
+    emulator::MK61 calc;
+    const emulator::ProgramLoadResult loaded = calc.load_program(step_opcodes(result.steps));
+    require(loaded.diagnostics.empty(), "cave robber probe should load");
+    for (const PreloadReport& preload : result.preloads)
+      calc.set_register(preload.register_name, preload.value);
+    calc.press_sequence({"В/О", "С/П"});
+    require(calc.run_until_stable(500, 6).stopped, "cave robber probe should stop on stake");
+    require(display_is_number(calc.display_text(), "2"), "cave robber probe should display stake");
+    calc.press_sequence(keys);
+    require(calc.run_until_stable(500, 6).stopped, "cave robber probe should stop after choice");
+    return calc.display_text();
+  };
 
-    require(display_is_number(run_choice({"0", "С/П"}), "2"),
-            "cave robber zero choice should keep stake");
-    require(display_is_number(run_choice({"В↑", "С/П"}), "3"),
-            "cave robber stack choice should avoid fresh random draw");
-  }
+  require(display_is_number(run_choice({"0", "С/П"}), "2"),
+          "cave robber zero choice should keep stake");
+  require(display_is_number(run_choice({"В↑", "С/П"}), "3"),
+          "cave robber stack choice should avoid fresh random draw");
+}
 
-  {
-    const std::string source = R"mkpro(
+void emulator_regression_cos_stack_stop_matches_typescript_contract() {
+  // Traceability: tests/emulator/regression.test.ts
+  const std::string source = R"mkpro(
 program StakeCosProbe {
   state {
     stake_value: counter 0..99 = 2
@@ -282,31 +289,32 @@ program StakeCosProbe {
   }
 }
 )mkpro";
-    CompileOptions options;
-    options.analysis = true;
-    options.budget = 999;
-    const CompileResult result = compile_source(source, options);
-    require(result.implemented, "cos stack-stop probe should compile");
-    require(has_optimization(result, "x-param-stack-stop-risk-inline"),
-            "cos stack-stop probe should report inline TS optimization");
-    require(!has_optimization(result, "x-param-stack-stop-risk-read"),
-            "cos stack-stop probe should not report read fallback optimization");
+  CompileOptions options;
+  options.analysis = true;
+  options.budget = 999;
+  const CompileResult result = compile_source(source, options);
+  require(result.implemented, "cos stack-stop probe should compile");
+  require(has_optimization(result, "x-param-stack-stop-risk-inline"),
+          "cos stack-stop probe should report inline TS optimization");
+  require(!has_optimization(result, "x-param-stack-stop-risk-read"),
+          "cos stack-stop probe should not report read fallback optimization");
 
-    emulator::MK61 calc;
-    const emulator::ProgramLoadResult loaded = calc.load_program(step_opcodes(result.steps));
-    require(loaded.diagnostics.empty(), "cos stack-stop probe should load");
-    for (const PreloadReport& preload : result.preloads)
-      calc.set_register(preload.register_name, preload.value);
-    calc.press_sequence({"В/О", "С/П"});
-    require(calc.run_until_stable(500, 6).stopped, "cos stack-stop probe should stop on stake");
-    require(display_is_number(calc.display_text(), "2"), "cos stack-stop probe should display stake");
-    calc.press_sequence({"0", "С/П"});
-    require(calc.run_until_stable(500, 6).stopped, "cos stack-stop probe should stop after input");
-    require(display_is_number(calc.display_text(), "4"), "cos stack-stop zero input should return 4");
-  }
+  emulator::MK61 calc;
+  const emulator::ProgramLoadResult loaded = calc.load_program(step_opcodes(result.steps));
+  require(loaded.diagnostics.empty(), "cos stack-stop probe should load");
+  for (const PreloadReport& preload : result.preloads)
+    calc.set_register(preload.register_name, preload.value);
+  calc.press_sequence({"В/О", "С/П"});
+  require(calc.run_until_stable(500, 6).stopped, "cos stack-stop probe should stop on stake");
+  require(display_is_number(calc.display_text(), "2"), "cos stack-stop probe should display stake");
+  calc.press_sequence({"0", "С/П"});
+  require(calc.run_until_stable(500, 6).stopped, "cos stack-stop probe should stop after input");
+  require(display_is_number(calc.display_text(), "4"), "cos stack-stop zero input should return 4");
+}
 
-  {
-    const std::string source = R"mkpro(
+void emulator_regression_resource_underflow_matches_typescript_contract() {
+  // Traceability: tests/emulator/regression.test.ts
+  const std::string source = R"mkpro(
 program ResourceUnderflowProbe {
   state {
     food: counter 0..9 = 0
@@ -321,135 +329,138 @@ program ResourceUnderflowProbe {
   }
 }
 )mkpro";
-    CompileOptions options;
-    options.analysis = true;
-    options.budget = 999;
-    const CompileResult result = compile_source(source, options);
-    require(result.implemented, "resource underflow probe should compile");
-    require(has_optimization(result, "decrement-underflow-domain-guard"),
-            "resource underflow probe should report TS optimization");
-    const std::string food_register = require_register(result, "food");
+  CompileOptions options;
+  options.analysis = true;
+  options.budget = 999;
+  const CompileResult result = compile_source(source, options);
+  require(result.implemented, "resource underflow probe should compile");
+  require(has_optimization(result, "decrement-underflow-domain-guard"),
+          "resource underflow probe should report TS optimization");
+  const std::string food_register = require_register(result, "food");
 
-    auto run_with_food = [&](const std::string& food) {
-      emulator::MK61 calc;
-      const emulator::ProgramLoadResult loaded = calc.load_program(step_opcodes(result.steps));
-      require(loaded.diagnostics.empty(), "resource underflow probe should load");
-      calc.set_register(food_register, food);
-      calc.press_sequence({"В/О", "С/П"});
-      require(calc.run_until_stable(500, 6).stopped, "resource underflow probe should stop");
-      return calc.display_text();
-    };
-
-    require(display_is_number(run_with_food("2"), "1"),
-            "resource underflow should decrement positive food");
-    require(compact(run_with_food("0")).find("ЕГГ") != std::string::npos,
-            "resource underflow should stop with error after exhaustion");
-  }
-
-  {
-    CompileOptions options;
-    options.analysis = true;
-    options.budget = 999;
-    const CompileResult result =
-        compile_source(read_text(root / "examples" / "wumpus.mkpro"), options);
-    require(result.implemented, "wumpus setup regression should compile");
-    for (const auto& [name, allocated_register] : result.registers) {
-      (void)allocated_register;
-      require(!name.starts_with("__const_"),
-              "wumpus public register report should not expose internal constant " + name);
-    }
-    require(result.setup_program.has_value(), "wumpus should expose setup program");
-    require(result.steps.size() <= 105, "wumpus main program should fit");
-
-    emulator::MK61 calc;
-    const emulator::ProgramLoadResult setup_loaded =
-        calc.load_program(step_opcodes(result.setup_program->steps));
-    require(setup_loaded.diagnostics.empty(), "wumpus setup should load");
-    calc.press_sequence({"В/О", "С/П"});
-    require(calc.run_until_stable(1000, 8).stopped, "wumpus setup should stop");
-
-    for (const std::string& field :
-         {"wumpus", "hazard_pit_1", "hazard_pit_2", "hazard_bat_1", "hazard_bat_2"}) {
-      const int value = read_integer_register(calc, require_register(result, field));
-      require(value >= 1, "wumpus setup field should be >= 1: " + field);
-      require(value <= 20, "wumpus setup field should be <= 20: " + field);
-    }
-
-    const emulator::ProgramLoadResult main_loaded = calc.load_program(step_opcodes(result.steps));
-    require(main_loaded.diagnostics.empty(), "wumpus main program should load after setup");
-  }
-
-  {
-    CompileOptions options;
-    options.analysis = true;
-    options.budget = 999;
-    const CompileResult result =
-        compile_source(read_text(root / "examples" / "wumpus.mkpro"), options);
-    require(result.implemented, "wumpus arrow regression should compile");
-
+  auto run_with_food = [&](const std::string& food) {
     emulator::MK61 calc;
     const emulator::ProgramLoadResult loaded = calc.load_program(step_opcodes(result.steps));
-    require(loaded.diagnostics.empty(), "wumpus arrow regression should load");
-
-    const std::string room_register = require_register(result, "room");
-    const std::string target_register = require_register(result, "target");
-    const std::string arrows_register = require_register(result, "arrows");
-    const std::string clue_register = require_register(result, "clue");
-    const std::string wumpus_register = require_register(result, "wumpus");
-    const std::string pit_1_register = require_register(result, "hazard_pit_1");
-    const std::string pit_2_register = require_register(result, "hazard_pit_2");
-    const std::string bat_1_register = require_register(result, "hazard_bat_1");
-    const std::string bat_2_register = require_register(result, "hazard_bat_2");
-
-    const std::set<std::string> state_registers = {
-        room_register,   target_register, arrows_register, clue_register,  wumpus_register,
-        pit_1_register,  pit_2_register,  bat_1_register,  bat_2_register,
-    };
-    for (const PreloadReport& preload : result.preloads) {
-      if (!state_registers.contains(preload.register_name))
-        calc.set_register(preload.register_name, preload.value);
-    }
-
-    calc.set_register(room_register, "1");
-    calc.set_register(target_register, "0");
-    calc.set_register(arrows_register, "5");
-    calc.set_register(clue_register, "0");
-    calc.set_register(wumpus_register, "10");
-    calc.set_register(pit_1_register, "15");
-    calc.set_register(pit_2_register, "16");
-    calc.set_register(bat_1_register, "18");
-    calc.set_register(bat_2_register, "19");
-
-    auto shoot_miss = [&]() {
-      calc.press("С/П");
-      (void)calc.run_until_stable(800, 6);
-      calc.input_number("5", true);
-      calc.press("/-/");
-      calc.press("С/П");
-      (void)calc.run_until_stable(1500, 6);
-      return compact(calc.display_text());
-    };
-
+    require(loaded.diagnostics.empty(), "resource underflow probe should load");
+    calc.set_register(food_register, food);
     calc.press_sequence({"В/О", "С/П"});
-    (void)calc.run_until_stable(800, 6);
-    require(calc.program_counter() == "32",
-            "wumpus should start on the room/arrows stop before clue, got pc=" +
-                calc.program_counter() + " display=" + compact(calc.display_text()));
+    require(calc.run_until_stable(500, 6).stopped, "resource underflow probe should stop");
+    return calc.display_text();
+  };
 
-    bool died = false;
-    for (int shot = 1; shot <= 6 && !died; ++shot) {
-      const std::string display = shoot_miss();
-      if (display.find("Г") != std::string::npos) {
-        require(shot == 5, "wumpus should die on the fifth missed arrow, got shot " +
-                               std::to_string(shot) + " with display " + display +
-                               ", arrows=" + compact(calc.read_register(arrows_register)) +
-                               ", room=" + compact(calc.read_register(room_register)) +
-                               ", wumpus=" + compact(calc.read_register(wumpus_register)));
-        died = true;
-      }
-    }
-    require(died, "wumpus arrow exhaustion should eventually kill the player");
+  require(display_is_number(run_with_food("2"), "1"),
+          "resource underflow should decrement positive food");
+  require(compact(run_with_food("0")).find("ЕГГ") != std::string::npos,
+          "resource underflow should stop with error after exhaustion");
+}
+
+void emulator_regression_wumpus_setup_matches_typescript_contract() {
+  // Traceability: tests/emulator/regression.test.ts
+  const std::filesystem::path root = std::filesystem::current_path();
+  CompileOptions options;
+  options.analysis = true;
+  options.budget = 999;
+  const CompileResult result =
+      compile_source(read_text(root / "examples" / "wumpus.mkpro"), options);
+  require(result.implemented, "wumpus setup regression should compile");
+  for (const auto& [name, allocated_register] : result.registers) {
+    (void)allocated_register;
+    require(!name.starts_with("__const_"),
+            "wumpus public register report should not expose internal constant " + name);
   }
+  require(result.setup_program.has_value(), "wumpus should expose setup program");
+  require(result.steps.size() <= 105, "wumpus main program should fit");
+
+  emulator::MK61 calc;
+  const emulator::ProgramLoadResult setup_loaded =
+      calc.load_program(step_opcodes(result.setup_program->steps));
+  require(setup_loaded.diagnostics.empty(), "wumpus setup should load");
+  calc.press_sequence({"В/О", "С/П"});
+  require(calc.run_until_stable(1000, 8).stopped, "wumpus setup should stop");
+
+  for (const std::string& field :
+       {"wumpus", "hazard_pit_1", "hazard_pit_2", "hazard_bat_1", "hazard_bat_2"}) {
+    const int value = read_integer_register(calc, require_register(result, field));
+    require(value >= 1, "wumpus setup field should be >= 1: " + field);
+    require(value <= 20, "wumpus setup field should be <= 20: " + field);
+  }
+
+  const emulator::ProgramLoadResult main_loaded = calc.load_program(step_opcodes(result.steps));
+  require(main_loaded.diagnostics.empty(), "wumpus main program should load after setup");
+}
+
+void emulator_regression_wumpus_arrow_exhaustion_matches_typescript_contract() {
+  // Traceability: tests/emulator/regression.test.ts
+  const std::filesystem::path root = std::filesystem::current_path();
+  CompileOptions options;
+  options.analysis = true;
+  options.budget = 999;
+  const CompileResult result =
+      compile_source(read_text(root / "examples" / "wumpus.mkpro"), options);
+  require(result.implemented, "wumpus arrow regression should compile");
+
+  emulator::MK61 calc;
+  const emulator::ProgramLoadResult loaded = calc.load_program(step_opcodes(result.steps));
+  require(loaded.diagnostics.empty(), "wumpus arrow regression should load");
+
+  const std::string room_register = require_register(result, "room");
+  const std::string target_register = require_register(result, "target");
+  const std::string arrows_register = require_register(result, "arrows");
+  const std::string clue_register = require_register(result, "clue");
+  const std::string wumpus_register = require_register(result, "wumpus");
+  const std::string pit_1_register = require_register(result, "hazard_pit_1");
+  const std::string pit_2_register = require_register(result, "hazard_pit_2");
+  const std::string bat_1_register = require_register(result, "hazard_bat_1");
+  const std::string bat_2_register = require_register(result, "hazard_bat_2");
+
+  const std::set<std::string> state_registers = {
+      room_register,   target_register, arrows_register, clue_register,  wumpus_register,
+      pit_1_register,  pit_2_register,  bat_1_register,  bat_2_register,
+  };
+  for (const PreloadReport& preload : result.preloads) {
+    if (!state_registers.contains(preload.register_name))
+      calc.set_register(preload.register_name, preload.value);
+  }
+
+  calc.set_register(room_register, "1");
+  calc.set_register(target_register, "0");
+  calc.set_register(arrows_register, "5");
+  calc.set_register(clue_register, "0");
+  calc.set_register(wumpus_register, "10");
+  calc.set_register(pit_1_register, "15");
+  calc.set_register(pit_2_register, "16");
+  calc.set_register(bat_1_register, "18");
+  calc.set_register(bat_2_register, "19");
+
+  auto shoot_miss = [&]() {
+    calc.press("С/П");
+    (void)calc.run_until_stable(800, 6);
+    calc.input_number("5", true);
+    calc.press("/-/");
+    calc.press("С/П");
+    (void)calc.run_until_stable(1500, 6);
+    return compact(calc.display_text());
+  };
+
+  calc.press_sequence({"В/О", "С/П"});
+  (void)calc.run_until_stable(800, 6);
+  require(calc.program_counter() == "32",
+          "wumpus should start on the room/arrows stop before clue, got pc=" +
+              calc.program_counter() + " display=" + compact(calc.display_text()));
+
+  bool died = false;
+  for (int shot = 1; shot <= 6 && !died; ++shot) {
+    const std::string display = shoot_miss();
+    if (display.find("Г") != std::string::npos) {
+      require(shot == 5, "wumpus should die on the fifth missed arrow, got shot " +
+                             std::to_string(shot) + " with display " + display +
+                             ", arrows=" + compact(calc.read_register(arrows_register)) +
+                             ", room=" + compact(calc.read_register(room_register)) +
+                             ", wumpus=" + compact(calc.read_register(wumpus_register)));
+      died = true;
+    }
+  }
+  require(died, "wumpus arrow exhaustion should eventually kill the player");
 }
 
 } // namespace mkpro::tests

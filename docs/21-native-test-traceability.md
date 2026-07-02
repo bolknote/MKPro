@@ -54,11 +54,21 @@ cmake --preset debug && cmake --build --preset debug && ctest --preset debug
 build/release/native/mkpro_tests --list
 build/release/native/mkpro_tests --exact opcode_catalog_matches_typescript_contract
 ctest --preset release -R mkpro.opcode_catalog_matches_typescript_contract --output-on-failure
+
+# Skip long-running emulator/integration checks in a fast local pass
+ctest --preset release -LE slow --output-on-failure
+
+# Run only the emulator regression layer, parallelized by scenario/source file
+ctest --preset release -R mkpro.emulator_regression -j 8 --output-on-failure
 ```
 
 CTest registers every native test group independently as `mkpro.<test-name>`.
 This is required for sanitizer triage because the example and golden tests are
 too slow to debug as one monolithic process.
+The emulator regression layer also uses CTest-generated per-source tests for
+`examples/*.mkpro` and `examples/pending-optimizer/*.mkpro`; these are labeled
+`emulator`, `integration`, and `slow` so local cycles can exclude them with
+`-LE slow` while full gates can still run them in parallel.
 
 ## Compiler Test Mapping
 
