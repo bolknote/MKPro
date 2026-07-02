@@ -46418,6 +46418,60 @@ SizeAttributionReport build_size_attribution_report(
         spills != helper_value_aware_register_traffic_spills.end()) {
       helper.details["valueAwareRegisterTrafficBreakdown"] =
           size_report_helper_spill_breakdown(spills->second);
+      std::set<std::string> stack_input_names;
+      std::set<std::string> state_output_names;
+      std::set<std::string> mixed_state_names;
+      int stack_input_cells = 0;
+      int state_output_cells = 0;
+      int mixed_state_cells = 0;
+      for (const SizeHelperSpillSummaryReport& spill : spills->second) {
+        if (spill.recall_cells > 0 && spill.store_cells == 0) {
+          stack_input_names.insert(spill.name);
+          stack_input_cells += spill.total_cells;
+        } else if (spill.store_cells > 0 && spill.recall_cells == 0) {
+          state_output_names.insert(spill.name);
+          state_output_cells += spill.total_cells;
+        } else {
+          mixed_state_names.insert(spill.name);
+          mixed_state_cells += spill.total_cells;
+        }
+      }
+      if (!stack_input_names.empty()) {
+        helper.details["valueAwareStackInputNames"] =
+            join_strings(std::vector<std::string>(stack_input_names.begin(),
+                                                  stack_input_names.end()),
+                         ",");
+        helper.details["valueAwareStackInputCells"] = std::to_string(stack_input_cells);
+      }
+      if (!state_output_names.empty()) {
+        helper.details["valueAwareStateOutputNames"] =
+            join_strings(std::vector<std::string>(state_output_names.begin(),
+                                                  state_output_names.end()),
+                         ",");
+        helper.details["valueAwareStateOutputCells"] = std::to_string(state_output_cells);
+      }
+      if (!mixed_state_names.empty()) {
+        helper.details["valueAwareMixedStateNames"] =
+            join_strings(std::vector<std::string>(mixed_state_names.begin(),
+                                                  mixed_state_names.end()),
+                         ",");
+        helper.details["valueAwareMixedStateCells"] = std::to_string(mixed_state_cells);
+      }
+      if (!stack_input_names.empty() || !state_output_names.empty() ||
+          !mixed_state_names.empty()) {
+        if (!stack_input_names.empty() && state_output_names.empty() &&
+            mixed_state_names.empty()) {
+          helper.details["valueAwareSchedulerTrafficShape"] = "stack-inputs-only";
+        } else if (stack_input_names.empty() && !state_output_names.empty() &&
+                   mixed_state_names.empty()) {
+          helper.details["valueAwareSchedulerTrafficShape"] = "deferred-state-outputs-only";
+        } else if (stack_input_names.empty() && state_output_names.empty()) {
+          helper.details["valueAwareSchedulerTrafficShape"] = "mixed-state-traffic";
+        } else {
+          helper.details["valueAwareSchedulerTrafficShape"] =
+              "stack-inputs-and-deferred-state-outputs";
+        }
+      }
     }
     const int selector_bound_cells = helper_selector_bound_register_traffic_cells[helper.label];
     if (selector_bound_cells > 0) {

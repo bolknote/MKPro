@@ -374,9 +374,56 @@ void example_sizes_match_typescript_baselines() {
                   cell_mask_helper->details.at("registerTrafficBreakdown").find("x:") !=
                       std::string::npos &&
                   cell_mask_helper->details.at("registerTrafficBreakdown").find("y:") !=
-                      std::string::npos,
+                      std::string::npos &&
+                  cell_mask_helper->details.contains("valueAwareStackInputNames") &&
+                  cell_mask_helper->details.at("valueAwareStackInputNames").find("x") !=
+                      std::string::npos &&
+                  cell_mask_helper->details.at("valueAwareStackInputNames").find("y") !=
+                      std::string::npos &&
+                  cell_mask_helper->details.contains("valueAwareStackInputCells") &&
+                  cell_mask_helper->details.at("valueAwareStackInputCells") == "2" &&
+                  cell_mask_helper->details.contains("valueAwareSchedulerTrafficShape") &&
+                  cell_mask_helper->details.at("valueAwareSchedulerTrafficShape") ==
+                      "stack-inputs-only" &&
+                  !cell_mask_helper->details.contains("valueAwareStateOutputNames"),
               "tic-tac-toe-4x4 helper summary should aggregate helper-local register traffic "
               "for value-aware scheduler attribution");
+      const SizeHelperSummaryReport* candidate_score_zero =
+          find_size_helper(result, "candidate_score zero-accumulator entry");
+      require(candidate_score_zero != nullptr &&
+                  candidate_score_zero->details.contains("valueAwareStackInputNames") &&
+                  candidate_score_zero->details.at("valueAwareStackInputNames")
+                          .find("lines_6") != std::string::npos &&
+                  candidate_score_zero->details.at("valueAwareStackInputNames")
+                          .find("lines_7") != std::string::npos &&
+                  candidate_score_zero->details.at("valueAwareStackInputNames").find("x") !=
+                      std::string::npos &&
+                  candidate_score_zero->details.at("valueAwareStackInputNames").find("y") !=
+                      std::string::npos &&
+                  candidate_score_zero->details.contains("valueAwareSchedulerTrafficShape") &&
+                  candidate_score_zero->details.at("valueAwareSchedulerTrafficShape") ==
+                      "stack-inputs-only" &&
+                  !candidate_score_zero->details.contains("valueAwareStateOutputNames"),
+              "tic-tac-toe-4x4 candidate_score helper should classify helper-local traffic as "
+              "stack input candidates for the value-aware scheduler");
+      const SizeHelperSummaryReport* mark_lines_helper =
+          find_size_helper(result, "mark_lines_and_check");
+      require(mark_lines_helper != nullptr &&
+                  mark_lines_helper->details.contains("valueAwareStackInputNames") &&
+                  mark_lines_helper->details.at("valueAwareStackInputNames").find("x") !=
+                      std::string::npos &&
+                  mark_lines_helper->details.at("valueAwareStackInputNames").find("y") !=
+                      std::string::npos &&
+                  mark_lines_helper->details.contains("valueAwareStateOutputNames") &&
+                  mark_lines_helper->details.at("valueAwareStateOutputNames")
+                          .find("best_score") != std::string::npos &&
+                  mark_lines_helper->details.at("valueAwareStateOutputNames").find("slot") !=
+                      std::string::npos &&
+                  mark_lines_helper->details.contains("valueAwareSchedulerTrafficShape") &&
+                  mark_lines_helper->details.at("valueAwareSchedulerTrafficShape") ==
+                      "stack-inputs-and-deferred-state-outputs",
+              "tic-tac-toe-4x4 mark_lines_and_check helper should classify stack inputs "
+              "separately from deferred state outputs");
       const SizeOpportunityReport* cell_mask_register_traffic = find_size_opportunity_detail(
           result, "helper-register-traffic", "helperLabel", "expr cell_mask(x, y)");
       require(cell_mask_register_traffic != nullptr &&
@@ -571,7 +618,13 @@ void example_sizes_match_typescript_baselines() {
                   value_aware_scheduler_blocker->best_details.contains("sizeImpactStatus") &&
                   value_aware_scheduler_blocker->best_details.contains("proofStatus") &&
                   value_aware_scheduler_blocker->best_details.contains("schedulerScope") &&
-                  value_aware_scheduler_blocker->best_details.contains("registerTrafficBreakdown"),
+                  value_aware_scheduler_blocker->best_details.contains("registerTrafficBreakdown") &&
+                  value_aware_scheduler_blocker->best_details.contains(
+                      "valueAwareStackInputNames") &&
+                  value_aware_scheduler_blocker->best_details.contains(
+                      "valueAwareStateOutputNames") &&
+                  value_aware_scheduler_blocker->best_details.contains(
+                      "valueAwareSchedulerTrafficShape"),
               "tic-tac-toe-4x4 size attribution should summarize helper-local register traffic "
               "as a value-aware stack/register scheduler blocker");
       const SizeNextActionSummaryReport* required_action = find_size_next_action(
@@ -616,7 +669,13 @@ void example_sizes_match_typescript_baselines() {
                   value_aware_scheduler_action->best_details.contains("sizeImpactStatus") &&
                   value_aware_scheduler_action->best_details.contains("schedulerScope") &&
                   value_aware_scheduler_action->best_details.contains("proofStatus") &&
-                  value_aware_scheduler_action->best_details.contains("registerTrafficBreakdown"),
+                  value_aware_scheduler_action->best_details.contains("registerTrafficBreakdown") &&
+                  value_aware_scheduler_action->best_details.contains(
+                      "valueAwareStackInputNames") &&
+                  value_aware_scheduler_action->best_details.contains(
+                      "valueAwareStateOutputNames") &&
+                  value_aware_scheduler_action->best_details.contains(
+                      "valueAwareSchedulerTrafficShape"),
               "tic-tac-toe-4x4 size attribution should rank value-aware stack/register "
               "scheduling as a next action when helper-local register traffic is visible");
     }
