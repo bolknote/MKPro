@@ -37843,6 +37843,225 @@ void canonicalize_repeated_unary_update_args(V2Program& program,
   });
 }
 
+// ---- Alternating literal call argument -> sign-toggle state --------------
+//
+// When a single-parameter rule is only ever invoked from one linear statement
+// block with literal arguments that strictly alternate in sign (-a, +a, -a,
+// ..., +a) and the block contains an even number of such calls, the parameter
+// can become a state register that the callee itself negates on entry. Every
+// call site then loses its literal argument and becomes textually identical
+// to its siblings, which lets the shared-suffix passes merge the duplicated
+// call regions. The even count keeps the toggle phase stable no matter how
+// many times the surrounding block runs or whether it is skipped entirely.
+
+void collect_rule_invoke_blocks(std::vector<V2Statement>& statements, const std::string& rule_name,
+                                std::vector<std::vector<V2Statement*>>& blocks);
+
+void collect_rule_invoke_blocks_in_statement(V2Statement& statement, const std::string& rule_name,
+                                             std::vector<std::vector<V2Statement*>>& blocks,
+                                             std::vector<V2Statement*>& direct) {
+  if (statement.kind == "v2_invoke" && statement.name == rule_name)
+    direct.push_back(&statement);
+  collect_rule_invoke_blocks(statement.body, rule_name, blocks);
+  collect_rule_invoke_blocks(statement.then_body, rule_name, blocks);
+  collect_rule_invoke_blocks(statement.else_body, rule_name, blocks);
+  for (V2MatchCase& match_case : statement.cases) {
+    if (match_case.action == nullptr)
+      continue;
+    std::vector<V2Statement*> nested;
+    collect_rule_invoke_blocks_in_statement(*match_case.action, rule_name, blocks, nested);
+    if (!nested.empty())
+      blocks.push_back(std::move(nested));
+  }
+  if (statement.otherwise != nullptr) {
+    std::vector<V2Statement*> nested;
+    collect_rule_invoke_blocks_in_statement(*statement.otherwise, rule_name, blocks, nested);
+    if (!nested.empty())
+      blocks.push_back(std::move(nested));
+  }
+}
+
+void collect_rule_invoke_blocks(std::vector<V2Statement>& statements, const std::string& rule_name,
+                                std::vector<std::vector<V2Statement*>>& blocks) {
+  std::vector<V2Statement*> direct;
+  for (V2Statement& statement : statements)
+    collect_rule_invoke_blocks_in_statement(statement, rule_name, blocks, direct);
+  if (!direct.empty())
+    blocks.push_back(std::move(direct));
+}
+
+bool statements_assign_identifier_target(const std::vector<V2Statement>& statements,
+                                         const std::string& name);
+
+bool statement_assigns_identifier_target(const V2Statement& statement, const std::string& name) {
+  if (statement.target == name &&
+      (statement.kind == "v2_assign" || statement.kind == "v2_update" ||
+       statement.kind == "v2_read")) {
+    return true;
+  }
+  for (const V2RawOutput& output : statement.outputs) {
+    if (output.target == name)
+      return true;
+  }
+  for (const std::string& clobber : statement.clobbers) {
+    if (clobber == name)
+      return true;
+  }
+  if (statements_assign_identifier_target(statement.body, name) ||
+      statements_assign_identifier_target(statement.then_body, name) ||
+      statements_assign_identifier_target(statement.else_body, name)) {
+    return true;
+  }
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr &&
+        statement_assigns_identifier_target(*match_case.action, name))
+      return true;
+  }
+  return statement.otherwise != nullptr &&
+         statement_assigns_identifier_target(*statement.otherwise, name);
+}
+
+bool statements_assign_identifier_target(const std::vector<V2Statement>& statements,
+                                         const std::string& name) {
+  return std::any_of(statements.begin(), statements.end(), [&](const V2Statement& statement) {
+    return statement_assigns_identifier_target(statement, name);
+  });
+}
+
+std::optional<double> invoke_signed_literal_argument(const V2Statement& statement) {
+  if (statement.kind != "v2_invoke" || statement.args.size() != 1U)
+    return std::nullopt;
+  try {
+    return numeric_literal_value(parse_expression(statement.args.front(), statement.line));
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+bool toggle_alternating_literal_args_for_rule(V2Program& program, V2Rule& rule) {
+  if (rule.params.size() != 1U)
+    return false;
+  const std::string param = rule.params.front();
+
+  // The parameter is promoted to a program-wide state register, so its name
+  // must not collide with existing state or with another rule's parameter,
+  // and nothing outside the callee may read or write it.
+  // Rule params are materialized as implicit state fields early in the
+  // pipeline; that backing field is exactly the register the toggle reuses.
+  // Any explicit (user-declared or initialized) field of the same name is a
+  // real collision.
+  V2StateField* param_field = nullptr;
+  for (V2StateField& field : program.state) {
+    if (field.name != param)
+      continue;
+    if (!field.implicit || field.initial.has_value() || field.initial_stack.has_value() ||
+        field.bank.has_value()) {
+      return false;
+    }
+    param_field = &field;
+    break;
+  }
+  for (const V2Rule& other : program.rules) {
+    if (other.name == param)
+      return false;
+    const bool is_callee = &other == &rule;
+    if (!is_callee && std::any_of(other.params.begin(), other.params.end(),
+                                  [&](const std::string& other_param) {
+                                    return other_param == param;
+                                  }))
+      return false;
+    if (!is_callee && (statements_read_identifier(other.body, param, false) ||
+                       statements_assign_identifier_target(other.body, param))) {
+      return false;
+    }
+  }
+  if (statements_read_identifier(program.body, param, false) ||
+      statements_assign_identifier_target(program.body, param)) {
+    return false;
+  }
+  // The callee may only read the parameter; a write would desynchronize the
+  // toggle phase.
+  if (statements_assign_identifier_target(rule.body, param))
+    return false;
+
+  // Every reference to the rule must be a direct invoke statement: calls
+  // hidden inside expressions or recursion would break the phase proof.
+  const std::set<std::string> callee_names{lower_ascii(rule.name)};
+  if (statements_contain_call_named(program.body, callee_names))
+    return false;
+  for (const V2Rule& other : program.rules) {
+    if (statements_contain_call_named(other.body, callee_names))
+      return false;
+  }
+
+  std::vector<std::vector<V2Statement*>> blocks;
+  collect_rule_invoke_blocks(program.body, rule.name, blocks);
+  for (V2Rule& other : program.rules) {
+    const std::size_t before = blocks.size();
+    collect_rule_invoke_blocks(other.body, rule.name, blocks);
+    // Self-recursion (even indirect placement inside the callee body) is out.
+    if (&other == &rule && blocks.size() != before)
+      return false;
+  }
+  if (blocks.size() != 1U)
+    return false;
+  const std::vector<V2Statement*>& sites = blocks.front();
+  if (sites.size() < 2U || sites.size() % 2U != 0U)
+    return false;
+
+  const std::optional<double> first = invoke_signed_literal_argument(*sites.front());
+  if (!first.has_value() || *first == 0.0)
+    return false;
+  double expected = *first;
+  for (const V2Statement* site : sites) {
+    const std::optional<double> literal = invoke_signed_literal_argument(*site);
+    if (!literal.has_value() || *literal != expected)
+      return false;
+    expected = -expected;
+  }
+
+  // Rewrite: the parameter becomes toggle state whose initial value is the
+  // negation of the first literal, the callee flips it on entry, and every
+  // call site drops its argument.
+  if (param_field != nullptr) {
+    param_field->initial = format_number_literal(-*first);
+    param_field->implicit = false;
+  } else {
+    program.state.push_back(V2StateField{
+        .name = param,
+        .type = "packed",
+        .initial = format_number_literal(-*first),
+        .line = rule.line,
+    });
+  }
+  rule.params.clear();
+  V2Statement toggle;
+  toggle.kind = "v2_assign";
+  toggle.target = param;
+  toggle.expr = "-" + param;
+  toggle.line = rule.line;
+  rule.body.insert(rule.body.begin(), std::move(toggle));
+  for (V2Statement* site : sites)
+    site->args.clear();
+  return true;
+}
+
+void toggle_alternating_literal_call_args(V2Program& program,
+                                          std::vector<OptimizationReport>& optimizations) {
+  std::vector<std::string> toggled;
+  for (V2Rule& rule : program.rules) {
+    if (toggle_alternating_literal_args_for_rule(program, rule))
+      toggled.push_back(rule.name);
+  }
+  if (toggled.empty())
+    return;
+  optimizations.push_back(OptimizationReport{
+      .name = "alternating-sign-toggle-arg",
+      .detail = "Replaced strictly alternating literal arguments of " + join_strings(toggled, ", ") +
+                " with a callee-owned sign-toggle register.",
+  });
+}
+
 bool prelude_assigns_target(const std::vector<V2Statement>& prelude, const std::string& target) {
   return std::any_of(prelude.begin(), prelude.end(), [&](const V2Statement& statement) {
     return statement.kind == "v2_assign" && statement.target == target;
@@ -42253,6 +42472,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       eliminate_unobserved_state(*ast.v2, context.optimizations);
       eliminate_identity_assignments(*ast.v2, context.optimizations);
       run_interprocedural_ast_passes(options, *ast.v2, context.optimizations);
+      if (options.alternating_sign_toggle_args)
+        toggle_alternating_literal_call_args(*ast.v2, context.optimizations);
       // TS performs dead-source residual temp reuse before common-tail hoisting.
       // Native currently lowers residual-temp reuse later, but the common-tail
       // pass must still run in this candidate so single-use tail inlining can
@@ -43055,6 +43276,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.alias_x_reuse || options.segmented_bitplanes ||
          options.segmented_line_count_scan || options.tail_branch_inversion ||
          options.conditional_branch_trampoline || options.shared_straight_line_call_bodies ||
+         options.callee_hole_straight_line_helper ||
          options.disable_interprocedural_opts || options.coalesce_copies ||
          options.aggressive_indirect_call_threshold || options.aggressive_indirect_call ||
          options.dual_use_constant_indirect_flow || options.aggressive_post_layout_indirect_flow ||
@@ -43069,6 +43291,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.sentinel_decimal_pack || options.trig_fractional_pack || options.sign_pack_state ||
          options.packed_score_accumulator_helpers ||
          options.canonicalize_repeated_unary_update_args ||
+         options.alternating_sign_toggle_args ||
          options.x_param_value_functions ||
          options.x_param_y_stack_stored_entry || options.packed_line_family_update_check_tail ||
          options.packed_line_family_mutating_selector_update_check_tail ||
@@ -43131,6 +43354,7 @@ bool candidate_needs_static_proof_gate(const CompileOptions& options) {
          options.runtime_indirect_call_flow || options.preloaded_indirect_flow ||
          options.forward_indirect_flow || options.aggressive_indirect_call ||
          options.aggressive_indirect_call_threshold ||
+         options.callee_hole_straight_line_helper ||
          options.assume_dead_selector_integer_part ||
          !options.suppress_constant_preloads.empty() ||
          !options.fractional_constant_selectors.empty() ||
@@ -43148,6 +43372,8 @@ bool indirect_flow_targets_proved(const std::vector<OptimizationReport>& optimiz
                                   const std::map<std::string, std::string>& allocated_registers);
 bool runtime_indirect_call_targets_proved(const std::vector<OptimizationReport>& optimizations,
                                           const std::vector<ResolvedStep>& steps);
+bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationReport>& optimizations,
+                                              const std::vector<ResolvedStep>& steps);
 bool fractional_selector_data_values_proved(const std::vector<OptimizationReport>& optimizations,
                                             const CompileOptions& options,
                                             const std::vector<PreloadReport>& preloads,
@@ -43411,6 +43637,7 @@ bool suppress_constant_preload_only_static_gate_accepts(const CompileOptions& ca
       candidate_options.forward_indirect_flow ||
       candidate_options.aggressive_indirect_call ||
       candidate_options.aggressive_indirect_call_threshold ||
+      candidate_options.callee_hole_straight_line_helper ||
       candidate_options.assume_dead_selector_integer_part ||
       !candidate_options.synthesized_dispatch_plans.empty() ||
       !candidate_options.fractional_constant_selectors.empty() ||
@@ -43431,6 +43658,7 @@ bool preloaded_indirect_flow_static_gate_accepts(const CompileOptions& candidate
       candidate_options.aggressive_post_layout_indirect_flow ||
       candidate_options.dual_use_constant_indirect_flow ||
       candidate_options.runtime_indirect_call_flow ||
+      candidate_options.callee_hole_straight_line_helper ||
       candidate_options.assume_dead_selector_integer_part ||
       !candidate_options.synthesized_dispatch_plans.empty() ||
       !candidate_options.fractional_constant_selectors.empty() ||
@@ -43451,6 +43679,7 @@ bool aggressive_post_layout_indirect_flow_static_gate_accepts(
       candidate_options.dual_use_constant_indirect_flow ||
       candidate_options.preloaded_indirect_flow || candidate_options.forward_indirect_flow ||
       candidate_options.runtime_indirect_call_flow ||
+      candidate_options.callee_hole_straight_line_helper ||
       candidate_options.assume_dead_selector_integer_part ||
       !candidate_options.synthesized_dispatch_plans.empty() ||
       !candidate_options.fractional_constant_selectors.empty() ||
@@ -43474,6 +43703,7 @@ bool runtime_indirect_call_flow_static_gate_accepts(const CompileOptions& candid
       candidate_options.aggressive_post_layout_indirect_flow ||
       candidate_options.dual_use_constant_indirect_flow ||
       candidate_options.preloaded_indirect_flow || candidate_options.forward_indirect_flow ||
+      candidate_options.callee_hole_straight_line_helper ||
       candidate_options.assume_dead_selector_integer_part ||
       !candidate_options.synthesized_dispatch_plans.empty() ||
       !candidate_options.fractional_constant_selectors.empty() ||
@@ -43498,6 +43728,7 @@ bool dual_use_constant_indirect_flow_static_gate_accepts(const CompileOptions& c
   if (!candidate_options.dual_use_constant_indirect_flow ||
       candidate_options.preloaded_indirect_flow || candidate_options.forward_indirect_flow ||
       candidate_options.runtime_indirect_call_flow ||
+      candidate_options.callee_hole_straight_line_helper ||
       !candidate_options.synthesized_dispatch_plans.empty() ||
       (!uses_fractional_selectors &&
        !candidate_options.force_fractional_constant_selector_preloads.empty())) {
@@ -43555,6 +43786,7 @@ bool forward_indirect_flow_static_gate_accepts(const CompileOptions& candidate_o
   if (!candidate_options.forward_indirect_flow ||
       candidate_options.preloaded_indirect_flow ||
       candidate_options.runtime_indirect_call_flow ||
+      candidate_options.callee_hole_straight_line_helper ||
       !candidate_options.synthesized_dispatch_plans.empty() ||
       (!uses_fractional_selectors &&
        !candidate_options.force_fractional_constant_selector_preloads.empty())) {
@@ -43610,6 +43842,26 @@ bool forward_indirect_flow_static_gate_accepts(const CompileOptions& candidate_o
   return true;
 }
 
+bool callee_hole_straight_line_helper_static_gate_accepts(const CompileOptions& candidate_options,
+                                                          const CompileResult& result) {
+  if (!candidate_options.callee_hole_straight_line_helper ||
+      candidate_options.aggressive_post_layout_indirect_flow ||
+      candidate_options.dual_use_constant_indirect_flow ||
+      candidate_options.preloaded_indirect_flow || candidate_options.forward_indirect_flow ||
+      candidate_options.runtime_indirect_call_flow ||
+      candidate_options.aggressive_indirect_call ||
+      candidate_options.aggressive_indirect_call_threshold ||
+      candidate_options.assume_dead_selector_integer_part ||
+      !candidate_options.synthesized_dispatch_plans.empty() ||
+      !candidate_options.fractional_constant_selectors.empty() ||
+      !candidate_options.force_fractional_constant_selector_preloads.empty()) {
+    return false;
+  }
+  if (!suppressed_preload_static_gate_accepts(candidate_options, result))
+    return false;
+  return callee_hole_indirect_call_targets_proved(result.optimizations, result.steps);
+}
+
 bool optimizer_static_gate_accepts(const CompileOptions& candidate_options,
                                    const CompileResult& result) {
   return computed_dispatch_static_gate_accepts(candidate_options, result) ||
@@ -43617,6 +43869,7 @@ bool optimizer_static_gate_accepts(const CompileOptions& candidate_options,
          preloaded_indirect_flow_static_gate_accepts(candidate_options, result) ||
          aggressive_post_layout_indirect_flow_static_gate_accepts(candidate_options, result) ||
          runtime_indirect_call_flow_static_gate_accepts(candidate_options, result) ||
+         callee_hole_straight_line_helper_static_gate_accepts(candidate_options, result) ||
          dual_use_constant_indirect_flow_static_gate_accepts(candidate_options, result) ||
          forward_indirect_flow_static_gate_accepts(candidate_options, result);
 }
@@ -43727,6 +43980,8 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";packed_score_accumulator_helpers=" << options.packed_score_accumulator_helpers
       << ";canonicalize_repeated_unary_update_args="
       << options.canonicalize_repeated_unary_update_args
+      << ";alternating_sign_toggle_args=" << options.alternating_sign_toggle_args
+      << ";callee_hole_straight_line_helper=" << options.callee_hole_straight_line_helper
       << ";x_param_value_functions=" << options.x_param_value_functions
       << ";x_param_y_stack_stored_entry=" << options.x_param_y_stack_stored_entry
       << ";packed_line_family_update_check_tail=" << options.packed_line_family_update_check_tail
@@ -44623,6 +44878,140 @@ bool runtime_indirect_call_targets_proved(const std::vector<OptimizationReport>&
   return saw_proved_call;
 }
 
+constexpr std::string_view kCalleeHoleCallMarker = "callee-hole indirect call;";
+constexpr std::string_view kCalleeHoleSkeletonCallMarker = "callee-hole skeleton call";
+
+std::optional<std::set<std::string>> indirect_memory_targets_from_comment(
+    const std::optional<std::string>& comment);
+
+std::optional<std::map<int, std::string>> callee_hole_leaf_targets_from_comment(
+    const std::optional<std::string>& comment) {
+  if (!comment.has_value() || !comment->starts_with(kCalleeHoleCallMarker))
+    return std::nullopt;
+  constexpr std::string_view kMarker = "leaf-targets=";
+  const std::size_t marker = comment->find(kMarker);
+  if (marker == std::string::npos)
+    return std::nullopt;
+  std::size_t pos = marker + kMarker.size();
+  std::map<int, std::string> targets;
+  while (pos < comment->size() && std::isdigit(static_cast<unsigned char>((*comment)[pos]))) {
+    int value = 0;
+    while (pos < comment->size() && std::isdigit(static_cast<unsigned char>((*comment)[pos]))) {
+      value = value * 10 + ((*comment)[pos] - '0');
+      ++pos;
+    }
+    if (value < 0 || value > 104)
+      return std::nullopt;
+    if (pos >= comment->size() || (*comment)[pos] != ':')
+      return std::nullopt;
+    ++pos;
+    std::string label;
+    while (pos < comment->size() && (*comment)[pos] != ',' && (*comment)[pos] != ';' &&
+           std::isspace(static_cast<unsigned char>((*comment)[pos])) == 0) {
+      label.push_back((*comment)[pos]);
+      ++pos;
+    }
+    if (label.empty())
+      return std::nullopt;
+    targets[value] = label;
+    if (pos < comment->size() && (*comment)[pos] == ',') {
+      ++pos;
+      continue;
+    }
+    break;
+  }
+  if (targets.empty())
+    return std::nullopt;
+  return targets;
+}
+
+// Callee-hole proof: the skeleton's К ПП r hole is fed exclusively by charge
+// sites (literal digits of a leaf address + X->П r immediately followed by the
+// direct skeleton call), every charged address is a member of the hole's
+// annotated leaf-target set, nothing else can write the selector register, and
+// each annotated leaf address re-derives from the delivered listing: the step
+// carrying that leaf's entry marker must sit at exactly that address. The last
+// check catches layout shifts after the rewrite froze the charge digits.
+bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationReport>& optimizations,
+                                              const std::vector<ResolvedStep>& steps) {
+  if (!has_optimization_named(optimizations, "callee-hole-straight-line-helper"))
+    return false;
+
+  std::map<std::string, std::set<int>> charged_targets;
+  std::set<std::string> poisoned;
+  bool all_poisoned = false;
+  for (std::size_t index = 0; index < steps.size(); ++index) {
+    const ResolvedStep& step = steps.at(index);
+    const std::optional<std::string> store_register = store_register_for_opcode(step.opcode);
+    if (store_register.has_value()) {
+      const std::optional<int> stored_target = runtime_selector_target_from_comment(step.comment);
+      if (stored_target.has_value() &&
+          runtime_selector_literal_precedes_store(steps, index, *stored_target)) {
+        // Charges bound for the skeleton must transfer control to it right
+        // away, otherwise the register value at the hole is unconstrained.
+        const bool followed_by_skeleton_call =
+            index + 1U < steps.size() && steps.at(index + 1U).opcode == 0x53 &&
+            steps.at(index + 1U).comment.has_value() &&
+            steps.at(index + 1U).comment->find(kCalleeHoleSkeletonCallMarker) !=
+                std::string::npos;
+        if (followed_by_skeleton_call) {
+          charged_targets[*store_register].insert(*stored_target);
+          continue;
+        }
+      }
+      poisoned.insert(*store_register);
+      continue;
+    }
+    if (step.opcode >= 0xb0 && step.opcode <= 0xbe) {
+      const std::optional<std::set<std::string>> targets =
+          indirect_memory_targets_from_comment(step.comment);
+      if (!targets.has_value()) {
+        all_poisoned = true;
+        continue;
+      }
+      poisoned.insert(targets->begin(), targets->end());
+    }
+  }
+
+  const auto leaf_entry_address = [&](const std::string& label) -> std::optional<int> {
+    const std::string marker = "callee-hole leaf entry " + label;
+    std::optional<int> address;
+    for (const ResolvedStep& step : steps) {
+      if (!step.comment.has_value() || step.comment->find(marker) == std::string::npos)
+        continue;
+      if (address.has_value())
+        return std::nullopt;
+      address = step.address;
+    }
+    return address;
+  };
+
+  bool saw_proved_hole = false;
+  for (const ResolvedStep& step : steps) {
+    const std::optional<std::map<int, std::string>> leaf_targets =
+        callee_hole_leaf_targets_from_comment(step.comment);
+    if (!leaf_targets.has_value())
+      continue;
+    if (all_poisoned || step.opcode < 0xa0 || step.opcode > 0xae)
+      return false;
+    const std::string register_name = core::register_name_for_index(step.opcode - 0xa0);
+    if (!core::is_stable_indirect_selector(register_name) || poisoned.contains(register_name))
+      return false;
+    std::set<int> annotated;
+    for (const auto& [target, label] : *leaf_targets) {
+      const std::optional<int> entry_address = leaf_entry_address(label);
+      if (!entry_address.has_value() || *entry_address != target)
+        return false;
+      annotated.insert(target);
+    }
+    const auto charged = charged_targets.find(register_name);
+    if (charged == charged_targets.end() || charged->second != annotated)
+      return false;
+    saw_proved_hole = true;
+  }
+  return saw_proved_hole;
+}
+
 std::optional<std::set<std::string>> indirect_memory_targets_from_comment(
     const std::optional<std::string>& comment) {
   if (!comment.has_value())
@@ -45298,6 +45687,16 @@ std::vector<ProofReport> build_proof_report(const ProgramAst& ast,
         .detail =
             "Runtime indirect calls enter the target literal, store it into the same stable "
             "register, and use that register before any overwrite.",
+    });
+  }
+  if (callee_hole_indirect_call_targets_proved(optimizations, steps)) {
+    proofs.push_back(ProofReport{
+        .id = "callee-hole-indirect-call-targets",
+        .status = "proved",
+        .detail =
+            "Every callee-hole skeleton dispatch reads a selector register that is written only "
+            "by literal leaf-address charges immediately followed by the skeleton call, and the "
+            "charged addresses match the hole's annotated leaf-target set.",
     });
   }
   if (fractional_selector_data_values_proved(optimizations, options, preloads, steps)) {
@@ -49281,6 +49680,49 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       },
       "repeated-unary-update-arg-temp",
       "Canonicalized repeated X-transform unary-call arguments through a hidden scratch");
+  add_candidate(
+      [](CompileOptions& candidate_options) {
+        candidate_options.alternating_sign_toggle_args = true;
+      },
+      "alternating-sign-toggle-arg",
+      "Replaced strictly alternating literal call arguments with a callee-owned sign toggle",
+      CandidateGate::SizeRescue);
+  add_candidate(
+      [](CompileOptions& candidate_options) {
+        candidate_options.alternating_sign_toggle_args = true;
+        candidate_options.shared_straight_line_call_bodies = true;
+        candidate_options.hoist_shared_helpers = true;
+      },
+      "alternating-sign-toggle-arg-shared-call",
+      "Combined the alternating sign toggle with shared call-body helpers so identical call "
+      "regions merge",
+      CandidateGate::SizeRescue);
+  add_candidate(
+      [](CompileOptions& candidate_options) {
+        candidate_options.callee_hole_straight_line_helper = true;
+      },
+      "callee-hole-straight-line-helper",
+      "Merged straight-line regions differing only in their leaf call into one skeleton with a "
+      "К ПП dispatch",
+      CandidateGate::SizeRescue);
+  add_candidate(
+      [](CompileOptions& candidate_options) {
+        candidate_options.callee_hole_straight_line_helper = true;
+        candidate_options.shared_straight_line_call_bodies = true;
+      },
+      "callee-hole-straight-line-helper-shared-call",
+      "Combined the callee-hole skeleton with shared call-body helpers",
+      CandidateGate::SizeRescue);
+  add_candidate(
+      [](CompileOptions& candidate_options) {
+        candidate_options.alternating_sign_toggle_args = true;
+        candidate_options.callee_hole_straight_line_helper = true;
+        candidate_options.shared_straight_line_call_bodies = true;
+        candidate_options.hoist_shared_helpers = true;
+      },
+      "alternating-sign-toggle-callee-hole-shared-call",
+      "Combined the sign toggle, callee-hole skeleton, and shared call-body helpers",
+      CandidateGate::SizeRescue);
   add_candidate(
       [](CompileOptions& candidate_options) { candidate_options.x_param_value_functions = true; },
       "x-param-value-function",

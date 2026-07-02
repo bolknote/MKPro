@@ -109,6 +109,7 @@ const std::vector<IrPass>& pass_pipeline() {
       return_suffix_gadget_pass(),
       shared_terminal_tail_pass(),
       shared_straight_line_helper_pass(),
+      callee_hole_straight_line_helper_pass(),
       return_zero_jump_pass(),
       store_recall_peephole_pass(),
       pre_shift_stack_lift_pass(),

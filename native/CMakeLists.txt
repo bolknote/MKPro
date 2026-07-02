@@ -166,6 +166,8 @@ add_executable(mkpro_tests
   tests/emulator_near_any_helper_test.cpp
   tests/emulator_number_entry_concat_test.cpp
   tests/emulator_packed_line_family_test.cpp
+  tests/sign_toggle_arg_test.cpp
+  tests/callee_hole_helper_test.cpp
   tests/emulator_packed_position_test.cpp
   tests/emulator_recall_side_effects_test.cpp
   tests/emulator_regression_test.cpp
@@ -308,6 +310,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   emulator_mk61_execution_matches_typescript_contract
   emulator_near_any_helper_matches_typescript_contract
   emulator_number_entry_concat_matches_typescript_contract
+  emulator_packed_line_family_pow10_semantics_match_generic_lowering
   emulator_packed_position_facts_match_typescript_contract
   emulator_recall_side_effects_match_typescript_contract
   emulator_regression_matches_typescript_contract
@@ -362,6 +365,8 @@ set(MKPRO_NATIVE_TEST_NAMES
   register_coalesce_matches_typescript_contract
   rules_match_typescript_contract
   safe_minmax_matches_typescript_contract
+  alternating_sign_toggle_arg_matches_literal_semantics
+  callee_hole_helper_matches_direct_call_semantics
   segmented_bitplanes_match_typescript_contract
   setup_program_matches_typescript_contract
   setup_only_counted_loop_matches_typescript_contract

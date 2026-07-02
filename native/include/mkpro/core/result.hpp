@@ -298,6 +298,11 @@ struct CompileOptions {
   bool tail_branch_inversion = false;
   bool conditional_branch_trampoline = false;
   bool shared_straight_line_call_bodies = false;
+  // Extract one skeleton from straight-line regions that are identical except
+  // for the target of their (single, repeated) leaf call. Callers charge a
+  // spare stable register with their leaf address and the skeleton dispatches
+  // through К ПП r. Verified by callee_hole_indirect_call_targets_proved.
+  bool callee_hole_straight_line_helper = false;
   bool disable_interprocedural_opts = false;
   bool coalesce_copies = false;
   bool aggressive_indirect_call_threshold = false;
@@ -334,6 +339,7 @@ struct CompileOptions {
   bool sign_pack_state = false;
   bool packed_score_accumulator_helpers = false;
   bool canonicalize_repeated_unary_update_args = false;
+  bool alternating_sign_toggle_args = false;
   bool x_param_value_functions = false;
   bool x_param_y_stack_stored_entry = false;
   bool stack_argument_helper_entries = false;

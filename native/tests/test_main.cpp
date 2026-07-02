@@ -115,6 +115,8 @@ void register_allocator_matches_typescript_contract();
 void register_coalesce_matches_typescript_contract();
 void rules_match_typescript_contract();
 void safe_minmax_matches_typescript_contract();
+void alternating_sign_toggle_arg_matches_literal_semantics();
+void callee_hole_helper_matches_direct_call_semantics();
 void segmented_bitplanes_match_typescript_contract();
 void setup_program_matches_typescript_contract();
 void setup_only_counted_loop_matches_typescript_contract();
@@ -373,6 +375,10 @@ int main(int argc, char** argv) {
       {"rules_match_typescript_contract", mkpro::tests::rules_match_typescript_contract},
       {"safe_minmax_matches_typescript_contract",
        mkpro::tests::safe_minmax_matches_typescript_contract},
+      {"alternating_sign_toggle_arg_matches_literal_semantics",
+       mkpro::tests::alternating_sign_toggle_arg_matches_literal_semantics},
+      {"callee_hole_helper_matches_direct_call_semantics",
+       mkpro::tests::callee_hole_helper_matches_direct_call_semantics},
       {"segmented_bitplanes_match_typescript_contract",
        mkpro::tests::segmented_bitplanes_match_typescript_contract},
       {"setup_program_matches_typescript_contract",

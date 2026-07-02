@@ -751,6 +751,39 @@ std::vector<std::string> computed_dispatch_target_labels(const IrOp& op) {
   }
   if (!op.meta.comment.has_value())
     return labels;
+  // Callee-hole skeleton dispatches advertise their leaf entries as
+  // `leaf-targets=<address>:<label>,...`; the labels keep the leaves alive
+  // in the CFG exactly like computed-dispatch target labels.
+  if (op.meta.comment->starts_with("callee-hole indirect call;")) {
+    constexpr std::string_view kLeafMarker = "leaf-targets=";
+    const std::string& comment = *op.meta.comment;
+    const std::size_t marker = comment.find(kLeafMarker);
+    if (marker == std::string::npos)
+      return labels;
+    std::size_t cursor = marker + kLeafMarker.size();
+    std::string current;
+    bool in_label = false;
+    while (cursor < comment.size()) {
+      const char ch = comment.at(cursor);
+      if (ch == ':') {
+        in_label = true;
+        current.clear();
+      } else if (ch == ',') {
+        if (in_label && !current.empty())
+          labels.push_back(current);
+        current.clear();
+        in_label = false;
+      } else if (std::isspace(static_cast<unsigned char>(ch)) != 0 || ch == ';') {
+        break;
+      } else {
+        current.push_back(ch);
+      }
+      ++cursor;
+    }
+    if (in_label && !current.empty())
+      labels.push_back(current);
+    return labels;
+  }
   if (!op.meta.comment->starts_with("computed dispatch;"))
     return labels;
 
