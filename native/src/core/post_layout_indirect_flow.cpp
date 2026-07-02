@@ -639,6 +639,13 @@ apply_address_code_overlay(const std::vector<MachineItem>& items) {
       const std::optional<OverlayExecutable> executable = overlay_executable_at(items, labels_end);
       if (!executable.has_value() || is_address_taking_opcode(executable->opcode))
         continue;
+      // Relocating a distant label onto the branch address byte changes the
+      // linear continuation of the overlaid cell: after executing the byte at
+      // the branch operand, control falls into the cells following the branch,
+      // not into the label's original block. That is only sound when the
+      // overlaid opcode never continues linearly (В/О returns to the caller).
+      if (executable->opcode != 0x52)
+        continue;
 
       const auto removed_address_it = layout.address_by_item_index.find(labels_end);
       if (removed_address_it == layout.address_by_item_index.end() ||

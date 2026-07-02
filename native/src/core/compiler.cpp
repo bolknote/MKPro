@@ -38062,6 +38062,607 @@ void toggle_alternating_literal_call_args(V2Program& program,
   });
 }
 
+struct PackedLineBankField {
+  std::string name;
+  int min = 0;
+  int max = 0;
+};
+
+std::optional<PackedLineBankField> packed_line_bank_field(const V2Program& program) {
+  for (const V2StateField& field : program.state) {
+    if (!field.bank.has_value())
+      continue;
+    return PackedLineBankField{
+        .name = field.name,
+        .min = field.bank->min,
+        .max = field.bank->max,
+    };
+  }
+  return std::nullopt;
+}
+
+std::optional<int> literal_integer_expression(const Expression& expression) {
+  if (expression.kind != "number")
+    return std::nullopt;
+  try {
+    const std::optional<double> value = numeric_literal_value(expression);
+    if (!value.has_value() || std::fabs(*value - std::round(*value)) >= 1e-12)
+      return std::nullopt;
+    return static_cast<int>(round_to_long_long(*value));
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+std::optional<int> indexed_literal_slot(const Expression& expression,
+                                        const PackedLineBankField& bank) {
+  if (expression.kind == "indexed" && expression.base == bank.name &&
+      expression.index != nullptr) {
+    const std::optional<int> slot = literal_integer_expression(*expression.index);
+    if (slot.has_value() && *slot >= bank.min && *slot <= bank.max)
+      return slot;
+    return std::nullopt;
+  }
+  // resolve_constant_indexed_state may already have flattened bank[N] into the
+  // "<bank>_<N>" element identifier.
+  if (expression.kind == "identifier" && expression.name.size() > bank.name.size() + 1U &&
+      expression.name.compare(0, bank.name.size(), bank.name) == 0 &&
+      expression.name.at(bank.name.size()) == '_') {
+    const std::string suffix = expression.name.substr(bank.name.size() + 1U);
+    if (!suffix.empty() &&
+        std::all_of(suffix.begin(), suffix.end(), [](char c) { return c >= '0' && c <= '9'; })) {
+      const int slot = std::stoi(suffix);
+      if (slot >= bank.min && slot <= bank.max)
+        return slot;
+    }
+  }
+  return std::nullopt;
+}
+
+V2Statement make_assign_statement(const std::string& target, const Expression& expression, int line) {
+  V2Statement statement;
+  statement.kind = "v2_assign";
+  statement.target = target;
+  statement.expr = expression_to_source(expression);
+  statement.line = line;
+  return statement;
+}
+
+V2Statement make_update_statement(const std::string& target, const std::string& op,
+                                  const Expression& expression, int line) {
+  V2Statement statement;
+  statement.kind = "v2_update";
+  statement.target = target;
+  statement.op = op;
+  statement.expr = expression_to_source(expression);
+  statement.line = line;
+  return statement;
+}
+
+V2Statement make_invoke_statement(const std::string& name, std::vector<std::string> args, int line) {
+  V2Statement statement;
+  statement.kind = "v2_invoke";
+  statement.name = name;
+  statement.args = std::move(args);
+  statement.line = line;
+  return statement;
+}
+
+Expression indexed_bank_slot(const std::string& bank_name, const Expression& slot) {
+  Expression indexed;
+  indexed.kind = "indexed";
+  indexed.base = bank_name;
+  indexed.index = std::make_shared<Expression>(slot);
+  return indexed;
+}
+
+// A "mark leaf" is a zero-param rule that pre-decrements a selector register
+// and packed_add-updates the bank cell it now points at:
+//   slot--
+//   bank[slot] = packed_add(bank[slot], line, ...)
+//   ...tail...
+// The canonicalization turns the mutating selector into an explicit slot
+// parameter so callers can spell the same walk with literal bank slots.
+std::optional<std::pair<std::string, std::string>>
+self_decrement_mark_leaf_shape(const V2Rule& leaf, const std::string& bank_name) {
+  if (!leaf.params.empty() || leaf.body.size() < 2U)
+    return std::nullopt;
+  const V2Statement& decrement = leaf.body.front();
+  if (!statement_is_unit_decrement(decrement) || !decrement.target.has_value())
+    return std::nullopt;
+  const std::string& selector = *decrement.target;
+  const V2Statement& update = leaf.body.at(1);
+  if (update.kind != "v2_assign" || !update.target.has_value() || !update.expr.has_value())
+    return std::nullopt;
+  try {
+    const Expression target = parse_expression(*update.target, update.line);
+    if (target.kind != "indexed" || target.base != bank_name || target.index == nullptr ||
+        target.index->kind != "identifier" || target.index->name != selector) {
+      return std::nullopt;
+    }
+    const Expression expr = parse_expression(*update.expr, update.line);
+    if (expr.kind != "call" || lower_ascii(expr.callee) != "packed_add" ||
+        expr.args.size() < 2U || expr.args.at(1).kind != "identifier") {
+      return std::nullopt;
+    }
+    const Expression& current = expr.args.front();
+    if (current.kind != "indexed" || current.base != bank_name || current.index == nullptr ||
+        current.index->kind != "identifier" || current.index->name != selector) {
+      return std::nullopt;
+    }
+    return std::pair{selector, expr.args.at(1).name};
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+void rewrite_self_decrement_mark_leaf(V2Rule& leaf, const std::string& selector_name,
+                                      const std::string& param_name) {
+  const int line = leaf.body.front().line;
+  leaf.params = {param_name};
+  V2Statement assign;
+  assign.kind = "v2_assign";
+  assign.target = selector_name;
+  assign.expr = param_name;
+  assign.line = line;
+  leaf.body.front() = std::move(assign);
+}
+
+struct CanonicalBankWalkStep {
+  enum class PrepKind { AssignLine, NormalizeLine };
+  PrepKind prep = PrepKind::AssignLine;
+  Expression line_expr;
+  std::string normalizer;
+  Expression normalizer_arg;
+  int slot = 0;
+  int source_line = 0;
+};
+
+bool parse_zero_arg_leaf_invoke(const V2Statement& statement, const std::string& leaf_name) {
+  return statement.kind == "v2_invoke" && statement.name.has_value() &&
+         *statement.name == leaf_name && statement.args.empty();
+}
+
+bool parse_direct_bank_walk_step(const V2Statement& prep, const V2Statement& call,
+                                 const std::string& leaf_name, const std::string& line_name,
+                                 CanonicalBankWalkStep& step) {
+  if (prep.kind != "v2_assign" || prep.target != line_name || !prep.expr.has_value() ||
+      !parse_zero_arg_leaf_invoke(call, leaf_name)) {
+    return false;
+  }
+  step.prep = CanonicalBankWalkStep::PrepKind::AssignLine;
+  step.line_expr = parse_expression(*prep.expr, prep.line);
+  step.source_line = prep.line;
+  return true;
+}
+
+bool parse_normalized_bank_walk_step(const V2Statement& prep, const V2Statement& call,
+                                     const std::string& leaf_name,
+                                     CanonicalBankWalkStep& step) {
+  if (prep.kind != "v2_invoke" || !prep.name.has_value() || prep.args.size() != 1U ||
+      !parse_zero_arg_leaf_invoke(call, leaf_name)) {
+    return false;
+  }
+  step.prep = CanonicalBankWalkStep::PrepKind::NormalizeLine;
+  step.normalizer = *prep.name;
+  step.normalizer_arg = parse_expression(prep.args.front(), prep.line);
+  step.source_line = prep.line;
+  return true;
+}
+
+// A single-param rule whose final statement assigns its result variable; the
+// walk uses it to normalize diagonal line coordinates before the leaf call.
+std::optional<std::string> single_param_rule_return_target(const V2Program& program,
+                                                           const std::string& name) {
+  for (const V2Rule& rule : program.rules) {
+    if (rule.name != name)
+      continue;
+    if (rule.params.size() != 1U || rule.body.empty())
+      return std::nullopt;
+    const V2Statement& last = rule.body.back();
+    if (last.kind != "v2_assign" || !last.target.has_value())
+      return std::nullopt;
+    return *last.target;
+  }
+  return std::nullopt;
+}
+
+bool parse_packed_line_bank_walk(const V2Program& program, const std::vector<V2Statement>& body,
+                                 std::size_t start, const std::string& leaf_name,
+                                 const std::string& line_name, const PackedLineBankField& bank,
+                                 std::vector<CanonicalBankWalkStep>& steps,
+                                 std::size_t& consumed) {
+  steps.clear();
+  const std::size_t slot_count = static_cast<std::size_t>(bank.max - bank.min + 1);
+  std::size_t cursor = start;
+  int next_slot = bank.max;
+  while (cursor + 1U < body.size() && steps.size() < slot_count) {
+    CanonicalBankWalkStep step;
+    const V2Statement& prep = body.at(cursor);
+    const V2Statement& call = body.at(cursor + 1U);
+    if (parse_direct_bank_walk_step(prep, call, leaf_name, line_name, step) ||
+        parse_normalized_bank_walk_step(prep, call, leaf_name, step)) {
+      if (step.prep == CanonicalBankWalkStep::PrepKind::NormalizeLine &&
+          single_param_rule_return_target(program, step.normalizer) != line_name) {
+        break;
+      }
+      step.slot = next_slot--;
+      steps.push_back(std::move(step));
+      cursor += 2U;
+      continue;
+    }
+    break;
+  }
+  if (steps.size() != slot_count || steps.size() < 4U)
+    return false;
+  consumed = cursor - start;
+  return true;
+}
+
+int count_invokes_of_rule(const V2Statement& statement, const std::string& name);
+
+int count_invokes_of_rule(const std::vector<V2Statement>& statements, const std::string& name) {
+  int count = 0;
+  for (const V2Statement& statement : statements)
+    count += count_invokes_of_rule(statement, name);
+  return count;
+}
+
+int count_invokes_of_rule(const V2Statement& statement, const std::string& name) {
+  int count = statement.kind == "v2_invoke" && statement.name == name ? 1 : 0;
+  count += count_invokes_of_rule(statement.body, name);
+  count += count_invokes_of_rule(statement.then_body, name);
+  count += count_invokes_of_rule(statement.else_body, name);
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr)
+      count += count_invokes_of_rule(*match_case.action, name);
+  }
+  if (statement.otherwise != nullptr)
+    count += count_invokes_of_rule(*statement.otherwise, name);
+  return count;
+}
+
+struct MarkWalkRewritePlan {
+  V2Rule* caller = nullptr;
+  std::size_t init_index = 0;
+  std::size_t walk_start = 0;
+  std::size_t consumed = 0;
+  std::vector<CanonicalBankWalkStep> steps;
+};
+
+std::optional<MarkWalkRewritePlan> plan_mark_walk_rewrite(const V2Program& program, V2Rule& caller,
+                                                          const std::string& leaf_name,
+                                                          const std::string& line_name,
+                                                          const std::string& selector,
+                                                          const PackedLineBankField& bank) {
+  for (std::size_t start = 0; start + 8U <= caller.body.size(); ++start) {
+    std::vector<CanonicalBankWalkStep> steps;
+    std::size_t consumed = 0;
+    if (!parse_packed_line_bank_walk(program, caller.body, start, leaf_name, line_name, bank,
+                                     steps, consumed)) {
+      continue;
+    }
+
+    // The walk relies on a single "selector = bank.max + 1" initializer before
+    // it; dropping the initializer is only sound when nothing else touches the
+    // selector until the walk starts.
+    std::optional<std::size_t> init_index;
+    bool pre_walk_safe = true;
+    for (std::size_t index = 0; index < start; ++index) {
+      const V2Statement& statement = caller.body.at(index);
+      if (statement.kind == "v2_assign" && statement.target == selector &&
+          statement.expr.has_value()) {
+        try {
+          const std::optional<int> slot_init =
+              literal_integer_expression(parse_expression(*statement.expr, statement.line));
+          if (slot_init.has_value() && *slot_init == bank.max + 1 && !init_index.has_value()) {
+            init_index = index;
+            continue;
+          }
+        } catch (const std::exception&) {
+        }
+      }
+      if (statement_assigns_identifier_target(statement, selector) ||
+          statements_read_identifier({statement}, selector, false)) {
+        pre_walk_safe = false;
+        break;
+      }
+    }
+    if (!pre_walk_safe || !init_index.has_value())
+      return std::nullopt;
+
+    return MarkWalkRewritePlan{
+        .caller = &caller,
+        .init_index = *init_index,
+        .walk_start = start,
+        .consumed = consumed,
+        .steps = std::move(steps),
+    };
+  }
+  return std::nullopt;
+}
+
+void apply_mark_walk_rewrite(const MarkWalkRewritePlan& plan, const std::string& leaf_name,
+                             const std::string& line_name) {
+  V2Rule& caller = *plan.caller;
+  std::vector<V2Statement> rewritten;
+  rewritten.reserve(caller.body.size() + plan.steps.size());
+  for (std::size_t index = 0; index < plan.walk_start; ++index) {
+    if (index == plan.init_index)
+      continue;
+    rewritten.push_back(caller.body.at(index));
+  }
+  for (const CanonicalBankWalkStep& step : plan.steps) {
+    if (step.prep == CanonicalBankWalkStep::PrepKind::AssignLine) {
+      rewritten.push_back(make_assign_statement(line_name, step.line_expr, step.source_line));
+    } else {
+      rewritten.push_back(make_invoke_statement(
+          step.normalizer, {expression_to_source(step.normalizer_arg)}, step.source_line));
+    }
+    rewritten.push_back(
+        make_invoke_statement(leaf_name, {std::to_string(step.slot)}, step.source_line));
+  }
+  rewritten.insert(rewritten.end(),
+                   caller.body.begin() +
+                       static_cast<std::ptrdiff_t>(plan.walk_start + plan.consumed),
+                   caller.body.end());
+  caller.body = std::move(rewritten);
+}
+
+bool program_declares_name(const V2Program& program, const std::string& name) {
+  for (const V2StateField& field : program.state) {
+    if (field.name == name)
+      return true;
+  }
+  for (const V2Rule& rule : program.rules) {
+    if (rule.name == name)
+      return true;
+    if (std::find(rule.params.begin(), rule.params.end(), name) != rule.params.end())
+      return true;
+  }
+  return false;
+}
+
+void ensure_implicit_param_state_field(V2Program& program, const std::string& name, int line) {
+  for (const V2StateField& field : program.state) {
+    if (field.name == name)
+      return;
+  }
+  V2StateField field;
+  field.name = name;
+  field.type = "packed";
+  field.implicit = true;
+  field.line = line;
+  program.state.push_back(std::move(field));
+}
+
+struct ScoreBankWalkMatch {
+  std::string score;
+  std::string line_name;
+  std::string bank_name;
+  std::string normalizer;
+  std::string score_leaf;
+  std::string slot_param;
+  Expression first_line;
+  Expression second_line;
+  Expression diagonal_add_arg;
+  Expression diagonal_sub_arg;
+  int first_slot = 0;
+  int second_slot = 0;
+  int third_slot = 0;
+  int fourth_slot = 0;
+  int line = 0;
+};
+
+bool detect_score_bank_walk(const V2Program& program, const V2Rule& rule,
+                            const PackedLineBankField& bank, ScoreBankWalkMatch& match) {
+  if (rule.body.size() != 5U)
+    return false;
+  const V2Statement& first = rule.body.at(0);
+  const V2Statement& add_call = rule.body.at(1);
+  const V2Statement& add_score = rule.body.at(2);
+  const V2Statement& sub_call = rule.body.at(3);
+  const V2Statement& sub_score = rule.body.at(4);
+  if (first.kind != "v2_assign" || !first.target.has_value() || !first.expr.has_value())
+    return false;
+
+  const Expression first_expression = parse_expression(*first.expr, first.line);
+  const std::optional<std::pair<PackedScoreTerm, PackedScoreTerm>> first_pair =
+      packed_score_pair(first_expression, first.line);
+  if (!first_pair.has_value())
+    return false;
+
+  const std::optional<int> first_slot =
+      indexed_literal_slot(first_pair->first.line_value, bank);
+  const std::optional<int> second_slot =
+      indexed_literal_slot(first_pair->second.line_value, bank);
+  if (!first_slot.has_value() || !second_slot.has_value() || *first_slot <= *second_slot)
+    return false;
+
+  if (add_call.kind != "v2_invoke" || sub_call.kind != "v2_invoke" ||
+      !add_call.name.has_value() || !sub_call.name.has_value() ||
+      *add_call.name != *sub_call.name || add_call.args.size() != 1U ||
+      sub_call.args.size() != 1U) {
+    return false;
+  }
+
+  const std::optional<std::string> line_name =
+      single_param_rule_return_target(program, *add_call.name);
+  if (!line_name.has_value())
+    return false;
+
+  const std::optional<PackedScoreTerm> add_term =
+      packed_score_accumulator_term(add_score, *first.target, *line_name);
+  const std::optional<PackedScoreTerm> sub_term =
+      packed_score_accumulator_term(sub_score, *first.target, *line_name);
+  if (!add_term.has_value() || !sub_term.has_value())
+    return false;
+
+  const std::optional<int> third_slot = indexed_literal_slot(add_term->line_value, bank);
+  const std::optional<int> fourth_slot = indexed_literal_slot(sub_term->line_value, bank);
+  if (!third_slot.has_value() || !fourth_slot.has_value() || *third_slot <= *fourth_slot)
+    return false;
+
+  const Expression add_arg = parse_expression(add_call.args.front(), add_call.line);
+  const Expression sub_arg = parse_expression(sub_call.args.front(), sub_call.line);
+  const std::optional<std::pair<Expression, Expression>> diagonal =
+      shared_add_sub_operands(add_arg, sub_arg);
+  if (!diagonal.has_value())
+    return false;
+
+  match = ScoreBankWalkMatch{
+      .score = *first.target,
+      .line_name = *line_name,
+      .bank_name = bank.name,
+      .normalizer = *add_call.name,
+      .first_line = first_pair->first.index,
+      .second_line = first_pair->second.index,
+      .diagonal_add_arg = add_arg,
+      .diagonal_sub_arg = sub_arg,
+      .first_slot = *first_slot,
+      .second_slot = *second_slot,
+      .third_slot = *third_slot,
+      .fourth_slot = *fourth_slot,
+      .line = first.line,
+  };
+  return true;
+}
+
+V2Rule make_score_bank_walk_leaf(const ScoreBankWalkMatch& match) {
+  const Expression packed_score_call =
+      call_expression("packed_score", {indexed_bank_slot(match.bank_name,
+                                                         identifier_expression(match.slot_param)),
+                                       identifier_expression(match.line_name)});
+  V2Rule leaf;
+  leaf.name = match.score_leaf;
+  leaf.params = {match.slot_param};
+  leaf.line = match.line;
+  leaf.body.push_back(make_update_statement(match.score, "+=", packed_score_call, match.line));
+  return leaf;
+}
+
+std::vector<V2Statement> build_explicit_score_walk_body(const ScoreBankWalkMatch& match) {
+  std::vector<V2Statement> body;
+  const auto leaf_call = [&](int slot) {
+    return make_invoke_statement(match.score_leaf, {std::to_string(slot)}, match.line);
+  };
+  body.push_back(make_assign_statement(match.score, number_expression("0"), match.line));
+  body.push_back(make_assign_statement(match.line_name, match.first_line, match.line));
+  body.push_back(leaf_call(match.first_slot));
+  body.push_back(make_assign_statement(match.line_name, match.second_line, match.line));
+  body.push_back(leaf_call(match.second_slot));
+  body.push_back(make_invoke_statement(match.normalizer,
+                                       {expression_to_source(match.diagonal_add_arg)}, match.line));
+  body.push_back(leaf_call(match.third_slot));
+  body.push_back(make_invoke_statement(match.normalizer,
+                                       {expression_to_source(match.diagonal_sub_arg)}, match.line));
+  body.push_back(leaf_call(match.fourth_slot));
+  return body;
+}
+
+void canonicalize_packed_line_bank_walks(V2Program& program,
+                                         std::vector<OptimizationReport>& optimizations) {
+  const std::optional<PackedLineBankField> bank = packed_line_bank_field(program);
+  if (!bank.has_value())
+    return;
+
+  const std::string slot_param = "__bank_slot";
+  if (program_declares_name(program, slot_param))
+    return;
+
+  std::vector<std::string> rewritten_markers;
+  std::vector<std::string> rewritten_scorers;
+
+  // Mark side: two-phase. Plan every caller rewrite first and mutate only when
+  // each invocation of the leaf is accounted for by a recognized walk, so a
+  // partial match can never desynchronize the selector protocol.
+  for (V2Rule& leaf : program.rules) {
+    const std::optional<std::pair<std::string, std::string>> shape =
+        self_decrement_mark_leaf_shape(leaf, bank->name);
+    if (!shape.has_value())
+      continue;
+    const auto& [selector, line_name] = *shape;
+
+    const std::set<std::string> leaf_names{lower_ascii(leaf.name)};
+    if (count_invokes_of_rule(program.body, leaf.name) != 0 ||
+        statements_contain_call_named(program.body, leaf_names)) {
+      continue;
+    }
+
+    bool eligible = true;
+    std::vector<MarkWalkRewritePlan> plans;
+    for (V2Rule& caller : program.rules) {
+      if (statements_contain_call_named(caller.body, leaf_names)) {
+        eligible = false;
+        break;
+      }
+      const int invokes = count_invokes_of_rule(caller.body, leaf.name);
+      if (&caller == &leaf) {
+        if (invokes != 0)
+          eligible = false;
+        continue;
+      }
+      if (invokes == 0)
+        continue;
+      std::optional<MarkWalkRewritePlan> plan =
+          plan_mark_walk_rewrite(program, caller, leaf.name, line_name, selector, *bank);
+      if (!plan.has_value() || static_cast<int>(plan->steps.size()) != invokes) {
+        eligible = false;
+        break;
+      }
+      plans.push_back(std::move(*plan));
+    }
+    if (!eligible || plans.empty())
+      continue;
+
+    rewrite_self_decrement_mark_leaf(leaf, selector, slot_param);
+    ensure_implicit_param_state_field(program, slot_param, leaf.line);
+    for (const MarkWalkRewritePlan& plan : plans) {
+      apply_mark_walk_rewrite(plan, leaf.name, line_name);
+      rewritten_markers.push_back(plan.caller->name);
+    }
+  }
+
+  // Score side: collect new leaf rules separately to avoid invalidating the
+  // rule references being iterated.
+  std::vector<V2Rule> new_leaves;
+  std::set<std::string> used_names = collect_callable_names(program);
+  for (V2Rule& rule : program.rules) {
+    ScoreBankWalkMatch match;
+    if (!detect_score_bank_walk(program, rule, *bank, match))
+      continue;
+    match.score_leaf = fresh_callable_name(used_names, "__score_one", 0);
+    match.slot_param = slot_param;
+    new_leaves.push_back(make_score_bank_walk_leaf(match));
+    rule.body = build_explicit_score_walk_body(match);
+    rewritten_scorers.push_back(rule.name);
+  }
+  if (!new_leaves.empty()) {
+    ensure_implicit_param_state_field(program, slot_param, new_leaves.front().line);
+    for (V2Rule& leaf : new_leaves)
+      program.rules.push_back(std::move(leaf));
+  }
+
+  if (rewritten_markers.empty() && rewritten_scorers.empty())
+    return;
+
+  std::string detail;
+  if (!rewritten_markers.empty()) {
+    detail = "Rewrote self-decrementing mark walks in " + join_strings(rewritten_markers, ", ") +
+             " to explicit bank-slot leaf calls";
+  }
+  if (!rewritten_scorers.empty()) {
+    if (!detail.empty())
+      detail += "; ";
+    detail += "Decomposed score walks in " + join_strings(rewritten_scorers, ", ") +
+              " into explicit bank-slot leaf calls";
+  }
+  optimizations.push_back(OptimizationReport{
+      .name = "canonicalize-packed-line-bank-walk",
+      .detail = detail + ".",
+  });
+}
+
 bool prelude_assigns_target(const std::vector<V2Statement>& prelude, const std::string& target) {
   return std::any_of(prelude.begin(), prelude.end(), [&](const V2Statement& statement) {
     return statement.kind == "v2_assign" && statement.target == target;
@@ -42474,6 +43075,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       run_interprocedural_ast_passes(options, *ast.v2, context.optimizations);
       if (options.alternating_sign_toggle_args)
         toggle_alternating_literal_call_args(*ast.v2, context.optimizations);
+      if (options.canonicalize_packed_line_bank_walks)
+        canonicalize_packed_line_bank_walks(*ast.v2, context.optimizations);
       // TS performs dead-source residual temp reuse before common-tail hoisting.
       // Native currently lowers residual-temp reuse later, but the common-tail
       // pass must still run in this candidate so single-use tail inlining can
@@ -43292,6 +43895,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.packed_score_accumulator_helpers ||
          options.canonicalize_repeated_unary_update_args ||
          options.alternating_sign_toggle_args ||
+         options.canonicalize_packed_line_bank_walks ||
          options.x_param_value_functions ||
          options.x_param_y_stack_stored_entry || options.packed_line_family_update_check_tail ||
          options.packed_line_family_mutating_selector_update_check_tail ||
@@ -43981,6 +44585,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";canonicalize_repeated_unary_update_args="
       << options.canonicalize_repeated_unary_update_args
       << ";alternating_sign_toggle_args=" << options.alternating_sign_toggle_args
+      << ";canonicalize_packed_line_bank_walks=" << options.canonicalize_packed_line_bank_walks
       << ";callee_hole_straight_line_helper=" << options.callee_hole_straight_line_helper
       << ";x_param_value_functions=" << options.x_param_value_functions
       << ";x_param_y_stack_stored_entry=" << options.x_param_y_stack_stored_entry
@@ -49722,6 +50327,34 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       },
       "alternating-sign-toggle-callee-hole-shared-call",
       "Combined the sign toggle, callee-hole skeleton, and shared call-body helpers",
+      CandidateGate::SizeRescue);
+  add_candidate(
+      [](CompileOptions& candidate_options) {
+        candidate_options.canonicalize_packed_line_bank_walks = true;
+      },
+      "canonicalize-packed-line-bank-walk",
+      "Rewrote packed-line bank walks into explicit descending slot leaf-call sequences",
+      CandidateGate::SizeRescue);
+  add_candidate(
+      [](CompileOptions& candidate_options) {
+        candidate_options.canonicalize_packed_line_bank_walks = true;
+        candidate_options.callee_hole_straight_line_helper = true;
+        candidate_options.shared_straight_line_call_bodies = true;
+        candidate_options.hoist_shared_helpers = true;
+      },
+      "canonicalize-packed-line-bank-walk-callee-hole",
+      "Combined explicit bank-walk canonicalization with callee-hole skeleton merging",
+      CandidateGate::SizeRescue);
+  add_candidate(
+      [](CompileOptions& candidate_options) {
+        candidate_options.alternating_sign_toggle_args = true;
+        candidate_options.canonicalize_packed_line_bank_walks = true;
+        candidate_options.callee_hole_straight_line_helper = true;
+        candidate_options.shared_straight_line_call_bodies = true;
+        candidate_options.hoist_shared_helpers = true;
+      },
+      "alternating-sign-toggle-bank-walk-callee-hole",
+      "Combined sign toggle, bank-walk canonicalization, and callee-hole skeleton merging",
       CandidateGate::SizeRescue);
   add_candidate(
       [](CompileOptions& candidate_options) { candidate_options.x_param_value_functions = true; },

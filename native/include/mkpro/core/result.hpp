@@ -340,6 +340,10 @@ struct CompileOptions {
   bool packed_score_accumulator_helpers = false;
   bool canonicalize_repeated_unary_update_args = false;
   bool alternating_sign_toggle_args = false;
+  // Rewrite self-decrementing packed-line mark walks and monolithic score walks
+  // into the same explicit (line prep; leaf(bank_slot)) sequence so callee-hole
+  // IR merging can unify them.
+  bool canonicalize_packed_line_bank_walks = false;
   bool x_param_value_functions = false;
   bool x_param_y_stack_stored_entry = false;
   bool stack_argument_helper_entries = false;

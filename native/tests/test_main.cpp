@@ -117,6 +117,7 @@ void rules_match_typescript_contract();
 void safe_minmax_matches_typescript_contract();
 void alternating_sign_toggle_arg_matches_literal_semantics();
 void callee_hole_helper_matches_direct_call_semantics();
+void canonicalize_packed_line_bank_walk_rewrites_explicit_slot_leaves();
 void segmented_bitplanes_match_typescript_contract();
 void setup_program_matches_typescript_contract();
 void setup_only_counted_loop_matches_typescript_contract();
@@ -379,6 +380,8 @@ int main(int argc, char** argv) {
        mkpro::tests::alternating_sign_toggle_arg_matches_literal_semantics},
       {"callee_hole_helper_matches_direct_call_semantics",
        mkpro::tests::callee_hole_helper_matches_direct_call_semantics},
+      {"canonicalize_packed_line_bank_walk_rewrites_explicit_slot_leaves",
+       mkpro::tests::canonicalize_packed_line_bank_walk_rewrites_explicit_slot_leaves},
       {"segmented_bitplanes_match_typescript_contract",
        mkpro::tests::segmented_bitplanes_match_typescript_contract},
       {"setup_program_matches_typescript_contract",
