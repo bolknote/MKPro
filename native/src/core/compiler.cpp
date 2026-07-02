@@ -50445,6 +50445,15 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       CandidateGate::SizeRescue);
   add_candidate(
       [](CompileOptions& candidate_options) {
+        candidate_options.canonicalize_packed_line_bank_walks = true;
+        candidate_options.callee_hole_straight_line_helper = true;
+        candidate_options.hoist_procs = true;
+      },
+      "canonicalize-packed-line-bank-walk-callee-hole-hoisted",
+      "Combined bank-walk canonicalization and callee-hole merging with hoisted procedures",
+      CandidateGate::SizeRescue);
+  add_candidate(
+      [](CompileOptions& candidate_options) {
         candidate_options.alternating_sign_toggle_args = true;
         candidate_options.canonicalize_packed_line_bank_walks = true;
         candidate_options.callee_hole_straight_line_helper = true;
