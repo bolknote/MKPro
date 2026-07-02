@@ -9582,6 +9582,34 @@ int stack_only_stack_carried_show_read_run(LoweringContext& context,
   return statements_read_identifier_before_write(context, tail, name) ? 0 : 3;
 }
 
+bool statement_is_stack_carried_packed_digit_prefix_safe(const V2Program& program,
+                                                         const V2Statement& statement,
+                                                         const std::string& name) {
+  if (statement_reads_or_writes_identifier_for_stack_analysis(program, statement, name))
+    return false;
+  return statement_is_unit_decrement(statement);
+}
+
+bool no_arg_invoke_consumes_stack_carried_packed_digit_index(
+    const V2Program& program, const V2Statement& statement, const std::string& name) {
+  if (statement.kind != "v2_invoke" || !statement.name.has_value() || !statement.args.empty())
+    return false;
+  const auto rule_it = std::find_if(program.rules.begin(), program.rules.end(),
+                                    [&](const V2Rule& rule) { return rule.name == *statement.name; });
+  if (rule_it == program.rules.end())
+    return false;
+  for (std::size_t index = 0; index < rule_it->body.size(); ++index) {
+    const V2Statement& body_statement = rule_it->body.at(index);
+    if (indexed_packed_pow10_delta_stack_index_name_for_analysis(body_statement) == name)
+      return true;
+    if (index > 0U ||
+        !statement_is_stack_carried_packed_digit_prefix_safe(program, body_statement, name)) {
+      return false;
+    }
+  }
+  return false;
+}
+
 int stack_only_covered_run(
     LoweringContext& context, const V2Program& program,
     const std::vector<V2Statement>& statements, std::size_t index, const std::string& name,
@@ -9638,6 +9666,12 @@ int stack_only_covered_run(
           analysis_simple_stack_load(argument)) {
         return 2;
       }
+    }
+    if (next != nullptr &&
+        no_arg_invoke_consumes_stack_carried_packed_digit_index(program, *next, name)) {
+      const Expression expression = parse_expression(*statement.expr, statement.line);
+      if (!expression_contains_identifier(expression, name))
+        return 2;
     }
   }
 

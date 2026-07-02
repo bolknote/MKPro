@@ -213,7 +213,7 @@ void example_sizes_match_typescript_baselines() {
       {"wumpus", 105},
   };
   const std::map<std::string, std::size_t> PENDING_BASELINE{
-      {"tic-tac-toe-4x4", 141},
+      {"tic-tac-toe-4x4", 137},
   };
 
   const std::filesystem::path root = std::filesystem::current_path();
@@ -279,8 +279,8 @@ void example_sizes_match_typescript_baselines() {
           find_candidate(result.rejected_candidates, "fractional-constant-selector-dead-int");
       require(rejected_dead_integer != nullptr,
               "tic-tac-toe-4x4 should report rejected dead-integer fractional selector rescue");
-      require(rejected_dead_integer->steps == 140,
-              "tic-tac-toe-4x4 rejected dead-integer fractional selector should show 140 cells");
+      require(rejected_dead_integer->steps == 136,
+              "tic-tac-toe-4x4 rejected dead-integer fractional selector should show 136 cells");
       require(rejected_dead_integer->reason.find("before K {x}") != std::string::npos,
               "tic-tac-toe-4x4 dead-integer rejection should explain the unsafe consumer");
       require(rejected_dead_integer->reason.find("consumerAddress=") != std::string::npos &&
@@ -296,7 +296,7 @@ void example_sizes_match_typescript_baselines() {
               "tic-tac-toe-4x4 size attribution should expose the packed_score helper body");
       const SizeAttributionEntry* cell_mask =
           find_size_entry(result, "helper-region", "expr cell_mask(x, y)");
-      require(cell_mask != nullptr && cell_mask->cells >= 8,
+      require(cell_mask != nullptr && cell_mask->cells >= 4,
               "tic-tac-toe-4x4 size attribution should expose the cell_mask helper body");
       const SizeAttributionEntry* cell_mask_calls =
           find_size_entry(result, "helper-call-sites", "expr cell_mask(x, y)");
@@ -529,7 +529,7 @@ void example_sizes_match_typescript_baselines() {
                   dead_integer_opportunity->reason.find("before K {x}") != std::string::npos &&
                   dead_integer_opportunity->reason.find("consumerAddress=") !=
                       std::string::npos,
-              "tic-tac-toe-4x4 size attribution should expose the blocked 140-cell rescue");
+              "tic-tac-toe-4x4 size attribution should expose the blocked 136-cell rescue");
       require(dead_integer_opportunity->details.contains("consumerAddress") &&
                   dead_integer_opportunity->details.contains("selectorTarget") &&
                   dead_integer_opportunity->details.contains("naturalTarget") &&
@@ -600,7 +600,7 @@ void example_sizes_match_typescript_baselines() {
                       "relayout-or-overlay-flow-to-natural-target",
               "tic-tac-toe-4x4 dead-integer arithmetic blocker should say this needs codegen or "
               "layout work instead of proof weakening");
-      const bool has_operand_conflict =
+      const bool has_occupied_target_conflict =
           std::any_of(result.size_attribution.opportunities.begin(),
                       result.size_attribution.opportunities.end(),
                       [](const SizeOpportunityReport& opportunity) {
@@ -609,42 +609,31 @@ void example_sizes_match_typescript_baselines() {
                         const auto kind = opportunity.details.find(
                             "currentNaturalTargetOccupantKind");
                         const auto conflict = opportunity.details.find("layoutConflictKind");
-                        const auto executable =
-                            opportunity.details.find("currentNaturalTargetOperandExecutable");
-                        const auto flow_target =
-                            opportunity.details.find("currentNaturalTargetOperandFlowTarget");
-                        const auto next_executable =
-                            opportunity.details.find("currentNaturalTargetNextExecutable");
-                        const auto next =
-                            opportunity.details.find("currentNaturalTargetNextOccupant");
-                        const auto compatibility =
-                            opportunity.details.find("currentNaturalTargetOverlayCompatibility");
-                        const auto blocker =
-                            opportunity.details.find("currentNaturalTargetOverlayBlocker");
-                        const auto action =
-                            opportunity.details.find("currentNaturalTargetOverlayAction");
+                        const auto disposition = opportunity.details.find("layoutDisposition");
+                        const auto flow_count =
+                            opportunity.details.find("currentNaturalTargetFlowCount");
+                        const auto selector_kind =
+                            opportunity.details.find("currentSelectorTargetOccupantKind");
+                        const auto selector_flow_count =
+                            opportunity.details.find("currentSelectorTargetFlowCount");
                         return kind != opportunity.details.end() && conflict != opportunity.details.end() &&
-                               executable != opportunity.details.end() &&
-                               flow_target != opportunity.details.end() &&
-                               next_executable != opportunity.details.end() &&
-                               next != opportunity.details.end() &&
-                               compatibility != opportunity.details.end() &&
-                               blocker != opportunity.details.end() &&
-                               action != opportunity.details.end() &&
-                               kind->second == "address-operand" &&
-                               conflict->second == "code-data-overlay-candidate" &&
-                               compatibility->second == "next-opcode-mismatch" &&
-                               blocker->second == "overlaid-opcode-would-retarget-owner-branch" &&
-                               action->second ==
-                                   "relayout-owner-branch-or-place-compatible-executable";
+                               disposition != opportunity.details.end() &&
+                               flow_count != opportunity.details.end() &&
+                               selector_kind != opportunity.details.end() &&
+                               selector_flow_count != opportunity.details.end() &&
+                               kind->second == "instruction" &&
+                               conflict->second == "occupied-target-cell" &&
+                               disposition->second == "natural-target-has-no-flow" &&
+                               flow_count->second == "0" && !selector_kind->second.empty() &&
+                               !selector_flow_count->second.empty();
                       });
-      require(has_operand_conflict,
-              "tic-tac-toe-4x4 size attribution should classify natural-target address-byte "
-              "conflicts as code-data overlay candidates and expose local opcode compatibility");
+      require(has_occupied_target_conflict,
+              "tic-tac-toe-4x4 size attribution should classify occupied natural-target cells "
+              "and expose selector flow context");
       const SizeBlockerSummaryReport* data_arithmetic_blocker =
           find_size_blocker(result, "data-arithmetic");
       require(data_arithmetic_blocker != nullptr &&
-                  data_arithmetic_blocker->opportunities == 2 &&
+                  data_arithmetic_blocker->opportunities == 5 &&
                   data_arithmetic_blocker->potential_savings == 1 &&
                   data_arithmetic_blocker->best_savings == 1 &&
                   data_arithmetic_blocker->best_variant ==
@@ -686,7 +675,7 @@ void example_sizes_match_typescript_baselines() {
               "as a value-aware stack/register scheduler blocker");
       const SizeNextActionSummaryReport* required_action = find_size_next_action(
           result, "requiredAction", "keep-fractional-erase-before-data-arithmetic");
-      require(required_action != nullptr && required_action->opportunities == 2 &&
+      require(required_action != nullptr && required_action->opportunities == 5 &&
                   required_action->potential_savings == 1 &&
                   required_action->best_savings == 1 &&
                   required_action->best_blocker_kind == "data-arithmetic" &&
@@ -696,7 +685,7 @@ void example_sizes_match_typescript_baselines() {
               "blocked positive-savings candidates");
       const SizeNextActionSummaryReport* layout_action = find_size_next_action(
           result, "layoutAction", "relayout-or-overlay-flow-to-natural-target");
-      require(layout_action != nullptr && layout_action->opportunities == 2 &&
+      require(layout_action != nullptr && layout_action->opportunities == 5 &&
                   layout_action->potential_savings == 1 &&
                   layout_action->best_savings == 1 &&
                   layout_action->best_blocker_kind == "data-arithmetic" &&
@@ -706,7 +695,7 @@ void example_sizes_match_typescript_baselines() {
               "actions for blocked positive-savings candidates");
       const SizeNextActionSummaryReport* safe_savings_action = find_size_next_action(
           result, "safeSavingsAction", "align-selector-flow-to-natural-target");
-      require(safe_savings_action != nullptr && safe_savings_action->opportunities == 2 &&
+      require(safe_savings_action != nullptr && safe_savings_action->opportunities == 5 &&
                   safe_savings_action->potential_savings == 1 &&
                   safe_savings_action->best_savings == 1 &&
                   safe_savings_action->best_blocker_kind == "data-arithmetic" &&
@@ -717,7 +706,7 @@ void example_sizes_match_typescript_baselines() {
               "selector moves separately from proof-only action labels");
       const SizeNextActionSummaryReport* discovery_action = find_size_next_action(
           result, "candidateDiscoveryAction", "allow-natural-target-layout-candidate");
-      require(discovery_action != nullptr && discovery_action->opportunities == 2 &&
+      require(discovery_action != nullptr && discovery_action->opportunities == 5 &&
                   discovery_action->potential_savings == 1 &&
                   discovery_action->best_savings == 1 &&
                   discovery_action->best_blocker_kind == "data-arithmetic" &&

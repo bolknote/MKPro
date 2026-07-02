@@ -809,6 +809,44 @@ program StackOnlyXParamReturnDirectHaltConsumer {
 
   {
     const CompileResult result = compile_stack_variant(R"mkpro(
+program StackOnlyNoArgPackedDigitConsumer {
+  state {
+    lines: packed[4..7] = [44444.4, 44444.4, 44444.4, 44444.4]
+    x: counter 0..7 = 2
+    y: counter 0..7 = 3
+    line: packed = 0
+    slot: counter 0..8 = 8
+    best_score: packed = 1
+  }
+
+  fn mark_one() {
+    slot--
+    lines[slot] = packed_add(lines[slot], line, best_score)
+  }
+
+  loop {
+    line = x
+    mark_one()
+    line = y
+    mark_one()
+    halt(0)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-only no-arg packed digit consumer");
+    require(has_optimization(result, "stack-only-state-field"),
+            "no-arg packed digit consumer should prove line stack-only before allocation");
+    require(!result.registers.contains("line"),
+            "no-arg packed digit consumer should not allocate a register for line");
+    require(count_steps_with_comment(result, "set line") == 0,
+            "no-arg packed digit consumer should not store line");
+    require(count_steps_with_comment(result, "recall line") == 0,
+            "no-arg packed digit consumer should not recall line");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
 program StackCarriedUnaryDerivationBinaryConsumer {
   state {
     x: packed = -8
