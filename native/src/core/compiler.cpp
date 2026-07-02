@@ -45935,6 +45935,21 @@ std::string size_report_helper_spill_breakdown(
   return join_strings(parts, ";");
 }
 
+bool size_report_indirect_memory_selector_opcode(int opcode) {
+  return (opcode >= 0xb0 && opcode <= 0xbe) || (opcode >= 0xd0 && opcode <= 0xde);
+}
+
+int size_report_value_aware_register_traffic_cells(const SizeHelperSummaryReport& helper) {
+  const auto it = helper.details.find("valueAwareRegisterTrafficCells");
+  if (it == helper.details.end())
+    return helper.register_traffic_cells;
+  try {
+    return std::stoi(it->second);
+  } catch (const std::exception&) {
+    return helper.register_traffic_cells;
+  }
+}
+
 struct PackedScoreAccumulatorHelperUsage {
   int terms = 0;
   int groups = 0;
@@ -46284,8 +46299,46 @@ SizeAttributionReport build_size_attribution_report(
   std::map<std::string, std::size_t> helper_summary_by_label;
   for (std::size_t index = 0; index < report.helpers.size(); ++index)
     helper_summary_by_label.emplace(report.helpers.at(index).label, index);
+  std::map<std::string, std::set<int>> helper_indirect_memory_selector_registers;
+  for (const HelperRegionRange& region : helper_regions) {
+    std::set<int>& registers = helper_indirect_memory_selector_registers[region.label];
+    for (std::size_t index = region.start; index < region.end && index < steps.size(); ++index) {
+      const int opcode = steps.at(index).opcode;
+      if (size_report_indirect_memory_selector_opcode(opcode))
+        registers.insert(opcode & 0x0f);
+    }
+  }
+  std::map<std::string, std::set<int>> helper_spill_registers;
+  for (const HelperRegionRange& region : helper_regions) {
+    for (std::size_t index = region.start; index < region.end && index < steps.size(); ++index) {
+      const ResolvedStep& step = steps.at(index);
+      const std::optional<SizeSpillAccess> access = size_report_spill_access(step);
+      if (!access.has_value())
+        continue;
+      std::optional<int> register_index = direct_register_recall_index(step.opcode);
+      if (!register_index.has_value())
+        register_index = direct_register_store_index(step.opcode);
+      if (!register_index.has_value())
+        continue;
+      helper_spill_registers[region.label + "\x1f" + access->name].insert(*register_index);
+    }
+  }
   std::map<std::string, std::set<std::string>> helper_register_traffic_names;
+  std::map<std::string, std::set<std::string>> helper_value_aware_register_traffic_names;
+  std::map<std::string, std::set<std::string>> helper_selector_bound_register_traffic_names;
   std::map<std::string, std::vector<SizeHelperSpillSummaryReport>> helper_register_traffic_spills;
+  std::map<std::string, std::vector<SizeHelperSpillSummaryReport>>
+      helper_value_aware_register_traffic_spills;
+  std::map<std::string, std::vector<SizeHelperSpillSummaryReport>>
+      helper_selector_bound_register_traffic_spills;
+  std::map<std::string, int> helper_value_aware_register_traffic_cells;
+  std::map<std::string, int> helper_selector_bound_register_traffic_cells;
+  std::map<std::string, int> helper_value_aware_register_recall_cells;
+  std::map<std::string, int> helper_value_aware_register_store_cells;
+  std::map<std::string, int> helper_value_aware_register_traffic_occurrences;
+  std::map<std::string, int> helper_selector_bound_register_recall_cells;
+  std::map<std::string, int> helper_selector_bound_register_store_cells;
+  std::map<std::string, int> helper_selector_bound_register_traffic_occurrences;
   for (const SizeHelperSpillSummaryReport& spill : report.helper_spills) {
     const auto helper_it = helper_summary_by_label.find(spill.helper_label);
     if (helper_it == helper_summary_by_label.end())
@@ -46297,6 +46350,37 @@ SizeAttributionReport build_size_attribution_report(
     helper.register_traffic_occurrences += spill.recall_occurrences + spill.store_occurrences;
     helper_register_traffic_names[helper.label].insert(spill.name);
     helper_register_traffic_spills[helper.label].push_back(spill);
+    const std::string spill_key = spill.helper_label + "\x1f" + spill.name;
+    const auto spill_registers_it = helper_spill_registers.find(spill_key);
+    const auto selector_registers_it =
+        helper_indirect_memory_selector_registers.find(spill.helper_label);
+    bool selector_bound = false;
+    if (spill_registers_it != helper_spill_registers.end() &&
+        selector_registers_it != helper_indirect_memory_selector_registers.end()) {
+      for (const int register_index : spill_registers_it->second) {
+        if (selector_registers_it->second.contains(register_index)) {
+          selector_bound = true;
+          break;
+        }
+      }
+    }
+    if (selector_bound) {
+      helper_selector_bound_register_traffic_cells[helper.label] += spill.total_cells;
+      helper_selector_bound_register_recall_cells[helper.label] += spill.recall_cells;
+      helper_selector_bound_register_store_cells[helper.label] += spill.store_cells;
+      helper_selector_bound_register_traffic_occurrences[helper.label] +=
+          spill.recall_occurrences + spill.store_occurrences;
+      helper_selector_bound_register_traffic_names[helper.label].insert(spill.name);
+      helper_selector_bound_register_traffic_spills[helper.label].push_back(spill);
+    } else {
+      helper_value_aware_register_traffic_cells[helper.label] += spill.total_cells;
+      helper_value_aware_register_recall_cells[helper.label] += spill.recall_cells;
+      helper_value_aware_register_store_cells[helper.label] += spill.store_cells;
+      helper_value_aware_register_traffic_occurrences[helper.label] +=
+          spill.recall_occurrences + spill.store_occurrences;
+      helper_value_aware_register_traffic_names[helper.label].insert(spill.name);
+      helper_value_aware_register_traffic_spills[helper.label].push_back(spill);
+    }
   }
   for (SizeHelperSummaryReport& helper : report.helpers) {
     if (helper.register_traffic_cells <= 0)
@@ -46318,6 +46402,48 @@ SizeAttributionReport build_size_attribution_report(
     if (spills_it != helper_register_traffic_spills.end())
       helper.details["registerTrafficBreakdown"] =
           size_report_helper_spill_breakdown(spills_it->second);
+    const int value_aware_cells = helper_value_aware_register_traffic_cells[helper.label];
+    helper.details["valueAwareRegisterTrafficCells"] = std::to_string(value_aware_cells);
+    helper.details["valueAwareRegisterRecallCells"] =
+        std::to_string(helper_value_aware_register_recall_cells[helper.label]);
+    helper.details["valueAwareRegisterStoreCells"] =
+        std::to_string(helper_value_aware_register_store_cells[helper.label]);
+    helper.details["valueAwareRegisterTrafficOccurrences"] =
+        std::to_string(helper_value_aware_register_traffic_occurrences[helper.label]);
+    if (const auto names = helper_value_aware_register_traffic_names.find(helper.label);
+        names != helper_value_aware_register_traffic_names.end()) {
+      helper.details["valueAwareRegisterTrafficNames"] =
+          join_strings(std::vector<std::string>(names->second.begin(), names->second.end()), ",");
+    }
+    if (const auto spills = helper_value_aware_register_traffic_spills.find(helper.label);
+        spills != helper_value_aware_register_traffic_spills.end()) {
+      helper.details["valueAwareRegisterTrafficBreakdown"] =
+          size_report_helper_spill_breakdown(spills->second);
+    }
+    const int selector_bound_cells = helper_selector_bound_register_traffic_cells[helper.label];
+    if (selector_bound_cells > 0) {
+      helper.details["selectorBoundRegisterTrafficCells"] =
+          std::to_string(selector_bound_cells);
+      helper.details["selectorBoundRegisterRecallCells"] =
+          std::to_string(helper_selector_bound_register_recall_cells[helper.label]);
+      helper.details["selectorBoundRegisterStoreCells"] =
+          std::to_string(helper_selector_bound_register_store_cells[helper.label]);
+      helper.details["selectorBoundRegisterTrafficOccurrences"] =
+          std::to_string(helper_selector_bound_register_traffic_occurrences[helper.label]);
+      helper.details["selectorBoundRegisterTrafficReason"] =
+          "register acts as an indirect memory selector inside the helper";
+      if (const auto names = helper_selector_bound_register_traffic_names.find(helper.label);
+          names != helper_selector_bound_register_traffic_names.end()) {
+        helper.details["selectorBoundRegisterTrafficNames"] =
+            join_strings(std::vector<std::string>(names->second.begin(), names->second.end()),
+                         ",");
+      }
+      if (const auto spills = helper_selector_bound_register_traffic_spills.find(helper.label);
+          spills != helper_selector_bound_register_traffic_spills.end()) {
+        helper.details["selectorBoundRegisterTrafficBreakdown"] =
+            size_report_helper_spill_breakdown(spills->second);
+      }
+    }
     helper.details["registerTrafficAction"] = "try-value-aware-stack-register-scheduling";
   }
 
@@ -46422,9 +46548,23 @@ SizeAttributionReport build_size_attribution_report(
   report.opportunities.reserve(rejected_candidates.size() + report.abi_blockers.size() +
                                report.helpers.size());
   for (const SizeHelperSummaryReport& helper : report.helpers) {
-    if (helper.register_traffic_cells <= 0)
+    const int value_aware_register_traffic_cells =
+        size_report_value_aware_register_traffic_cells(helper);
+    if (value_aware_register_traffic_cells <= 0)
       continue;
     std::map<std::string, std::string> details = helper.details;
+    details["registerTrafficCells"] = std::to_string(value_aware_register_traffic_cells);
+    if (details.contains("valueAwareRegisterRecallCells"))
+      details["registerRecallCells"] = details.at("valueAwareRegisterRecallCells");
+    if (details.contains("valueAwareRegisterStoreCells"))
+      details["registerStoreCells"] = details.at("valueAwareRegisterStoreCells");
+    if (details.contains("valueAwareRegisterTrafficOccurrences"))
+      details["registerTrafficOccurrences"] =
+          details.at("valueAwareRegisterTrafficOccurrences");
+    if (details.contains("valueAwareRegisterTrafficNames"))
+      details["registerTrafficNames"] = details.at("valueAwareRegisterTrafficNames");
+    if (details.contains("valueAwareRegisterTrafficBreakdown"))
+      details["registerTrafficBreakdown"] = details.at("valueAwareRegisterTrafficBreakdown");
     details["helperLabel"] = helper.label;
     details["helperTotalCells"] = std::to_string(helper.total_cells);
     details["helperBodyCells"] = std::to_string(helper.body_cells);
@@ -46435,7 +46575,7 @@ SizeAttributionReport build_size_attribution_report(
     details["candidateStepsStatus"] = "synthetic-upper-bound-not-compiled";
     details["sizeImpactStatus"] = "blocked-unmeasured";
     details["netSavingsStatus"] = "unproved-before-callsite-stack-proof";
-    details["measurementBasis"] = "summed-helper-local-recall-store-cells";
+    details["measurementBasis"] = "summed-value-aware-helper-local-recall-store-cells";
     details["proofStatus"] = "missing-callsite-stack-value-proof";
     details["requiredAction"] = "value-aware-stack-register-scheduling";
     details["schedulerScope"] = "helper-entry-and-callsite-stack-values";
@@ -46443,8 +46583,8 @@ SizeAttributionReport build_size_attribution_report(
         .site = "helper",
         .variant = "helper-register-traffic",
         .current_steps = current_steps,
-        .candidate_steps = current_steps - helper.register_traffic_cells,
-        .savings = helper.register_traffic_cells,
+        .candidate_steps = current_steps - value_aware_register_traffic_cells,
+        .savings = value_aware_register_traffic_cells,
         .reason = "helper-local register traffic requires value-aware stack/register scheduling "
                   "proof before it can be removed",
         .blocker_kind = "value-aware-stack-register-scheduler",

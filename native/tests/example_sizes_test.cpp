@@ -428,6 +428,36 @@ void example_sizes_match_typescript_baselines() {
                       std::string::npos,
               "tic-tac-toe-4x4 size attribution should rank helper-local register traffic as a "
               "gross value-aware scheduler opportunity");
+      const SizeHelperSummaryReport* mark_one_helper = find_size_helper(result, "mark_one");
+      require(mark_one_helper != nullptr &&
+                  mark_one_helper->details.contains("selectorBoundRegisterTrafficNames") &&
+                  mark_one_helper->details.at("selectorBoundRegisterTrafficNames") == "slot" &&
+                  mark_one_helper->details.contains("selectorBoundRegisterTrafficCells") &&
+                  mark_one_helper->details.at("selectorBoundRegisterTrafficCells") == "3" &&
+                  mark_one_helper->details.contains("valueAwareRegisterTrafficNames") &&
+                  mark_one_helper->details.at("valueAwareRegisterTrafficNames").find("slot") ==
+                      std::string::npos &&
+                  mark_one_helper->details.at("valueAwareRegisterTrafficNames").find("x") !=
+                      std::string::npos &&
+                  mark_one_helper->details.at("valueAwareRegisterTrafficNames").find("y") !=
+                      std::string::npos &&
+                  mark_one_helper->details.at("valueAwareRegisterTrafficNames")
+                          .find("best_score") != std::string::npos,
+              "tic-tac-toe-4x4 mark_one helper summary should split indirect-selector traffic "
+              "from value-aware scheduler traffic");
+      const SizeOpportunityReport* mark_one_register_traffic = find_size_opportunity_detail(
+          result, "helper-register-traffic", "helperLabel", "mark_one");
+      require(mark_one_register_traffic != nullptr &&
+                  mark_one_register_traffic->savings == 8 &&
+                  mark_one_register_traffic->details.contains("registerTrafficNames") &&
+                  mark_one_register_traffic->details.at("registerTrafficNames").find("slot") ==
+                      std::string::npos &&
+                  mark_one_register_traffic->details.contains(
+                      "selectorBoundRegisterTrafficNames") &&
+                  mark_one_register_traffic->details.at("selectorBoundRegisterTrafficNames") ==
+                      "slot",
+              "tic-tac-toe-4x4 value-aware scheduler opportunity should not count the indirect "
+              "selector as removable stack/register traffic");
       const SizeAbiBlockerReport* stack_helper_abi = find_size_abi_blocker(
           result, "stack-helper-abi", "cell_mask(x, y)");
       require(stack_helper_abi != nullptr && stack_helper_abi->line == 103 &&
