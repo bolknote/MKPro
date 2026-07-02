@@ -1,10 +1,9 @@
+#include <array>
 #include <chrono>
-#include <cstdlib>
-#include <functional>
+#include <exception>
 #include <iostream>
 #include <string>
-#include <utility>
-#include <vector>
+#include <string_view>
 
 namespace mkpro::tests {
 
@@ -171,321 +170,205 @@ void pre_shift_stack_lift_matches_typescript_contract();
 
 namespace {
 
-using TestFn = std::function<void()>;
+using TestFn = void (*)();
 
 struct TestCase {
-  std::string name;
+  std::string_view name;
   TestFn run;
 };
 
+template <typename Run> int run_named_test(std::string_view name, Run run) {
+  const auto started = std::chrono::steady_clock::now();
+  try {
+    run();
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - started);
+    std::cout << "[PASS] " << name << " (" << elapsed.count() << " ms)" << std::endl;
+    return 0;
+  } catch (const std::exception& error) {
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - started);
+    std::cerr << "[FAIL] " << name << " (" << elapsed.count() << " ms): " << error.what()
+              << std::endl;
+    return 1;
+  }
+}
+
+bool matches_selector(std::string_view test_name, std::string_view exact, std::string_view filter) {
+  if (!exact.empty() && test_name != exact) {
+    return false;
+  }
+  if (!filter.empty() && test_name.find(filter) == std::string_view::npos) {
+    return false;
+  }
+  return true;
+}
+
 } // namespace
 
+// clang-format off
+#define MKPRO_TEST(name) TestCase{#name, mkpro::tests::name}
+// clang-format on
+
 int main(int argc, char** argv) {
-  const std::vector<TestCase> tests = {
-      {"address_formula_solver_synthesizes_dispatch",
-       mkpro::tests::address_formula_solver_synthesizes_dispatch},
-      {"address_formula_solver_verifies_static_proof_obligations",
-       mkpro::tests::address_formula_solver_verifies_static_proof_obligations},
-      {"computed_dispatch_targets_survive_dead_code_elimination",
-       mkpro::tests::computed_dispatch_targets_survive_dead_code_elimination},
-      {"computed_dispatch_discovery_keeps_program_correct",
-       mkpro::tests::computed_dispatch_discovery_keeps_program_correct},
-      {"guarded_computed_dispatch_default_discovery_keeps_program_correct",
-       mkpro::tests::guarded_computed_dispatch_default_discovery_keeps_program_correct},
-      {"optimizer_analysis_reports_sign_pack_and_address_formula_opportunities",
-       mkpro::tests::optimizer_analysis_reports_sign_pack_and_address_formula_opportunities},
-      {"optimizer_analysis_reports_decimal_and_multi_sign_pack_opportunities",
-       mkpro::tests::optimizer_analysis_reports_decimal_and_multi_sign_pack_opportunities},
-      {"state_packing_rewrite_options_affect_lowering",
-       mkpro::tests::state_packing_rewrite_options_affect_lowering},
-      {"optimizer_static_proof_gate_rejects_unproved_dangerous_candidates",
-       mkpro::tests::optimizer_static_proof_gate_rejects_unproved_dangerous_candidates},
-      {"optimizer_translation_unit_stays_emulator_free",
-       mkpro::tests::optimizer_translation_unit_stays_emulator_free},
-      {"arithmetic_if_matches_typescript_contract",
-       mkpro::tests::arithmetic_if_matches_typescript_contract},
-      {"bit_mask_quotient_reuse_matches_typescript_contract",
-       mkpro::tests::bit_mask_quotient_reuse_matches_typescript_contract},
-      {"board_width_macros_matches_typescript_contract",
-       mkpro::tests::board_width_macros_matches_typescript_contract},
-      {"branch_target_x_reuse_matches_typescript_contract",
-       mkpro::tests::branch_target_x_reuse_matches_typescript_contract},
-      {"cfg_matches_typescript_contract", mkpro::tests::cfg_matches_typescript_contract},
-      {"compiler_coord_list_lowering_matches_typescript_contract",
-       mkpro::tests::compiler_coord_list_lowering_matches_typescript_contract},
-      {"compiler_display_lowering_matches_typescript_contract",
-       mkpro::tests::compiler_display_lowering_matches_typescript_contract},
-      {"compiler_lowers_initial_v2_subset", mkpro::tests::compiler_lowers_initial_v2_subset},
-      {"counted_loop_unroll_matches_typescript_contract",
-       mkpro::tests::counted_loop_unroll_matches_typescript_contract},
-      {"constant_folding_matches_typescript_contract",
-       mkpro::tests::constant_folding_matches_typescript_contract},
-      {"cse_display_block_matches_typescript_contract",
-       mkpro::tests::cse_display_block_matches_typescript_contract},
-      {"dead_code_after_halt_matches_typescript_contract",
-       mkpro::tests::dead_code_after_halt_matches_typescript_contract},
-      {"dead_proc_elimination_matches_typescript_contract",
-       mkpro::tests::dead_proc_elimination_matches_typescript_contract},
-      {"dead_store_before_commutative_matches_typescript_contract",
-       mkpro::tests::dead_store_before_commutative_matches_typescript_contract},
-      {"dead_store_elimination_matches_typescript_contract",
-       mkpro::tests::dead_store_elimination_matches_typescript_contract},
-      {"display_byte_helpers_match_typescript_contract",
-       mkpro::tests::display_byte_helpers_match_typescript_contract},
-      {"display_lowering_helpers_match_typescript_contract",
-       mkpro::tests::display_lowering_helpers_match_typescript_contract},
-      {"duplicate_failure_tail_matches_typescript_contract",
-       mkpro::tests::duplicate_failure_tail_matches_typescript_contract},
-      {"emitter_matches_initial_typescript_contract",
-       mkpro::tests::emitter_matches_initial_typescript_contract},
-      {"exact_decimal_arithmetic_matches_typescript_contract",
-       mkpro::tests::exact_decimal_arithmetic_matches_typescript_contract},
-      {"emulator_bitmask_facts_match_typescript_contract",
-       mkpro::tests::emulator_bitmask_facts_match_typescript_contract},
-      {"emulator_constants_dual_use_matches_typescript_contract",
-       mkpro::tests::emulator_constants_dual_use_matches_typescript_contract},
-      {"emulator_domain_error_guard_matches_typescript_contract",
-       mkpro::tests::emulator_domain_error_guard_matches_typescript_contract},
-      {"emulator_display_byte_facts_match_typescript_contract",
-       mkpro::tests::emulator_display_byte_facts_match_typescript_contract},
-      {"emulator_fractional_r0_matches_typescript_contract",
-       mkpro::tests::emulator_fractional_r0_matches_typescript_contract},
-      {"emulator_hex_arithmetic_facts_match_typescript_contract",
-       mkpro::tests::emulator_hex_arithmetic_facts_match_typescript_contract},
-      {"emulator_function_equivalence_matches_typescript_contract",
-       mkpro::tests::emulator_function_equivalence_matches_typescript_contract},
-      {"emulator_fl_counter_facts_match_typescript_contract",
-       mkpro::tests::emulator_fl_counter_facts_match_typescript_contract},
-      {"emulator_if_chain_dispatch_matches_typescript_contract",
-       mkpro::tests::emulator_if_chain_dispatch_matches_typescript_contract},
-      {"emulator_indirect_flow_equivalence_matches_typescript_contract",
-       mkpro::tests::emulator_indirect_flow_equivalence_matches_typescript_contract},
-      {"emulator_indirect_incdec_facts_match_typescript_contract",
-       mkpro::tests::emulator_indirect_incdec_facts_match_typescript_contract},
-      {"emulator_int_frac_shared_tail_matches_typescript_contract",
-       mkpro::tests::emulator_int_frac_shared_tail_matches_typescript_contract},
-      {"emulator_interprocedural_equivalence_matches_typescript_contract",
-       mkpro::tests::emulator_interprocedural_equivalence_matches_typescript_contract},
-      {"emulator_log_selector_premise_matches_typescript_contract",
-       mkpro::tests::emulator_log_selector_premise_matches_typescript_contract},
-      {"emulator_mk61_execution_matches_typescript_contract",
-       mkpro::tests::emulator_mk61_execution_matches_typescript_contract},
-      {"emulator_near_any_helper_matches_typescript_contract",
-       mkpro::tests::emulator_near_any_helper_matches_typescript_contract},
-      {"emulator_number_entry_concat_matches_typescript_contract",
-       mkpro::tests::emulator_number_entry_concat_matches_typescript_contract},
-      {"emulator_packed_line_family_pow10_semantics_match_generic_lowering",
-       mkpro::tests::emulator_packed_line_family_pow10_semantics_match_generic_lowering},
-      {"emulator_packed_position_facts_match_typescript_contract",
-       mkpro::tests::emulator_packed_position_facts_match_typescript_contract},
-      {"emulator_recall_side_effects_match_typescript_contract",
-       mkpro::tests::emulator_recall_side_effects_match_typescript_contract},
-      {"emulator_regression_opcode_and_stop_flow_matches_typescript_contract",
-       mkpro::tests::emulator_regression_opcode_and_stop_flow_matches_typescript_contract},
-      {"emulator_regression_basic_scenario_matches_typescript_contract",
-       mkpro::tests::emulator_regression_basic_scenario_matches_typescript_contract},
-      {"emulator_regression_boot_scenarios_match_typescript_contract",
-       mkpro::tests::emulator_regression_boot_scenarios_match_typescript_contract},
-      {"emulator_regression_human_paths_match_typescript_contract",
-       mkpro::tests::emulator_regression_human_paths_match_typescript_contract},
-      {"emulator_regression_tiny_game_drain_path_matches_typescript_contract",
-       mkpro::tests::emulator_regression_tiny_game_drain_path_matches_typescript_contract},
-      {"emulator_regression_stack_stop_risk_matches_typescript_contract",
-       mkpro::tests::emulator_regression_stack_stop_risk_matches_typescript_contract},
-      {"emulator_regression_cos_stack_stop_matches_typescript_contract",
-       mkpro::tests::emulator_regression_cos_stack_stop_matches_typescript_contract},
-      {"emulator_regression_resource_underflow_matches_typescript_contract",
-       mkpro::tests::emulator_regression_resource_underflow_matches_typescript_contract},
-      {"emulator_regression_wumpus_setup_matches_typescript_contract",
-       mkpro::tests::emulator_regression_wumpus_setup_matches_typescript_contract},
-      {"emulator_regression_wumpus_arrow_exhaustion_matches_typescript_contract",
-       mkpro::tests::emulator_regression_wumpus_arrow_exhaustion_matches_typescript_contract},
-      {"emulator_rom_tables_match_typescript_contract",
-       mkpro::tests::emulator_rom_tables_match_typescript_contract},
-      {"emulator_stack_dup_equivalence_matches_typescript_contract",
-       mkpro::tests::emulator_stack_dup_equivalence_matches_typescript_contract},
-      {"emulator_stack_resident_equivalence_matches_typescript_contract",
-       mkpro::tests::emulator_stack_resident_equivalence_matches_typescript_contract},
-      {"emulator_super_dark_matches_typescript_contract",
-       mkpro::tests::emulator_super_dark_matches_typescript_contract},
-      {"emulator_vo_return_matches_typescript_contract",
-       mkpro::tests::emulator_vo_return_matches_typescript_contract},
-      {"emulator_vp_splice_equivalence_matches_typescript_contract",
-       mkpro::tests::emulator_vp_splice_equivalence_matches_typescript_contract},
-      {"emulator_x2_dead_restore_matches_typescript_contract",
-       mkpro::tests::emulator_x2_dead_restore_matches_typescript_contract},
-      {"emulator_x2_restore_context_matches_typescript_contract",
-       mkpro::tests::emulator_x2_restore_context_matches_typescript_contract},
-      {"emulator_z_stack_derived_tail_matches_typescript_contract",
-       mkpro::tests::emulator_z_stack_derived_tail_matches_typescript_contract},
-      {"example_sizes_match_typescript_baselines",
-       mkpro::tests::example_sizes_match_typescript_baselines},
-      {"compiler_examples_match_typescript_contract",
-       mkpro::tests::compiler_examples_match_typescript_contract},
-      {"supported_examples_match_native_oracles",
-       mkpro::tests::supported_examples_match_native_oracles},
-      {"expression_helpers_match_typescript_contract",
-       mkpro::tests::expression_helpers_match_typescript_contract},
-      {"expression_lowering_helpers_match_typescript_contract",
-       mkpro::tests::expression_lowering_helpers_match_typescript_contract},
-      {"flow_structure_passes_match_typescript_contract",
-       mkpro::tests::flow_structure_passes_match_typescript_contract},
-      {"flow_x_reuse_matches_typescript_contract",
-       mkpro::tests::flow_x_reuse_matches_typescript_contract},
-      {"formal_address_matches_typescript_contract",
-       mkpro::tests::formal_address_matches_typescript_contract},
-      {"format_primitives_match_typescript_contract",
-       mkpro::tests::format_primitives_match_typescript_contract},
-      {"golden_listing_contract_matches_typescript_contract",
-       mkpro::tests::golden_listing_contract_matches_typescript_contract},
-      {"functions_match_typescript_contract", mkpro::tests::functions_match_typescript_contract},
-      {"indirect_flow_target_marker_requires_strict_boundary",
-       mkpro::tests::indirect_flow_target_marker_requires_strict_boundary},
-      {"indirect_addressing_matches_typescript_contract",
-       mkpro::tests::indirect_addressing_matches_typescript_contract},
-      {"indirect_selector_integer_part_matches_typescript_contract",
-       mkpro::tests::indirect_selector_integer_part_matches_typescript_contract},
-      {"int128_fallback_matches_builtin", mkpro::tests::int128_fallback_matches_builtin},
-      {"inline_floor_packed_row_matches_typescript_contract",
-       mkpro::tests::inline_floor_packed_row_matches_typescript_contract},
-      {"ir_round_trip_matches_typescript_contract",
-       mkpro::tests::ir_round_trip_matches_typescript_contract},
-      {"last_x_reuse_matches_typescript_contract",
-       mkpro::tests::last_x_reuse_matches_typescript_contract},
-      {"liveness_analysis_matches_typescript_contract",
-       mkpro::tests::liveness_analysis_matches_typescript_contract},
-      {"lowering_helpers_match_typescript_contract",
-       mkpro::tests::lowering_helpers_match_typescript_contract},
-      {"machine_profile_matches_typescript_contract",
-       mkpro::tests::machine_profile_matches_typescript_contract},
-      {"match_blocks_match_typescript_contract",
-       mkpro::tests::match_blocks_match_typescript_contract},
-      {"maxmin_zero_lint_matches_typescript_contract",
-       mkpro::tests::maxmin_zero_lint_matches_typescript_contract},
-      {"mk61_trig_matches_emulator_contract",
-       mkpro::tests::mk61_trig_matches_emulator_contract},
-      {"mk61_trig_calculate_matches_rom_values",
-       mkpro::tests::mk61_trig_calculate_matches_rom_values},
-      {"opcode_catalog_matches_typescript_contract",
-       mkpro::tests::opcode_catalog_matches_typescript_contract},
-      {"oracle_index_loads_committed_artifacts",
-       mkpro::tests::oracle_index_loads_committed_artifacts},
-      {"packed_counter_stripes_match_typescript_contract",
-       mkpro::tests::packed_counter_stripes_match_typescript_contract},
-      {"sentinel_decimal_pack_matches_strategy_contract",
-       mkpro::tests::sentinel_decimal_pack_matches_strategy_contract},
-      {"packed_display_helpers_match_typescript_contract",
-       mkpro::tests::packed_display_helpers_match_typescript_contract},
-      {"packed_score_helpers_match_typescript_contract",
-       mkpro::tests::packed_score_helpers_match_typescript_contract},
-      {"parser_matches_initial_v2_source_contract",
-       mkpro::tests::parser_matches_initial_v2_source_contract},
-      {"expression_parser_matches_initial_contract",
-       mkpro::tests::expression_parser_matches_initial_contract},
-      {"parser_accepts_all_example_sources", mkpro::tests::parser_accepts_all_example_sources},
-      {"pass_pipeline_matches_initial_typescript_contract",
-       mkpro::tests::pass_pipeline_matches_initial_typescript_contract},
-      {"post_layout_indirect_flow_matches_typescript_contract",
-       mkpro::tests::post_layout_indirect_flow_matches_typescript_contract},
-      {"r0_fractional_sentinel_matches_typescript_contract",
-       mkpro::tests::r0_fractional_sentinel_matches_typescript_contract},
-      {"random_cell_helpers_match_typescript_contract",
-       mkpro::tests::random_cell_helpers_match_typescript_contract},
-      {"recall_removal_engine_matches_initial_typescript_contract",
-       mkpro::tests::recall_removal_engine_matches_initial_typescript_contract},
-      {"residual_elseif_matches_typescript_contract",
-       mkpro::tests::residual_elseif_matches_typescript_contract},
-      {"residual_temp_matches_typescript_contract",
-       mkpro::tests::residual_temp_matches_typescript_contract},
-      {"return_stack_script_matches_mk61_strategy_contract",
-       mkpro::tests::return_stack_script_matches_mk61_strategy_contract},
-      {"register_allocator_matches_typescript_contract",
-       mkpro::tests::register_allocator_matches_typescript_contract},
-      {"register_coalesce_matches_typescript_contract",
-       mkpro::tests::register_coalesce_matches_typescript_contract},
-      {"rules_match_typescript_contract", mkpro::tests::rules_match_typescript_contract},
-      {"safe_minmax_matches_typescript_contract",
-       mkpro::tests::safe_minmax_matches_typescript_contract},
-      {"alternating_sign_toggle_arg_matches_literal_semantics",
-       mkpro::tests::alternating_sign_toggle_arg_matches_literal_semantics},
-      {"callee_hole_helper_matches_direct_call_semantics",
-       mkpro::tests::callee_hole_helper_matches_direct_call_semantics},
-      {"canonicalize_packed_line_bank_walk_rewrites_explicit_slot_leaves",
-       mkpro::tests::canonicalize_packed_line_bank_walk_rewrites_explicit_slot_leaves},
-      {"segmented_bitplanes_match_typescript_contract",
-       mkpro::tests::segmented_bitplanes_match_typescript_contract},
-      {"setup_program_matches_typescript_contract",
-       mkpro::tests::setup_program_matches_typescript_contract},
-      {"setup_only_counted_loop_matches_typescript_contract",
-       mkpro::tests::setup_only_counted_loop_matches_typescript_contract},
-      {"store_recall_peephole_matches_typescript_contract",
-       mkpro::tests::store_recall_peephole_matches_typescript_contract},
-      {"show_optimization_strategies_match_typescript_contract",
-       mkpro::tests::show_optimization_strategies_match_typescript_contract},
-      {"setup_formatting_matches_typescript_contract",
-       mkpro::tests::setup_formatting_matches_typescript_contract},
-      {"show_read_guarded_transfer_matches_typescript_contract",
-       mkpro::tests::show_read_guarded_transfer_matches_typescript_contract},
-      {"show_sequence_helpers_match_typescript_contract",
-       mkpro::tests::show_sequence_helpers_match_typescript_contract},
-      {"small_set_condition_lowering_matches_typescript_contract",
-       mkpro::tests::small_set_condition_lowering_matches_typescript_contract},
-      {"spatial_helpers_match_typescript_contract",
-       mkpro::tests::spatial_helpers_match_typescript_contract},
-      {"state_banks_match_typescript_contract",
-       mkpro::tests::state_banks_match_typescript_contract},
-      {"state_init_counted_loop_matches_typescript_contract",
-       mkpro::tests::state_init_counted_loop_matches_typescript_contract},
-      {"stack_residency_matches_typescript_contract",
-       mkpro::tests::stack_residency_matches_typescript_contract},
-      {"strict_allocation_matches_typescript_contract",
-       mkpro::tests::strict_allocation_matches_typescript_contract},
-      {"style_lints_matches_typescript_contract",
-       mkpro::tests::style_lints_matches_typescript_contract},
-      {"super_dark_layout_matches_typescript_contract",
-       mkpro::tests::super_dark_layout_matches_typescript_contract},
-      {"trig_fractional_pack_matches_strategy_contract",
-       mkpro::tests::trig_fractional_pack_matches_strategy_contract},
-      {"v2_const_matches_typescript_contract", mkpro::tests::v2_const_matches_typescript_contract},
-      {"x2_register_dataflow_matches_typescript_contract",
-       mkpro::tests::x2_register_dataflow_matches_typescript_contract},
-      {"x2_shape_data_model_matches_typescript_contract",
-       mkpro::tests::x2_shape_data_model_matches_typescript_contract},
-      {"x2_display_cluster_matches_typescript_contract",
-       mkpro::tests::x2_display_cluster_matches_typescript_contract},
-      {"x2_structural_unary_matches_typescript_contract",
-       mkpro::tests::x2_structural_unary_matches_typescript_contract},
-      {"x2_structural_bitwise_matches_typescript_contract",
-       mkpro::tests::x2_structural_bitwise_matches_typescript_contract},
-      {"x2_structural_hex_binary_matches_typescript_contract",
-       mkpro::tests::x2_structural_hex_binary_matches_typescript_contract},
-      {"x2_stable_expression_matches_typescript_contract",
-       mkpro::tests::x2_stable_expression_matches_typescript_contract},
-      {"x2_state_builders_matches_typescript_contract",
-       mkpro::tests::x2_state_builders_matches_typescript_contract},
-      {"x2_vp_splice_matches_typescript_contract",
-       mkpro::tests::x2_vp_splice_matches_typescript_contract},
-      {"x2_vp_entry_matches_typescript_contract",
-       mkpro::tests::x2_vp_entry_matches_typescript_contract},
-      {"x2_transfer_plain_matches_typescript_contract",
-       mkpro::tests::x2_transfer_plain_matches_typescript_contract},
-      {"x2_value_dataflow_matches_typescript_contract",
-       mkpro::tests::x2_value_dataflow_matches_typescript_contract},
-      {"x2_join_matches_typescript_contract",
-       mkpro::tests::x2_join_matches_typescript_contract},
-      {"x2_noop_restore_matches_typescript_contract",
-       mkpro::tests::x2_noop_restore_matches_typescript_contract},
-      {"x2_hidden_temp_restore_matches_typescript_contract",
-       mkpro::tests::x2_hidden_temp_restore_matches_typescript_contract},
-      {"x2_literal_restore_matches_typescript_contract",
-       mkpro::tests::x2_literal_restore_matches_typescript_contract},
-      {"vp_x2_peephole_matches_typescript_contract",
-       mkpro::tests::vp_x2_peephole_matches_typescript_contract},
-      {"vp_splice_matches_typescript_contract",
-       mkpro::tests::vp_splice_matches_typescript_contract},
-      {"pre_shift_stack_lift_matches_typescript_contract",
-       mkpro::tests::pre_shift_stack_lift_matches_typescript_contract},
+  constexpr std::array tests = {
+      MKPRO_TEST(address_formula_solver_synthesizes_dispatch),
+      MKPRO_TEST(address_formula_solver_verifies_static_proof_obligations),
+      MKPRO_TEST(computed_dispatch_targets_survive_dead_code_elimination),
+      MKPRO_TEST(computed_dispatch_discovery_keeps_program_correct),
+      MKPRO_TEST(guarded_computed_dispatch_default_discovery_keeps_program_correct),
+      MKPRO_TEST(optimizer_analysis_reports_sign_pack_and_address_formula_opportunities),
+      MKPRO_TEST(optimizer_analysis_reports_decimal_and_multi_sign_pack_opportunities),
+      MKPRO_TEST(state_packing_rewrite_options_affect_lowering),
+      MKPRO_TEST(optimizer_static_proof_gate_rejects_unproved_dangerous_candidates),
+      MKPRO_TEST(optimizer_translation_unit_stays_emulator_free),
+      MKPRO_TEST(arithmetic_if_matches_typescript_contract),
+      MKPRO_TEST(bit_mask_quotient_reuse_matches_typescript_contract),
+      MKPRO_TEST(board_width_macros_matches_typescript_contract),
+      MKPRO_TEST(branch_target_x_reuse_matches_typescript_contract),
+      MKPRO_TEST(cfg_matches_typescript_contract),
+      MKPRO_TEST(compiler_coord_list_lowering_matches_typescript_contract),
+      MKPRO_TEST(compiler_display_lowering_matches_typescript_contract),
+      MKPRO_TEST(compiler_lowers_initial_v2_subset),
+      MKPRO_TEST(counted_loop_unroll_matches_typescript_contract),
+      MKPRO_TEST(constant_folding_matches_typescript_contract),
+      MKPRO_TEST(cse_display_block_matches_typescript_contract),
+      MKPRO_TEST(dead_code_after_halt_matches_typescript_contract),
+      MKPRO_TEST(dead_proc_elimination_matches_typescript_contract),
+      MKPRO_TEST(dead_store_before_commutative_matches_typescript_contract),
+      MKPRO_TEST(dead_store_elimination_matches_typescript_contract),
+      MKPRO_TEST(display_byte_helpers_match_typescript_contract),
+      MKPRO_TEST(display_lowering_helpers_match_typescript_contract),
+      MKPRO_TEST(duplicate_failure_tail_matches_typescript_contract),
+      MKPRO_TEST(emitter_matches_initial_typescript_contract),
+      MKPRO_TEST(exact_decimal_arithmetic_matches_typescript_contract),
+      MKPRO_TEST(emulator_bitmask_facts_match_typescript_contract),
+      MKPRO_TEST(emulator_constants_dual_use_matches_typescript_contract),
+      MKPRO_TEST(emulator_domain_error_guard_matches_typescript_contract),
+      MKPRO_TEST(emulator_display_byte_facts_match_typescript_contract),
+      MKPRO_TEST(emulator_fractional_r0_matches_typescript_contract),
+      MKPRO_TEST(emulator_hex_arithmetic_facts_match_typescript_contract),
+      MKPRO_TEST(emulator_function_equivalence_matches_typescript_contract),
+      MKPRO_TEST(emulator_fl_counter_facts_match_typescript_contract),
+      MKPRO_TEST(emulator_if_chain_dispatch_matches_typescript_contract),
+      MKPRO_TEST(emulator_indirect_flow_equivalence_matches_typescript_contract),
+      MKPRO_TEST(emulator_indirect_incdec_facts_match_typescript_contract),
+      MKPRO_TEST(emulator_int_frac_shared_tail_matches_typescript_contract),
+      MKPRO_TEST(emulator_interprocedural_equivalence_matches_typescript_contract),
+      MKPRO_TEST(emulator_log_selector_premise_matches_typescript_contract),
+      MKPRO_TEST(emulator_mk61_execution_matches_typescript_contract),
+      MKPRO_TEST(emulator_near_any_helper_matches_typescript_contract),
+      MKPRO_TEST(emulator_number_entry_concat_matches_typescript_contract),
+      MKPRO_TEST(emulator_packed_line_family_pow10_semantics_match_generic_lowering),
+      MKPRO_TEST(emulator_packed_position_facts_match_typescript_contract),
+      MKPRO_TEST(emulator_recall_side_effects_match_typescript_contract),
+      MKPRO_TEST(emulator_regression_opcode_and_stop_flow_matches_typescript_contract),
+      MKPRO_TEST(emulator_regression_basic_scenario_matches_typescript_contract),
+      MKPRO_TEST(emulator_regression_boot_scenarios_match_typescript_contract),
+      MKPRO_TEST(emulator_regression_human_paths_match_typescript_contract),
+      MKPRO_TEST(emulator_regression_tiny_game_drain_path_matches_typescript_contract),
+      MKPRO_TEST(emulator_regression_stack_stop_risk_matches_typescript_contract),
+      MKPRO_TEST(emulator_regression_cos_stack_stop_matches_typescript_contract),
+      MKPRO_TEST(emulator_regression_resource_underflow_matches_typescript_contract),
+      MKPRO_TEST(emulator_regression_wumpus_setup_matches_typescript_contract),
+      MKPRO_TEST(emulator_regression_wumpus_arrow_exhaustion_matches_typescript_contract),
+      MKPRO_TEST(emulator_rom_tables_match_typescript_contract),
+      MKPRO_TEST(emulator_stack_dup_equivalence_matches_typescript_contract),
+      MKPRO_TEST(emulator_stack_resident_equivalence_matches_typescript_contract),
+      MKPRO_TEST(emulator_super_dark_matches_typescript_contract),
+      MKPRO_TEST(emulator_vo_return_matches_typescript_contract),
+      MKPRO_TEST(emulator_vp_splice_equivalence_matches_typescript_contract),
+      MKPRO_TEST(emulator_x2_dead_restore_matches_typescript_contract),
+      MKPRO_TEST(emulator_x2_restore_context_matches_typescript_contract),
+      MKPRO_TEST(emulator_z_stack_derived_tail_matches_typescript_contract),
+      MKPRO_TEST(example_sizes_match_typescript_baselines),
+      MKPRO_TEST(compiler_examples_match_typescript_contract),
+      MKPRO_TEST(supported_examples_match_native_oracles),
+      MKPRO_TEST(expression_helpers_match_typescript_contract),
+      MKPRO_TEST(expression_lowering_helpers_match_typescript_contract),
+      MKPRO_TEST(flow_structure_passes_match_typescript_contract),
+      MKPRO_TEST(flow_x_reuse_matches_typescript_contract),
+      MKPRO_TEST(formal_address_matches_typescript_contract),
+      MKPRO_TEST(format_primitives_match_typescript_contract),
+      MKPRO_TEST(golden_listing_contract_matches_typescript_contract),
+      MKPRO_TEST(functions_match_typescript_contract),
+      MKPRO_TEST(indirect_flow_target_marker_requires_strict_boundary),
+      MKPRO_TEST(indirect_addressing_matches_typescript_contract),
+      MKPRO_TEST(indirect_selector_integer_part_matches_typescript_contract),
+      MKPRO_TEST(int128_fallback_matches_builtin),
+      MKPRO_TEST(inline_floor_packed_row_matches_typescript_contract),
+      MKPRO_TEST(ir_round_trip_matches_typescript_contract),
+      MKPRO_TEST(last_x_reuse_matches_typescript_contract),
+      MKPRO_TEST(liveness_analysis_matches_typescript_contract),
+      MKPRO_TEST(lowering_helpers_match_typescript_contract),
+      MKPRO_TEST(machine_profile_matches_typescript_contract),
+      MKPRO_TEST(match_blocks_match_typescript_contract),
+      MKPRO_TEST(maxmin_zero_lint_matches_typescript_contract),
+      MKPRO_TEST(mk61_trig_matches_emulator_contract),
+      MKPRO_TEST(mk61_trig_calculate_matches_rom_values),
+      MKPRO_TEST(opcode_catalog_matches_typescript_contract),
+      MKPRO_TEST(oracle_index_loads_committed_artifacts),
+      MKPRO_TEST(packed_counter_stripes_match_typescript_contract),
+      MKPRO_TEST(sentinel_decimal_pack_matches_strategy_contract),
+      MKPRO_TEST(packed_display_helpers_match_typescript_contract),
+      MKPRO_TEST(packed_score_helpers_match_typescript_contract),
+      MKPRO_TEST(parser_matches_initial_v2_source_contract),
+      MKPRO_TEST(expression_parser_matches_initial_contract),
+      MKPRO_TEST(parser_accepts_all_example_sources),
+      MKPRO_TEST(pass_pipeline_matches_initial_typescript_contract),
+      MKPRO_TEST(post_layout_indirect_flow_matches_typescript_contract),
+      MKPRO_TEST(r0_fractional_sentinel_matches_typescript_contract),
+      MKPRO_TEST(random_cell_helpers_match_typescript_contract),
+      MKPRO_TEST(recall_removal_engine_matches_initial_typescript_contract),
+      MKPRO_TEST(residual_elseif_matches_typescript_contract),
+      MKPRO_TEST(residual_temp_matches_typescript_contract),
+      MKPRO_TEST(return_stack_script_matches_mk61_strategy_contract),
+      MKPRO_TEST(register_allocator_matches_typescript_contract),
+      MKPRO_TEST(register_coalesce_matches_typescript_contract),
+      MKPRO_TEST(rules_match_typescript_contract),
+      MKPRO_TEST(safe_minmax_matches_typescript_contract),
+      MKPRO_TEST(alternating_sign_toggle_arg_matches_literal_semantics),
+      MKPRO_TEST(callee_hole_helper_matches_direct_call_semantics),
+      MKPRO_TEST(canonicalize_packed_line_bank_walk_rewrites_explicit_slot_leaves),
+      MKPRO_TEST(segmented_bitplanes_match_typescript_contract),
+      MKPRO_TEST(setup_program_matches_typescript_contract),
+      MKPRO_TEST(setup_only_counted_loop_matches_typescript_contract),
+      MKPRO_TEST(store_recall_peephole_matches_typescript_contract),
+      MKPRO_TEST(show_optimization_strategies_match_typescript_contract),
+      MKPRO_TEST(setup_formatting_matches_typescript_contract),
+      MKPRO_TEST(show_read_guarded_transfer_matches_typescript_contract),
+      MKPRO_TEST(show_sequence_helpers_match_typescript_contract),
+      MKPRO_TEST(small_set_condition_lowering_matches_typescript_contract),
+      MKPRO_TEST(spatial_helpers_match_typescript_contract),
+      MKPRO_TEST(state_banks_match_typescript_contract),
+      MKPRO_TEST(state_init_counted_loop_matches_typescript_contract),
+      MKPRO_TEST(stack_residency_matches_typescript_contract),
+      MKPRO_TEST(strict_allocation_matches_typescript_contract),
+      MKPRO_TEST(style_lints_matches_typescript_contract),
+      MKPRO_TEST(super_dark_layout_matches_typescript_contract),
+      MKPRO_TEST(trig_fractional_pack_matches_strategy_contract),
+      MKPRO_TEST(v2_const_matches_typescript_contract),
+      MKPRO_TEST(x2_register_dataflow_matches_typescript_contract),
+      MKPRO_TEST(x2_shape_data_model_matches_typescript_contract),
+      MKPRO_TEST(x2_display_cluster_matches_typescript_contract),
+      MKPRO_TEST(x2_structural_unary_matches_typescript_contract),
+      MKPRO_TEST(x2_structural_bitwise_matches_typescript_contract),
+      MKPRO_TEST(x2_structural_hex_binary_matches_typescript_contract),
+      MKPRO_TEST(x2_stable_expression_matches_typescript_contract),
+      MKPRO_TEST(x2_state_builders_matches_typescript_contract),
+      MKPRO_TEST(x2_vp_splice_matches_typescript_contract),
+      MKPRO_TEST(x2_vp_entry_matches_typescript_contract),
+      MKPRO_TEST(x2_transfer_plain_matches_typescript_contract),
+      MKPRO_TEST(x2_value_dataflow_matches_typescript_contract),
+      MKPRO_TEST(x2_join_matches_typescript_contract),
+      MKPRO_TEST(x2_noop_restore_matches_typescript_contract),
+      MKPRO_TEST(x2_hidden_temp_restore_matches_typescript_contract),
+      MKPRO_TEST(x2_literal_restore_matches_typescript_contract),
+      MKPRO_TEST(vp_x2_peephole_matches_typescript_contract),
+      MKPRO_TEST(vp_splice_matches_typescript_contract),
+      MKPRO_TEST(pre_shift_stack_lift_matches_typescript_contract),
   };
+#undef MKPRO_TEST
 
   std::string filter;
   std::string exact;
@@ -530,39 +413,27 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  const int custom_modes = (load_example.empty() ? 0 : 1) +
-                           (pending_optimizer_source.empty() ? 0 : 1);
+  const int custom_modes =
+      (load_example.empty() ? 0 : 1) + (pending_optimizer_source.empty() ? 0 : 1);
   if (custom_modes > 0) {
     if (custom_modes > 1 || list || !filter.empty() || !exact.empty()) {
-      std::cerr << "Custom native test modes cannot be combined with other selectors"
-                << std::endl;
+      std::cerr << "Custom native test modes cannot be combined with other selectors" << std::endl;
       return 2;
     }
 
-    const auto started = std::chrono::steady_clock::now();
     const std::string name =
         !load_example.empty()
             ? "emulator_regression_example_loads:" + load_example
             : "emulator_regression_pending_optimizer_source_stays_before_loading:" +
                   pending_optimizer_source;
-    try {
+    return run_named_test(name, [&]() {
       if (!load_example.empty()) {
         mkpro::tests::emulator_regression_example_loads(load_example);
       } else {
         mkpro::tests::emulator_regression_pending_optimizer_source_stays_before_loading(
             pending_optimizer_source);
       }
-      const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::steady_clock::now() - started);
-      std::cout << "[PASS] " << name << " (" << elapsed.count() << " ms)" << std::endl;
-      return 0;
-    } catch (const std::exception& error) {
-      const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::steady_clock::now() - started);
-      std::cerr << "[FAIL] " << name << " (" << elapsed.count() << " ms): "
-                << error.what() << std::endl;
-      return 1;
-    }
+    });
   }
 
   if (list) {
@@ -573,28 +444,14 @@ int main(int argc, char** argv) {
 
   int failed = 0;
   int selected = 0;
+  const std::string_view exact_name{exact.data(), exact.size()};
+  const std::string_view name_filter{filter.data(), filter.size()};
   for (const auto& test : tests) {
-    if (!exact.empty() && test.name != exact) {
-      continue;
-    }
-    if (!filter.empty() && test.name.find(filter) == std::string::npos) {
+    if (!matches_selector(test.name, exact_name, name_filter)) {
       continue;
     }
     ++selected;
-    const auto started = std::chrono::steady_clock::now();
-    try {
-      test.run();
-      const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::steady_clock::now() - started);
-      std::cout << "[PASS] " << test.name << " (" << elapsed.count() << " ms)"
-                << std::endl;
-    } catch (const std::exception& error) {
-      const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::steady_clock::now() - started);
-      ++failed;
-      std::cerr << "[FAIL] " << test.name << " (" << elapsed.count() << " ms): "
-                << error.what() << std::endl;
-    }
+    failed += run_named_test(test.name, test.run);
   }
 
   if (selected == 0) {
