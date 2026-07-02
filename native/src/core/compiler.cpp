@@ -45949,6 +45949,23 @@ int size_report_value_aware_register_traffic_cells(const SizeHelperSummaryReport
   }
 }
 
+std::optional<std::string> value_aware_scheduler_traffic_shape_action(
+    const std::map<std::string, std::string>& details) {
+  const auto shape_it = details.find("valueAwareSchedulerTrafficShape");
+  if (shape_it == details.end())
+    return std::nullopt;
+  const std::string& shape = shape_it->second;
+  if (shape == "stack-inputs-only")
+    return "schedule-stack-input-helper-values";
+  if (shape == "deferred-state-outputs-only")
+    return "defer-helper-state-output-stores";
+  if (shape == "stack-inputs-and-deferred-state-outputs")
+    return "split-stack-inputs-from-deferred-state-outputs";
+  if (shape == "mixed-state-traffic")
+    return "prove-mixed-helper-state-lifetimes";
+  return std::nullopt;
+}
+
 struct PackedScoreAccumulatorHelperUsage {
   int terms = 0;
   int groups = 0;
@@ -46632,6 +46649,10 @@ SizeAttributionReport build_size_attribution_report(
     details["proofStatus"] = "missing-callsite-stack-value-proof";
     details["requiredAction"] = "value-aware-stack-register-scheduling";
     details["schedulerScope"] = "helper-entry-and-callsite-stack-values";
+    if (const std::optional<std::string> traffic_shape_action =
+            value_aware_scheduler_traffic_shape_action(details)) {
+      details["trafficShapeAction"] = *traffic_shape_action;
+    }
     report.opportunities.push_back(SizeOpportunityReport{
         .site = "helper",
         .variant = "helper-register-traffic",
@@ -46835,6 +46856,10 @@ SizeAttributionReport build_size_attribution_report(
     if (const auto cost_it = opportunity.details.find("costModelAction");
         cost_it != opportunity.details.end()) {
       add_next_action(opportunity, "costModelAction", cost_it->second, index);
+    }
+    if (const auto traffic_shape_it = opportunity.details.find("trafficShapeAction");
+        traffic_shape_it != opportunity.details.end()) {
+      add_next_action(opportunity, "trafficShapeAction", traffic_shape_it->second, index);
     }
   }
   report.next_actions.reserve(next_action_summaries.size());

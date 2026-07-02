@@ -678,6 +678,33 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareSchedulerTrafficShape"),
               "tic-tac-toe-4x4 size attribution should rank value-aware stack/register "
               "scheduling as a next action when helper-local register traffic is visible");
+      const SizeNextActionSummaryReport* stack_input_scheduler_action = find_size_next_action(
+          result, "trafficShapeAction", "schedule-stack-input-helper-values");
+      require(stack_input_scheduler_action != nullptr &&
+                  stack_input_scheduler_action->opportunities >= 3 &&
+                  stack_input_scheduler_action->potential_savings >=
+                      candidate_score_zero->register_traffic_cells +
+                          cell_mask_helper->register_traffic_cells &&
+                  stack_input_scheduler_action->best_details.contains("helperLabel") &&
+                  stack_input_scheduler_action->best_details.at("helperLabel") ==
+                      "candidate_score zero-accumulator entry" &&
+                  stack_input_scheduler_action->best_details.contains(
+                      "valueAwareSchedulerTrafficShape") &&
+                  stack_input_scheduler_action->best_details.at(
+                      "valueAwareSchedulerTrafficShape") == "stack-inputs-only",
+              "tic-tac-toe-4x4 size attribution should separately rank stack-input-only helper "
+              "traffic for the value-aware scheduler");
+      const SizeNextActionSummaryReport* split_scheduler_action = find_size_next_action(
+          result, "trafficShapeAction", "split-stack-inputs-from-deferred-state-outputs");
+      require(split_scheduler_action != nullptr &&
+                  split_scheduler_action->opportunities >= 1 &&
+                  split_scheduler_action->best_details.contains("helperLabel") &&
+                  split_scheduler_action->best_details.at("helperLabel") ==
+                      "mark_lines_and_check" &&
+                  split_scheduler_action->best_details.contains("valueAwareStackInputNames") &&
+                  split_scheduler_action->best_details.contains("valueAwareStateOutputNames"),
+              "tic-tac-toe-4x4 size attribution should split mixed helper traffic into a "
+              "separate scheduler action");
     }
   }
 }
