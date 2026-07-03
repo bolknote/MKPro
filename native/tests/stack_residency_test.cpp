@@ -359,9 +359,9 @@ program StackHelperAbiAggregation {
                 blocker->details.contains("schedulerAction") &&
                 blocker->details.at("schedulerAction") == "prove-stack-aware-helper-call" &&
                 blocker->details.contains("estimatedStackEntryOverheadCells") &&
-                blocker->details.at("estimatedStackEntryOverheadCells") == "11" &&
+                blocker->details.at("estimatedStackEntryOverheadCells") == "12" &&
                 blocker->details.contains("estimatedNetSavings") &&
-                blocker->details.at("estimatedNetSavings") == "1" &&
+                blocker->details.at("estimatedNetSavings") == "0" &&
                 blocker->details.contains("estimatedBreakEvenCallSites") &&
                 blocker->details.at("estimatedBreakEvenCallSites") == "6" &&
                 blocker->details.contains("additionalCallSitesToBreakEven") &&
@@ -370,13 +370,14 @@ program StackHelperAbiAggregation {
                 blocker->details.contains("lastLine") &&
                 blocker->details.contains("costModelAction") &&
                 blocker->details.at("costModelAction") ==
-                    "implement-stack-argument-helper-entry",
-            "repeated stack helper ABI report should recognize break-even stack-entry sites");
+                    "find-more-stack-entry-call-sites-or-inline-helper",
+            "repeated stack helper ABI report should recognize measured break-even stack-entry "
+            "sites");
     const SizeOpportunityReport* opportunity = find_size_opportunity(result, "stack-helper-abi");
-    require(opportunity != nullptr && opportunity->savings == 1 &&
-                opportunity->candidate_steps == static_cast<int>(result.steps.size()) - 1 &&
+    require(opportunity != nullptr && opportunity->savings == 0 &&
+                opportunity->candidate_steps == static_cast<int>(result.steps.size()) &&
                 opportunity->details.contains("estimatedNetSavings") &&
-                opportunity->details.at("estimatedNetSavings") == "1" &&
+                opportunity->details.at("estimatedNetSavings") == "0" &&
                 opportunity->details.contains("correctnessStatus") &&
                 opportunity->details.at("correctnessStatus") ==
                     "requires-stack-argument-entry-or-materialization" &&
@@ -387,11 +388,12 @@ program StackHelperAbiAggregation {
                 opportunity->details.at("schedulerAction") == "prove-stack-aware-helper-call" &&
                 opportunity->details.contains("stackEntryCandidateCallSites") &&
                 opportunity->details.at("stackEntryCandidateCallSites") == "6",
-            "stack helper ABI opportunity should expose repeated sites as a measured size win");
+            "stack helper ABI opportunity should expose repeated sites as measured break-even");
     const SizeNextActionSummaryReport* cost_action = find_size_next_action(
         result, "costModelAction", "implement-stack-argument-helper-entry");
-    require(cost_action != nullptr && cost_action->potential_savings == 1,
-            "positive stack helper ABI estimate should rank implementation as a next action");
+    require(cost_action == nullptr,
+            "break-even stack helper ABI estimate should not rank implementation as a positive "
+            "next action");
 
     CompileOptions stack_entry_options;
     stack_entry_options.analysis = true;

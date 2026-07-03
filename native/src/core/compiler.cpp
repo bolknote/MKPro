@@ -47128,7 +47128,7 @@ estimated_stack_entry_helper_overhead_cells(const std::map<std::string, std::str
       // branch, and the surrounding shared straight-line helper layout does
       // not yet shrink with it. Keep the estimate aligned with measured codegen
       // so size attribution does not rank this as profitable prematurely.
-      return 11;
+      return 12;
     }
   } catch (const std::exception&) {
   }
