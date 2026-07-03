@@ -97,6 +97,9 @@ bool statement_writes_identifier(const V2Statement& statement, const std::string
 bool statements_read_identifier(const std::vector<V2Statement>& statements,
                                 const std::string& name);
 
+bool statements_read_identifier_before_write(const std::vector<V2Statement>& statements,
+                                             const std::string& name);
+
 bool statement_reads_identifier(const V2Statement& statement, const std::string& name) {
   if (target_text_reads_identifier(statement.target, name, statement.line) ||
       expression_text_references_identifier(statement.expr, name, statement.line)) {
@@ -182,7 +185,18 @@ bool stack_temp_value_dead_after_consumer(const std::string& temp,
                                           const std::optional<std::string>& overwritten,
                                           const std::vector<V2Statement>& tail) {
   return (overwritten.has_value() && *overwritten == temp) ||
-         !statements_read_identifier(tail, temp);
+         !statements_read_identifier_before_write(tail, temp);
+}
+
+bool statements_read_identifier_before_write(const std::vector<V2Statement>& statements,
+                                             const std::string& name) {
+  for (const V2Statement& statement : statements) {
+    if (statement_reads_identifier(statement, name))
+      return true;
+    if (statement_writes_identifier(statement, name))
+      return false;
+  }
+  return false;
 }
 
 bool stack_temp_other_operand_is_safe(const Expression& expression) {

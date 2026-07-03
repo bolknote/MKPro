@@ -39,6 +39,16 @@ V2Statement assign(std::string target, std::string expr, int line) {
   return statement;
 }
 
+V2Statement update(std::string target, std::string op, std::string expr, int line) {
+  V2Statement statement;
+  statement.kind = "v2_update";
+  statement.target = std::move(target);
+  statement.op = std::move(op);
+  statement.expr = std::move(expr);
+  statement.line = line;
+  return statement;
+}
+
 V2Statement empty_if(std::string left, std::string op, std::string right, int line) {
   V2Statement statement;
   statement.kind = "v2_if";
@@ -209,6 +219,24 @@ void stack_residency_matches_typescript_contract() {
   }
 
   {
+    const std::vector<V2Statement> body = {
+        assign("sx", "x", 1),
+        assign("sy", "y", 2),
+        assign("line", "cell_mask(sx, sy)", 3),
+        update("out", "+=", "line", 4),
+        assign("sx", "x", 5),
+        assign("sy", "y", 6),
+        assign("line", "cell_mask(sx, sy)", 7),
+    };
+    const std::optional<core::emit::StackResidentFusionSite> site =
+        find_stack_resident_fusion_site(body, 0);
+    require(site.has_value(),
+            "stack-residency should treat future reads after overwrite as dead for the current "
+            "temp value");
+    require(site->consumer_index == 2, "stack-residency should fuse the first cell_mask consumer");
+  }
+
+  {
     const V2Statement statement = empty_if("x", "==", "0", 1);
     require(statement_preserves_stack_residency(statement, std::set<std::string>{"a"}),
             "empty if/else should preserve unrelated stack-resident temps");
@@ -315,41 +343,39 @@ program StackHelperAbiAggregation {
     const SizeAbiBlockerReport* blocker =
         find_size_abi_blocker(result, "stack-helper-abi", "cell_mask(sx, sy)");
     require(blocker != nullptr, "size attribution should report stack helper ABI blockers");
-    require(blocker->materialize_cells == 6 &&
+    require(blocker->materialize_cells == 12 &&
                 blocker->details.contains("stackEntryCandidateCallSites") &&
-                blocker->details.at("stackEntryCandidateCallSites") == "3" &&
+                blocker->details.at("stackEntryCandidateCallSites") == "6" &&
                 blocker->details.contains("grossMaterializeCells") &&
-                blocker->details.at("grossMaterializeCells") == "6" &&
+                blocker->details.at("grossMaterializeCells") == "12" &&
                 blocker->details.contains("materializeCellsPerCallSite") &&
                 blocker->details.at("materializeCellsPerCallSite") == "2" &&
                 blocker->details.contains("estimatedStackEntryOverheadCells") &&
                 blocker->details.at("estimatedStackEntryOverheadCells") == "11" &&
                 blocker->details.contains("estimatedNetSavings") &&
-                blocker->details.at("estimatedNetSavings") == "-5" &&
+                blocker->details.at("estimatedNetSavings") == "1" &&
                 blocker->details.contains("estimatedBreakEvenCallSites") &&
                 blocker->details.at("estimatedBreakEvenCallSites") == "6" &&
                 blocker->details.contains("additionalCallSitesToBreakEven") &&
-                blocker->details.at("additionalCallSitesToBreakEven") == "3" &&
+                blocker->details.at("additionalCallSitesToBreakEven") == "0" &&
                 blocker->details.contains("firstLine") &&
                 blocker->details.contains("lastLine") &&
                 blocker->details.contains("costModelAction") &&
                 blocker->details.at("costModelAction") ==
-                    "find-more-stack-entry-call-sites-or-inline-helper",
-            "repeated stack helper ABI report should keep current stack-entry cost conservative");
+                    "implement-stack-argument-helper-entry",
+            "repeated stack helper ABI report should recognize break-even stack-entry sites");
     const SizeOpportunityReport* opportunity = find_size_opportunity(result, "stack-helper-abi");
-    require(opportunity != nullptr && opportunity->savings == -5 &&
-                opportunity->candidate_steps == static_cast<int>(result.steps.size()) + 5 &&
+    require(opportunity != nullptr && opportunity->savings == 1 &&
+                opportunity->candidate_steps == static_cast<int>(result.steps.size()) - 1 &&
                 opportunity->details.contains("estimatedNetSavings") &&
-                opportunity->details.at("estimatedNetSavings") == "-5" &&
+                opportunity->details.at("estimatedNetSavings") == "1" &&
                 opportunity->details.contains("stackEntryCandidateCallSites") &&
-                opportunity->details.at("stackEntryCandidateCallSites") == "3",
-            "stack helper ABI opportunity should expose repeated sites without ranking them as a "
-            "size win");
+                opportunity->details.at("stackEntryCandidateCallSites") == "6",
+            "stack helper ABI opportunity should expose repeated sites as a measured size win");
     const SizeNextActionSummaryReport* cost_action = find_size_next_action(
         result, "costModelAction", "implement-stack-argument-helper-entry");
-    require(cost_action == nullptr,
-            "negative stack helper ABI estimate should not rank implementation as a positive "
-            "next action");
+    require(cost_action != nullptr && cost_action->potential_savings == 1,
+            "positive stack helper ABI estimate should rank implementation as a next action");
 
     CompileOptions stack_entry_options;
     stack_entry_options.analysis = true;
@@ -364,7 +390,7 @@ program StackHelperAbiAggregation {
     require(has_optimization(stack_entry, "expression-helper-stack-entry-call"),
             "stack helper argument-entry variant should call the secondary helper entry");
     require(count_steps_with_comment_prefix_and_opcode(
-                stack_entry, "expr cell_mask(sx, sy) stack entry", 0x53) == 3,
+                stack_entry, "expr cell_mask(sx, sy) stack entry", 0x53) == 6,
             "stack helper argument-entry variant should route stack-resident cell_mask calls "
             "through the secondary entry");
     require(find_size_abi_blocker(stack_entry, "stack-helper-abi", "cell_mask(sx, sy)") ==
