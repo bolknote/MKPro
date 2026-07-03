@@ -403,6 +403,11 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.contains("valueAwareSchedulerTrafficShape") &&
                   candidate_score_zero->details.at("valueAwareSchedulerTrafficShape") ==
                       "stack-inputs-only" &&
+                  candidate_score_zero->details.contains("valueAwareStackInputUniqueCount") &&
+                  candidate_score_zero->details.at("valueAwareStackInputUniqueCount") == "6" &&
+                  candidate_score_zero->details.contains("valueAwareStackCapacityStatus") &&
+                  candidate_score_zero->details.at("valueAwareStackCapacityStatus") ==
+                      "exceeds-x-y-z-t-capacity" &&
                   !candidate_score_zero->details.contains("valueAwareStateOutputNames"),
               "tic-tac-toe-4x4 candidate_score helper should classify helper-local traffic as "
               "stack input candidates for the value-aware scheduler");
@@ -672,9 +677,15 @@ void example_sizes_match_typescript_baselines() {
                   value_aware_scheduler_action->best_details.contains("sizeImpactStatus") &&
                   value_aware_scheduler_action->best_details.contains("schedulerScope") &&
                   value_aware_scheduler_action->best_details.contains("proofStatus") &&
+                  value_aware_scheduler_action->best_details.at("proofStatus") ==
+                      "stack-inputs-exceed-x-y-z-t-capacity" &&
                   value_aware_scheduler_action->best_details.contains("registerTrafficBreakdown") &&
                   value_aware_scheduler_action->best_details.contains(
                       "valueAwareStackInputNames") &&
+                  value_aware_scheduler_action->best_details.contains(
+                      "valueAwareStackCapacityStatus") &&
+                  value_aware_scheduler_action->best_details.at(
+                      "valueAwareStackCapacityStatus") == "exceeds-x-y-z-t-capacity" &&
                   value_aware_scheduler_action->best_details.contains(
                       "valueAwareSchedulerTrafficShape"),
               "tic-tac-toe-4x4 size attribution should rank value-aware stack/register "
@@ -682,19 +693,31 @@ void example_sizes_match_typescript_baselines() {
       const SizeNextActionSummaryReport* stack_input_scheduler_action = find_size_next_action(
           result, "trafficShapeAction", "schedule-stack-input-helper-values");
       require(stack_input_scheduler_action != nullptr &&
-                  stack_input_scheduler_action->opportunities >= 3 &&
+                  stack_input_scheduler_action->opportunities >= 2 &&
                   stack_input_scheduler_action->potential_savings >=
-                      candidate_score_zero->register_traffic_cells +
-                          cell_mask_helper->register_traffic_cells &&
+                      cell_mask_helper->register_traffic_cells &&
                   stack_input_scheduler_action->best_details.contains("helperLabel") &&
                   stack_input_scheduler_action->best_details.at("helperLabel") ==
-                      "candidate_score zero-accumulator entry" &&
+                      "expr cell_mask(x, y)" &&
                   stack_input_scheduler_action->best_details.contains(
                       "valueAwareSchedulerTrafficShape") &&
                   stack_input_scheduler_action->best_details.at(
                       "valueAwareSchedulerTrafficShape") == "stack-inputs-only",
               "tic-tac-toe-4x4 size attribution should separately rank stack-input-only helper "
               "traffic for the value-aware scheduler");
+      const SizeNextActionSummaryReport* staged_stack_input_action = find_size_next_action(
+          result, "trafficShapeAction", "split-or-stage-stack-input-helper-values");
+      require(staged_stack_input_action != nullptr &&
+                  staged_stack_input_action->opportunities >= 1 &&
+                  staged_stack_input_action->best_details.contains("helperLabel") &&
+                  staged_stack_input_action->best_details.at("helperLabel") ==
+                      "candidate_score zero-accumulator entry" &&
+                  staged_stack_input_action->best_details.contains(
+                      "valueAwareStackCapacityStatus") &&
+                  staged_stack_input_action->best_details.at("valueAwareStackCapacityStatus") ==
+                      "exceeds-x-y-z-t-capacity",
+              "tic-tac-toe-4x4 size attribution should not rank six-input candidate_score as "
+              "a direct stack-input scheduling action");
       const SizeNextActionSummaryReport* split_scheduler_action = find_size_next_action(
           result, "trafficShapeAction", "split-stack-inputs-from-deferred-state-outputs");
       require(split_scheduler_action != nullptr &&

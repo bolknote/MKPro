@@ -47185,8 +47185,15 @@ std::optional<std::string> value_aware_scheduler_traffic_shape_action(
   if (shape_it == details.end())
     return std::nullopt;
   const std::string& shape = shape_it->second;
+  const auto stack_capacity_it = details.find("valueAwareStackCapacityStatus");
+  const bool exceeds_stack_capacity =
+      stack_capacity_it != details.end() &&
+      stack_capacity_it->second == "exceeds-x-y-z-t-capacity";
   if (shape == "stack-inputs-only")
-    return "schedule-stack-input-helper-values";
+    return exceeds_stack_capacity ? "split-or-stage-stack-input-helper-values"
+                                  : "schedule-stack-input-helper-values";
+  if (exceeds_stack_capacity)
+    return "split-or-stage-stack-input-helper-values";
   if (shape == "deferred-state-outputs-only")
     return "defer-helper-state-output-stores";
   if (shape == "stack-inputs-and-deferred-state-outputs")
@@ -47689,6 +47696,12 @@ SizeAttributionReport build_size_attribution_report(
                                                   stack_input_names.end()),
                          ",");
         helper.details["valueAwareStackInputCells"] = std::to_string(stack_input_cells);
+        helper.details["valueAwareStackInputUniqueCount"] =
+            std::to_string(stack_input_names.size());
+        helper.details["valueAwareStackCapacity"] = "4";
+        helper.details["valueAwareStackCapacityStatus"] =
+            stack_input_names.size() <= 4U ? "fits-x-y-z-t-capacity"
+                                           : "exceeds-x-y-z-t-capacity";
       }
       if (!state_output_names.empty()) {
         helper.details["valueAwareStateOutputNames"] =
@@ -47879,6 +47892,16 @@ SizeAttributionReport build_size_attribution_report(
     details["proofStatus"] = "missing-callsite-stack-value-proof";
     details["requiredAction"] = "value-aware-stack-register-scheduling";
     details["schedulerScope"] = "helper-entry-and-callsite-stack-values";
+    const auto stack_capacity_it = details.find("valueAwareStackCapacityStatus");
+    if (stack_capacity_it != details.end() &&
+        stack_capacity_it->second == "exceeds-x-y-z-t-capacity") {
+      details["estimateKind"] = "gross-upper-bound-exceeds-stack-capacity";
+      details["candidateStepsStatus"] = "synthetic-upper-bound-not-directly-schedulable";
+      details["netSavingsStatus"] = "requires-staged-or-spilled-stack-input-plan";
+      details["proofStatus"] = "stack-inputs-exceed-x-y-z-t-capacity";
+      details["schedulerScope"] =
+          "helper-entry-callsite-stack-values-and-staged-materialization";
+    }
     if (const std::optional<std::string> traffic_shape_action =
             value_aware_scheduler_traffic_shape_action(details)) {
       details["trafficShapeAction"] = *traffic_shape_action;
