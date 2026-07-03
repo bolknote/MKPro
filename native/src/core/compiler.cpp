@@ -21354,6 +21354,7 @@ bool lower_expression_to_x(LoweringContext& context, const Expression& expressio
 
   if (const ExpressionHelperRequest* helper = shared_expression_helper(context, expression);
       helper != nullptr) {
+    ++context.expression_helper_regular_call_sites[helper->key];
     context.emitter.emit_jump(0x53, "ПП", helper->label,
                               "expr " + expression_to_source(expression));
     clear_current_x_facts(context);
@@ -35806,14 +35807,62 @@ bool lower_cell_mask_expression_helper_with_stack_entry(
   return true;
 }
 
+bool lower_cell_mask_expression_helper_stack_only_entry(
+    LoweringContext& context, const ExpressionHelperRequest& helper,
+    const ExpressionHelperStackEntryRequest& entry) {
+  if (!expression_is_cell_mask_of_stack_temps(helper.expr, {entry.first, entry.second}))
+    return false;
+  const int line = helper.line;
+  context.emitter.emit_op(0x14, "X↔Y", "expression helper stack-entry x", line);
+  context.emitter.emit_op(0x15, "F 10^x", "expression helper stack-entry pow10", line);
+  context.emitter.emit_op(0x14, "X↔Y", "expression helper stack-entry y", line);
+  emit_number_or_preload(context, format_number_literal(cell_mask_row_constant(4)), std::nullopt,
+                         line);
+  context.emitter.emit_op(0x12, "*", "expr *", line);
+  context.emitter.emit_op(0x15, "F 10^x", "pow10()", line);
+  context.emitter.emit_op(0x34, "К [x]", "int()", line);
+  context.emitter.emit_op(0x10, "+", "expr +", line);
+  clear_current_x_facts(context);
+  return true;
+}
+
 bool lower_expression_helpers(LoweringContext& context) {
   for (const ExpressionHelperRequest& helper : context.expression_helpers) {
+    const auto stack_entry_it = context.expression_helper_stack_entries.find(helper.key);
+    const int regular_call_sites = context.expression_helper_regular_call_sites[helper.key];
+    if (stack_entry_it != context.expression_helper_stack_entries.end() &&
+        regular_call_sites == 0) {
+      context.emitter.emit_label(
+          stack_entry_it->second.entry_label,
+          {.procedure_boundary = "start", .procedure_name = helper.label, .hidden = true});
+      const bool previous = context.emitting_expression_helper;
+      context.emitting_expression_helper = true;
+      const bool lowered =
+          lower_cell_mask_expression_helper_stack_only_entry(context, helper,
+                                                             stack_entry_it->second);
+      context.emitting_expression_helper = previous;
+      if (!lowered)
+        return false;
+      context.emitter.emit_op(0x52, "В/О", "expression helper return", helper.line);
+      context.optimizations.push_back(OptimizationReport{
+          .name = "expression-helper",
+          .detail = "Emitted stack-entry-only shared helper for " +
+                    expression_to_source(helper.expr) + ".",
+      });
+      context.optimizations.push_back(OptimizationReport{
+          .name = "expression-helper-stack-entry-primary",
+          .detail = "Used stack-argument ABI as the only entry for " +
+                    expression_to_source(helper.expr) + " after " +
+                    std::to_string(stack_entry_it->second.call_sites) +
+                    " stack-resident call site(s).",
+      });
+      continue;
+    }
     context.emitter.emit_label(
         helper.label,
         {.procedure_boundary = "start", .procedure_name = helper.label, .hidden = true});
     const bool previous = context.emitting_expression_helper;
     context.emitting_expression_helper = true;
-    const auto stack_entry_it = context.expression_helper_stack_entries.find(helper.key);
     const bool lowered =
         stack_entry_it == context.expression_helper_stack_entries.end()
             ? lower_expression_to_x(context, helper.expr)

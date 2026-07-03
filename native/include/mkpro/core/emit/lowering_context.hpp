@@ -207,6 +207,7 @@ struct LoweringContext {
   std::map<std::string, std::string> random_cell_helper_labels;
   std::vector<RandomCellHelperRequest> random_cell_helpers;
   std::map<std::string, std::string> expression_helper_labels;
+  std::map<std::string, int> expression_helper_regular_call_sites;
   std::vector<ExpressionHelperRequest> expression_helpers;
   std::map<std::string, ExpressionHelperStackEntryRequest> expression_helper_stack_entries;
   std::map<std::string, NearAnyHelperStats> near_any_helper_stats;

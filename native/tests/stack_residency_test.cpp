@@ -403,14 +403,15 @@ program StackHelperAbiAggregation {
     stack_entry_options.disable_candidate_search = true;
     const CompileResult stack_entry = compile_source(stack_helper_abi_source, stack_entry_options);
     require_clean_compile(stack_entry, "stack helper argument-entry variant");
-    require(has_optimization(stack_entry, "expression-helper-stack-entry"),
-            "stack helper argument-entry variant should emit a secondary helper entry");
+    require(has_optimization(stack_entry, "expression-helper-stack-entry-primary"),
+            "stack helper argument-entry variant should emit a primary stack helper entry when "
+            "all calls use the stack ABI");
     require(has_optimization(stack_entry, "expression-helper-stack-entry-call"),
-            "stack helper argument-entry variant should call the secondary helper entry");
+            "stack helper argument-entry variant should call the stack helper entry");
     require(count_steps_with_comment_prefix_and_opcode(
                 stack_entry, "expr cell_mask(sx, sy) stack entry", 0x53) == 6,
             "stack helper argument-entry variant should route stack-resident cell_mask calls "
-            "through the secondary entry");
+            "through the stack entry");
     require(find_size_abi_blocker(stack_entry, "stack-helper-abi", "cell_mask(sx, sy)") ==
                 nullptr,
             "stack helper argument-entry variant should satisfy the stack-helper ABI blocker");
