@@ -315,10 +315,22 @@ void example_sizes_match_typescript_baselines() {
               "call-site costs");
       require(packed_score_helper->details.contains("role") &&
                   packed_score_helper->details.at("role") == "packed-score-accumulator" &&
+                  packed_score_helper->details.contains("pipelineShape") &&
+                  packed_score_helper->details.at("pipelineShape") ==
+                      "packed-line-family-score" &&
                   packed_score_helper->details.contains("accumulatorTerms") &&
                   packed_score_helper->details.at("accumulatorTerms") == "4" &&
                   packed_score_helper->details.contains("sharedTailTerms") &&
                   packed_score_helper->details.at("sharedTailTerms") == "4" &&
+                  packed_score_helper->details.contains("pow10ScaleLineValuePolicy") &&
+                  packed_score_helper->details.at("pow10ScaleLineValuePolicy") ==
+                      "line-value-carried-under-index" &&
+                  packed_score_helper->details.contains("pow10ScaleCorrectnessAction") &&
+                  packed_score_helper->details.at("pow10ScaleCorrectnessAction") ==
+                      "keep-line-value-under-index-before-helper" &&
+                  packed_score_helper->details.contains("nextPipelineAction") &&
+                  packed_score_helper->details.at("nextPipelineAction") ==
+                      "value-aware-stack-register-scheduling" &&
                   packed_score_helper->details.contains("bodyCells") &&
                   packed_score_helper->details.contains("callSiteCells") &&
                   packed_score_helper->details.contains("callOccurrences") &&

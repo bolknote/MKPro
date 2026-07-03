@@ -121,6 +121,9 @@ program PackedScoreDirectExpressionAccumulator {
               direct_accumulator_helper->details.at("accumulatorTerms") == "3" &&
               direct_accumulator_helper->details.contains("selectionThresholdTerms") &&
               direct_accumulator_helper->details.at("selectionThresholdTerms") == "3" &&
+              direct_accumulator_helper->details.contains("pipelineShape") &&
+              direct_accumulator_helper->details.at("pipelineShape") ==
+                  "expression-accumulator" &&
               direct_accumulator_helper->details.contains("bodyCells") &&
               direct_accumulator_helper->details.contains("callSiteCells") &&
               direct_accumulator_helper->details.contains("callCellsPerOccurrence"),

@@ -47304,12 +47304,20 @@ void attach_packed_score_accumulator_helper_details(
         size_report_ratio_text(helper.call_site_cells, helper.call_occurrences);
     helper.details["bodyCellsPerAccumulatorTerm"] =
         size_report_ratio_text(helper.body_cells, usage.terms);
-    if (label == "packed_score accumulator helper")
+    if (label == "packed_score accumulator helper") {
+      helper.details["pipelineShape"] = "expression-accumulator";
       helper.details["selectionThresholdTerms"] = "3";
+    }
     if (usage.x_param_terms > 0)
       helper.details["xParamTerms"] = std::to_string(usage.x_param_terms);
-    if (usage.shared_tail_terms > 0)
+    if (usage.shared_tail_terms > 0) {
       helper.details["sharedTailTerms"] = std::to_string(usage.shared_tail_terms);
+      helper.details["pipelineShape"] = "packed-line-family-score";
+      helper.details["pow10ScaleLineValuePolicy"] = "line-value-carried-under-index";
+      helper.details["pow10ScaleCorrectnessAction"] =
+          "keep-line-value-under-index-before-helper";
+      helper.details["nextPipelineAction"] = "value-aware-stack-register-scheduling";
+    }
   }
 }
 
