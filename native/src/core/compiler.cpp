@@ -47712,6 +47712,7 @@ SizeAttributionReport build_size_attribution_report(
       std::set<std::string> stack_input_names;
       std::set<std::string> state_output_names;
       std::set<std::string> mixed_state_names;
+      std::map<std::string, int> stack_input_cells_by_name;
       int stack_input_cells = 0;
       int state_output_cells = 0;
       int mixed_state_cells = 0;
@@ -47719,6 +47720,7 @@ SizeAttributionReport build_size_attribution_report(
         if (spill.recall_cells > 0 && spill.store_cells == 0) {
           stack_input_names.insert(spill.name);
           stack_input_cells += spill.total_cells;
+          stack_input_cells_by_name[spill.name] += spill.total_cells;
         } else if (spill.store_cells > 0 && spill.recall_cells == 0) {
           state_output_names.insert(spill.name);
           state_output_cells += spill.total_cells;
@@ -47736,9 +47738,65 @@ SizeAttributionReport build_size_attribution_report(
         helper.details["valueAwareStackInputUniqueCount"] =
             std::to_string(stack_input_names.size());
         helper.details["valueAwareStackCapacity"] = "4";
+        constexpr std::size_t stack_capacity = 4U;
         helper.details["valueAwareStackCapacityStatus"] =
-            stack_input_names.size() <= 4U ? "fits-x-y-z-t-capacity"
-                                           : "exceeds-x-y-z-t-capacity";
+            stack_input_names.size() <= stack_capacity ? "fits-x-y-z-t-capacity"
+                                                       : "exceeds-x-y-z-t-capacity";
+        std::vector<std::pair<std::string, int>> ranked_stack_inputs(
+            stack_input_cells_by_name.begin(), stack_input_cells_by_name.end());
+        std::sort(ranked_stack_inputs.begin(), ranked_stack_inputs.end(),
+                  [](const auto& left, const auto& right) {
+                    if (left.second != right.second)
+                      return left.second > right.second;
+                    return left.first < right.first;
+                  });
+        auto ranked_names = [](const std::vector<std::pair<std::string, int>>& inputs,
+                               std::size_t begin, std::size_t end) {
+          std::vector<std::string> names;
+          begin = std::min(begin, inputs.size());
+          end = std::min(end, inputs.size());
+          names.reserve(end - begin);
+          for (std::size_t index = begin; index < end; ++index)
+            names.push_back(inputs.at(index).first);
+          return join_strings(names, ",");
+        };
+        auto ranked_cells = [](const std::vector<std::pair<std::string, int>>& inputs,
+                               std::size_t begin, std::size_t end) {
+          int cells = 0;
+          begin = std::min(begin, inputs.size());
+          end = std::min(end, inputs.size());
+          for (std::size_t index = begin; index < end; ++index)
+            cells += inputs.at(index).second;
+          return cells;
+        };
+        std::vector<std::string> ranking_parts;
+        ranking_parts.reserve(ranked_stack_inputs.size());
+        for (const auto& [name, cells] : ranked_stack_inputs)
+          ranking_parts.push_back(name + ":" + std::to_string(cells));
+        helper.details["valueAwareStackInputRanking"] = join_strings(ranking_parts, ",");
+        helper.details["valueAwareStackInputPlanBasis"] =
+            "ranked-helper-local-recall-cells";
+        const std::size_t resident_count = std::min(stack_capacity, ranked_stack_inputs.size());
+        helper.details["valueAwareSuggestedResidentInputNames"] =
+            ranked_names(ranked_stack_inputs, 0U, resident_count);
+        helper.details["valueAwareSuggestedResidentInputCells"] =
+            std::to_string(ranked_cells(ranked_stack_inputs, 0U, resident_count));
+        helper.details["valueAwareStackInputPressure"] =
+            std::to_string(ranked_stack_inputs.size() > stack_capacity
+                               ? ranked_stack_inputs.size() - stack_capacity
+                               : 0U);
+        if (ranked_stack_inputs.size() > stack_capacity) {
+          helper.details["valueAwareStackInputPlanStatus"] = "requires-staged-inputs";
+          helper.details["valueAwareSuggestedStagedInputNames"] =
+              ranked_names(ranked_stack_inputs, resident_count, ranked_stack_inputs.size());
+          helper.details["valueAwareSuggestedStagedInputCells"] =
+              std::to_string(ranked_cells(ranked_stack_inputs, resident_count,
+                                          ranked_stack_inputs.size()));
+          helper.details["valueAwareSuggestedStagedInputCount"] =
+              std::to_string(ranked_stack_inputs.size() - stack_capacity);
+        } else {
+          helper.details["valueAwareStackInputPlanStatus"] = "direct-stack-fit";
+        }
       }
       if (!state_output_names.empty()) {
         helper.details["valueAwareStateOutputNames"] =

@@ -901,6 +901,10 @@ void print_human_analysis_report(const mkpro::CompileResult& result) {
       print_size_detail_suffix(opportunity.details,
                                {"helperLabel", "registerTrafficNames", "requiredAction",
                                 "estimateKind", "candidateStepsStatus", "sizeImpactStatus",
+                                "valueAwareStackInputPlanStatus",
+                                "valueAwareSuggestedResidentInputNames",
+                                "valueAwareSuggestedStagedInputNames",
+                                "valueAwareStackInputPressure",
                                 "registerTrafficBreakdown", "layoutAction", "safeSavingsAction",
                                 "candidateDiscoveryAction"});
       if (!opportunity.reason.empty())
@@ -972,6 +976,10 @@ void print_human_analysis_report(const mkpro::CompileResult& result) {
       print_size_detail_suffix(action.best_details,
                                {"helperLabel", "registerTrafficNames", "registerTrafficBreakdown",
                                 "estimateKind", "candidateStepsStatus", "sizeImpactStatus",
+                                "valueAwareStackInputPlanStatus",
+                                "valueAwareSuggestedResidentInputNames",
+                                "valueAwareSuggestedStagedInputNames",
+                                "valueAwareStackInputPressure",
                                 "layoutAction", "safeSavingsAction", "candidateDiscoveryAction"});
       if (!action.best_reason.empty())
         std::cout << " - " << action.best_reason;

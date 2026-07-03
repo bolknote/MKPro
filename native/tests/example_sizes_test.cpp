@@ -420,6 +420,26 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.contains("valueAwareStackCapacityStatus") &&
                   candidate_score_zero->details.at("valueAwareStackCapacityStatus") ==
                       "exceeds-x-y-z-t-capacity" &&
+                  candidate_score_zero->details.contains("valueAwareStackInputRanking") &&
+                  candidate_score_zero->details.at("valueAwareStackInputRanking").find("y:3") !=
+                      std::string::npos &&
+                  candidate_score_zero->details.at("valueAwareStackInputRanking").find("x:2") !=
+                      std::string::npos &&
+                  candidate_score_zero->details.contains("valueAwareStackInputPlanStatus") &&
+                  candidate_score_zero->details.at("valueAwareStackInputPlanStatus") ==
+                      "requires-staged-inputs" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareSuggestedResidentInputNames") &&
+                  candidate_score_zero->details.at("valueAwareSuggestedResidentInputNames")
+                          .find("y") != std::string::npos &&
+                  candidate_score_zero->details.at("valueAwareSuggestedResidentInputNames")
+                          .find("x") != std::string::npos &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareSuggestedStagedInputNames") &&
+                  candidate_score_zero->details.at("valueAwareSuggestedStagedInputNames")
+                          .find("lines_") != std::string::npos &&
+                  candidate_score_zero->details.contains("valueAwareStackInputPressure") &&
+                  candidate_score_zero->details.at("valueAwareStackInputPressure") == "2" &&
                   !candidate_score_zero->details.contains("valueAwareStateOutputNames"),
               "tic-tac-toe-4x4 candidate_score helper should classify helper-local traffic as "
               "stack input candidates for the value-aware scheduler");
