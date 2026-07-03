@@ -396,23 +396,21 @@ void example_sizes_match_typescript_baselines() {
                       std::string::npos &&
                   candidate_score_zero->details.at("valueAwareStackInputNames").find("y") !=
                       std::string::npos &&
+                  candidate_score_zero->details.at("valueAwareStackInputNames").find("lines_4") !=
+                      std::string::npos &&
+                  candidate_score_zero->details.at("valueAwareStackInputNames").find("lines_7") !=
+                      std::string::npos &&
                   candidate_score_zero->details.contains("valueAwareSchedulerTrafficShape") &&
                   candidate_score_zero->details.at("valueAwareSchedulerTrafficShape") ==
                       "stack-inputs-only" &&
                   !candidate_score_zero->details.contains("valueAwareStateOutputNames"),
               "tic-tac-toe-4x4 candidate_score helper should classify helper-local traffic as "
               "stack input candidates for the value-aware scheduler");
-      // Since the score-accumulator fix, the packed-line body (with its
-      // lines_4..lines_7 recalls) lays out inside the normalize region.
       const SizeHelperSummaryReport* normalize_helper = find_size_helper(result, "normalize");
       require(normalize_helper != nullptr &&
-                  normalize_helper->details.contains("valueAwareStackInputNames") &&
-                  normalize_helper->details.at("valueAwareStackInputNames").find("lines_4") !=
-                      std::string::npos &&
-                  normalize_helper->details.at("valueAwareStackInputNames").find("lines_7") !=
-                      std::string::npos,
-              "tic-tac-toe-4x4 normalize helper should carry the packed-line bank recalls after "
-              "the score-accumulator fix");
+                  !normalize_helper->details.contains("valueAwareStackInputNames"),
+              "tic-tac-toe-4x4 normalize helper should not inherit packed-line score traffic "
+              "from a BCD/direct-address collision in size attribution");
       const SizeHelperSummaryReport* mark_lines_helper =
           find_size_helper(result, "mark_lines_and_check");
       require(mark_lines_helper != nullptr &&
@@ -689,7 +687,8 @@ void example_sizes_match_typescript_baselines() {
                       candidate_score_zero->register_traffic_cells +
                           cell_mask_helper->register_traffic_cells &&
                   stack_input_scheduler_action->best_details.contains("helperLabel") &&
-                  stack_input_scheduler_action->best_details.at("helperLabel") == "normalize" &&
+                  stack_input_scheduler_action->best_details.at("helperLabel") ==
+                      "candidate_score zero-accumulator entry" &&
                   stack_input_scheduler_action->best_details.contains(
                       "valueAwareSchedulerTrafficShape") &&
                   stack_input_scheduler_action->best_details.at(

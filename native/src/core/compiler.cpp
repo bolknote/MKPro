@@ -46526,14 +46526,16 @@ std::optional<int> size_report_indirect_target(const std::optional<std::string>&
 }
 
 std::optional<int> size_report_direct_target(
-    int opcode, const std::map<int, std::size_t>& index_by_address) {
-  if (opcode > 104 && index_by_address.contains(opcode))
-    return opcode;
-  const int official = code_to_address(opcode);
+    const ResolvedStep& operand, const std::map<int, std::size_t>& index_by_address) {
+  if (!operand.mnemonic.empty() && operand.mnemonic.front() == '>' &&
+      index_by_address.contains(operand.opcode)) {
+    return operand.opcode;
+  }
+  const int official = code_to_address(operand.opcode);
   if (index_by_address.contains(official))
     return official;
   try {
-    const int formal = formal_address_info(opcode).actual;
+    const int formal = formal_address_info(operand.opcode).actual;
     if (index_by_address.contains(formal))
       return formal;
   } catch (...) {
@@ -47333,7 +47335,7 @@ SizeAttributionReport build_size_attribution_report(
     }
     if (index + 1U < steps.size() && opcode_by_code(step.opcode).takes_address) {
       const std::optional<int> target =
-          size_report_direct_target(steps.at(index + 1U).opcode, index_by_address);
+          size_report_direct_target(steps.at(index + 1U), index_by_address);
       if (target.has_value()) {
         add_called_region(*target, *label);
         call_sites.push_back(CallSite{
