@@ -120,9 +120,8 @@ add_library(mkpro_debug STATIC
 target_link_libraries(mkpro_debug PUBLIC mkpro_core)
 target_compile_features(mkpro_debug PUBLIC cxx_std_23)
 
-add_executable(mkpro_cli src/main.cpp)
-set_target_properties(mkpro_cli PROPERTIES OUTPUT_NAME mkpro-native)
-target_link_libraries(mkpro_cli PRIVATE mkpro_debug)
+add_executable(mkpro-native src/main.cpp)
+target_link_libraries(mkpro-native PRIVATE mkpro_debug)
 
 add_executable(mkpro_tests
   tests/address_formula_solver_test.cpp
@@ -537,7 +536,7 @@ add_test(NAME int128_selftest COMMAND mkpro_int128_selftest)
 
 mkpro_configure_target(mkpro_core)
 mkpro_configure_target(mkpro_debug)
-mkpro_configure_target(mkpro_cli)
+mkpro_configure_target(mkpro-native)
 mkpro_configure_target(mkpro_tests)
 mkpro_configure_target(mkpro_validate_trig)
 mkpro_configure_target(mkpro_int128_selftest)
