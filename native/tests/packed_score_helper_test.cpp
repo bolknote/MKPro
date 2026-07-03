@@ -877,6 +877,63 @@ program PackedScoreXParamExpressionLineAccumulatorHelper {
           "x-param packed_score expression-line sequence should not need separate accumulator add "
           "cells");
 
+  const CompileResult x_param_returned_index_expression_sequence = compile_source(R"mkpro(
+program PackedScoreXParamReturnedIndexExpressionAccumulatorHelper {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    offset_a: packed = 1
+    offset_b: packed = 2
+    offset_c: packed = 3
+    x: counter 0..7 = 2
+    y: counter 0..7 = 3
+    line: packed = 0
+    score: packed = 0
+  }
+  loop {
+    score = 0
+    normalize(x + y)
+    score += packed_score(a + offset_a, line + 1)
+    normalize(x - y)
+    score += packed_score(b + offset_b, line + 1)
+    normalize(y + 1)
+    score += packed_score(c + offset_c, line + 1)
+    halt(score)
+  }
+
+  fn normalize(raw_line) {
+    line = frac((raw_line + 3) / 4) * 4 + 1
+  }
+}
+)mkpro",
+                                                                            pinned_options());
+  require(x_param_returned_index_expression_sequence.implemented,
+          "x-param packed_score returned-index expression accumulator-helper program should "
+          "compile");
+  require(x_param_returned_index_expression_sequence.diagnostics.empty(),
+          "x-param packed_score returned-index expression compile should not report diagnostics");
+  require(count_optimization(x_param_returned_index_expression_sequence,
+                             "x-param-packed-score-line-stack-accumulate") == 3,
+          "x-param packed_score returned-index expression sequence should keep returned-index "
+          "updates stack-carried");
+  require(count_packed_score_accumulator_helper_jumps(
+              x_param_returned_index_expression_sequence) == 3,
+          "x-param packed_score returned-index expression sequence should call the accumulator "
+          "helper for each term");
+  require(count_packed_score_helper_jumps(x_param_returned_index_expression_sequence) == 0,
+          "x-param packed_score returned-index expression sequence should not use the standalone "
+          "helper fallback");
+  require(count_steps_with_comment(x_param_returned_index_expression_sequence,
+                                   "packed_score stack accumulator") == 0,
+          "x-param packed_score returned-index expression sequence should not need separate "
+          "accumulator add cells");
+  require(count_steps_with_comment(x_param_returned_index_expression_sequence, "set line") == 0 &&
+              count_steps_with_comment(x_param_returned_index_expression_sequence,
+                                       "recall line") == 0,
+          "x-param packed_score returned-index expression sequence should keep returned indexes "
+          "stack-only");
+
   const CompileResult x_param_initial_addend_sequence = compile_source(R"mkpro(
 program PackedScoreXParamInitialAddendAccumulatorHelper {
   state {
