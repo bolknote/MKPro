@@ -540,6 +540,15 @@ void example_sizes_match_typescript_baselines() {
                   stack_helper_abi->details.at("stackEntryCandidateCallSites") == "1" &&
                   stack_helper_abi->details.contains("materializeCellsPerCallSite") &&
                   stack_helper_abi->details.at("materializeCellsPerCallSite") == "2" &&
+                  stack_helper_abi->details.contains("correctnessStatus") &&
+                  stack_helper_abi->details.at("correctnessStatus") ==
+                      "requires-stack-argument-entry-or-materialization" &&
+                  stack_helper_abi->details.contains("safeFallbackAction") &&
+                  stack_helper_abi->details.at("safeFallbackAction") ==
+                      "materialize-stack-resident-temps-before-register-entry" &&
+                  stack_helper_abi->details.contains("schedulerAction") &&
+                  stack_helper_abi->details.at("schedulerAction") ==
+                      "prove-stack-aware-helper-call" &&
                   stack_helper_abi->details.contains("estimatedEntryOverheadAmortization") &&
                   stack_helper_abi->details.at("estimatedEntryOverheadAmortization") ==
                       "shared-helper-entry-body" &&
@@ -574,6 +583,15 @@ void example_sizes_match_typescript_baselines() {
                       "estimated-net-after-entry-cost" &&
                   stack_helper_abi_opportunity->details.contains("grossMaterializeCells") &&
                   stack_helper_abi_opportunity->details.at("grossMaterializeCells") == "2" &&
+                  stack_helper_abi_opportunity->details.contains("correctnessStatus") &&
+                  stack_helper_abi_opportunity->details.at("correctnessStatus") ==
+                      "requires-stack-argument-entry-or-materialization" &&
+                  stack_helper_abi_opportunity->details.contains("safeFallbackAction") &&
+                  stack_helper_abi_opportunity->details.at("safeFallbackAction") ==
+                      "materialize-stack-resident-temps-before-register-entry" &&
+                  stack_helper_abi_opportunity->details.contains("schedulerAction") &&
+                  stack_helper_abi_opportunity->details.at("schedulerAction") ==
+                      "prove-stack-aware-helper-call" &&
                   stack_helper_abi_opportunity->details.contains("costModelAction") &&
                   stack_helper_abi_opportunity->details.at("costModelAction") ==
                       "find-more-stack-entry-call-sites-or-inline-helper" &&

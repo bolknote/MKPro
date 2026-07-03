@@ -350,6 +350,14 @@ program StackHelperAbiAggregation {
                 blocker->details.at("grossMaterializeCells") == "12" &&
                 blocker->details.contains("materializeCellsPerCallSite") &&
                 blocker->details.at("materializeCellsPerCallSite") == "2" &&
+                blocker->details.contains("correctnessStatus") &&
+                blocker->details.at("correctnessStatus") ==
+                    "requires-stack-argument-entry-or-materialization" &&
+                blocker->details.contains("safeFallbackAction") &&
+                blocker->details.at("safeFallbackAction") ==
+                    "materialize-stack-resident-temps-before-register-entry" &&
+                blocker->details.contains("schedulerAction") &&
+                blocker->details.at("schedulerAction") == "prove-stack-aware-helper-call" &&
                 blocker->details.contains("estimatedStackEntryOverheadCells") &&
                 blocker->details.at("estimatedStackEntryOverheadCells") == "11" &&
                 blocker->details.contains("estimatedNetSavings") &&
@@ -369,6 +377,14 @@ program StackHelperAbiAggregation {
                 opportunity->candidate_steps == static_cast<int>(result.steps.size()) - 1 &&
                 opportunity->details.contains("estimatedNetSavings") &&
                 opportunity->details.at("estimatedNetSavings") == "1" &&
+                opportunity->details.contains("correctnessStatus") &&
+                opportunity->details.at("correctnessStatus") ==
+                    "requires-stack-argument-entry-or-materialization" &&
+                opportunity->details.contains("safeFallbackAction") &&
+                opportunity->details.at("safeFallbackAction") ==
+                    "materialize-stack-resident-temps-before-register-entry" &&
+                opportunity->details.contains("schedulerAction") &&
+                opportunity->details.at("schedulerAction") == "prove-stack-aware-helper-call" &&
                 opportunity->details.contains("stackEntryCandidateCallSites") &&
                 opportunity->details.at("stackEntryCandidateCallSites") == "6",
             "stack helper ABI opportunity should expose repeated sites as a measured size win");

@@ -47849,6 +47849,9 @@ SizeAttributionReport build_size_attribution_report(
     details["stackEntryCandidateCallSites"] = std::to_string(aggregate.call_sites);
     details["materializeCellsPerCallSite"] =
         size_report_ratio_text(materialize_cells, aggregate.call_sites);
+    details["correctnessStatus"] = "requires-stack-argument-entry-or-materialization";
+    details["safeFallbackAction"] = "materialize-stack-resident-temps-before-register-entry";
+    details["schedulerAction"] = "prove-stack-aware-helper-call";
     if (aggregate.first_line > 0)
       details["firstLine"] = std::to_string(aggregate.first_line);
     if (aggregate.last_line > 0)
