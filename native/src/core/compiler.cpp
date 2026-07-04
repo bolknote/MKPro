@@ -46044,6 +46044,60 @@ std::string opcode_hex_text(int opcode) {
   return out.str();
 }
 
+std::string selector_data_access_kind(const ResolvedStep& step) {
+  if (step_is_direct_recall(step))
+    return "direct-register-recall";
+  if (step_is_indirect_memory_recall(step))
+    return "indirect-memory-recall";
+  if (step_is_direct_store(step))
+    return "direct-register-store";
+  if (step_is_indirect_memory_store(step))
+    return "indirect-memory-store";
+  return "unknown-data-access";
+}
+
+std::string selector_data_access_targets_text(const ResolvedStep& step,
+                                              const std::string& selector_register) {
+  if (step_is_direct_recall(step) || step_is_direct_store(step))
+    return selector_register;
+  if (step_is_indirect_memory_recall(step) || step_is_indirect_memory_store(step)) {
+    const std::optional<std::set<std::string>> targets =
+        indirect_memory_targets_from_comment(step.comment);
+    if (targets.has_value())
+      return static_proof_gate_join_values(*targets);
+    return "unknown";
+  }
+  return "unknown";
+}
+
+std::string selector_data_access_precision(const ResolvedStep& step) {
+  if (step_is_direct_recall(step) || step_is_direct_store(step))
+    return "exact-register";
+  if (step_is_indirect_memory_recall(step) || step_is_indirect_memory_store(step)) {
+    return indirect_memory_targets_from_comment(step.comment).has_value()
+               ? "annotated-indirect-memory-targets"
+               : "missing-indirect-memory-targets";
+  }
+  return "unknown";
+}
+
+std::string selector_data_access_proof_gap(const ResolvedStep& step) {
+  const std::string precision = selector_data_access_precision(step);
+  if (precision == "missing-indirect-memory-targets")
+    return "missing-indirect-memory-target-range";
+  if (precision == "annotated-indirect-memory-targets")
+    return "annotated-target-overlaps-selector-data";
+  if (precision == "exact-register")
+    return "selector-register-is-live-data-payload";
+  return "unclassified-selector-data-access";
+}
+
+std::string selector_data_access_proof_action(const ResolvedStep& step) {
+  return selector_data_access_precision(step) == "missing-indirect-memory-targets"
+             ? "annotate-indirect-memory-targets-or-prove-pointer-range"
+             : "split-selector-register-or-pack-data-away-from-flow-selectors";
+}
+
 std::set<std::string>
 free_stable_selector_registers(const std::map<std::string, std::string>& allocated_registers) {
   std::set<std::string> allocated;
@@ -46096,9 +46150,17 @@ std::optional<std::string> indirect_flow_selector_preservation_rejection_reason(
 
   std::set<std::string> conflicting_selector_registers;
   std::set<std::string> conflicting_allocated_names;
+  std::set<std::string> conflicting_access_kinds;
+  std::set<std::string> conflicting_access_precisions;
+  std::set<std::string> conflicting_proof_gaps;
+  std::set<std::string> conflicting_proof_actions;
+  std::vector<std::string> conflicting_access_parts;
   const ResolvedStep* first_consumer = nullptr;
   std::string first_selector;
   std::string first_name;
+  std::string first_access_kind;
+  std::string first_access_targets;
+  std::string first_access_precision;
   for (const auto& [name, allocated_register] : allocated_registers) {
     if (compiler_owned_indirect_flow_allocation(name))
       continue;
@@ -46110,10 +46172,25 @@ std::optional<std::string> indirect_flow_selector_preservation_rejection_reason(
         continue;
       conflicting_selector_registers.insert(allocated_register);
       conflicting_allocated_names.insert(name);
+      const std::string access_kind = selector_data_access_kind(step);
+      const std::string access_targets =
+          selector_data_access_targets_text(step, allocated_register);
+      const std::string access_precision = selector_data_access_precision(step);
+      conflicting_access_kinds.insert(access_kind);
+      conflicting_access_precisions.insert(access_precision);
+      conflicting_proof_gaps.insert(selector_data_access_proof_gap(step));
+      conflicting_proof_actions.insert(selector_data_access_proof_action(step));
+      conflicting_access_parts.push_back(allocated_register + "/" + name + "@" +
+                                         safe_format_label_address(step.address) + "/" +
+                                         opcode_hex_text(step.opcode) + "/" + access_kind +
+                                         "/targets:" + access_targets);
       if (first_consumer == nullptr) {
         first_consumer = &step;
         first_selector = allocated_register;
         first_name = name;
+        first_access_kind = access_kind;
+        first_access_targets = access_targets;
+        first_access_precision = access_precision;
       }
       break;
     }
@@ -46128,9 +46205,20 @@ std::optional<std::string> indirect_flow_selector_preservation_rejection_reason(
                {"selectorRegister", first_selector},
                {"allocatedName", first_name},
                {"conflictingSelectorRegisters",
-                static_proof_gate_join_values(conflicting_selector_registers)},
+               static_proof_gate_join_values(conflicting_selector_registers)},
                {"conflictingAllocatedNames",
                 static_proof_gate_join_values(conflicting_allocated_names)},
+               {"selectorDataConflictKind", first_access_kind},
+               {"selectorDataConflictTargets", first_access_targets},
+               {"selectorDataConflictPrecision", first_access_precision},
+               {"selectorDataConflictKinds",
+                static_proof_gate_join_values(conflicting_access_kinds)},
+               {"selectorDataConflictPrecisions",
+                static_proof_gate_join_values(conflicting_access_precisions)},
+               {"selectorDataConflictAccesses", join_strings(conflicting_access_parts, "+")},
+               {"selectorDataProofGap", static_proof_gate_join_values(conflicting_proof_gaps)},
+               {"selectorDataNextProofAction",
+                static_proof_gate_join_values(conflicting_proof_actions)},
                {"proofFailure", "selector-register-used-as-data"},
                {"consumerAddress", safe_format_label_address(first_consumer->address)},
                {"consumerOpcodeHex", opcode_hex_text(first_consumer->opcode)},

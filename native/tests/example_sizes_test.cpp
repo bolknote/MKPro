@@ -294,6 +294,27 @@ void example_sizes_match_typescript_baselines() {
                   indirect_flow->details.at("consumerAddress") == "14" &&
                   indirect_flow->details.contains("consumerOpcodeHex") &&
                   indirect_flow->details.at("consumerOpcodeHex") == "D5" &&
+                  indirect_flow->details.contains("selectorDataConflictKind") &&
+                  indirect_flow->details.at("selectorDataConflictKind") ==
+                      "indirect-memory-recall" &&
+                  indirect_flow->details.contains("selectorDataConflictTargets") &&
+                  indirect_flow->details.at("selectorDataConflictTargets") == "unknown" &&
+                  indirect_flow->details.contains("selectorDataConflictPrecision") &&
+                  indirect_flow->details.at("selectorDataConflictPrecision") ==
+                      "missing-indirect-memory-targets" &&
+                  indirect_flow->details.contains("selectorDataConflictAccesses") &&
+                  indirect_flow->details.at("selectorDataConflictAccesses")
+                          .find("7/__coord_list_foxes_1@14/D5/indirect-memory-recall/"
+                                "targets:unknown") != std::string::npos &&
+                  indirect_flow->details.at("selectorDataConflictAccesses")
+                          .find("9/__coord_list_foxes_3@14/D5/indirect-memory-recall/"
+                                "targets:unknown") != std::string::npos &&
+                  indirect_flow->details.contains("selectorDataProofGap") &&
+                  indirect_flow->details.at("selectorDataProofGap") ==
+                      "missing-indirect-memory-target-range" &&
+                  indirect_flow->details.contains("selectorDataNextProofAction") &&
+                  indirect_flow->details.at("selectorDataNextProofAction") ==
+                      "annotate-indirect-memory-targets-or-prove-pointer-range" &&
                   indirect_flow->details.contains("freeStableSelectorRegisters") &&
                   indirect_flow->details.at("freeStableSelectorRegisters") == "none" &&
                   indirect_flow->details.contains("selectorSplitStatus") &&
@@ -317,6 +338,15 @@ void example_sizes_match_typescript_baselines() {
                   selector_action->best_details.at("consumerOpcodeHex") == "D5" &&
                   selector_action->best_details.contains("conflictingSelectorRegisters") &&
                   selector_action->best_details.at("conflictingSelectorRegisters") == "7+8+9" &&
+                  selector_action->best_details.contains("selectorDataConflictPrecision") &&
+                  selector_action->best_details.at("selectorDataConflictPrecision") ==
+                      "missing-indirect-memory-targets" &&
+                  selector_action->best_details.contains("selectorDataProofGap") &&
+                  selector_action->best_details.at("selectorDataProofGap") ==
+                      "missing-indirect-memory-target-range" &&
+                  selector_action->best_details.contains("selectorDataNextProofAction") &&
+                  selector_action->best_details.at("selectorDataNextProofAction") ==
+                      "annotate-indirect-memory-targets-or-prove-pointer-range" &&
                   selector_action->best_details.contains("freeStableSelectorRegisters") &&
                   selector_action->best_details.at("freeStableSelectorRegisters") == "none" &&
                   selector_action->best_details.contains("selectorSplitStatus") &&
