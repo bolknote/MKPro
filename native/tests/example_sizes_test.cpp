@@ -402,6 +402,76 @@ void example_sizes_match_typescript_baselines() {
                       "6+7+8+9+a+b+c+d+e",
               "fox-hunt-mk61 size attribution should expose the packing cost-model action");
     }
+    if (name == "dangerous-loading") {
+      const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
+      const SizeHelperSummaryReport* resolve_turn = find_size_helper(result, "resolve_turn");
+      require(resolve_turn != nullptr &&
+                  resolve_turn->details.contains("valueAwareStateOutputNames") &&
+                  resolve_turn->details.at("valueAwareStateOutputNames") == "loaded" &&
+                  resolve_turn->details.contains("valueAwareStateOutputPlanStatus") &&
+                  resolve_turn->details.at("valueAwareStateOutputPlanStatus") ==
+                      "requires-persistent-state-store" &&
+                  resolve_turn->details.contains("valueAwareStateOutputNetCells") &&
+                  resolve_turn->details.at("valueAwareStateOutputNetCells") == "0" &&
+                  resolve_turn->details.contains("valueAwareEstimatedNetSavingsAfterMaterialization") &&
+                  resolve_turn->details.at("valueAwareEstimatedNetSavingsAfterMaterialization") ==
+                      "0" &&
+                  resolve_turn->details.contains("valueAwareEstimatedNetSavingsExcludes") &&
+                  resolve_turn->details.at("valueAwareEstimatedNetSavingsExcludes") ==
+                      "persistent-state-output-stores",
+              "dangerous-loading should not count persistent loaded stores as direct "
+              "value-aware scheduler savings");
+      const SizeOpportunityReport* resolve_turn_register_traffic =
+          find_size_opportunity_detail(result, "helper-register-traffic", "helperLabel",
+                                       "resolve_turn");
+      require(resolve_turn_register_traffic != nullptr &&
+                  resolve_turn_register_traffic->savings == 0 &&
+                  resolve_turn_register_traffic->details.contains("sizeImpactStatus") &&
+                  resolve_turn_register_traffic->details.at("sizeImpactStatus") ==
+                      "estimated-nonpositive-net",
+              "dangerous-loading should keep resolve_turn traffic visible while ranking its "
+              "persistent state output as non-positive");
+      const SizeNextActionSummaryReport* state_output_action = find_size_next_action(
+          result, "trafficShapeAction", "split-stack-inputs-from-deferred-state-outputs");
+      require(state_output_action == nullptr,
+              "dangerous-loading should not rank persistent state-output stores as a positive "
+              "next scheduler action");
+    }
+    if (name == "game-100-pig") {
+      const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
+      const SizeHelperSummaryReport* roll_die = find_size_helper(result, "roll_die");
+      require(roll_die != nullptr &&
+                  roll_die->details.contains("valueAwareSchedulerTrafficShape") &&
+                  roll_die->details.at("valueAwareSchedulerTrafficShape") ==
+                      "deferred-state-outputs-only" &&
+                  roll_die->details.contains("valueAwareStateOutputNames") &&
+                  roll_die->details.at("valueAwareStateOutputNames") == "die" &&
+                  roll_die->details.contains("valueAwareStateOutputPlanStatus") &&
+                  roll_die->details.at("valueAwareStateOutputPlanStatus") ==
+                      "requires-persistent-state-store" &&
+                  roll_die->details.contains("valueAwareStateOutputNetCells") &&
+                  roll_die->details.at("valueAwareStateOutputNetCells") == "0" &&
+                  roll_die->details.contains("valueAwareEstimatedNetSavingsAfterMaterialization") &&
+                  roll_die->details.at("valueAwareEstimatedNetSavingsAfterMaterialization") ==
+                      "0",
+              "game-100-pig should expose roll_die's persistent die store without counting it as "
+              "direct scheduler savings");
+      const SizeOpportunityReport* roll_die_register_traffic =
+          find_size_opportunity_detail(result, "helper-register-traffic", "helperLabel",
+                                       "roll_die");
+      require(roll_die_register_traffic != nullptr &&
+                  roll_die_register_traffic->savings == 0 &&
+                  roll_die_register_traffic->details.contains("sizeImpactStatus") &&
+                  roll_die_register_traffic->details.at("sizeImpactStatus") ==
+                      "estimated-nonpositive-net",
+              "game-100-pig should keep roll_die traffic visible while ranking persistent state "
+              "output as non-positive");
+      const SizeNextActionSummaryReport* state_output_action =
+          find_size_next_action(result, "trafficShapeAction", "defer-helper-state-output-stores");
+      require(state_output_action == nullptr,
+              "game-100-pig should not rank persistent die stores as a positive next scheduler "
+              "action");
+    }
     if (name == "rambo-iii") {
       const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
       const SizeHelperSummaryReport* front_stop = find_size_helper(result, "front_stop");
@@ -827,7 +897,7 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.contains("valueAwareEstimatedNetSavingsModel") &&
                   candidate_score_zero->details.at("valueAwareEstimatedNetSavingsModel") ==
                       "profitable-stack-input-recalls-minus-callsite-materialization-minus-"
-                      "argument-preservation-plus-state-outputs" &&
+                      "argument-preservation-excluding-persistent-state-outputs" &&
                   candidate_score_zero->details.contains("valueAwareProfitableStackInputNames") &&
                   candidate_score_zero->details.at("valueAwareProfitableStackInputNames")
                           .find("y") != std::string::npos &&

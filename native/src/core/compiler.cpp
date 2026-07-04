@@ -48979,8 +48979,7 @@ SizeAttributionReport build_size_attribution_report(
                 "blocked-by-stack-mutating-callee";
           }
         }
-        const int base_estimated_net_cells =
-            profitable_stack_input_net_cells + state_output_cells;
+        const int base_estimated_net_cells = profitable_stack_input_net_cells;
         const int adjusted_estimated_net_cells =
             base_estimated_net_cells - call_argument_preservation_cells;
         if (base_estimated_net_cells > 0 || state_output_cells > 0 ||
@@ -48994,13 +48993,17 @@ SizeAttributionReport build_size_attribution_report(
                 std::to_string(adjusted_estimated_net_cells);
             helper.details["valueAwareEstimatedNetSavingsModel"] =
                 "profitable-stack-input-recalls-minus-callsite-materialization-minus-"
-                "argument-preservation-plus-state-outputs";
+                "argument-preservation-excluding-persistent-state-outputs";
           } else {
             helper.details["valueAwareEstimatedNetSavingsAfterMaterialization"] =
                 std::to_string(base_estimated_net_cells);
             helper.details["valueAwareEstimatedNetSavingsModel"] =
-                "profitable-stack-input-recalls-minus-callsite-materialization-plus-state-outputs";
+                "profitable-stack-input-recalls-minus-callsite-materialization-excluding-"
+                "persistent-state-outputs";
           }
+          if (state_output_cells > 0)
+            helper.details["valueAwareEstimatedNetSavingsExcludes"] =
+                "persistent-state-output-stores";
         }
         if (!direct_stack_input_names.empty()) {
           helper.details["valueAwareDirectStackInputNames"] =
@@ -49070,6 +49073,19 @@ SizeAttributionReport build_size_attribution_report(
                                                   state_output_names.end()),
                          ",");
         helper.details["valueAwareStateOutputCells"] = std::to_string(state_output_cells);
+        helper.details["valueAwareStateOutputPlanStatus"] = "requires-persistent-state-store";
+        helper.details["valueAwareStateOutputNetCells"] = "0";
+        helper.details["valueAwareStateOutputReason"] =
+            "helper output stores preserve state for later control-flow consumers; deferring "
+            "them is not direct scheduler savings without a consumer stack-flow proof";
+        if (stack_input_names.empty() && nested_call_input_names.empty() &&
+            mixed_state_names.empty()) {
+          helper.details["valueAwareEstimatedNetSavingsAfterMaterialization"] = "0";
+          helper.details["valueAwareEstimatedNetSavingsModel"] =
+              "deferred-state-output-stores-excluded-without-consumer-stack-flow-proof";
+          helper.details["valueAwareEstimatedNetSavingsExcludes"] =
+              "persistent-state-output-stores";
+        }
       }
       if (!nested_call_input_names.empty()) {
         helper.details["valueAwareNestedCallInputNames"] =
