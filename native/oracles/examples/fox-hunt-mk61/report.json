@@ -98,7 +98,7 @@
       "opcode": 213,
       "hex": "D5",
       "mnemonic": "К П->X 5",
-      "comment": "coord_list fused candidate"
+      "comment": "coord_list fused candidate; indirect-memory-targets=6,7,8,9,a,b,c,d,e"
     },
     {
       "address": 15,

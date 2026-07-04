@@ -1223,6 +1223,42 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
   require(optimizer_static_proof_gate_accepts_for_testing(forward_options, forward_result),
           "forward indirect-flow candidate with verified target artifact should be accepted");
 
+  CompileOptions fox_aggressive_options;
+  fox_aggressive_options.analysis = true;
+  fox_aggressive_options.aggressive_post_layout_indirect_flow = true;
+  const CompileResult fox_aggressive_result = compile_source(
+      read_text_file(project_file("examples/fox-hunt-mk61.mkpro")), fox_aggressive_options);
+  require(fox_aggressive_result.implemented,
+          "fox-hunt aggressive post-layout indirect-flow candidate should compile");
+  require(fox_aggressive_result.steps.size() == 60,
+          "fox-hunt aggressive post-layout indirect-flow candidate should keep the measured "
+          "60-cell result");
+  const std::optional<std::string> fox_aggressive_rejection =
+      optimizer_static_proof_gate_rejection_reason_for_testing(fox_aggressive_options,
+                                                               fox_aggressive_result);
+  require(fox_aggressive_rejection.has_value() &&
+              fox_aggressive_rejection->find("proofFamily=indirect-flow-targets") !=
+                  std::string::npos &&
+              fox_aggressive_rejection->find("missingProof=selector-register-preservation") !=
+                  std::string::npos &&
+              fox_aggressive_rejection->find("proofFailure=selector-register-used-as-data") !=
+                  std::string::npos &&
+              fox_aggressive_rejection->find(
+                  "selectorDataConflictResolutionStatus="
+                  "proved-selector-data-overlap-requires-payload-repacking") !=
+                  std::string::npos &&
+              fox_aggressive_rejection->find(
+                  "proofDisposition=proved-conflict-needs-layout-change") !=
+                  std::string::npos &&
+              fox_aggressive_rejection->find("requiredAction=pack-data-away-from-flow-selectors") !=
+                  std::string::npos,
+          "fox-hunt aggressive post-layout indirect-flow rejection should explain the selector "
+          "register/data payload-layout blocker");
+  require(!optimizer_static_proof_gate_accepts_for_testing(fox_aggressive_options,
+                                                           fox_aggressive_result),
+          "fox-hunt aggressive post-layout indirect-flow candidate must stay rejected while "
+          "selector registers can still be read as coord_list data");
+
   CompileOptions forward_dead_integer_options = forward_options;
   forward_dead_integer_options.assume_dead_selector_integer_part = true;
   require(!optimizer_static_proof_gate_accepts_for_testing(forward_dead_integer_options,
@@ -2025,15 +2061,17 @@ void optimizer_translation_unit_stays_emulator_free() {
   require(compiler_code.find("candidate_needs_static_proof_gate(candidate.options)") !=
               std::string::npos,
           "main optimizer candidate loop must ask whether a candidate needs static proof");
-  require(compiler_code.find("optimizer_static_gate_accepts(candidate.options, result)") !=
+  require(compiler_code.find("optimizer_static_gate_rejection_reason(candidate.options, result)") !=
               std::string::npos,
-          "main optimizer candidate loop must reject unproved risky candidates");
+          "main optimizer candidate loop must reject and report unproved risky candidates");
   require(compiler_code.find("candidate_needs_static_proof_gate(candidate_options)") !=
               std::string::npos,
           "optimizer beam search must ask whether a candidate needs static proof");
-  require(compiler_code.find("optimizer_static_gate_accepts(candidate_options, result)") !=
+  require(compiler_code.find(
+              "optimizer_static_gate_rejection_reason(candidate_options, result)") !=
               std::string::npos,
-          "optimizer beam search must reject unproved risky candidates");
+          "optimizer beam search must reject unproved risky candidates through the same static "
+          "proof reason helper");
 
   const std::string wrapper_source = read_text_file(project_file("native/include/mkpro/compiler.hpp"));
   const std::string wrapper_without_comments = source_without_comments(wrapper_source);
@@ -2092,7 +2130,7 @@ void optimizer_translation_unit_stays_emulator_free() {
           "mkpro_core must not include emulator translation units");
   const std::string debug_target_source =
       required_source_range(cmake_source, "add_library(mkpro_debug STATIC",
-                            "add_executable(mkpro_cli");
+                            "add_executable(mkpro-native");
   require(contains_noncomment_line_text(cmake_source, "src/core/compiler_behavior_digest.cpp"),
           "CMake must keep the emulator-backed behavior digest in its separate translation unit");
   require(debug_target_source.find("src/core/compiler_behavior_digest.cpp") != std::string::npos,
@@ -2101,7 +2139,7 @@ void optimizer_translation_unit_stays_emulator_free() {
           "mkpro_debug must own the MK-61 emulator implementation");
   require(debug_target_source.find("src/emulator/rom.cpp") != std::string::npos,
           "mkpro_debug must own the MK-61 emulator ROM implementation");
-  require(cmake_source.find("target_link_libraries(mkpro_cli PRIVATE mkpro_debug)") !=
+  require(cmake_source.find("target_link_libraries(mkpro-native PRIVATE mkpro_debug)") !=
               std::string::npos,
           "CLI may use behavior digest only through mkpro_debug, not mkpro_core");
   require(cmake_source.find("target_link_libraries(mkpro_tests PRIVATE mkpro_debug)") !=

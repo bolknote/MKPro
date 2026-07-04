@@ -1520,7 +1520,7 @@ bool collect_stack_accumulator_target_sum_terms_with_initial_syntax(
     return false;
   }
   if (!expression_preserves_previous_x_as_y_for_stack_analysis(expression) &&
-      !(count == 0 && stack_accumulator_initial_addend_can_start(expression))) {
+      !stack_accumulator_initial_addend_can_start(expression)) {
     return false;
   }
   has_initial = true;
@@ -1567,7 +1567,7 @@ bool collect_stack_accumulator_sum_terms_with_initial_syntax(
     return false;
   }
   if (!expression_preserves_previous_x_as_y_for_stack_analysis(expression) &&
-      !(count == 0 && stack_accumulator_initial_addend_can_start(expression))) {
+      !stack_accumulator_initial_addend_can_start(expression)) {
     return false;
   }
   has_initial = true;
@@ -15419,7 +15419,7 @@ bool lower_coord_list_line_count_assignment(LoweringContext& context, const std:
   const Expression current = identifier_expression(std::string(kCoordListCurrent));
 
   context.emitter.emit_label(start_label);
-  core::emit::lowering::emit_coord_list_indirect_recall(api, indirect->pointer, source_line,
+  core::emit::lowering::emit_coord_list_indirect_recall(api, *indirect, source_line,
                                                         "coord_list candidate");
   emit_store(context, std::string(kCoordListCurrent), "coord_list current");
 
@@ -17823,7 +17823,7 @@ bool collect_stack_accumulator_target_sum_terms_with_initial(
     return false;
   }
   if (!expression_preserves_previous_x_as_y_for_stack_analysis(expression) &&
-      !(terms.empty() && stack_accumulator_initial_addend_can_start(expression))) {
+      !stack_accumulator_initial_addend_can_start(expression)) {
     return false;
   }
   append_stack_accumulator_initial(initial, expression);
@@ -17868,7 +17868,7 @@ bool collect_stack_accumulator_sum_terms_with_initial(const Expression& expressi
     return false;
   }
   if (!expression_preserves_previous_x_as_y_for_stack_analysis(expression) &&
-      !(terms.empty() && stack_accumulator_initial_addend_can_start(expression))) {
+      !stack_accumulator_initial_addend_can_start(expression)) {
     return false;
   }
   append_stack_accumulator_initial(initial, expression);
@@ -21633,7 +21633,7 @@ bool lower_coord_list_contains_false_branch(LoweringContext& context, const V2Pr
       context.emitter.emit_label(start_label, {.hidden = true});
       if (!lower_expression_to_x(context, indirect->cell))
         return false;
-      core::emit::lowering::emit_coord_list_indirect_recall(api, indirect->pointer, source_line,
+      core::emit::lowering::emit_coord_list_indirect_recall(api, *indirect, source_line,
                                                             "coord_list candidate");
       context.emitter.emit_op(0x11, "-", "coord_list hit compare", source_line);
       context.emitter.emit_jump(0x57, "F x!=0", true_label, "coord_list hit", source_line);
@@ -35738,7 +35738,7 @@ bool lower_fused_coord_list_scan(LoweringContext& context,
   const std::string visible_label = context.emitter.fresh_label("coord_list_fused_visible");
   const std::string count_next_label = context.emitter.fresh_label("coord_list_fused_next");
   context.emitter.emit_label(start_label);
-  core::emit::lowering::emit_coord_list_indirect_recall(api, indirect->pointer, branch.line,
+  core::emit::lowering::emit_coord_list_indirect_recall(api, *indirect, branch.line,
                                                         "coord_list fused candidate");
   emit_store(context, std::string(kCoordListCurrent), "coord_list fused current");
   if (context.removable_coord_lists.contains(line_count_call->list_name)) {
@@ -44838,6 +44838,11 @@ bool indirect_flow_targets_proved(const std::vector<OptimizationReport>& optimiz
                                   const std::vector<PreloadReport>& preloads,
                                   const std::vector<ResolvedStep>& steps,
                                   const std::map<std::string, std::string>& allocated_registers);
+std::optional<std::string> indirect_flow_targets_rejection_reason(
+    const std::vector<OptimizationReport>& optimizations,
+    const std::vector<PreloadReport>& preloads,
+    const std::vector<ResolvedStep>& steps,
+    const std::map<std::string, std::string>& allocated_registers);
 bool runtime_indirect_call_targets_proved(const std::vector<OptimizationReport>& optimizations,
                                           const std::vector<ResolvedStep>& steps);
 bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationReport>& optimizations,
@@ -45350,6 +45355,18 @@ std::optional<std::string> optimizer_static_gate_rejection_reason(
     if (const std::optional<std::string> reason =
             dead_integer_fractional_selector_uses_rejection_reason(
                 result.optimizations, candidate_options, result.steps)) {
+      return reason;
+    }
+  }
+  const bool needs_indirect_flow_target_proof =
+      candidate_options.preloaded_indirect_flow ||
+      candidate_options.aggressive_post_layout_indirect_flow ||
+      candidate_options.dual_use_constant_indirect_flow ||
+      candidate_options.forward_indirect_flow;
+  if (needs_indirect_flow_target_proof) {
+    if (const std::optional<std::string> reason =
+            indirect_flow_targets_rejection_reason(result.optimizations, result.preloads,
+                                                   result.steps, result.registers)) {
       return reason;
     }
   }
@@ -46630,6 +46647,384 @@ bool indirect_flow_selector_registers_are_preserved(
   return true;
 }
 
+std::string static_proof_gate_key_values(const std::vector<std::pair<std::string, std::string>>& fields) {
+  std::vector<std::string> parts;
+  parts.reserve(fields.size());
+  for (const auto& [key, value] : fields) {
+    if (!key.empty() && !value.empty())
+      parts.push_back(key + "=" + value);
+  }
+  return join_strings(parts, "; ");
+}
+
+std::string static_proof_gate_join_values(const std::set<std::string>& values) {
+  if (values.empty())
+    return "none";
+  return join_strings(std::vector<std::string>(values.begin(), values.end()), "+");
+}
+
+std::string indirect_flow_step_text(const ResolvedStep& step) {
+  std::string text = step.mnemonic.empty() ? opcode_by_code(step.opcode).name : step.mnemonic;
+  if (text.empty())
+    text = "opcode-" + std::to_string(step.opcode);
+  return text;
+}
+
+std::string opcode_hex_text(int opcode) {
+  std::ostringstream out;
+  out << std::uppercase << std::hex << std::setw(2) << std::setfill('0') << (opcode & 0xff);
+  return out.str();
+}
+
+std::string selector_data_access_kind(const ResolvedStep& step) {
+  if (step_is_direct_recall(step))
+    return "direct-register-recall";
+  if (step_is_indirect_memory_recall(step))
+    return "indirect-memory-recall";
+  if (step_is_direct_store(step))
+    return "direct-register-store";
+  if (step_is_indirect_memory_store(step))
+    return "indirect-memory-store";
+  return "unknown-data-access";
+}
+
+std::string selector_data_access_targets_text(const ResolvedStep& step,
+                                              const std::string& selector_register) {
+  if (step_is_direct_recall(step) || step_is_direct_store(step))
+    return selector_register;
+  if (step_is_indirect_memory_recall(step) || step_is_indirect_memory_store(step)) {
+    const std::optional<std::set<std::string>> targets =
+        indirect_memory_targets_from_comment(step.comment);
+    if (targets.has_value())
+      return static_proof_gate_join_values(*targets);
+    return "unknown";
+  }
+  return "unknown";
+}
+
+std::optional<std::set<std::string>>
+selector_data_access_target_registers(const ResolvedStep& step,
+                                      const std::string& selector_register) {
+  if (step_is_direct_recall(step) || step_is_direct_store(step))
+    return std::set<std::string>{selector_register};
+  if (step_is_indirect_memory_recall(step) || step_is_indirect_memory_store(step))
+    return indirect_memory_targets_from_comment(step.comment);
+  return std::nullopt;
+}
+
+std::string selector_data_access_precision(const ResolvedStep& step) {
+  if (step_is_direct_recall(step) || step_is_direct_store(step))
+    return "exact-register";
+  if (step_is_indirect_memory_recall(step) || step_is_indirect_memory_store(step)) {
+    return indirect_memory_targets_from_comment(step.comment).has_value()
+               ? "annotated-indirect-memory-targets"
+               : "missing-indirect-memory-targets";
+  }
+  return "unknown";
+}
+
+std::string selector_data_access_proof_gap(const ResolvedStep& step) {
+  const std::string precision = selector_data_access_precision(step);
+  if (precision == "missing-indirect-memory-targets")
+    return "missing-indirect-memory-target-range";
+  if (precision == "annotated-indirect-memory-targets")
+    return "annotated-target-overlaps-selector-data";
+  if (precision == "exact-register")
+    return "selector-register-is-live-data-payload";
+  return "unclassified-selector-data-access";
+}
+
+std::string selector_data_access_proof_action(const ResolvedStep& step) {
+  return selector_data_access_precision(step) == "missing-indirect-memory-targets"
+             ? "annotate-indirect-memory-targets-or-prove-pointer-range"
+             : "split-selector-register-or-pack-data-away-from-flow-selectors";
+}
+
+std::string selector_data_resolution_status(const std::set<std::string>& proof_gaps,
+                                            const std::set<std::string>& overlap_registers,
+                                            const std::set<std::string>& free_selectors) {
+  if (proof_gaps.contains("missing-indirect-memory-target-range"))
+    return "needs-indirect-memory-target-range-proof";
+  if (!overlap_registers.empty() && free_selectors.empty())
+    return "proved-selector-data-overlap-requires-payload-repacking";
+  if (!overlap_registers.empty())
+    return "proved-selector-data-overlap-can-retarget-to-free-selector";
+  return "needs-selector-data-lifetime-proof";
+}
+
+std::string selector_data_required_action(const std::string& resolution_status) {
+  if (resolution_status == "needs-indirect-memory-target-range-proof")
+    return "annotate-indirect-memory-targets-or-prove-pointer-range";
+  if (resolution_status == "proved-selector-data-overlap-requires-payload-repacking")
+    return "pack-data-away-from-flow-selectors";
+  if (resolution_status == "proved-selector-data-overlap-can-retarget-to-free-selector")
+    return "retarget-indirect-flow-selector";
+  return "split-selector-register-or-prove-dual-use-data-selector";
+}
+
+std::string selector_data_proof_disposition(const std::string& resolution_status) {
+  if (resolution_status == "needs-indirect-memory-target-range-proof")
+    return "needs-indirect-memory-target-range-proof";
+  if (resolution_status == "proved-selector-data-overlap-requires-payload-repacking")
+    return "proved-conflict-needs-layout-change";
+  if (resolution_status == "proved-selector-data-overlap-can-retarget-to-free-selector")
+    return "proved-conflict-can-retarget-selector";
+  return "needs-selector-data-lifetime-proof";
+}
+
+std::string selector_data_layout_action(const std::string& resolution_status) {
+  if (resolution_status == "proved-selector-data-overlap-requires-payload-repacking")
+    return "free-stable-selector-registers";
+  if (resolution_status == "proved-selector-data-overlap-can-retarget-to-free-selector")
+    return "retarget-flow-selector-to-free-stable-register";
+  return "";
+}
+
+std::string selector_data_cost_model_action(const std::string& resolution_status) {
+  return resolution_status == "proved-selector-data-overlap-requires-payload-repacking"
+             ? "estimate-payload-packing-for-selector-freeing"
+             : "";
+}
+
+std::set<std::string>
+free_stable_selector_registers(const std::map<std::string, std::string>& allocated_registers) {
+  std::set<std::string> allocated;
+  for (const auto& [unused, reg] : allocated_registers) {
+    (void)unused;
+    allocated.insert(reg);
+  }
+  std::set<std::string> free;
+  for (int index = 0; index <= 0x0e; ++index) {
+    const std::string reg = core::register_name_for_index(index);
+    if (core::is_stable_indirect_selector(reg) && !allocated.contains(reg))
+      free.insert(reg);
+  }
+  return free;
+}
+
+std::optional<std::string> indirect_flow_selector_preservation_rejection_reason(
+    const std::set<std::string>& selector_registers,
+    const std::map<std::string, std::string>& allocated_registers,
+    const std::vector<ResolvedStep>& steps) {
+  const std::string selector_registers_text = static_proof_gate_join_values(selector_registers);
+  const std::set<std::string> free_stable_selectors =
+      free_stable_selector_registers(allocated_registers);
+  const std::string free_stable_selector_text =
+      static_proof_gate_join_values(free_stable_selectors);
+  const std::string selector_split_status =
+      free_stable_selectors.empty() ? "no-free-stable-selector-register"
+                                    : "free-stable-selector-register-available";
+  for (const ResolvedStep& step : steps) {
+    if (!step_writes_indirect_flow_selector(step, selector_registers))
+      continue;
+    std::string selector = "unknown";
+    if (step_is_direct_store(step))
+      selector = core::register_name_for_index(step.opcode - 0x40);
+    return "static proof gate rejected candidate; " +
+           static_proof_gate_key_values({
+               {"proofFamily", "indirect-flow-targets"},
+               {"missingProof", "selector-register-preservation"},
+               {"candidateSelectorRegisters", selector_registers_text},
+               {"selectorRegister", selector},
+               {"proofFailure", "selector-register-overwritten"},
+               {"consumerAddress", safe_format_label_address(step.address)},
+               {"consumerOpcodeHex", opcode_hex_text(step.opcode)},
+               {"consumerOpcode", indirect_flow_step_text(step)},
+               {"freeStableSelectorRegisters", free_stable_selector_text},
+               {"selectorSplitStatus", selector_split_status},
+               {"requiredAction", "keep-selector-register-stable-or-retarget-indirect-flow"},
+           });
+  }
+
+  std::set<std::string> conflicting_selector_registers;
+  std::set<std::string> conflicting_allocated_names;
+  std::set<std::string> conflicting_access_kinds;
+  std::set<std::string> conflicting_access_precisions;
+  std::set<std::string> conflicting_proof_gaps;
+  std::set<std::string> conflicting_proof_actions;
+  std::set<std::string> conflicting_target_registers;
+  std::set<std::string> overlapping_selector_registers;
+  std::vector<std::string> conflicting_access_parts;
+  const ResolvedStep* first_consumer = nullptr;
+  std::string first_selector;
+  std::string first_name;
+  std::string first_access_kind;
+  std::string first_access_targets;
+  std::string first_access_precision;
+  for (const auto& [name, allocated_register] : allocated_registers) {
+    if (compiler_owned_indirect_flow_allocation(name))
+      continue;
+    if (!selector_registers.contains(allocated_register))
+      continue;
+    const std::set<std::string> allocated_selector{allocated_register};
+    for (const ResolvedStep& step : steps) {
+      if (!step_accesses_selector_as_data(step, allocated_selector))
+        continue;
+      conflicting_selector_registers.insert(allocated_register);
+      conflicting_allocated_names.insert(name);
+      const std::string access_kind = selector_data_access_kind(step);
+      const std::string access_targets =
+          selector_data_access_targets_text(step, allocated_register);
+      const std::string access_precision = selector_data_access_precision(step);
+      conflicting_access_kinds.insert(access_kind);
+      conflicting_access_precisions.insert(access_precision);
+      conflicting_proof_gaps.insert(selector_data_access_proof_gap(step));
+      conflicting_proof_actions.insert(selector_data_access_proof_action(step));
+      if (const std::optional<std::set<std::string>> target_registers =
+              selector_data_access_target_registers(step, allocated_register)) {
+        conflicting_target_registers.insert(target_registers->begin(), target_registers->end());
+        for (const std::string& selector_register : selector_registers) {
+          if (target_registers->contains(selector_register))
+            overlapping_selector_registers.insert(selector_register);
+        }
+      }
+      conflicting_access_parts.push_back(allocated_register + "/" + name + "@" +
+                                         safe_format_label_address(step.address) + "/" +
+                                         opcode_hex_text(step.opcode) + "/" + access_kind +
+                                         "/targets:" + access_targets);
+      if (first_consumer == nullptr) {
+        first_consumer = &step;
+        first_selector = allocated_register;
+        first_name = name;
+        first_access_kind = access_kind;
+        first_access_targets = access_targets;
+        first_access_precision = access_precision;
+      }
+      break;
+    }
+  }
+
+  if (first_consumer != nullptr) {
+    const std::string resolution_status =
+        selector_data_resolution_status(conflicting_proof_gaps, overlapping_selector_registers,
+                                        free_stable_selectors);
+    const std::string required_action = selector_data_required_action(resolution_status);
+    return "static proof gate rejected candidate; " +
+           static_proof_gate_key_values({
+               {"proofFamily", "indirect-flow-targets"},
+               {"missingProof", "selector-register-preservation"},
+               {"candidateSelectorRegisters", selector_registers_text},
+               {"selectorRegister", first_selector},
+               {"allocatedName", first_name},
+               {"conflictingSelectorRegisters",
+               static_proof_gate_join_values(conflicting_selector_registers)},
+               {"conflictingAllocatedNames",
+                static_proof_gate_join_values(conflicting_allocated_names)},
+               {"selectorDataConflictKind", first_access_kind},
+               {"selectorDataConflictTargets", first_access_targets},
+               {"selectorDataConflictPrecision", first_access_precision},
+               {"selectorDataConflictKinds",
+                static_proof_gate_join_values(conflicting_access_kinds)},
+               {"selectorDataConflictPrecisions",
+                static_proof_gate_join_values(conflicting_access_precisions)},
+               {"selectorDataConflictAccesses", join_strings(conflicting_access_parts, "+")},
+               {"selectorDataAllConflictTargets",
+                static_proof_gate_join_values(conflicting_target_registers)},
+               {"selectorDataOverlapRegisters",
+                static_proof_gate_join_values(overlapping_selector_registers)},
+               {"selectorDataOverlapCount",
+                std::to_string(overlapping_selector_registers.size())},
+               {"selectorDataProofGap", static_proof_gate_join_values(conflicting_proof_gaps)},
+               {"selectorDataNextProofAction",
+                static_proof_gate_join_values(conflicting_proof_actions)},
+               {"selectorDataConflictResolutionStatus", resolution_status},
+               {"proofFailure", "selector-register-used-as-data"},
+               {"proofDisposition", selector_data_proof_disposition(resolution_status)},
+               {"consumerAddress", safe_format_label_address(first_consumer->address)},
+               {"consumerOpcodeHex", opcode_hex_text(first_consumer->opcode)},
+               {"consumerOpcode", indirect_flow_step_text(*first_consumer)},
+               {"freeStableSelectorRegisters", free_stable_selector_text},
+               {"selectorSplitStatus", selector_split_status},
+               {"layoutAction", selector_data_layout_action(resolution_status)},
+               {"costModelAction", selector_data_cost_model_action(resolution_status)},
+               {"requiredAction", required_action},
+           });
+  }
+
+  return std::nullopt;
+}
+
+std::optional<std::string> indirect_flow_targets_rejection_reason(
+    const std::vector<OptimizationReport>& optimizations,
+    const std::vector<PreloadReport>& preloads,
+    const std::vector<ResolvedStep>& steps,
+    const std::map<std::string, std::string>& allocated_registers) {
+  (void)optimizations;
+  bool saw_candidate_step = false;
+  std::set<std::string> selector_registers;
+  for (const ResolvedStep& step : steps) {
+    if (!step.comment.has_value() ||
+        step.comment->find("indirect-target=") == std::string::npos) {
+      continue;
+    }
+    if (is_runtime_indirect_call_comment(step.comment))
+      continue;
+    saw_candidate_step = true;
+    const std::optional<std::string> register_name = indirect_flow_register_for_opcode(step.opcode);
+    if (!register_name.has_value() || !core::is_stable_indirect_selector(*register_name)) {
+      return "static proof gate rejected candidate; " +
+             static_proof_gate_key_values({
+                 {"proofFamily", "indirect-flow-targets"},
+                 {"missingProof", "stable-selector-register"},
+                 {"proofFailure", "indirect-target-step-is-not-stable-selector-flow"},
+                 {"consumerAddress", safe_format_label_address(step.address)},
+                 {"consumerOpcodeHex", opcode_hex_text(step.opcode)},
+                 {"consumerOpcode", indirect_flow_step_text(step)},
+                 {"requiredAction", "emit-stable-selector-indirect-flow-artifact"},
+             });
+    }
+    const std::optional<PreloadedSelectorAnnotation> annotation =
+        preloaded_selector_annotation_from_comment(step.comment, *register_name);
+    if (!annotation.has_value()) {
+      return "static proof gate rejected candidate; " +
+             static_proof_gate_key_values({
+                 {"proofFamily", "indirect-flow-targets"},
+                 {"missingProof", "preloaded-selector-annotation"},
+                 {"selectorRegister", *register_name},
+                 {"proofFailure", "missing-or-malformed-preloaded-selector-comment"},
+                 {"consumerAddress", safe_format_label_address(step.address)},
+                 {"consumerOpcodeHex", opcode_hex_text(step.opcode)},
+                 {"consumerOpcode", indirect_flow_step_text(step)},
+                 {"requiredAction", "emit-final-preloaded-selector-target-artifact"},
+             });
+    }
+    if (!final_preload_resolves_to_flow_target(preloads, *register_name, annotation->target,
+                                               annotation->value)) {
+      return "static proof gate rejected candidate; " +
+             static_proof_gate_key_values({
+                 {"proofFamily", "indirect-flow-targets"},
+                 {"missingProof", "final-preload-target-resolution"},
+                 {"selectorRegister", *register_name},
+                 {"selectorValue", annotation->value},
+                 {"selectorTarget", safe_format_label_address(annotation->target)},
+                 {"proofFailure", "final-preload-missing-or-does-not-resolve"},
+                 {"consumerAddress", safe_format_label_address(step.address)},
+                 {"consumerOpcodeHex", opcode_hex_text(step.opcode)},
+                 {"consumerOpcode", indirect_flow_step_text(step)},
+                 {"requiredAction", "retarget-final-preload-or-selector-annotation"},
+             });
+    }
+    selector_registers.insert(*register_name);
+  }
+
+  if (!saw_candidate_step) {
+    return "static proof gate rejected candidate; " +
+           static_proof_gate_key_values({
+               {"proofFamily", "indirect-flow-targets"},
+               {"missingProof", "final-indirect-target-artifact"},
+               {"proofFailure", "no-indirect-target-steps"},
+               {"requiredAction", "emit-final-indirect-flow-proof-artifacts"},
+           });
+  }
+
+  if (const std::optional<std::string> preservation =
+          indirect_flow_selector_preservation_rejection_reason(selector_registers,
+                                                               allocated_registers, steps)) {
+    return preservation;
+  }
+  return std::nullopt;
+}
+
 bool indirect_flow_targets_proved(const std::vector<OptimizationReport>& optimizations,
                                   const std::vector<PreloadReport>& preloads,
                                   const std::vector<ResolvedStep>& steps,
@@ -46640,32 +47035,9 @@ bool indirect_flow_targets_proved(const std::vector<OptimizationReport>& optimiz
   // shape-specific lowerers emit the same artifacts before optimizer reporting
   // attaches a generic preloaded-indirect-flow name, so the verifier must not
   // depend on OptimizationReport labels.
-  (void)optimizations;
-  bool saw_proved_step = false;
-  std::set<std::string> selector_registers;
-  for (const ResolvedStep& step : steps) {
-    if (!step.comment.has_value() ||
-        step.comment->find("indirect-target=") == std::string::npos) {
-      continue;
-    }
-    if (is_runtime_indirect_call_comment(step.comment))
-      continue;
-    const std::optional<std::string> register_name = indirect_flow_register_for_opcode(step.opcode);
-    if (!register_name.has_value() || !core::is_stable_indirect_selector(*register_name))
-      return false;
-    const std::optional<PreloadedSelectorAnnotation> annotation =
-        preloaded_selector_annotation_from_comment(step.comment, *register_name);
-    if (!annotation.has_value())
-      return false;
-    if (!final_preload_resolves_to_flow_target(preloads, *register_name, annotation->target,
-                                         annotation->value))
-      return false;
-    selector_registers.insert(*register_name);
-    saw_proved_step = true;
-  }
-  return saw_proved_step &&
-         indirect_flow_selector_registers_are_preserved(selector_registers, allocated_registers,
-                                                        steps);
+  return !indirect_flow_targets_rejection_reason(optimizations, preloads, steps,
+                                                 allocated_registers)
+              .has_value();
 }
 
 bool fractional_selector_data_values_proved(const std::vector<OptimizationReport>& optimizations,
@@ -48260,8 +48632,20 @@ std::optional<std::string> value_aware_scheduler_traffic_shape_action(
     return "defer-helper-state-output-stores";
   if (shape == "stack-inputs-and-deferred-state-outputs")
     return "split-stack-inputs-from-deferred-state-outputs";
-  if (shape == "mixed-state-traffic")
-    return "prove-mixed-helper-state-lifetimes";
+  if (shape == "mixed-state-traffic") {
+    if (details.contains("valueAwareMixedStateTempCarrierNames") &&
+        details.contains("valueAwareMixedStateRequiredUpdateNames")) {
+      return "prove-local-temp-carrier-through-state-update-guard";
+    }
+    if (details.contains("valueAwareMixedStateTempCarrierNames"))
+      return "prove-local-temp-carrier-stack-value-flow";
+    const auto lifetime_status_it = details.find("valueAwareMixedStateLifetimeStatus");
+    if (lifetime_status_it != details.end() &&
+        lifetime_status_it->second == "local-to-helper-without-nested-calls") {
+      return "prove-local-mixed-state-stack-value-flow";
+    }
+    return "split-mixed-state-lifetimes-around-nested-calls";
+  }
   return std::nullopt;
 }
 
@@ -48577,6 +48961,8 @@ SizeAttributionReport build_size_attribution_report(
             });
 
   std::map<std::string, SizeHelperSpillSummaryReport> helper_spill_summaries;
+  std::map<std::string, std::vector<std::pair<int, SizeSpillAccessKind>>>
+      helper_spill_accesses_by_key;
   for (const HelperRegionRange& region : helper_regions) {
     for (std::size_t index = region.start; index < region.end && index < steps.size(); ++index) {
       const ResolvedStep& step = steps.at(index);
@@ -48584,6 +48970,7 @@ SizeAttributionReport build_size_attribution_report(
       if (!access.has_value())
         continue;
       const std::string key = region.label + "\x1f" + access->name;
+      helper_spill_accesses_by_key[key].push_back(std::make_pair(step.address, access->kind));
       SizeHelperSpillSummaryReport& summary = helper_spill_summaries[key];
       if (summary.helper_label.empty()) {
         summary.helper_label = region.label;
@@ -48871,7 +49258,47 @@ SizeAttributionReport build_size_attribution_report(
       int state_output_cells = 0;
       int nested_call_input_cells = 0;
       int mixed_state_cells = 0;
+      std::vector<SizeHelperSpillSummaryReport> mixed_state_spills;
       const auto nested_input_it = helper_nested_call_input_names.find(helper.label);
+      const auto nested_call_sites_for_helper = helper_nested_call_sites.find(helper.label);
+      const auto mixed_state_nested_sites =
+          [&](const SizeHelperSpillSummaryReport& spill) {
+            std::vector<std::string> sites;
+            if (nested_call_sites_for_helper == helper_nested_call_sites.end())
+              return sites;
+            for (const CallSite& call_site : nested_call_sites_for_helper->second) {
+              if (call_site.address < spill.first_address ||
+                  call_site.address > spill.last_address) {
+                continue;
+              }
+              sites.push_back(call_site.label + "@" +
+                              safe_format_label_address(call_site.address));
+            }
+            return sites;
+          };
+      const auto mixed_state_access_order =
+          [&](const SizeHelperSpillSummaryReport& spill) {
+            const std::string key = helper.label + "\x1f" + spill.name;
+            const auto access_it = helper_spill_accesses_by_key.find(key);
+            if (access_it == helper_spill_accesses_by_key.end())
+              return spill.name + ":unknown";
+            std::vector<std::string> events;
+            events.reserve(access_it->second.size());
+            for (const auto& [address, kind] : access_it->second) {
+              events.push_back(std::string(kind == SizeSpillAccessKind::Recall ? "R@" : "S@") +
+                               safe_format_label_address(address));
+            }
+            return spill.name + ":" + join_strings(events, "/");
+          };
+      const auto mixed_state_accesses =
+          [&](const SizeHelperSpillSummaryReport& spill)
+              -> std::vector<std::pair<int, SizeSpillAccessKind>> {
+            const std::string key = helper.label + "\x1f" + spill.name;
+            const auto access_it = helper_spill_accesses_by_key.find(key);
+            if (access_it == helper_spill_accesses_by_key.end())
+              return {};
+            return access_it->second;
+          };
       for (const SizeHelperSpillSummaryReport& spill : spills->second) {
         if (spill.recall_cells > 0 && spill.store_cells == 0) {
           stack_input_names.insert(spill.name);
@@ -48889,6 +49316,7 @@ SizeAttributionReport build_size_attribution_report(
         } else {
           mixed_state_names.insert(spill.name);
           mixed_state_cells += spill.total_cells;
+          mixed_state_spills.push_back(spill);
         }
       }
       if (!stack_input_names.empty()) {
@@ -48974,6 +49402,9 @@ SizeAttributionReport build_size_attribution_report(
         std::set<std::string> call_preservation_input_names;
         std::map<std::string, std::set<int>> call_preservation_recall_addresses_by_name;
         std::vector<std::string> call_preservation_site_parts;
+        std::set<std::string> call_argument_input_names;
+        std::vector<std::string> call_argument_site_parts;
+        int call_argument_preservation_cells = 0;
         const auto nested_call_sites_it = helper_nested_call_sites.find(helper.label);
         const auto recall_indices_it = helper_recall_indices_by_name.find(helper.label);
         if (nested_call_sites_it != helper_nested_call_sites.end() &&
@@ -49002,6 +49433,21 @@ SizeAttributionReport build_size_attribution_report(
               call_preservation_site_parts.push_back(
                   call_site.label + "@" + safe_format_label_address(call_site.address) + ":" +
                   name + "@" + join_strings(recall_addresses, "/"));
+              if (call_site.start_index > 0) {
+                const ResolvedStep& producer = steps.at(call_site.start_index - 1U);
+                const std::optional<SizeSpillAccess> producer_access =
+                    size_report_spill_access(producer);
+                if (producer_access.has_value() &&
+                    producer_access->kind == SizeSpillAccessKind::Recall &&
+                    producer_access->name == name) {
+                  call_argument_input_names.insert(name);
+                  call_argument_site_parts.push_back(
+                      call_site.label + "@" + safe_format_label_address(call_site.address) +
+                      ":" + name + "<-recall@" +
+                      safe_format_label_address(producer.address));
+                  ++call_argument_preservation_cells;
+                }
+              }
             }
           }
         }
@@ -49049,12 +49495,6 @@ SizeAttributionReport build_size_attribution_report(
         if (!unprofitable_stack_input_names.empty()) {
           helper.details["valueAwareUnprofitableStackInputNames"] =
               join_strings(unprofitable_stack_input_names, ",");
-        }
-        if (profitable_stack_input_net_cells > 0 || state_output_cells > 0) {
-          helper.details["valueAwareEstimatedNetSavingsAfterMaterialization"] =
-              std::to_string(profitable_stack_input_net_cells + state_output_cells);
-          helper.details["valueAwareEstimatedNetSavingsModel"] =
-              "profitable-stack-input-recalls-minus-callsite-materialization-plus-state-outputs";
         }
         if (!call_preservation_input_names.empty()) {
           helper.details["valueAwareCallPreservationInputNames"] = join_strings(
@@ -49150,10 +49590,49 @@ SizeAttributionReport build_size_attribution_report(
                   : "prove-callee-stack-effect-for-listed-sites";
           helper.details["valueAwareCallPreservationReason"] =
               "profitable stack inputs have helper-local recalls after nested helper calls";
+          if (!call_argument_input_names.empty()) {
+            helper.details["valueAwareCallArgumentInputNames"] =
+                join_strings(std::vector<std::string>(call_argument_input_names.begin(),
+                                                      call_argument_input_names.end()),
+                             ",");
+            helper.details["valueAwareCallArgumentSites"] =
+                join_strings(call_argument_site_parts, ";");
+            helper.details["valueAwareCallArgumentPreservationCells"] =
+                std::to_string(call_argument_preservation_cells);
+            helper.details["valueAwareCallArgumentPreservationReason"] =
+                "live stack input is also consumed as a nested helper X argument before later "
+                "helper-local recalls";
+          }
           if (call_preservation_has_stack_mutating_callee) {
             helper.details["valueAwareProfitableStackInputPlanStatus"] =
                 "blocked-by-stack-mutating-callee";
           }
+        }
+        const int base_estimated_net_cells = profitable_stack_input_net_cells;
+        const int adjusted_estimated_net_cells =
+            base_estimated_net_cells - call_argument_preservation_cells;
+        if (base_estimated_net_cells > 0 || state_output_cells > 0 ||
+            call_argument_preservation_cells > 0) {
+          if (call_argument_preservation_cells > 0) {
+            helper.details["valueAwareEstimatedNetSavingsBeforeArgumentPreservation"] =
+                std::to_string(base_estimated_net_cells);
+            helper.details["valueAwareEstimatedNetSavingsAfterArgumentPreservation"] =
+                std::to_string(adjusted_estimated_net_cells);
+            helper.details["valueAwareEstimatedNetSavingsAfterMaterialization"] =
+                std::to_string(adjusted_estimated_net_cells);
+            helper.details["valueAwareEstimatedNetSavingsModel"] =
+                "profitable-stack-input-recalls-minus-callsite-materialization-minus-"
+                "argument-preservation-excluding-persistent-state-outputs";
+          } else {
+            helper.details["valueAwareEstimatedNetSavingsAfterMaterialization"] =
+                std::to_string(base_estimated_net_cells);
+            helper.details["valueAwareEstimatedNetSavingsModel"] =
+                "profitable-stack-input-recalls-minus-callsite-materialization-excluding-"
+                "persistent-state-outputs";
+          }
+          if (state_output_cells > 0)
+            helper.details["valueAwareEstimatedNetSavingsExcludes"] =
+                "persistent-state-output-stores";
         }
         if (!direct_stack_input_names.empty()) {
           helper.details["valueAwareDirectStackInputNames"] =
@@ -49223,6 +49702,19 @@ SizeAttributionReport build_size_attribution_report(
                                                   state_output_names.end()),
                          ",");
         helper.details["valueAwareStateOutputCells"] = std::to_string(state_output_cells);
+        helper.details["valueAwareStateOutputPlanStatus"] = "requires-persistent-state-store";
+        helper.details["valueAwareStateOutputNetCells"] = "0";
+        helper.details["valueAwareStateOutputReason"] =
+            "helper output stores preserve state for later control-flow consumers; deferring "
+            "them is not direct scheduler savings without a consumer stack-flow proof";
+        if (stack_input_names.empty() && nested_call_input_names.empty() &&
+            mixed_state_names.empty()) {
+          helper.details["valueAwareEstimatedNetSavingsAfterMaterialization"] = "0";
+          helper.details["valueAwareEstimatedNetSavingsModel"] =
+              "deferred-state-output-stores-excluded-without-consumer-stack-flow-proof";
+          helper.details["valueAwareEstimatedNetSavingsExcludes"] =
+              "persistent-state-output-stores";
+        }
       }
       if (!nested_call_input_names.empty()) {
         helper.details["valueAwareNestedCallInputNames"] =
@@ -49240,6 +49732,123 @@ SizeAttributionReport build_size_attribution_report(
                                                   mixed_state_names.end()),
                          ",");
         helper.details["valueAwareMixedStateCells"] = std::to_string(mixed_state_cells);
+        helper.details["valueAwareMixedStateBreakdown"] =
+            size_report_helper_spill_breakdown(mixed_state_spills);
+        std::vector<std::string> access_order_parts;
+        std::vector<std::string> local_lifetime_names;
+        std::vector<std::string> nested_crossing_names;
+        std::vector<std::string> nested_crossing_site_parts;
+        std::vector<std::string> temp_carrier_names;
+        std::vector<std::string> required_update_names;
+        std::vector<std::string> unclassified_local_names;
+        int local_lifetime_cells = 0;
+        int nested_crossing_cells = 0;
+        int temp_carrier_cells = 0;
+        int required_update_cells = 0;
+        int unclassified_local_cells = 0;
+        access_order_parts.reserve(mixed_state_spills.size());
+        for (const SizeHelperSpillSummaryReport& spill : mixed_state_spills) {
+          access_order_parts.push_back(mixed_state_access_order(spill));
+          const std::vector<std::string> nested_sites = mixed_state_nested_sites(spill);
+          if (nested_sites.empty()) {
+            local_lifetime_names.push_back(spill.name);
+            local_lifetime_cells += spill.total_cells;
+            const std::vector<std::pair<int, SizeSpillAccessKind>> accesses =
+                mixed_state_accesses(spill);
+            if (!accesses.empty() && accesses.front().second == SizeSpillAccessKind::Store &&
+                std::any_of(accesses.begin(), accesses.end(), [](const auto& access) {
+                  return access.second == SizeSpillAccessKind::Recall;
+                })) {
+              temp_carrier_names.push_back(spill.name);
+              temp_carrier_cells += spill.total_cells;
+            } else if (!accesses.empty() &&
+                       accesses.front().second == SizeSpillAccessKind::Recall &&
+                       std::any_of(accesses.begin(), accesses.end(), [](const auto& access) {
+                         return access.second == SizeSpillAccessKind::Store;
+                       })) {
+              required_update_names.push_back(spill.name);
+              required_update_cells += spill.total_cells;
+            } else {
+              unclassified_local_names.push_back(spill.name);
+              unclassified_local_cells += spill.total_cells;
+            }
+          } else {
+            nested_crossing_names.push_back(spill.name);
+            nested_crossing_cells += spill.total_cells;
+            nested_crossing_site_parts.push_back(spill.name + ":" +
+                                                 join_strings(nested_sites, "/"));
+          }
+        }
+        helper.details["valueAwareMixedStateAccessOrder"] =
+            join_strings(access_order_parts, ";");
+        if (!local_lifetime_names.empty()) {
+          helper.details["valueAwareMixedStateLocalLifetimeNames"] =
+              join_strings(local_lifetime_names, ",");
+          helper.details["valueAwareMixedStateLocalLifetimeCells"] =
+              std::to_string(local_lifetime_cells);
+        }
+        if (!temp_carrier_names.empty()) {
+          helper.details["valueAwareMixedStateTempCarrierNames"] =
+              join_strings(temp_carrier_names, ",");
+          helper.details["valueAwareMixedStateTempCarrierCells"] =
+              std::to_string(temp_carrier_cells);
+          helper.details["valueAwareMixedStateTempCarrierReason"] =
+              "local store-before-recall value can be stack-carried after preserving it through "
+              "intervening operations";
+        }
+        if (!required_update_names.empty()) {
+          helper.details["valueAwareMixedStateRequiredUpdateNames"] =
+              join_strings(required_update_names, ",");
+          helper.details["valueAwareMixedStateRequiredUpdateCells"] =
+              std::to_string(required_update_cells);
+          helper.details["valueAwareMixedStateRequiredUpdateReason"] =
+              "recall-before-store traffic updates persistent state and is not direct scheduler "
+              "savings";
+        }
+        if (!unclassified_local_names.empty()) {
+          helper.details["valueAwareMixedStateUnclassifiedLocalNames"] =
+              join_strings(unclassified_local_names, ",");
+          helper.details["valueAwareMixedStateUnclassifiedLocalCells"] =
+              std::to_string(unclassified_local_cells);
+        }
+        if (!nested_crossing_names.empty()) {
+          helper.details["valueAwareMixedStateNestedCrossingNames"] =
+              join_strings(nested_crossing_names, ",");
+          helper.details["valueAwareMixedStateNestedCrossingCells"] =
+              std::to_string(nested_crossing_cells);
+          helper.details["valueAwareMixedStateNestedCrossingSites"] =
+              join_strings(nested_crossing_site_parts, ";");
+        }
+        helper.details["valueAwareMixedStateLifetimeStatus"] =
+            nested_crossing_names.empty()
+                ? "local-to-helper-without-nested-calls"
+                : (local_lifetime_names.empty() ? "crosses-nested-helper-calls"
+                                                : "mixed-local-and-nested-crossing-lifetimes");
+        helper.details["valueAwareMixedStateProofAction"] =
+            nested_crossing_names.empty()
+                ? "prove-local-stack-value-flow-through-mutating-ops"
+                : "split-local-lifetimes-from-nested-call-crossing-state";
+        if (temp_carrier_cells > 0) {
+          const int temp_carrier_materialize_cells =
+              required_update_cells > 0 ? temp_carrier_cells : 0;
+          const int temp_carrier_net_cells =
+              temp_carrier_cells - temp_carrier_materialize_cells;
+          helper.details["valueAwareMixedStateTempCarrierGrossCells"] =
+              std::to_string(temp_carrier_cells);
+          helper.details["valueAwareMixedStateTempCarrierMaterializeCells"] =
+              std::to_string(temp_carrier_materialize_cells);
+          helper.details["valueAwareMixedStateTempCarrierNetCells"] =
+              std::to_string(temp_carrier_net_cells);
+          helper.details["valueAwareMixedStateTempCarrierPlanStatus"] =
+              temp_carrier_net_cells > 0 ? "positive-after-stack-preservation"
+                                         : "break-even-after-stack-preservation";
+          helper.details["valueAwareEstimatedNetSavingsAfterMaterialization"] =
+              std::to_string(temp_carrier_net_cells);
+          helper.details["valueAwareEstimatedNetSavingsModel"] =
+              "local-temp-carrier-register-traffic-minus-stack-preservation";
+          helper.details["valueAwareEstimatedNetSavingsExcludes"] =
+              "persistent-state-updates-and-nested-call-inputs";
+        }
       }
       if (!stack_input_names.empty() || !state_output_names.empty() ||
           !nested_call_input_names.empty() ||
@@ -51387,25 +51996,24 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       if (!candidate_beats_best(result, best)) {
         continue;
       }
-      if (candidate_needs_static_proof_gate(candidate.options) &&
-          !optimizer_static_gate_accepts(candidate.options, result)) {
-        const std::optional<std::string> rejection_reason =
-            optimizer_static_gate_rejection_reason(candidate.options, result);
+      const std::optional<std::string> rejection_reason =
+          candidate_needs_static_proof_gate(candidate.options)
+              ? optimizer_static_gate_rejection_reason(candidate.options, result)
+              : std::nullopt;
+      if (rejection_reason.has_value()) {
         append_candidate_report_once(search_rejected_candidates,
                                      CandidateReport{
                                          .site = "candidate-search",
                                          .variant = candidate.name,
                                          .steps = static_cast<int>(result.steps.size()),
                                          .selected = false,
-                                         .reason = rejection_reason.value_or(
-                                             "static proof gate rejected candidate"),
+                                         .reason = *rejection_reason,
                                      });
         if (trace_candidates) {
           std::cerr << "[candidate-trace] reject-unproved #"
                     << (evaluated_candidate_count + 1U) << " " << candidate.name << " steps="
                     << result.steps.size();
-          if (rejection_reason.has_value())
-            std::cerr << " reason=" << *rejection_reason;
+          std::cerr << " reason=" << *rejection_reason;
           std::cerr << "\n";
         }
         continue;
@@ -53713,11 +54321,8 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
     std::set<std::string> beam_seen;
     auto beam_gate_ok = [&](const CompileOptions& candidate_options,
                             const CompileResult& result) -> bool {
-      if (candidate_needs_static_proof_gate(candidate_options) &&
-          !optimizer_static_gate_accepts(candidate_options, result)) {
-        return false;
-      }
-      return true;
+      return !candidate_needs_static_proof_gate(candidate_options) ||
+             !optimizer_static_gate_rejection_reason(candidate_options, result).has_value();
     };
     // Seed the frontier from the top-K smallest of every curated candidate that
     // was already compiled above (cache hits, so this is cheap), not just the

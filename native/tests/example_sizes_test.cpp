@@ -264,6 +264,312 @@ void example_sizes_match_typescript_baselines() {
     const std::filesystem::path path = examples_root / (name + ".mkpro");
     const std::size_t actual = example_steps(path, /*analysis_budgeted=*/false);
     require(actual == expected, "top-level example " + name + " step count should match TS baseline");
+    if (name == "fox-hunt-mk61") {
+      const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
+      require(std::any_of(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
+                return step.address == 14 && step.comment.has_value() &&
+                       step.comment->find("coord_list fused candidate; "
+                                          "indirect-memory-targets=6,7,8,9,a,b,c,d,e") !=
+                           std::string::npos;
+              }),
+              "fox-hunt-mk61 coord_list fused indirect recall should annotate its proved "
+              "memory target range");
+      const SizeOpportunityReport* indirect_flow =
+          find_size_opportunity(result, "aggressive-post-layout-indirect-flow");
+      require(indirect_flow != nullptr && indirect_flow->current_steps == 65 &&
+                  indirect_flow->candidate_steps == 60 && indirect_flow->savings == 5 &&
+                  indirect_flow->blocker_kind == "static-proof-gate" &&
+                  indirect_flow->details.contains("proofFamily") &&
+                  indirect_flow->details.at("proofFamily") == "indirect-flow-targets" &&
+                  indirect_flow->details.contains("missingProof") &&
+                  indirect_flow->details.at("missingProof") ==
+                      "selector-register-preservation" &&
+                  indirect_flow->details.contains("proofFailure") &&
+                  indirect_flow->details.at("proofFailure") ==
+                      "selector-register-used-as-data" &&
+                  indirect_flow->details.contains("selectorRegister") &&
+                  indirect_flow->details.at("selectorRegister") == "7" &&
+                  indirect_flow->details.contains("candidateSelectorRegisters") &&
+                  indirect_flow->details.at("candidateSelectorRegisters") == "7+8+9" &&
+                  indirect_flow->details.contains("conflictingSelectorRegisters") &&
+                  indirect_flow->details.at("conflictingSelectorRegisters") == "7+8+9" &&
+                  indirect_flow->details.contains("allocatedName") &&
+                  indirect_flow->details.at("allocatedName") == "__coord_list_foxes_1" &&
+                  indirect_flow->details.contains("conflictingAllocatedNames") &&
+                  indirect_flow->details.at("conflictingAllocatedNames") ==
+                      "__coord_list_foxes_1+__coord_list_foxes_2+__coord_list_foxes_3" &&
+                  indirect_flow->details.contains("consumerAddress") &&
+                  indirect_flow->details.at("consumerAddress") == "14" &&
+                  indirect_flow->details.contains("consumerOpcodeHex") &&
+                  indirect_flow->details.at("consumerOpcodeHex") == "D5" &&
+                  indirect_flow->details.contains("selectorDataConflictKind") &&
+                  indirect_flow->details.at("selectorDataConflictKind") ==
+                      "indirect-memory-recall" &&
+                  indirect_flow->details.contains("selectorDataConflictTargets") &&
+                  indirect_flow->details.at("selectorDataConflictTargets") ==
+                      "6+7+8+9+a+b+c+d+e" &&
+                  indirect_flow->details.contains("selectorDataConflictPrecision") &&
+                  indirect_flow->details.at("selectorDataConflictPrecision") ==
+                      "annotated-indirect-memory-targets" &&
+                  indirect_flow->details.contains("selectorDataConflictAccesses") &&
+                  indirect_flow->details.at("selectorDataConflictAccesses")
+                          .find("7/__coord_list_foxes_1@14/D5/indirect-memory-recall/"
+                                "targets:6+7+8+9+a+b+c+d+e") != std::string::npos &&
+                  indirect_flow->details.at("selectorDataConflictAccesses")
+                          .find("9/__coord_list_foxes_3@14/D5/indirect-memory-recall/"
+                                "targets:6+7+8+9+a+b+c+d+e") != std::string::npos &&
+                  indirect_flow->details.contains("selectorDataAllConflictTargets") &&
+                  indirect_flow->details.at("selectorDataAllConflictTargets") ==
+                      "6+7+8+9+a+b+c+d+e" &&
+                  indirect_flow->details.contains("selectorDataOverlapRegisters") &&
+                  indirect_flow->details.at("selectorDataOverlapRegisters") == "7+8+9" &&
+                  indirect_flow->details.contains("selectorDataOverlapCount") &&
+                  indirect_flow->details.at("selectorDataOverlapCount") == "3" &&
+                  indirect_flow->details.contains("selectorDataProofGap") &&
+                  indirect_flow->details.at("selectorDataProofGap") ==
+                      "annotated-target-overlaps-selector-data" &&
+                  indirect_flow->details.contains("selectorDataNextProofAction") &&
+                  indirect_flow->details.at("selectorDataNextProofAction") ==
+                      "split-selector-register-or-pack-data-away-from-flow-selectors" &&
+                  indirect_flow->details.contains("selectorDataConflictResolutionStatus") &&
+                  indirect_flow->details.at("selectorDataConflictResolutionStatus") ==
+                      "proved-selector-data-overlap-requires-payload-repacking" &&
+                  indirect_flow->details.contains("proofDisposition") &&
+                  indirect_flow->details.at("proofDisposition") ==
+                      "proved-conflict-needs-layout-change" &&
+                  indirect_flow->details.contains("freeStableSelectorRegisters") &&
+                  indirect_flow->details.at("freeStableSelectorRegisters") == "none" &&
+                  indirect_flow->details.contains("selectorSplitStatus") &&
+                  indirect_flow->details.at("selectorSplitStatus") ==
+                      "no-free-stable-selector-register" &&
+                  indirect_flow->details.contains("layoutAction") &&
+                  indirect_flow->details.at("layoutAction") ==
+                      "free-stable-selector-registers" &&
+                  indirect_flow->details.contains("costModelAction") &&
+                  indirect_flow->details.at("costModelAction") ==
+                      "estimate-payload-packing-for-selector-freeing" &&
+                  indirect_flow->details.contains("requiredAction") &&
+                  indirect_flow->details.at("requiredAction") ==
+                      "pack-data-away-from-flow-selectors",
+              "fox-hunt-mk61 size attribution should explain why the 60-cell indirect-flow "
+              "candidate is blocked by proved selector/data overlap");
+      const SizeNextActionSummaryReport* selector_action = find_size_next_action(
+          result, "requiredAction", "pack-data-away-from-flow-selectors");
+      require(selector_action != nullptr && selector_action->opportunities == 6 &&
+                  selector_action->potential_savings == 5 &&
+                  selector_action->best_savings == 5 &&
+                  selector_action->best_blocker_kind == "static-proof-gate" &&
+                  selector_action->best_details.contains("proofFailure") &&
+                  selector_action->best_details.at("proofFailure") ==
+                      "selector-register-used-as-data" &&
+                  selector_action->best_details.contains("consumerOpcodeHex") &&
+                  selector_action->best_details.at("consumerOpcodeHex") == "D5" &&
+                  selector_action->best_details.contains("conflictingSelectorRegisters") &&
+                  selector_action->best_details.at("conflictingSelectorRegisters") == "7+8+9" &&
+                  selector_action->best_details.contains("selectorDataConflictPrecision") &&
+                  selector_action->best_details.at("selectorDataConflictPrecision") ==
+                      "annotated-indirect-memory-targets" &&
+                  selector_action->best_details.contains("selectorDataProofGap") &&
+                  selector_action->best_details.at("selectorDataProofGap") ==
+                      "annotated-target-overlaps-selector-data" &&
+                  selector_action->best_details.contains("selectorDataNextProofAction") &&
+                  selector_action->best_details.at("selectorDataNextProofAction") ==
+                      "split-selector-register-or-pack-data-away-from-flow-selectors" &&
+                  selector_action->best_details.contains("selectorDataConflictResolutionStatus") &&
+                  selector_action->best_details.at("selectorDataConflictResolutionStatus") ==
+                      "proved-selector-data-overlap-requires-payload-repacking" &&
+                  selector_action->best_details.contains("proofDisposition") &&
+                  selector_action->best_details.at("proofDisposition") ==
+                      "proved-conflict-needs-layout-change" &&
+                  selector_action->best_details.contains("freeStableSelectorRegisters") &&
+                  selector_action->best_details.at("freeStableSelectorRegisters") == "none" &&
+                  selector_action->best_details.contains("selectorSplitStatus") &&
+                  selector_action->best_details.at("selectorSplitStatus") ==
+                      "no-free-stable-selector-register",
+              "fox-hunt-mk61 size attribution should rank selector/data payload packing as the "
+              "next action for the 60-cell post-layout candidates");
+      const SizeNextActionSummaryReport* layout_action =
+          find_size_next_action(result, "layoutAction", "free-stable-selector-registers");
+      require(layout_action != nullptr && layout_action->potential_savings == 5 &&
+                  layout_action->best_details.contains("selectorDataOverlapRegisters") &&
+                  layout_action->best_details.at("selectorDataOverlapRegisters") == "7+8+9",
+              "fox-hunt-mk61 size attribution should expose the concrete register-layout action");
+      const SizeNextActionSummaryReport* cost_model_action = find_size_next_action(
+          result, "costModelAction", "estimate-payload-packing-for-selector-freeing");
+      require(cost_model_action != nullptr && cost_model_action->potential_savings == 5 &&
+                  cost_model_action->best_details.contains("selectorDataAllConflictTargets") &&
+                  cost_model_action->best_details.at("selectorDataAllConflictTargets") ==
+                      "6+7+8+9+a+b+c+d+e",
+              "fox-hunt-mk61 size attribution should expose the packing cost-model action");
+    }
+    if (name == "dangerous-loading") {
+      const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
+      const SizeHelperSummaryReport* resolve_turn = find_size_helper(result, "resolve_turn");
+      require(resolve_turn != nullptr &&
+                  resolve_turn->details.contains("valueAwareStateOutputNames") &&
+                  resolve_turn->details.at("valueAwareStateOutputNames") == "loaded" &&
+                  resolve_turn->details.contains("valueAwareStateOutputPlanStatus") &&
+                  resolve_turn->details.at("valueAwareStateOutputPlanStatus") ==
+                      "requires-persistent-state-store" &&
+                  resolve_turn->details.contains("valueAwareStateOutputNetCells") &&
+                  resolve_turn->details.at("valueAwareStateOutputNetCells") == "0" &&
+                  resolve_turn->details.contains("valueAwareEstimatedNetSavingsAfterMaterialization") &&
+                  resolve_turn->details.at("valueAwareEstimatedNetSavingsAfterMaterialization") ==
+                      "0" &&
+                  resolve_turn->details.contains("valueAwareEstimatedNetSavingsExcludes") &&
+                  resolve_turn->details.at("valueAwareEstimatedNetSavingsExcludes") ==
+                      "persistent-state-output-stores",
+              "dangerous-loading should not count persistent loaded stores as direct "
+              "value-aware scheduler savings");
+      const SizeOpportunityReport* resolve_turn_register_traffic =
+          find_size_opportunity_detail(result, "helper-register-traffic", "helperLabel",
+                                       "resolve_turn");
+      require(resolve_turn_register_traffic != nullptr &&
+                  resolve_turn_register_traffic->savings == 0 &&
+                  resolve_turn_register_traffic->details.contains("sizeImpactStatus") &&
+                  resolve_turn_register_traffic->details.at("sizeImpactStatus") ==
+                      "estimated-nonpositive-net",
+              "dangerous-loading should keep resolve_turn traffic visible while ranking its "
+              "persistent state output as non-positive");
+      const SizeNextActionSummaryReport* state_output_action = find_size_next_action(
+          result, "trafficShapeAction", "split-stack-inputs-from-deferred-state-outputs");
+      require(state_output_action == nullptr,
+              "dangerous-loading should not rank persistent state-output stores as a positive "
+              "next scheduler action");
+    }
+    if (name == "game-100-pig") {
+      const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
+      const SizeHelperSummaryReport* roll_die = find_size_helper(result, "roll_die");
+      require(roll_die != nullptr &&
+                  roll_die->details.contains("valueAwareSchedulerTrafficShape") &&
+                  roll_die->details.at("valueAwareSchedulerTrafficShape") ==
+                      "deferred-state-outputs-only" &&
+                  roll_die->details.contains("valueAwareStateOutputNames") &&
+                  roll_die->details.at("valueAwareStateOutputNames") == "die" &&
+                  roll_die->details.contains("valueAwareStateOutputPlanStatus") &&
+                  roll_die->details.at("valueAwareStateOutputPlanStatus") ==
+                      "requires-persistent-state-store" &&
+                  roll_die->details.contains("valueAwareStateOutputNetCells") &&
+                  roll_die->details.at("valueAwareStateOutputNetCells") == "0" &&
+                  roll_die->details.contains("valueAwareEstimatedNetSavingsAfterMaterialization") &&
+                  roll_die->details.at("valueAwareEstimatedNetSavingsAfterMaterialization") ==
+                      "0",
+              "game-100-pig should expose roll_die's persistent die store without counting it as "
+              "direct scheduler savings");
+      const SizeOpportunityReport* roll_die_register_traffic =
+          find_size_opportunity_detail(result, "helper-register-traffic", "helperLabel",
+                                       "roll_die");
+      require(roll_die_register_traffic != nullptr &&
+                  roll_die_register_traffic->savings == 0 &&
+                  roll_die_register_traffic->details.contains("sizeImpactStatus") &&
+                  roll_die_register_traffic->details.at("sizeImpactStatus") ==
+                      "estimated-nonpositive-net",
+              "game-100-pig should keep roll_die traffic visible while ranking persistent state "
+              "output as non-positive");
+      const SizeNextActionSummaryReport* state_output_action =
+          find_size_next_action(result, "trafficShapeAction", "defer-helper-state-output-stores");
+      require(state_output_action == nullptr,
+              "game-100-pig should not rank persistent die stores as a positive next scheduler "
+              "action");
+    }
+    if (name == "rambo-iii") {
+      const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
+      const SizeHelperSummaryReport* front_stop = find_size_helper(result, "front_stop");
+      require(front_stop != nullptr &&
+                  front_stop->details.contains("valueAwareMixedStateNames") &&
+                  front_stop->details.at("valueAwareMixedStateNames") == "cells_7,scratch" &&
+                  front_stop->details.contains("valueAwareMixedStateCells") &&
+                  front_stop->details.at("valueAwareMixedStateCells") == "4" &&
+                  front_stop->details.contains("valueAwareMixedStateBreakdown") &&
+                  front_stop->details.at("valueAwareMixedStateBreakdown")
+                          .find("cells_7:2c/1r/1s@39..42") != std::string::npos &&
+                  front_stop->details.at("valueAwareMixedStateBreakdown")
+                          .find("scratch:2c/1r/1s@38..45") != std::string::npos &&
+                  front_stop->details.contains("valueAwareMixedStateAccessOrder") &&
+                  front_stop->details.at("valueAwareMixedStateAccessOrder")
+                          .find("cells_7:R@39/S@42") != std::string::npos &&
+                  front_stop->details.at("valueAwareMixedStateAccessOrder")
+                          .find("scratch:S@38/R@45") != std::string::npos &&
+                  front_stop->details.contains("valueAwareMixedStateLocalLifetimeNames") &&
+                  front_stop->details.at("valueAwareMixedStateLocalLifetimeNames") ==
+                      "cells_7,scratch" &&
+                  front_stop->details.contains("valueAwareMixedStateLocalLifetimeCells") &&
+                  front_stop->details.at("valueAwareMixedStateLocalLifetimeCells") == "4" &&
+                  front_stop->details.contains("valueAwareMixedStateLifetimeStatus") &&
+                  front_stop->details.at("valueAwareMixedStateLifetimeStatus") ==
+                      "local-to-helper-without-nested-calls" &&
+                  front_stop->details.contains("valueAwareMixedStateProofAction") &&
+                  front_stop->details.at("valueAwareMixedStateProofAction") ==
+                      "prove-local-stack-value-flow-through-mutating-ops" &&
+                  front_stop->details.contains("valueAwareMixedStateTempCarrierNames") &&
+                  front_stop->details.at("valueAwareMixedStateTempCarrierNames") == "scratch" &&
+                  front_stop->details.contains("valueAwareMixedStateTempCarrierCells") &&
+                  front_stop->details.at("valueAwareMixedStateTempCarrierCells") == "2" &&
+                  front_stop->details.contains("valueAwareMixedStateTempCarrierGrossCells") &&
+                  front_stop->details.at("valueAwareMixedStateTempCarrierGrossCells") == "2" &&
+                  front_stop->details.contains(
+                      "valueAwareMixedStateTempCarrierMaterializeCells") &&
+                  front_stop->details.at(
+                      "valueAwareMixedStateTempCarrierMaterializeCells") == "2" &&
+                  front_stop->details.contains("valueAwareMixedStateTempCarrierNetCells") &&
+                  front_stop->details.at("valueAwareMixedStateTempCarrierNetCells") == "0" &&
+                  front_stop->details.contains("valueAwareMixedStateTempCarrierPlanStatus") &&
+                  front_stop->details.at("valueAwareMixedStateTempCarrierPlanStatus") ==
+                      "break-even-after-stack-preservation" &&
+                  front_stop->details.contains("valueAwareMixedStateRequiredUpdateNames") &&
+                  front_stop->details.at("valueAwareMixedStateRequiredUpdateNames") ==
+                      "cells_7" &&
+                  front_stop->details.contains("valueAwareMixedStateRequiredUpdateCells") &&
+                  front_stop->details.at("valueAwareMixedStateRequiredUpdateCells") == "2" &&
+                  front_stop->details.contains("valueAwareEstimatedNetSavingsAfterMaterialization") &&
+                  front_stop->details.at("valueAwareEstimatedNetSavingsAfterMaterialization") ==
+                      "0" &&
+                  front_stop->details.contains("valueAwareEstimatedNetSavingsModel") &&
+                  front_stop->details.at("valueAwareEstimatedNetSavingsModel") ==
+                      "local-temp-carrier-register-traffic-minus-stack-preservation" &&
+                  front_stop->details.contains("valueAwareEstimatedNetSavingsExcludes") &&
+                  front_stop->details.at("valueAwareEstimatedNetSavingsExcludes") ==
+                      "persistent-state-updates-and-nested-call-inputs" &&
+                  !front_stop->details.contains("valueAwareMixedStateNestedCrossingNames") &&
+                  front_stop->details.contains("valueAwareNestedCallInputNames") &&
+                  front_stop->details.at("valueAwareNestedCallInputNames") == "random_state",
+              "rambo-iii front_stop size attribution should split local mixed-state lifetimes "
+              "from nested-call state inputs for the value-aware scheduler");
+      const SizeOpportunityReport* front_stop_register_traffic =
+          find_size_opportunity_detail(result, "helper-register-traffic", "helperLabel",
+                                       "front_stop");
+      require(front_stop_register_traffic != nullptr &&
+                  front_stop_register_traffic->savings == 0 &&
+                  front_stop_register_traffic->candidate_steps ==
+                      static_cast<int>(result.steps.size()) &&
+                  front_stop_register_traffic->details.contains("savingsModel") &&
+                  front_stop_register_traffic->details.at("savingsModel") ==
+                      "estimated-net-after-callsite-materialization" &&
+                  front_stop_register_traffic->details.contains("candidateStepsStatus") &&
+                  front_stop_register_traffic->details.at("candidateStepsStatus") ==
+                      "synthetic-net-estimate-not-compiled" &&
+                  front_stop_register_traffic->details.contains("sizeImpactStatus") &&
+                  front_stop_register_traffic->details.at("sizeImpactStatus") ==
+                      "estimated-nonpositive-net" &&
+                  front_stop_register_traffic->details.contains("netSavingsStatus") &&
+                  front_stop_register_traffic->details.at("netSavingsStatus") ==
+                      "estimated-nonpositive-after-callsite-materialization" &&
+                  front_stop_register_traffic->details.contains("trafficShapeAction") &&
+                  front_stop_register_traffic->details.at("trafficShapeAction") ==
+                      "prove-local-temp-carrier-through-state-update-guard" &&
+                  front_stop_register_traffic->details.contains(
+                      "valueAwareMixedStateLifetimeStatus") &&
+                  front_stop_register_traffic->details.at(
+                      "valueAwareMixedStateLifetimeStatus") ==
+                      "local-to-helper-without-nested-calls",
+              "rambo-iii should keep the front_stop temp-carrier proof visible while estimating "
+              "it as break-even after required stack preservation");
+      const SizeNextActionSummaryReport* mixed_state_action = find_size_next_action(
+          result, "trafficShapeAction", "prove-local-temp-carrier-through-state-update-guard");
+      require(mixed_state_action == nullptr,
+              "rambo-iii should not rank a break-even local temp-carrier rewrite as a positive "
+              "next scheduler action");
+    }
   }
 
   for (const auto& [name, expected] : PENDING_BASELINE) {
@@ -561,9 +867,37 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.contains("valueAwareAllStackInputPressure") &&
                   candidate_score_zero->details.at("valueAwareAllStackInputPressure") == "2" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareEstimatedNetSavingsBeforeArgumentPreservation") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareEstimatedNetSavingsBeforeArgumentPreservation") == "3" &&
+                  candidate_score_zero->details.contains("valueAwareCallArgumentInputNames") &&
+                  candidate_score_zero->details.at("valueAwareCallArgumentInputNames")
+                          .find("x") != std::string::npos &&
+                  candidate_score_zero->details.at("valueAwareCallArgumentInputNames")
+                          .find("y") != std::string::npos &&
+                  candidate_score_zero->details.contains("valueAwareCallArgumentSites") &&
+                  candidate_score_zero->details.at("valueAwareCallArgumentSites")
+                          .find("packed-line score accumulator helper@71:x<-recall@70") !=
+                      std::string::npos &&
+                  candidate_score_zero->details.at("valueAwareCallArgumentSites")
+                          .find("packed-line score accumulator helper@74:y<-recall@73") !=
+                      std::string::npos &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCallArgumentPreservationCells") &&
+                  candidate_score_zero->details.at("valueAwareCallArgumentPreservationCells") ==
+                      "2" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareEstimatedNetSavingsAfterArgumentPreservation") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareEstimatedNetSavingsAfterArgumentPreservation") == "1" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareEstimatedNetSavingsAfterMaterialization") &&
                   candidate_score_zero->details.at(
-                      "valueAwareEstimatedNetSavingsAfterMaterialization") == "3" &&
+                      "valueAwareEstimatedNetSavingsAfterMaterialization") == "1" &&
+                  candidate_score_zero->details.contains("valueAwareEstimatedNetSavingsModel") &&
+                  candidate_score_zero->details.at("valueAwareEstimatedNetSavingsModel") ==
+                      "profitable-stack-input-recalls-minus-callsite-materialization-minus-"
+                      "argument-preservation-excluding-persistent-state-outputs" &&
                   candidate_score_zero->details.contains("valueAwareProfitableStackInputNames") &&
                   candidate_score_zero->details.at("valueAwareProfitableStackInputNames")
                           .find("y") != std::string::npos &&
@@ -673,9 +1007,31 @@ void example_sizes_match_typescript_baselines() {
                   mark_lines_helper->details.at("valueAwareNestedCallLabels").find("normalize") !=
                       std::string::npos &&
                   mark_lines_helper->details.contains(
+                      "valueAwareEstimatedNetSavingsBeforeArgumentPreservation") &&
+                  mark_lines_helper->details.at(
+                      "valueAwareEstimatedNetSavingsBeforeArgumentPreservation") == "2" &&
+                  mark_lines_helper->details.contains("valueAwareCallArgumentInputNames") &&
+                  mark_lines_helper->details.at("valueAwareCallArgumentInputNames")
+                          .find("x") != std::string::npos &&
+                  mark_lines_helper->details.at("valueAwareCallArgumentInputNames")
+                          .find("y") != std::string::npos &&
+                  mark_lines_helper->details.contains("valueAwareCallArgumentSites") &&
+                  mark_lines_helper->details.at("valueAwareCallArgumentSites")
+                          .find("mark_one@97:x<-recall@96") != std::string::npos &&
+                  mark_lines_helper->details.at("valueAwareCallArgumentSites")
+                          .find("mark_one@A0:y<-recall@99") != std::string::npos &&
+                  mark_lines_helper->details.contains(
+                      "valueAwareCallArgumentPreservationCells") &&
+                  mark_lines_helper->details.at("valueAwareCallArgumentPreservationCells") ==
+                      "2" &&
+                  mark_lines_helper->details.contains(
+                      "valueAwareEstimatedNetSavingsAfterArgumentPreservation") &&
+                  mark_lines_helper->details.at(
+                      "valueAwareEstimatedNetSavingsAfterArgumentPreservation") == "0" &&
+                  mark_lines_helper->details.contains(
                       "valueAwareEstimatedNetSavingsAfterMaterialization") &&
                   mark_lines_helper->details.at(
-                      "valueAwareEstimatedNetSavingsAfterMaterialization") == "2",
+                      "valueAwareEstimatedNetSavingsAfterMaterialization") == "0",
               "tic-tac-toe-4x4 mark_lines_and_check helper should classify stack inputs "
               "separately from nested-call state inputs and nested helper-call blockers");
       const SizeOpportunityReport* cell_mask_register_traffic = find_size_opportunity_detail(
@@ -897,16 +1253,21 @@ void example_sizes_match_typescript_baselines() {
       const SizeBlockerSummaryReport* value_aware_scheduler_blocker =
           find_size_blocker(result, "value-aware-stack-register-scheduler");
       require(value_aware_scheduler_blocker != nullptr &&
-                  value_aware_scheduler_blocker->opportunities >= 1 &&
-                  value_aware_scheduler_blocker->potential_savings >=
-                      cell_mask_helper->register_traffic_cells &&
-                  value_aware_scheduler_blocker->best_savings >=
-                      cell_mask_helper->register_traffic_cells &&
+                  value_aware_scheduler_blocker->opportunities == 1 &&
+                  value_aware_scheduler_blocker->potential_savings == 1 &&
+                  value_aware_scheduler_blocker->best_savings == 1 &&
                   value_aware_scheduler_blocker->best_variant == "helper-register-traffic" &&
+                  value_aware_scheduler_blocker->best_details.contains("helperLabel") &&
+                  value_aware_scheduler_blocker->best_details.at("helperLabel") ==
+                      "candidate_score zero-accumulator entry" &&
                   value_aware_scheduler_blocker->best_details.contains("estimateKind") &&
                   value_aware_scheduler_blocker->best_details.contains("sizeImpactStatus") &&
                   value_aware_scheduler_blocker->best_details.contains("proofStatus") &&
                   value_aware_scheduler_blocker->best_details.contains("schedulerScope") &&
+                  value_aware_scheduler_blocker->best_details.contains(
+                      "valueAwareCallArgumentPreservationCells") &&
+                  value_aware_scheduler_blocker->best_details.at(
+                      "valueAwareCallArgumentPreservationCells") == "2" &&
                   value_aware_scheduler_blocker->best_details.contains("registerTrafficBreakdown") &&
                   value_aware_scheduler_blocker->best_details.contains(
                       "valueAwareStackInputNames") &&
@@ -942,9 +1303,9 @@ void example_sizes_match_typescript_baselines() {
       const SizeNextActionSummaryReport* callee_abi_required_action = find_size_next_action(
           result, "requiredAction", "refactor-stack-mutating-callee-abi");
       require(callee_abi_required_action != nullptr &&
-                  callee_abi_required_action->opportunities == 2 &&
-                  callee_abi_required_action->potential_savings == 5 &&
-                  callee_abi_required_action->best_savings == 3 &&
+                  callee_abi_required_action->opportunities == 1 &&
+                  callee_abi_required_action->potential_savings == 1 &&
+                  callee_abi_required_action->best_savings == 1 &&
                   callee_abi_required_action->best_blocker_kind ==
                       "value-aware-stack-register-scheduler" &&
                   callee_abi_required_action->best_variant == "helper-register-traffic" &&
@@ -997,6 +1358,10 @@ void example_sizes_match_typescript_baselines() {
                   callee_abi_required_action->best_details.at("valueAwareStackInputNames")
                           .find("y") != std::string::npos &&
                   callee_abi_required_action->best_details.contains(
+                      "valueAwareCallArgumentPreservationCells") &&
+                  callee_abi_required_action->best_details.at(
+                      "valueAwareCallArgumentPreservationCells") == "2" &&
+                  callee_abi_required_action->best_details.contains(
                       "valueAwareStackCapacityStatus") &&
                   callee_abi_required_action->best_details.at(
                       "valueAwareStackCapacityStatus") == "fits-x-y-z-t-capacity" &&
@@ -1017,9 +1382,9 @@ void example_sizes_match_typescript_baselines() {
       const SizeNextActionSummaryReport* callee_abi_action = find_size_next_action(
           result, "trafficShapeAction", "refactor-stack-mutating-callee-abi");
       require(callee_abi_action != nullptr &&
-                  callee_abi_action->opportunities == 2 &&
-                  callee_abi_action->potential_savings == 5 &&
-                  callee_abi_action->best_savings == 3 &&
+                  callee_abi_action->opportunities == 1 &&
+                  callee_abi_action->potential_savings == 1 &&
+                  callee_abi_action->best_savings == 1 &&
                   callee_abi_action->best_details.contains("helperLabel") &&
                   callee_abi_action->best_details.at("helperLabel") ==
                       "candidate_score zero-accumulator entry" &&
@@ -1034,6 +1399,10 @@ void example_sizes_match_typescript_baselines() {
                   callee_abi_action->best_details.contains("valueAwareStackInputPlanStatus") &&
                   callee_abi_action->best_details.at("valueAwareStackInputPlanStatus") ==
                       "blocked-by-stack-mutating-callee" &&
+                  callee_abi_action->best_details.contains(
+                      "valueAwareCallArgumentPreservationCells") &&
+                  callee_abi_action->best_details.at(
+                      "valueAwareCallArgumentPreservationCells") == "2" &&
                   callee_abi_action->best_details.contains("proofStatus") &&
                   callee_abi_action->best_details.at("proofStatus") ==
                       "callee-stack-mutation-clobbers-stack-inputs" &&
