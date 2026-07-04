@@ -1433,6 +1433,8 @@ int count_expression_calls_in_program(const V2Program& program, const std::strin
 
 bool expression_preserves_previous_x_as_y_for_stack_analysis(const Expression& expression);
 bool expression_preserves_previous_x_as_y_for_packed_line(const Expression& expression);
+bool expression_equals(const Expression& left, const Expression& right);
+bool analysis_simple_stack_load(const Expression& expression);
 std::optional<std::string> proc_return_x_variable_for_analysis(const V2Rule& rule);
 
 bool expression_contains_packed_score_call_for_accumulator(const Expression& expression) {
@@ -2000,6 +2002,85 @@ int x_param_packed_score_accumulator_eligible_call_count_in_program(const V2Prog
   return count;
 }
 
+bool shared_add_sub_tail_operands_syntax(const Expression& first, const Expression& second) {
+  const auto matches = [](const Expression& add, const Expression& sub) {
+    if (add.kind != "binary" || add.op != "+" || sub.kind != "binary" || sub.op != "-" ||
+        add.left == nullptr || add.right == nullptr || sub.left == nullptr ||
+        sub.right == nullptr) {
+      return false;
+    }
+    return expression_equals(*add.left, *sub.left) &&
+           expression_equals(*add.right, *sub.right) &&
+           analysis_simple_stack_load(*add.left) && analysis_simple_stack_load(*add.right);
+  };
+  return matches(first, second) || matches(second, first);
+}
+
+int x_param_packed_score_shared_tail_eligible_call_count_in_rule(
+    const V2Rule& rule, const std::map<std::string, std::string>& return_x_by_rule) {
+  if (rule.body.size() < 5U)
+    return 0;
+  int prefix_count = 0;
+  std::optional<std::string> target =
+      packed_score_sequence_start_syntax(rule.body.front(), prefix_count);
+  if (!target.has_value() || prefix_count <= 0)
+    return 0;
+
+  std::size_t tail_start = 1U;
+  while (tail_start + 4U < rule.body.size()) {
+    const int next_count =
+        packed_score_sequence_accumulator_syntax_count(rule.body.at(tail_start), *target);
+    if (next_count <= 0)
+      return 0;
+    prefix_count += next_count;
+    ++tail_start;
+  }
+  if (prefix_count < 2 || tail_start + 4U != rule.body.size())
+    return 0;
+
+  const V2Statement& first_call = rule.body.at(tail_start);
+  const V2Statement& first_score = rule.body.at(tail_start + 1U);
+  const V2Statement& second_call = rule.body.at(tail_start + 2U);
+  const V2Statement& second_score = rule.body.at(tail_start + 3U);
+  if (first_call.kind != "v2_invoke" || second_call.kind != "v2_invoke" ||
+      !first_call.name.has_value() || !second_call.name.has_value() ||
+      *first_call.name != *second_call.name || first_call.args.size() != 1U ||
+      second_call.args.size() != 1U || !first_score.target.has_value() ||
+      !second_score.target.has_value() || *first_score.target != *target ||
+      *second_score.target != *target) {
+    return 0;
+  }
+  const auto return_it = return_x_by_rule.find(*first_call.name);
+  if (return_it == return_x_by_rule.end())
+    return 0;
+  const std::optional<XParamPackedScoreAccumulatorSyntaxAnalysis> first_analysis =
+      x_param_packed_score_accumulator_syntax_analysis(first_score, *target, return_it->second);
+  const std::optional<XParamPackedScoreAccumulatorSyntaxAnalysis> second_analysis =
+      x_param_packed_score_accumulator_syntax_analysis(second_score, *target, return_it->second);
+  if (!first_analysis.has_value() || !second_analysis.has_value() ||
+      first_analysis->call_count != 1 || second_analysis->call_count != 1)
+    return 0;
+
+  try {
+    const Expression first_argument = parse_expression(first_call.args.front(), first_call.line);
+    const Expression second_argument = parse_expression(second_call.args.front(), second_call.line);
+    if (!shared_add_sub_tail_operands_syntax(first_argument, second_argument))
+      return 0;
+  } catch (const std::exception&) {
+    return 0;
+  }
+  return prefix_count + first_analysis->call_count + second_analysis->call_count;
+}
+
+int x_param_packed_score_shared_tail_eligible_call_count_in_program(const V2Program& program) {
+  int count = 0;
+  const std::map<std::string, std::string> return_x_by_rule =
+      packed_score_x_param_return_names_for_accumulator_syntax(program);
+  for (const V2Rule& rule : program.rules)
+    count += x_param_packed_score_shared_tail_eligible_call_count_in_rule(rule, return_x_by_rule);
+  return count;
+}
+
 int packed_score_accumulator_eligible_call_count_in_program(const V2Program& program) {
   return packed_score_accumulator_regular_eligible_call_count_in_program(program) +
          x_param_packed_score_accumulator_eligible_call_count_in_program(program);
@@ -2007,7 +2088,8 @@ int packed_score_accumulator_eligible_call_count_in_program(const V2Program& pro
 
 bool packed_score_accumulator_helper_has_cost_effective_family(const V2Program& program) {
   return packed_score_accumulator_regular_eligible_call_count_in_program(program) >= 3 ||
-         x_param_packed_score_accumulator_eligible_call_count_in_program(program) >= 3;
+         x_param_packed_score_accumulator_eligible_call_count_in_program(program) >= 3 ||
+         x_param_packed_score_shared_tail_eligible_call_count_in_program(program) >= 4;
 }
 
 std::set<std::string> collect_value_function_names(const V2Program& program) {
@@ -27764,7 +27846,8 @@ struct XParamPackedScoreAccumulationPlan {
 std::optional<XParamPackedScoreAccumulationPlan>
 build_x_param_packed_score_accumulation_plan(LoweringContext& context, const Expression& argument,
                                              const std::string& block,
-                                             const V2Statement& score_assign) {
+                                             const V2Statement& score_assign,
+                                             bool require_current_target_in_x = true) {
   const auto lowering_it = context.x_param_procs.find(block);
   if (lowering_it == context.x_param_procs.end())
     return std::nullopt;
@@ -27790,7 +27873,7 @@ build_x_param_packed_score_accumulation_plan(LoweringContext& context, const Exp
                                                 *return_x);
   if (!accumulator.has_value())
     return std::nullopt;
-  if (!x_holds_identifier(context, *score_assign.target))
+  if (require_current_target_in_x && !x_holds_identifier(context, *score_assign.target))
     return std::nullopt;
   if (!expression_preserves_previous_x_as_y_for_packed_line(accumulator->line) ||
       expression_contains_identifier(accumulator->line, *score_assign.target))
@@ -27909,6 +27992,233 @@ bool lower_x_param_proc_packed_score_accumulation_run(LoweringContext& context,
     }
   }
   return false;
+}
+
+struct XParamPackedScoreSharedTailRule {
+  std::string target;
+  std::string block;
+  std::vector<PackedScoreTerm> prefix_terms;
+  std::optional<Expression> initial;
+  XParamPackedScoreAccumulationPlan first;
+  XParamPackedScoreAccumulationPlan second;
+  Expression shared;
+  Expression partial;
+  bool first_negates_partial = false;
+  bool second_negates_partial = false;
+  int first_argument_line = 0;
+  int second_argument_line = 0;
+  int line = 0;
+};
+
+struct SharedAddSubTailOperands {
+  Expression shared;
+  Expression partial;
+  bool first_negates_partial = false;
+  bool second_negates_partial = false;
+};
+
+std::optional<SharedAddSubTailOperands>
+shared_add_sub_tail_operands(const Expression& first, const Expression& second) {
+  if (const std::optional<std::pair<Expression, Expression>> operands =
+          shared_add_sub_operands(first, second)) {
+    return SharedAddSubTailOperands{
+        .shared = operands->first,
+        .partial = operands->second,
+        .first_negates_partial = false,
+        .second_negates_partial = true,
+    };
+  }
+  if (const std::optional<std::pair<Expression, Expression>> operands =
+          shared_add_sub_operands(second, first)) {
+    return SharedAddSubTailOperands{
+        .shared = operands->first,
+        .partial = operands->second,
+        .first_negates_partial = true,
+        .second_negates_partial = false,
+    };
+  }
+  return std::nullopt;
+}
+
+std::optional<XParamPackedScoreAccumulationPlan>
+build_x_param_packed_score_tail_plan_for_rule(LoweringContext& context,
+                                              const V2Statement& call,
+                                              const V2Statement& score_assign) {
+  if (call.kind != "v2_invoke" || !call.name.has_value() || call.args.size() != 1U)
+    return std::nullopt;
+  const Expression argument = parse_expression(call.args.front(), call.line);
+  return build_x_param_packed_score_accumulation_plan(
+      context, argument, *call.name, score_assign, /*require_current_target_in_x=*/false);
+}
+
+std::optional<XParamPackedScoreSharedTailRule>
+x_param_packed_score_shared_tail_rule(LoweringContext& context, const V2Rule& rule) {
+  if (!context.use_packed_score_accumulator_helper || rule.body.size() < 5U)
+    return std::nullopt;
+
+  std::vector<PackedScoreTerm> prefix_terms;
+  std::optional<StackAccumulatorSequenceStart> sequence_start =
+      packed_score_sequence_start_terms(context, rule.body.front(), prefix_terms);
+  if (!sequence_start.has_value() || prefix_terms.empty())
+    return std::nullopt;
+
+  std::size_t tail_start = 1U;
+  while (tail_start + 4U < rule.body.size()) {
+    if (!collect_packed_score_sequence_accumulator_terms(
+            context, rule.body.at(tail_start), sequence_start->target, prefix_terms,
+            sequence_start->initial)) {
+      return std::nullopt;
+    }
+    ++tail_start;
+  }
+  if (tail_start + 4U != rule.body.size())
+    return std::nullopt;
+
+  const V2Statement& first_call = rule.body.at(tail_start);
+  const V2Statement& first_score = rule.body.at(tail_start + 1U);
+  const V2Statement& second_call = rule.body.at(tail_start + 2U);
+  const V2Statement& second_score = rule.body.at(tail_start + 3U);
+  if (!first_call.name.has_value() || !second_call.name.has_value() ||
+      *first_call.name != *second_call.name || !first_score.target.has_value() ||
+      !second_score.target.has_value() || *first_score.target != sequence_start->target ||
+      *second_score.target != sequence_start->target) {
+    return std::nullopt;
+  }
+
+  std::optional<XParamPackedScoreAccumulationPlan> first_plan =
+      build_x_param_packed_score_tail_plan_for_rule(context, first_call, first_score);
+  std::optional<XParamPackedScoreAccumulationPlan> second_plan =
+      build_x_param_packed_score_tail_plan_for_rule(context, second_call, second_score);
+  if (!first_plan.has_value() || !second_plan.has_value())
+    return std::nullopt;
+  if (!first_plan->prefix_terms.empty() || !second_plan->prefix_terms.empty() ||
+      first_plan->accumulator_prelude.has_value() ||
+      second_plan->accumulator_prelude.has_value()) {
+    return std::nullopt;
+  }
+  if (first_plan->return_x != second_plan->return_x ||
+      first_plan->helper_label != second_plan->helper_label ||
+      first_plan->helper_accumulates != second_plan->helper_accumulates ||
+      !expression_equals(first_plan->index, second_plan->index)) {
+    return std::nullopt;
+  }
+
+  const Expression first_argument = parse_expression(first_call.args.front(), first_call.line);
+  const Expression second_argument = parse_expression(second_call.args.front(), second_call.line);
+  const std::optional<SharedAddSubTailOperands> operands =
+      shared_add_sub_tail_operands(first_argument, second_argument);
+  if (!operands.has_value())
+    return std::nullopt;
+
+  return XParamPackedScoreSharedTailRule{
+      .target = sequence_start->target,
+      .block = *first_call.name,
+      .prefix_terms = std::move(prefix_terms),
+      .initial = std::move(sequence_start->initial),
+      .first = std::move(*first_plan),
+      .second = std::move(*second_plan),
+      .shared = operands->shared,
+      .partial = operands->partial,
+      .first_negates_partial = operands->first_negates_partial,
+      .second_negates_partial = operands->second_negates_partial,
+      .first_argument_line = first_call.line,
+      .second_argument_line = second_call.line,
+      .line = rule.line,
+  };
+}
+
+bool lower_x_param_packed_score_shared_tail_rule(LoweringContext& context, const V2Rule& rule) {
+  const std::optional<XParamPackedScoreSharedTailRule> match =
+      x_param_packed_score_shared_tail_rule(context, rule);
+  if (!match.has_value())
+    return false;
+
+  const std::string helper = packed_score_accumulator_helper_label(context);
+  const auto emit_initial = [&]() {
+    if (match->initial.has_value())
+      return lower_expression_to_x(context, *match->initial);
+    context.emitter.emit_number("0");
+    if (!context.emitter.items.empty())
+      context.emitter.items.back().comment = "packed_score accumulator zero";
+    return true;
+  };
+  if (!lower_stack_accumulator_terms_to_x_with_initial<PackedScoreTerm>(
+          match->prefix_terms, emit_initial,
+          [&](const PackedScoreTerm& term) {
+            return emit_packed_score_accumulator_term(context, helper, term);
+          })) {
+    return false;
+  }
+  mark_current_x(context, match->target);
+  context.emitter.current_x_known_zero = false;
+
+  const std::string tail = context.emitter.fresh_label("x_param_packed_score_shared_tail");
+  const auto emit_tail_call = [&](const XParamPackedScoreAccumulationPlan& plan, int line,
+                                  bool negate_partial) -> bool {
+    if (!lower_expression_preserving_previous_x_as_y(context, plan.line, line))
+      return false;
+    if (!lower_expression_preserving_previous_x_as_y(context, match->partial, line))
+      return false;
+    if (negate_partial)
+      context.emitter.emit_op(0x0b, "/-/", "x-param packed_score negative shared-tail partial",
+                              line);
+    context.emitter.emit_jump(0x53, "ПП", tail, "x-param packed_score shared returned-index tail",
+                              line);
+    mark_current_x(context, match->target);
+    context.emitter.current_x_known_zero = false;
+    return true;
+  };
+
+  if (!emit_tail_call(match->first, match->first_argument_line, match->first_negates_partial))
+    return false;
+  if (!emit_tail_call(match->second, match->second_argument_line, match->second_negates_partial))
+    return false;
+
+  context.emitter.emit_op(0x52, "В/О", "x-param packed_score shared-tail return", match->line);
+  context.emitter.emit_label(tail);
+  if (!lower_expression_preserving_previous_x_as_y(context, match->shared, match->line))
+    return false;
+  context.emitter.emit_op(0x10, "+", "x-param packed_score shared returned-index argument",
+                          match->line);
+  compile_block_call(context, match->block, match->line);
+  if (!lower_expression_preserving_previous_x_as_y(context, match->first.index, match->line))
+    return false;
+  context.emitter.emit_jump(0x53, "ПП", match->first.helper_label,
+                            "packed_score accumulator helper", match->line);
+  if (context.stack_only_state_fields.contains(match->target)) {
+    mark_current_x(context, match->target);
+    context.emitter.current_x_known_zero = false;
+  } else {
+    emit_store(context, match->target, "set " + match->target);
+  }
+  context.emitter.emit_op(0x52, "В/О", "x-param packed_score shared-tail helper return",
+                          match->line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "x-param-packed-score-shared-returned-index-tail",
+      .detail = "Shared the returned-index packed_score() tail for " +
+                expression_to_source(add_expression(match->shared, match->partial)) + " and " +
+                expression_to_source(subtract_expression(match->shared, match->partial)) + " in " +
+                rule.name + ".",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-score-sequence-stack-accumulator",
+      .detail = "Lowered " + std::to_string(match->prefix_terms.size()) +
+                " packed_score() terms before the shared returned-index tail in " + rule.name +
+                " as one stack accumulator pipeline.",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = "x-param-packed-score-line-stack-accumulate",
+      .detail = "Loaded the first packed_score line argument before the shared returned-index "
+                "tail in " +
+                rule.name + ". The accumulator helper consumed the parked score.",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = "x-param-packed-score-line-stack-accumulate",
+      .detail = "Loaded the second packed_score line argument before the shared returned-index "
+                "tail in " +
+                rule.name + ". The accumulator helper consumed the parked score.",
+  });
+  return true;
 }
 
 bool lower_single_bit_mask_op_assignment(LoweringContext& context, const V2Statement& statement,
@@ -29850,6 +30160,9 @@ bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
     return true;
 
   if (lower_packed_line_family_score_rule(context, rule))
+    return true;
+
+  if (lower_x_param_packed_score_shared_tail_rule(context, rule))
     return true;
 
   if (context.packed_line_family_mutating_selector_update_check_tail &&
