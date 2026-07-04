@@ -1674,7 +1674,7 @@ int packed_score_accumulator_eligible_call_count(const Expression& expression) {
   int sum_count = 0;
   bool has_initial = false;
   if (collect_packed_score_sum_terms_with_initial_syntax(expression, sum_count, has_initial) &&
-      sum_count >= 3) {
+      sum_count >= 2) {
     return sum_count;
   }
   int count = 0;
@@ -2114,10 +2114,15 @@ int x_param_packed_score_accumulator_eligible_call_count_in_statement(
   return count;
 }
 
-int packed_score_accumulator_eligible_call_count_in_program(const V2Program& program) {
+int packed_score_accumulator_regular_eligible_call_count_in_program(const V2Program& program) {
   int count = packed_score_accumulator_eligible_call_count_in_statements(program.body);
   for (const V2Rule& rule : program.rules)
     count += packed_score_accumulator_eligible_call_count_in_statements(rule.body);
+  return count;
+}
+
+int x_param_packed_score_accumulator_eligible_call_count_in_program(const V2Program& program) {
+  int count = 0;
   const std::map<std::string, std::string> return_x_by_rule =
       packed_score_x_param_return_names_for_accumulator_syntax(program);
   count += x_param_packed_score_accumulator_eligible_call_count_in_statements(program.body,
@@ -2127,6 +2132,16 @@ int packed_score_accumulator_eligible_call_count_in_program(const V2Program& pro
         rule.body, return_x_by_rule);
   }
   return count;
+}
+
+int packed_score_accumulator_eligible_call_count_in_program(const V2Program& program) {
+  return packed_score_accumulator_regular_eligible_call_count_in_program(program) +
+         x_param_packed_score_accumulator_eligible_call_count_in_program(program);
+}
+
+bool packed_score_accumulator_helper_has_cost_effective_family(const V2Program& program) {
+  return packed_score_accumulator_regular_eligible_call_count_in_program(program) >= 3 ||
+         x_param_packed_score_accumulator_eligible_call_count_in_program(program) >= 3;
 }
 
 std::set<std::string> collect_value_function_names(const V2Program& program) {
@@ -10332,7 +10347,8 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   const int accumulator_packed_score_calls =
       packed_score_accumulator_eligible_call_count_in_program(program);
   context.use_packed_score_accumulator_helper =
-      context.packed_score_accumulator_helpers && accumulator_packed_score_calls >= 3;
+      context.packed_score_accumulator_helpers &&
+      packed_score_accumulator_helper_has_cost_effective_family(program);
   const int non_accumulator_group_packed_score_calls =
       std::max(0, packed_score_calls - accumulator_packed_score_calls);
   context.use_packed_score_accumulator_for_singletons =
@@ -49054,6 +49070,22 @@ std::string rejected_candidate_blocked_proof(
   return blocker_kind.empty() ? std::string("unknown") : blocker_kind;
 }
 
+std::optional<std::pair<int, int>> selector_data_payload_compression_requirement(
+    const std::map<std::string, std::string>& details) {
+  const auto it = details.find("selectorDataPayloadCompressionRequirement");
+  if (it == details.end())
+    return std::nullopt;
+  static const std::regex requirement_regex(R"(^\s*(\d+)\s*->\s*(\d+)\s*$)");
+  std::smatch match;
+  if (!std::regex_match(it->second, match, requirement_regex))
+    return std::nullopt;
+  try {
+    return std::pair<int, int>{std::stoi(match[1].str()), std::stoi(match[2].str())};
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
 void attach_rejected_candidate_size_details(std::map<std::string, std::string>& details,
                                             const CandidateReport& candidate,
                                             int current_steps,
@@ -49083,6 +49115,41 @@ void attach_rejected_candidate_size_details(std::map<std::string, std::string>& 
         "unestimated-payload-access-overhead";
     details["selectorDataPayloadPackingCostModelRequirement"] =
         "packed-or-split-access-overhead-must-not-exceed-candidate-savings";
+    if (const std::optional<std::pair<int, int>> compression =
+            selector_data_payload_compression_requirement(details);
+        compression.has_value() && compression->first > compression->second) {
+      const int registers_to_pack = compression->first - compression->second;
+      const int min_packed_logical_accesses = registers_to_pack * 2;
+      const int net_lower_bound_savings = savings - min_packed_logical_accesses;
+      details["selectorDataPayloadRegistersToPackMinimum"] =
+          std::to_string(registers_to_pack);
+      details["selectorDataPayloadMinPackedLogicalAccesses"] =
+          std::to_string(min_packed_logical_accesses);
+      details["selectorDataPayloadMinPackedAccessOverheadCells"] =
+          std::to_string(min_packed_logical_accesses);
+      details["selectorDataPayloadPackingLowerBoundModel"] =
+          "each-register-saved-requires-two-packed-logical-access-extractions";
+      details["selectorDataPayloadPackingNetLowerBoundCells"] =
+          std::to_string(net_lower_bound_savings);
+      details["estimatedCandidateStepsAfterPayloadPackingLowerBound"] =
+          std::to_string(candidate.steps + min_packed_logical_accesses);
+      if (net_lower_bound_savings <= 0) {
+        details["selectorDataPayloadPackingLowerBoundStatus"] =
+            net_lower_bound_savings == 0 ? "break-even-with-candidate-savings"
+                                         : "exceeds-candidate-savings";
+        details["selectorDataPayloadPackingCostModelStatus"] =
+            "minimum-packed-access-overhead-not-positive";
+        details["selectorDataPayloadPackingCostModelRequirement"] =
+            "find-nonpacked-selector-layout-or-reduce-packed-access-overhead";
+        details["costModelAction"] =
+            "find-nonpacked-selector-layout-or-reduce-packed-access-overhead";
+        details["requiredAction"] =
+            "find-nonpacked-selector-layout-or-reduce-payload-access-overhead";
+      } else {
+        details["selectorDataPayloadPackingLowerBoundStatus"] =
+            "below-candidate-savings";
+      }
+    }
   }
   details.emplace("proofStatus",
                   blocker_kind == "nonwinning-candidate"
@@ -50129,6 +50196,7 @@ SizeAttributionReport build_size_attribution_report(
         const bool requires_call_preserving_stack_proof =
             !call_preservation_input_names.empty();
         bool call_preservation_has_stack_mutating_callee = false;
+        int callee_abi_mutation_surface_cells = 0;
         std::vector<std::string> direct_stack_input_names;
         int direct_stack_input_gross_cells = 0;
         int direct_stack_input_materialize_cells = 0;
@@ -50208,6 +50276,7 @@ SizeAttributionReport build_size_attribution_report(
             if (effect.status == "stack-mutating") {
               saw_stack_mutating_required_callee = true;
               call_preservation_has_stack_mutating_callee = true;
+              callee_abi_mutation_surface_cells += effect.mutating_cells;
               const std::string input_list =
                   join_strings(std::vector<std::string>(inputs.begin(), inputs.end()), ",");
               callee_abi_preservation_parts.push_back(label + ":" + input_list);
@@ -50314,10 +50383,29 @@ SizeAttributionReport build_size_attribution_report(
               std::to_string(adjusted_estimated_net_cells);
           helper.details["valueAwareCalleeAbiBreakEvenAddedCells"] =
               std::to_string(adjusted_estimated_net_cells);
+          if (callee_abi_mutation_surface_cells > 0) {
+            helper.details["valueAwareCalleeAbiMutationSurfaceCells"] =
+                std::to_string(callee_abi_mutation_surface_cells);
+            helper.details["valueAwareCalleeAbiMutationSurfaceStatus"] =
+                callee_abi_mutation_surface_cells > adjusted_estimated_net_cells
+                    ? "exceeds-overhead-budget"
+                    : "within-overhead-budget";
+          }
+          const auto mutation_surface_status_it =
+              helper.details.find("valueAwareCalleeAbiMutationSurfaceStatus");
+          const bool mutation_surface_exceeds_budget =
+              mutation_surface_status_it != helper.details.end() &&
+              mutation_surface_status_it->second == "exceeds-overhead-budget";
           helper.details["valueAwareCalleeAbiCostModelStatus"] =
-              "unestimated-stack-preserving-entry-overhead";
+              mutation_surface_exceeds_budget
+                  ? "mutation-surface-exceeds-overhead-budget"
+                  : "unestimated-stack-preserving-entry-overhead";
           helper.details["valueAwareCalleeAbiCostModelRequirement"] =
-              "stack-preserving-callee-abi-overhead-must-not-exceed-estimated-net-savings";
+              helper.details["valueAwareCalleeAbiCostModelStatus"] ==
+                      "mutation-surface-exceeds-overhead-budget"
+                  ? "prove-stack-preserving-callee-abi-overhead-below-mutation-surface-before-"
+                    "ranking"
+                  : "stack-preserving-callee-abi-overhead-must-not-exceed-estimated-net-savings";
         }
         if (!direct_stack_input_names.empty()) {
           helper.details["valueAwareDirectStackInputNames"] =
@@ -50788,6 +50876,20 @@ SizeAttributionReport build_size_attribution_report(
       details["requiredAction"] = "refactor-stack-mutating-callee-abi";
       details["schedulerScope"] =
           "helper-entry-callsite-stack-values-and-callee-abi-refactor";
+      if (const auto abi_status_it = details.find("valueAwareCalleeAbiCostModelStatus");
+          abi_status_it != details.end() &&
+          abi_status_it->second == "mutation-surface-exceeds-overhead-budget") {
+        opportunity_savings = 0;
+        details["candidateStepsStatus"] = "not-a-positive-size-opportunity";
+        details["sizeImpactStatus"] = "estimated-nonpositive-net";
+        details["netSavingsStatus"] =
+            "stack-preserving-callee-abi-mutation-surface-exceeds-budget";
+        details["estimateKind"] = "estimated-net-after-callee-abi-surface";
+        details["savingsModel"] = "estimated-net-after-callee-abi-surface-budget";
+        details["requiredAction"] = "prove-or-reduce-stack-preserving-callee-abi-overhead";
+        details["costModelAction"] =
+            "estimate-stack-preserving-callee-abi-overhead-from-mutation-surface";
+      }
     }
     if (const std::optional<std::string> traffic_shape_action =
             value_aware_scheduler_traffic_shape_action(details)) {
@@ -50896,12 +50998,43 @@ SizeAttributionReport build_size_attribution_report(
       details.emplace("savingsAggregation", "alternative-candidate");
     const std::string blocker_kind = size_opportunity_blocker_kind(candidate);
     attach_rejected_candidate_size_details(details, candidate, current_steps, blocker_kind);
+    int opportunity_savings = current_steps - candidate.steps;
+    int opportunity_candidate_steps = candidate.steps;
+    if (const auto net_lower_bound_it =
+            details.find("selectorDataPayloadPackingNetLowerBoundCells");
+        net_lower_bound_it != details.end()) {
+      try {
+        const int net_lower_bound_savings = std::stoi(net_lower_bound_it->second);
+        if (net_lower_bound_savings <= 0) {
+          opportunity_savings = net_lower_bound_savings;
+          if (const auto estimated_steps_it =
+                  details.find("estimatedCandidateStepsAfterPayloadPackingLowerBound");
+              estimated_steps_it != details.end()) {
+            opportunity_candidate_steps = std::stoi(estimated_steps_it->second);
+          } else {
+            opportunity_candidate_steps = current_steps - opportunity_savings;
+          }
+          details["candidateStepsStatus"] =
+              net_lower_bound_savings == 0
+                  ? "estimated-payload-packing-lower-bound-break-even"
+                  : "estimated-payload-packing-lower-bound-larger-than-current";
+          details["sizeImpactStatus"] = "estimated-nonpositive-net";
+          details["netSavingsStatus"] =
+              net_lower_bound_savings == 0
+                  ? "payload-packing-lower-bound-break-even"
+                  : "payload-packing-lower-bound-exceeds-candidate-savings";
+          details["estimateKind"] = "estimated-net-after-payload-packing-lower-bound";
+          details["savingsModel"] = "candidate-steps-plus-minimum-payload-packing-overhead";
+        }
+      } catch (const std::exception&) {
+      }
+    }
     report.opportunities.push_back(SizeOpportunityReport{
         .site = candidate.site,
         .variant = candidate.variant,
         .current_steps = current_steps,
-        .candidate_steps = candidate.steps,
-        .savings = current_steps - candidate.steps,
+        .candidate_steps = opportunity_candidate_steps,
+        .savings = opportunity_savings,
         .reason = candidate.reason,
         .blocker_kind = blocker_kind,
         .details = std::move(details),
@@ -52457,7 +52590,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   }
   const bool may_use_packed_score_accumulator =
       selector_probe_program.has_value() &&
-      packed_score_accumulator_eligible_call_count_in_program(*selector_probe_program) >= 3;
+      packed_score_accumulator_helper_has_cost_effective_family(*selector_probe_program);
   const int packed_score_call_count =
       selector_probe_program.has_value()
           ? count_expression_calls_in_program(*selector_probe_program, "packed_score")

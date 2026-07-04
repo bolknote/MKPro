@@ -277,7 +277,7 @@ void example_sizes_match_typescript_baselines() {
       const SizeOpportunityReport* indirect_flow =
           find_size_opportunity(result, "aggressive-post-layout-indirect-flow");
       require(indirect_flow != nullptr && indirect_flow->current_steps == 65 &&
-                  indirect_flow->candidate_steps == 60 && indirect_flow->savings == 5 &&
+                  indirect_flow->candidate_steps == 66 && indirect_flow->savings == -1 &&
                   indirect_flow->blocker_kind == "static-proof-gate" &&
                   indirect_flow->details.contains("proofFamily") &&
                   indirect_flow->details.at("proofFamily") == "indirect-flow-targets" &&
@@ -386,7 +386,7 @@ void example_sizes_match_typescript_baselines() {
                       "free-stable-selector-registers" &&
                   indirect_flow->details.contains("costModelAction") &&
                   indirect_flow->details.at("costModelAction") ==
-                      "estimate-payload-packing-for-selector-freeing" &&
+                      "find-nonpacked-selector-layout-or-reduce-packed-access-overhead" &&
                   indirect_flow->details.contains(
                       "selectorDataPayloadPackingOverheadBudgetCells") &&
                   indirect_flow->details.at("selectorDataPayloadPackingOverheadBudgetCells") ==
@@ -398,98 +398,91 @@ void example_sizes_match_typescript_baselines() {
                   indirect_flow->details.contains(
                       "selectorDataPayloadPackingCostModelStatus") &&
                   indirect_flow->details.at("selectorDataPayloadPackingCostModelStatus") ==
-                      "unestimated-payload-access-overhead" &&
+                      "minimum-packed-access-overhead-not-positive" &&
                   indirect_flow->details.contains(
                       "selectorDataPayloadPackingCostModelRequirement") &&
                   indirect_flow->details.at(
                       "selectorDataPayloadPackingCostModelRequirement") ==
-                      "packed-or-split-access-overhead-must-not-exceed-candidate-savings" &&
+                      "find-nonpacked-selector-layout-or-reduce-packed-access-overhead" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadRegistersToPackMinimum") &&
+                  indirect_flow->details.at("selectorDataPayloadRegistersToPackMinimum") ==
+                      "3" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadMinPackedLogicalAccesses") &&
+                  indirect_flow->details.at("selectorDataPayloadMinPackedLogicalAccesses") ==
+                      "6" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadMinPackedAccessOverheadCells") &&
+                  indirect_flow->details.at(
+                      "selectorDataPayloadMinPackedAccessOverheadCells") == "6" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadPackingLowerBoundStatus") &&
+                  indirect_flow->details.at(
+                      "selectorDataPayloadPackingLowerBoundStatus") ==
+                      "exceeds-candidate-savings" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadPackingNetLowerBoundCells") &&
+                  indirect_flow->details.at("selectorDataPayloadPackingNetLowerBoundCells") ==
+                      "-1" &&
+                  indirect_flow->details.contains(
+                      "estimatedCandidateStepsAfterPayloadPackingLowerBound") &&
+                  indirect_flow->details.at(
+                      "estimatedCandidateStepsAfterPayloadPackingLowerBound") == "66" &&
+                  indirect_flow->details.contains("candidateStepsStatus") &&
+                  indirect_flow->details.at("candidateStepsStatus") ==
+                      "estimated-payload-packing-lower-bound-larger-than-current" &&
+                  indirect_flow->details.contains("sizeImpactStatus") &&
+                  indirect_flow->details.at("sizeImpactStatus") == "estimated-nonpositive-net" &&
+                  indirect_flow->details.contains("netSavingsStatus") &&
+                  indirect_flow->details.at("netSavingsStatus") ==
+                      "payload-packing-lower-bound-exceeds-candidate-savings" &&
+                  indirect_flow->details.contains("savingsModel") &&
+                  indirect_flow->details.at("savingsModel") ==
+                      "candidate-steps-plus-minimum-payload-packing-overhead" &&
                   indirect_flow->details.contains("requiredAction") &&
                   indirect_flow->details.at("requiredAction") ==
-                      "pack-data-away-from-flow-selectors" &&
+                      "find-nonpacked-selector-layout-or-reduce-payload-access-overhead" &&
                   indirect_flow->details.contains("blockedProof") &&
                   indirect_flow->details.at("blockedProof") ==
                       "indirect-flow-targets:selector-register-used-as-data" &&
                   indirect_flow->details.contains("blockedProofAction") &&
                   indirect_flow->details.at("blockedProofAction") ==
-                      "pack-data-away-from-flow-selectors",
+                      "find-nonpacked-selector-layout-or-reduce-payload-access-overhead",
               "fox-hunt-mk61 size attribution should explain why the 60-cell indirect-flow "
               "candidate is blocked by proved selector/data overlap");
+      require(indirect_flow->savings == -1 &&
+                  indirect_flow->candidate_steps ==
+                      static_cast<int>(result.steps.size()) + 1,
+              "fox-hunt-mk61 size attribution should rank selector payload packing by the "
+              "minimum packed-access overhead lower bound");
       const SizeNextActionSummaryReport* selector_action = find_size_next_action(
           result, "requiredAction", "pack-data-away-from-flow-selectors");
-      require(selector_action != nullptr && selector_action->opportunities == 6 &&
-                  selector_action->potential_savings == 5 &&
-                  selector_action->best_savings == 5 &&
-                  selector_action->best_blocker_kind == "static-proof-gate" &&
-                  selector_action->best_details.contains("proofFailure") &&
-                  selector_action->best_details.at("proofFailure") ==
-                      "selector-register-used-as-data" &&
-                  selector_action->best_details.contains("consumerOpcodeHex") &&
-                  selector_action->best_details.at("consumerOpcodeHex") == "D5" &&
-                  selector_action->best_details.contains("consumerOpcode") &&
-                  selector_action->best_details.at("consumerOpcode") == "К П->X 5" &&
-                  selector_action->best_details.contains("conflictingSelectorRegisters") &&
-                  selector_action->best_details.at("conflictingSelectorRegisters") == "7+8+9" &&
-                  selector_action->best_details.contains("selectorDataConflictPrecision") &&
-                  selector_action->best_details.at("selectorDataConflictPrecision") ==
-                      "annotated-indirect-memory-targets" &&
-                  selector_action->best_details.contains("selectorDataProofGap") &&
-                  selector_action->best_details.at("selectorDataProofGap") ==
-                      "annotated-target-overlaps-selector-data" &&
-                  selector_action->best_details.contains("selectorDataNextProofAction") &&
-                  selector_action->best_details.at("selectorDataNextProofAction") ==
-                      "split-selector-register-or-pack-data-away-from-flow-selectors" &&
-                  selector_action->best_details.contains("selectorDataConflictResolutionStatus") &&
-                  selector_action->best_details.at("selectorDataConflictResolutionStatus") ==
-                      "proved-selector-data-overlap-requires-payload-repacking" &&
-                  selector_action->best_details.contains("proofDisposition") &&
-                  selector_action->best_details.at("proofDisposition") ==
-                      "proved-conflict-needs-layout-change" &&
-                  selector_action->best_details.contains("freeStableSelectorRegisters") &&
-                  selector_action->best_details.at("freeStableSelectorRegisters") == "none" &&
-                  selector_action->best_details.contains("selectorSplitStatus") &&
-                  selector_action->best_details.at("selectorSplitStatus") ==
-                      "no-free-stable-selector-register" &&
-                  selector_action->best_details.contains(
-                      "selectorDataPayloadPackingRequirement") &&
-                  selector_action->best_details.at("selectorDataPayloadPackingRequirement") ==
-                      "pack-or-split-contiguous-indirect-payload" &&
-                  selector_action->best_details.contains(
-                      "selectorDataPayloadCompressionRequirement") &&
-                  selector_action->best_details.at(
-                      "selectorDataPayloadCompressionRequirement") == "9->6" &&
-                  selector_action->best_details.contains(
-                      "selectorDataPayloadPackingOverheadBudgetCells") &&
-                  selector_action->best_details.at(
-                      "selectorDataPayloadPackingOverheadBudgetCells") == "5",
-              "fox-hunt-mk61 size attribution should rank selector/data payload packing as the "
-              "next action for the 60-cell post-layout candidates");
+      require(selector_action == nullptr,
+              "fox-hunt-mk61 size attribution should not rank selector/data payload packing as "
+              "a positive next action when minimum extraction overhead exceeds savings");
+      const SizeNextActionSummaryReport* reduce_payload_action = find_size_next_action(
+          result, "requiredAction",
+          "find-nonpacked-selector-layout-or-reduce-payload-access-overhead");
+      require(reduce_payload_action == nullptr,
+              "fox-hunt-mk61 size attribution should keep overbudget selector payload work "
+              "visible only on the nonpositive opportunity");
       const SizeNextActionSummaryReport* layout_action =
           find_size_next_action(result, "layoutAction", "free-stable-selector-registers");
-      require(layout_action != nullptr && layout_action->potential_savings == 5 &&
-                  layout_action->best_details.contains("selectorDataOverlapRegisters") &&
-                  layout_action->best_details.at("selectorDataOverlapRegisters") == "7+8+9",
-              "fox-hunt-mk61 size attribution should expose the concrete register-layout action");
+      require(layout_action == nullptr,
+              "fox-hunt-mk61 size attribution should not rank register relayout as positive "
+              "when the required payload packing lower bound is nonpositive");
       const SizeNextActionSummaryReport* cost_model_action = find_size_next_action(
           result, "costModelAction", "estimate-payload-packing-for-selector-freeing");
-      require(cost_model_action != nullptr && cost_model_action->potential_savings == 5 &&
-                  cost_model_action->best_details.contains("selectorDataAllConflictTargets") &&
-                  cost_model_action->best_details.at("selectorDataAllConflictTargets") ==
-                      "6+7+8+9+a+b+c+d+e" &&
-                  cost_model_action->best_details.contains(
-                      "selectorDataContiguousRelocationStatus") &&
-                  cost_model_action->best_details.at("selectorDataContiguousRelocationStatus") ==
-                      "no-selector-free-contiguous-window" &&
-                  cost_model_action->best_details.contains(
-                      "selectorDataPayloadRegisterBudgetAfterFreeingSelectors") &&
-                  cost_model_action->best_details.at(
-                      "selectorDataPayloadRegisterBudgetAfterFreeingSelectors") == "6" &&
-                  cost_model_action->best_details.contains(
-                      "selectorDataPayloadPackingCostModelRequirement") &&
-                  cost_model_action->best_details.at(
-                      "selectorDataPayloadPackingCostModelRequirement") ==
-                      "packed-or-split-access-overhead-must-not-exceed-candidate-savings",
-              "fox-hunt-mk61 size attribution should expose the packing cost-model action");
+      require(cost_model_action == nullptr,
+              "fox-hunt-mk61 size attribution should not rank the old unestimated payload "
+              "packing cost-model action after lower-bound accounting");
+      const SizeNextActionSummaryReport* reduce_packing_cost_action = find_size_next_action(
+          result, "costModelAction",
+          "find-nonpacked-selector-layout-or-reduce-packed-access-overhead");
+      require(reduce_packing_cost_action == nullptr,
+              "fox-hunt-mk61 size attribution should keep the payload lower-bound cost model "
+              "visible only on the nonpositive opportunity");
     }
     if (name == "dangerous-loading") {
       const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
@@ -952,15 +945,24 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.at("valueAwareCalleeAbiBreakEvenAddedCells") ==
                       "1" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiMutationSurfaceCells") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiMutationSurfaceCells") == "4" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiMutationSurfaceStatus") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiMutationSurfaceStatus") ==
+                      "exceeds-overhead-budget" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiCostModelStatus") &&
                   candidate_score_zero->details.at("valueAwareCalleeAbiCostModelStatus") ==
-                      "unestimated-stack-preserving-entry-overhead" &&
+                      "mutation-surface-exceeds-overhead-budget" &&
                   candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiCostModelRequirement") &&
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiCostModelRequirement") ==
-                      "stack-preserving-callee-abi-overhead-must-not-exceed-estimated-net-"
-                      "savings" &&
+                      "prove-stack-preserving-callee-abi-overhead-below-mutation-surface-"
+                      "before-ranking" &&
                   candidate_score_zero->details.contains(
                       "valueAwareSuggestedResidentInputNames") &&
                   candidate_score_zero->details.at("valueAwareSuggestedResidentInputNames")
@@ -1359,29 +1361,51 @@ void example_sizes_match_typescript_baselines() {
               "ABI savings as a positive optimizer blocker");
       const SizeBlockerSummaryReport* value_aware_scheduler_blocker =
           find_size_blocker(result, "value-aware-stack-register-scheduler");
-      require(value_aware_scheduler_blocker != nullptr &&
-                  value_aware_scheduler_blocker->opportunities == 1 &&
-                  value_aware_scheduler_blocker->potential_savings == 1 &&
-                  value_aware_scheduler_blocker->best_savings == 1 &&
-                  value_aware_scheduler_blocker->best_variant == "helper-register-traffic" &&
-                  value_aware_scheduler_blocker->best_details.contains("helperLabel") &&
-                  value_aware_scheduler_blocker->best_details.at("helperLabel") ==
-                      "candidate_score zero-accumulator entry" &&
-                  value_aware_scheduler_blocker->best_details.contains("estimateKind") &&
-                  value_aware_scheduler_blocker->best_details.contains("sizeImpactStatus") &&
-                  value_aware_scheduler_blocker->best_details.contains("proofStatus") &&
-                  value_aware_scheduler_blocker->best_details.contains("schedulerScope") &&
-                  value_aware_scheduler_blocker->best_details.contains(
-                      "valueAwareCallArgumentPreservationCells") &&
-                  value_aware_scheduler_blocker->best_details.at(
-                      "valueAwareCallArgumentPreservationCells") == "2" &&
-                  value_aware_scheduler_blocker->best_details.contains("registerTrafficBreakdown") &&
-                  value_aware_scheduler_blocker->best_details.contains(
-                      "valueAwareStackInputNames") &&
-                  value_aware_scheduler_blocker->best_details.contains(
-                      "valueAwareSchedulerTrafficShape"),
-              "tic-tac-toe-4x4 size attribution should summarize helper-local register traffic "
-              "as a value-aware stack/register scheduler blocker");
+      require(value_aware_scheduler_blocker == nullptr,
+              "tic-tac-toe-4x4 size attribution should not summarize overbudget "
+              "stack-mutating callee ABI work as a positive scheduler blocker");
+      const SizeOpportunityReport* candidate_score_register_traffic =
+          find_size_opportunity_detail(result, "helper-register-traffic", "helperLabel",
+                                       "candidate_score zero-accumulator entry");
+      require(candidate_score_register_traffic != nullptr &&
+                  candidate_score_register_traffic->site == "helper" &&
+                  candidate_score_register_traffic->savings == 0 &&
+                  candidate_score_register_traffic->candidate_steps ==
+                      static_cast<int>(result.steps.size()) &&
+                  candidate_score_register_traffic->blocker_kind ==
+                      "value-aware-stack-register-scheduler" &&
+                  candidate_score_register_traffic->details.contains("savingsModel") &&
+                  candidate_score_register_traffic->details.at("savingsModel") ==
+                      "estimated-net-after-callee-abi-surface-budget" &&
+                  candidate_score_register_traffic->details.contains("estimateKind") &&
+                  candidate_score_register_traffic->details.at("estimateKind") ==
+                      "estimated-net-after-callee-abi-surface" &&
+                  candidate_score_register_traffic->details.contains("candidateStepsStatus") &&
+                  candidate_score_register_traffic->details.at("candidateStepsStatus") ==
+                      "not-a-positive-size-opportunity" &&
+                  candidate_score_register_traffic->details.contains("sizeImpactStatus") &&
+                  candidate_score_register_traffic->details.at("sizeImpactStatus") ==
+                      "estimated-nonpositive-net" &&
+                  candidate_score_register_traffic->details.contains("netSavingsStatus") &&
+                  candidate_score_register_traffic->details.at("netSavingsStatus") ==
+                      "stack-preserving-callee-abi-mutation-surface-exceeds-budget" &&
+                  candidate_score_register_traffic->details.contains("requiredAction") &&
+                  candidate_score_register_traffic->details.at("requiredAction") ==
+                      "prove-or-reduce-stack-preserving-callee-abi-overhead" &&
+                  candidate_score_register_traffic->details.contains("costModelAction") &&
+                  candidate_score_register_traffic->details.at("costModelAction") ==
+                      "estimate-stack-preserving-callee-abi-overhead-from-mutation-surface" &&
+                  candidate_score_register_traffic->details.contains(
+                      "valueAwareCalleeAbiMutationSurfaceCells") &&
+                  candidate_score_register_traffic->details.at(
+                      "valueAwareCalleeAbiMutationSurfaceCells") == "4" &&
+                  candidate_score_register_traffic->details.contains(
+                      "valueAwareCalleeAbiOverheadBudgetCells") &&
+                  candidate_score_register_traffic->details.at(
+                      "valueAwareCalleeAbiOverheadBudgetCells") == "1",
+              "tic-tac-toe-4x4 size attribution should keep the candidate_score scheduler "
+              "opportunity visible while ranking the overbudget callee ABI surface as "
+              "nonpositive");
       const SizeNextActionSummaryReport* required_action = find_size_next_action(
           result, "requiredAction", "keep-fractional-erase-before-data-arithmetic");
       require(required_action == nullptr,
@@ -1409,83 +1433,20 @@ void example_sizes_match_typescript_baselines() {
               "implementation as a positive next action");
       const SizeNextActionSummaryReport* callee_abi_required_action = find_size_next_action(
           result, "requiredAction", "refactor-stack-mutating-callee-abi");
-      require(callee_abi_required_action != nullptr &&
-                  callee_abi_required_action->opportunities == 1 &&
-                  callee_abi_required_action->potential_savings == 1 &&
-                  callee_abi_required_action->best_savings == 1 &&
-                  callee_abi_required_action->best_blocker_kind ==
-                      "value-aware-stack-register-scheduler" &&
-                  callee_abi_required_action->best_variant == "helper-register-traffic" &&
-                  callee_abi_required_action->best_details.contains("helperLabel") &&
-                  callee_abi_required_action->best_details.at("helperLabel") ==
-                      "candidate_score zero-accumulator entry" &&
-                  callee_abi_required_action->best_details.contains("savingsModel") &&
-                  callee_abi_required_action->best_details.at("savingsModel") ==
-                      "estimated-net-after-callsite-materialization" &&
-                  callee_abi_required_action->best_details.contains("estimateKind") &&
-                  callee_abi_required_action->best_details.at("estimateKind") ==
-                      "estimated-net-after-materialization" &&
-                  callee_abi_required_action->best_details.contains("candidateStepsStatus") &&
-                  callee_abi_required_action->best_details.at("candidateStepsStatus") ==
-                      "synthetic-net-estimate-not-compiled" &&
-                  callee_abi_required_action->best_details.contains("sizeImpactStatus") &&
-                  callee_abi_required_action->best_details.at("sizeImpactStatus") ==
-                      "blocked-estimated-positive-net" &&
-                  callee_abi_required_action->best_details.contains("schedulerScope") &&
-                  callee_abi_required_action->best_details.contains("proofStatus") &&
-                  callee_abi_required_action->best_details.at("proofStatus") ==
-                      "callee-stack-mutation-clobbers-stack-inputs" &&
-                  callee_abi_required_action->best_details.contains(
-                      "valueAwareCallPreservationMutatingCells") &&
-                  callee_abi_required_action->best_details.at(
-                      "valueAwareCallPreservationMutatingCells") ==
-                      "packed-line score accumulator helper:4" &&
-                  callee_abi_required_action->best_details.contains(
-                      "valueAwareCallPreservationMutatingOpcodes") &&
-                  callee_abi_required_action->best_details.at(
-                      "valueAwareCallPreservationMutatingOpcodes")
-                          .find("packed-line score accumulator helper:86://consume-y-drop") !=
-                      std::string::npos &&
-                  callee_abi_required_action->best_details.contains(
-                      "valueAwareCalleeAbiRefactorKind") &&
-                  callee_abi_required_action->best_details.at(
-                      "valueAwareCalleeAbiRefactorKind") ==
-                      "stack-preserving-entry-for-live-caller-inputs" &&
-                  callee_abi_required_action->best_details.contains(
-                      "valueAwareCalleeAbiPreservationPlan") &&
-                  callee_abi_required_action->best_details.at(
-                      "valueAwareCalleeAbiPreservationPlan")
-                          .find("packed-line score accumulator helper:x,y") !=
-                      std::string::npos &&
-                  callee_abi_required_action->best_details.contains(
-                      "valueAwareCalleeAbiOverheadBudgetCells") &&
-                  callee_abi_required_action->best_details.at(
-                      "valueAwareCalleeAbiOverheadBudgetCells") == "1" &&
-                  callee_abi_required_action->best_details.contains(
-                      "valueAwareCalleeAbiCostModelRequirement") &&
-                  callee_abi_required_action->best_details.at(
-                      "valueAwareCalleeAbiCostModelRequirement") ==
-                      "stack-preserving-callee-abi-overhead-must-not-exceed-estimated-net-"
-                      "savings" &&
-                  callee_abi_required_action->best_details.contains("registerTrafficBreakdown") &&
-                  callee_abi_required_action->best_details.contains(
-                      "valueAwareStackInputNames") &&
-                  callee_abi_required_action->best_details.at("valueAwareStackInputNames")
-                          .find("x") != std::string::npos &&
-                  callee_abi_required_action->best_details.at("valueAwareStackInputNames")
-                          .find("y") != std::string::npos &&
-                  callee_abi_required_action->best_details.contains(
-                      "valueAwareCallArgumentPreservationCells") &&
-                  callee_abi_required_action->best_details.at(
-                      "valueAwareCallArgumentPreservationCells") == "2" &&
-                  callee_abi_required_action->best_details.contains(
-                      "valueAwareStackCapacityStatus") &&
-                  callee_abi_required_action->best_details.at(
-                      "valueAwareStackCapacityStatus") == "fits-x-y-z-t-capacity" &&
-                  callee_abi_required_action->best_details.contains(
-                      "valueAwareSchedulerTrafficShape"),
-              "tic-tac-toe-4x4 size attribution should rank value-aware stack/register "
-              "scheduling by net estimated size and report the stack-mutating callee ABI blocker");
+      require(callee_abi_required_action == nullptr,
+              "tic-tac-toe-4x4 size attribution should not rank overbudget callee ABI "
+              "refactoring as a positive required action");
+      const SizeNextActionSummaryReport* callee_abi_proof_action = find_size_next_action(
+          result, "requiredAction", "prove-or-reduce-stack-preserving-callee-abi-overhead");
+      require(callee_abi_proof_action == nullptr,
+              "tic-tac-toe-4x4 size attribution should keep overbudget callee ABI proof work "
+              "visible only on the nonpositive opportunity");
+      const SizeNextActionSummaryReport* callee_abi_cost_model_action = find_size_next_action(
+          result, "costModelAction",
+          "estimate-stack-preserving-callee-abi-overhead-from-mutation-surface");
+      require(callee_abi_cost_model_action == nullptr,
+              "tic-tac-toe-4x4 size attribution should not rank the overbudget callee ABI cost "
+              "model as a positive next action");
       const SizeNextActionSummaryReport* stack_input_scheduler_action = find_size_next_action(
           result, "trafficShapeAction", "schedule-stack-input-helper-values");
       require(stack_input_scheduler_action == nullptr,
@@ -1498,51 +1459,9 @@ void example_sizes_match_typescript_baselines() {
               "positive staged stack-input action");
       const SizeNextActionSummaryReport* callee_abi_action = find_size_next_action(
           result, "trafficShapeAction", "refactor-stack-mutating-callee-abi");
-      require(callee_abi_action != nullptr &&
-                  callee_abi_action->opportunities == 1 &&
-                  callee_abi_action->potential_savings == 1 &&
-                  callee_abi_action->best_savings == 1 &&
-                  callee_abi_action->best_details.contains("helperLabel") &&
-                  callee_abi_action->best_details.at("helperLabel") ==
-                      "candidate_score zero-accumulator entry" &&
-                  callee_abi_action->best_details.contains("valueAwareStackInputNames") &&
-                  callee_abi_action->best_details.at("valueAwareStackInputNames")
-                          .find("x") != std::string::npos &&
-                  callee_abi_action->best_details.at("valueAwareStackInputNames")
-                          .find("y") != std::string::npos &&
-                  callee_abi_action->best_details.contains("valueAwareNestedCallLabels") &&
-                  callee_abi_action->best_details.at("valueAwareNestedCallLabels")
-                          .find("packed-line score accumulator helper") != std::string::npos &&
-                  callee_abi_action->best_details.contains("valueAwareStackInputPlanStatus") &&
-                  callee_abi_action->best_details.at("valueAwareStackInputPlanStatus") ==
-                      "blocked-by-stack-mutating-callee" &&
-                  callee_abi_action->best_details.contains(
-                      "valueAwareCallArgumentPreservationCells") &&
-                  callee_abi_action->best_details.at(
-                      "valueAwareCallArgumentPreservationCells") == "2" &&
-                  callee_abi_action->best_details.contains("proofStatus") &&
-                  callee_abi_action->best_details.at("proofStatus") ==
-                      "callee-stack-mutation-clobbers-stack-inputs" &&
-                  callee_abi_action->best_details.contains(
-                      "valueAwareCallPreservationMutatingCells") &&
-                  callee_abi_action->best_details.at("valueAwareCallPreservationMutatingCells") ==
-                      "packed-line score accumulator helper:4" &&
-                  callee_abi_action->best_details.contains(
-                      "valueAwareCalleeAbiRefactorTargets") &&
-                  callee_abi_action->best_details.at(
-                      "valueAwareCalleeAbiRefactorTargets") ==
-                      "packed-line score accumulator helper" &&
-                  callee_abi_action->best_details.contains(
-                      "valueAwareCalleeAbiBreakEvenAddedCells") &&
-                  callee_abi_action->best_details.at(
-                      "valueAwareCalleeAbiBreakEvenAddedCells") == "1" &&
-                  callee_abi_action->best_details.contains(
-                      "valueAwareCalleeAbiCostModelStatus") &&
-                  callee_abi_action->best_details.at(
-                      "valueAwareCalleeAbiCostModelStatus") ==
-                      "unestimated-stack-preserving-entry-overhead",
-              "tic-tac-toe-4x4 size attribution should rank profitable stack inputs blocked by "
-              "stack-mutating callees as the next value-aware scheduler action");
+      require(callee_abi_action == nullptr,
+              "tic-tac-toe-4x4 size attribution should not rank stack-mutating callee ABI work "
+              "as a positive traffic-shape action when the mutation surface exceeds the budget");
     }
   }
 }
