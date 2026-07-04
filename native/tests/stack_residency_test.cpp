@@ -141,6 +141,16 @@ const SizeOpportunityReport* find_size_opportunity(const CompileResult& result,
   return it == result.size_attribution.opportunities.end() ? nullptr : &*it;
 }
 
+const SizeHelperSummaryReport* find_size_helper(const CompileResult& result,
+                                                const std::string& label) {
+  const auto it = std::find_if(result.size_attribution.helpers.begin(),
+                               result.size_attribution.helpers.end(),
+                               [&](const SizeHelperSummaryReport& helper) {
+                                 return helper.label == label;
+                               });
+  return it == result.size_attribution.helpers.end() ? nullptr : &*it;
+}
+
 const CandidateReport* find_candidate(const std::vector<CandidateReport>& candidates,
                                       const std::string& variant) {
   const auto it = std::find_if(candidates.begin(), candidates.end(),
@@ -440,6 +450,51 @@ program StackHelperAbiAggregation {
                 stack_entry_candidate->steps == static_cast<int>(stack_entry.steps.size()),
             "candidate search should evaluate stack helper argument-entry lowering even when a "
             "larger shared-body rewrite wins");
+  }
+
+  {
+    const CompileResult result = compile_stack_analysis(R"mkpro(
+program ValueAwareDirectStackInputNestedCall {
+  state {
+    x: packed = 2
+    seed: packed = 1
+    scratch: packed = 0
+    score: packed = 0
+  }
+
+  fn cold() {
+    scratch = seed + 1
+  }
+
+  fn hot() {
+    score = sum(x, x, x, x)
+    cold()
+  }
+
+  loop {
+    hot()
+    hot()
+    cold()
+    halt(score)
+  }
+}
+)mkpro");
+    require_clean_compile(result, "direct stack-input nested-call attribution");
+    const SizeHelperSummaryReport* hot = find_size_helper(result, "hot");
+    require(hot != nullptr, "size attribution should summarize the hot helper");
+    require(hot->details.contains("valueAwareNestedCallLabels") &&
+                hot->details.at("valueAwareNestedCallLabels").find("cold") !=
+                    std::string::npos,
+            "hot helper should expose its nested cold call");
+    require(hot->details.contains("valueAwareDirectStackInputNames") &&
+                hot->details.at("valueAwareDirectStackInputNames").find("x") !=
+                    std::string::npos,
+            "x should be classified as directly schedulable before the nested call");
+    require(!hot->details.contains("valueAwareCallPreservationInputNames"),
+            "x should not require call-preserving proof when it is not recalled after cold");
+    require(hot->details.contains("valueAwareStackInputPlanStatus") &&
+                hot->details.at("valueAwareStackInputPlanStatus") == "direct-stack-fit",
+            "nested calls should not block profitable stack inputs that are dead before them");
   }
 
   {

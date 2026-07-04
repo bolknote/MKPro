@@ -48108,6 +48108,18 @@ SizeAttributionReport build_size_attribution_report(
         }
         const bool requires_call_preserving_stack_proof =
             !call_preservation_input_names.empty();
+        std::vector<std::string> direct_stack_input_names;
+        int direct_stack_input_gross_cells = 0;
+        int direct_stack_input_materialize_cells = 0;
+        for (const auto& [name, cells] : ranked_profitable_stack_inputs) {
+          if (call_preservation_input_names.contains(name))
+            continue;
+          direct_stack_input_names.push_back(name);
+          direct_stack_input_gross_cells += cells;
+          direct_stack_input_materialize_cells += materialize_cells_per_input;
+        }
+        const int direct_stack_input_net_cells =
+            direct_stack_input_gross_cells - direct_stack_input_materialize_cells;
         helper.details["valueAwareStackInputMaterializeCellsPerInput"] =
             std::to_string(materialize_cells_per_input);
         helper.details["valueAwareProfitableStackInputGrossCells"] =
@@ -48161,6 +48173,18 @@ SizeAttributionReport build_size_attribution_report(
               join_strings(matrix_parts, ";");
           helper.details["valueAwareCallPreservationReason"] =
               "profitable stack inputs have helper-local recalls after nested helper calls";
+        }
+        if (!direct_stack_input_names.empty()) {
+          helper.details["valueAwareDirectStackInputNames"] =
+              join_strings(direct_stack_input_names, ",");
+          helper.details["valueAwareDirectStackInputGrossCells"] =
+              std::to_string(direct_stack_input_gross_cells);
+          helper.details["valueAwareDirectStackInputMaterializeCells"] =
+              std::to_string(direct_stack_input_materialize_cells);
+          helper.details["valueAwareDirectStackInputNetCells"] =
+              std::to_string(direct_stack_input_net_cells);
+          helper.details["valueAwareDirectStackInputReason"] =
+              "profitable stack inputs are not recalled after nested helper calls";
         }
         helper.details["valueAwareAllStackCapacityStatus"] =
             ranked_stack_inputs.size() <= stack_capacity ? "fits-x-y-z-t-capacity"
