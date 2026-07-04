@@ -674,6 +674,14 @@ void example_sizes_match_typescript_baselines() {
                   generic_packed_score_fallback->steps > static_cast<int>(result.steps.size()),
               "tic-tac-toe-4x4 should measure the generic packed_score accumulator fallback and "
               "keep the current specialized scorer when the fallback is larger");
+      const CandidateReport* generic_packed_score_stack_fallback =
+          find_candidate(result.rejected_candidates,
+                         "generic-packed-score-accumulator-stack-helper-fallback");
+      require(generic_packed_score_stack_fallback != nullptr &&
+                  generic_packed_score_stack_fallback->steps >=
+                      static_cast<int>(result.steps.size()),
+              "tic-tac-toe-4x4 should also measure the generic packed_score fallback together "
+              "with stack-resident helper entries without hiding a smaller listing");
       const SizeOpportunityReport* generic_packed_score_opportunity =
           find_size_opportunity(result, "generic-packed-score-accumulator-fallback");
       require(generic_packed_score_opportunity != nullptr &&
@@ -710,6 +718,22 @@ void example_sizes_match_typescript_baselines() {
               "tic-tac-toe-4x4 generic packed_score fallback size opportunity should explain "
               "that generic shared-tail support exists but the selected specialized packed-line "
               "pipeline is still smaller");
+      const SizeOpportunityReport* generic_packed_score_stack_opportunity =
+          find_size_opportunity(result, "generic-packed-score-accumulator-stack-helper-fallback");
+      require(generic_packed_score_stack_opportunity != nullptr &&
+                  generic_packed_score_stack_opportunity->details.contains(
+                      "packedScoreFallbackFamily") &&
+                  generic_packed_score_stack_opportunity->details.at(
+                      "packedScoreFallbackFamily") == "generic-expression-accumulator" &&
+                  generic_packed_score_stack_opportunity->details.contains(
+                      "packedScoreFallbackCombination") &&
+                  generic_packed_score_stack_opportunity->details.at(
+                      "packedScoreFallbackCombination") ==
+                      "stack-resident-temporaries-and-stack-argument-helper-entries" &&
+                  generic_packed_score_stack_opportunity->details.contains(
+                      "packedScoreFallbackAction"),
+              "tic-tac-toe-4x4 generic packed_score stack-entry fallback should carry the same "
+              "fallback attribution plus its stack-entry combination");
       const CandidateReport* rejected_dead_integer =
           find_candidate(result.rejected_candidates, "fractional-constant-selector-dead-int");
       require(rejected_dead_integer == nullptr,
