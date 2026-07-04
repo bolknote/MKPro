@@ -264,6 +264,48 @@ void example_sizes_match_typescript_baselines() {
     const std::filesystem::path path = examples_root / (name + ".mkpro");
     const std::size_t actual = example_steps(path, /*analysis_budgeted=*/false);
     require(actual == expected, "top-level example " + name + " step count should match TS baseline");
+    if (name == "fox-hunt-mk61") {
+      const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
+      const SizeOpportunityReport* indirect_flow =
+          find_size_opportunity(result, "aggressive-post-layout-indirect-flow");
+      require(indirect_flow != nullptr && indirect_flow->current_steps == 65 &&
+                  indirect_flow->candidate_steps == 60 && indirect_flow->savings == 5 &&
+                  indirect_flow->blocker_kind == "static-proof-gate" &&
+                  indirect_flow->details.contains("proofFamily") &&
+                  indirect_flow->details.at("proofFamily") == "indirect-flow-targets" &&
+                  indirect_flow->details.contains("missingProof") &&
+                  indirect_flow->details.at("missingProof") ==
+                      "selector-register-preservation" &&
+                  indirect_flow->details.contains("proofFailure") &&
+                  indirect_flow->details.at("proofFailure") ==
+                      "selector-register-used-as-data" &&
+                  indirect_flow->details.contains("selectorRegister") &&
+                  indirect_flow->details.at("selectorRegister") == "7" &&
+                  indirect_flow->details.contains("allocatedName") &&
+                  indirect_flow->details.at("allocatedName") == "__coord_list_foxes_1" &&
+                  indirect_flow->details.contains("consumerAddress") &&
+                  indirect_flow->details.at("consumerAddress") == "14" &&
+                  indirect_flow->details.contains("consumerOpcodeHex") &&
+                  indirect_flow->details.at("consumerOpcodeHex") == "D5" &&
+                  indirect_flow->details.contains("requiredAction") &&
+                  indirect_flow->details.at("requiredAction") ==
+                      "split-selector-register-or-prove-dual-use-data-selector",
+              "fox-hunt-mk61 size attribution should explain why the 60-cell indirect-flow "
+              "candidate is still blocked by selector/data dual-use proof");
+      const SizeNextActionSummaryReport* selector_action = find_size_next_action(
+          result, "requiredAction", "split-selector-register-or-prove-dual-use-data-selector");
+      require(selector_action != nullptr && selector_action->opportunities == 6 &&
+                  selector_action->potential_savings == 5 &&
+                  selector_action->best_savings == 5 &&
+                  selector_action->best_blocker_kind == "static-proof-gate" &&
+                  selector_action->best_details.contains("proofFailure") &&
+                  selector_action->best_details.at("proofFailure") ==
+                      "selector-register-used-as-data" &&
+                  selector_action->best_details.contains("consumerOpcodeHex") &&
+                  selector_action->best_details.at("consumerOpcodeHex") == "D5",
+              "fox-hunt-mk61 size attribution should rank selector/data dual-use proof as the "
+              "next action for the 60-cell post-layout candidates");
+    }
   }
 
   for (const auto& [name, expected] : PENDING_BASELINE) {

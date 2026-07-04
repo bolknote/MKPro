@@ -44206,6 +44206,11 @@ bool indirect_flow_targets_proved(const std::vector<OptimizationReport>& optimiz
                                   const std::vector<PreloadReport>& preloads,
                                   const std::vector<ResolvedStep>& steps,
                                   const std::map<std::string, std::string>& allocated_registers);
+std::optional<std::string> indirect_flow_targets_rejection_reason(
+    const std::vector<OptimizationReport>& optimizations,
+    const std::vector<PreloadReport>& preloads,
+    const std::vector<ResolvedStep>& steps,
+    const std::map<std::string, std::string>& allocated_registers);
 bool runtime_indirect_call_targets_proved(const std::vector<OptimizationReport>& optimizations,
                                           const std::vector<ResolvedStep>& steps);
 bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationReport>& optimizations,
@@ -44718,6 +44723,18 @@ std::optional<std::string> optimizer_static_gate_rejection_reason(
     if (const std::optional<std::string> reason =
             dead_integer_fractional_selector_uses_rejection_reason(
                 result.optimizations, candidate_options, result.steps)) {
+      return reason;
+    }
+  }
+  const bool needs_indirect_flow_target_proof =
+      candidate_options.preloaded_indirect_flow ||
+      candidate_options.aggressive_post_layout_indirect_flow ||
+      candidate_options.dual_use_constant_indirect_flow ||
+      candidate_options.forward_indirect_flow;
+  if (needs_indirect_flow_target_proof) {
+    if (const std::optional<std::string> reason =
+            indirect_flow_targets_rejection_reason(result.optimizations, result.preloads,
+                                                   result.steps, result.registers)) {
       return reason;
     }
   }
@@ -45998,6 +46015,160 @@ bool indirect_flow_selector_registers_are_preserved(
   return true;
 }
 
+std::string static_proof_gate_key_values(const std::vector<std::pair<std::string, std::string>>& fields) {
+  std::vector<std::string> parts;
+  parts.reserve(fields.size());
+  for (const auto& [key, value] : fields) {
+    if (!key.empty() && !value.empty())
+      parts.push_back(key + "=" + value);
+  }
+  return join_strings(parts, "; ");
+}
+
+std::string indirect_flow_step_text(const ResolvedStep& step) {
+  std::string text = step.mnemonic.empty() ? opcode_by_code(step.opcode).name : step.mnemonic;
+  if (text.empty())
+    text = "opcode-" + std::to_string(step.opcode);
+  return text;
+}
+
+std::string opcode_hex_text(int opcode) {
+  std::ostringstream out;
+  out << std::uppercase << std::hex << std::setw(2) << std::setfill('0') << (opcode & 0xff);
+  return out.str();
+}
+
+std::optional<std::string> indirect_flow_selector_preservation_rejection_reason(
+    const std::set<std::string>& selector_registers,
+    const std::map<std::string, std::string>& allocated_registers,
+    const std::vector<ResolvedStep>& steps) {
+  for (const ResolvedStep& step : steps) {
+    if (!step_writes_indirect_flow_selector(step, selector_registers))
+      continue;
+    std::string selector = "unknown";
+    if (step_is_direct_store(step))
+      selector = core::register_name_for_index(step.opcode - 0x40);
+    return "static proof gate rejected candidate; " +
+           static_proof_gate_key_values({
+               {"proofFamily", "indirect-flow-targets"},
+               {"missingProof", "selector-register-preservation"},
+               {"selectorRegister", selector},
+               {"proofFailure", "selector-register-overwritten"},
+               {"consumerAddress", safe_format_label_address(step.address)},
+               {"consumerOpcodeHex", opcode_hex_text(step.opcode)},
+               {"consumerOpcode", indirect_flow_step_text(step)},
+               {"requiredAction", "keep-selector-register-stable-or-retarget-indirect-flow"},
+           });
+  }
+
+  for (const auto& [name, allocated_register] : allocated_registers) {
+    if (compiler_owned_indirect_flow_allocation(name))
+      continue;
+    if (!selector_registers.contains(allocated_register))
+      continue;
+    const std::set<std::string> allocated_selector{allocated_register};
+    for (const ResolvedStep& step : steps) {
+      if (!step_accesses_selector_as_data(step, allocated_selector))
+        continue;
+      return "static proof gate rejected candidate; " +
+             static_proof_gate_key_values({
+                 {"proofFamily", "indirect-flow-targets"},
+                 {"missingProof", "selector-register-preservation"},
+                 {"selectorRegister", allocated_register},
+                 {"allocatedName", name},
+                 {"proofFailure", "selector-register-used-as-data"},
+                 {"consumerAddress", safe_format_label_address(step.address)},
+                 {"consumerOpcodeHex", opcode_hex_text(step.opcode)},
+                 {"consumerOpcode", indirect_flow_step_text(step)},
+                 {"requiredAction", "split-selector-register-or-prove-dual-use-data-selector"},
+             });
+    }
+  }
+
+  return std::nullopt;
+}
+
+std::optional<std::string> indirect_flow_targets_rejection_reason(
+    const std::vector<OptimizationReport>& optimizations,
+    const std::vector<PreloadReport>& preloads,
+    const std::vector<ResolvedStep>& steps,
+    const std::map<std::string, std::string>& allocated_registers) {
+  (void)optimizations;
+  bool saw_candidate_step = false;
+  std::set<std::string> selector_registers;
+  for (const ResolvedStep& step : steps) {
+    if (!step.comment.has_value() ||
+        step.comment->find("indirect-target=") == std::string::npos) {
+      continue;
+    }
+    if (is_runtime_indirect_call_comment(step.comment))
+      continue;
+    saw_candidate_step = true;
+    const std::optional<std::string> register_name = indirect_flow_register_for_opcode(step.opcode);
+    if (!register_name.has_value() || !core::is_stable_indirect_selector(*register_name)) {
+      return "static proof gate rejected candidate; " +
+             static_proof_gate_key_values({
+                 {"proofFamily", "indirect-flow-targets"},
+                 {"missingProof", "stable-selector-register"},
+                 {"proofFailure", "indirect-target-step-is-not-stable-selector-flow"},
+                 {"consumerAddress", safe_format_label_address(step.address)},
+                 {"consumerOpcodeHex", opcode_hex_text(step.opcode)},
+                 {"consumerOpcode", indirect_flow_step_text(step)},
+                 {"requiredAction", "emit-stable-selector-indirect-flow-artifact"},
+             });
+    }
+    const std::optional<PreloadedSelectorAnnotation> annotation =
+        preloaded_selector_annotation_from_comment(step.comment, *register_name);
+    if (!annotation.has_value()) {
+      return "static proof gate rejected candidate; " +
+             static_proof_gate_key_values({
+                 {"proofFamily", "indirect-flow-targets"},
+                 {"missingProof", "preloaded-selector-annotation"},
+                 {"selectorRegister", *register_name},
+                 {"proofFailure", "missing-or-malformed-preloaded-selector-comment"},
+                 {"consumerAddress", safe_format_label_address(step.address)},
+                 {"consumerOpcodeHex", opcode_hex_text(step.opcode)},
+                 {"consumerOpcode", indirect_flow_step_text(step)},
+                 {"requiredAction", "emit-final-preloaded-selector-target-artifact"},
+             });
+    }
+    if (!final_preload_resolves_to_flow_target(preloads, *register_name, annotation->target,
+                                               annotation->value)) {
+      return "static proof gate rejected candidate; " +
+             static_proof_gate_key_values({
+                 {"proofFamily", "indirect-flow-targets"},
+                 {"missingProof", "final-preload-target-resolution"},
+                 {"selectorRegister", *register_name},
+                 {"selectorValue", annotation->value},
+                 {"selectorTarget", safe_format_label_address(annotation->target)},
+                 {"proofFailure", "final-preload-missing-or-does-not-resolve"},
+                 {"consumerAddress", safe_format_label_address(step.address)},
+                 {"consumerOpcodeHex", opcode_hex_text(step.opcode)},
+                 {"consumerOpcode", indirect_flow_step_text(step)},
+                 {"requiredAction", "retarget-final-preload-or-selector-annotation"},
+             });
+    }
+    selector_registers.insert(*register_name);
+  }
+
+  if (!saw_candidate_step) {
+    return "static proof gate rejected candidate; " +
+           static_proof_gate_key_values({
+               {"proofFamily", "indirect-flow-targets"},
+               {"missingProof", "final-indirect-target-artifact"},
+               {"proofFailure", "no-indirect-target-steps"},
+               {"requiredAction", "emit-final-indirect-flow-proof-artifacts"},
+           });
+  }
+
+  if (const std::optional<std::string> preservation =
+          indirect_flow_selector_preservation_rejection_reason(selector_registers,
+                                                               allocated_registers, steps)) {
+    return preservation;
+  }
+  return std::nullopt;
+}
+
 bool indirect_flow_targets_proved(const std::vector<OptimizationReport>& optimizations,
                                   const std::vector<PreloadReport>& preloads,
                                   const std::vector<ResolvedStep>& steps,
@@ -46008,32 +46179,9 @@ bool indirect_flow_targets_proved(const std::vector<OptimizationReport>& optimiz
   // shape-specific lowerers emit the same artifacts before optimizer reporting
   // attaches a generic preloaded-indirect-flow name, so the verifier must not
   // depend on OptimizationReport labels.
-  (void)optimizations;
-  bool saw_proved_step = false;
-  std::set<std::string> selector_registers;
-  for (const ResolvedStep& step : steps) {
-    if (!step.comment.has_value() ||
-        step.comment->find("indirect-target=") == std::string::npos) {
-      continue;
-    }
-    if (is_runtime_indirect_call_comment(step.comment))
-      continue;
-    const std::optional<std::string> register_name = indirect_flow_register_for_opcode(step.opcode);
-    if (!register_name.has_value() || !core::is_stable_indirect_selector(*register_name))
-      return false;
-    const std::optional<PreloadedSelectorAnnotation> annotation =
-        preloaded_selector_annotation_from_comment(step.comment, *register_name);
-    if (!annotation.has_value())
-      return false;
-    if (!final_preload_resolves_to_flow_target(preloads, *register_name, annotation->target,
-                                         annotation->value))
-      return false;
-    selector_registers.insert(*register_name);
-    saw_proved_step = true;
-  }
-  return saw_proved_step &&
-         indirect_flow_selector_registers_are_preserved(selector_registers, allocated_registers,
-                                                        steps);
+  return !indirect_flow_targets_rejection_reason(optimizations, preloads, steps,
+                                                 allocated_registers)
+              .has_value();
 }
 
 bool fractional_selector_data_values_proved(const std::vector<OptimizationReport>& optimizations,
@@ -50758,25 +50906,24 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       if (!candidate_beats_best(result, best)) {
         continue;
       }
-      if (candidate_needs_static_proof_gate(candidate.options) &&
-          !optimizer_static_gate_accepts(candidate.options, result)) {
-        const std::optional<std::string> rejection_reason =
-            optimizer_static_gate_rejection_reason(candidate.options, result);
+      const std::optional<std::string> rejection_reason =
+          candidate_needs_static_proof_gate(candidate.options)
+              ? optimizer_static_gate_rejection_reason(candidate.options, result)
+              : std::nullopt;
+      if (rejection_reason.has_value()) {
         append_candidate_report_once(search_rejected_candidates,
                                      CandidateReport{
                                          .site = "candidate-search",
                                          .variant = candidate.name,
                                          .steps = static_cast<int>(result.steps.size()),
                                          .selected = false,
-                                         .reason = rejection_reason.value_or(
-                                             "static proof gate rejected candidate"),
+                                         .reason = *rejection_reason,
                                      });
         if (trace_candidates) {
           std::cerr << "[candidate-trace] reject-unproved #"
                     << (evaluated_candidate_count + 1U) << " " << candidate.name << " steps="
                     << result.steps.size();
-          if (rejection_reason.has_value())
-            std::cerr << " reason=" << *rejection_reason;
+          std::cerr << " reason=" << *rejection_reason;
           std::cerr << "\n";
         }
         continue;
@@ -53084,11 +53231,8 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
     std::set<std::string> beam_seen;
     auto beam_gate_ok = [&](const CompileOptions& candidate_options,
                             const CompileResult& result) -> bool {
-      if (candidate_needs_static_proof_gate(candidate_options) &&
-          !optimizer_static_gate_accepts(candidate_options, result)) {
-        return false;
-      }
-      return true;
+      return !candidate_needs_static_proof_gate(candidate_options) ||
+             !optimizer_static_gate_rejection_reason(candidate_options, result).has_value();
     };
     // Seed the frontier from the top-K smallest of every curated candidate that
     // was already compiled above (cache hits, so this is cheap), not just the
