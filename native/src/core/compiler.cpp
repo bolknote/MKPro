@@ -47586,7 +47586,16 @@ std::optional<std::string> value_aware_scheduler_traffic_shape_action(
   const auto shape_it = details.find("valueAwareSchedulerTrafficShape");
   if (shape_it == details.end())
     return std::nullopt;
+  const auto callee_status_it = details.find("valueAwareCallPreservationCalleeStatus");
+  if (callee_status_it != details.end() &&
+      callee_status_it->second == "blocked-by-callee-stack-mutation") {
+    return "refactor-stack-mutating-callee-abi";
+  }
   const auto plan_it = details.find("valueAwareStackInputPlanStatus");
+  if (plan_it != details.end() &&
+      plan_it->second == "blocked-by-stack-mutating-callee") {
+    return "refactor-stack-mutating-callee-abi";
+  }
   if (plan_it != details.end() &&
       plan_it->second == "requires-call-preserving-stack-proof") {
     return "prove-stack-input-survives-nested-helper-calls";
@@ -48345,6 +48354,7 @@ SizeAttributionReport build_size_attribution_report(
         }
         const bool requires_call_preserving_stack_proof =
             !call_preservation_input_names.empty();
+        bool call_preservation_has_stack_mutating_callee = false;
         std::vector<std::string> direct_stack_input_names;
         int direct_stack_input_gross_cells = 0;
         int direct_stack_input_materialize_cells = 0;
@@ -48418,8 +48428,10 @@ SizeAttributionReport build_size_attribution_report(
             callee_effect_parts.push_back(helper_stack_effect_summary_text(label, effect));
             if (effect.status != "stack-preserving")
               all_required_callees_stack_preserving = false;
-            if (effect.status == "stack-mutating")
+            if (effect.status == "stack-mutating") {
               saw_stack_mutating_required_callee = true;
+              call_preservation_has_stack_mutating_callee = true;
+            }
           }
           if (!callee_effect_parts.empty()) {
             helper.details["valueAwareCallPreservationCalleeEffects"] =
@@ -48449,9 +48461,15 @@ SizeAttributionReport build_size_attribution_report(
                 join_strings(recall_address_parts, ";");
           }
           helper.details["valueAwareCallPreservationProofAction"] =
-              "prove-callee-stack-effect-for-listed-sites";
+              call_preservation_has_stack_mutating_callee
+                  ? "refactor-stack-mutating-callee-abi"
+                  : "prove-callee-stack-effect-for-listed-sites";
           helper.details["valueAwareCallPreservationReason"] =
               "profitable stack inputs have helper-local recalls after nested helper calls";
+          if (call_preservation_has_stack_mutating_callee) {
+            helper.details["valueAwareProfitableStackInputPlanStatus"] =
+                "blocked-by-stack-mutating-callee";
+          }
         }
         if (!direct_stack_input_names.empty()) {
           helper.details["valueAwareDirectStackInputNames"] =
@@ -48503,9 +48521,13 @@ SizeAttributionReport build_size_attribution_report(
                 "no-profitable-stack-input-materialization";
           } else if (requires_call_preserving_stack_proof) {
             helper.details["valueAwareStackInputPlanStatus"] =
-                "requires-call-preserving-stack-proof";
+                call_preservation_has_stack_mutating_callee
+                    ? "blocked-by-stack-mutating-callee"
+                    : "requires-call-preserving-stack-proof";
             helper.details["valueAwareStackInputPlanBlocker"] =
-                "nested-helper-calls-may-clobber-live-stack-inputs";
+                call_preservation_has_stack_mutating_callee
+                    ? "nested-helper-calls-are-stack-mutating"
+                    : "nested-helper-calls-may-clobber-live-stack-inputs";
           } else {
             helper.details["valueAwareStackInputPlanStatus"] = "direct-stack-fit";
           }
@@ -48778,18 +48800,33 @@ SizeAttributionReport build_size_attribution_report(
       details["schedulerScope"] =
           "helper-entry-callsite-stack-values-and-nested-call-stack-preservation";
     }
+    if (stack_plan_it != details.end() &&
+        stack_plan_it->second == "blocked-by-stack-mutating-callee") {
+      if (details["savingsModel"] == "gross-helper-register-traffic-before-callsite-proof") {
+        details["candidateStepsStatus"] = "synthetic-upper-bound-not-directly-schedulable";
+        details["netSavingsStatus"] = "requires-stack-mutating-callee-abi-refactor";
+      }
+      details["proofStatus"] = "callee-stack-mutation-clobbers-stack-inputs";
+      details["requiredAction"] = "refactor-stack-mutating-callee-abi";
+      details["schedulerScope"] =
+          "helper-entry-callsite-stack-values-and-callee-abi-refactor";
+    }
     if (const std::optional<std::string> traffic_shape_action =
             value_aware_scheduler_traffic_shape_action(details)) {
       details["trafficShapeAction"] = *traffic_shape_action;
     }
+    const std::string opportunity_reason =
+        details["requiredAction"] == "refactor-stack-mutating-callee-abi"
+            ? "helper-local register traffic is blocked by stack-mutating helper ABI"
+            : "helper-local register traffic requires value-aware stack/register scheduling "
+              "proof before it can be removed";
     report.opportunities.push_back(SizeOpportunityReport{
         .site = "helper",
         .variant = "helper-register-traffic",
         .current_steps = current_steps,
         .candidate_steps = current_steps - opportunity_savings,
         .savings = opportunity_savings,
-        .reason = "helper-local register traffic requires value-aware stack/register scheduling "
-                  "proof before it can be removed",
+        .reason = opportunity_reason,
         .blocker_kind = "value-aware-stack-register-scheduler",
         .details = std::move(details),
     });

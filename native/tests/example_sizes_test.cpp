@@ -468,10 +468,10 @@ void example_sizes_match_typescript_baselines() {
                       std::string::npos &&
                   candidate_score_zero->details.contains("valueAwareStackInputPlanStatus") &&
                   candidate_score_zero->details.at("valueAwareStackInputPlanStatus") ==
-                      "requires-call-preserving-stack-proof" &&
+                      "blocked-by-stack-mutating-callee" &&
                   candidate_score_zero->details.contains("valueAwareStackInputPlanBlocker") &&
                   candidate_score_zero->details.at("valueAwareStackInputPlanBlocker") ==
-                      "nested-helper-calls-may-clobber-live-stack-inputs" &&
+                      "nested-helper-calls-are-stack-mutating" &&
                   candidate_score_zero->details.contains(
                       "valueAwareCallPreservationInputNames") &&
                   candidate_score_zero->details.at("valueAwareCallPreservationInputNames")
@@ -498,7 +498,7 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.contains(
                       "valueAwareCallPreservationProofAction") &&
                   candidate_score_zero->details.at("valueAwareCallPreservationProofAction") ==
-                      "prove-callee-stack-effect-for-listed-sites" &&
+                      "refactor-stack-mutating-callee-abi" &&
                   candidate_score_zero->details.contains(
                       "valueAwareCallPreservationCalleeEffects") &&
                   candidate_score_zero->details.at("valueAwareCallPreservationCalleeEffects")
@@ -539,7 +539,7 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.contains(
                       "valueAwareProfitableStackInputPlanStatus") &&
                   candidate_score_zero->details.at("valueAwareProfitableStackInputPlanStatus") ==
-                      "requires-call-preserving-stack-proof" &&
+                      "blocked-by-stack-mutating-callee" &&
                   candidate_score_zero->details.contains("valueAwareNestedCallLabels") &&
                   candidate_score_zero->details.at("valueAwareNestedCallLabels")
                           .find("packed-line score accumulator helper") != std::string::npos &&
@@ -576,10 +576,10 @@ void example_sizes_match_typescript_baselines() {
                       "stack-inputs-and-nested-call-inputs" &&
                   mark_lines_helper->details.contains("valueAwareStackInputPlanStatus") &&
                   mark_lines_helper->details.at("valueAwareStackInputPlanStatus") ==
-                      "requires-call-preserving-stack-proof" &&
+                      "blocked-by-stack-mutating-callee" &&
                   mark_lines_helper->details.contains("valueAwareStackInputPlanBlocker") &&
                   mark_lines_helper->details.at("valueAwareStackInputPlanBlocker") ==
-                      "nested-helper-calls-may-clobber-live-stack-inputs" &&
+                      "nested-helper-calls-are-stack-mutating" &&
                   mark_lines_helper->details.contains("valueAwareCallPreservationInputNames") &&
                   mark_lines_helper->details.at("valueAwareCallPreservationInputNames")
                           .find("x") != std::string::npos &&
@@ -602,7 +602,7 @@ void example_sizes_match_typescript_baselines() {
                   mark_lines_helper->details.contains(
                       "valueAwareCallPreservationProofAction") &&
                   mark_lines_helper->details.at("valueAwareCallPreservationProofAction") ==
-                      "prove-callee-stack-effect-for-listed-sites" &&
+                      "refactor-stack-mutating-callee-abi" &&
                   mark_lines_helper->details.contains(
                       "valueAwareCallPreservationCalleeEffects") &&
                   mark_lines_helper->details.at("valueAwareCallPreservationCalleeEffects")
@@ -885,49 +885,49 @@ void example_sizes_match_typescript_baselines() {
       require(stack_helper_action == nullptr,
               "tic-tac-toe-4x4 size attribution should not rank net-negative stack-entry ABI "
               "implementation as a positive next action");
-      const SizeNextActionSummaryReport* value_aware_scheduler_action = find_size_next_action(
-          result, "requiredAction", "value-aware-stack-register-scheduling");
-      require(value_aware_scheduler_action != nullptr &&
-                  value_aware_scheduler_action->opportunities == 2 &&
-                  value_aware_scheduler_action->potential_savings == 5 &&
-                  value_aware_scheduler_action->best_savings == 3 &&
-                  value_aware_scheduler_action->best_blocker_kind ==
+      const SizeNextActionSummaryReport* callee_abi_required_action = find_size_next_action(
+          result, "requiredAction", "refactor-stack-mutating-callee-abi");
+      require(callee_abi_required_action != nullptr &&
+                  callee_abi_required_action->opportunities == 2 &&
+                  callee_abi_required_action->potential_savings == 5 &&
+                  callee_abi_required_action->best_savings == 3 &&
+                  callee_abi_required_action->best_blocker_kind ==
                       "value-aware-stack-register-scheduler" &&
-                  value_aware_scheduler_action->best_variant == "helper-register-traffic" &&
-                  value_aware_scheduler_action->best_details.contains("helperLabel") &&
-                  value_aware_scheduler_action->best_details.at("helperLabel") ==
+                  callee_abi_required_action->best_variant == "helper-register-traffic" &&
+                  callee_abi_required_action->best_details.contains("helperLabel") &&
+                  callee_abi_required_action->best_details.at("helperLabel") ==
                       "candidate_score zero-accumulator entry" &&
-                  value_aware_scheduler_action->best_details.contains("savingsModel") &&
-                  value_aware_scheduler_action->best_details.at("savingsModel") ==
+                  callee_abi_required_action->best_details.contains("savingsModel") &&
+                  callee_abi_required_action->best_details.at("savingsModel") ==
                       "estimated-net-after-callsite-materialization" &&
-                  value_aware_scheduler_action->best_details.contains("estimateKind") &&
-                  value_aware_scheduler_action->best_details.at("estimateKind") ==
+                  callee_abi_required_action->best_details.contains("estimateKind") &&
+                  callee_abi_required_action->best_details.at("estimateKind") ==
                       "estimated-net-after-materialization" &&
-                  value_aware_scheduler_action->best_details.contains("candidateStepsStatus") &&
-                  value_aware_scheduler_action->best_details.at("candidateStepsStatus") ==
+                  callee_abi_required_action->best_details.contains("candidateStepsStatus") &&
+                  callee_abi_required_action->best_details.at("candidateStepsStatus") ==
                       "synthetic-net-estimate-not-compiled" &&
-                  value_aware_scheduler_action->best_details.contains("sizeImpactStatus") &&
-                  value_aware_scheduler_action->best_details.at("sizeImpactStatus") ==
+                  callee_abi_required_action->best_details.contains("sizeImpactStatus") &&
+                  callee_abi_required_action->best_details.at("sizeImpactStatus") ==
                       "blocked-estimated-positive-net" &&
-                  value_aware_scheduler_action->best_details.contains("schedulerScope") &&
-                  value_aware_scheduler_action->best_details.contains("proofStatus") &&
-                  value_aware_scheduler_action->best_details.at("proofStatus") ==
-                      "nested-helper-calls-may-clobber-stack-inputs" &&
-                  value_aware_scheduler_action->best_details.contains("registerTrafficBreakdown") &&
-                  value_aware_scheduler_action->best_details.contains(
+                  callee_abi_required_action->best_details.contains("schedulerScope") &&
+                  callee_abi_required_action->best_details.contains("proofStatus") &&
+                  callee_abi_required_action->best_details.at("proofStatus") ==
+                      "callee-stack-mutation-clobbers-stack-inputs" &&
+                  callee_abi_required_action->best_details.contains("registerTrafficBreakdown") &&
+                  callee_abi_required_action->best_details.contains(
                       "valueAwareStackInputNames") &&
-                  value_aware_scheduler_action->best_details.at("valueAwareStackInputNames")
+                  callee_abi_required_action->best_details.at("valueAwareStackInputNames")
                           .find("x") != std::string::npos &&
-                  value_aware_scheduler_action->best_details.at("valueAwareStackInputNames")
+                  callee_abi_required_action->best_details.at("valueAwareStackInputNames")
                           .find("y") != std::string::npos &&
-                  value_aware_scheduler_action->best_details.contains(
+                  callee_abi_required_action->best_details.contains(
                       "valueAwareStackCapacityStatus") &&
-                  value_aware_scheduler_action->best_details.at(
+                  callee_abi_required_action->best_details.at(
                       "valueAwareStackCapacityStatus") == "fits-x-y-z-t-capacity" &&
-                  value_aware_scheduler_action->best_details.contains(
+                  callee_abi_required_action->best_details.contains(
                       "valueAwareSchedulerTrafficShape"),
               "tic-tac-toe-4x4 size attribution should rank value-aware stack/register "
-              "scheduling by net estimated size instead of gross helper-local register traffic");
+              "scheduling by net estimated size and report the stack-mutating callee ABI blocker");
       const SizeNextActionSummaryReport* stack_input_scheduler_action = find_size_next_action(
           result, "trafficShapeAction", "schedule-stack-input-helper-values");
       require(stack_input_scheduler_action == nullptr,
@@ -938,28 +938,31 @@ void example_sizes_match_typescript_baselines() {
       require(staged_stack_input_action == nullptr,
               "tic-tac-toe-4x4 size attribution should not rank break-even line inputs as a "
               "positive staged stack-input action");
-      const SizeNextActionSummaryReport* split_scheduler_action = find_size_next_action(
-          result, "trafficShapeAction", "prove-stack-input-survives-nested-helper-calls");
-      require(split_scheduler_action != nullptr &&
-                  split_scheduler_action->opportunities == 2 &&
-                  split_scheduler_action->potential_savings == 5 &&
-                  split_scheduler_action->best_savings == 3 &&
-                  split_scheduler_action->best_details.contains("helperLabel") &&
-                  split_scheduler_action->best_details.at("helperLabel") ==
+      const SizeNextActionSummaryReport* callee_abi_action = find_size_next_action(
+          result, "trafficShapeAction", "refactor-stack-mutating-callee-abi");
+      require(callee_abi_action != nullptr &&
+                  callee_abi_action->opportunities == 2 &&
+                  callee_abi_action->potential_savings == 5 &&
+                  callee_abi_action->best_savings == 3 &&
+                  callee_abi_action->best_details.contains("helperLabel") &&
+                  callee_abi_action->best_details.at("helperLabel") ==
                       "candidate_score zero-accumulator entry" &&
-                  split_scheduler_action->best_details.contains("valueAwareStackInputNames") &&
-                  split_scheduler_action->best_details.at("valueAwareStackInputNames")
+                  callee_abi_action->best_details.contains("valueAwareStackInputNames") &&
+                  callee_abi_action->best_details.at("valueAwareStackInputNames")
                           .find("x") != std::string::npos &&
-                  split_scheduler_action->best_details.at("valueAwareStackInputNames")
+                  callee_abi_action->best_details.at("valueAwareStackInputNames")
                           .find("y") != std::string::npos &&
-                  split_scheduler_action->best_details.contains("valueAwareNestedCallLabels") &&
-                  split_scheduler_action->best_details.at("valueAwareNestedCallLabels")
+                  callee_abi_action->best_details.contains("valueAwareNestedCallLabels") &&
+                  callee_abi_action->best_details.at("valueAwareNestedCallLabels")
                           .find("packed-line score accumulator helper") != std::string::npos &&
-                  split_scheduler_action->best_details.contains("valueAwareStackInputPlanStatus") &&
-                  split_scheduler_action->best_details.at("valueAwareStackInputPlanStatus") ==
-                      "requires-call-preserving-stack-proof",
+                  callee_abi_action->best_details.contains("valueAwareStackInputPlanStatus") &&
+                  callee_abi_action->best_details.at("valueAwareStackInputPlanStatus") ==
+                      "blocked-by-stack-mutating-callee" &&
+                  callee_abi_action->best_details.contains("proofStatus") &&
+                  callee_abi_action->best_details.at("proofStatus") ==
+                      "callee-stack-mutation-clobbers-stack-inputs",
               "tic-tac-toe-4x4 size attribution should rank profitable stack inputs blocked by "
-              "nested helper calls as the next value-aware scheduler proof action");
+              "stack-mutating callees as the next value-aware scheduler action");
     }
   }
 }
