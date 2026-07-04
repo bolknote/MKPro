@@ -302,6 +302,8 @@ void example_sizes_match_typescript_baselines() {
                   indirect_flow->details.at("consumerAddress") == "14" &&
                   indirect_flow->details.contains("consumerOpcodeHex") &&
                   indirect_flow->details.at("consumerOpcodeHex") == "D5" &&
+                  indirect_flow->details.contains("consumerOpcode") &&
+                  indirect_flow->details.at("consumerOpcode") == "К П->X 5" &&
                   indirect_flow->details.contains("selectorDataConflictKind") &&
                   indirect_flow->details.at("selectorDataConflictKind") ==
                       "indirect-memory-recall" &&
@@ -387,6 +389,8 @@ void example_sizes_match_typescript_baselines() {
                       "selector-register-used-as-data" &&
                   selector_action->best_details.contains("consumerOpcodeHex") &&
                   selector_action->best_details.at("consumerOpcodeHex") == "D5" &&
+                  selector_action->best_details.contains("consumerOpcode") &&
+                  selector_action->best_details.at("consumerOpcode") == "К П->X 5" &&
                   selector_action->best_details.contains("conflictingSelectorRegisters") &&
                   selector_action->best_details.at("conflictingSelectorRegisters") == "7+8+9" &&
                   selector_action->best_details.contains("selectorDataConflictPrecision") &&

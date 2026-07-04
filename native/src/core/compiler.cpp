@@ -47544,6 +47544,8 @@ void add_size_opportunity_flow_target_details(
   }
 }
 
+std::map<std::string, std::string> semicolon_key_value_details(const std::string& text);
+
 std::map<std::string, std::string>
 size_opportunity_details(const CandidateReport& candidate,
                          const std::map<int, SizeReportFlowTargetStats>& flow_stats,
@@ -47590,6 +47592,8 @@ size_opportunity_details(const CandidateReport& candidate,
       details[key] = reason.substr(value_start, value_end - value_start);
     cursor = value_end == value_start ? equals + 1U : value_end;
   }
+  for (const auto& [key, value] : semicolon_key_value_details(reason))
+    details[key] = value;
   const bool dead_integer_recovery_order_reason =
       reason.find("before K {x}") != std::string::npos ||
       reason.find("instead of immediate K {x}") != std::string::npos;
