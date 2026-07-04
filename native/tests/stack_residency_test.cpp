@@ -367,6 +367,88 @@ program StackResidentIndexedSumUpdateConsumer {
     CompileOptions options;
     options.budget = 999999;
     options.stack_resident_temps = true;
+    options.disable_candidate_search = true;
+    const CompileResult result = compile_source(R"mkpro(
+program StackResidentIndexedInlinePackedScoreUpdateConsumer {
+  state {
+    cells: packed[1..3] = [10, 20, 30]
+    slot: counter 1..3 = 2
+    line: packed = 44444.4
+    x: counter 0..7 = 1
+    y: counter 0..7 = 2
+    tmp: counter 0..7 = 0
+  }
+
+  loop {
+    tmp = x + y
+    cells[slot] += packed_score(line, tmp)
+    halt(cells[slot])
+  }
+}
+)mkpro",
+                                                options);
+    require_clean_compile(result, "stack-resident indexed inline packed_score update consumer");
+    require(has_optimization(result, "stack-resident-indexed-temp"),
+            "indexed inline packed_score update should keep tmp on the stack");
+    require(has_optimization(result, "packed-score-inline-stack-argument-lowering"),
+            "indexed inline packed_score update should consume tmp from the stack");
+    require(has_optimization(result, "packed-grid-primitive-lowering"),
+            "indexed inline packed_score update should still report packed-grid lowering");
+    require(!has_optimization(result, "packed-score-stack-helper"),
+            "single inline packed_score update should not force the shared helper body");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "indexed inline packed_score update should not store tmp before the indexed update");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "indexed inline packed_score update should not recall tmp inside the indexed update");
+  }
+
+  {
+    CompileOptions options;
+    options.budget = 999999;
+    options.stack_resident_temps = true;
+    options.disable_candidate_search = true;
+    const CompileResult result = compile_source(R"mkpro(
+program StackResidentProcInlinePackedScoreUpdateConsumer {
+  state {
+    cells: packed[1..3] = [10, 20, 30]
+    slot: counter 1..3 = 2
+    line: packed = 44444.4
+    x: counter 0..7 = 1
+    y: counter 0..7 = 2
+    tmp: counter 0..7 = 0
+  }
+
+  fn hot() {
+    tmp = x + y
+    cells[slot] += packed_score(line, tmp)
+  }
+
+  loop {
+    hot()
+    hot()
+    hot()
+    halt(cells[slot])
+  }
+}
+)mkpro",
+                                                options);
+    require_clean_compile(result, "stack-resident proc inline packed_score update consumer");
+    require(has_optimization(result, "stack-resident-indexed-temp"),
+            "proc inline packed_score update should keep tmp on the stack inside the helper");
+    require(has_optimization(result, "packed-score-inline-stack-argument-lowering"),
+            "proc inline packed_score update should consume tmp from the stack");
+    require(!has_optimization(result, "packed-score-stack-helper"),
+            "single static packed_score in proc should not force the shared helper body");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "proc inline packed_score update should not store tmp in the helper body");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "proc inline packed_score update should not recall tmp in the helper body");
+  }
+
+  {
+    CompileOptions options;
+    options.budget = 999999;
+    options.stack_resident_temps = true;
     options.shared_bit_mask_helper_calls = true;
     options.disable_candidate_search = true;
     const CompileResult result = compile_source(R"mkpro(
