@@ -725,6 +725,40 @@ std::optional<std::pair<int, std::string>> x_transform_unary_opcode(const std::s
   return it->second;
 }
 
+struct StackUnaryTransformCall {
+  int opcode = 0;
+  std::string mnemonic;
+  std::string comment_name;
+  const Expression* arg = nullptr;
+};
+
+std::optional<StackUnaryTransformCall> stack_unary_transform_call(const Expression& expression) {
+  if (expression.kind != "call")
+    return std::nullopt;
+  if (expression.args.size() == 1U) {
+    const std::optional<std::pair<int, std::string>> opcode =
+        x_transform_unary_opcode(expression.callee);
+    if (!opcode.has_value())
+      return std::nullopt;
+    return StackUnaryTransformCall{
+        .opcode = opcode->first,
+        .mnemonic = opcode->second,
+        .comment_name = lower_ascii(expression.callee),
+        .arg = &expression.args.front(),
+    };
+  }
+  if (lower_ascii(expression.callee) == "pow" && expression.args.size() == 2U &&
+      is_numeric_literal_value(expression.args.at(0), 10)) {
+    return StackUnaryTransformCall{
+        .opcode = 0x15,
+        .mnemonic = "F 10^x",
+        .comment_name = "pow10",
+        .arg = &expression.args.at(1),
+    };
+  }
+  return std::nullopt;
+}
+
 std::optional<std::pair<int, std::string>> binary_opcode(const std::string& op) {
   if (op == "+")
     return std::pair{0x10, std::string("+")};
@@ -778,9 +812,9 @@ bool expression_can_consume_identifier_from_x(const Expression& expression,
            expression_can_consume_identifier_from_x(*expression.right, name) &&
            expression_pure_for_substitution(*expression.left);
   }
-  return expression.kind == "call" && expression.args.size() == 1 &&
-         x_transform_unary_opcode(expression.callee).has_value() &&
-         expression_can_consume_identifier_from_x(expression.args.front(), name);
+  const std::optional<StackUnaryTransformCall> transform = stack_unary_transform_call(expression);
+  return transform.has_value() && transform->arg != nullptr &&
+         expression_can_consume_identifier_from_x(*transform->arg, name);
 }
 
 int count_identifier_reads(const Expression& expression, const std::string& name) {
@@ -6605,17 +6639,14 @@ collect_input_unary_chain(const Expression& expression,
                           const std::function<bool(const Expression&)>& is_leaf) {
   if (is_leaf(expression))
     return std::vector<std::pair<int, std::string>>{};
-  if (expression.kind != "call" || expression.args.size() != 1)
-    return std::nullopt;
-  const std::optional<std::pair<int, std::string>> opcode =
-      x_transform_unary_opcode(expression.callee);
-  if (!opcode.has_value())
+  const std::optional<StackUnaryTransformCall> transform = stack_unary_transform_call(expression);
+  if (!transform.has_value() || transform->arg == nullptr)
     return std::nullopt;
   std::optional<std::vector<std::pair<int, std::string>>> inner =
-      collect_input_unary_chain(expression.args.front(), is_leaf);
+      collect_input_unary_chain(*transform->arg, is_leaf);
   if (!inner.has_value())
     return std::nullopt;
-  inner->push_back(*opcode);
+  inner->push_back({transform->opcode, transform->mnemonic});
   return inner;
 }
 
@@ -9635,9 +9666,10 @@ bool expression_preserves_previous_x_as_y_for_stack_analysis(const Expression& e
            expression_preserves_previous_x_as_y_for_stack_analysis(*expression.left) &&
            expression_preserves_previous_x_as_y_for_stack_analysis(*expression.right);
   }
-  if (expression.kind == "call") {
-    return expression.args.size() == 1U && x_transform_unary_opcode(expression.callee).has_value() &&
-           expression_preserves_previous_x_as_y_for_stack_analysis(expression.args.front());
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression)) {
+    return transform->arg != nullptr &&
+           expression_preserves_previous_x_as_y_for_stack_analysis(*transform->arg);
   }
   return false;
 }
@@ -9664,9 +9696,10 @@ bool x_param_expression_preserves_caller_y_for_stack_analysis(const Expression& 
            x_param_expression_preserves_caller_y_for_stack_analysis(*expression.right, param) &&
            analysis_simple_stack_load(*expression.left);
   }
-  if (expression.kind == "call") {
-    return expression.args.size() == 1U && x_transform_unary_opcode(expression.callee).has_value() &&
-           x_param_expression_preserves_caller_y_for_stack_analysis(expression.args.front(), param);
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression)) {
+    return transform->arg != nullptr &&
+           x_param_expression_preserves_caller_y_for_stack_analysis(*transform->arg, param);
   }
   return false;
 }
@@ -17605,15 +17638,14 @@ bool compile_x_param_first_expression(LoweringContext& context, const Expression
     context.emitter.current_x_aliases.clear();
     return true;
   }
-  if (expression.kind == "call" && expression.args.size() == 1) {
-    if (!compile_x_param_first_expression(context, expression.args.front(), param, line))
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression)) {
+    if (transform->arg == nullptr)
       return false;
-    const std::optional<std::pair<int, std::string>> opcode =
-        x_transform_unary_opcode(expression.callee);
-    if (!opcode.has_value())
+    if (!compile_x_param_first_expression(context, *transform->arg, param, line))
       return false;
-    context.emitter.emit_op(opcode->first, opcode->second, "x-param " + expression.callee + "()",
-                            line);
+    context.emitter.emit_op(transform->opcode, transform->mnemonic,
+                            "x-param " + transform->comment_name + "()", line);
     return true;
   }
   return false;
@@ -18518,9 +18550,10 @@ bool expression_derives_current_x_identifier(const Expression& expression,
     return true;
   if (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr)
     return expression_derives_current_x_identifier(*expression.expr, target);
-  if (expression.kind == "call" && expression.args.size() == 1U &&
-      x_transform_unary_opcode(expression.callee).has_value()) {
-    return expression_derives_current_x_identifier(expression.args.front(), target);
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression)) {
+    return transform->arg != nullptr &&
+           expression_derives_current_x_identifier(*transform->arg, target);
   }
   return false;
 }
@@ -20319,9 +20352,10 @@ bool expression_preserves_previous_x_as_y_for_packed_line(const Expression& expr
            expression_preserves_previous_x_as_y_for_packed_line(*expression.left) &&
            expression_preserves_previous_x_as_y_for_packed_line(*expression.right);
   }
-  if (expression.kind == "call") {
-    return expression.args.size() == 1 && x_transform_unary_opcode(expression.callee).has_value() &&
-           expression_preserves_previous_x_as_y_for_packed_line(expression.args.front());
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression)) {
+    return transform->arg != nullptr &&
+           expression_preserves_previous_x_as_y_for_packed_line(*transform->arg);
   }
   return false;
 }
@@ -20516,14 +20550,14 @@ bool lower_expression_preserving_previous_x_as_y(LoweringContext& context,
     clear_current_x_facts(context);
     return true;
   }
-  if (expression.kind == "call" && expression.args.size() == 1) {
-    const std::optional<std::pair<int, std::string>> opcode =
-        x_transform_unary_opcode(expression.callee);
-    if (!opcode.has_value())
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression)) {
+    if (transform->arg == nullptr)
       return false;
-    if (!lower_expression_preserving_previous_x_as_y(context, expression.args.front(), line))
+    if (!lower_expression_preserving_previous_x_as_y(context, *transform->arg, line))
       return false;
-    context.emitter.emit_op(opcode->first, opcode->second, expression.callee + "()", line);
+    context.emitter.emit_op(transform->opcode, transform->mnemonic,
+                            transform->comment_name + "()", line);
     return true;
   }
   return false;
@@ -24298,17 +24332,14 @@ struct StackUnaryDerivationCall {
 
 std::optional<StackUnaryDerivationCall>
 match_stack_unary_derivation_call(const Expression& expression) {
-  if (expression.kind != "call" || expression.args.size() != 1U)
-    return std::nullopt;
-  const std::string fn = lower_ascii(expression.callee);
-  const std::optional<std::pair<int, std::string>> opcode = x_transform_unary_opcode(fn);
-  if (!opcode.has_value())
+  const std::optional<StackUnaryTransformCall> transform = stack_unary_transform_call(expression);
+  if (!transform.has_value() || transform->arg == nullptr)
     return std::nullopt;
   return StackUnaryDerivationCall{
-      .fn = fn,
-      .opcode = opcode->first,
-      .mnemonic = opcode->second,
-      .arg = expression.args.front(),
+      .fn = transform->comment_name,
+      .opcode = transform->opcode,
+      .mnemonic = transform->mnemonic,
+      .arg = *transform->arg,
   };
 }
 
@@ -34971,16 +35002,14 @@ bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expres
     });
     return true;
   }
-  if (expression.kind == "call" && expression.args.size() == 1U &&
-      stack_expression_references_any_temp(expression.args.front(), temps)) {
-    const std::optional<std::pair<int, std::string>> opcode =
-        x_transform_unary_opcode(expression.callee);
-    if (!opcode.has_value())
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression);
+      transform.has_value() && transform->arg != nullptr &&
+      stack_expression_references_any_temp(*transform->arg, temps)) {
+    if (!lower_stack_resident_expression_to_x(context, *transform->arg, temps, line))
       return false;
-    if (!lower_stack_resident_expression_to_x(context, expression.args.front(), temps, line))
-      return false;
-    context.emitter.emit_op(opcode->first, opcode->second,
-                            "stack-resident " + lower_ascii(expression.callee), line);
+    context.emitter.emit_op(transform->opcode, transform->mnemonic,
+                            "stack-resident " + transform->comment_name, line);
     clear_current_x_facts(context);
     return true;
   }

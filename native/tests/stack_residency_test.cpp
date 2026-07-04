@@ -680,6 +680,37 @@ program StackPackedScoreHelperIndexArg {
 
   {
     const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedPowAlias {
+  state {
+    index: counter 0..7 = 3
+    guard: flag = false
+    tmp: counter 0..7 = 0
+    out: packed = 0
+  }
+
+  loop {
+    tmp = index
+    if guard {
+    }
+    out = pow(10, tmp)
+    halt(out)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried pow(10, tmp) alias");
+    require(has_optimization(result, "stack-carried-assignment-delayed"),
+            "pow(10, tmp) should be recognized as a delayed current-X consumer");
+    require(has_optimization(result, "pow10-opcode-lowering"),
+            "pow(10, tmp) should still lower through the native pow10 opcode");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-carried pow(10, tmp) should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-carried pow(10, tmp) should not recall tmp");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
 program StackResidentRepeatedSum {
   state {
     x: packed = 2
