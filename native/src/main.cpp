@@ -377,6 +377,25 @@ void print_json_size_attribution(const mkpro::SizeAttributionReport& report, std
     std::cout << "}" << (index + 1U == report.abi_blockers.size() ? "" : ",") << "\n";
   }
   std::cout << indent << "  ],\n";
+  std::cout << indent << "  \"selectedOptimizations\": [\n";
+  for (std::size_t index = 0; index < report.selected_optimizations.size(); ++index) {
+    const auto& selected = report.selected_optimizations.at(index);
+    std::cout << indent << "    {\"site\": ";
+    print_json_string(std::cout, selected.site);
+    std::cout << ", \"variant\": ";
+    print_json_string(std::cout, selected.variant);
+    std::cout << ", \"currentSteps\": " << selected.current_steps;
+    std::cout << ", \"baselineSteps\": " << selected.baseline_steps;
+    std::cout << ", \"savings\": " << selected.savings;
+    if (!selected.details.empty()) {
+      std::cout << ", \"details\": ";
+      print_json_string_map(selected.details);
+    }
+    std::cout << ", \"reason\": ";
+    print_json_string(std::cout, selected.reason);
+    std::cout << "}" << (index + 1U == report.selected_optimizations.size() ? "" : ",") << "\n";
+  }
+  std::cout << indent << "  ],\n";
   std::cout << indent << "  \"opportunities\": [\n";
   for (std::size_t index = 0; index < report.opportunities.size(); ++index) {
     const auto& opportunity = report.opportunities.at(index);
@@ -879,6 +898,28 @@ void print_human_analysis_report(const mkpro::CompileResult& result) {
         std::cout << " requiredAction=" << action->second;
       if (!blocker.reason.empty())
         std::cout << " - " << blocker.reason;
+      std::cout << "\n";
+      ++printed;
+    }
+  }
+
+  std::cout << "\n### Size Selected Optimizations\n";
+  if (result.size_attribution.selected_optimizations.empty()) {
+    std::cout << "(none)\n";
+  } else {
+    std::size_t printed = 0;
+    for (const auto& selected : result.size_attribution.selected_optimizations) {
+      if (printed >= 12U)
+        break;
+      std::cout << "- " << selected.site << " :: " << selected.variant
+                << " current=" << selected.current_steps
+                << " baseline=" << selected.baseline_steps
+                << " savings=" << selected.savings;
+      print_size_detail_suffix(selected.details,
+                               {"estimateKind", "replacementCount", "savingsModel",
+                                "baselineStepsStatus", "savingsAggregation"});
+      if (!selected.reason.empty())
+        std::cout << " - " << selected.reason;
       std::cout << "\n";
       ++printed;
     }

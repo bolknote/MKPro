@@ -78,6 +78,17 @@ const SizeOpportunityReport* find_size_opportunity(const CompileResult& result,
   return it == result.size_attribution.opportunities.end() ? nullptr : &*it;
 }
 
+const SizeSelectedOptimizationReport* find_size_selected_optimization(
+    const CompileResult& result, const std::string& variant) {
+  const auto it = std::find_if(
+      result.size_attribution.selected_optimizations.begin(),
+      result.size_attribution.selected_optimizations.end(),
+      [&](const SizeSelectedOptimizationReport& selected) {
+        return selected.variant == variant;
+      });
+  return it == result.size_attribution.selected_optimizations.end() ? nullptr : &*it;
+}
+
 const SizeOpportunityReport* find_size_opportunity_detail(const CompileResult& result,
                                                           const std::string& variant,
                                                           const std::string& key,
@@ -282,6 +293,21 @@ void example_sizes_match_typescript_baselines() {
               "selector-layout refinement reaches the same size");
       require(result.size_attribution.total_cells == static_cast<int>(result.steps.size()),
               "tic-tac-toe-4x4 size attribution should report the final cell count");
+      const SizeSelectedOptimizationReport* selected_indirect_flow =
+          find_size_selected_optimization(result, "preloaded-indirect-flow");
+      require(selected_indirect_flow != nullptr && selected_indirect_flow->site == "flow" &&
+                  selected_indirect_flow->current_steps ==
+                      static_cast<int>(result.steps.size()) &&
+                  selected_indirect_flow->baseline_steps ==
+                      static_cast<int>(result.steps.size()) + 5 &&
+                  selected_indirect_flow->savings == 5 &&
+                  selected_indirect_flow->details.contains("estimateKind") &&
+                  selected_indirect_flow->details.at("estimateKind") ==
+                      "gross-main-cell-direct-to-indirect-flow" &&
+                  selected_indirect_flow->details.contains("replacementCount") &&
+                  selected_indirect_flow->details.at("replacementCount") == "5" &&
+                  selected_indirect_flow->details.contains("savingsModel"),
+              "tic-tac-toe-4x4 size attribution should expose selected indirect-flow savings");
       const SizeAttributionEntry* candidate_score =
           find_size_entry(result, "helper-region", "packed-line score accumulator helper");
       require(candidate_score != nullptr && candidate_score->cells >= 5 &&

@@ -47257,6 +47257,100 @@ int size_report_value_aware_register_traffic_cells(const SizeHelperSummaryReport
   }
 }
 
+std::optional<std::pair<int, int>> selected_optimization_measured_steps(
+    const OptimizationReport& optimization) {
+  static const std::regex measured_steps(R"(\((\d+)\s+vs\s+(\d+)\s+cells\))");
+  std::smatch match;
+  if (!std::regex_search(optimization.detail, match, measured_steps))
+    return std::nullopt;
+  try {
+    return std::pair<int, int>{std::stoi(match[1].str()), std::stoi(match[2].str())};
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+std::optional<int> selected_indirect_flow_replacement_count(
+    const OptimizationReport& optimization) {
+  static const std::regex replaced(R"(replaced\s+(\d+)\s+direct branch/call)");
+  std::smatch match;
+  if (!std::regex_search(optimization.detail, match, replaced))
+    return std::nullopt;
+  try {
+    return std::stoi(match[1].str());
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+std::string selected_optimization_site(const std::string& name) {
+  if (name.find("indirect-flow") != std::string::npos ||
+      name.find("indirect-call") != std::string::npos ||
+      name.find("dark-flow") != std::string::npos) {
+    return "flow";
+  }
+  if (name.find("overlay") != std::string::npos || name.find("layout") != std::string::npos)
+    return "layout";
+  if (name.find("packed") != std::string::npos)
+    return "state";
+  return "optimizer";
+}
+
+std::vector<SizeSelectedOptimizationReport> selected_size_optimization_reports(
+    const std::vector<OptimizationReport>& optimizations, int current_steps) {
+  std::vector<SizeSelectedOptimizationReport> reports;
+  for (const OptimizationReport& optimization : optimizations) {
+    std::map<std::string, std::string> details;
+    int baseline_steps = 0;
+    int savings = 0;
+    if (const std::optional<std::pair<int, int>> measured =
+            selected_optimization_measured_steps(optimization)) {
+      const int selected_steps = measured->first;
+      baseline_steps = measured->second;
+      savings = baseline_steps - selected_steps;
+      details["estimateKind"] = "measured-selected-candidate-delta";
+      details["selectedStepsFromDetail"] = std::to_string(selected_steps);
+      details["baselineStepsFromDetail"] = std::to_string(baseline_steps);
+      details["savingsModel"] = "selected-candidate-vs-baseline";
+    } else if (optimization.name == "preloaded-indirect-flow") {
+      const std::optional<int> replacements =
+          selected_indirect_flow_replacement_count(optimization);
+      if (!replacements.has_value() || *replacements <= 0)
+        continue;
+      baseline_steps = current_steps + *replacements;
+      savings = *replacements;
+      details["estimateKind"] = "gross-main-cell-direct-to-indirect-flow";
+      details["replacementCount"] = std::to_string(*replacements);
+      details["savingsModel"] = "one-cell-saved-per-replaced-direct-branch-call";
+      details["baselineStepsStatus"] = "estimated-gross-before-overlapping-layout-effects";
+    } else {
+      continue;
+    }
+    if (savings <= 0)
+      continue;
+    details["savingsAggregation"] = "selected-optimization-not-necessarily-additive";
+    reports.push_back(SizeSelectedOptimizationReport{
+        .site = selected_optimization_site(optimization.name),
+        .variant = optimization.name,
+        .current_steps = current_steps,
+        .baseline_steps = baseline_steps,
+        .savings = savings,
+        .reason = optimization.detail,
+        .details = std::move(details),
+    });
+  }
+  std::sort(reports.begin(), reports.end(),
+            [](const SizeSelectedOptimizationReport& left,
+               const SizeSelectedOptimizationReport& right) {
+              if (left.savings != right.savings)
+                return left.savings > right.savings;
+              if (left.site != right.site)
+                return left.site < right.site;
+              return left.variant < right.variant;
+            });
+  return reports;
+}
+
 std::optional<std::string> value_aware_scheduler_traffic_shape_action(
     const std::map<std::string, std::string>& details) {
   const auto shape_it = details.find("valueAwareSchedulerTrafficShape");
@@ -48005,6 +48099,8 @@ SizeAttributionReport build_size_attribution_report(
             });
 
   const int current_steps = static_cast<int>(steps.size());
+  report.selected_optimizations =
+      selected_size_optimization_reports(optimizations, current_steps);
   report.opportunities.reserve(rejected_candidates.size() + report.abi_blockers.size() +
                                report.helpers.size());
   for (const SizeHelperSummaryReport& helper : report.helpers) {

@@ -113,6 +113,16 @@ struct SizeOpportunityReport {
   std::map<std::string, std::string> details;
 };
 
+struct SizeSelectedOptimizationReport {
+  std::string site;
+  std::string variant;
+  int current_steps = 0;
+  int baseline_steps = 0;
+  int savings = 0;
+  std::string reason;
+  std::map<std::string, std::string> details;
+};
+
 struct SizeBlockerSummaryReport {
   std::string blocker_kind;
   int opportunities = 0;
@@ -191,6 +201,7 @@ struct SizeAttributionReport {
   std::vector<SizeHelperSummaryReport> helpers;
   std::vector<SizeHelperSpillSummaryReport> helper_spills;
   std::vector<SizeAbiBlockerReport> abi_blockers;
+  std::vector<SizeSelectedOptimizationReport> selected_optimizations;
   std::vector<SizeOpportunityReport> opportunities;
   std::vector<SizeBlockerSummaryReport> blockers;
   std::vector<SizeNextActionSummaryReport> next_actions;
