@@ -48968,10 +48968,23 @@ SizeAttributionReport build_size_attribution_report(
                 ? "prove-local-stack-value-flow-through-mutating-ops"
                 : "split-local-lifetimes-from-nested-call-crossing-state";
         if (temp_carrier_cells > 0) {
-          helper.details["valueAwareEstimatedNetSavingsAfterMaterialization"] =
+          const int temp_carrier_materialize_cells =
+              required_update_cells > 0 ? temp_carrier_cells : 0;
+          const int temp_carrier_net_cells =
+              temp_carrier_cells - temp_carrier_materialize_cells;
+          helper.details["valueAwareMixedStateTempCarrierGrossCells"] =
               std::to_string(temp_carrier_cells);
+          helper.details["valueAwareMixedStateTempCarrierMaterializeCells"] =
+              std::to_string(temp_carrier_materialize_cells);
+          helper.details["valueAwareMixedStateTempCarrierNetCells"] =
+              std::to_string(temp_carrier_net_cells);
+          helper.details["valueAwareMixedStateTempCarrierPlanStatus"] =
+              temp_carrier_net_cells > 0 ? "positive-after-stack-preservation"
+                                         : "break-even-after-stack-preservation";
+          helper.details["valueAwareEstimatedNetSavingsAfterMaterialization"] =
+              std::to_string(temp_carrier_net_cells);
           helper.details["valueAwareEstimatedNetSavingsModel"] =
-              "local-temp-carrier-register-traffic-before-stack-flow-proof";
+              "local-temp-carrier-register-traffic-minus-stack-preservation";
           helper.details["valueAwareEstimatedNetSavingsExcludes"] =
               "persistent-state-updates-and-nested-call-inputs";
         }

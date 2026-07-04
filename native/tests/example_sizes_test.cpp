@@ -358,6 +358,17 @@ void example_sizes_match_typescript_baselines() {
                   front_stop->details.at("valueAwareMixedStateTempCarrierNames") == "scratch" &&
                   front_stop->details.contains("valueAwareMixedStateTempCarrierCells") &&
                   front_stop->details.at("valueAwareMixedStateTempCarrierCells") == "2" &&
+                  front_stop->details.contains("valueAwareMixedStateTempCarrierGrossCells") &&
+                  front_stop->details.at("valueAwareMixedStateTempCarrierGrossCells") == "2" &&
+                  front_stop->details.contains(
+                      "valueAwareMixedStateTempCarrierMaterializeCells") &&
+                  front_stop->details.at(
+                      "valueAwareMixedStateTempCarrierMaterializeCells") == "2" &&
+                  front_stop->details.contains("valueAwareMixedStateTempCarrierNetCells") &&
+                  front_stop->details.at("valueAwareMixedStateTempCarrierNetCells") == "0" &&
+                  front_stop->details.contains("valueAwareMixedStateTempCarrierPlanStatus") &&
+                  front_stop->details.at("valueAwareMixedStateTempCarrierPlanStatus") ==
+                      "break-even-after-stack-preservation" &&
                   front_stop->details.contains("valueAwareMixedStateRequiredUpdateNames") &&
                   front_stop->details.at("valueAwareMixedStateRequiredUpdateNames") ==
                       "cells_7" &&
@@ -365,10 +376,10 @@ void example_sizes_match_typescript_baselines() {
                   front_stop->details.at("valueAwareMixedStateRequiredUpdateCells") == "2" &&
                   front_stop->details.contains("valueAwareEstimatedNetSavingsAfterMaterialization") &&
                   front_stop->details.at("valueAwareEstimatedNetSavingsAfterMaterialization") ==
-                      "2" &&
+                      "0" &&
                   front_stop->details.contains("valueAwareEstimatedNetSavingsModel") &&
                   front_stop->details.at("valueAwareEstimatedNetSavingsModel") ==
-                      "local-temp-carrier-register-traffic-before-stack-flow-proof" &&
+                      "local-temp-carrier-register-traffic-minus-stack-preservation" &&
                   front_stop->details.contains("valueAwareEstimatedNetSavingsExcludes") &&
                   front_stop->details.at("valueAwareEstimatedNetSavingsExcludes") ==
                       "persistent-state-updates-and-nested-call-inputs" &&
@@ -381,12 +392,21 @@ void example_sizes_match_typescript_baselines() {
           find_size_opportunity_detail(result, "helper-register-traffic", "helperLabel",
                                        "front_stop");
       require(front_stop_register_traffic != nullptr &&
-                  front_stop_register_traffic->savings == 2 &&
+                  front_stop_register_traffic->savings == 0 &&
                   front_stop_register_traffic->candidate_steps ==
-                      static_cast<int>(result.steps.size()) - 2 &&
+                      static_cast<int>(result.steps.size()) &&
                   front_stop_register_traffic->details.contains("savingsModel") &&
                   front_stop_register_traffic->details.at("savingsModel") ==
                       "estimated-net-after-callsite-materialization" &&
+                  front_stop_register_traffic->details.contains("candidateStepsStatus") &&
+                  front_stop_register_traffic->details.at("candidateStepsStatus") ==
+                      "synthetic-net-estimate-not-compiled" &&
+                  front_stop_register_traffic->details.contains("sizeImpactStatus") &&
+                  front_stop_register_traffic->details.at("sizeImpactStatus") ==
+                      "estimated-nonpositive-net" &&
+                  front_stop_register_traffic->details.contains("netSavingsStatus") &&
+                  front_stop_register_traffic->details.at("netSavingsStatus") ==
+                      "estimated-nonpositive-after-callsite-materialization" &&
                   front_stop_register_traffic->details.contains("trafficShapeAction") &&
                   front_stop_register_traffic->details.at("trafficShapeAction") ==
                       "prove-local-temp-carrier-through-state-update-guard" &&
@@ -395,20 +415,13 @@ void example_sizes_match_typescript_baselines() {
                   front_stop_register_traffic->details.at(
                       "valueAwareMixedStateLifetimeStatus") ==
                       "local-to-helper-without-nested-calls",
-              "rambo-iii should rank the front_stop value-aware blocker by the local mixed-state "
-                  "stack-flow proof that is missing");
+              "rambo-iii should keep the front_stop temp-carrier proof visible while estimating "
+              "it as break-even after required stack preservation");
       const SizeNextActionSummaryReport* mixed_state_action = find_size_next_action(
           result, "trafficShapeAction", "prove-local-temp-carrier-through-state-update-guard");
-      require(mixed_state_action != nullptr && mixed_state_action->opportunities == 1 &&
-                  mixed_state_action->potential_savings == 2 &&
-                  mixed_state_action->best_savings == 2 &&
-                  mixed_state_action->best_details.contains("helperLabel") &&
-                  mixed_state_action->best_details.at("helperLabel") == "front_stop" &&
-                  mixed_state_action->best_details.contains("valueAwareMixedStateTempCarrierNames") &&
-                  mixed_state_action->best_details.at("valueAwareMixedStateTempCarrierNames") ==
-                      "scratch",
-              "rambo-iii size attribution should expose the local temp-carrier stack-flow proof "
-              "as the next scheduler action without counting required state updates");
+      require(mixed_state_action == nullptr,
+              "rambo-iii should not rank a break-even local temp-carrier rewrite as a positive "
+              "next scheduler action");
     }
   }
 
