@@ -401,6 +401,46 @@ program StackResidentIndexedBitMaskUpdateConsumer {
   }
 
   {
+    CompileOptions options;
+    options.budget = 999999;
+    options.stack_resident_temps = true;
+    options.disable_candidate_search = true;
+    const CompileResult result = compile_source(R"mkpro(
+program StackResidentIndexedPackedScoreUpdateConsumer {
+  state {
+    cells: packed[1..3] = [10, 20, 30]
+    slot: counter 1..3 = 2
+    line: packed = 44444.4
+    index: counter 0..7 = 3
+    tmp: counter 0..7 = 0
+  }
+
+  loop {
+    tmp = index
+    cells[slot] += packed_score(line, tmp)
+    cells[slot] += packed_score(line, index)
+    cells[slot] += packed_score(line, index + 1)
+    halt(cells[slot])
+  }
+}
+)mkpro",
+                                                options);
+    require_clean_compile(result, "stack-resident indexed packed_score update consumer");
+    require(has_optimization(result, "stack-resident-indexed-temp"),
+            "indexed packed_score update should keep tmp on the stack");
+    require(has_optimization(result, "packed-score-helper-stack-argument-call"),
+            "indexed packed_score update should enter the shared helper with tmp in X");
+    require(has_optimization(result, "packed-score-stack-helper"),
+            "indexed packed_score update should still use the shared helper body");
+    require(count_steps_with_comment_prefix_and_opcode(result, "packed_score helper", 0x53) == 3,
+            "indexed packed_score update should emit one helper call per scoring term");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "indexed packed_score update should not store tmp before the indexed update");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "indexed packed_score update should not recall tmp inside the indexed update");
+  }
+
+  {
     const std::string stack_helper_abi_source = R"mkpro(
 program StackHelperAbiAggregation {
   state {

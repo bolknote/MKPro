@@ -35195,6 +35195,19 @@ bool can_compile_indexed_stack_temp_expression(const LoweringContext& context,
     return context.shared_bit_mask_helper_calls && expression.args.size() == 1U &&
            can_compile_indexed_stack_temp_expression(context, expression.args.front(), temp);
   }
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "packed_score" &&
+      context.use_packed_score_helper && expression.args.size() == 2U) {
+    const std::vector<std::string> temps{temp};
+    const Expression& line_value = expression.args.at(0);
+    const Expression& index = expression.args.at(1);
+    const std::optional<std::size_t> line_temp = stack_temp_identifier_index(line_value, temps);
+    const std::optional<std::size_t> index_temp = stack_temp_identifier_index(index, temps);
+    if (line_temp.has_value() == index_temp.has_value())
+      return false;
+    const Expression& other = line_temp.has_value() ? index : line_value;
+    return !stack_expression_references_any_temp(other, temps) &&
+           expression_preserves_previous_x_as_y_for_stack_analysis(other);
+  }
   if (const std::optional<StackUnaryTransformCall> transform =
           stack_unary_transform_call(expression)) {
     return transform->arg != nullptr &&
@@ -35268,6 +35281,12 @@ bool lower_indexed_stack_temp_expression_to_x(
         .name = "sum-primitive-lowering",
         .detail = "Lowered indexed stack-temp sum(...) to an arithmetic addition chain.",
     });
+    return true;
+  }
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "packed_score" &&
+      context.use_packed_score_helper) {
+    if (!lower_stack_argument_packed_score_helper_call(context, expression, {temp}, line))
+      return false;
     return true;
   }
   if (const std::optional<StackUnaryTransformCall> transform =
