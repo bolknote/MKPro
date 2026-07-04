@@ -48051,11 +48051,13 @@ SizeAttributionReport build_size_attribution_report(
         const int materialize_cells_per_input = std::max(1, helper.call_occurrences);
         int profitable_stack_input_gross_cells = 0;
         int profitable_stack_input_materialize_cells = 0;
+        std::vector<std::pair<std::string, int>> ranked_profitable_stack_inputs;
         std::vector<std::string> profitable_stack_input_names;
         std::vector<std::string> break_even_stack_input_names;
         std::vector<std::string> unprofitable_stack_input_names;
         for (const auto& [name, cells] : ranked_stack_inputs) {
           if (cells > materialize_cells_per_input) {
+            ranked_profitable_stack_inputs.emplace_back(name, cells);
             profitable_stack_input_names.push_back(name);
             profitable_stack_input_gross_cells += cells;
             profitable_stack_input_materialize_cells += materialize_cells_per_input;
@@ -48102,26 +48104,43 @@ SizeAttributionReport build_size_attribution_report(
           helper.details["valueAwareEstimatedNetSavingsModel"] =
               "profitable-stack-input-recalls-minus-callsite-materialization-plus-state-outputs";
         }
-        const std::size_t resident_count = std::min(stack_capacity, ranked_stack_inputs.size());
-        helper.details["valueAwareSuggestedResidentInputNames"] =
-            ranked_names(ranked_stack_inputs, 0U, resident_count);
-        helper.details["valueAwareSuggestedResidentInputCells"] =
-            std::to_string(ranked_cells(ranked_stack_inputs, 0U, resident_count));
-        helper.details["valueAwareStackInputPressure"] =
+        helper.details["valueAwareAllStackCapacityStatus"] =
+            ranked_stack_inputs.size() <= stack_capacity ? "fits-x-y-z-t-capacity"
+                                                         : "exceeds-x-y-z-t-capacity";
+        helper.details["valueAwareAllStackInputPressure"] =
             std::to_string(ranked_stack_inputs.size() > stack_capacity
                                ? ranked_stack_inputs.size() - stack_capacity
                                : 0U);
-        if (ranked_stack_inputs.size() > stack_capacity) {
+        helper.details["valueAwareStackCapacityBasis"] =
+            "profitable-stack-inputs-after-materialization";
+        helper.details["valueAwareStackCapacityStatus"] =
+            ranked_profitable_stack_inputs.size() <= stack_capacity ? "fits-x-y-z-t-capacity"
+                                                                    : "exceeds-x-y-z-t-capacity";
+        const std::size_t resident_count =
+            std::min(stack_capacity, ranked_profitable_stack_inputs.size());
+        helper.details["valueAwareSuggestedResidentInputNames"] =
+            ranked_names(ranked_profitable_stack_inputs, 0U, resident_count);
+        helper.details["valueAwareSuggestedResidentInputCells"] =
+            std::to_string(ranked_cells(ranked_profitable_stack_inputs, 0U, resident_count));
+        helper.details["valueAwareStackInputPressure"] =
+            std::to_string(ranked_profitable_stack_inputs.size() > stack_capacity
+                               ? ranked_profitable_stack_inputs.size() - stack_capacity
+                               : 0U);
+        if (ranked_profitable_stack_inputs.size() > stack_capacity) {
           helper.details["valueAwareStackInputPlanStatus"] = "requires-staged-inputs";
           helper.details["valueAwareSuggestedStagedInputNames"] =
-              ranked_names(ranked_stack_inputs, resident_count, ranked_stack_inputs.size());
+              ranked_names(ranked_profitable_stack_inputs, resident_count,
+                           ranked_profitable_stack_inputs.size());
           helper.details["valueAwareSuggestedStagedInputCells"] =
-              std::to_string(ranked_cells(ranked_stack_inputs, resident_count,
-                                          ranked_stack_inputs.size()));
+              std::to_string(ranked_cells(ranked_profitable_stack_inputs, resident_count,
+                                          ranked_profitable_stack_inputs.size()));
           helper.details["valueAwareSuggestedStagedInputCount"] =
-              std::to_string(ranked_stack_inputs.size() - stack_capacity);
+              std::to_string(ranked_profitable_stack_inputs.size() - stack_capacity);
         } else {
-          if (nested_call_cells > 0) {
+          if (profitable_stack_input_names.empty()) {
+            helper.details["valueAwareStackInputPlanStatus"] =
+                "no-profitable-stack-input-materialization";
+          } else if (nested_call_cells > 0) {
             helper.details["valueAwareStackInputPlanStatus"] =
                 "requires-call-preserving-stack-proof";
             helper.details["valueAwareStackInputPlanBlocker"] =
