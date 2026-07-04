@@ -35,6 +35,13 @@ int count_packed_score_accumulator_helper_jumps(const CompileResult& result) {
       }));
 }
 
+int count_packed_score_subtractor_helper_jumps(const CompileResult& result) {
+  return static_cast<int>(
+      std::count_if(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
+        return step.opcode == 0x53 && step.comment == "packed_score subtractor helper";
+      }));
+}
+
 int count_steps_with_comment(const CompileResult& result, const std::string& comment) {
   return static_cast<int>(
       std::count_if(result.steps.begin(), result.steps.end(), [&](const ResolvedStep& step) {
@@ -249,6 +256,77 @@ program PackedScoreDirectExpressionAccumulatorWithInitial {
   require(count_steps_with_comment(direct_expression_sum_with_initial,
                                    "packed_score accumulator zero") == 0,
           "initial-addend packed_score expression should use the addend as accumulator");
+
+  const CompileResult small_signed_direct_expression_sum = compile_source(R"mkpro(
+program PackedScoreSmallSignedDirectExpressionAccumulator {
+  state {
+    base: packed = 7
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+  }
+  loop {
+    halt(base + packed_score(a, 1) - packed_score(b, 2) + packed_score(c, 3))
+  }
+}
+)mkpro",
+                                                                       pinned_options());
+
+  require(small_signed_direct_expression_sum.implemented,
+          "native compiler should still lower small signed packed_score expressions");
+  require(small_signed_direct_expression_sum.diagnostics.empty(),
+          "small signed packed_score expression compile should not report diagnostics");
+  require(!has_optimization(small_signed_direct_expression_sum, "packed-score-sum-accumulator"),
+          "small signed packed_score expression should not use a losing accumulator helper pair");
+  require(!has_optimization(small_signed_direct_expression_sum,
+                            "packed-score-subtractor-accumulator-helper"),
+          "small signed packed_score expression should not emit the subtractor helper");
+  require(count_packed_score_helper_jumps(small_signed_direct_expression_sum) == 3,
+          "small signed packed_score expression should keep the standalone helper calls");
+
+  const CompileResult signed_direct_expression_sum = compile_source(R"mkpro(
+program PackedScoreSignedDirectExpressionAccumulator {
+  state {
+    base: packed = 7
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    d: packed = 44447.4
+    e: packed = 44448.4
+    f: packed = 44449.4
+    g: packed = 44450.4
+    h: packed = 44451.4
+    i: packed = 44452.4
+    j: packed = 44453.4
+  }
+  loop {
+    halt(base + packed_score(a, 1) - packed_score(b, 2) + packed_score(c, 3) - packed_score(d, 4) + packed_score(e, 5) - packed_score(f, 6) + packed_score(g, 7) - packed_score(h, 8) + packed_score(i, 1) - packed_score(j, 2))
+  }
+}
+)mkpro",
+                                                                 pinned_options());
+
+  require(signed_direct_expression_sum.implemented,
+          "native compiler should lower signed packed_score expression accumulators");
+  require(signed_direct_expression_sum.diagnostics.empty(),
+          "signed packed_score expression compile should not report diagnostics");
+  require(has_optimization(signed_direct_expression_sum, "packed-score-sum-accumulator"),
+          "signed packed_score expression should report accumulator lowering");
+  require(has_optimization(signed_direct_expression_sum,
+                           "packed-score-subtractor-accumulator-helper"),
+          "signed packed_score expression should report the subtractor accumulator helper");
+  require(count_optimization(signed_direct_expression_sum,
+                             "packed-score-stack-helper-call") == 0,
+          "signed packed_score expression should not use standalone helper calls");
+  require(count_packed_score_helper_jumps(signed_direct_expression_sum) == 0,
+          "signed packed_score expression should not emit standalone helper calls");
+  require(count_packed_score_accumulator_helper_jumps(signed_direct_expression_sum) == 5,
+          "signed packed_score expression should emit accumulator helper calls for positive terms");
+  require(count_packed_score_subtractor_helper_jumps(signed_direct_expression_sum) == 5,
+          "signed packed_score expression should emit subtractor helper calls for negative terms");
+  require(count_steps_with_comment(signed_direct_expression_sum,
+                                   "packed_score accumulator zero") == 0,
+          "signed packed_score expression should use the addend as accumulator");
 
   const CompileResult direct_expression_sum_with_negative_initial = compile_source(R"mkpro(
 program PackedScoreDirectExpressionAccumulatorWithNegativeInitial {

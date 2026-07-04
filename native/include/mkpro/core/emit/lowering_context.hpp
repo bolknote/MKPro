@@ -182,6 +182,7 @@ struct LoweringContext {
   int bit_mask_condition_helper_calls = 0;
   std::optional<std::string> packed_score_helper;
   std::optional<std::string> packed_score_accumulator_helper;
+  std::optional<std::string> packed_score_subtractor_accumulator_helper;
   std::map<std::string, std::string> spatial_sum_helper_labels;
   std::map<std::string, SpatialHitHelperRequest> spatial_hit_helpers;
   std::vector<std::string> spatial_hit_helper_order;

@@ -1595,6 +1595,38 @@ struct StackAccumulatorSyntaxCount {
   bool has_initial = false;
 };
 
+struct PackedScoreSignedAccumulatorSyntaxCount {
+  int positive_terms = 0;
+  int negative_terms = 0;
+  bool has_initial = false;
+
+  int terms() const { return positive_terms + negative_terms; }
+  bool has_negative_terms() const { return negative_terms > 0; }
+};
+
+constexpr int kPackedScoreStackHelperBodyCells = 7;
+constexpr int kPackedScoreAccumulatorHelperBodyCells = 8;
+constexpr int kPackedScoreSubtractorAccumulatorHelperBodyCells = 8;
+
+bool packed_score_signed_accumulator_locally_profitable(
+    int positive_terms, int negative_terms, bool has_initial,
+    bool positive_helper_already_planned = false,
+    bool subtractor_helper_already_planned = false) {
+  const int terms = positive_terms + negative_terms;
+  if (terms <= 0 || negative_terms <= 0)
+    return false;
+
+  const int removed_operator_cells = has_initial ? terms : std::max(0, terms - 2);
+  int extra_body_cells = 0;
+  if (positive_terms > 0 && !positive_helper_already_planned)
+    extra_body_cells += kPackedScoreAccumulatorHelperBodyCells;
+  if (negative_terms > 0 && !subtractor_helper_already_planned)
+    extra_body_cells += kPackedScoreSubtractorAccumulatorHelperBodyCells;
+  if (extra_body_cells > 0)
+    extra_body_cells = std::max(0, extra_body_cells - kPackedScoreStackHelperBodyCells);
+  return removed_operator_cells > extra_body_cells;
+}
+
 std::optional<StackAccumulatorSyntaxCount>
 packed_score_target_sum_terms_with_initial_syntax(const Expression& expression,
                                                   const std::string& target) {
@@ -1672,12 +1704,54 @@ bool collect_packed_score_sum_terms_with_initial_syntax(const Expression& expres
       expression, packed_score_accumulator_term_syntax_safe, count, has_initial);
 }
 
+bool collect_packed_score_signed_sum_terms_with_initial_syntax(
+    const Expression& expression, PackedScoreSignedAccumulatorSyntaxCount& count,
+    bool subtract = false) {
+  if (expression_is_zero_literal_syntax(expression))
+    return true;
+  if (packed_score_accumulator_term_syntax_safe(expression)) {
+    if (subtract) {
+      ++count.negative_terms;
+    } else {
+      ++count.positive_terms;
+    }
+    return true;
+  }
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "sum") {
+    return std::all_of(expression.args.begin(), expression.args.end(), [&](const Expression& arg) {
+      return collect_packed_score_signed_sum_terms_with_initial_syntax(arg, count, subtract);
+    });
+  }
+  if (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr) {
+    return collect_packed_score_signed_sum_terms_with_initial_syntax(*expression.expr, count,
+                                                                    !subtract);
+  }
+  if (expression.kind == "binary" && expression.left != nullptr && expression.right != nullptr &&
+      (expression.op == "+" || expression.op == "-")) {
+    return collect_packed_score_signed_sum_terms_with_initial_syntax(*expression.left, count,
+                                                                    subtract) &&
+           collect_packed_score_signed_sum_terms_with_initial_syntax(
+               *expression.right, count, expression.op == "-" ? !subtract : subtract);
+  }
+  if (expression_contains_packed_score_call_for_accumulator(expression))
+    return false;
+  if (!expression_preserves_previous_x_as_y_for_stack_analysis(expression) &&
+      !stack_accumulator_initial_addend_can_start(expression)) {
+    return false;
+  }
+  count.has_initial = true;
+  return true;
+}
+
 int packed_score_accumulator_eligible_call_count(const Expression& expression) {
-  int sum_count = 0;
-  bool has_initial = false;
-  if (collect_packed_score_sum_terms_with_initial_syntax(expression, sum_count, has_initial) &&
-      sum_count >= 2) {
-    return sum_count;
+  PackedScoreSignedAccumulatorSyntaxCount signed_count;
+  if (collect_packed_score_signed_sum_terms_with_initial_syntax(expression, signed_count) &&
+      signed_count.terms() >= 2) {
+    if (!signed_count.has_negative_terms() ||
+        packed_score_signed_accumulator_locally_profitable(
+            signed_count.positive_terms, signed_count.negative_terms, signed_count.has_initial)) {
+      return signed_count.terms();
+    }
   }
   int count = 0;
   if (expression.index != nullptr)
@@ -14671,6 +14745,13 @@ std::string packed_score_accumulator_helper_label(LoweringContext& context) {
   return *context.packed_score_accumulator_helper;
 }
 
+std::string packed_score_subtractor_accumulator_helper_label(LoweringContext& context) {
+  if (context.packed_score_subtractor_accumulator_helper.has_value())
+    return *context.packed_score_subtractor_accumulator_helper;
+  context.packed_score_subtractor_accumulator_helper = "__packed_score_subtractor_accumulator";
+  return *context.packed_score_subtractor_accumulator_helper;
+}
+
 std::optional<std::string> choose_existing_bit_mask_helper_scratch(const LoweringContext& context) {
   if (context.register_index_by_name.contains(std::string(kSharedBitMaskScratch)))
     return std::string(kSharedBitMaskScratch);
@@ -17965,6 +18046,7 @@ struct PackedScoreTerm {
 struct PackedScoreAccumulatorStep {
   enum class Kind {
     Term,
+    NegativeTerm,
     Addend,
     Subtrahend,
   };
@@ -18184,6 +18266,63 @@ bool collect_packed_score_sum_terms_with_initial(LoweringContext& context,
       terms, initial);
 }
 
+PackedScoreAccumulatorStep packed_score_accumulator_negative_term_step(
+    const PackedScoreTerm& term) {
+  return PackedScoreAccumulatorStep{.kind = PackedScoreAccumulatorStep::Kind::NegativeTerm,
+                                    .term = term,
+                                    .line = term.line};
+}
+
+bool collect_packed_score_signed_sum_steps_with_initial(
+    LoweringContext& context, const Expression& expression,
+    std::vector<PackedScoreAccumulatorStep>& steps, std::optional<Expression>& initial,
+    bool subtract = false) {
+  const std::optional<double> value = numeric_value_of_expression(context, expression);
+  if (value.has_value() && std::abs(*value) < 1e-12)
+    return true;
+  if (const std::optional<PackedScoreTerm> term =
+          packed_score_accumulator_expression_term(context, expression);
+      term.has_value()) {
+    steps.push_back(subtract ? packed_score_accumulator_negative_term_step(*term)
+                             : PackedScoreAccumulatorStep{
+                                   .kind = PackedScoreAccumulatorStep::Kind::Term,
+                                   .term = *term,
+                                   .line = term->line,
+                               });
+    return true;
+  }
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "sum") {
+    return std::all_of(expression.args.begin(), expression.args.end(), [&](const Expression& arg) {
+      return collect_packed_score_signed_sum_steps_with_initial(context, arg, steps, initial,
+                                                                subtract);
+    });
+  }
+  if (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr) {
+    return collect_packed_score_signed_sum_steps_with_initial(context, *expression.expr, steps,
+                                                              initial, !subtract);
+  }
+  if (expression.kind == "binary" && expression.left != nullptr && expression.right != nullptr &&
+      (expression.op == "+" || expression.op == "-")) {
+    return collect_packed_score_signed_sum_steps_with_initial(context, *expression.left, steps,
+                                                              initial, subtract) &&
+           collect_packed_score_signed_sum_steps_with_initial(
+               context, *expression.right, steps, initial,
+               expression.op == "-" ? !subtract : subtract);
+  }
+  if (expression_contains_packed_score_call_for_accumulator(expression))
+    return false;
+  if (!expression_preserves_previous_x_as_y_for_stack_analysis(expression) &&
+      !stack_accumulator_initial_addend_can_start(expression)) {
+    return false;
+  }
+  if (subtract) {
+    append_stack_accumulator_negative_initial(initial, expression);
+  } else {
+    append_stack_accumulator_initial(initial, expression);
+  }
+  return true;
+}
+
 template <typename Term, typename InitialEmitter, typename Emitter>
 bool lower_stack_accumulator_terms_to_x_with_initial(const std::vector<Term>& terms,
                                                     const InitialEmitter& emit_initial,
@@ -18212,12 +18351,14 @@ bool lower_stack_accumulator_terms_to_x(LoweringContext& context,
 }
 
 bool emit_packed_score_accumulator_term(LoweringContext& context, const std::string& helper,
-                                        const PackedScoreTerm& term) {
+                                        const PackedScoreTerm& term,
+                                        const std::string& comment =
+                                            "packed_score accumulator helper") {
   if (!lower_expression_to_x(context, term.line_value))
     return false;
   if (!lower_expression_to_x(context, term.index))
     return false;
-  context.emitter.emit_jump(0x53, "ПП", helper, "packed_score accumulator helper");
+  context.emitter.emit_jump(0x53, "ПП", helper, comment);
   clear_current_x_facts(context);
   return true;
 }
@@ -18262,9 +18403,16 @@ bool emit_packed_score_accumulator_addend(LoweringContext& context,
 }
 
 bool emit_packed_score_accumulator_step(LoweringContext& context, const std::string& helper,
-                                        const PackedScoreAccumulatorStep& step) {
+                                        const PackedScoreAccumulatorStep& step,
+                                        const std::string* subtract_helper = nullptr) {
   if (step.kind == PackedScoreAccumulatorStep::Kind::Term)
     return emit_packed_score_accumulator_term(context, helper, step.term);
+  if (step.kind == PackedScoreAccumulatorStep::Kind::NegativeTerm) {
+    if (subtract_helper == nullptr)
+      return false;
+    return emit_packed_score_accumulator_term(context, *subtract_helper, step.term,
+                                             "packed_score subtractor helper");
+  }
   return emit_packed_score_accumulator_addend(context, step);
 }
 
@@ -18273,16 +18421,41 @@ bool lower_packed_score_sum_accumulator_to_x(LoweringContext& context,
   if (!context.use_packed_score_accumulator_helper)
     return false;
 
-  std::vector<PackedScoreTerm> terms;
+  std::vector<PackedScoreAccumulatorStep> steps;
   std::optional<Expression> initial;
-  if (!collect_packed_score_sum_terms_with_initial(context, expression, terms, initial) ||
-      (terms.size() < 3U &&
-       !(terms.size() >= 2U && context.use_packed_score_accumulator_helper) &&
-       !(terms.size() == 1U && context.use_packed_score_accumulator_for_singletons))) {
+  if (!collect_packed_score_signed_sum_steps_with_initial(context, expression, steps, initial)) {
+    return false;
+  }
+  const std::size_t positive_term_count =
+      static_cast<std::size_t>(std::count_if(steps.begin(), steps.end(), [](const auto& step) {
+        return step.kind == PackedScoreAccumulatorStep::Kind::Term;
+      }));
+  const std::size_t negative_term_count =
+      static_cast<std::size_t>(std::count_if(steps.begin(), steps.end(), [](const auto& step) {
+        return step.kind == PackedScoreAccumulatorStep::Kind::NegativeTerm;
+      }));
+  const std::size_t term_count = positive_term_count + negative_term_count;
+  if (term_count < 3U && !(term_count >= 2U && context.use_packed_score_accumulator_helper) &&
+      !(term_count == 1U && context.use_packed_score_accumulator_for_singletons)) {
     return false;
   }
 
-  const std::string helper = packed_score_accumulator_helper_label(context);
+  const bool has_positive_term = positive_term_count > 0U;
+  const bool has_negative_term = negative_term_count > 0U;
+  if (has_negative_term &&
+      !packed_score_signed_accumulator_locally_profitable(
+          static_cast<int>(positive_term_count), static_cast<int>(negative_term_count),
+          initial.has_value(), context.packed_score_accumulator_helper.has_value(),
+          context.packed_score_subtractor_accumulator_helper.has_value())) {
+    return false;
+  }
+  const std::optional<std::string> helper =
+      has_positive_term ? std::optional<std::string>(packed_score_accumulator_helper_label(context))
+                        : std::nullopt;
+  const std::optional<std::string> subtract_helper =
+      has_negative_term
+          ? std::optional<std::string>(packed_score_subtractor_accumulator_helper_label(context))
+          : std::nullopt;
   const auto emit_initial = [&]() {
     if (initial.has_value())
       return lower_expression_to_x(context, *initial);
@@ -18291,17 +18464,30 @@ bool lower_packed_score_sum_accumulator_to_x(LoweringContext& context,
       context.emitter.items.back().comment = "packed_score accumulator zero";
     return true;
   };
-  if (!lower_stack_accumulator_terms_to_x_with_initial<PackedScoreTerm>(
-          terms, emit_initial,
-          [&](const PackedScoreTerm& term) {
-            return emit_packed_score_accumulator_term(context, helper, term);
+  if (!lower_stack_accumulator_terms_to_x_with_initial<PackedScoreAccumulatorStep>(
+          steps, emit_initial,
+          [&](const PackedScoreAccumulatorStep& step) {
+            if (step.kind == PackedScoreAccumulatorStep::Kind::Term) {
+              if (!helper.has_value())
+                return false;
+              return emit_packed_score_accumulator_term(context, *helper, step.term);
+            }
+            if (step.kind == PackedScoreAccumulatorStep::Kind::NegativeTerm) {
+              if (!subtract_helper.has_value())
+                return false;
+              return emit_packed_score_accumulator_term(context, *subtract_helper, step.term,
+                                                       "packed_score subtractor helper");
+            }
+            return emit_packed_score_accumulator_addend(context, step);
           })) {
     return false;
   }
   context.optimizations.push_back(OptimizationReport{
       .name = "packed-score-sum-accumulator",
-      .detail = "Lowered " + std::to_string(terms.size()) +
-                " packed_score() terms as one stack accumulator pipeline.",
+      .detail = "Lowered " + std::to_string(term_count) +
+                " packed_score() terms as one " +
+                std::string(has_negative_term ? "signed " : "") +
+                "stack accumulator pipeline.",
   });
   return true;
 }
@@ -38013,6 +38199,25 @@ bool lower_packed_score_helper(LoweringContext& context) {
     context.optimizations.push_back(OptimizationReport{
         .name = "packed-score-accumulator-helper",
         .detail = "Emitted shared stack accumulator helper for packed_score(value, index) sums.",
+    });
+  }
+  if (context.packed_score_subtractor_accumulator_helper.has_value()) {
+    context.emitter.emit_label(*context.packed_score_subtractor_accumulator_helper,
+                               {.procedure_boundary = "start",
+                                .procedure_name = *context.packed_score_subtractor_accumulator_helper,
+                                .hidden = true});
+    context.emitter.emit_op(0x15, "F 10^x", "packed_score subtractor helper pow10");
+    context.emitter.emit_op(0x13, "/", "packed_score subtractor helper divide");
+    context.emitter.emit_op(0x35, "К {x}", "packed_score subtractor helper frac");
+    emit_number_or_preload(context, "0.41200076");
+    context.emitter.emit_op(0x11, "-", "packed_score subtractor helper center");
+    context.emitter.emit_op(0x22, "F x^2", "packed_score subtractor helper square");
+    context.emitter.emit_op(0x11, "-", "packed_score subtractor helper subtract");
+    context.emitter.emit_op(0x52, "В/О", "packed_score subtractor helper return");
+    context.optimizations.push_back(OptimizationReport{
+        .name = "packed-score-subtractor-accumulator-helper",
+        .detail =
+            "Emitted shared stack subtractor helper for signed packed_score(value, index) sums.",
     });
   }
   return true;
