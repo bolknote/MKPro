@@ -471,7 +471,18 @@ void example_sizes_match_typescript_baselines() {
                       "requires-call-preserving-stack-proof" &&
                   candidate_score_zero->details.contains("valueAwareStackInputPlanBlocker") &&
                   candidate_score_zero->details.at("valueAwareStackInputPlanBlocker") ==
-                      "nested-helper-calls-may-clobber-x-y-z-t" &&
+                      "nested-helper-calls-may-clobber-live-stack-inputs" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCallPreservationInputNames") &&
+                  candidate_score_zero->details.at("valueAwareCallPreservationInputNames")
+                          .find("x") != std::string::npos &&
+                  candidate_score_zero->details.at("valueAwareCallPreservationInputNames")
+                          .find("y") != std::string::npos &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCallPreservationMatrix") &&
+                  candidate_score_zero->details.at("valueAwareCallPreservationMatrix")
+                          .find("packed-line score accumulator helper") !=
+                      std::string::npos &&
                   candidate_score_zero->details.contains(
                       "valueAwareSuggestedResidentInputNames") &&
                   candidate_score_zero->details.at("valueAwareSuggestedResidentInputNames")
@@ -541,7 +552,15 @@ void example_sizes_match_typescript_baselines() {
                       "requires-call-preserving-stack-proof" &&
                   mark_lines_helper->details.contains("valueAwareStackInputPlanBlocker") &&
                   mark_lines_helper->details.at("valueAwareStackInputPlanBlocker") ==
-                      "nested-helper-calls-may-clobber-x-y-z-t" &&
+                      "nested-helper-calls-may-clobber-live-stack-inputs" &&
+                  mark_lines_helper->details.contains("valueAwareCallPreservationInputNames") &&
+                  mark_lines_helper->details.at("valueAwareCallPreservationInputNames")
+                          .find("x") != std::string::npos &&
+                  mark_lines_helper->details.at("valueAwareCallPreservationInputNames")
+                          .find("y") != std::string::npos &&
+                  mark_lines_helper->details.contains("valueAwareCallPreservationMatrix") &&
+                  mark_lines_helper->details.at("valueAwareCallPreservationMatrix")
+                          .find("mark_one") != std::string::npos &&
                   mark_lines_helper->details.contains("valueAwareNestedCallLabels") &&
                   mark_lines_helper->details.at("valueAwareNestedCallLabels").find("mark_one") !=
                       std::string::npos &&

@@ -47835,11 +47835,22 @@ SizeAttributionReport build_size_attribution_report(
   std::map<std::string, int> helper_nested_call_cells;
   std::map<std::string, std::set<std::string>> helper_nested_call_labels;
   std::map<std::string, std::set<std::string>> helper_nested_call_input_names;
+  std::map<std::string, std::vector<CallSite>> helper_nested_call_sites;
+  std::map<std::string, std::map<std::string, std::vector<std::size_t>>>
+      helper_recall_indices_by_name;
   for (const HelperRegionRange& region : helper_regions) {
+    std::map<std::string, std::vector<std::size_t>>& recall_indices =
+        helper_recall_indices_by_name[region.label];
+    for (std::size_t index = region.start; index < region.end && index < steps.size(); ++index) {
+      const std::optional<SizeSpillAccess> access = size_report_spill_access(steps.at(index));
+      if (access.has_value() && access->kind == SizeSpillAccessKind::Recall)
+        recall_indices[access->name].push_back(index);
+    }
     for (const CallSite& call_site : call_sites) {
       if (call_site.start_index < region.start || call_site.start_index >= region.end)
         continue;
       helper_nested_call_cells[region.label] += call_site.cells;
+      helper_nested_call_sites[region.label].push_back(call_site);
       if (!call_site.label.empty()) {
         helper_nested_call_labels[region.label].insert(call_site.label);
         if (const auto recall_it = helper_recall_names.find(call_site.label);
@@ -48069,6 +48080,34 @@ SizeAttributionReport build_size_attribution_report(
         }
         const int profitable_stack_input_net_cells =
             profitable_stack_input_gross_cells - profitable_stack_input_materialize_cells;
+        std::map<std::string, std::set<std::string>> call_preservation_inputs_by_label;
+        std::set<std::string> call_preservation_input_names;
+        const auto nested_call_sites_it = helper_nested_call_sites.find(helper.label);
+        const auto recall_indices_it = helper_recall_indices_by_name.find(helper.label);
+        if (nested_call_sites_it != helper_nested_call_sites.end() &&
+            recall_indices_it != helper_recall_indices_by_name.end()) {
+          for (const auto& [name, unused_cells] : ranked_profitable_stack_inputs) {
+            (void)unused_cells;
+            const auto input_recalls_it = recall_indices_it->second.find(name);
+            if (input_recalls_it == recall_indices_it->second.end())
+              continue;
+            for (const CallSite& call_site : nested_call_sites_it->second) {
+              const std::size_t call_end =
+                  call_site.start_index + static_cast<std::size_t>(std::max(1, call_site.cells));
+              const bool has_recall_after_call =
+                  std::any_of(input_recalls_it->second.begin(), input_recalls_it->second.end(),
+                              [&](std::size_t recall_index) {
+                                return recall_index >= call_end;
+                              });
+              if (!has_recall_after_call)
+                continue;
+              call_preservation_input_names.insert(name);
+              call_preservation_inputs_by_label[call_site.label].insert(name);
+            }
+          }
+        }
+        const bool requires_call_preserving_stack_proof =
+            !call_preservation_input_names.empty();
         helper.details["valueAwareStackInputMaterializeCellsPerInput"] =
             std::to_string(materialize_cells_per_input);
         helper.details["valueAwareProfitableStackInputGrossCells"] =
@@ -48084,8 +48123,9 @@ SizeAttributionReport build_size_attribution_report(
                 ? "no-profitable-stack-input-materialization"
                 : (profitable_stack_input_names.size() > stack_capacity
                        ? "requires-staged-inputs"
-                       : (nested_call_cells > 0 ? "requires-call-preserving-stack-proof"
-                                                : "direct-stack-fit"));
+                       : (requires_call_preserving_stack_proof
+                              ? "requires-call-preserving-stack-proof"
+                              : "direct-stack-fit"));
         if (!profitable_stack_input_names.empty()) {
           helper.details["valueAwareProfitableStackInputNames"] =
               join_strings(profitable_stack_input_names, ",");
@@ -48103,6 +48143,24 @@ SizeAttributionReport build_size_attribution_report(
               std::to_string(profitable_stack_input_net_cells + state_output_cells);
           helper.details["valueAwareEstimatedNetSavingsModel"] =
               "profitable-stack-input-recalls-minus-callsite-materialization-plus-state-outputs";
+        }
+        if (!call_preservation_input_names.empty()) {
+          helper.details["valueAwareCallPreservationInputNames"] = join_strings(
+              std::vector<std::string>(call_preservation_input_names.begin(),
+                                       call_preservation_input_names.end()),
+              ",");
+          std::vector<std::string> matrix_parts;
+          matrix_parts.reserve(call_preservation_inputs_by_label.size());
+          for (const auto& [label, inputs] : call_preservation_inputs_by_label) {
+            matrix_parts.push_back(label + ":" +
+                                   join_strings(std::vector<std::string>(inputs.begin(),
+                                                                         inputs.end()),
+                                                ","));
+          }
+          helper.details["valueAwareCallPreservationMatrix"] =
+              join_strings(matrix_parts, ";");
+          helper.details["valueAwareCallPreservationReason"] =
+              "profitable stack inputs have helper-local recalls after nested helper calls";
         }
         helper.details["valueAwareAllStackCapacityStatus"] =
             ranked_stack_inputs.size() <= stack_capacity ? "fits-x-y-z-t-capacity"
@@ -48140,11 +48198,11 @@ SizeAttributionReport build_size_attribution_report(
           if (profitable_stack_input_names.empty()) {
             helper.details["valueAwareStackInputPlanStatus"] =
                 "no-profitable-stack-input-materialization";
-          } else if (nested_call_cells > 0) {
+          } else if (requires_call_preserving_stack_proof) {
             helper.details["valueAwareStackInputPlanStatus"] =
                 "requires-call-preserving-stack-proof";
             helper.details["valueAwareStackInputPlanBlocker"] =
-                "nested-helper-calls-may-clobber-x-y-z-t";
+                "nested-helper-calls-may-clobber-live-stack-inputs";
           } else {
             helper.details["valueAwareStackInputPlanStatus"] = "direct-stack-fit";
           }
