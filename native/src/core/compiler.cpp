@@ -1851,21 +1851,28 @@ std::optional<int> packed_score_sequence_accumulator_syntax_count(
   if (statement.kind == "v2_update" && statement.op.has_value() && *statement.op == "+=") {
     if (expression_contains_identifier(expression, target))
       return std::nullopt;
-    int count = 0;
-    bool has_initial = false;
-    if (!collect_packed_score_sum_terms_with_initial_syntax(expression, count, has_initial) ||
-        (count <= 0 && !has_initial)) {
+    PackedScoreSignedAccumulatorSyntaxCount signed_count;
+    if (!collect_packed_score_signed_sum_terms_with_initial_syntax(expression, signed_count) ||
+        (signed_count.terms() <= 0 && !signed_count.has_initial)) {
       return std::nullopt;
     }
-    if (count <= 0 && !expression_preserves_previous_x_as_y_for_stack_analysis(expression))
+    if (signed_count.terms() <= 0 &&
+        !expression_preserves_previous_x_as_y_for_stack_analysis(expression))
       return std::nullopt;
-    return count;
+    return signed_count.terms();
   }
   if (statement.kind == "v2_update" && statement.op.has_value() && *statement.op == "-=") {
-    if (expression_contains_identifier(expression, target) ||
-        expression_contains_packed_score_call_for_accumulator(expression)) {
+    if (expression_contains_identifier(expression, target)) {
       return std::nullopt;
     }
+    PackedScoreSignedAccumulatorSyntaxCount signed_count;
+    if (collect_packed_score_signed_sum_terms_with_initial_syntax(
+            expression, signed_count, /*subtract=*/true) &&
+        signed_count.terms() > 0) {
+      return signed_count.terms();
+    }
+    if (expression_contains_packed_score_call_for_accumulator(expression))
+      return std::nullopt;
     if (!expression_preserves_previous_x_as_y_for_stack_analysis(expression)) {
       return std::nullopt;
     }
@@ -18656,7 +18663,7 @@ std::optional<StackAccumulatorSequenceStart> packed_score_sequence_start_terms(
 bool collect_packed_score_sequence_accumulator_steps(
     LoweringContext& context, const V2Statement& statement, const std::string& target,
     std::vector<PackedScoreAccumulatorStep>& steps, std::size_t& term_count,
-    std::optional<Expression>& initial) {
+    std::optional<Expression>& initial, bool allow_signed_packed_score_terms = false) {
   if (!statement.target.has_value() || !statement.expr.has_value())
     return false;
   const Expression target_expression = parse_expression(*statement.target, statement.line);
@@ -18667,6 +18674,32 @@ bool collect_packed_score_sequence_accumulator_steps(
   if (statement.kind == "v2_update" && statement.op.has_value() && *statement.op == "+=") {
     if (expression_contains_identifier(expression, target))
       return false;
+    if (allow_signed_packed_score_terms) {
+      std::vector<PackedScoreAccumulatorStep> collected_steps;
+      std::optional<Expression> collected_initial;
+      if (!collect_packed_score_signed_sum_steps_with_initial(context, expression, collected_steps,
+                                                              collected_initial)) {
+        return false;
+      }
+      const std::size_t collected_term_count = static_cast<std::size_t>(
+          std::count_if(collected_steps.begin(), collected_steps.end(), [](const auto& step) {
+            return step.kind == PackedScoreAccumulatorStep::Kind::Term ||
+                   step.kind == PackedScoreAccumulatorStep::Kind::NegativeTerm;
+          }));
+      if (collected_term_count == 0U && !collected_initial.has_value())
+        return false;
+      if (collected_term_count == 0U) {
+        if (!expression_preserves_previous_x_as_y_for_stack_analysis(*collected_initial))
+          return false;
+        steps.push_back(packed_score_accumulator_addend_step(*collected_initial, statement.line));
+        return true;
+      }
+      if (collected_initial.has_value())
+        append_stack_accumulator_initial(initial, *collected_initial);
+      steps.insert(steps.end(), collected_steps.begin(), collected_steps.end());
+      term_count += collected_term_count;
+      return true;
+    }
     std::vector<PackedScoreTerm> collected;
     std::optional<Expression> collected_initial;
     if (!collect_packed_score_sum_terms_with_initial(context, expression, collected,
@@ -18688,8 +18721,29 @@ bool collect_packed_score_sequence_accumulator_steps(
   }
 
   if (statement.kind == "v2_update" && statement.op.has_value() && *statement.op == "-=") {
-    if (expression_contains_identifier(expression, target) ||
-        expression_contains_packed_score_call_for_accumulator(expression)) {
+    if (expression_contains_identifier(expression, target)) {
+      return false;
+    }
+    if (allow_signed_packed_score_terms) {
+      std::vector<PackedScoreAccumulatorStep> collected_steps;
+      std::optional<Expression> collected_initial;
+      if (!collect_packed_score_signed_sum_steps_with_initial(
+              context, expression, collected_steps, collected_initial, /*subtract=*/true)) {
+        return false;
+      }
+      const std::size_t collected_term_count = static_cast<std::size_t>(
+          std::count_if(collected_steps.begin(), collected_steps.end(), [](const auto& step) {
+            return step.kind == PackedScoreAccumulatorStep::Kind::Term ||
+                   step.kind == PackedScoreAccumulatorStep::Kind::NegativeTerm;
+          }));
+      if (collected_term_count > 0U) {
+        if (collected_initial.has_value())
+          append_stack_accumulator_initial(initial, *collected_initial);
+        steps.insert(steps.end(), collected_steps.begin(), collected_steps.end());
+        term_count += collected_term_count;
+        return true;
+      }
+    } else if (expression_contains_packed_score_call_for_accumulator(expression)) {
       return false;
     }
     if (!expression_preserves_previous_x_as_y_for_stack_analysis(expression)) {
@@ -19111,88 +19165,121 @@ bool statement_directly_consumes_current_x_identifier(LoweringContext& context,
 bool lower_packed_score_sequence_accumulator_run(LoweringContext& context,
                                                  const std::vector<V2Statement>& statements,
                                                  std::size_t start, std::size_t& consumed) {
-  consumed = 0;
-  if (!context.use_packed_score_accumulator_helper || start >= statements.size())
-    return false;
-
-  std::vector<PackedScoreTerm> start_terms;
-  std::optional<StackAccumulatorSequenceStart> sequence_start =
-      packed_score_sequence_start_terms(context, statements.at(start), start_terms);
-  if (!sequence_start.has_value())
-    return false;
-  const std::string& target = sequence_start->target;
-  std::vector<PackedScoreAccumulatorStep> steps;
-  append_packed_score_accumulator_term_steps(steps, start_terms);
-  std::size_t term_count = start_terms.size();
-
-  std::size_t run = 1;
-  while (start + run < statements.size()) {
-    if (!collect_packed_score_sequence_accumulator_steps(context, statements.at(start + run),
-                                                         target, steps, term_count,
-                                                         sequence_start->initial)) {
-      break;
-    }
-    ++run;
-  }
-  const std::size_t next_index = start + run;
-  const bool stack_only_target = context.stack_only_state_fields.contains(target);
-  const bool direct_consumer =
-      next_index < statements.size() &&
-      statement_directly_consumes_current_x_identifier(context, statements.at(next_index),
-                                                       target);
-  const bool reuse_planned_accumulator_helper =
-      term_count >= 2U && context.use_packed_score_accumulator_helper;
-  if ((term_count < 3U && !reuse_planned_accumulator_helper) ||
-      (run < 2U && !stack_only_target && !direct_consumer))
-    return false;
-
-  const std::string helper = packed_score_accumulator_helper_label(context);
-  const auto emit_initial = [&]() {
-    if (sequence_start->initial.has_value())
-      return lower_expression_to_x(context, *sequence_start->initial);
-    context.emitter.emit_number("0");
-    if (!context.emitter.items.empty())
-      context.emitter.items.back().comment = "packed_score accumulator zero";
-    return true;
-  };
-  if (!emit_initial())
-    return false;
-  for (const PackedScoreAccumulatorStep& step : steps) {
-    if (!emit_packed_score_accumulator_step(context, helper, step))
+  auto lower_run = [&](bool allow_signed_packed_score_terms) -> bool {
+    consumed = 0;
+    if (!context.use_packed_score_accumulator_helper || start >= statements.size())
       return false;
-  }
-  mark_current_x(context, target);
-  context.emitter.current_x_known_zero = false;
 
-  bool stored = false;
-  if (stack_only_target) {
-    report_stack_only_state_field(context, target, statements.at(start).line);
-  } else if (direct_consumer) {
-    const std::vector<V2Statement> tail(
-        statements.begin() + static_cast<std::vector<V2Statement>::difference_type>(next_index + 1U),
-        statements.end());
-    if (statements_read_identifier_before_write(context, tail, target)) {
+    std::vector<PackedScoreTerm> start_terms;
+    std::optional<StackAccumulatorSequenceStart> sequence_start =
+        packed_score_sequence_start_terms(context, statements.at(start), start_terms);
+    if (!sequence_start.has_value())
+      return false;
+    const std::string& target = sequence_start->target;
+    std::vector<PackedScoreAccumulatorStep> steps;
+    append_packed_score_accumulator_term_steps(steps, start_terms);
+    std::size_t term_count = start_terms.size();
+
+    std::size_t run = 1;
+    while (start + run < statements.size()) {
+      if (!collect_packed_score_sequence_accumulator_steps(context, statements.at(start + run),
+                                                           target, steps, term_count,
+                                                           sequence_start->initial,
+                                                           allow_signed_packed_score_terms)) {
+        break;
+      }
+      ++run;
+    }
+    const std::size_t positive_term_count =
+        static_cast<std::size_t>(std::count_if(steps.begin(), steps.end(), [](const auto& step) {
+          return step.kind == PackedScoreAccumulatorStep::Kind::Term;
+        }));
+    const std::size_t negative_term_count =
+        static_cast<std::size_t>(std::count_if(steps.begin(), steps.end(), [](const auto& step) {
+          return step.kind == PackedScoreAccumulatorStep::Kind::NegativeTerm;
+        }));
+    if (allow_signed_packed_score_terms && negative_term_count > 0U) {
+      const PackedScoreSignedAccumulatorLocalCost signed_cost =
+          packed_score_signed_accumulator_local_cost(
+              static_cast<int>(positive_term_count), static_cast<int>(negative_term_count),
+              sequence_start->initial.has_value(),
+              context.packed_score_accumulator_helper.has_value(),
+              context.packed_score_subtractor_accumulator_helper.has_value());
+      if (signed_cost.net_savings <= 0) {
+        return false;
+      }
+    }
+    const std::size_t next_index = start + run;
+    const bool stack_only_target = context.stack_only_state_fields.contains(target);
+    const bool direct_consumer =
+        next_index < statements.size() &&
+        statement_directly_consumes_current_x_identifier(context, statements.at(next_index),
+                                                         target);
+    const bool reuse_planned_accumulator_helper =
+        term_count >= 2U && context.use_packed_score_accumulator_helper;
+    if ((term_count < 3U && !reuse_planned_accumulator_helper) ||
+        (run < 2U && !stack_only_target && !direct_consumer))
+      return false;
+
+    const std::string helper = packed_score_accumulator_helper_label(context);
+    const std::optional<std::string> subtract_helper =
+        negative_term_count > 0U
+            ? std::optional<std::string>(packed_score_subtractor_accumulator_helper_label(context))
+            : std::nullopt;
+    const auto emit_initial = [&]() {
+      if (sequence_start->initial.has_value())
+        return lower_expression_to_x(context, *sequence_start->initial);
+      context.emitter.emit_number("0");
+      if (!context.emitter.items.empty())
+        context.emitter.items.back().comment = "packed_score accumulator zero";
+      return true;
+    };
+    if (!emit_initial())
+      return false;
+    for (const PackedScoreAccumulatorStep& step : steps) {
+      if (!emit_packed_score_accumulator_step(
+              context, helper, step, subtract_helper.has_value() ? &*subtract_helper : nullptr))
+        return false;
+    }
+    mark_current_x(context, target);
+    context.emitter.current_x_known_zero = false;
+
+    bool stored = false;
+    if (stack_only_target) {
+      report_stack_only_state_field(context, target, statements.at(start).line);
+    } else if (direct_consumer) {
+      const std::vector<V2Statement> tail(
+          statements.begin() +
+              static_cast<std::vector<V2Statement>::difference_type>(next_index + 1U),
+          statements.end());
+      if (statements_read_identifier_before_write(context, tail, target)) {
+        emit_store(context, target, "set " + target);
+        stored = true;
+      }
+    } else {
       emit_store(context, target, "set " + target);
       stored = true;
     }
-  } else {
-    emit_store(context, target, "set " + target);
-    stored = true;
-  }
 
-  const bool single_assignment = run == 1U;
-  context.optimizations.push_back(OptimizationReport{
-      .name = single_assignment
-                  ? (stored ? "packed-score-assignment-accumulator"
-                            : "packed-score-assignment-stack-accumulator")
-                  : (stored ? "packed-score-sequence-accumulator"
-                            : "packed-score-sequence-stack-accumulator"),
-      .detail = "Lowered " + std::to_string(term_count) + " packed_score() terms across " +
-                std::to_string(run) + " assignment statement" + (run == 1U ? "" : "s") +
-                " into " + target + " as one stack accumulator pipeline.",
-  });
-  consumed = run;
-  return true;
+    const bool single_assignment = run == 1U;
+    context.optimizations.push_back(OptimizationReport{
+        .name = single_assignment
+                    ? (stored ? "packed-score-assignment-accumulator"
+                              : "packed-score-assignment-stack-accumulator")
+                    : (stored ? "packed-score-sequence-accumulator"
+                              : "packed-score-sequence-stack-accumulator"),
+        .detail = "Lowered " + std::to_string(term_count) + " packed_score() terms across " +
+                  std::to_string(run) + " assignment statement" + (run == 1U ? "" : "s") +
+                  " into " + target + " as one " +
+                  std::string(negative_term_count > 0U ? "signed " : "") +
+                  "stack accumulator pipeline.",
+    });
+    consumed = run;
+    return true;
+  };
+  if (lower_run(/*allow_signed_packed_score_terms=*/true))
+    return true;
+  return lower_run(/*allow_signed_packed_score_terms=*/false);
 }
 
 bool stack_carried_assignment_future_safe(LoweringContext& context,

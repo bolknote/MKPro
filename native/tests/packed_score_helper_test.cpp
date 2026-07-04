@@ -792,6 +792,93 @@ program PackedScoreContinuationNegativeInitialAccumulator {
   require(count_steps_with_comment(continuation_with_negative_initial, "recall penalty") == 1,
           "continuation negative addends should fold the penalty into the initial accumulator");
 
+  const CompileResult signed_statement_sequence = compile_source(R"mkpro(
+program PackedScoreSignedStatementSequenceAccumulator {
+  state {
+    base: packed = 7
+    line: packed = 44444.4
+    slot: counter 0..7 = 4
+    score: packed = 0
+  }
+  loop {
+    score = base + packed_score(line, slot)
+    score += packed_score(line, slot)
+    score -= packed_score(line, slot)
+    score += packed_score(line, slot)
+    score -= packed_score(line, slot)
+    score += packed_score(line, slot)
+    score -= packed_score(line, slot)
+    score += packed_score(line, slot)
+    score -= packed_score(line, slot)
+    score += packed_score(line, slot)
+    score -= packed_score(line, slot)
+    score += packed_score(line, slot)
+    score -= packed_score(line, slot)
+    score += packed_score(line, slot)
+    score -= packed_score(line, slot)
+    score += packed_score(line, slot)
+    score -= packed_score(line, slot)
+    score += packed_score(line, slot)
+    score -= packed_score(line, slot)
+    score -= packed_score(line, slot)
+    halt(score)
+  }
+}
+)mkpro",
+                                                        pinned_options());
+  require(signed_statement_sequence.implemented,
+          "native compiler should lower profitable signed packed_score statement sequences");
+  require(signed_statement_sequence.diagnostics.empty(),
+          "signed packed_score statement sequence should not report diagnostics");
+  require(has_optimization(signed_statement_sequence,
+                           "packed-score-sequence-stack-accumulator"),
+          "signed statement sequence should report sequence stack accumulator lowering");
+  require(has_optimization(signed_statement_sequence,
+                           "packed-score-subtractor-accumulator-helper"),
+          "signed statement sequence should emit the subtractor accumulator helper");
+  require(count_optimization(signed_statement_sequence, "packed-score-stack-helper-call") == 0,
+          "signed statement sequence should not use standalone helper calls");
+  require(count_packed_score_helper_jumps(signed_statement_sequence) == 0,
+          "signed statement sequence should not emit standalone helper calls");
+  require(count_packed_score_accumulator_helper_jumps(signed_statement_sequence) == 10,
+          "signed statement sequence should emit positive accumulator helper calls");
+  require(count_packed_score_subtractor_helper_jumps(signed_statement_sequence) == 10,
+          "signed statement sequence should emit negative accumulator helper calls");
+  require(count_steps_with_comment(signed_statement_sequence, "set score") == 0,
+          "signed statement sequence should keep score on the stack for the direct consumer");
+  require(count_steps_with_comment(signed_statement_sequence, "recall score") == 0,
+          "signed statement sequence should not recall score inside the accumulator run");
+
+  const CompileResult small_signed_statement_sequence = compile_source(R"mkpro(
+program PackedScoreSmallSignedStatementSequenceFallback {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    score: packed = 0
+  }
+  loop {
+    score = packed_score(a, 1)
+    score += packed_score(b, 2)
+    score -= packed_score(c, 3)
+    halt(score)
+  }
+}
+)mkpro",
+                                                              pinned_options());
+  require(small_signed_statement_sequence.implemented,
+          "native compiler should still compile nonprofitable signed packed_score sequences");
+  require(small_signed_statement_sequence.diagnostics.empty(),
+          "small signed packed_score statement sequence should not report diagnostics");
+  require(has_optimization(small_signed_statement_sequence,
+                           "packed-score-sequence-accumulator"),
+          "small signed sequence should keep the old positive-prefix accumulator fallback");
+  require(!has_optimization(small_signed_statement_sequence,
+                            "packed-score-subtractor-accumulator-helper"),
+          "small signed sequence should not emit a losing subtractor helper");
+  require(count_packed_score_subtractor_helper_jumps(small_signed_statement_sequence) == 0,
+          "small signed sequence should not emit subtractor accumulator helper calls");
+
   const CompileResult continuation_with_standalone_addends = compile_source(R"mkpro(
 program PackedScoreContinuationStandaloneAddendsAccumulator {
   state {
