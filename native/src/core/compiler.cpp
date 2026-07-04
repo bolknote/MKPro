@@ -46701,6 +46701,62 @@ bool dead_integer_fractional_selector_direct_jump_use_proved(const ResolvedStep&
 
 constexpr int kDeadIntegerFractionalEraseOpcode = 0x35;  // К {x}
 
+bool dead_integer_fractional_selector_conditional_flow_opcode(int opcode) {
+  if (opcode < 0)
+    return false;
+  const int offset = opcode & 0x0f;
+  if (offset > 0x0e)
+    return false;
+  const int base = opcode - offset;
+  return base == 0x70 || base == 0x90 || base == 0xc0 || base == 0xe0;
+}
+
+std::optional<std::size_t> unique_resolved_step_index_by_address(
+    const std::vector<ResolvedStep>& steps, int address) {
+  std::optional<std::size_t> found;
+  for (std::size_t index = 0; index < steps.size(); ++index) {
+    if (steps.at(index).address != address)
+      continue;
+    if (found.has_value())
+      return std::nullopt;
+    found = index;
+  }
+  return found;
+}
+
+bool resolved_step_erases_dead_integer_fractional_selector(
+    const std::vector<ResolvedStep>& steps, std::optional<std::size_t> index) {
+  return index.has_value() && steps.at(*index).opcode == kDeadIntegerFractionalEraseOpcode;
+}
+
+bool dead_integer_fractional_selector_conditional_flow_use_proved(
+    const std::vector<ResolvedStep>& steps, std::size_t conditional_index, int register_index,
+    std::optional<int> selector_target) {
+  if (conditional_index >= steps.size())
+    return false;
+  const ResolvedStep& step = steps.at(conditional_index);
+  if (!dead_integer_fractional_selector_conditional_flow_opcode(step.opcode))
+    return false;
+  const std::optional<std::string> register_name = indirect_flow_register_for_opcode(step.opcode);
+  if (!register_name.has_value() ||
+      *register_name != core::register_name_for_index(register_index)) {
+    return false;
+  }
+  const std::optional<PreloadedSelectorAnnotation> annotation =
+      preloaded_selector_annotation_from_comment(step.comment, *register_name);
+  if (!annotation.has_value())
+    return false;
+  if (selector_target.has_value() && annotation->target != *selector_target)
+    return false;
+
+  const std::optional<std::size_t> branch =
+      unique_resolved_step_index_by_address(steps, annotation->target);
+  const std::optional<std::size_t> fallthrough =
+      unique_resolved_step_index_by_address(steps, step.address + 1);
+  return resolved_step_erases_dead_integer_fractional_selector(steps, branch) &&
+         resolved_step_erases_dead_integer_fractional_selector(steps, fallthrough);
+}
+
 std::string dead_integer_fractional_selector_next_step_name(const ResolvedStep& step) {
   if (!step.mnemonic.empty())
     return step.mnemonic;
@@ -46920,8 +46976,17 @@ std::optional<std::string> dead_integer_fractional_selector_uses_rejection_reaso
     const int source_register = steps.at(index).opcode - 0x60;
     const std::optional<std::string> carrier_value =
         dead_integer_fractional_selector_carrier_from_comment(steps.at(index).comment);
+    const auto target_it = selector_targets.find(normalized_source);
+    const std::optional<int> selector_target =
+        target_it == selector_targets.end() ? std::nullopt
+                                            : std::optional<int>(target_it->second);
     if (dead_integer_fractional_selector_direct_jump_use_proved(steps.at(index + 1U),
                                                                 source_register)) {
+      proved_values.insert(normalized_source);
+      continue;
+    }
+    if (dead_integer_fractional_selector_conditional_flow_use_proved(
+            steps, index + 1U, source_register, selector_target)) {
       proved_values.insert(normalized_source);
       continue;
     }
@@ -46931,10 +46996,6 @@ std::optional<std::string> dead_integer_fractional_selector_uses_rejection_reaso
       proved_values.insert(normalized_source);
       continue;
     }
-    const auto target_it = selector_targets.find(normalized_source);
-    const std::optional<int> selector_target =
-        target_it == selector_targets.end() ? std::nullopt
-                                            : std::optional<int>(target_it->second);
     if (const std::optional<int> store = direct_register_store_index(steps.at(index + 1U).opcode);
         store.has_value()) {
       if (const std::optional<std::string> reason =
