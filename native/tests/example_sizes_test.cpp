@@ -682,10 +682,15 @@ void example_sizes_match_typescript_baselines() {
                   generic_packed_score_opportunity->details.at("packedScoreFallbackFamily") ==
                       "generic-expression-accumulator" &&
                   generic_packed_score_opportunity->details.contains(
+                      "packedScoreFallbackSharedTailCapability") &&
+                  generic_packed_score_opportunity->details.at(
+                      "packedScoreFallbackSharedTailCapability") ==
+                      "generic-shared-returned-index-tail-available" &&
+                  generic_packed_score_opportunity->details.contains(
                       "packedScoreFallbackDominantLoss") &&
                   generic_packed_score_opportunity->details.at(
                       "packedScoreFallbackDominantLoss") ==
-                      "loses-shared-diagonal-tail" &&
+                      "selected-specialized-packed-line-pipeline-and-layout-still-smaller" &&
                   generic_packed_score_opportunity->details.contains(
                       "selectedPackedScoreHelper.pipelineShape") &&
                   generic_packed_score_opportunity->details.at(
@@ -696,9 +701,15 @@ void example_sizes_match_typescript_baselines() {
                   generic_packed_score_opportunity->details.at(
                       "selectedPackedScoreHelper.sharedTailTerms") == "4" &&
                   generic_packed_score_opportunity->details.contains(
-                      "packedScoreFallbackAction"),
+                      "packedScoreFallbackMeasurementLimit") &&
+                  generic_packed_score_opportunity->details.contains(
+                      "packedScoreFallbackAction") &&
+                  generic_packed_score_opportunity->details.at(
+                      "packedScoreFallbackAction") ==
+                      "focus-on-value-aware-stack-register-scheduling-and-stack-preserving-helper-abi",
               "tic-tac-toe-4x4 generic packed_score fallback size opportunity should explain "
-              "that it loses the selected packed-line shared-tail pipeline");
+              "that generic shared-tail support exists but the selected specialized packed-line "
+              "pipeline is still smaller");
       const CandidateReport* rejected_dead_integer =
           find_candidate(result.rejected_candidates, "fractional-constant-selector-dead-int");
       require(rejected_dead_integer == nullptr,

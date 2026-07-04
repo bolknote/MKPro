@@ -48713,9 +48713,14 @@ void attach_generic_packed_score_fallback_details(
   details["packedScoreFallbackDeltaCells"] = std::to_string(candidate.steps - current_steps);
   details["packedScoreFallbackLossModel"] =
       "measured-generic-candidate-minus-selected-packed-line-pipeline";
-  details["packedScoreFallbackDominantLoss"] = "loses-shared-diagonal-tail";
+  details["packedScoreFallbackSharedTailCapability"] =
+      "generic-shared-returned-index-tail-available";
+  details["packedScoreFallbackDominantLoss"] =
+      "selected-specialized-packed-line-pipeline-and-layout-still-smaller";
+  details["packedScoreFallbackMeasurementLimit"] =
+      "rejected-candidate-report-retains-size-delta-not-candidate-optimization-breakdown";
   details["packedScoreFallbackAction"] =
-      "teach-generic-accumulator-to-share-returned-index-tail-before-replacing-specialized-score";
+      "focus-on-value-aware-stack-register-scheduling-and-stack-preserving-helper-abi";
   if (selected == nullptr)
     return;
   details["selectedPackedScoreHelperTotalCells"] = std::to_string(selected->total_cells);
