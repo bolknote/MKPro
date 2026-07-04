@@ -934,6 +934,25 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.at("valueAwareCalleeAbiPreserveDepthBasis") ==
                       "live-caller-stack-inputs-after-nested-call" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPreservationCallSitesByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPreservationCallSitesByCallee") ==
+                      "packed-line score accumulator helper:2" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPreservationCallAddressesByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPreservationCallAddressesByCallee") ==
+                      "packed-line score accumulator helper:71,74" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPreservationSlotCrossingsByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPreservationSlotCrossingsByCallee") ==
+                      "packed-line score accumulator helper:4" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPreservationSlotCrossings") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPreservationSlotCrossings") == "4" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiSafetyProof") &&
                   candidate_score_zero->details.at("valueAwareCalleeAbiSafetyProof") ==
                       "prove-live-stack-inputs-survive-nested-callee-entry" &&
@@ -1124,6 +1143,26 @@ void example_sizes_match_typescript_baselines() {
                           .find("normalize:2") != std::string::npos &&
                   mark_lines_helper->details.contains("valueAwareCalleeAbiMaxPreserveDepth") &&
                   mark_lines_helper->details.at("valueAwareCalleeAbiMaxPreserveDepth") == "2" &&
+                  mark_lines_helper->details.contains(
+                      "valueAwareCalleeAbiPreservationCallSitesByCallee") &&
+                  mark_lines_helper->details.at(
+                      "valueAwareCalleeAbiPreservationCallSitesByCallee")
+                          .find("mark_one:3") != std::string::npos &&
+                  mark_lines_helper->details.at(
+                      "valueAwareCalleeAbiPreservationCallSitesByCallee")
+                          .find("normalize:1") != std::string::npos &&
+                  mark_lines_helper->details.contains(
+                      "valueAwareCalleeAbiPreservationSlotCrossingsByCallee") &&
+                  mark_lines_helper->details.at(
+                      "valueAwareCalleeAbiPreservationSlotCrossingsByCallee")
+                          .find("mark_one:6") != std::string::npos &&
+                  mark_lines_helper->details.at(
+                      "valueAwareCalleeAbiPreservationSlotCrossingsByCallee")
+                          .find("normalize:2") != std::string::npos &&
+                  mark_lines_helper->details.contains(
+                      "valueAwareCalleeAbiPreservationSlotCrossings") &&
+                  mark_lines_helper->details.at(
+                      "valueAwareCalleeAbiPreservationSlotCrossings") == "8" &&
                   mark_lines_helper->details.contains("valueAwareNestedCallLabels") &&
                   mark_lines_helper->details.at("valueAwareNestedCallLabels").find("mark_one") !=
                       std::string::npos &&

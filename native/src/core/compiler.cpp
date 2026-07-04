@@ -48961,6 +48961,7 @@ SizeAttributionReport build_size_attribution_report(
         std::map<std::string, std::set<std::string>> call_preservation_inputs_by_label;
         std::set<std::string> call_preservation_input_names;
         std::map<std::string, std::set<int>> call_preservation_recall_addresses_by_name;
+        std::map<std::string, std::set<int>> call_preservation_call_addresses_by_label;
         std::vector<std::string> call_preservation_site_parts;
         std::set<std::string> call_argument_input_names;
         std::vector<std::string> call_argument_site_parts;
@@ -48990,6 +48991,8 @@ SizeAttributionReport build_size_attribution_report(
                 continue;
               call_preservation_input_names.insert(name);
               call_preservation_inputs_by_label[call_site.label].insert(name);
+              call_preservation_call_addresses_by_label[call_site.label].insert(
+                  call_site.address);
               call_preservation_site_parts.push_back(
                   call_site.label + "@" + safe_format_label_address(call_site.address) + ":" +
                   name + "@" + join_strings(recall_addresses, "/"));
@@ -49077,10 +49080,14 @@ SizeAttributionReport build_size_attribution_report(
           std::vector<std::string> callee_mutating_opcode_parts;
           std::vector<std::string> callee_abi_preservation_parts;
           std::vector<std::string> callee_abi_preserve_depth_parts;
+          std::vector<std::string> callee_abi_preservation_call_site_parts;
+          std::vector<std::string> callee_abi_preservation_call_address_parts;
+          std::vector<std::string> callee_abi_preservation_slot_crossing_parts;
           std::vector<std::string> callee_abi_refactor_targets;
           bool all_required_callees_stack_preserving = !call_preservation_inputs_by_label.empty();
           bool saw_stack_mutating_required_callee = false;
           int callee_abi_max_preserve_depth = 0;
+          int callee_abi_preservation_slot_crossings = 0;
           callee_effect_parts.reserve(call_preservation_inputs_by_label.size());
           for (const auto& [label, inputs] : call_preservation_inputs_by_label) {
             const HelperStackEffectSummary effect = helper_stack_effect_summary(label);
@@ -49105,6 +49112,26 @@ SizeAttributionReport build_size_attribution_report(
                                                         std::to_string(preserve_depth));
               callee_abi_max_preserve_depth =
                   std::max(callee_abi_max_preserve_depth, preserve_depth);
+              const auto call_addresses_it =
+                  call_preservation_call_addresses_by_label.find(label);
+              const int call_site_count =
+                  call_addresses_it == call_preservation_call_addresses_by_label.end()
+                      ? 0
+                      : static_cast<int>(call_addresses_it->second.size());
+              callee_abi_preservation_call_site_parts.push_back(
+                  label + ":" + std::to_string(call_site_count));
+              if (call_addresses_it != call_preservation_call_addresses_by_label.end()) {
+                std::vector<std::string> formatted_addresses;
+                formatted_addresses.reserve(call_addresses_it->second.size());
+                for (const int address : call_addresses_it->second)
+                  formatted_addresses.push_back(safe_format_label_address(address));
+                callee_abi_preservation_call_address_parts.push_back(
+                    label + ":" + join_strings(formatted_addresses, ","));
+              }
+              const int slot_crossings = preserve_depth * call_site_count;
+              callee_abi_preservation_slot_crossings += slot_crossings;
+              callee_abi_preservation_slot_crossing_parts.push_back(
+                  label + ":" + std::to_string(slot_crossings));
               callee_abi_refactor_targets.push_back(label);
             }
           }
@@ -49136,6 +49163,14 @@ SizeAttributionReport build_size_attribution_report(
                   std::to_string(callee_abi_max_preserve_depth);
               helper.details["valueAwareCalleeAbiPreserveDepthBasis"] =
                   "live-caller-stack-inputs-after-nested-call";
+              helper.details["valueAwareCalleeAbiPreservationCallSitesByCallee"] =
+                  join_strings(callee_abi_preservation_call_site_parts, ";");
+              helper.details["valueAwareCalleeAbiPreservationCallAddressesByCallee"] =
+                  join_strings(callee_abi_preservation_call_address_parts, ";");
+              helper.details["valueAwareCalleeAbiPreservationSlotCrossingsByCallee"] =
+                  join_strings(callee_abi_preservation_slot_crossing_parts, ";");
+              helper.details["valueAwareCalleeAbiPreservationSlotCrossings"] =
+                  std::to_string(callee_abi_preservation_slot_crossings);
               helper.details["valueAwareCalleeAbiSafetyProof"] =
                   "prove-live-stack-inputs-survive-nested-callee-entry";
               helper.details["valueAwareCalleeAbiImplementationStatus"] =
