@@ -1367,6 +1367,16 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
                                                            direct_dead_integer_call_result),
           "dead-integer fractional selector elision must still reject direct indirect calls "
           "because control returns with the un-erased X value potentially live");
+  const std::optional<std::string> direct_dead_integer_call_reason =
+      optimizer_static_proof_gate_rejection_reason_for_testing(direct_dead_integer_options,
+                                                               direct_dead_integer_call_result);
+  require(direct_dead_integer_call_reason.has_value() &&
+              direct_dead_integer_call_reason->find("xLivenessProofScope=indirect-call-return") !=
+                  std::string::npos &&
+              direct_dead_integer_call_reason->find("returnSite=01") != std::string::npos &&
+              direct_dead_integer_call_reason->find("calleeTarget=") != std::string::npos,
+          "dead-integer indirect-call rejection should expose the callee-return X-liveness "
+          "proof gap");
 
   CompileResult safe_stored_dead_integer_result = forward_result;
   safe_stored_dead_integer_result.optimizations.push_back(

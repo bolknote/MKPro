@@ -46752,6 +46752,26 @@ std::string dead_integer_fractional_selector_rejection_context(
   if (selector_target.has_value())
     parts.push_back("selectorTarget=" +
                     dead_integer_fractional_selector_address_text(*selector_target));
+  if (consumer_step != nullptr && consumer_step->opcode >= 0xa0 &&
+      consumer_step->opcode <= 0xae) {
+    if (selector_target.has_value()) {
+      parts.push_back("calleeTarget=" +
+                      dead_integer_fractional_selector_address_text(*selector_target));
+    }
+    parts.push_back("returnSite=" +
+                    dead_integer_fractional_selector_address_text(consumer_step->address + 1));
+    parts.push_back("xLivenessProofScope=indirect-call-return");
+  }
+  if (consumer_step != nullptr &&
+      dead_integer_fractional_selector_next_step_name(*consumer_step).rfind("К x", 0) == 0) {
+    if (selector_target.has_value()) {
+      parts.push_back("branchTarget=" +
+                      dead_integer_fractional_selector_address_text(*selector_target));
+    }
+    parts.push_back("fallthroughSite=" +
+                    dead_integer_fractional_selector_address_text(consumer_step->address + 1));
+    parts.push_back("xLivenessProofScope=conditional-indirect-flow");
+  }
   try {
     const std::optional<std::pair<std::string, int>> natural =
         natural_fractional_selector_preload_value(normalize_number_key(source));
