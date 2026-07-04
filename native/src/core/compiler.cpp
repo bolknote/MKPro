@@ -35171,6 +35171,8 @@ bool can_compile_indexed_stack_temp_expression(const Expression& expression,
     return expression.name == temp;
   if (expression.kind == "unary" && expression.expr != nullptr)
     return can_compile_indexed_stack_temp_expression(*expression.expr, temp);
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "sum")
+    return can_compile_indexed_stack_temp_expression(sum_expressions(expression.args), temp);
   if (const std::optional<StackUnaryTransformCall> transform =
           stack_unary_transform_call(expression)) {
     return transform->arg != nullptr &&
@@ -35217,6 +35219,17 @@ bool lower_indexed_stack_temp_expression_to_x(
     context.emitter.emit_op(0x0b, "/-/", "stack temp unary minus", line);
     context.emitter.current_x_variable.reset();
     context.emitter.current_x_aliases.clear();
+    return true;
+  }
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "sum") {
+    if (!lower_indexed_stack_temp_expression_to_x(context, sum_expressions(expression.args), temp,
+                                                  indexed_target, prepared_selector, line)) {
+      return false;
+    }
+    context.optimizations.push_back(OptimizationReport{
+        .name = "sum-primitive-lowering",
+        .detail = "Lowered indexed stack-temp sum(...) to an arithmetic addition chain.",
+    });
     return true;
   }
   if (const std::optional<StackUnaryTransformCall> transform =

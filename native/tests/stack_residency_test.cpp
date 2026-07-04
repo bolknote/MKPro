@@ -333,6 +333,37 @@ program StackResidentIndexedUnaryBuiltinUpdateConsumer {
   }
 
   {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackResidentIndexedSumUpdateConsumer {
+  state {
+    cells: packed[1..3] = [10, 20, 30]
+    slot: counter 1..3 = 2
+    x: packed = 1
+    y: packed = 2
+    bonus: packed = 4
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    cells[slot] += sum(tmp, bonus)
+    halt(cells[slot])
+  }
+}
+)mkpro",
+                                                       true);
+    require_clean_compile(result, "stack-resident indexed sum update consumer");
+    require(has_optimization(result, "stack-resident-indexed-temp"),
+            "indexed sum update should keep tmp on the stack");
+    require(has_optimization(result, "sum-primitive-lowering"),
+            "indexed sum update should still lower sum(...) through the primitive path");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "indexed sum update should not store tmp before the indexed update");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "indexed sum update should not recall tmp inside the indexed update");
+  }
+
+  {
     const std::string stack_helper_abi_source = R"mkpro(
 program StackHelperAbiAggregation {
   state {
