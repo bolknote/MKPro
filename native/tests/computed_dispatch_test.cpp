@@ -1244,10 +1244,16 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
               fox_aggressive_rejection->find("proofFailure=selector-register-used-as-data") !=
                   std::string::npos &&
               fox_aggressive_rejection->find(
-                  "requiredAction=split-selector-register-or-prove-dual-use-data-selector") !=
+                  "selectorDataConflictResolutionStatus="
+                  "proved-selector-data-overlap-requires-payload-repacking") !=
+                  std::string::npos &&
+              fox_aggressive_rejection->find(
+                  "proofDisposition=proved-conflict-needs-layout-change") !=
+                  std::string::npos &&
+              fox_aggressive_rejection->find("requiredAction=pack-data-away-from-flow-selectors") !=
                   std::string::npos,
           "fox-hunt aggressive post-layout indirect-flow rejection should explain the selector "
-          "register/data dual-use proof blocker");
+          "register/data payload-layout blocker");
   require(!optimizer_static_proof_gate_accepts_for_testing(fox_aggressive_options,
                                                            fox_aggressive_result),
           "fox-hunt aggressive post-layout indirect-flow candidate must stay rejected while "

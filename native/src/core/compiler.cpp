@@ -46070,6 +46070,16 @@ std::string selector_data_access_targets_text(const ResolvedStep& step,
   return "unknown";
 }
 
+std::optional<std::set<std::string>>
+selector_data_access_target_registers(const ResolvedStep& step,
+                                      const std::string& selector_register) {
+  if (step_is_direct_recall(step) || step_is_direct_store(step))
+    return std::set<std::string>{selector_register};
+  if (step_is_indirect_memory_recall(step) || step_is_indirect_memory_store(step))
+    return indirect_memory_targets_from_comment(step.comment);
+  return std::nullopt;
+}
+
 std::string selector_data_access_precision(const ResolvedStep& step) {
   if (step_is_direct_recall(step) || step_is_direct_store(step))
     return "exact-register";
@@ -46096,6 +46106,52 @@ std::string selector_data_access_proof_action(const ResolvedStep& step) {
   return selector_data_access_precision(step) == "missing-indirect-memory-targets"
              ? "annotate-indirect-memory-targets-or-prove-pointer-range"
              : "split-selector-register-or-pack-data-away-from-flow-selectors";
+}
+
+std::string selector_data_resolution_status(const std::set<std::string>& proof_gaps,
+                                            const std::set<std::string>& overlap_registers,
+                                            const std::set<std::string>& free_selectors) {
+  if (proof_gaps.contains("missing-indirect-memory-target-range"))
+    return "needs-indirect-memory-target-range-proof";
+  if (!overlap_registers.empty() && free_selectors.empty())
+    return "proved-selector-data-overlap-requires-payload-repacking";
+  if (!overlap_registers.empty())
+    return "proved-selector-data-overlap-can-retarget-to-free-selector";
+  return "needs-selector-data-lifetime-proof";
+}
+
+std::string selector_data_required_action(const std::string& resolution_status) {
+  if (resolution_status == "needs-indirect-memory-target-range-proof")
+    return "annotate-indirect-memory-targets-or-prove-pointer-range";
+  if (resolution_status == "proved-selector-data-overlap-requires-payload-repacking")
+    return "pack-data-away-from-flow-selectors";
+  if (resolution_status == "proved-selector-data-overlap-can-retarget-to-free-selector")
+    return "retarget-indirect-flow-selector";
+  return "split-selector-register-or-prove-dual-use-data-selector";
+}
+
+std::string selector_data_proof_disposition(const std::string& resolution_status) {
+  if (resolution_status == "needs-indirect-memory-target-range-proof")
+    return "needs-indirect-memory-target-range-proof";
+  if (resolution_status == "proved-selector-data-overlap-requires-payload-repacking")
+    return "proved-conflict-needs-layout-change";
+  if (resolution_status == "proved-selector-data-overlap-can-retarget-to-free-selector")
+    return "proved-conflict-can-retarget-selector";
+  return "needs-selector-data-lifetime-proof";
+}
+
+std::string selector_data_layout_action(const std::string& resolution_status) {
+  if (resolution_status == "proved-selector-data-overlap-requires-payload-repacking")
+    return "free-stable-selector-registers";
+  if (resolution_status == "proved-selector-data-overlap-can-retarget-to-free-selector")
+    return "retarget-flow-selector-to-free-stable-register";
+  return "";
+}
+
+std::string selector_data_cost_model_action(const std::string& resolution_status) {
+  return resolution_status == "proved-selector-data-overlap-requires-payload-repacking"
+             ? "estimate-payload-packing-for-selector-freeing"
+             : "";
 }
 
 std::set<std::string>
@@ -46154,6 +46210,8 @@ std::optional<std::string> indirect_flow_selector_preservation_rejection_reason(
   std::set<std::string> conflicting_access_precisions;
   std::set<std::string> conflicting_proof_gaps;
   std::set<std::string> conflicting_proof_actions;
+  std::set<std::string> conflicting_target_registers;
+  std::set<std::string> overlapping_selector_registers;
   std::vector<std::string> conflicting_access_parts;
   const ResolvedStep* first_consumer = nullptr;
   std::string first_selector;
@@ -46180,6 +46238,14 @@ std::optional<std::string> indirect_flow_selector_preservation_rejection_reason(
       conflicting_access_precisions.insert(access_precision);
       conflicting_proof_gaps.insert(selector_data_access_proof_gap(step));
       conflicting_proof_actions.insert(selector_data_access_proof_action(step));
+      if (const std::optional<std::set<std::string>> target_registers =
+              selector_data_access_target_registers(step, allocated_register)) {
+        conflicting_target_registers.insert(target_registers->begin(), target_registers->end());
+        for (const std::string& selector_register : selector_registers) {
+          if (target_registers->contains(selector_register))
+            overlapping_selector_registers.insert(selector_register);
+        }
+      }
       conflicting_access_parts.push_back(allocated_register + "/" + name + "@" +
                                          safe_format_label_address(step.address) + "/" +
                                          opcode_hex_text(step.opcode) + "/" + access_kind +
@@ -46197,6 +46263,10 @@ std::optional<std::string> indirect_flow_selector_preservation_rejection_reason(
   }
 
   if (first_consumer != nullptr) {
+    const std::string resolution_status =
+        selector_data_resolution_status(conflicting_proof_gaps, overlapping_selector_registers,
+                                        free_stable_selectors);
+    const std::string required_action = selector_data_required_action(resolution_status);
     return "static proof gate rejected candidate; " +
            static_proof_gate_key_values({
                {"proofFamily", "indirect-flow-targets"},
@@ -46216,16 +46286,26 @@ std::optional<std::string> indirect_flow_selector_preservation_rejection_reason(
                {"selectorDataConflictPrecisions",
                 static_proof_gate_join_values(conflicting_access_precisions)},
                {"selectorDataConflictAccesses", join_strings(conflicting_access_parts, "+")},
+               {"selectorDataAllConflictTargets",
+                static_proof_gate_join_values(conflicting_target_registers)},
+               {"selectorDataOverlapRegisters",
+                static_proof_gate_join_values(overlapping_selector_registers)},
+               {"selectorDataOverlapCount",
+                std::to_string(overlapping_selector_registers.size())},
                {"selectorDataProofGap", static_proof_gate_join_values(conflicting_proof_gaps)},
                {"selectorDataNextProofAction",
                 static_proof_gate_join_values(conflicting_proof_actions)},
+               {"selectorDataConflictResolutionStatus", resolution_status},
                {"proofFailure", "selector-register-used-as-data"},
+               {"proofDisposition", selector_data_proof_disposition(resolution_status)},
                {"consumerAddress", safe_format_label_address(first_consumer->address)},
                {"consumerOpcodeHex", opcode_hex_text(first_consumer->opcode)},
                {"consumerOpcode", indirect_flow_step_text(*first_consumer)},
                {"freeStableSelectorRegisters", free_stable_selector_text},
                {"selectorSplitStatus", selector_split_status},
-               {"requiredAction", "split-selector-register-or-prove-dual-use-data-selector"},
+               {"layoutAction", selector_data_layout_action(resolution_status)},
+               {"costModelAction", selector_data_cost_model_action(resolution_status)},
+               {"requiredAction", required_action},
            });
   }
 

@@ -318,24 +318,43 @@ void example_sizes_match_typescript_baselines() {
                   indirect_flow->details.at("selectorDataConflictAccesses")
                           .find("9/__coord_list_foxes_3@14/D5/indirect-memory-recall/"
                                 "targets:6+7+8+9+a+b+c+d+e") != std::string::npos &&
+                  indirect_flow->details.contains("selectorDataAllConflictTargets") &&
+                  indirect_flow->details.at("selectorDataAllConflictTargets") ==
+                      "6+7+8+9+a+b+c+d+e" &&
+                  indirect_flow->details.contains("selectorDataOverlapRegisters") &&
+                  indirect_flow->details.at("selectorDataOverlapRegisters") == "7+8+9" &&
+                  indirect_flow->details.contains("selectorDataOverlapCount") &&
+                  indirect_flow->details.at("selectorDataOverlapCount") == "3" &&
                   indirect_flow->details.contains("selectorDataProofGap") &&
                   indirect_flow->details.at("selectorDataProofGap") ==
                       "annotated-target-overlaps-selector-data" &&
                   indirect_flow->details.contains("selectorDataNextProofAction") &&
                   indirect_flow->details.at("selectorDataNextProofAction") ==
                       "split-selector-register-or-pack-data-away-from-flow-selectors" &&
+                  indirect_flow->details.contains("selectorDataConflictResolutionStatus") &&
+                  indirect_flow->details.at("selectorDataConflictResolutionStatus") ==
+                      "proved-selector-data-overlap-requires-payload-repacking" &&
+                  indirect_flow->details.contains("proofDisposition") &&
+                  indirect_flow->details.at("proofDisposition") ==
+                      "proved-conflict-needs-layout-change" &&
                   indirect_flow->details.contains("freeStableSelectorRegisters") &&
                   indirect_flow->details.at("freeStableSelectorRegisters") == "none" &&
                   indirect_flow->details.contains("selectorSplitStatus") &&
                   indirect_flow->details.at("selectorSplitStatus") ==
                       "no-free-stable-selector-register" &&
+                  indirect_flow->details.contains("layoutAction") &&
+                  indirect_flow->details.at("layoutAction") ==
+                      "free-stable-selector-registers" &&
+                  indirect_flow->details.contains("costModelAction") &&
+                  indirect_flow->details.at("costModelAction") ==
+                      "estimate-payload-packing-for-selector-freeing" &&
                   indirect_flow->details.contains("requiredAction") &&
                   indirect_flow->details.at("requiredAction") ==
-                      "split-selector-register-or-prove-dual-use-data-selector",
+                      "pack-data-away-from-flow-selectors",
               "fox-hunt-mk61 size attribution should explain why the 60-cell indirect-flow "
-              "candidate is still blocked by selector/data dual-use proof");
+              "candidate is blocked by proved selector/data overlap");
       const SizeNextActionSummaryReport* selector_action = find_size_next_action(
-          result, "requiredAction", "split-selector-register-or-prove-dual-use-data-selector");
+          result, "requiredAction", "pack-data-away-from-flow-selectors");
       require(selector_action != nullptr && selector_action->opportunities == 6 &&
                   selector_action->potential_savings == 5 &&
                   selector_action->best_savings == 5 &&
@@ -356,13 +375,32 @@ void example_sizes_match_typescript_baselines() {
                   selector_action->best_details.contains("selectorDataNextProofAction") &&
                   selector_action->best_details.at("selectorDataNextProofAction") ==
                       "split-selector-register-or-pack-data-away-from-flow-selectors" &&
+                  selector_action->best_details.contains("selectorDataConflictResolutionStatus") &&
+                  selector_action->best_details.at("selectorDataConflictResolutionStatus") ==
+                      "proved-selector-data-overlap-requires-payload-repacking" &&
+                  selector_action->best_details.contains("proofDisposition") &&
+                  selector_action->best_details.at("proofDisposition") ==
+                      "proved-conflict-needs-layout-change" &&
                   selector_action->best_details.contains("freeStableSelectorRegisters") &&
                   selector_action->best_details.at("freeStableSelectorRegisters") == "none" &&
                   selector_action->best_details.contains("selectorSplitStatus") &&
                   selector_action->best_details.at("selectorSplitStatus") ==
                       "no-free-stable-selector-register",
-              "fox-hunt-mk61 size attribution should rank selector/data dual-use proof as the "
+              "fox-hunt-mk61 size attribution should rank selector/data payload packing as the "
               "next action for the 60-cell post-layout candidates");
+      const SizeNextActionSummaryReport* layout_action =
+          find_size_next_action(result, "layoutAction", "free-stable-selector-registers");
+      require(layout_action != nullptr && layout_action->potential_savings == 5 &&
+                  layout_action->best_details.contains("selectorDataOverlapRegisters") &&
+                  layout_action->best_details.at("selectorDataOverlapRegisters") == "7+8+9",
+              "fox-hunt-mk61 size attribution should expose the concrete register-layout action");
+      const SizeNextActionSummaryReport* cost_model_action = find_size_next_action(
+          result, "costModelAction", "estimate-payload-packing-for-selector-freeing");
+      require(cost_model_action != nullptr && cost_model_action->potential_savings == 5 &&
+                  cost_model_action->best_details.contains("selectorDataAllConflictTargets") &&
+                  cost_model_action->best_details.at("selectorDataAllConflictTargets") ==
+                      "6+7+8+9+a+b+c+d+e",
+              "fox-hunt-mk61 size attribution should expose the packing cost-model action");
     }
     if (name == "rambo-iii") {
       const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
