@@ -336,6 +336,20 @@ void example_sizes_match_typescript_baselines() {
                   indirect_flow->details.at("selectorDataPayloadRegisterCount") == "9" &&
                   indirect_flow->details.contains("selectorDataRequiredFreeSelectorCount") &&
                   indirect_flow->details.at("selectorDataRequiredFreeSelectorCount") == "3" &&
+                  indirect_flow->details.contains("selectorDataPayloadRegistersToFree") &&
+                  indirect_flow->details.at("selectorDataPayloadRegistersToFree") ==
+                      "7+8+9" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadRegisterBudgetAfterFreeingSelectors") &&
+                  indirect_flow->details.at(
+                      "selectorDataPayloadRegisterBudgetAfterFreeingSelectors") == "6" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadCompressionRequirement") &&
+                  indirect_flow->details.at("selectorDataPayloadCompressionRequirement") ==
+                      "9->6" &&
+                  indirect_flow->details.contains("selectorDataPayloadCompressionReason") &&
+                  indirect_flow->details.at("selectorDataPayloadCompressionReason") ==
+                      "free-overlapping-flow-selectors" &&
                   indirect_flow->details.contains("selectorDataContiguousRelocationWindows") &&
                   indirect_flow->details.at("selectorDataContiguousRelocationWindows")
                           .find("5..d:overlaps-flow-selectors") != std::string::npos &&
@@ -373,6 +387,23 @@ void example_sizes_match_typescript_baselines() {
                   indirect_flow->details.contains("costModelAction") &&
                   indirect_flow->details.at("costModelAction") ==
                       "estimate-payload-packing-for-selector-freeing" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadPackingOverheadBudgetCells") &&
+                  indirect_flow->details.at("selectorDataPayloadPackingOverheadBudgetCells") ==
+                      "5" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadPackingBreakEvenCells") &&
+                  indirect_flow->details.at("selectorDataPayloadPackingBreakEvenCells") ==
+                      "5" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadPackingCostModelStatus") &&
+                  indirect_flow->details.at("selectorDataPayloadPackingCostModelStatus") ==
+                      "unestimated-payload-access-overhead" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadPackingCostModelRequirement") &&
+                  indirect_flow->details.at(
+                      "selectorDataPayloadPackingCostModelRequirement") ==
+                      "packed-or-split-access-overhead-must-not-exceed-candidate-savings" &&
                   indirect_flow->details.contains("requiredAction") &&
                   indirect_flow->details.at("requiredAction") ==
                       "pack-data-away-from-flow-selectors",
@@ -416,7 +447,15 @@ void example_sizes_match_typescript_baselines() {
                   selector_action->best_details.contains(
                       "selectorDataPayloadPackingRequirement") &&
                   selector_action->best_details.at("selectorDataPayloadPackingRequirement") ==
-                      "pack-or-split-contiguous-indirect-payload",
+                      "pack-or-split-contiguous-indirect-payload" &&
+                  selector_action->best_details.contains(
+                      "selectorDataPayloadCompressionRequirement") &&
+                  selector_action->best_details.at(
+                      "selectorDataPayloadCompressionRequirement") == "9->6" &&
+                  selector_action->best_details.contains(
+                      "selectorDataPayloadPackingOverheadBudgetCells") &&
+                  selector_action->best_details.at(
+                      "selectorDataPayloadPackingOverheadBudgetCells") == "5",
               "fox-hunt-mk61 size attribution should rank selector/data payload packing as the "
               "next action for the 60-cell post-layout candidates");
       const SizeNextActionSummaryReport* layout_action =
@@ -434,7 +473,16 @@ void example_sizes_match_typescript_baselines() {
                   cost_model_action->best_details.contains(
                       "selectorDataContiguousRelocationStatus") &&
                   cost_model_action->best_details.at("selectorDataContiguousRelocationStatus") ==
-                      "no-selector-free-contiguous-window",
+                      "no-selector-free-contiguous-window" &&
+                  cost_model_action->best_details.contains(
+                      "selectorDataPayloadRegisterBudgetAfterFreeingSelectors") &&
+                  cost_model_action->best_details.at(
+                      "selectorDataPayloadRegisterBudgetAfterFreeingSelectors") == "6" &&
+                  cost_model_action->best_details.contains(
+                      "selectorDataPayloadPackingCostModelRequirement") &&
+                  cost_model_action->best_details.at(
+                      "selectorDataPayloadPackingCostModelRequirement") ==
+                      "packed-or-split-access-overhead-must-not-exceed-candidate-savings",
               "fox-hunt-mk61 size attribution should expose the packing cost-model action");
     }
     if (name == "dangerous-loading") {

@@ -46218,6 +46218,18 @@ std::vector<std::pair<std::string, std::string>> selector_data_payload_layout_de
 
   fields.emplace_back("selectorDataRequiredFreeSelectorCount",
                       std::to_string(overlap_registers.size()));
+  if (!overlap_registers.empty()) {
+    const int selector_free_budget = count - static_cast<int>(overlap_registers.size());
+    fields.emplace_back("selectorDataPayloadRegistersToFree",
+                        static_proof_gate_join_values(overlap_registers));
+    fields.emplace_back("selectorDataPayloadRegisterBudgetAfterFreeingSelectors",
+                        std::to_string(std::max(0, selector_free_budget)));
+    fields.emplace_back("selectorDataPayloadCompressionRequirement",
+                        std::to_string(count) + "->" +
+                            std::to_string(std::max(0, selector_free_budget)));
+    fields.emplace_back("selectorDataPayloadCompressionReason",
+                        "free-overlapping-flow-selectors");
+  }
   std::vector<std::string> relocation_windows;
   bool has_selector_free_window = false;
   for (int pointer = core::k_min_register_index; pointer <= core::k_max_register_index; ++pointer) {
@@ -47887,6 +47899,14 @@ void attach_rejected_candidate_size_details(std::map<std::string, std::string>& 
       savings > 0 ? "measured-positive-vs-current"
                   : (savings == 0 ? "measured-break-even-vs-current"
                                   : "measured-negative-vs-current");
+  if (savings > 0 && details.contains("selectorDataPayloadPackingRequirement")) {
+    details["selectorDataPayloadPackingOverheadBudgetCells"] = std::to_string(savings);
+    details["selectorDataPayloadPackingBreakEvenCells"] = std::to_string(savings);
+    details["selectorDataPayloadPackingCostModelStatus"] =
+        "unestimated-payload-access-overhead";
+    details["selectorDataPayloadPackingCostModelRequirement"] =
+        "packed-or-split-access-overhead-must-not-exceed-candidate-savings";
+  }
   details.emplace("proofStatus",
                   blocker_kind == "nonwinning-candidate"
                       ? "not-blocked-by-proof-selected-candidate-is-smaller-or-equal"
