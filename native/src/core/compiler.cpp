@@ -48048,6 +48048,8 @@ SizeAttributionReport build_size_attribution_report(
     int barriers = 0;
     int unknown = 0;
     int nested_calls = 0;
+    int mutating_cells = 0;
+    std::vector<std::string> mutating_opcodes;
   };
   const auto helper_stack_effect_summary = [&](const std::string& label) {
     HelperStackEffectSummary summary;
@@ -48060,12 +48062,14 @@ SizeAttributionReport build_size_attribution_report(
           opcode_by_code(steps.at(index - 1U).opcode).takes_address) {
         continue;
       }
-      const int opcode = steps.at(index).opcode;
+      const ResolvedStep& step = steps.at(index);
+      const int opcode = step.opcode;
       if (opcode == 0x52)
         continue;
       if (opcode == 0x53 || (opcode >= 0xa0 && opcode <= 0xae))
         ++summary.nested_calls;
-      switch (opcode_by_code(opcode).stack_effect) {
+      const OpcodeInfo& info = opcode_by_code(opcode);
+      switch (info.stack_effect) {
         case StackEffect::Preserves:
           ++summary.preserves;
           break;
@@ -48088,6 +48092,12 @@ SizeAttributionReport build_size_attribution_report(
           ++summary.unknown;
           break;
       }
+      if (info.stack_effect != StackEffect::Preserves) {
+        ++summary.mutating_cells;
+        summary.mutating_opcodes.push_back(safe_format_label_address(step.address) + ":" +
+                                           info.name + "/" +
+                                           stack_effect_name(info.stack_effect));
+      }
     }
     const bool has_stack_mutation =
         summary.shifts > 0 || summary.consume_y_drop > 0 || summary.consume_y_keep > 0 ||
@@ -48108,7 +48118,8 @@ SizeAttributionReport build_size_attribution_report(
         << ",shifts=" << summary.shifts << ",consumeYDrop=" << summary.consume_y_drop
         << ",consumeYKeep=" << summary.consume_y_keep << ",exposes=" << summary.exposes
         << ",barriers=" << summary.barriers << ",unknown=" << summary.unknown
-        << ",nestedCalls=" << summary.nested_calls << ")";
+        << ",nestedCalls=" << summary.nested_calls
+        << ",mutatingCells=" << summary.mutating_cells << ")";
     return out.str();
   };
   std::map<std::string, std::set<int>> helper_spill_registers;
@@ -48432,6 +48443,8 @@ SizeAttributionReport build_size_attribution_report(
           helper.details["valueAwareCallPreservationMatrix"] =
               join_strings(matrix_parts, ";");
           std::vector<std::string> callee_effect_parts;
+          std::vector<std::string> callee_mutating_cell_parts;
+          std::vector<std::string> callee_mutating_opcode_parts;
           bool all_required_callees_stack_preserving = !call_preservation_inputs_by_label.empty();
           bool saw_stack_mutating_required_callee = false;
           callee_effect_parts.reserve(call_preservation_inputs_by_label.size());
@@ -48439,6 +48452,12 @@ SizeAttributionReport build_size_attribution_report(
             (void)unused_inputs;
             const HelperStackEffectSummary effect = helper_stack_effect_summary(label);
             callee_effect_parts.push_back(helper_stack_effect_summary_text(label, effect));
+            if (effect.mutating_cells > 0) {
+              callee_mutating_cell_parts.push_back(label + ":" +
+                                                   std::to_string(effect.mutating_cells));
+              callee_mutating_opcode_parts.push_back(label + ":" +
+                                                     join_strings(effect.mutating_opcodes, ","));
+            }
             if (effect.status != "stack-preserving")
               all_required_callees_stack_preserving = false;
             if (effect.status == "stack-mutating") {
@@ -48449,6 +48468,12 @@ SizeAttributionReport build_size_attribution_report(
           if (!callee_effect_parts.empty()) {
             helper.details["valueAwareCallPreservationCalleeEffects"] =
                 join_strings(callee_effect_parts, ";");
+            if (!callee_mutating_cell_parts.empty()) {
+              helper.details["valueAwareCallPreservationMutatingCells"] =
+                  join_strings(callee_mutating_cell_parts, ";");
+              helper.details["valueAwareCallPreservationMutatingOpcodes"] =
+                  join_strings(callee_mutating_opcode_parts, ";");
+            }
             helper.details["valueAwareCallPreservationCalleeStatus"] =
                 all_required_callees_stack_preserving
                     ? "proved-callee-stack-preserving"

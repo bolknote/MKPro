@@ -513,6 +513,16 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.at("valueAwareCallPreservationCalleeEffects")
                           .find("consumeYDrop=3") != std::string::npos &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCallPreservationMutatingCells") &&
+                  candidate_score_zero->details.at("valueAwareCallPreservationMutatingCells") ==
+                      "packed-line score accumulator helper:4" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCallPreservationMutatingOpcodes") &&
+                  candidate_score_zero->details.at("valueAwareCallPreservationMutatingOpcodes")
+                          .find("86://consume-y-drop") != std::string::npos &&
+                  candidate_score_zero->details.at("valueAwareCallPreservationMutatingOpcodes")
+                          .find("91:+/consume-y-drop") != std::string::npos &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCallPreservationCalleeStatus") &&
                   candidate_score_zero->details.at("valueAwareCallPreservationCalleeStatus") ==
                       "blocked-by-callee-stack-mutation" &&
@@ -615,6 +625,12 @@ void example_sizes_match_typescript_baselines() {
                           .find("mark_one:stack-mutating") != std::string::npos &&
                   mark_lines_helper->details.at("valueAwareCallPreservationCalleeEffects")
                           .find("normalize:stack-mutating") != std::string::npos &&
+                  mark_lines_helper->details.contains(
+                      "valueAwareCallPreservationMutatingCells") &&
+                  mark_lines_helper->details.at("valueAwareCallPreservationMutatingCells")
+                          .find("mark_one:") != std::string::npos &&
+                  mark_lines_helper->details.at("valueAwareCallPreservationMutatingCells")
+                          .find("normalize:") != std::string::npos &&
                   mark_lines_helper->details.contains(
                       "valueAwareCallPreservationCalleeStatus") &&
                   mark_lines_helper->details.at("valueAwareCallPreservationCalleeStatus") ==
@@ -919,6 +935,17 @@ void example_sizes_match_typescript_baselines() {
                   callee_abi_required_action->best_details.contains("proofStatus") &&
                   callee_abi_required_action->best_details.at("proofStatus") ==
                       "callee-stack-mutation-clobbers-stack-inputs" &&
+                  callee_abi_required_action->best_details.contains(
+                      "valueAwareCallPreservationMutatingCells") &&
+                  callee_abi_required_action->best_details.at(
+                      "valueAwareCallPreservationMutatingCells") ==
+                      "packed-line score accumulator helper:4" &&
+                  callee_abi_required_action->best_details.contains(
+                      "valueAwareCallPreservationMutatingOpcodes") &&
+                  callee_abi_required_action->best_details.at(
+                      "valueAwareCallPreservationMutatingOpcodes")
+                          .find("packed-line score accumulator helper:86://consume-y-drop") !=
+                      std::string::npos &&
                   callee_abi_required_action->best_details.contains("registerTrafficBreakdown") &&
                   callee_abi_required_action->best_details.contains(
                       "valueAwareStackInputNames") &&
@@ -966,7 +993,11 @@ void example_sizes_match_typescript_baselines() {
                       "blocked-by-stack-mutating-callee" &&
                   callee_abi_action->best_details.contains("proofStatus") &&
                   callee_abi_action->best_details.at("proofStatus") ==
-                      "callee-stack-mutation-clobbers-stack-inputs",
+                      "callee-stack-mutation-clobbers-stack-inputs" &&
+                  callee_abi_action->best_details.contains(
+                      "valueAwareCallPreservationMutatingCells") &&
+                  callee_abi_action->best_details.at("valueAwareCallPreservationMutatingCells") ==
+                      "packed-line score accumulator helper:4",
               "tic-tac-toe-4x4 size attribution should rank profitable stack inputs blocked by "
               "stack-mutating callees as the next value-aware scheduler action");
     }
