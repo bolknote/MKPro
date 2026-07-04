@@ -325,6 +325,29 @@ void example_sizes_match_typescript_baselines() {
                   indirect_flow->details.at("selectorDataOverlapRegisters") == "7+8+9" &&
                   indirect_flow->details.contains("selectorDataOverlapCount") &&
                   indirect_flow->details.at("selectorDataOverlapCount") == "3" &&
+                  indirect_flow->details.contains("selectorDataPayloadLayout") &&
+                  indirect_flow->details.at("selectorDataPayloadLayout") ==
+                      "contiguous-indirect-window" &&
+                  indirect_flow->details.contains("selectorDataPayloadTargetRange") &&
+                  indirect_flow->details.at("selectorDataPayloadTargetRange") == "6..e" &&
+                  indirect_flow->details.contains("selectorDataPayloadRegisterCount") &&
+                  indirect_flow->details.at("selectorDataPayloadRegisterCount") == "9" &&
+                  indirect_flow->details.contains("selectorDataRequiredFreeSelectorCount") &&
+                  indirect_flow->details.at("selectorDataRequiredFreeSelectorCount") == "3" &&
+                  indirect_flow->details.contains("selectorDataContiguousRelocationWindows") &&
+                  indirect_flow->details.at("selectorDataContiguousRelocationWindows")
+                          .find("5..d:overlaps-flow-selectors") != std::string::npos &&
+                  indirect_flow->details.at("selectorDataContiguousRelocationWindows")
+                          .find("6..e:overlaps-flow-selectors") != std::string::npos &&
+                  indirect_flow->details.contains("selectorDataContiguousRelocationStatus") &&
+                  indirect_flow->details.at("selectorDataContiguousRelocationStatus") ==
+                      "no-selector-free-contiguous-window" &&
+                  indirect_flow->details.contains("selectorDataPayloadPackingRequirement") &&
+                  indirect_flow->details.at("selectorDataPayloadPackingRequirement") ==
+                      "pack-or-split-contiguous-indirect-payload" &&
+                  indirect_flow->details.contains("selectorDataPayloadPackingReason") &&
+                  indirect_flow->details.at("selectorDataPayloadPackingReason") ==
+                      "contiguous-window-overlaps-flow-selectors" &&
                   indirect_flow->details.contains("selectorDataProofGap") &&
                   indirect_flow->details.at("selectorDataProofGap") ==
                       "annotated-target-overlaps-selector-data" &&
@@ -385,7 +408,11 @@ void example_sizes_match_typescript_baselines() {
                   selector_action->best_details.at("freeStableSelectorRegisters") == "none" &&
                   selector_action->best_details.contains("selectorSplitStatus") &&
                   selector_action->best_details.at("selectorSplitStatus") ==
-                      "no-free-stable-selector-register",
+                      "no-free-stable-selector-register" &&
+                  selector_action->best_details.contains(
+                      "selectorDataPayloadPackingRequirement") &&
+                  selector_action->best_details.at("selectorDataPayloadPackingRequirement") ==
+                      "pack-or-split-contiguous-indirect-payload",
               "fox-hunt-mk61 size attribution should rank selector/data payload packing as the "
               "next action for the 60-cell post-layout candidates");
       const SizeNextActionSummaryReport* layout_action =
@@ -399,7 +426,11 @@ void example_sizes_match_typescript_baselines() {
       require(cost_model_action != nullptr && cost_model_action->potential_savings == 5 &&
                   cost_model_action->best_details.contains("selectorDataAllConflictTargets") &&
                   cost_model_action->best_details.at("selectorDataAllConflictTargets") ==
-                      "6+7+8+9+a+b+c+d+e",
+                      "6+7+8+9+a+b+c+d+e" &&
+                  cost_model_action->best_details.contains(
+                      "selectorDataContiguousRelocationStatus") &&
+                  cost_model_action->best_details.at("selectorDataContiguousRelocationStatus") ==
+                      "no-selector-free-contiguous-window",
               "fox-hunt-mk61 size attribution should expose the packing cost-model action");
     }
     if (name == "dangerous-loading") {
