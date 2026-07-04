@@ -46329,6 +46329,9 @@ std::optional<std::string> stored_dead_integer_fractional_selector_rejection_rea
                              : "end of listing";
     return "dead-integer fractional selector source " + source + " is stored before " + next +
            " instead of immediate K {x}" +
+           (next_step != nullptr ? " (" + dead_integer_fractional_selector_consumer_kind(*next_step) +
+                                       ")"
+                                 : "") +
            dead_integer_fractional_selector_rejection_context(source, selector_target, next_step);
   }
 
@@ -47104,13 +47107,18 @@ size_opportunity_details(const CandidateReport& candidate,
       details[key] = reason.substr(value_start, value_end - value_start);
     cursor = value_end == value_start ? equals + 1U : value_end;
   }
+  const bool dead_integer_recovery_order_reason =
+      reason.find("before K {x}") != std::string::npos ||
+      reason.find("instead of immediate K {x}") != std::string::npos;
   if (candidate.variant == "fractional-constant-selector-dead-int" &&
-      reason.find("before K {x}") != std::string::npos) {
+      dead_integer_recovery_order_reason) {
     constexpr std::string_view kSourcePrefix =
         "dead-integer fractional selector source ";
     constexpr std::string_view kStoredIn = " stored in R";
     constexpr std::string_view kReaches = " reaches ";
     constexpr std::string_view kBeforeErase = " before K {x}";
+    constexpr std::string_view kIsStoredBefore = " is stored before ";
+    constexpr std::string_view kInsteadImmediateErase = " instead of immediate K {x}";
     if (reason.rfind(kSourcePrefix, 0) == 0) {
       const std::size_t source_start = kSourcePrefix.size();
       const std::size_t reaches = reason.find(kReaches, source_start);
@@ -47144,6 +47152,33 @@ size_opportunity_details(const CandidateReport& candidate,
               kind_end > kind_start + 1U) {
             details.emplace("consumerKind", reason.substr(kind_start + 1U,
                                                           kind_end - kind_start - 1U));
+          }
+        }
+      } else {
+        const std::size_t stored_before = reason.find(kIsStoredBefore, source_start);
+        if (stored_before != std::string::npos && stored_before > source_start) {
+          details.emplace("fractionalSelectorSource",
+                          reason.substr(source_start, stored_before - source_start));
+          details.emplace("fractionalSelectorStorage", "live-x-after-store");
+          const std::size_t consumer_start = stored_before + kIsStoredBefore.size();
+          const std::size_t instead =
+              reason.find(kInsteadImmediateErase, consumer_start);
+          if (instead != std::string::npos && instead > consumer_start) {
+            const std::string consumer = reason.substr(consumer_start,
+                                                       instead - consumer_start);
+            details.emplace("fractionalSelectorConsumer", consumer);
+            details.emplace("integerPartConsumerOpcode", consumer);
+            details.emplace("fractionalEraseOpcode", "K {x}");
+            const std::size_t kind_start =
+                reason.find("(", instead + kInsteadImmediateErase.size());
+            const std::size_t kind_end = kind_start == std::string::npos
+                                             ? std::string::npos
+                                             : reason.find(")", kind_start);
+            if (kind_start != std::string::npos && kind_end != std::string::npos &&
+                kind_end > kind_start + 1U) {
+              details.emplace("consumerKind", reason.substr(kind_start + 1U,
+                                                            kind_end - kind_start - 1U));
+            }
           }
         }
       }
@@ -47365,11 +47400,12 @@ void attach_rejected_candidate_size_details(std::map<std::string, std::string>& 
       savings > 0 ? "measured-positive-vs-current"
                   : (savings == 0 ? "measured-break-even-vs-current"
                                   : "measured-negative-vs-current");
-  details["proofStatus"] = blocker_kind == "nonwinning-candidate"
-                               ? "not-blocked-by-proof-selected-candidate-is-smaller-or-equal"
-                               : blocker_kind;
-  details["requiredAction"] =
-      rejected_candidate_required_action(candidate, blocker_kind, savings);
+  details.emplace("proofStatus",
+                  blocker_kind == "nonwinning-candidate"
+                      ? "not-blocked-by-proof-selected-candidate-is-smaller-or-equal"
+                      : blocker_kind);
+  details.emplace("requiredAction",
+                  rejected_candidate_required_action(candidate, blocker_kind, savings));
 }
 
 std::string size_opportunity_potential_group(const SizeOpportunityReport& opportunity,

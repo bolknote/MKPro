@@ -1417,6 +1417,10 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
                   "is stored before К X->П 9 instead of immediate K {x}") != std::string::npos,
           "dead-integer rejection reason should keep distinguishing unsafe live-X memory stores "
           "after a selector store");
+  require(unsafe_stored_immediate_memory_store_reason->find("(indirect memory store use)") !=
+              std::string::npos,
+          "dead-integer rejection reason should classify unsafe live-X memory stores after a "
+          "selector store");
 
   CompileResult unsafe_stored_immediate_jump_result = safe_stored_immediate_memory_recall_result;
   unsafe_stored_immediate_jump_result.steps.at(unsafe_stored_immediate_jump_result.steps.size() -
@@ -1435,6 +1439,10 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
                   std::string::npos,
           "dead-integer rejection reason should keep distinguishing unsafe live-X flow after "
           "a selector store");
+  require(unsafe_stored_immediate_jump_reason->find("(indirect address/control use)") !=
+              std::string::npos,
+          "dead-integer rejection reason should classify unsafe live-X flow after a selector "
+          "store");
 
   CompileResult unsafe_stored_unmarked_address_use_result = safe_stored_dead_integer_result;
   unsafe_stored_unmarked_address_use_result.steps.insert(
@@ -1485,6 +1493,8 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
               unsafe_stored_live_x_reason->find("is stored before expr * instead of immediate "
                                                 "K {x}") != std::string::npos,
           "dead-integer rejection reason must identify unsafe live-X use after store");
+  require(unsafe_stored_live_x_reason->find("(data arithmetic)") != std::string::npos,
+          "dead-integer rejection reason must classify unsafe live-X arithmetic after store");
 
   CompileResult unsafe_stored_recall_result = safe_stored_dead_integer_result;
   unsafe_stored_recall_result.steps.back() = resolved_step(0x12, "expr *");
