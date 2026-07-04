@@ -588,6 +588,97 @@ program ValueAwareDirectStackInputNestedCall {
   }
 
   {
+    CompileOptions options;
+    options.budget = 999999;
+    options.stack_resident_temps = true;
+    options.shared_bit_mask_helper_calls = true;
+    options.disable_candidate_search = true;
+    const CompileResult result = compile_source(R"mkpro(
+program StackBitMaskHelperArg {
+  state {
+    index: counter 0..7 = 3
+    guard: flag = false
+    tmp: counter 0..7 = 0
+    out: packed = 0
+  }
+
+  fn hot() {
+    tmp = index
+    if guard {
+    }
+    out = bit_mask(tmp)
+  }
+
+  loop {
+    hot()
+    hot()
+    halt(out)
+  }
+}
+)mkpro",
+                                                options);
+    require_clean_compile(result, "stack-resident bit_mask helper argument");
+    require(has_optimization(result, "stack-carried-assignment-delayed"),
+            "bit_mask(tmp) should be recognized as a delayed current-X consumer");
+    require(has_optimization(result, "bit-mask-helper-stack-argument-call"),
+            "bit_mask(tmp) should call the shared helper with tmp restored directly to X");
+    require(has_optimization(result, "bit-mask-helper-call"),
+            "stack-resident bit_mask should still use the shared bit-mask helper");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-resident bit_mask helper argument should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-resident bit_mask helper argument should not recall tmp");
+  }
+
+  {
+    CompileOptions options;
+    options.budget = 999999;
+    options.stack_resident_temps = true;
+    options.disable_candidate_search = true;
+    const CompileResult result = compile_source(R"mkpro(
+program StackPackedScoreHelperIndexArg {
+  state {
+    line: packed = 44444.4
+    index: counter 0..7 = 3
+    guard: flag = false
+    tmp: counter 0..7 = 0
+    out: packed = 0
+  }
+
+  fn hot() {
+    tmp = index
+    if guard {
+    }
+    out += packed_score(line, tmp)
+    out += packed_score(line, index)
+    out += packed_score(line, index + 1)
+  }
+
+  loop {
+    hot()
+    halt(out)
+  }
+}
+)mkpro",
+                                                options);
+    require_clean_compile(result, "stack-resident packed_score helper index argument");
+    require(has_optimization(result, "stack-carried-assignment-delayed"),
+            "packed_score(line, tmp) should be recognized as a delayed current-X consumer");
+    require(has_optimization(result, "packed-score-helper-stack-argument-call"),
+            "packed_score(line, tmp) should call the shared helper with tmp restored directly");
+    require(has_optimization(result, "packed-score-current-x-update"),
+            "packed_score(line, tmp) update should add the accumulator after current-X scoring");
+    require(has_optimization(result, "packed-score-stack-helper"),
+            "stack-resident packed_score should still use the shared packed_score helper body");
+    require(count_steps_with_comment_prefix_and_opcode(result, "packed_score helper", 0x53) == 3,
+            "stack-resident packed_score should emit one helper call per hot() call");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-resident packed_score helper argument should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-resident packed_score helper argument should not recall tmp");
+  }
+
+  {
     const CompileResult result = compile_stack_variant(R"mkpro(
 program StackResidentRepeatedSum {
   state {

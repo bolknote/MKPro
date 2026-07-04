@@ -4647,6 +4647,52 @@ program SqrtMultiwayDomainTrapGuard {
                       }),
           "sqrt multiway domain-trap guard should branch on the F sqrt zero result");
 
+  const CompileResult reciprocal_multiway_domain_guard = compile_source(R"mkpro(
+program ReciprocalMultiwayDomainTrapGuard {
+  state {
+    charge: counter 0..9 = 1
+  }
+
+  loop {
+    if charge == 0 { halt("ЕГГОГ") }
+    if charge == 1 {
+      halt(11)
+    }
+    else {
+      halt(22)
+    }
+  }
+}
+)mkpro",
+                                                                     domain_options);
+  require(reciprocal_multiway_domain_guard.implemented,
+          "native compiler should lower reciprocal multiway domain-trap guards");
+  require(reciprocal_multiway_domain_guard.diagnostics.empty(),
+          "reciprocal multiway domain-trap guard compile should not report diagnostics");
+  require(has_optimization(reciprocal_multiway_domain_guard, "multiway-domain-trap-guard"),
+          "reciprocal multiway domain-trap guard should report the TS strategy name");
+  require(std::any_of(reciprocal_multiway_domain_guard.steps.begin(),
+                      reciprocal_multiway_domain_guard.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x23 &&
+                               step.comment == "multiway domain-error guard trap";
+                      }),
+          "charge == 0 / charge == 1 should use F 1/x as a trap and branch value");
+  require(std::any_of(reciprocal_multiway_domain_guard.steps.begin(),
+                      reciprocal_multiway_domain_guard.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x11 &&
+                               step.comment == "multiway reciprocal equality offset";
+                      }),
+          "reciprocal multiway domain-trap guard should offset 1/x before branching");
+  require(std::any_of(reciprocal_multiway_domain_guard.steps.begin(),
+                      reciprocal_multiway_domain_guard.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x57 &&
+                               step.comment == "false branch for domain(value)=0";
+                      }),
+          "reciprocal multiway domain-trap guard should branch on the adjusted zero result");
+
   const CompileResult domain_difference = compile_source(R"mkpro(
 program DomainErrorDifference {
   state {

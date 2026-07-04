@@ -406,6 +406,12 @@ void example_sizes_match_typescript_baselines() {
                       "packed-or-split-access-overhead-must-not-exceed-candidate-savings" &&
                   indirect_flow->details.contains("requiredAction") &&
                   indirect_flow->details.at("requiredAction") ==
+                      "pack-data-away-from-flow-selectors" &&
+                  indirect_flow->details.contains("blockedProof") &&
+                  indirect_flow->details.at("blockedProof") ==
+                      "indirect-flow-targets:selector-register-used-as-data" &&
+                  indirect_flow->details.contains("blockedProofAction") &&
+                  indirect_flow->details.at("blockedProofAction") ==
                       "pack-data-away-from-flow-selectors",
               "fox-hunt-mk61 size attribution should explain why the 60-cell indirect-flow "
               "candidate is blocked by proved selector/data overlap");
