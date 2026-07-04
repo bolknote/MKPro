@@ -423,9 +423,18 @@ void example_sizes_match_typescript_baselines() {
                   cell_mask_helper->details.contains("valueAwareSchedulerTrafficShape") &&
                   cell_mask_helper->details.at("valueAwareSchedulerTrafficShape") ==
                       "stack-inputs-only" &&
+                  cell_mask_helper->details.contains(
+                      "valueAwareProfitableStackInputPlanStatus") &&
+                  cell_mask_helper->details.at("valueAwareProfitableStackInputPlanStatus") ==
+                      "no-profitable-stack-input-materialization" &&
+                  cell_mask_helper->details.contains("valueAwareUnprofitableStackInputNames") &&
+                  cell_mask_helper->details.at("valueAwareUnprofitableStackInputNames")
+                          .find("x") != std::string::npos &&
+                  cell_mask_helper->details.at("valueAwareUnprofitableStackInputNames")
+                          .find("y") != std::string::npos &&
                   !cell_mask_helper->details.contains("valueAwareStateOutputNames"),
               "tic-tac-toe-4x4 helper summary should aggregate helper-local register traffic "
-              "for value-aware scheduler attribution");
+              "and callsite materialization costs for value-aware scheduler attribution");
       const SizeHelperSummaryReport* candidate_score_zero =
           find_size_helper(result, "candidate_score zero-accumulator entry");
       require(candidate_score_zero != nullptr &&
@@ -466,9 +475,28 @@ void example_sizes_match_typescript_baselines() {
                           .find("lines_") != std::string::npos &&
                   candidate_score_zero->details.contains("valueAwareStackInputPressure") &&
                   candidate_score_zero->details.at("valueAwareStackInputPressure") == "2" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareEstimatedNetSavingsAfterMaterialization") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareEstimatedNetSavingsAfterMaterialization") == "3" &&
+                  candidate_score_zero->details.contains("valueAwareProfitableStackInputNames") &&
+                  candidate_score_zero->details.at("valueAwareProfitableStackInputNames")
+                          .find("y") != std::string::npos &&
+                  candidate_score_zero->details.at("valueAwareProfitableStackInputNames")
+                          .find("x") != std::string::npos &&
+                  candidate_score_zero->details.contains("valueAwareBreakEvenStackInputNames") &&
+                  candidate_score_zero->details.at("valueAwareBreakEvenStackInputNames")
+                          .find("lines_4") != std::string::npos &&
+                  candidate_score_zero->details.at("valueAwareBreakEvenStackInputNames")
+                          .find("lines_7") != std::string::npos &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareProfitableStackInputPlanStatus") &&
+                  candidate_score_zero->details.at("valueAwareProfitableStackInputPlanStatus") ==
+                      "direct-stack-fit" &&
                   !candidate_score_zero->details.contains("valueAwareStateOutputNames"),
               "tic-tac-toe-4x4 candidate_score helper should classify helper-local traffic as "
-              "stack input candidates for the value-aware scheduler");
+              "stack input candidates and net materialization savings for the value-aware "
+              "scheduler");
       const SizeHelperSummaryReport* normalize_helper = find_size_helper(result, "normalize");
       require(normalize_helper != nullptr &&
                   !normalize_helper->details.contains("valueAwareStackInputNames"),
@@ -500,7 +528,11 @@ void example_sizes_match_typescript_baselines() {
                   mark_lines_helper->details.at("valueAwareNestedCallLabels").find("mark_one") !=
                       std::string::npos &&
                   mark_lines_helper->details.at("valueAwareNestedCallLabels").find("normalize") !=
-                      std::string::npos,
+                      std::string::npos &&
+                  mark_lines_helper->details.contains(
+                      "valueAwareEstimatedNetSavingsAfterMaterialization") &&
+                  mark_lines_helper->details.at(
+                      "valueAwareEstimatedNetSavingsAfterMaterialization") == "4",
               "tic-tac-toe-4x4 mark_lines_and_check helper should classify stack inputs "
               "separately from deferred state outputs and nested helper-call blockers");
       const SizeOpportunityReport* cell_mask_register_traffic = find_size_opportunity_detail(

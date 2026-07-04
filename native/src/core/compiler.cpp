@@ -47959,6 +47959,59 @@ SizeAttributionReport build_size_attribution_report(
         helper.details["valueAwareStackInputRanking"] = join_strings(ranking_parts, ",");
         helper.details["valueAwareStackInputPlanBasis"] =
             "ranked-helper-local-recall-cells";
+        const int materialize_cells_per_input = std::max(1, helper.call_occurrences);
+        int profitable_stack_input_gross_cells = 0;
+        int profitable_stack_input_materialize_cells = 0;
+        std::vector<std::string> profitable_stack_input_names;
+        std::vector<std::string> break_even_stack_input_names;
+        std::vector<std::string> unprofitable_stack_input_names;
+        for (const auto& [name, cells] : ranked_stack_inputs) {
+          if (cells > materialize_cells_per_input) {
+            profitable_stack_input_names.push_back(name);
+            profitable_stack_input_gross_cells += cells;
+            profitable_stack_input_materialize_cells += materialize_cells_per_input;
+          } else if (cells == materialize_cells_per_input) {
+            break_even_stack_input_names.push_back(name);
+          } else {
+            unprofitable_stack_input_names.push_back(name);
+          }
+        }
+        const int profitable_stack_input_net_cells =
+            profitable_stack_input_gross_cells - profitable_stack_input_materialize_cells;
+        helper.details["valueAwareStackInputMaterializeCellsPerInput"] =
+            std::to_string(materialize_cells_per_input);
+        helper.details["valueAwareProfitableStackInputGrossCells"] =
+            std::to_string(profitable_stack_input_gross_cells);
+        helper.details["valueAwareProfitableStackInputMaterializeCells"] =
+            std::to_string(profitable_stack_input_materialize_cells);
+        helper.details["valueAwareProfitableStackInputNetCells"] =
+            std::to_string(profitable_stack_input_net_cells);
+        helper.details["valueAwareProfitableStackInputCount"] =
+            std::to_string(profitable_stack_input_names.size());
+        helper.details["valueAwareProfitableStackInputPlanStatus"] =
+            profitable_stack_input_names.empty()
+                ? "no-profitable-stack-input-materialization"
+                : (profitable_stack_input_names.size() <= stack_capacity
+                       ? "direct-stack-fit"
+                       : "requires-staged-inputs");
+        if (!profitable_stack_input_names.empty()) {
+          helper.details["valueAwareProfitableStackInputNames"] =
+              join_strings(profitable_stack_input_names, ",");
+        }
+        if (!break_even_stack_input_names.empty()) {
+          helper.details["valueAwareBreakEvenStackInputNames"] =
+              join_strings(break_even_stack_input_names, ",");
+        }
+        if (!unprofitable_stack_input_names.empty()) {
+          helper.details["valueAwareUnprofitableStackInputNames"] =
+              join_strings(unprofitable_stack_input_names, ",");
+        }
+        if (profitable_stack_input_net_cells > 0 || state_output_cells > 0) {
+          helper.details["valueAwareEstimatedNetSavingsAfterMaterialization"] =
+              std::to_string(profitable_stack_input_net_cells + state_output_cells);
+          helper.details["valueAwareEstimatedNetSavingsModel"] =
+              "profitable-stack-input-recalls-minus-callsite-materialization-plus-state-outputs";
+        }
         const std::size_t resident_count = std::min(stack_capacity, ranked_stack_inputs.size());
         helper.details["valueAwareSuggestedResidentInputNames"] =
             ranked_names(ranked_stack_inputs, 0U, resident_count);
