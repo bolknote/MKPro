@@ -938,6 +938,24 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCalleeAbiImplementationStatus") ==
                       "required-before-stack-input-scheduling" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiOverheadBudgetCells") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiOverheadBudgetCells") ==
+                      "1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBreakEvenAddedCells") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiBreakEvenAddedCells") ==
+                      "1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiCostModelStatus") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiCostModelStatus") ==
+                      "unestimated-stack-preserving-entry-overhead" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiCostModelRequirement") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiCostModelRequirement") ==
+                      "stack-preserving-callee-abi-overhead-must-not-exceed-estimated-net-"
+                      "savings" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareSuggestedResidentInputNames") &&
                   candidate_score_zero->details.at("valueAwareSuggestedResidentInputNames")
                           .find("y") != std::string::npos &&
@@ -1433,6 +1451,16 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCalleeAbiPreservationPlan")
                           .find("packed-line score accumulator helper:x,y") !=
                       std::string::npos &&
+                  callee_abi_required_action->best_details.contains(
+                      "valueAwareCalleeAbiOverheadBudgetCells") &&
+                  callee_abi_required_action->best_details.at(
+                      "valueAwareCalleeAbiOverheadBudgetCells") == "1" &&
+                  callee_abi_required_action->best_details.contains(
+                      "valueAwareCalleeAbiCostModelRequirement") &&
+                  callee_abi_required_action->best_details.at(
+                      "valueAwareCalleeAbiCostModelRequirement") ==
+                      "stack-preserving-callee-abi-overhead-must-not-exceed-estimated-net-"
+                      "savings" &&
                   callee_abi_required_action->best_details.contains("registerTrafficBreakdown") &&
                   callee_abi_required_action->best_details.contains(
                       "valueAwareStackInputNames") &&
@@ -1497,7 +1525,16 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCalleeAbiRefactorTargets") &&
                   callee_abi_action->best_details.at(
                       "valueAwareCalleeAbiRefactorTargets") ==
-                      "packed-line score accumulator helper",
+                      "packed-line score accumulator helper" &&
+                  callee_abi_action->best_details.contains(
+                      "valueAwareCalleeAbiBreakEvenAddedCells") &&
+                  callee_abi_action->best_details.at(
+                      "valueAwareCalleeAbiBreakEvenAddedCells") == "1" &&
+                  callee_abi_action->best_details.contains(
+                      "valueAwareCalleeAbiCostModelStatus") &&
+                  callee_abi_action->best_details.at(
+                      "valueAwareCalleeAbiCostModelStatus") ==
+                      "unestimated-stack-preserving-entry-overhead",
               "tic-tac-toe-4x4 size attribution should rank profitable stack inputs blocked by "
               "stack-mutating callees as the next value-aware scheduler action");
     }

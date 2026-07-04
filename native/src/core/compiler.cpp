@@ -49127,6 +49127,16 @@ SizeAttributionReport build_size_attribution_report(
             helper.details["valueAwareEstimatedNetSavingsExcludes"] =
                 "persistent-state-output-stores";
         }
+        if (call_preservation_has_stack_mutating_callee && adjusted_estimated_net_cells > 0) {
+          helper.details["valueAwareCalleeAbiOverheadBudgetCells"] =
+              std::to_string(adjusted_estimated_net_cells);
+          helper.details["valueAwareCalleeAbiBreakEvenAddedCells"] =
+              std::to_string(adjusted_estimated_net_cells);
+          helper.details["valueAwareCalleeAbiCostModelStatus"] =
+              "unestimated-stack-preserving-entry-overhead";
+          helper.details["valueAwareCalleeAbiCostModelRequirement"] =
+              "stack-preserving-callee-abi-overhead-must-not-exceed-estimated-net-savings";
+        }
         if (!direct_stack_input_names.empty()) {
           helper.details["valueAwareDirectStackInputNames"] =
               join_strings(direct_stack_input_names, ",");
