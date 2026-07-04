@@ -325,6 +325,65 @@ void example_sizes_match_typescript_baselines() {
               "fox-hunt-mk61 size attribution should rank selector/data dual-use proof as the "
               "next action for the 60-cell post-layout candidates");
     }
+    if (name == "rambo-iii") {
+      const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
+      const SizeHelperSummaryReport* front_stop = find_size_helper(result, "front_stop");
+      require(front_stop != nullptr &&
+                  front_stop->details.contains("valueAwareMixedStateNames") &&
+                  front_stop->details.at("valueAwareMixedStateNames") == "cells_7,scratch" &&
+                  front_stop->details.contains("valueAwareMixedStateCells") &&
+                  front_stop->details.at("valueAwareMixedStateCells") == "4" &&
+                  front_stop->details.contains("valueAwareMixedStateBreakdown") &&
+                  front_stop->details.at("valueAwareMixedStateBreakdown")
+                          .find("cells_7:2c/1r/1s@39..42") != std::string::npos &&
+                  front_stop->details.at("valueAwareMixedStateBreakdown")
+                          .find("scratch:2c/1r/1s@38..45") != std::string::npos &&
+                  front_stop->details.contains("valueAwareMixedStateAccessOrder") &&
+                  front_stop->details.at("valueAwareMixedStateAccessOrder")
+                          .find("cells_7:R@39/S@42") != std::string::npos &&
+                  front_stop->details.at("valueAwareMixedStateAccessOrder")
+                          .find("scratch:S@38/R@45") != std::string::npos &&
+                  front_stop->details.contains("valueAwareMixedStateLocalLifetimeNames") &&
+                  front_stop->details.at("valueAwareMixedStateLocalLifetimeNames") ==
+                      "cells_7,scratch" &&
+                  front_stop->details.contains("valueAwareMixedStateLocalLifetimeCells") &&
+                  front_stop->details.at("valueAwareMixedStateLocalLifetimeCells") == "4" &&
+                  front_stop->details.contains("valueAwareMixedStateLifetimeStatus") &&
+                  front_stop->details.at("valueAwareMixedStateLifetimeStatus") ==
+                      "local-to-helper-without-nested-calls" &&
+                  front_stop->details.contains("valueAwareMixedStateProofAction") &&
+                  front_stop->details.at("valueAwareMixedStateProofAction") ==
+                      "prove-local-stack-value-flow-through-mutating-ops" &&
+                  !front_stop->details.contains("valueAwareMixedStateNestedCrossingNames") &&
+                  front_stop->details.contains("valueAwareNestedCallInputNames") &&
+                  front_stop->details.at("valueAwareNestedCallInputNames") == "random_state",
+              "rambo-iii front_stop size attribution should split local mixed-state lifetimes "
+              "from nested-call state inputs for the value-aware scheduler");
+      const SizeOpportunityReport* front_stop_register_traffic =
+          find_size_opportunity_detail(result, "helper-register-traffic", "helperLabel",
+                                       "front_stop");
+      require(front_stop_register_traffic != nullptr &&
+                  front_stop_register_traffic->savings == 6 &&
+                  front_stop_register_traffic->details.contains("trafficShapeAction") &&
+                  front_stop_register_traffic->details.at("trafficShapeAction") ==
+                      "prove-local-mixed-state-stack-value-flow" &&
+                  front_stop_register_traffic->details.contains(
+                      "valueAwareMixedStateLifetimeStatus") &&
+                  front_stop_register_traffic->details.at(
+                      "valueAwareMixedStateLifetimeStatus") ==
+                      "local-to-helper-without-nested-calls",
+              "rambo-iii should rank the front_stop value-aware blocker by the local mixed-state "
+              "stack-flow proof that is missing");
+      const SizeNextActionSummaryReport* mixed_state_action = find_size_next_action(
+          result, "trafficShapeAction", "prove-local-mixed-state-stack-value-flow");
+      require(mixed_state_action != nullptr && mixed_state_action->opportunities == 1 &&
+                  mixed_state_action->potential_savings == 6 &&
+                  mixed_state_action->best_savings == 6 &&
+                  mixed_state_action->best_details.contains("helperLabel") &&
+                  mixed_state_action->best_details.at("helperLabel") == "front_stop",
+              "rambo-iii size attribution should expose the local mixed-state stack-flow proof "
+              "as the next scheduler action");
+    }
   }
 
   for (const auto& [name, expected] : PENDING_BASELINE) {

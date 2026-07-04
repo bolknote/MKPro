@@ -47835,8 +47835,14 @@ std::optional<std::string> value_aware_scheduler_traffic_shape_action(
     return "defer-helper-state-output-stores";
   if (shape == "stack-inputs-and-deferred-state-outputs")
     return "split-stack-inputs-from-deferred-state-outputs";
-  if (shape == "mixed-state-traffic")
-    return "prove-mixed-helper-state-lifetimes";
+  if (shape == "mixed-state-traffic") {
+    const auto lifetime_status_it = details.find("valueAwareMixedStateLifetimeStatus");
+    if (lifetime_status_it != details.end() &&
+        lifetime_status_it->second == "local-to-helper-without-nested-calls") {
+      return "prove-local-mixed-state-stack-value-flow";
+    }
+    return "split-mixed-state-lifetimes-around-nested-calls";
+  }
   return std::nullopt;
 }
 
@@ -48152,6 +48158,8 @@ SizeAttributionReport build_size_attribution_report(
             });
 
   std::map<std::string, SizeHelperSpillSummaryReport> helper_spill_summaries;
+  std::map<std::string, std::vector<std::pair<int, SizeSpillAccessKind>>>
+      helper_spill_accesses_by_key;
   for (const HelperRegionRange& region : helper_regions) {
     for (std::size_t index = region.start; index < region.end && index < steps.size(); ++index) {
       const ResolvedStep& step = steps.at(index);
@@ -48159,6 +48167,7 @@ SizeAttributionReport build_size_attribution_report(
       if (!access.has_value())
         continue;
       const std::string key = region.label + "\x1f" + access->name;
+      helper_spill_accesses_by_key[key].push_back(std::make_pair(step.address, access->kind));
       SizeHelperSpillSummaryReport& summary = helper_spill_summaries[key];
       if (summary.helper_label.empty()) {
         summary.helper_label = region.label;
@@ -48446,7 +48455,38 @@ SizeAttributionReport build_size_attribution_report(
       int state_output_cells = 0;
       int nested_call_input_cells = 0;
       int mixed_state_cells = 0;
+      std::vector<SizeHelperSpillSummaryReport> mixed_state_spills;
       const auto nested_input_it = helper_nested_call_input_names.find(helper.label);
+      const auto nested_call_sites_for_helper = helper_nested_call_sites.find(helper.label);
+      const auto mixed_state_nested_sites =
+          [&](const SizeHelperSpillSummaryReport& spill) {
+            std::vector<std::string> sites;
+            if (nested_call_sites_for_helper == helper_nested_call_sites.end())
+              return sites;
+            for (const CallSite& call_site : nested_call_sites_for_helper->second) {
+              if (call_site.address < spill.first_address ||
+                  call_site.address > spill.last_address) {
+                continue;
+              }
+              sites.push_back(call_site.label + "@" +
+                              safe_format_label_address(call_site.address));
+            }
+            return sites;
+          };
+      const auto mixed_state_access_order =
+          [&](const SizeHelperSpillSummaryReport& spill) {
+            const std::string key = helper.label + "\x1f" + spill.name;
+            const auto access_it = helper_spill_accesses_by_key.find(key);
+            if (access_it == helper_spill_accesses_by_key.end())
+              return spill.name + ":unknown";
+            std::vector<std::string> events;
+            events.reserve(access_it->second.size());
+            for (const auto& [address, kind] : access_it->second) {
+              events.push_back(std::string(kind == SizeSpillAccessKind::Recall ? "R@" : "S@") +
+                               safe_format_label_address(address));
+            }
+            return spill.name + ":" + join_strings(events, "/");
+          };
       for (const SizeHelperSpillSummaryReport& spill : spills->second) {
         if (spill.recall_cells > 0 && spill.store_cells == 0) {
           stack_input_names.insert(spill.name);
@@ -48464,6 +48504,7 @@ SizeAttributionReport build_size_attribution_report(
         } else {
           mixed_state_names.insert(spill.name);
           mixed_state_cells += spill.total_cells;
+          mixed_state_spills.push_back(spill);
         }
       }
       if (!stack_input_names.empty()) {
@@ -48815,6 +48856,53 @@ SizeAttributionReport build_size_attribution_report(
                                                   mixed_state_names.end()),
                          ",");
         helper.details["valueAwareMixedStateCells"] = std::to_string(mixed_state_cells);
+        helper.details["valueAwareMixedStateBreakdown"] =
+            size_report_helper_spill_breakdown(mixed_state_spills);
+        std::vector<std::string> access_order_parts;
+        std::vector<std::string> local_lifetime_names;
+        std::vector<std::string> nested_crossing_names;
+        std::vector<std::string> nested_crossing_site_parts;
+        int local_lifetime_cells = 0;
+        int nested_crossing_cells = 0;
+        access_order_parts.reserve(mixed_state_spills.size());
+        for (const SizeHelperSpillSummaryReport& spill : mixed_state_spills) {
+          access_order_parts.push_back(mixed_state_access_order(spill));
+          const std::vector<std::string> nested_sites = mixed_state_nested_sites(spill);
+          if (nested_sites.empty()) {
+            local_lifetime_names.push_back(spill.name);
+            local_lifetime_cells += spill.total_cells;
+          } else {
+            nested_crossing_names.push_back(spill.name);
+            nested_crossing_cells += spill.total_cells;
+            nested_crossing_site_parts.push_back(spill.name + ":" +
+                                                 join_strings(nested_sites, "/"));
+          }
+        }
+        helper.details["valueAwareMixedStateAccessOrder"] =
+            join_strings(access_order_parts, ";");
+        if (!local_lifetime_names.empty()) {
+          helper.details["valueAwareMixedStateLocalLifetimeNames"] =
+              join_strings(local_lifetime_names, ",");
+          helper.details["valueAwareMixedStateLocalLifetimeCells"] =
+              std::to_string(local_lifetime_cells);
+        }
+        if (!nested_crossing_names.empty()) {
+          helper.details["valueAwareMixedStateNestedCrossingNames"] =
+              join_strings(nested_crossing_names, ",");
+          helper.details["valueAwareMixedStateNestedCrossingCells"] =
+              std::to_string(nested_crossing_cells);
+          helper.details["valueAwareMixedStateNestedCrossingSites"] =
+              join_strings(nested_crossing_site_parts, ";");
+        }
+        helper.details["valueAwareMixedStateLifetimeStatus"] =
+            nested_crossing_names.empty()
+                ? "local-to-helper-without-nested-calls"
+                : (local_lifetime_names.empty() ? "crosses-nested-helper-calls"
+                                                : "mixed-local-and-nested-crossing-lifetimes");
+        helper.details["valueAwareMixedStateProofAction"] =
+            nested_crossing_names.empty()
+                ? "prove-local-stack-value-flow-through-mutating-ops"
+                : "split-local-lifetimes-from-nested-call-crossing-state";
       }
       if (!stack_input_names.empty() || !state_output_names.empty() ||
           !nested_call_input_names.empty() ||
