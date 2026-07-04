@@ -359,9 +359,9 @@ program StackHelperAbiAggregation {
                 blocker->details.contains("schedulerAction") &&
                 blocker->details.at("schedulerAction") == "prove-stack-aware-helper-call" &&
                 blocker->details.contains("estimatedStackEntryOverheadCells") &&
-                blocker->details.at("estimatedStackEntryOverheadCells") == "12" &&
+                blocker->details.at("estimatedStackEntryOverheadCells") == "11" &&
                 blocker->details.contains("estimatedNetSavings") &&
-                blocker->details.at("estimatedNetSavings") == "0" &&
+                blocker->details.at("estimatedNetSavings") == "1" &&
                 blocker->details.contains("estimatedBreakEvenCallSites") &&
                 blocker->details.at("estimatedBreakEvenCallSites") == "6" &&
                 blocker->details.contains("additionalCallSitesToBreakEven") &&
@@ -370,14 +370,14 @@ program StackHelperAbiAggregation {
                 blocker->details.contains("lastLine") &&
                 blocker->details.contains("costModelAction") &&
                 blocker->details.at("costModelAction") ==
-                    "find-more-stack-entry-call-sites-or-inline-helper",
-            "repeated stack helper ABI report should recognize measured break-even stack-entry "
+                    "implement-stack-argument-helper-entry",
+            "repeated stack helper ABI report should recognize positive stack-entry "
             "sites");
     const SizeOpportunityReport* opportunity = find_size_opportunity(result, "stack-helper-abi");
-    require(opportunity != nullptr && opportunity->savings == 0 &&
-                opportunity->candidate_steps == static_cast<int>(result.steps.size()) &&
+    require(opportunity != nullptr && opportunity->savings == 1 &&
+                opportunity->candidate_steps == static_cast<int>(result.steps.size()) - 1 &&
                 opportunity->details.contains("estimatedNetSavings") &&
-                opportunity->details.at("estimatedNetSavings") == "0" &&
+                opportunity->details.at("estimatedNetSavings") == "1" &&
                 opportunity->details.contains("correctnessStatus") &&
                 opportunity->details.at("correctnessStatus") ==
                     "requires-stack-argument-entry-or-materialization" &&
@@ -388,12 +388,13 @@ program StackHelperAbiAggregation {
                 opportunity->details.at("schedulerAction") == "prove-stack-aware-helper-call" &&
                 opportunity->details.contains("stackEntryCandidateCallSites") &&
                 opportunity->details.at("stackEntryCandidateCallSites") == "6",
-            "stack helper ABI opportunity should expose repeated sites as measured break-even");
+            "stack helper ABI opportunity should expose repeated sites as a positive entry");
     const SizeNextActionSummaryReport* cost_action = find_size_next_action(
         result, "costModelAction", "implement-stack-argument-helper-entry");
-    require(cost_action == nullptr,
-            "break-even stack helper ABI estimate should not rank implementation as a positive "
-            "next action");
+    require(cost_action != nullptr && cost_action->potential_savings >= 1 &&
+                cost_action->best_savings >= 1 &&
+                cost_action->best_variant == "stack-helper-abi",
+            "positive stack helper ABI estimate should rank implementation as a next action");
 
     CompileOptions stack_entry_options;
     stack_entry_options.analysis = true;
@@ -403,6 +404,8 @@ program StackHelperAbiAggregation {
     stack_entry_options.disable_candidate_search = true;
     const CompileResult stack_entry = compile_source(stack_helper_abi_source, stack_entry_options);
     require_clean_compile(stack_entry, "stack helper argument-entry variant");
+    require(static_cast<int>(stack_entry.steps.size()) == static_cast<int>(result.steps.size()) - 1,
+            "stack helper argument-entry variant should realize the one-cell stack-entry saving");
     require(has_optimization(stack_entry, "expression-helper-stack-entry-primary"),
             "stack helper argument-entry variant should emit a primary stack helper entry when "
             "all calls use the stack ABI");

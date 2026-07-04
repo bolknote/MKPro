@@ -579,9 +579,9 @@ void example_sizes_match_typescript_baselines() {
                   stack_helper_abi->details.at("entryOverheadStatus") ==
                       "estimated-stack-entry-helper-cost" &&
                   stack_helper_abi->details.contains("estimatedStackEntryOverheadCells") &&
-                  stack_helper_abi->details.at("estimatedStackEntryOverheadCells") == "12" &&
+                  stack_helper_abi->details.at("estimatedStackEntryOverheadCells") == "11" &&
                   stack_helper_abi->details.contains("estimatedNetSavings") &&
-                  stack_helper_abi->details.at("estimatedNetSavings") == "-10" &&
+                  stack_helper_abi->details.at("estimatedNetSavings") == "-9" &&
                   stack_helper_abi->details.contains("stackEntryCandidateCallSites") &&
                   stack_helper_abi->details.at("stackEntryCandidateCallSites") == "1" &&
                   stack_helper_abi->details.contains("materializeCellsPerCallSite") &&
@@ -614,9 +614,9 @@ void example_sizes_match_typescript_baselines() {
           find_size_opportunity(result, "stack-helper-abi");
       require(stack_helper_abi_opportunity != nullptr &&
                   stack_helper_abi_opportunity->site == "abi" &&
-                  stack_helper_abi_opportunity->savings == -10 &&
+                  stack_helper_abi_opportunity->savings == -9 &&
                   stack_helper_abi_opportunity->candidate_steps ==
-                      static_cast<int>(result.steps.size()) + 10 &&
+                      static_cast<int>(result.steps.size()) + 9 &&
                   stack_helper_abi_opportunity->blocker_kind == "stack-helper-abi" &&
                   stack_helper_abi_opportunity->details.contains("abiStatus") &&
                   stack_helper_abi_opportunity->details.at("abiStatus") ==
@@ -642,7 +642,7 @@ void example_sizes_match_typescript_baselines() {
                   stack_helper_abi_opportunity->details.at("costModelAction") ==
                       "find-more-stack-entry-call-sites-or-inline-helper" &&
                   stack_helper_abi_opportunity->details.contains("estimatedNetSavings") &&
-                  stack_helper_abi_opportunity->details.at("estimatedNetSavings") == "-10" &&
+                  stack_helper_abi_opportunity->details.at("estimatedNetSavings") == "-9" &&
                   stack_helper_abi_opportunity->details.contains(
                       "stackEntryCandidateCallSites") &&
                   stack_helper_abi_opportunity->details.at("stackEntryCandidateCallSites") ==
@@ -657,7 +657,7 @@ void example_sizes_match_typescript_baselines() {
                       "5" &&
                   stack_helper_abi_opportunity->details.contains("estimatedCandidateSteps") &&
                   stack_helper_abi_opportunity->details.at("estimatedCandidateSteps") ==
-                      std::to_string(static_cast<int>(result.steps.size()) + 10) &&
+                      std::to_string(static_cast<int>(result.steps.size()) + 9) &&
                   stack_helper_abi_opportunity->details.contains("requiredAction") &&
                   stack_helper_abi_opportunity->details.at("requiredAction") ==
                       "stack-argument-helper-entry",

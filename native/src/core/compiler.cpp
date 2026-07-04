@@ -35813,14 +35813,15 @@ bool lower_cell_mask_expression_helper_stack_only_entry(
   if (!expression_is_cell_mask_of_stack_temps(helper.expr, {entry.first, entry.second}))
     return false;
   const int line = helper.line;
-  context.emitter.emit_op(0x14, "X↔Y", "expression helper stack-entry x", line);
-  context.emitter.emit_op(0x15, "F 10^x", "expression helper stack-entry pow10", line);
-  context.emitter.emit_op(0x14, "X↔Y", "expression helper stack-entry y", line);
+  // Stack-entry ABI arrives with the second argument in X and the first in Y.
+  // Build the row mask from X first, then swap once to add the column mask.
   emit_number_or_preload(context, format_number_literal(cell_mask_row_constant(4)), std::nullopt,
                          line);
   context.emitter.emit_op(0x12, "*", "expr *", line);
   context.emitter.emit_op(0x15, "F 10^x", "pow10()", line);
   context.emitter.emit_op(0x34, "К [x]", "int()", line);
+  context.emitter.emit_op(0x14, "X↔Y", "expression helper stack-entry x", line);
+  context.emitter.emit_op(0x15, "F 10^x", "expression helper stack-entry pow10", line);
   context.emitter.emit_op(0x10, "+", "expr +", line);
   clear_current_x_facts(context);
   return true;
@@ -47173,11 +47174,9 @@ estimated_stack_entry_helper_overhead_cells(const std::map<std::string, std::str
         expression.args.size() == 2U && expression.args.at(0).kind == "identifier" &&
         expression.args.at(1).kind == "identifier" && expression.args.at(0).name == temps.at(0) &&
         expression.args.at(1).name == temps.at(1)) {
-      // The current alternate entry adds a stack prologue plus a shared-tail
-      // branch, and the surrounding shared straight-line helper layout does
-      // not yet shrink with it. Keep the estimate aligned with measured codegen
-      // so size attribution does not rank this as profitable prematurely.
-      return 12;
+      // Stack-only cell_mask helper entries can now consume the incoming X/Y
+      // values in row-first order and pay one swap instead of two.
+      return 11;
     }
   } catch (const std::exception&) {
   }
