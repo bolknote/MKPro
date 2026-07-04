@@ -47063,14 +47063,27 @@ size_opportunity_details(const CandidateReport& candidate,
       reason.find("before K {x}") != std::string::npos) {
     constexpr std::string_view kSourcePrefix =
         "dead-integer fractional selector source ";
+    constexpr std::string_view kStoredIn = " stored in R";
     constexpr std::string_view kReaches = " reaches ";
     constexpr std::string_view kBeforeErase = " before K {x}";
     if (reason.rfind(kSourcePrefix, 0) == 0) {
       const std::size_t source_start = kSourcePrefix.size();
       const std::size_t reaches = reason.find(kReaches, source_start);
       if (reaches != std::string::npos && reaches > source_start) {
-        details.emplace("fractionalSelectorSource",
-                        reason.substr(source_start, reaches - source_start));
+        const std::size_t stored_in = reason.find(kStoredIn, source_start);
+        if (stored_in != std::string::npos && stored_in < reaches) {
+          details.emplace("fractionalSelectorSource",
+                          reason.substr(source_start, stored_in - source_start));
+          const std::size_t register_start = stored_in + kStoredIn.size();
+          if (register_start < reaches)
+            details.emplace("fractionalSelectorStorageRegister",
+                            reason.substr(register_start, reaches - register_start));
+          details.emplace("fractionalSelectorStorage", "stored-register");
+        } else {
+          details.emplace("fractionalSelectorSource",
+                          reason.substr(source_start, reaches - source_start));
+          details.emplace("fractionalSelectorStorage", "live-x-carrier");
+        }
         const std::size_t consumer_start = reaches + kReaches.size();
         const std::size_t before_erase = reason.find(kBeforeErase, consumer_start);
         if (before_erase != std::string::npos && before_erase > consumer_start) {
@@ -47105,9 +47118,49 @@ size_opportunity_details(const CandidateReport& candidate,
         details.emplace("safeSelectorTarget", details["naturalTarget"]);
       }
     } else if (blocker == "indirect-address-control-use") {
-      details.emplace("proofDisposition", "needs-final-indirect-target-artifact");
-      details.emplace("requiredAction", "prove-indirect-target-or-erase-before-use");
-      details.emplace("integerPartHazard", "indirect-control-before-fractional-erase");
+      const std::string consumer =
+          details.contains("fractionalSelectorConsumer")
+              ? details["fractionalSelectorConsumer"]
+              : std::string{};
+      const bool live_x_carrier =
+          details.contains("fractionalSelectorStorage") &&
+          details["fractionalSelectorStorage"] == "live-x-carrier";
+      if (consumer.rfind("К x", 0) == 0 || consumer.rfind("K x", 0) == 0) {
+        details.emplace("consumerControlKind", "conditional-indirect-flow");
+        if (live_x_carrier) {
+          details.emplace("proofDisposition", "needs-cfg-x-liveness-proof");
+          details.emplace("requiredAction",
+                          "prove-conditional-indirect-flow-x-liveness-or-erase-before-use");
+          details.emplace("integerPartHazard",
+                          "conditional-indirect-flow-preserves-live-x-carrier");
+          details.emplace("proofOnlySavingsStatus",
+                          "blocked-by-live-x-after-conditional-flow");
+          details.emplace("xLivenessAction", "build-control-flow-x-liveness-proof");
+        } else {
+          details.emplace("proofDisposition", "needs-final-indirect-target-artifact");
+          details.emplace("requiredAction", "prove-indirect-target-or-erase-before-use");
+          details.emplace("integerPartHazard", "stored-selector-indirect-control-before-erase");
+        }
+      } else if (consumer.rfind("К ПП", 0) == 0 || consumer.rfind("K PP", 0) == 0) {
+        details.emplace("consumerControlKind", "indirect-call");
+        if (live_x_carrier) {
+          details.emplace("proofDisposition", "needs-return-x-liveness-proof");
+          details.emplace("requiredAction",
+                          "prove-indirect-call-return-x-liveness-or-erase-before-use");
+          details.emplace("integerPartHazard",
+                          "indirect-call-can-return-with-live-x-carrier");
+          details.emplace("xLivenessAction", "build-call-return-x-liveness-proof");
+        } else {
+          details.emplace("proofDisposition", "needs-final-indirect-target-artifact");
+          details.emplace("requiredAction", "prove-indirect-target-or-erase-before-use");
+          details.emplace("integerPartHazard", "stored-selector-indirect-call-before-erase");
+        }
+      } else {
+        details.emplace("consumerControlKind", "indirect-jump-or-address-use");
+        details.emplace("proofDisposition", "needs-final-indirect-target-artifact");
+        details.emplace("requiredAction", "prove-indirect-target-or-erase-before-use");
+        details.emplace("integerPartHazard", "indirect-control-before-fractional-erase");
+      }
     } else {
       details.emplace("proofDisposition", "needs-local-dead-integer-proof");
       details.emplace("requiredAction", "erase-before-data-consumption");
