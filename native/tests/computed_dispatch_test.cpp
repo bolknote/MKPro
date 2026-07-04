@@ -1560,6 +1560,55 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
           "dead-integer fractional selector elision should accept a stored selector that is "
           "immediately consumed by a proved indirect-memory recall because that overwrites live X");
 
+  CompileResult safe_stored_immediate_direct_recall_result = forward_result;
+  safe_stored_immediate_direct_recall_result.optimizations.push_back(
+      optimization_report("dead-integer-fractional-selector-use"));
+  safe_stored_immediate_direct_recall_result.steps.push_back(
+      resolved_step(0x69, "preload const 3.123456; fractional selector source 0.123456"));
+  safe_stored_immediate_direct_recall_result.steps.push_back(
+      resolved_step(0x49, "set saved selector"));
+  safe_stored_immediate_direct_recall_result.steps.push_back(
+      resolved_step_with_mnemonic(0x60, "П->X 0", "overwrite live selector"));
+  safe_stored_immediate_direct_recall_result.steps.push_back(
+      resolved_step(0x69, "recall saved selector"));
+  safe_stored_immediate_direct_recall_result.steps.push_back(resolved_step(0x35, "frac()"));
+  require(optimizer_static_proof_gate_accepts_for_testing(
+              safe_dead_integer_options, safe_stored_immediate_direct_recall_result),
+          "dead-integer fractional selector elision should accept a stored selector when a direct "
+          "recall from another register overwrites the still-live X carrier");
+
+  CompileResult safe_stored_immediate_same_recall_result = forward_result;
+  safe_stored_immediate_same_recall_result.optimizations.push_back(
+      optimization_report("dead-integer-fractional-selector-use"));
+  safe_stored_immediate_same_recall_result.steps.push_back(
+      resolved_step(0x69, "preload const 3.123456; fractional selector source 0.123456"));
+  safe_stored_immediate_same_recall_result.steps.push_back(
+      resolved_step(0x49, "set saved selector"));
+  safe_stored_immediate_same_recall_result.steps.push_back(
+      resolved_step_with_mnemonic(0x69, "П->X 9", "recall saved selector"));
+  safe_stored_immediate_same_recall_result.steps.push_back(resolved_step(0x35, "frac()"));
+  require(optimizer_static_proof_gate_accepts_for_testing(
+              safe_dead_integer_options, safe_stored_immediate_same_recall_result),
+          "dead-integer fractional selector elision should accept a stored selector immediately "
+          "recalled from the same register only when K {x} erases it");
+
+  CompileResult unsafe_stored_immediate_same_recall_result =
+      safe_stored_immediate_same_recall_result;
+  unsafe_stored_immediate_same_recall_result.steps.back() =
+      resolved_step(0x12, "expr *");
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              safe_dead_integer_options, unsafe_stored_immediate_same_recall_result),
+          "dead-integer fractional selector elision must reject a stored selector immediately "
+          "recalled from the same register when it is consumed before K {x}");
+  const std::optional<std::string> unsafe_stored_immediate_same_recall_reason =
+      optimizer_static_proof_gate_rejection_reason_for_testing(
+          safe_dead_integer_options, unsafe_stored_immediate_same_recall_result);
+  require(unsafe_stored_immediate_same_recall_reason.has_value() &&
+              unsafe_stored_immediate_same_recall_reason->find(
+                  "is stored before П->X 9 instead of immediate K {x}") != std::string::npos,
+          "dead-integer rejection reason should keep distinguishing unsafe same-register recalls "
+          "after a selector store");
+
   int stored_conditional_address = 70;
   while (stored_conditional_address == target || stored_conditional_address + 1 == target)
     ++stored_conditional_address;

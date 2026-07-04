@@ -48786,6 +48786,8 @@ bool dead_integer_fractional_selector_indirect_call_use_proved(
 
 enum class DeadIntegerStoredLiveXProof {
   OverwrittenByMemoryRecall,
+  OverwrittenByRegisterRecall,
+  ErasedBySameRegisterRecall,
   ErasedByConditionalSuccessors,
   ErasedByIndirectCallCallee,
 };
@@ -48803,6 +48805,15 @@ dead_integer_fractional_selector_stored_live_x_use_proved(
   if (dead_integer_fractional_selector_memory_recall_use_proved(step, register_index,
                                                                 carrier_value)) {
     return DeadIntegerStoredLiveXProof::OverwrittenByMemoryRecall;
+  }
+  if (const std::optional<int> recall = direct_register_recall_index(step.opcode);
+      recall.has_value()) {
+    if (*recall != register_index)
+      return DeadIntegerStoredLiveXProof::OverwrittenByRegisterRecall;
+    if (consumer_index + 1U < steps.size() &&
+        steps.at(consumer_index + 1U).opcode == kDeadIntegerFractionalEraseOpcode) {
+      return DeadIntegerStoredLiveXProof::ErasedBySameRegisterRecall;
+    }
   }
   if (dead_integer_fractional_selector_conditional_flow_use_proved(
           steps, consumer_index, register_index, selector_target)) {
