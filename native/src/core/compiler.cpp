@@ -47959,6 +47959,17 @@ SizeAttributionReport build_size_attribution_report(
         helper.details["valueAwareStackInputRanking"] = join_strings(ranking_parts, ",");
         helper.details["valueAwareStackInputPlanBasis"] =
             "ranked-helper-local-recall-cells";
+        const int nested_call_cells = helper_nested_call_cells[helper.label];
+        if (nested_call_cells > 0) {
+          helper.details["valueAwareNestedCallCells"] = std::to_string(nested_call_cells);
+          if (const auto nested_labels = helper_nested_call_labels.find(helper.label);
+              nested_labels != helper_nested_call_labels.end()) {
+            helper.details["valueAwareNestedCallLabels"] =
+                join_strings(std::vector<std::string>(nested_labels->second.begin(),
+                                                      nested_labels->second.end()),
+                             ",");
+          }
+        }
         const int materialize_cells_per_input = std::max(1, helper.call_occurrences);
         int profitable_stack_input_gross_cells = 0;
         int profitable_stack_input_materialize_cells = 0;
@@ -47991,9 +48002,10 @@ SizeAttributionReport build_size_attribution_report(
         helper.details["valueAwareProfitableStackInputPlanStatus"] =
             profitable_stack_input_names.empty()
                 ? "no-profitable-stack-input-materialization"
-                : (profitable_stack_input_names.size() <= stack_capacity
-                       ? "direct-stack-fit"
-                       : "requires-staged-inputs");
+                : (profitable_stack_input_names.size() > stack_capacity
+                       ? "requires-staged-inputs"
+                       : (nested_call_cells > 0 ? "requires-call-preserving-stack-proof"
+                                                : "direct-stack-fit"));
         if (!profitable_stack_input_names.empty()) {
           helper.details["valueAwareProfitableStackInputNames"] =
               join_strings(profitable_stack_input_names, ",");
@@ -48031,16 +48043,7 @@ SizeAttributionReport build_size_attribution_report(
           helper.details["valueAwareSuggestedStagedInputCount"] =
               std::to_string(ranked_stack_inputs.size() - stack_capacity);
         } else {
-          const int nested_call_cells = helper_nested_call_cells[helper.label];
           if (nested_call_cells > 0) {
-            helper.details["valueAwareNestedCallCells"] = std::to_string(nested_call_cells);
-            if (const auto nested_labels = helper_nested_call_labels.find(helper.label);
-                nested_labels != helper_nested_call_labels.end()) {
-              helper.details["valueAwareNestedCallLabels"] =
-                  join_strings(std::vector<std::string>(nested_labels->second.begin(),
-                                                        nested_labels->second.end()),
-                               ",");
-            }
             helper.details["valueAwareStackInputPlanStatus"] =
                 "requires-call-preserving-stack-proof";
             helper.details["valueAwareStackInputPlanBlocker"] =

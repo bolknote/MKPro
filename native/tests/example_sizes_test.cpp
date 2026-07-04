@@ -492,7 +492,12 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.contains(
                       "valueAwareProfitableStackInputPlanStatus") &&
                   candidate_score_zero->details.at("valueAwareProfitableStackInputPlanStatus") ==
-                      "direct-stack-fit" &&
+                      "requires-call-preserving-stack-proof" &&
+                  candidate_score_zero->details.contains("valueAwareNestedCallLabels") &&
+                  candidate_score_zero->details.at("valueAwareNestedCallLabels")
+                          .find("packed-line score accumulator helper") != std::string::npos &&
+                  candidate_score_zero->details.at("valueAwareNestedCallLabels")
+                          .find("normalize") != std::string::npos &&
                   !candidate_score_zero->details.contains("valueAwareStateOutputNames"),
               "tic-tac-toe-4x4 candidate_score helper should classify helper-local traffic as "
               "stack input candidates and net materialization savings for the value-aware "
