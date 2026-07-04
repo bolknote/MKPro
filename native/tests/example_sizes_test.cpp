@@ -286,6 +286,12 @@ void example_sizes_match_typescript_baselines() {
       require(packed_line_update_tail->steps >= static_cast<int>(result.steps.size()),
               "tic-tac-toe-4x4 packed-line update/check tail should not be reported as a hidden "
               "smaller candidate");
+      const CandidateReport* generic_packed_score_fallback =
+          find_candidate(result.rejected_candidates, "generic-packed-score-accumulator-fallback");
+      require(generic_packed_score_fallback != nullptr &&
+                  generic_packed_score_fallback->steps > static_cast<int>(result.steps.size()),
+              "tic-tac-toe-4x4 should measure the generic packed_score accumulator fallback and "
+              "keep the current specialized scorer when the fallback is larger");
       const CandidateReport* rejected_dead_integer =
           find_candidate(result.rejected_candidates, "fractional-constant-selector-dead-int");
       require(rejected_dead_integer == nullptr,

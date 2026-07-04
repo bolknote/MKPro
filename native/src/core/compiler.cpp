@@ -19048,6 +19048,8 @@ packed_line_family_score_rule(const LoweringContext& context, const V2Rule& rule
 }
 
 bool lower_packed_line_family_score_rule(LoweringContext& context, const V2Rule& rule) {
+  if (context.disable_packed_line_family_score_accumulator)
+    return false;
   const std::optional<PackedLineFamilyScoreRule> match =
       packed_line_family_score_rule(context, rule);
   if (!match.has_value())
@@ -21001,7 +21003,8 @@ bool lower_call_to_x(LoweringContext& context, const Expression& expression) {
     return true;
   if (context.x_param_procs.contains(rule.name))
     return lower_x_param_rule_call(context, rule, expression.args, 0);
-  if (expression.args.empty() && context.emitter.current_x_known_zero) {
+  if (expression.args.empty() && context.emitter.current_x_known_zero &&
+      !context.disable_packed_line_family_score_accumulator) {
     const std::optional<PackedLineFamilyScoreRule> score_rule =
         packed_line_family_score_rule(context, rule);
     if (score_rule.has_value() && context.stack_only_state_fields.contains(score_rule->score)) {
@@ -24257,6 +24260,8 @@ bool equality_true_fallthrough_leaves_zero(LoweringContext&, const V2Predicate& 
 
 bool statement_can_enter_packed_line_family_score_zero_entry(LoweringContext& context,
                                                              const V2Statement* statement) {
+  if (context.disable_packed_line_family_score_accumulator)
+    return false;
   if (statement == nullptr || statement->kind != "v2_invoke" || !statement->name.has_value() ||
       !statement->args.empty()) {
     return false;
@@ -27592,7 +27597,8 @@ bool lower_invoke_statement(LoweringContext& context, const V2Statement& stateme
     return true;
   if (context.x_param_procs.contains(rule.name))
     return lower_x_param_rule_call(context, rule, args, statement.line);
-  if (args.empty() && context.emitter.current_x_known_zero) {
+  if (args.empty() && context.emitter.current_x_known_zero &&
+      !context.disable_packed_line_family_score_accumulator) {
     const std::optional<PackedLineFamilyScoreRule> score_rule =
         packed_line_family_score_rule(context, rule);
     if (score_rule.has_value() && context.stack_only_state_fields.contains(score_rule->score)) {
@@ -27693,7 +27699,9 @@ void compile_block_call(LoweringContext& context, const std::string& block_name,
     });
     return;
   }
-  if (context.emitter.current_x_known_zero && packed_line_family_score_rule(context, rule)) {
+  if (context.emitter.current_x_known_zero &&
+      !context.disable_packed_line_family_score_accumulator &&
+      packed_line_family_score_rule(context, rule)) {
     context.emitter.emit_jump(0x53, "ПП", packed_line_family_score_zero_entry_label(rule.name),
                               "proc call " + rule.name + " zero-accumulator entry", line);
     if (const std::optional<std::string> return_x = proc_return_x_variable(context, rule)) {
@@ -43148,6 +43156,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   context.packed_line_family_borrowed_mutating_selector_update_check_tail =
       options.packed_line_family_borrowed_mutating_selector_update_check_tail;
   context.packed_score_accumulator_helpers = options.packed_score_accumulator_helpers;
+  context.disable_packed_line_family_score_accumulator =
+      options.disable_packed_line_family_score_accumulator;
   context.shared_bit_mask_helper_calls = options.shared_bit_mask_helper_calls;
   context.compact_bit_mask_helper_body = options.compact_bit_mask_helper_body;
   context.domain_error_guards = options.domain_error_guards;
@@ -44804,6 +44814,8 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";trig_fractional_pack=" << options.trig_fractional_pack
       << ";sign_pack_state=" << options.sign_pack_state
       << ";packed_score_accumulator_helpers=" << options.packed_score_accumulator_helpers
+      << ";disable_packed_line_family_score_accumulator="
+      << options.disable_packed_line_family_score_accumulator
       << ";canonicalize_repeated_unary_update_args="
       << options.canonicalize_repeated_unary_update_args
       << ";alternating_sign_toggle_args=" << options.alternating_sign_toggle_args
@@ -45228,6 +45240,7 @@ void append_candidate_report_once(std::vector<CandidateReport>& reports,
 bool should_report_nonwinning_candidate(std::string_view name) {
   return name == "packed-score-accumulator-helper" ||
          name == "packed-score-accumulator-aggressive-post-layout" ||
+         name == "generic-packed-score-accumulator-fallback" ||
          name == "packed-line-family-update-check-tail" ||
          name == "packed-line-family-mutating-selector-update-check-tail" ||
          name == "packed-line-family-borrowed-mutating-selector-update-check-tail" ||
@@ -50470,13 +50483,22 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   std::optional<V2Program> selector_probe_program;
   try {
     ProgramAst ast = parse_program(source);
-    if (ast.v2.has_value())
+    if (ast.v2.has_value()) {
+      lower_small_case_matches(*ast.v2);
+      materialize_rule_param_state_fields(*ast.v2);
       selector_probe_program = *ast.v2;
+    }
   } catch (const std::exception&) {
   }
   const bool may_use_packed_score_accumulator =
       selector_probe_program.has_value() &&
       packed_score_accumulator_eligible_call_count_in_program(*selector_probe_program) >= 3;
+  const int packed_score_call_count =
+      selector_probe_program.has_value()
+          ? count_expression_calls_in_program(*selector_probe_program, "packed_score")
+          : 0;
+  const bool may_compare_generic_packed_score_accumulator =
+      packed_score_call_count >= 4;
 
   struct CandidateSpec {
     CompileOptions options;
@@ -51271,6 +51293,16 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
           "Combined stack-accumulator helpers for repeated packed_score() sum groups with proven "
           "post-layout indirect-flow repacking");
     }
+  }
+  if (may_compare_generic_packed_score_accumulator) {
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.packed_score_accumulator_helpers = true;
+          candidate_options.disable_packed_line_family_score_accumulator = true;
+        },
+        "generic-packed-score-accumulator-fallback",
+        "Compared generic packed_score() accumulator lowering against specialized score lowering",
+        CandidateGate::SizeRescue);
   }
   for (const std::vector<std::string>& names :
        discover_packed_counter_stripe_variant_names(source)) {

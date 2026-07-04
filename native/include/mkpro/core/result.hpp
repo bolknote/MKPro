@@ -349,6 +349,7 @@ struct CompileOptions {
   bool trig_fractional_pack = false;
   bool sign_pack_state = false;
   bool packed_score_accumulator_helpers = false;
+  bool disable_packed_line_family_score_accumulator = false;
   bool canonicalize_repeated_unary_update_args = false;
   bool alternating_sign_toggle_args = false;
   // Rewrite self-decrementing packed-line mark walks and monolithic score walks
