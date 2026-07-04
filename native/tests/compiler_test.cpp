@@ -1845,6 +1845,58 @@ program PackedLineScoreProc {
   require(has_optimization(packed_line_score_proc, "packed-line-family-score-accumulator"),
           "four-term packed_score procedure should report the TS accumulator strategy");
 
+  CompileOptions generic_packed_score_tail_options;
+  generic_packed_score_tail_options.analysis = true;
+  generic_packed_score_tail_options.packed_score_accumulator_helpers = true;
+  generic_packed_score_tail_options.disable_packed_line_family_score_accumulator = true;
+  const CompileResult generic_packed_score_tail = compile_source(R"mkpro(
+program GenericPackedScoreSharedReturnedIndexTail {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    d: packed = 44447.4
+    x: counter 0..5 = 4
+    y: counter 0..5 = 4
+    line: packed = 0
+    score: packed = 0
+  }
+
+  fn score_move() {
+    score = sum(packed_score(a, x), packed_score(b, y))
+    normalize(x + y)
+    score += packed_score(c, line)
+    normalize(x - y)
+    score += packed_score(d, line)
+  }
+
+  fn normalize(raw_line) {
+    line = frac((raw_line + 3) / 4) * 4 + 1
+  }
+
+  loop {
+    score_move()
+    halt(score)
+  }
+}
+)mkpro",
+                                                          generic_packed_score_tail_options);
+  require(generic_packed_score_tail.implemented,
+          "generic packed_score shared returned-index tail program should compile");
+  require(generic_packed_score_tail.diagnostics.empty(),
+          "generic packed_score shared returned-index tail compile should not report diagnostics");
+  require(has_optimization(generic_packed_score_tail,
+                           "x-param-packed-score-shared-returned-index-tail"),
+          "generic packed_score lowering should share a returned-index tail for paired X-param "
+          "score terms");
+  require(optimization_count(generic_packed_score_tail,
+                             "x-param-packed-score-line-stack-accumulate") == 2,
+          "generic packed_score shared tail should still report both line-first X-param score "
+          "terms");
+  require(generic_packed_score_tail.listing.find(
+              "x-param packed_score shared returned-index tail") != std::string::npos,
+          "generic packed_score shared tail should emit a shared returned-index helper call");
+
   const CompileResult packed_line_score_proc_sum = compile_source(R"mkpro(
 program PackedLineScoreProcSumSyntax {
   state {

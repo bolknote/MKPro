@@ -680,6 +680,102 @@ void example_sizes_match_typescript_baselines() {
                   generic_packed_score_fallback->steps > static_cast<int>(result.steps.size()),
               "tic-tac-toe-4x4 should measure the generic packed_score accumulator fallback and "
               "keep the current specialized scorer when the fallback is larger");
+      const CandidateReport* generic_packed_score_aggressive_fallback =
+          find_candidate(result.rejected_candidates,
+                         "generic-packed-score-accumulator-aggressive-fallback");
+      require(generic_packed_score_aggressive_fallback != nullptr &&
+                  generic_packed_score_aggressive_fallback->steps >=
+                      static_cast<int>(result.steps.size()),
+              "tic-tac-toe-4x4 should measure the generic packed_score fallback together with "
+              "aggressive post-layout repacking without hiding a smaller listing");
+      const CandidateReport* generic_packed_score_stack_fallback =
+          find_candidate(result.rejected_candidates,
+                         "generic-packed-score-accumulator-stack-helper-fallback");
+      require(generic_packed_score_stack_fallback != nullptr &&
+                  generic_packed_score_stack_fallback->steps >=
+                      static_cast<int>(result.steps.size()),
+              "tic-tac-toe-4x4 should also measure the generic packed_score fallback together "
+              "with stack-resident helper entries without hiding a smaller listing");
+      const CandidateReport* generic_packed_score_stack_aggressive_fallback =
+          find_candidate(result.rejected_candidates,
+                         "generic-packed-score-accumulator-stack-helper-aggressive-fallback");
+      require(generic_packed_score_stack_aggressive_fallback != nullptr &&
+                  generic_packed_score_stack_aggressive_fallback->steps >=
+                      static_cast<int>(result.steps.size()),
+              "tic-tac-toe-4x4 should measure the generic packed_score fallback together with "
+              "stack-resident helper entries and aggressive post-layout repacking");
+      const SizeOpportunityReport* generic_packed_score_opportunity =
+          find_size_opportunity(result, "generic-packed-score-accumulator-fallback");
+      require(generic_packed_score_opportunity != nullptr &&
+                  generic_packed_score_opportunity->details.contains(
+                      "packedScoreFallbackFamily") &&
+                  generic_packed_score_opportunity->details.at("packedScoreFallbackFamily") ==
+                      "generic-expression-accumulator" &&
+                  generic_packed_score_opportunity->details.contains(
+                      "packedScoreFallbackSharedTailCapability") &&
+                  generic_packed_score_opportunity->details.at(
+                      "packedScoreFallbackSharedTailCapability") ==
+                      "generic-shared-returned-index-tail-available" &&
+                  generic_packed_score_opportunity->details.contains(
+                      "packedScoreFallbackDominantLoss") &&
+                  generic_packed_score_opportunity->details.at(
+                      "packedScoreFallbackDominantLoss") ==
+                      "selected-specialized-packed-line-pipeline-and-layout-still-smaller" &&
+                  generic_packed_score_opportunity->details.contains(
+                      "selectedPackedScoreHelper.pipelineShape") &&
+                  generic_packed_score_opportunity->details.at(
+                      "selectedPackedScoreHelper.pipelineShape") ==
+                      "packed-line-family-score" &&
+                  generic_packed_score_opportunity->details.contains(
+                      "selectedPackedScoreHelper.sharedTailTerms") &&
+                  generic_packed_score_opportunity->details.at(
+                      "selectedPackedScoreHelper.sharedTailTerms") == "4" &&
+                  generic_packed_score_opportunity->details.contains(
+                      "packedScoreFallbackMeasurementLimit") &&
+                  generic_packed_score_opportunity->details.contains(
+                      "packedScoreFallbackAction") &&
+                  generic_packed_score_opportunity->details.at(
+                      "packedScoreFallbackAction") ==
+                      "focus-on-value-aware-stack-register-scheduling-and-stack-preserving-helper-abi",
+              "tic-tac-toe-4x4 generic packed_score fallback size opportunity should explain "
+              "that generic shared-tail support exists but the selected specialized packed-line "
+              "pipeline is still smaller");
+      const SizeOpportunityReport* generic_packed_score_stack_opportunity =
+          find_size_opportunity(result, "generic-packed-score-accumulator-stack-helper-fallback");
+      require(generic_packed_score_stack_opportunity != nullptr &&
+                  generic_packed_score_stack_opportunity->details.contains(
+                      "packedScoreFallbackFamily") &&
+                  generic_packed_score_stack_opportunity->details.at(
+                      "packedScoreFallbackFamily") == "generic-expression-accumulator" &&
+                  generic_packed_score_stack_opportunity->details.contains(
+                      "packedScoreFallbackCombination") &&
+                  generic_packed_score_stack_opportunity->details.at(
+                      "packedScoreFallbackCombination") ==
+                      "stack-resident-temporaries-and-stack-argument-helper-entries" &&
+                  generic_packed_score_stack_opportunity->details.contains(
+                      "packedScoreFallbackAction"),
+              "tic-tac-toe-4x4 generic packed_score stack-entry fallback should carry the same "
+              "fallback attribution plus its stack-entry combination");
+      const SizeOpportunityReport* generic_packed_score_aggressive_opportunity =
+          find_size_opportunity(result, "generic-packed-score-accumulator-aggressive-fallback");
+      require(generic_packed_score_aggressive_opportunity != nullptr &&
+                  generic_packed_score_aggressive_opportunity->details.contains(
+                      "packedScoreFallbackPostLayoutCombination") &&
+                  generic_packed_score_aggressive_opportunity->details.at(
+                      "packedScoreFallbackPostLayoutCombination") ==
+                      "aggressive-post-layout-indirect-flow",
+              "tic-tac-toe-4x4 generic packed_score aggressive fallback should explain that it "
+              "was compared with post-layout indirect-flow repacking");
+      const SizeOpportunityReport* generic_packed_score_stack_aggressive_opportunity =
+          find_size_opportunity(
+              result, "generic-packed-score-accumulator-stack-helper-aggressive-fallback");
+      require(generic_packed_score_stack_aggressive_opportunity != nullptr &&
+                  generic_packed_score_stack_aggressive_opportunity->details.contains(
+                      "packedScoreFallbackCombination") &&
+                  generic_packed_score_stack_aggressive_opportunity->details.contains(
+                      "packedScoreFallbackPostLayoutCombination"),
+              "tic-tac-toe-4x4 generic packed_score stack-entry aggressive fallback should carry "
+              "both stack-entry and post-layout fallback attribution");
       const CandidateReport* rejected_dead_integer =
           find_candidate(result.rejected_candidates, "fractional-constant-selector-dead-int");
       require(rejected_dead_integer == nullptr,
@@ -928,6 +1024,37 @@ void example_sizes_match_typescript_baselines() {
                           .find("packed-line score accumulator helper:x,y") !=
                       std::string::npos &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPreserveDepthByCallee") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiPreserveDepthByCallee") ==
+                      "packed-line score accumulator helper:2" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiMaxPreserveDepth") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiMaxPreserveDepth") ==
+                      "2" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPreserveDepthBasis") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiPreserveDepthBasis") ==
+                      "live-caller-stack-inputs-after-nested-call" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPreservationCallSitesByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPreservationCallSitesByCallee") ==
+                      "packed-line score accumulator helper:2" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPreservationCallAddressesByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPreservationCallAddressesByCallee") ==
+                      "packed-line score accumulator helper:71,74" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPreservationSlotCrossingsByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPreservationSlotCrossingsByCallee") ==
+                      "packed-line score accumulator helper:4" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPreservationSlotCrossings") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPreservationSlotCrossings") == "4" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiSafetyProof") &&
                   candidate_score_zero->details.at("valueAwareCalleeAbiSafetyProof") ==
                       "prove-live-stack-inputs-survive-nested-callee-entry" &&
@@ -1110,6 +1237,34 @@ void example_sizes_match_typescript_baselines() {
                           .find("mark_one:x,y") != std::string::npos &&
                   mark_lines_helper->details.at("valueAwareCalleeAbiPreservationPlan")
                           .find("normalize:x,y") != std::string::npos &&
+                  mark_lines_helper->details.contains(
+                      "valueAwareCalleeAbiPreserveDepthByCallee") &&
+                  mark_lines_helper->details.at("valueAwareCalleeAbiPreserveDepthByCallee")
+                          .find("mark_one:2") != std::string::npos &&
+                  mark_lines_helper->details.at("valueAwareCalleeAbiPreserveDepthByCallee")
+                          .find("normalize:2") != std::string::npos &&
+                  mark_lines_helper->details.contains("valueAwareCalleeAbiMaxPreserveDepth") &&
+                  mark_lines_helper->details.at("valueAwareCalleeAbiMaxPreserveDepth") == "2" &&
+                  mark_lines_helper->details.contains(
+                      "valueAwareCalleeAbiPreservationCallSitesByCallee") &&
+                  mark_lines_helper->details.at(
+                      "valueAwareCalleeAbiPreservationCallSitesByCallee")
+                          .find("mark_one:3") != std::string::npos &&
+                  mark_lines_helper->details.at(
+                      "valueAwareCalleeAbiPreservationCallSitesByCallee")
+                          .find("normalize:1") != std::string::npos &&
+                  mark_lines_helper->details.contains(
+                      "valueAwareCalleeAbiPreservationSlotCrossingsByCallee") &&
+                  mark_lines_helper->details.at(
+                      "valueAwareCalleeAbiPreservationSlotCrossingsByCallee")
+                          .find("mark_one:6") != std::string::npos &&
+                  mark_lines_helper->details.at(
+                      "valueAwareCalleeAbiPreservationSlotCrossingsByCallee")
+                          .find("normalize:2") != std::string::npos &&
+                  mark_lines_helper->details.contains(
+                      "valueAwareCalleeAbiPreservationSlotCrossings") &&
+                  mark_lines_helper->details.at(
+                      "valueAwareCalleeAbiPreservationSlotCrossings") == "8" &&
                   mark_lines_helper->details.contains("valueAwareNestedCallLabels") &&
                   mark_lines_helper->details.at("valueAwareNestedCallLabels").find("mark_one") !=
                       std::string::npos &&

@@ -1467,6 +1467,8 @@ int count_expression_calls_in_program(const V2Program& program, const std::strin
 
 bool expression_preserves_previous_x_as_y_for_stack_analysis(const Expression& expression);
 bool expression_preserves_previous_x_as_y_for_packed_line(const Expression& expression);
+bool expression_equals(const Expression& left, const Expression& right);
+bool analysis_simple_stack_load(const Expression& expression);
 std::optional<std::string> proc_return_x_variable_for_analysis(const V2Rule& rule);
 
 bool expression_contains_packed_score_call_for_accumulator(const Expression& expression) {
@@ -2134,6 +2136,85 @@ int x_param_packed_score_accumulator_eligible_call_count_in_program(const V2Prog
   return count;
 }
 
+bool shared_add_sub_tail_operands_syntax(const Expression& first, const Expression& second) {
+  const auto matches = [](const Expression& add, const Expression& sub) {
+    if (add.kind != "binary" || add.op != "+" || sub.kind != "binary" || sub.op != "-" ||
+        add.left == nullptr || add.right == nullptr || sub.left == nullptr ||
+        sub.right == nullptr) {
+      return false;
+    }
+    return expression_equals(*add.left, *sub.left) &&
+           expression_equals(*add.right, *sub.right) &&
+           analysis_simple_stack_load(*add.left) && analysis_simple_stack_load(*add.right);
+  };
+  return matches(first, second) || matches(second, first);
+}
+
+int x_param_packed_score_shared_tail_eligible_call_count_in_rule(
+    const V2Rule& rule, const std::map<std::string, std::string>& return_x_by_rule) {
+  if (rule.body.size() < 5U)
+    return 0;
+  int prefix_count = 0;
+  std::optional<std::string> target =
+      packed_score_sequence_start_syntax(rule.body.front(), prefix_count);
+  if (!target.has_value() || prefix_count <= 0)
+    return 0;
+
+  std::size_t tail_start = 1U;
+  while (tail_start + 4U < rule.body.size()) {
+    const int next_count =
+        packed_score_sequence_accumulator_syntax_count(rule.body.at(tail_start), *target);
+    if (next_count <= 0)
+      return 0;
+    prefix_count += next_count;
+    ++tail_start;
+  }
+  if (prefix_count < 2 || tail_start + 4U != rule.body.size())
+    return 0;
+
+  const V2Statement& first_call = rule.body.at(tail_start);
+  const V2Statement& first_score = rule.body.at(tail_start + 1U);
+  const V2Statement& second_call = rule.body.at(tail_start + 2U);
+  const V2Statement& second_score = rule.body.at(tail_start + 3U);
+  if (first_call.kind != "v2_invoke" || second_call.kind != "v2_invoke" ||
+      !first_call.name.has_value() || !second_call.name.has_value() ||
+      *first_call.name != *second_call.name || first_call.args.size() != 1U ||
+      second_call.args.size() != 1U || !first_score.target.has_value() ||
+      !second_score.target.has_value() || *first_score.target != *target ||
+      *second_score.target != *target) {
+    return 0;
+  }
+  const auto return_it = return_x_by_rule.find(*first_call.name);
+  if (return_it == return_x_by_rule.end())
+    return 0;
+  const std::optional<XParamPackedScoreAccumulatorSyntaxAnalysis> first_analysis =
+      x_param_packed_score_accumulator_syntax_analysis(first_score, *target, return_it->second);
+  const std::optional<XParamPackedScoreAccumulatorSyntaxAnalysis> second_analysis =
+      x_param_packed_score_accumulator_syntax_analysis(second_score, *target, return_it->second);
+  if (!first_analysis.has_value() || !second_analysis.has_value() ||
+      first_analysis->call_count != 1 || second_analysis->call_count != 1)
+    return 0;
+
+  try {
+    const Expression first_argument = parse_expression(first_call.args.front(), first_call.line);
+    const Expression second_argument = parse_expression(second_call.args.front(), second_call.line);
+    if (!shared_add_sub_tail_operands_syntax(first_argument, second_argument))
+      return 0;
+  } catch (const std::exception&) {
+    return 0;
+  }
+  return prefix_count + first_analysis->call_count + second_analysis->call_count;
+}
+
+int x_param_packed_score_shared_tail_eligible_call_count_in_program(const V2Program& program) {
+  int count = 0;
+  const std::map<std::string, std::string> return_x_by_rule =
+      packed_score_x_param_return_names_for_accumulator_syntax(program);
+  for (const V2Rule& rule : program.rules)
+    count += x_param_packed_score_shared_tail_eligible_call_count_in_rule(rule, return_x_by_rule);
+  return count;
+}
+
 int packed_score_accumulator_eligible_call_count_in_program(const V2Program& program) {
   return packed_score_accumulator_regular_eligible_call_count_in_program(program) +
          x_param_packed_score_accumulator_eligible_call_count_in_program(program);
@@ -2141,7 +2222,8 @@ int packed_score_accumulator_eligible_call_count_in_program(const V2Program& pro
 
 bool packed_score_accumulator_helper_has_cost_effective_family(const V2Program& program) {
   return packed_score_accumulator_regular_eligible_call_count_in_program(program) >= 3 ||
-         x_param_packed_score_accumulator_eligible_call_count_in_program(program) >= 3;
+         x_param_packed_score_accumulator_eligible_call_count_in_program(program) >= 3 ||
+         x_param_packed_score_shared_tail_eligible_call_count_in_program(program) >= 4;
 }
 
 std::set<std::string> collect_value_function_names(const V2Program& program) {
@@ -28416,7 +28498,8 @@ struct XParamPackedScoreAccumulationPlan {
 std::optional<XParamPackedScoreAccumulationPlan>
 build_x_param_packed_score_accumulation_plan(LoweringContext& context, const Expression& argument,
                                              const std::string& block,
-                                             const V2Statement& score_assign) {
+                                             const V2Statement& score_assign,
+                                             bool require_current_target_in_x = true) {
   const auto lowering_it = context.x_param_procs.find(block);
   if (lowering_it == context.x_param_procs.end())
     return std::nullopt;
@@ -28442,7 +28525,7 @@ build_x_param_packed_score_accumulation_plan(LoweringContext& context, const Exp
                                                 *return_x);
   if (!accumulator.has_value())
     return std::nullopt;
-  if (!x_holds_identifier(context, *score_assign.target))
+  if (require_current_target_in_x && !x_holds_identifier(context, *score_assign.target))
     return std::nullopt;
   if (!expression_preserves_previous_x_as_y_for_packed_line(accumulator->line) ||
       expression_contains_identifier(accumulator->line, *score_assign.target))
@@ -28561,6 +28644,233 @@ bool lower_x_param_proc_packed_score_accumulation_run(LoweringContext& context,
     }
   }
   return false;
+}
+
+struct XParamPackedScoreSharedTailRule {
+  std::string target;
+  std::string block;
+  std::vector<PackedScoreTerm> prefix_terms;
+  std::optional<Expression> initial;
+  XParamPackedScoreAccumulationPlan first;
+  XParamPackedScoreAccumulationPlan second;
+  Expression shared;
+  Expression partial;
+  bool first_negates_partial = false;
+  bool second_negates_partial = false;
+  int first_argument_line = 0;
+  int second_argument_line = 0;
+  int line = 0;
+};
+
+struct SharedAddSubTailOperands {
+  Expression shared;
+  Expression partial;
+  bool first_negates_partial = false;
+  bool second_negates_partial = false;
+};
+
+std::optional<SharedAddSubTailOperands>
+shared_add_sub_tail_operands(const Expression& first, const Expression& second) {
+  if (const std::optional<std::pair<Expression, Expression>> operands =
+          shared_add_sub_operands(first, second)) {
+    return SharedAddSubTailOperands{
+        .shared = operands->first,
+        .partial = operands->second,
+        .first_negates_partial = false,
+        .second_negates_partial = true,
+    };
+  }
+  if (const std::optional<std::pair<Expression, Expression>> operands =
+          shared_add_sub_operands(second, first)) {
+    return SharedAddSubTailOperands{
+        .shared = operands->first,
+        .partial = operands->second,
+        .first_negates_partial = true,
+        .second_negates_partial = false,
+    };
+  }
+  return std::nullopt;
+}
+
+std::optional<XParamPackedScoreAccumulationPlan>
+build_x_param_packed_score_tail_plan_for_rule(LoweringContext& context,
+                                              const V2Statement& call,
+                                              const V2Statement& score_assign) {
+  if (call.kind != "v2_invoke" || !call.name.has_value() || call.args.size() != 1U)
+    return std::nullopt;
+  const Expression argument = parse_expression(call.args.front(), call.line);
+  return build_x_param_packed_score_accumulation_plan(
+      context, argument, *call.name, score_assign, /*require_current_target_in_x=*/false);
+}
+
+std::optional<XParamPackedScoreSharedTailRule>
+x_param_packed_score_shared_tail_rule(LoweringContext& context, const V2Rule& rule) {
+  if (!context.use_packed_score_accumulator_helper || rule.body.size() < 5U)
+    return std::nullopt;
+
+  std::vector<PackedScoreTerm> prefix_terms;
+  std::optional<StackAccumulatorSequenceStart> sequence_start =
+      packed_score_sequence_start_terms(context, rule.body.front(), prefix_terms);
+  if (!sequence_start.has_value() || prefix_terms.empty())
+    return std::nullopt;
+
+  std::size_t tail_start = 1U;
+  while (tail_start + 4U < rule.body.size()) {
+    if (!collect_packed_score_sequence_accumulator_terms(
+            context, rule.body.at(tail_start), sequence_start->target, prefix_terms,
+            sequence_start->initial)) {
+      return std::nullopt;
+    }
+    ++tail_start;
+  }
+  if (tail_start + 4U != rule.body.size())
+    return std::nullopt;
+
+  const V2Statement& first_call = rule.body.at(tail_start);
+  const V2Statement& first_score = rule.body.at(tail_start + 1U);
+  const V2Statement& second_call = rule.body.at(tail_start + 2U);
+  const V2Statement& second_score = rule.body.at(tail_start + 3U);
+  if (!first_call.name.has_value() || !second_call.name.has_value() ||
+      *first_call.name != *second_call.name || !first_score.target.has_value() ||
+      !second_score.target.has_value() || *first_score.target != sequence_start->target ||
+      *second_score.target != sequence_start->target) {
+    return std::nullopt;
+  }
+
+  std::optional<XParamPackedScoreAccumulationPlan> first_plan =
+      build_x_param_packed_score_tail_plan_for_rule(context, first_call, first_score);
+  std::optional<XParamPackedScoreAccumulationPlan> second_plan =
+      build_x_param_packed_score_tail_plan_for_rule(context, second_call, second_score);
+  if (!first_plan.has_value() || !second_plan.has_value())
+    return std::nullopt;
+  if (!first_plan->prefix_terms.empty() || !second_plan->prefix_terms.empty() ||
+      first_plan->accumulator_prelude.has_value() ||
+      second_plan->accumulator_prelude.has_value()) {
+    return std::nullopt;
+  }
+  if (first_plan->return_x != second_plan->return_x ||
+      first_plan->helper_label != second_plan->helper_label ||
+      first_plan->helper_accumulates != second_plan->helper_accumulates ||
+      !expression_equals(first_plan->index, second_plan->index)) {
+    return std::nullopt;
+  }
+
+  const Expression first_argument = parse_expression(first_call.args.front(), first_call.line);
+  const Expression second_argument = parse_expression(second_call.args.front(), second_call.line);
+  const std::optional<SharedAddSubTailOperands> operands =
+      shared_add_sub_tail_operands(first_argument, second_argument);
+  if (!operands.has_value())
+    return std::nullopt;
+
+  return XParamPackedScoreSharedTailRule{
+      .target = sequence_start->target,
+      .block = *first_call.name,
+      .prefix_terms = std::move(prefix_terms),
+      .initial = std::move(sequence_start->initial),
+      .first = std::move(*first_plan),
+      .second = std::move(*second_plan),
+      .shared = operands->shared,
+      .partial = operands->partial,
+      .first_negates_partial = operands->first_negates_partial,
+      .second_negates_partial = operands->second_negates_partial,
+      .first_argument_line = first_call.line,
+      .second_argument_line = second_call.line,
+      .line = rule.line,
+  };
+}
+
+bool lower_x_param_packed_score_shared_tail_rule(LoweringContext& context, const V2Rule& rule) {
+  const std::optional<XParamPackedScoreSharedTailRule> match =
+      x_param_packed_score_shared_tail_rule(context, rule);
+  if (!match.has_value())
+    return false;
+
+  const std::string helper = packed_score_accumulator_helper_label(context);
+  const auto emit_initial = [&]() {
+    if (match->initial.has_value())
+      return lower_expression_to_x(context, *match->initial);
+    context.emitter.emit_number("0");
+    if (!context.emitter.items.empty())
+      context.emitter.items.back().comment = "packed_score accumulator zero";
+    return true;
+  };
+  if (!lower_stack_accumulator_terms_to_x_with_initial<PackedScoreTerm>(
+          match->prefix_terms, emit_initial,
+          [&](const PackedScoreTerm& term) {
+            return emit_packed_score_accumulator_term(context, helper, term);
+          })) {
+    return false;
+  }
+  mark_current_x(context, match->target);
+  context.emitter.current_x_known_zero = false;
+
+  const std::string tail = context.emitter.fresh_label("x_param_packed_score_shared_tail");
+  const auto emit_tail_call = [&](const XParamPackedScoreAccumulationPlan& plan, int line,
+                                  bool negate_partial) -> bool {
+    if (!lower_expression_preserving_previous_x_as_y(context, plan.line, line))
+      return false;
+    if (!lower_expression_preserving_previous_x_as_y(context, match->partial, line))
+      return false;
+    if (negate_partial)
+      context.emitter.emit_op(0x0b, "/-/", "x-param packed_score negative shared-tail partial",
+                              line);
+    context.emitter.emit_jump(0x53, "ПП", tail, "x-param packed_score shared returned-index tail",
+                              line);
+    mark_current_x(context, match->target);
+    context.emitter.current_x_known_zero = false;
+    return true;
+  };
+
+  if (!emit_tail_call(match->first, match->first_argument_line, match->first_negates_partial))
+    return false;
+  if (!emit_tail_call(match->second, match->second_argument_line, match->second_negates_partial))
+    return false;
+
+  context.emitter.emit_op(0x52, "В/О", "x-param packed_score shared-tail return", match->line);
+  context.emitter.emit_label(tail);
+  if (!lower_expression_preserving_previous_x_as_y(context, match->shared, match->line))
+    return false;
+  context.emitter.emit_op(0x10, "+", "x-param packed_score shared returned-index argument",
+                          match->line);
+  compile_block_call(context, match->block, match->line);
+  if (!lower_expression_preserving_previous_x_as_y(context, match->first.index, match->line))
+    return false;
+  context.emitter.emit_jump(0x53, "ПП", match->first.helper_label,
+                            "packed_score accumulator helper", match->line);
+  if (context.stack_only_state_fields.contains(match->target)) {
+    mark_current_x(context, match->target);
+    context.emitter.current_x_known_zero = false;
+  } else {
+    emit_store(context, match->target, "set " + match->target);
+  }
+  context.emitter.emit_op(0x52, "В/О", "x-param packed_score shared-tail helper return",
+                          match->line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "x-param-packed-score-shared-returned-index-tail",
+      .detail = "Shared the returned-index packed_score() tail for " +
+                expression_to_source(add_expression(match->shared, match->partial)) + " and " +
+                expression_to_source(subtract_expression(match->shared, match->partial)) + " in " +
+                rule.name + ".",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-score-sequence-stack-accumulator",
+      .detail = "Lowered " + std::to_string(match->prefix_terms.size()) +
+                " packed_score() terms before the shared returned-index tail in " + rule.name +
+                " as one stack accumulator pipeline.",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = "x-param-packed-score-line-stack-accumulate",
+      .detail = "Loaded the first packed_score line argument before the shared returned-index "
+                "tail in " +
+                rule.name + ". The accumulator helper consumed the parked score.",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = "x-param-packed-score-line-stack-accumulate",
+      .detail = "Loaded the second packed_score line argument before the shared returned-index "
+                "tail in " +
+                rule.name + ". The accumulator helper consumed the parked score.",
+  });
+  return true;
 }
 
 bool lower_single_bit_mask_op_assignment(LoweringContext& context, const V2Statement& statement,
@@ -30659,6 +30969,9 @@ bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
     return true;
 
   if (lower_packed_line_family_score_rule(context, rule))
+    return true;
+
+  if (lower_x_param_packed_score_shared_tail_rule(context, rule))
     return true;
 
   if (context.packed_line_family_mutating_selector_update_check_tail &&
@@ -46540,7 +46853,11 @@ void append_candidate_report_once(std::vector<CandidateReport>& reports,
 bool should_report_nonwinning_candidate(std::string_view name) {
   return name == "packed-score-accumulator-helper" ||
          name == "packed-score-accumulator-aggressive-post-layout" ||
+         name == "packed-score-accumulator-stack-helper-entries" ||
          name == "generic-packed-score-accumulator-fallback" ||
+         name == "generic-packed-score-accumulator-aggressive-fallback" ||
+         name == "generic-packed-score-accumulator-stack-helper-fallback" ||
+         name == "generic-packed-score-accumulator-stack-helper-aggressive-fallback" ||
          name == "packed-line-family-update-check-tail" ||
          name == "packed-line-family-mutating-selector-update-check-tail" ||
          name == "packed-line-family-borrowed-mutating-selector-update-check-tail" ||
@@ -47968,6 +48285,62 @@ bool dead_integer_fractional_selector_direct_jump_use_proved(const ResolvedStep&
 
 constexpr int kDeadIntegerFractionalEraseOpcode = 0x35;  // К {x}
 
+bool dead_integer_fractional_selector_conditional_flow_opcode(int opcode) {
+  if (opcode < 0)
+    return false;
+  const int offset = opcode & 0x0f;
+  if (offset > 0x0e)
+    return false;
+  const int base = opcode - offset;
+  return base == 0x70 || base == 0x90 || base == 0xc0 || base == 0xe0;
+}
+
+std::optional<std::size_t> unique_resolved_step_index_by_address(
+    const std::vector<ResolvedStep>& steps, int address) {
+  std::optional<std::size_t> found;
+  for (std::size_t index = 0; index < steps.size(); ++index) {
+    if (steps.at(index).address != address)
+      continue;
+    if (found.has_value())
+      return std::nullopt;
+    found = index;
+  }
+  return found;
+}
+
+bool resolved_step_erases_dead_integer_fractional_selector(
+    const std::vector<ResolvedStep>& steps, std::optional<std::size_t> index) {
+  return index.has_value() && steps.at(*index).opcode == kDeadIntegerFractionalEraseOpcode;
+}
+
+bool dead_integer_fractional_selector_conditional_flow_use_proved(
+    const std::vector<ResolvedStep>& steps, std::size_t conditional_index, int register_index,
+    std::optional<int> selector_target) {
+  if (conditional_index >= steps.size())
+    return false;
+  const ResolvedStep& step = steps.at(conditional_index);
+  if (!dead_integer_fractional_selector_conditional_flow_opcode(step.opcode))
+    return false;
+  const std::optional<std::string> register_name = indirect_flow_register_for_opcode(step.opcode);
+  if (!register_name.has_value() ||
+      *register_name != core::register_name_for_index(register_index)) {
+    return false;
+  }
+  const std::optional<PreloadedSelectorAnnotation> annotation =
+      preloaded_selector_annotation_from_comment(step.comment, *register_name);
+  if (!annotation.has_value())
+    return false;
+  if (selector_target.has_value() && annotation->target != *selector_target)
+    return false;
+
+  const std::optional<std::size_t> branch =
+      unique_resolved_step_index_by_address(steps, annotation->target);
+  const std::optional<std::size_t> fallthrough =
+      unique_resolved_step_index_by_address(steps, step.address + 1);
+  return resolved_step_erases_dead_integer_fractional_selector(steps, branch) &&
+         resolved_step_erases_dead_integer_fractional_selector(steps, fallthrough);
+}
+
 std::string dead_integer_fractional_selector_next_step_name(const ResolvedStep& step) {
   if (!step.mnemonic.empty())
     return step.mnemonic;
@@ -48019,6 +48392,26 @@ std::string dead_integer_fractional_selector_rejection_context(
   if (selector_target.has_value())
     parts.push_back("selectorTarget=" +
                     dead_integer_fractional_selector_address_text(*selector_target));
+  if (consumer_step != nullptr && consumer_step->opcode >= 0xa0 &&
+      consumer_step->opcode <= 0xae) {
+    if (selector_target.has_value()) {
+      parts.push_back("calleeTarget=" +
+                      dead_integer_fractional_selector_address_text(*selector_target));
+    }
+    parts.push_back("returnSite=" +
+                    dead_integer_fractional_selector_address_text(consumer_step->address + 1));
+    parts.push_back("xLivenessProofScope=indirect-call-return");
+  }
+  if (consumer_step != nullptr &&
+      dead_integer_fractional_selector_next_step_name(*consumer_step).rfind("К x", 0) == 0) {
+    if (selector_target.has_value()) {
+      parts.push_back("branchTarget=" +
+                      dead_integer_fractional_selector_address_text(*selector_target));
+    }
+    parts.push_back("fallthroughSite=" +
+                    dead_integer_fractional_selector_address_text(consumer_step->address + 1));
+    parts.push_back("xLivenessProofScope=conditional-indirect-flow");
+  }
   try {
     const std::optional<std::pair<std::string, int>> natural =
         natural_fractional_selector_preload_value(normalize_number_key(source));
@@ -48167,8 +48560,17 @@ std::optional<std::string> dead_integer_fractional_selector_uses_rejection_reaso
     const int source_register = steps.at(index).opcode - 0x60;
     const std::optional<std::string> carrier_value =
         dead_integer_fractional_selector_carrier_from_comment(steps.at(index).comment);
+    const auto target_it = selector_targets.find(normalized_source);
+    const std::optional<int> selector_target =
+        target_it == selector_targets.end() ? std::nullopt
+                                            : std::optional<int>(target_it->second);
     if (dead_integer_fractional_selector_direct_jump_use_proved(steps.at(index + 1U),
                                                                 source_register)) {
+      proved_values.insert(normalized_source);
+      continue;
+    }
+    if (dead_integer_fractional_selector_conditional_flow_use_proved(
+            steps, index + 1U, source_register, selector_target)) {
       proved_values.insert(normalized_source);
       continue;
     }
@@ -48178,10 +48580,6 @@ std::optional<std::string> dead_integer_fractional_selector_uses_rejection_reaso
       proved_values.insert(normalized_source);
       continue;
     }
-    const auto target_it = selector_targets.find(normalized_source);
-    const std::optional<int> selector_target =
-        target_it == selector_targets.end() ? std::nullopt
-                                            : std::optional<int>(target_it->second);
     if (const std::optional<int> store = direct_register_store_index(steps.at(index + 1U).opcode);
         store.has_value()) {
       if (const std::optional<std::string> reason =
@@ -49584,6 +49982,65 @@ void attach_packed_score_accumulator_helper_details(
   }
 }
 
+const SizeHelperSummaryReport* size_report_helper_by_label(
+    const std::vector<SizeHelperSummaryReport>& helpers, const std::string& label) {
+  const auto it = std::find_if(helpers.begin(), helpers.end(),
+                               [&](const SizeHelperSummaryReport& helper) {
+                                 return helper.label == label;
+                               });
+  return it == helpers.end() ? nullptr : &*it;
+}
+
+void attach_generic_packed_score_fallback_details(
+    std::map<std::string, std::string>& details, const CandidateReport& candidate,
+    int current_steps, const std::vector<SizeHelperSummaryReport>& helpers) {
+  if (candidate.variant != "generic-packed-score-accumulator-fallback" &&
+      candidate.variant != "generic-packed-score-accumulator-aggressive-fallback" &&
+      candidate.variant != "generic-packed-score-accumulator-stack-helper-fallback" &&
+      candidate.variant != "generic-packed-score-accumulator-stack-helper-aggressive-fallback")
+    return;
+  const SizeHelperSummaryReport* selected =
+      size_report_helper_by_label(helpers, "packed-line score accumulator helper");
+  details["packedScoreFallbackFamily"] = "generic-expression-accumulator";
+  if (candidate.variant == "generic-packed-score-accumulator-stack-helper-fallback" ||
+      candidate.variant == "generic-packed-score-accumulator-stack-helper-aggressive-fallback") {
+    details["packedScoreFallbackCombination"] =
+        "stack-resident-temporaries-and-stack-argument-helper-entries";
+  }
+  if (candidate.variant == "generic-packed-score-accumulator-aggressive-fallback" ||
+      candidate.variant == "generic-packed-score-accumulator-stack-helper-aggressive-fallback") {
+    details["packedScoreFallbackPostLayoutCombination"] =
+        "aggressive-post-layout-indirect-flow";
+  }
+  details["packedScoreFallbackComparedAgainst"] = "packed-line-family-score";
+  details["packedScoreFallbackDeltaCells"] = std::to_string(candidate.steps - current_steps);
+  details["packedScoreFallbackLossModel"] =
+      "measured-generic-candidate-minus-selected-packed-line-pipeline";
+  details["packedScoreFallbackSharedTailCapability"] =
+      "generic-shared-returned-index-tail-available";
+  details["packedScoreFallbackDominantLoss"] =
+      "selected-specialized-packed-line-pipeline-and-layout-still-smaller";
+  details["packedScoreFallbackMeasurementLimit"] =
+      "rejected-candidate-report-retains-size-delta-not-candidate-optimization-breakdown";
+  details["packedScoreFallbackAction"] =
+      "focus-on-value-aware-stack-register-scheduling-and-stack-preserving-helper-abi";
+  if (selected == nullptr)
+    return;
+  details["selectedPackedScoreHelperTotalCells"] = std::to_string(selected->total_cells);
+  details["selectedPackedScoreHelperBodyCells"] = std::to_string(selected->body_cells);
+  details["selectedPackedScoreHelperCallSiteCells"] =
+      std::to_string(selected->call_site_cells);
+  details["selectedPackedScoreHelperCallOccurrences"] =
+      std::to_string(selected->call_occurrences);
+  for (const std::string& key : {"pipelineShape", "accumulatorTerms", "sharedTailTerms",
+                                 "bodyCellsPerAccumulatorTerm",
+                                 "pow10ScaleLineValuePolicy"}) {
+    const auto detail_it = selected->details.find(key);
+    if (detail_it != selected->details.end())
+      details["selectedPackedScoreHelper." + key] = detail_it->second;
+  }
+}
+
 SizeAttributionReport build_size_attribution_report(
     const std::vector<ResolvedStep>& steps,
     const std::vector<CandidateReport>& rejected_candidates,
@@ -50247,6 +50704,7 @@ SizeAttributionReport build_size_attribution_report(
         std::map<std::string, std::set<std::string>> call_preservation_inputs_by_label;
         std::set<std::string> call_preservation_input_names;
         std::map<std::string, std::set<int>> call_preservation_recall_addresses_by_name;
+        std::map<std::string, std::set<int>> call_preservation_call_addresses_by_label;
         std::vector<std::string> call_preservation_site_parts;
         std::set<std::string> call_argument_input_names;
         std::vector<std::string> call_argument_site_parts;
@@ -50276,6 +50734,8 @@ SizeAttributionReport build_size_attribution_report(
                 continue;
               call_preservation_input_names.insert(name);
               call_preservation_inputs_by_label[call_site.label].insert(name);
+              call_preservation_call_addresses_by_label[call_site.label].insert(
+                  call_site.address);
               call_preservation_site_parts.push_back(
                   call_site.label + "@" + safe_format_label_address(call_site.address) + ":" +
                   name + "@" + join_strings(recall_addresses, "/"));
@@ -50362,9 +50822,15 @@ SizeAttributionReport build_size_attribution_report(
           std::vector<std::string> callee_mutating_cell_parts;
           std::vector<std::string> callee_mutating_opcode_parts;
           std::vector<std::string> callee_abi_preservation_parts;
+          std::vector<std::string> callee_abi_preserve_depth_parts;
+          std::vector<std::string> callee_abi_preservation_call_site_parts;
+          std::vector<std::string> callee_abi_preservation_call_address_parts;
+          std::vector<std::string> callee_abi_preservation_slot_crossing_parts;
           std::vector<std::string> callee_abi_refactor_targets;
           bool all_required_callees_stack_preserving = !call_preservation_inputs_by_label.empty();
           bool saw_stack_mutating_required_callee = false;
+          int callee_abi_max_preserve_depth = 0;
+          int callee_abi_preservation_slot_crossings = 0;
           callee_effect_parts.reserve(call_preservation_inputs_by_label.size());
           for (const auto& [label, inputs] : call_preservation_inputs_by_label) {
             const HelperStackEffectSummary effect = helper_stack_effect_summary(label);
@@ -50384,6 +50850,31 @@ SizeAttributionReport build_size_attribution_report(
               const std::string input_list =
                   join_strings(std::vector<std::string>(inputs.begin(), inputs.end()), ",");
               callee_abi_preservation_parts.push_back(label + ":" + input_list);
+              const int preserve_depth = static_cast<int>(inputs.size());
+              callee_abi_preserve_depth_parts.push_back(label + ":" +
+                                                        std::to_string(preserve_depth));
+              callee_abi_max_preserve_depth =
+                  std::max(callee_abi_max_preserve_depth, preserve_depth);
+              const auto call_addresses_it =
+                  call_preservation_call_addresses_by_label.find(label);
+              const int call_site_count =
+                  call_addresses_it == call_preservation_call_addresses_by_label.end()
+                      ? 0
+                      : static_cast<int>(call_addresses_it->second.size());
+              callee_abi_preservation_call_site_parts.push_back(
+                  label + ":" + std::to_string(call_site_count));
+              if (call_addresses_it != call_preservation_call_addresses_by_label.end()) {
+                std::vector<std::string> formatted_addresses;
+                formatted_addresses.reserve(call_addresses_it->second.size());
+                for (const int address : call_addresses_it->second)
+                  formatted_addresses.push_back(safe_format_label_address(address));
+                callee_abi_preservation_call_address_parts.push_back(
+                    label + ":" + join_strings(formatted_addresses, ","));
+              }
+              const int slot_crossings = preserve_depth * call_site_count;
+              callee_abi_preservation_slot_crossings += slot_crossings;
+              callee_abi_preservation_slot_crossing_parts.push_back(
+                  label + ":" + std::to_string(slot_crossings));
               callee_abi_refactor_targets.push_back(label);
             }
           }
@@ -50409,6 +50900,20 @@ SizeAttributionReport build_size_attribution_report(
                   join_strings(callee_abi_refactor_targets, ",");
               helper.details["valueAwareCalleeAbiPreservationPlan"] =
                   join_strings(callee_abi_preservation_parts, ";");
+              helper.details["valueAwareCalleeAbiPreserveDepthByCallee"] =
+                  join_strings(callee_abi_preserve_depth_parts, ";");
+              helper.details["valueAwareCalleeAbiMaxPreserveDepth"] =
+                  std::to_string(callee_abi_max_preserve_depth);
+              helper.details["valueAwareCalleeAbiPreserveDepthBasis"] =
+                  "live-caller-stack-inputs-after-nested-call";
+              helper.details["valueAwareCalleeAbiPreservationCallSitesByCallee"] =
+                  join_strings(callee_abi_preservation_call_site_parts, ";");
+              helper.details["valueAwareCalleeAbiPreservationCallAddressesByCallee"] =
+                  join_strings(callee_abi_preservation_call_address_parts, ";");
+              helper.details["valueAwareCalleeAbiPreservationSlotCrossingsByCallee"] =
+                  join_strings(callee_abi_preservation_slot_crossing_parts, ";");
+              helper.details["valueAwareCalleeAbiPreservationSlotCrossings"] =
+                  std::to_string(callee_abi_preservation_slot_crossings);
               helper.details["valueAwareCalleeAbiSafetyProof"] =
                   "prove-live-stack-inputs-survive-nested-callee-entry";
               helper.details["valueAwareCalleeAbiImplementationStatus"] =
@@ -51102,6 +51607,8 @@ SizeAttributionReport build_size_attribution_report(
       details.emplace("savingsAggregation", "alternative-candidate");
     const std::string blocker_kind = size_opportunity_blocker_kind(candidate);
     attach_rejected_candidate_size_details(details, candidate, current_steps, blocker_kind);
+    attach_generic_packed_score_fallback_details(details, candidate, current_steps,
+                                                 report.helpers);
     int opportunity_savings = current_steps - candidate.steps;
     int opportunity_candidate_steps = candidate.steps;
     if (const auto net_lower_bound_it =
@@ -53504,6 +54011,44 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         "generic-packed-score-accumulator-fallback",
         "Compared generic packed_score() accumulator lowering against specialized score lowering",
         CandidateGate::SizeRescue);
+    if (allow_aggressive_post_layout) {
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.packed_score_accumulator_helpers = true;
+            candidate_options.disable_packed_line_family_score_accumulator = true;
+            candidate_options.aggressive_post_layout_indirect_flow = true;
+          },
+          "generic-packed-score-accumulator-aggressive-fallback",
+          "Compared generic packed_score() accumulator lowering plus proven post-layout "
+          "indirect-flow repacking against specialized score lowering",
+          CandidateGate::SizeRescue);
+    }
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.packed_score_accumulator_helpers = true;
+          candidate_options.disable_packed_line_family_score_accumulator = true;
+          candidate_options.stack_resident_temps = true;
+          candidate_options.stack_argument_helper_entries = true;
+        },
+        "generic-packed-score-accumulator-stack-helper-fallback",
+        "Compared generic packed_score() accumulator lowering plus stack-resident helper entries "
+        "against specialized score lowering",
+        CandidateGate::SizeRescue);
+    if (allow_aggressive_post_layout) {
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.packed_score_accumulator_helpers = true;
+            candidate_options.disable_packed_line_family_score_accumulator = true;
+            candidate_options.stack_resident_temps = true;
+            candidate_options.stack_argument_helper_entries = true;
+            candidate_options.aggressive_post_layout_indirect_flow = true;
+          },
+          "generic-packed-score-accumulator-stack-helper-aggressive-fallback",
+          "Compared generic packed_score() accumulator lowering plus stack-resident helper "
+          "entries and proven post-layout indirect-flow repacking against specialized score "
+          "lowering",
+          CandidateGate::SizeRescue);
+    }
   }
   for (const std::vector<std::string>& names :
        discover_packed_counter_stripe_variant_names(source)) {
@@ -53711,6 +54256,17 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       "stack-resident-helper-entries",
       "Kept temporaries stack-resident and entered eligible shared helpers through their "
       "stack-argument ABI");
+  if (may_use_packed_score_accumulator) {
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.stack_resident_temps = true;
+          candidate_options.stack_argument_helper_entries = true;
+          candidate_options.packed_score_accumulator_helpers = true;
+        },
+        "packed-score-accumulator-stack-helper-entries",
+        "Combined packed_score accumulator helpers with stack-resident temporaries and "
+        "stack-argument helper entries");
+  }
   add_candidate(
       [](CompileOptions& candidate_options) {
         candidate_options.stack_resident_temps = true;

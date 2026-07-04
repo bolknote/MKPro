@@ -191,6 +191,20 @@ ResolvedStep resolved_step_with_mnemonic(int opcode, std::string mnemonic, std::
   return step;
 }
 
+ResolvedStep resolved_step_at(int address, int opcode, std::string comment) {
+  ResolvedStep step = resolved_step(opcode, std::move(comment));
+  step.address = address;
+  return step;
+}
+
+ResolvedStep resolved_step_with_mnemonic_at(int address, int opcode, std::string mnemonic,
+                                            std::string comment) {
+  ResolvedStep step = resolved_step_with_mnemonic(opcode, std::move(mnemonic),
+                                                 std::move(comment));
+  step.address = address;
+  return step;
+}
+
 std::string indirect_target_comment(const std::string& register_name, const std::string& value,
                                     int target) {
   return "preloaded R" + register_name + "=" + value + " indirect-target=" +
@@ -1334,6 +1348,55 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
           "dead-integer fractional selector elision should accept a proved direct indirect jump "
           "that consumes the integer part only as an address");
 
+  int conditional_address = 11;
+  while (conditional_address == *direct_dead_integer_target ||
+         conditional_address + 1 == *direct_dead_integer_target) {
+    ++conditional_address;
+  }
+  const int conditional_fallthrough_address = conditional_address + 1;
+  int conditional_recall_address = 90;
+  while (conditional_recall_address == conditional_address ||
+         conditional_recall_address == conditional_fallthrough_address ||
+         conditional_recall_address == *direct_dead_integer_target) {
+    --conditional_recall_address;
+  }
+  CompileResult direct_dead_integer_conditional_result = direct_dead_integer_jump_result;
+  direct_dead_integer_conditional_result.steps = {
+      resolved_step_with_mnemonic_at(
+          conditional_recall_address, 0x69, "П->X 9",
+          "preload const 3.123456; fractional selector source 0.123456"),
+      resolved_step_with_mnemonic_at(
+          conditional_address, 0xe9, "К x=0 9",
+          indirect_target_comment("9", "3.123456", *direct_dead_integer_target)),
+      resolved_step_at(conditional_fallthrough_address, 0x35, "frac fallthrough"),
+      resolved_step_at(*direct_dead_integer_target, 0x35, "frac branch"),
+  };
+  require(optimizer_static_proof_gate_accepts_for_testing(
+              direct_dead_integer_options, direct_dead_integer_conditional_result),
+          "dead-integer fractional selector elision should accept a proved conditional indirect "
+          "flow when both branch and fallthrough immediately erase the live X carrier");
+
+  CompileResult unproved_dead_integer_conditional_result =
+      direct_dead_integer_conditional_result;
+  unproved_dead_integer_conditional_result.steps.back() =
+      resolved_step_at(*direct_dead_integer_target, 0x10, "branch consumes live x");
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              direct_dead_integer_options, unproved_dead_integer_conditional_result),
+          "dead-integer fractional selector elision must reject conditional indirect flow when "
+          "one successor can consume the live X carrier before K {x}");
+  const std::optional<std::string> unproved_dead_integer_conditional_reason =
+      optimizer_static_proof_gate_rejection_reason_for_testing(
+          direct_dead_integer_options, unproved_dead_integer_conditional_result);
+  require(unproved_dead_integer_conditional_reason.has_value() &&
+              unproved_dead_integer_conditional_reason->find(
+                  "xLivenessProofScope=conditional-indirect-flow") != std::string::npos &&
+              unproved_dead_integer_conditional_reason->find("branchTarget=") !=
+                  std::string::npos &&
+              unproved_dead_integer_conditional_reason->find("fallthroughSite=") !=
+                  std::string::npos,
+          "dead-integer conditional-flow rejection should expose the two-successor X-liveness "
+          "proof gap");
+
   CompileResult direct_dead_integer_memory_result = safe_dead_integer_result;
   direct_dead_integer_memory_result.steps.back() = resolved_step_with_mnemonic(
       0xd9, "К П->X 9", "indexed recall cells; indirect-memory-targets=3");
@@ -1367,6 +1430,16 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
                                                            direct_dead_integer_call_result),
           "dead-integer fractional selector elision must still reject direct indirect calls "
           "because control returns with the un-erased X value potentially live");
+  const std::optional<std::string> direct_dead_integer_call_reason =
+      optimizer_static_proof_gate_rejection_reason_for_testing(direct_dead_integer_options,
+                                                               direct_dead_integer_call_result);
+  require(direct_dead_integer_call_reason.has_value() &&
+              direct_dead_integer_call_reason->find("xLivenessProofScope=indirect-call-return") !=
+                  std::string::npos &&
+              direct_dead_integer_call_reason->find("returnSite=01") != std::string::npos &&
+              direct_dead_integer_call_reason->find("calleeTarget=") != std::string::npos,
+          "dead-integer indirect-call rejection should expose the callee-return X-liveness "
+          "proof gap");
 
   CompileResult safe_stored_dead_integer_result = forward_result;
   safe_stored_dead_integer_result.optimizations.push_back(
