@@ -47836,6 +47836,12 @@ std::optional<std::string> value_aware_scheduler_traffic_shape_action(
   if (shape == "stack-inputs-and-deferred-state-outputs")
     return "split-stack-inputs-from-deferred-state-outputs";
   if (shape == "mixed-state-traffic") {
+    if (details.contains("valueAwareMixedStateTempCarrierNames") &&
+        details.contains("valueAwareMixedStateRequiredUpdateNames")) {
+      return "prove-local-temp-carrier-through-state-update-guard";
+    }
+    if (details.contains("valueAwareMixedStateTempCarrierNames"))
+      return "prove-local-temp-carrier-stack-value-flow";
     const auto lifetime_status_it = details.find("valueAwareMixedStateLifetimeStatus");
     if (lifetime_status_it != details.end() &&
         lifetime_status_it->second == "local-to-helper-without-nested-calls") {
@@ -48487,6 +48493,15 @@ SizeAttributionReport build_size_attribution_report(
             }
             return spill.name + ":" + join_strings(events, "/");
           };
+      const auto mixed_state_accesses =
+          [&](const SizeHelperSpillSummaryReport& spill)
+              -> std::vector<std::pair<int, SizeSpillAccessKind>> {
+            const std::string key = helper.label + "\x1f" + spill.name;
+            const auto access_it = helper_spill_accesses_by_key.find(key);
+            if (access_it == helper_spill_accesses_by_key.end())
+              return {};
+            return access_it->second;
+          };
       for (const SizeHelperSpillSummaryReport& spill : spills->second) {
         if (spill.recall_cells > 0 && spill.store_cells == 0) {
           stack_input_names.insert(spill.name);
@@ -48862,8 +48877,14 @@ SizeAttributionReport build_size_attribution_report(
         std::vector<std::string> local_lifetime_names;
         std::vector<std::string> nested_crossing_names;
         std::vector<std::string> nested_crossing_site_parts;
+        std::vector<std::string> temp_carrier_names;
+        std::vector<std::string> required_update_names;
+        std::vector<std::string> unclassified_local_names;
         int local_lifetime_cells = 0;
         int nested_crossing_cells = 0;
+        int temp_carrier_cells = 0;
+        int required_update_cells = 0;
+        int unclassified_local_cells = 0;
         access_order_parts.reserve(mixed_state_spills.size());
         for (const SizeHelperSpillSummaryReport& spill : mixed_state_spills) {
           access_order_parts.push_back(mixed_state_access_order(spill));
@@ -48871,6 +48892,25 @@ SizeAttributionReport build_size_attribution_report(
           if (nested_sites.empty()) {
             local_lifetime_names.push_back(spill.name);
             local_lifetime_cells += spill.total_cells;
+            const std::vector<std::pair<int, SizeSpillAccessKind>> accesses =
+                mixed_state_accesses(spill);
+            if (!accesses.empty() && accesses.front().second == SizeSpillAccessKind::Store &&
+                std::any_of(accesses.begin(), accesses.end(), [](const auto& access) {
+                  return access.second == SizeSpillAccessKind::Recall;
+                })) {
+              temp_carrier_names.push_back(spill.name);
+              temp_carrier_cells += spill.total_cells;
+            } else if (!accesses.empty() &&
+                       accesses.front().second == SizeSpillAccessKind::Recall &&
+                       std::any_of(accesses.begin(), accesses.end(), [](const auto& access) {
+                         return access.second == SizeSpillAccessKind::Store;
+                       })) {
+              required_update_names.push_back(spill.name);
+              required_update_cells += spill.total_cells;
+            } else {
+              unclassified_local_names.push_back(spill.name);
+              unclassified_local_cells += spill.total_cells;
+            }
           } else {
             nested_crossing_names.push_back(spill.name);
             nested_crossing_cells += spill.total_cells;
@@ -48885,6 +48925,30 @@ SizeAttributionReport build_size_attribution_report(
               join_strings(local_lifetime_names, ",");
           helper.details["valueAwareMixedStateLocalLifetimeCells"] =
               std::to_string(local_lifetime_cells);
+        }
+        if (!temp_carrier_names.empty()) {
+          helper.details["valueAwareMixedStateTempCarrierNames"] =
+              join_strings(temp_carrier_names, ",");
+          helper.details["valueAwareMixedStateTempCarrierCells"] =
+              std::to_string(temp_carrier_cells);
+          helper.details["valueAwareMixedStateTempCarrierReason"] =
+              "local store-before-recall value can be stack-carried after preserving it through "
+              "intervening operations";
+        }
+        if (!required_update_names.empty()) {
+          helper.details["valueAwareMixedStateRequiredUpdateNames"] =
+              join_strings(required_update_names, ",");
+          helper.details["valueAwareMixedStateRequiredUpdateCells"] =
+              std::to_string(required_update_cells);
+          helper.details["valueAwareMixedStateRequiredUpdateReason"] =
+              "recall-before-store traffic updates persistent state and is not direct scheduler "
+              "savings";
+        }
+        if (!unclassified_local_names.empty()) {
+          helper.details["valueAwareMixedStateUnclassifiedLocalNames"] =
+              join_strings(unclassified_local_names, ",");
+          helper.details["valueAwareMixedStateUnclassifiedLocalCells"] =
+              std::to_string(unclassified_local_cells);
         }
         if (!nested_crossing_names.empty()) {
           helper.details["valueAwareMixedStateNestedCrossingNames"] =
@@ -48903,6 +48967,14 @@ SizeAttributionReport build_size_attribution_report(
             nested_crossing_names.empty()
                 ? "prove-local-stack-value-flow-through-mutating-ops"
                 : "split-local-lifetimes-from-nested-call-crossing-state";
+        if (temp_carrier_cells > 0) {
+          helper.details["valueAwareEstimatedNetSavingsAfterMaterialization"] =
+              std::to_string(temp_carrier_cells);
+          helper.details["valueAwareEstimatedNetSavingsModel"] =
+              "local-temp-carrier-register-traffic-before-stack-flow-proof";
+          helper.details["valueAwareEstimatedNetSavingsExcludes"] =
+              "persistent-state-updates-and-nested-call-inputs";
+        }
       }
       if (!stack_input_names.empty() || !state_output_names.empty() ||
           !nested_call_input_names.empty() ||

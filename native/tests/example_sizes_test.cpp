@@ -354,6 +354,24 @@ void example_sizes_match_typescript_baselines() {
                   front_stop->details.contains("valueAwareMixedStateProofAction") &&
                   front_stop->details.at("valueAwareMixedStateProofAction") ==
                       "prove-local-stack-value-flow-through-mutating-ops" &&
+                  front_stop->details.contains("valueAwareMixedStateTempCarrierNames") &&
+                  front_stop->details.at("valueAwareMixedStateTempCarrierNames") == "scratch" &&
+                  front_stop->details.contains("valueAwareMixedStateTempCarrierCells") &&
+                  front_stop->details.at("valueAwareMixedStateTempCarrierCells") == "2" &&
+                  front_stop->details.contains("valueAwareMixedStateRequiredUpdateNames") &&
+                  front_stop->details.at("valueAwareMixedStateRequiredUpdateNames") ==
+                      "cells_7" &&
+                  front_stop->details.contains("valueAwareMixedStateRequiredUpdateCells") &&
+                  front_stop->details.at("valueAwareMixedStateRequiredUpdateCells") == "2" &&
+                  front_stop->details.contains("valueAwareEstimatedNetSavingsAfterMaterialization") &&
+                  front_stop->details.at("valueAwareEstimatedNetSavingsAfterMaterialization") ==
+                      "2" &&
+                  front_stop->details.contains("valueAwareEstimatedNetSavingsModel") &&
+                  front_stop->details.at("valueAwareEstimatedNetSavingsModel") ==
+                      "local-temp-carrier-register-traffic-before-stack-flow-proof" &&
+                  front_stop->details.contains("valueAwareEstimatedNetSavingsExcludes") &&
+                  front_stop->details.at("valueAwareEstimatedNetSavingsExcludes") ==
+                      "persistent-state-updates-and-nested-call-inputs" &&
                   !front_stop->details.contains("valueAwareMixedStateNestedCrossingNames") &&
                   front_stop->details.contains("valueAwareNestedCallInputNames") &&
                   front_stop->details.at("valueAwareNestedCallInputNames") == "random_state",
@@ -363,26 +381,34 @@ void example_sizes_match_typescript_baselines() {
           find_size_opportunity_detail(result, "helper-register-traffic", "helperLabel",
                                        "front_stop");
       require(front_stop_register_traffic != nullptr &&
-                  front_stop_register_traffic->savings == 6 &&
+                  front_stop_register_traffic->savings == 2 &&
+                  front_stop_register_traffic->candidate_steps ==
+                      static_cast<int>(result.steps.size()) - 2 &&
+                  front_stop_register_traffic->details.contains("savingsModel") &&
+                  front_stop_register_traffic->details.at("savingsModel") ==
+                      "estimated-net-after-callsite-materialization" &&
                   front_stop_register_traffic->details.contains("trafficShapeAction") &&
                   front_stop_register_traffic->details.at("trafficShapeAction") ==
-                      "prove-local-mixed-state-stack-value-flow" &&
+                      "prove-local-temp-carrier-through-state-update-guard" &&
                   front_stop_register_traffic->details.contains(
                       "valueAwareMixedStateLifetimeStatus") &&
                   front_stop_register_traffic->details.at(
                       "valueAwareMixedStateLifetimeStatus") ==
                       "local-to-helper-without-nested-calls",
               "rambo-iii should rank the front_stop value-aware blocker by the local mixed-state "
-              "stack-flow proof that is missing");
+                  "stack-flow proof that is missing");
       const SizeNextActionSummaryReport* mixed_state_action = find_size_next_action(
-          result, "trafficShapeAction", "prove-local-mixed-state-stack-value-flow");
+          result, "trafficShapeAction", "prove-local-temp-carrier-through-state-update-guard");
       require(mixed_state_action != nullptr && mixed_state_action->opportunities == 1 &&
-                  mixed_state_action->potential_savings == 6 &&
-                  mixed_state_action->best_savings == 6 &&
+                  mixed_state_action->potential_savings == 2 &&
+                  mixed_state_action->best_savings == 2 &&
                   mixed_state_action->best_details.contains("helperLabel") &&
-                  mixed_state_action->best_details.at("helperLabel") == "front_stop",
-              "rambo-iii size attribution should expose the local mixed-state stack-flow proof "
-              "as the next scheduler action");
+                  mixed_state_action->best_details.at("helperLabel") == "front_stop" &&
+                  mixed_state_action->best_details.contains("valueAwareMixedStateTempCarrierNames") &&
+                  mixed_state_action->best_details.at("valueAwareMixedStateTempCarrierNames") ==
+                      "scratch",
+              "rambo-iii size attribution should expose the local temp-carrier stack-flow proof "
+              "as the next scheduler action without counting required state updates");
     }
   }
 
