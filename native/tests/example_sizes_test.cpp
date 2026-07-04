@@ -720,9 +720,37 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.contains("valueAwareAllStackInputPressure") &&
                   candidate_score_zero->details.at("valueAwareAllStackInputPressure") == "2" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareEstimatedNetSavingsBeforeArgumentPreservation") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareEstimatedNetSavingsBeforeArgumentPreservation") == "3" &&
+                  candidate_score_zero->details.contains("valueAwareCallArgumentInputNames") &&
+                  candidate_score_zero->details.at("valueAwareCallArgumentInputNames")
+                          .find("x") != std::string::npos &&
+                  candidate_score_zero->details.at("valueAwareCallArgumentInputNames")
+                          .find("y") != std::string::npos &&
+                  candidate_score_zero->details.contains("valueAwareCallArgumentSites") &&
+                  candidate_score_zero->details.at("valueAwareCallArgumentSites")
+                          .find("packed-line score accumulator helper@71:x<-recall@70") !=
+                      std::string::npos &&
+                  candidate_score_zero->details.at("valueAwareCallArgumentSites")
+                          .find("packed-line score accumulator helper@74:y<-recall@73") !=
+                      std::string::npos &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCallArgumentPreservationCells") &&
+                  candidate_score_zero->details.at("valueAwareCallArgumentPreservationCells") ==
+                      "2" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareEstimatedNetSavingsAfterArgumentPreservation") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareEstimatedNetSavingsAfterArgumentPreservation") == "1" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareEstimatedNetSavingsAfterMaterialization") &&
                   candidate_score_zero->details.at(
-                      "valueAwareEstimatedNetSavingsAfterMaterialization") == "3" &&
+                      "valueAwareEstimatedNetSavingsAfterMaterialization") == "1" &&
+                  candidate_score_zero->details.contains("valueAwareEstimatedNetSavingsModel") &&
+                  candidate_score_zero->details.at("valueAwareEstimatedNetSavingsModel") ==
+                      "profitable-stack-input-recalls-minus-callsite-materialization-minus-"
+                      "argument-preservation-plus-state-outputs" &&
                   candidate_score_zero->details.contains("valueAwareProfitableStackInputNames") &&
                   candidate_score_zero->details.at("valueAwareProfitableStackInputNames")
                           .find("y") != std::string::npos &&
@@ -832,9 +860,31 @@ void example_sizes_match_typescript_baselines() {
                   mark_lines_helper->details.at("valueAwareNestedCallLabels").find("normalize") !=
                       std::string::npos &&
                   mark_lines_helper->details.contains(
+                      "valueAwareEstimatedNetSavingsBeforeArgumentPreservation") &&
+                  mark_lines_helper->details.at(
+                      "valueAwareEstimatedNetSavingsBeforeArgumentPreservation") == "2" &&
+                  mark_lines_helper->details.contains("valueAwareCallArgumentInputNames") &&
+                  mark_lines_helper->details.at("valueAwareCallArgumentInputNames")
+                          .find("x") != std::string::npos &&
+                  mark_lines_helper->details.at("valueAwareCallArgumentInputNames")
+                          .find("y") != std::string::npos &&
+                  mark_lines_helper->details.contains("valueAwareCallArgumentSites") &&
+                  mark_lines_helper->details.at("valueAwareCallArgumentSites")
+                          .find("mark_one@97:x<-recall@96") != std::string::npos &&
+                  mark_lines_helper->details.at("valueAwareCallArgumentSites")
+                          .find("mark_one@A0:y<-recall@99") != std::string::npos &&
+                  mark_lines_helper->details.contains(
+                      "valueAwareCallArgumentPreservationCells") &&
+                  mark_lines_helper->details.at("valueAwareCallArgumentPreservationCells") ==
+                      "2" &&
+                  mark_lines_helper->details.contains(
+                      "valueAwareEstimatedNetSavingsAfterArgumentPreservation") &&
+                  mark_lines_helper->details.at(
+                      "valueAwareEstimatedNetSavingsAfterArgumentPreservation") == "0" &&
+                  mark_lines_helper->details.contains(
                       "valueAwareEstimatedNetSavingsAfterMaterialization") &&
                   mark_lines_helper->details.at(
-                      "valueAwareEstimatedNetSavingsAfterMaterialization") == "2",
+                      "valueAwareEstimatedNetSavingsAfterMaterialization") == "0",
               "tic-tac-toe-4x4 mark_lines_and_check helper should classify stack inputs "
               "separately from nested-call state inputs and nested helper-call blockers");
       const SizeOpportunityReport* cell_mask_register_traffic = find_size_opportunity_detail(
@@ -1056,16 +1106,21 @@ void example_sizes_match_typescript_baselines() {
       const SizeBlockerSummaryReport* value_aware_scheduler_blocker =
           find_size_blocker(result, "value-aware-stack-register-scheduler");
       require(value_aware_scheduler_blocker != nullptr &&
-                  value_aware_scheduler_blocker->opportunities >= 1 &&
-                  value_aware_scheduler_blocker->potential_savings >=
-                      cell_mask_helper->register_traffic_cells &&
-                  value_aware_scheduler_blocker->best_savings >=
-                      cell_mask_helper->register_traffic_cells &&
+                  value_aware_scheduler_blocker->opportunities == 1 &&
+                  value_aware_scheduler_blocker->potential_savings == 1 &&
+                  value_aware_scheduler_blocker->best_savings == 1 &&
                   value_aware_scheduler_blocker->best_variant == "helper-register-traffic" &&
+                  value_aware_scheduler_blocker->best_details.contains("helperLabel") &&
+                  value_aware_scheduler_blocker->best_details.at("helperLabel") ==
+                      "candidate_score zero-accumulator entry" &&
                   value_aware_scheduler_blocker->best_details.contains("estimateKind") &&
                   value_aware_scheduler_blocker->best_details.contains("sizeImpactStatus") &&
                   value_aware_scheduler_blocker->best_details.contains("proofStatus") &&
                   value_aware_scheduler_blocker->best_details.contains("schedulerScope") &&
+                  value_aware_scheduler_blocker->best_details.contains(
+                      "valueAwareCallArgumentPreservationCells") &&
+                  value_aware_scheduler_blocker->best_details.at(
+                      "valueAwareCallArgumentPreservationCells") == "2" &&
                   value_aware_scheduler_blocker->best_details.contains("registerTrafficBreakdown") &&
                   value_aware_scheduler_blocker->best_details.contains(
                       "valueAwareStackInputNames") &&
@@ -1101,9 +1156,9 @@ void example_sizes_match_typescript_baselines() {
       const SizeNextActionSummaryReport* callee_abi_required_action = find_size_next_action(
           result, "requiredAction", "refactor-stack-mutating-callee-abi");
       require(callee_abi_required_action != nullptr &&
-                  callee_abi_required_action->opportunities == 2 &&
-                  callee_abi_required_action->potential_savings == 5 &&
-                  callee_abi_required_action->best_savings == 3 &&
+                  callee_abi_required_action->opportunities == 1 &&
+                  callee_abi_required_action->potential_savings == 1 &&
+                  callee_abi_required_action->best_savings == 1 &&
                   callee_abi_required_action->best_blocker_kind ==
                       "value-aware-stack-register-scheduler" &&
                   callee_abi_required_action->best_variant == "helper-register-traffic" &&
@@ -1156,6 +1211,10 @@ void example_sizes_match_typescript_baselines() {
                   callee_abi_required_action->best_details.at("valueAwareStackInputNames")
                           .find("y") != std::string::npos &&
                   callee_abi_required_action->best_details.contains(
+                      "valueAwareCallArgumentPreservationCells") &&
+                  callee_abi_required_action->best_details.at(
+                      "valueAwareCallArgumentPreservationCells") == "2" &&
+                  callee_abi_required_action->best_details.contains(
                       "valueAwareStackCapacityStatus") &&
                   callee_abi_required_action->best_details.at(
                       "valueAwareStackCapacityStatus") == "fits-x-y-z-t-capacity" &&
@@ -1176,9 +1235,9 @@ void example_sizes_match_typescript_baselines() {
       const SizeNextActionSummaryReport* callee_abi_action = find_size_next_action(
           result, "trafficShapeAction", "refactor-stack-mutating-callee-abi");
       require(callee_abi_action != nullptr &&
-                  callee_abi_action->opportunities == 2 &&
-                  callee_abi_action->potential_savings == 5 &&
-                  callee_abi_action->best_savings == 3 &&
+                  callee_abi_action->opportunities == 1 &&
+                  callee_abi_action->potential_savings == 1 &&
+                  callee_abi_action->best_savings == 1 &&
                   callee_abi_action->best_details.contains("helperLabel") &&
                   callee_abi_action->best_details.at("helperLabel") ==
                       "candidate_score zero-accumulator entry" &&
@@ -1193,6 +1252,10 @@ void example_sizes_match_typescript_baselines() {
                   callee_abi_action->best_details.contains("valueAwareStackInputPlanStatus") &&
                   callee_abi_action->best_details.at("valueAwareStackInputPlanStatus") ==
                       "blocked-by-stack-mutating-callee" &&
+                  callee_abi_action->best_details.contains(
+                      "valueAwareCallArgumentPreservationCells") &&
+                  callee_abi_action->best_details.at(
+                      "valueAwareCallArgumentPreservationCells") == "2" &&
                   callee_abi_action->best_details.contains("proofStatus") &&
                   callee_abi_action->best_details.at("proofStatus") ==
                       "callee-stack-mutation-clobbers-stack-inputs" &&

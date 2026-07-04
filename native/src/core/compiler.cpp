@@ -48605,6 +48605,9 @@ SizeAttributionReport build_size_attribution_report(
         std::set<std::string> call_preservation_input_names;
         std::map<std::string, std::set<int>> call_preservation_recall_addresses_by_name;
         std::vector<std::string> call_preservation_site_parts;
+        std::set<std::string> call_argument_input_names;
+        std::vector<std::string> call_argument_site_parts;
+        int call_argument_preservation_cells = 0;
         const auto nested_call_sites_it = helper_nested_call_sites.find(helper.label);
         const auto recall_indices_it = helper_recall_indices_by_name.find(helper.label);
         if (nested_call_sites_it != helper_nested_call_sites.end() &&
@@ -48633,6 +48636,21 @@ SizeAttributionReport build_size_attribution_report(
               call_preservation_site_parts.push_back(
                   call_site.label + "@" + safe_format_label_address(call_site.address) + ":" +
                   name + "@" + join_strings(recall_addresses, "/"));
+              if (call_site.start_index > 0) {
+                const ResolvedStep& producer = steps.at(call_site.start_index - 1U);
+                const std::optional<SizeSpillAccess> producer_access =
+                    size_report_spill_access(producer);
+                if (producer_access.has_value() &&
+                    producer_access->kind == SizeSpillAccessKind::Recall &&
+                    producer_access->name == name) {
+                  call_argument_input_names.insert(name);
+                  call_argument_site_parts.push_back(
+                      call_site.label + "@" + safe_format_label_address(call_site.address) +
+                      ":" + name + "<-recall@" +
+                      safe_format_label_address(producer.address));
+                  ++call_argument_preservation_cells;
+                }
+              }
             }
           }
         }
@@ -48680,12 +48698,6 @@ SizeAttributionReport build_size_attribution_report(
         if (!unprofitable_stack_input_names.empty()) {
           helper.details["valueAwareUnprofitableStackInputNames"] =
               join_strings(unprofitable_stack_input_names, ",");
-        }
-        if (profitable_stack_input_net_cells > 0 || state_output_cells > 0) {
-          helper.details["valueAwareEstimatedNetSavingsAfterMaterialization"] =
-              std::to_string(profitable_stack_input_net_cells + state_output_cells);
-          helper.details["valueAwareEstimatedNetSavingsModel"] =
-              "profitable-stack-input-recalls-minus-callsite-materialization-plus-state-outputs";
         }
         if (!call_preservation_input_names.empty()) {
           helper.details["valueAwareCallPreservationInputNames"] = join_strings(
@@ -48781,9 +48793,45 @@ SizeAttributionReport build_size_attribution_report(
                   : "prove-callee-stack-effect-for-listed-sites";
           helper.details["valueAwareCallPreservationReason"] =
               "profitable stack inputs have helper-local recalls after nested helper calls";
+          if (!call_argument_input_names.empty()) {
+            helper.details["valueAwareCallArgumentInputNames"] =
+                join_strings(std::vector<std::string>(call_argument_input_names.begin(),
+                                                      call_argument_input_names.end()),
+                             ",");
+            helper.details["valueAwareCallArgumentSites"] =
+                join_strings(call_argument_site_parts, ";");
+            helper.details["valueAwareCallArgumentPreservationCells"] =
+                std::to_string(call_argument_preservation_cells);
+            helper.details["valueAwareCallArgumentPreservationReason"] =
+                "live stack input is also consumed as a nested helper X argument before later "
+                "helper-local recalls";
+          }
           if (call_preservation_has_stack_mutating_callee) {
             helper.details["valueAwareProfitableStackInputPlanStatus"] =
                 "blocked-by-stack-mutating-callee";
+          }
+        }
+        const int base_estimated_net_cells =
+            profitable_stack_input_net_cells + state_output_cells;
+        const int adjusted_estimated_net_cells =
+            base_estimated_net_cells - call_argument_preservation_cells;
+        if (base_estimated_net_cells > 0 || state_output_cells > 0 ||
+            call_argument_preservation_cells > 0) {
+          if (call_argument_preservation_cells > 0) {
+            helper.details["valueAwareEstimatedNetSavingsBeforeArgumentPreservation"] =
+                std::to_string(base_estimated_net_cells);
+            helper.details["valueAwareEstimatedNetSavingsAfterArgumentPreservation"] =
+                std::to_string(adjusted_estimated_net_cells);
+            helper.details["valueAwareEstimatedNetSavingsAfterMaterialization"] =
+                std::to_string(adjusted_estimated_net_cells);
+            helper.details["valueAwareEstimatedNetSavingsModel"] =
+                "profitable-stack-input-recalls-minus-callsite-materialization-minus-"
+                "argument-preservation-plus-state-outputs";
+          } else {
+            helper.details["valueAwareEstimatedNetSavingsAfterMaterialization"] =
+                std::to_string(base_estimated_net_cells);
+            helper.details["valueAwareEstimatedNetSavingsModel"] =
+                "profitable-stack-input-recalls-minus-callsite-materialization-plus-state-outputs";
           }
         }
         if (!direct_stack_input_names.empty()) {
