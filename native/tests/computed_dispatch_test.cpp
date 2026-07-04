@@ -1353,6 +1353,35 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
           "dead-integer fractional selector elision should allow proved stored selector "
           "indirect-memory recalls while still requiring data recalls to be erased");
 
+  CompileResult safe_stored_memory_store_result = safe_stored_dead_integer_result;
+  safe_stored_memory_store_result.steps.insert(
+      safe_stored_memory_store_result.steps.end() - 2,
+      resolved_step_with_mnemonic(0xb9, "К X->П 9",
+                                  "indexed store cells; indirect-memory-targets=3"));
+  require(optimizer_static_proof_gate_accepts_for_testing(safe_dead_integer_options,
+                                                          safe_stored_memory_store_result),
+          "dead-integer fractional selector elision should allow proved stored selector "
+          "indirect-memory stores while still requiring data recalls to be erased");
+
+  CompileResult mismatched_stored_memory_store_result = safe_stored_memory_store_result;
+  mismatched_stored_memory_store_result.steps.at(
+      mismatched_stored_memory_store_result.steps.size() - 3U) =
+      resolved_step_with_mnemonic(0xb9, "К X->П 9",
+                                  "indexed store cells; indirect-memory-targets=4");
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              safe_dead_integer_options, mismatched_stored_memory_store_result),
+          "dead-integer fractional selector elision must reject indirect-memory store targets "
+          "that do not match the stored carrier integer part");
+  const std::optional<std::string> mismatched_stored_memory_store_reason =
+      optimizer_static_proof_gate_rejection_reason_for_testing(
+          safe_dead_integer_options, mismatched_stored_memory_store_result);
+  require(mismatched_stored_memory_store_reason.has_value() &&
+              mismatched_stored_memory_store_reason->find("stored in R9 reaches К X->П 9 "
+                                                          "before K {x}") != std::string::npos &&
+              mismatched_stored_memory_store_reason->find("(indirect memory store use)") !=
+                  std::string::npos,
+          "dead-integer rejection reason must classify mismatched indirect-memory stores");
+
   CompileResult safe_stored_immediate_memory_recall_result = forward_result;
   safe_stored_immediate_memory_recall_result.optimizations.push_back(
       optimization_report("dead-integer-fractional-selector-use"));
@@ -1369,6 +1398,25 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
               safe_dead_integer_options, safe_stored_immediate_memory_recall_result),
           "dead-integer fractional selector elision should accept a stored selector that is "
           "immediately consumed by a proved indirect-memory recall because that overwrites live X");
+
+  CompileResult unsafe_stored_immediate_memory_store_result =
+      safe_stored_immediate_memory_recall_result;
+  unsafe_stored_immediate_memory_store_result.steps.at(
+      unsafe_stored_immediate_memory_store_result.steps.size() - 3U) =
+      resolved_step_with_mnemonic(0xb9, "К X->П 9",
+                                  "indexed store cells; indirect-memory-targets=3");
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              safe_dead_integer_options, unsafe_stored_immediate_memory_store_result),
+          "dead-integer fractional selector elision must reject a stored selector immediately "
+          "used by an indirect-memory store because the live X carrier would be stored");
+  const std::optional<std::string> unsafe_stored_immediate_memory_store_reason =
+      optimizer_static_proof_gate_rejection_reason_for_testing(
+          safe_dead_integer_options, unsafe_stored_immediate_memory_store_result);
+  require(unsafe_stored_immediate_memory_store_reason.has_value() &&
+              unsafe_stored_immediate_memory_store_reason->find(
+                  "is stored before К X->П 9 instead of immediate K {x}") != std::string::npos,
+          "dead-integer rejection reason should keep distinguishing unsafe live-X memory stores "
+          "after a selector store");
 
   CompileResult unsafe_stored_immediate_jump_result = safe_stored_immediate_memory_recall_result;
   unsafe_stored_immediate_jump_result.steps.at(unsafe_stored_immediate_jump_result.steps.size() -

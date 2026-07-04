@@ -46116,6 +46116,26 @@ bool dead_integer_fractional_selector_memory_recall_use_proved(
   return targets->contains(target_name);
 }
 
+bool dead_integer_fractional_selector_memory_store_use_proved(
+    const ResolvedStep& step, int register_index, const std::optional<std::string>& carrier_value) {
+  if (step.opcode != 0xb0 + register_index || !carrier_value.has_value())
+    return false;
+  const std::optional<std::set<std::string>> targets =
+      indirect_memory_targets_from_comment(step.comment);
+  if (!targets.has_value())
+    return false;
+  const std::string register_name = core::register_name_for_index(register_index);
+  if (!core::is_stable_indirect_selector(register_name))
+    return false;
+  const std::optional<core::IndirectAddressEvaluation> evaluated =
+      core::evaluate_indirect_address(register_name, *carrier_value,
+                                      core::IndirectOperationKind::Memory);
+  if (!evaluated.has_value() || !evaluated->memory_target.has_value())
+    return false;
+  const std::string target_name = core::register_name_for_index(*evaluated->memory_target);
+  return targets->contains(target_name);
+}
+
 bool dead_integer_fractional_selector_direct_jump_use_proved(const ResolvedStep& step,
                                                              int register_index) {
   if (step.opcode < 0x80 || step.opcode > 0x8e)
@@ -46229,6 +46249,10 @@ std::optional<std::string> stored_dead_integer_fractional_selector_later_rejecti
         continue;
       if (dead_integer_fractional_selector_memory_recall_use_proved(step, register_index,
                                                                     carrier_value)) {
+        continue;
+      }
+      if (dead_integer_fractional_selector_memory_store_use_proved(step, register_index,
+                                                                   carrier_value)) {
         continue;
       }
       return "dead-integer fractional selector source " + source + " stored in R" +
