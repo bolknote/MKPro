@@ -48401,6 +48401,37 @@ bool dead_integer_fractional_selector_indirect_call_use_proved(
   return resolved_step_erases_dead_integer_fractional_selector(steps, callee);
 }
 
+enum class DeadIntegerStoredLiveXProof {
+  OverwrittenByMemoryRecall,
+  ErasedByConditionalSuccessors,
+  ErasedByIndirectCallCallee,
+};
+
+// After storing a dead-integer selector, X still carries the retuned value.  A
+// following consumer is safe only if it overwrites X or proves that every
+// possible continuation erases X before data consumption.
+std::optional<DeadIntegerStoredLiveXProof>
+dead_integer_fractional_selector_stored_live_x_use_proved(
+    const std::vector<ResolvedStep>& steps, std::size_t consumer_index, int register_index,
+    const std::optional<std::string>& carrier_value, std::optional<int> selector_target) {
+  if (consumer_index >= steps.size())
+    return std::nullopt;
+  const ResolvedStep& step = steps.at(consumer_index);
+  if (dead_integer_fractional_selector_memory_recall_use_proved(step, register_index,
+                                                                carrier_value)) {
+    return DeadIntegerStoredLiveXProof::OverwrittenByMemoryRecall;
+  }
+  if (dead_integer_fractional_selector_conditional_flow_use_proved(
+          steps, consumer_index, register_index, selector_target)) {
+    return DeadIntegerStoredLiveXProof::ErasedByConditionalSuccessors;
+  }
+  if (dead_integer_fractional_selector_indirect_call_use_proved(
+          steps, consumer_index, register_index, selector_target)) {
+    return DeadIntegerStoredLiveXProof::ErasedByIndirectCallCallee;
+  }
+  return std::nullopt;
+}
+
 std::string dead_integer_fractional_selector_next_step_name(const ResolvedStep& step) {
   if (!step.mnemonic.empty())
     return step.mnemonic;
@@ -48557,9 +48588,10 @@ std::optional<std::string> stored_dead_integer_fractional_selector_rejection_rea
       steps.at(store_index + 1U).opcode != kDeadIntegerFractionalEraseOpcode) {
     const ResolvedStep* next_step =
         store_index + 1U < steps.size() ? &steps.at(store_index + 1U) : nullptr;
-    if (next_step != nullptr &&
-        dead_integer_fractional_selector_memory_recall_use_proved(*next_step, register_index,
-                                                                  carrier_value)) {
+    if (next_step != nullptr && dead_integer_fractional_selector_stored_live_x_use_proved(
+                                  steps, store_index + 1U, register_index, carrier_value,
+                                  selector_target)
+                                  .has_value()) {
       return stored_dead_integer_fractional_selector_later_rejection_reason(
           steps, store_index + 2U, register_index, source, carrier_value, selector_target);
     }

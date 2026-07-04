@@ -1560,6 +1560,88 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
           "dead-integer fractional selector elision should accept a stored selector that is "
           "immediately consumed by a proved indirect-memory recall because that overwrites live X");
 
+  int stored_conditional_address = 70;
+  while (stored_conditional_address == target || stored_conditional_address + 1 == target)
+    ++stored_conditional_address;
+  CompileResult safe_stored_immediate_conditional_result = forward_result;
+  safe_stored_immediate_conditional_result.optimizations.push_back(
+      optimization_report("dead-integer-fractional-selector-use"));
+  safe_stored_immediate_conditional_result.steps.push_back(
+      resolved_step(0x69, "preload const 3.123456; fractional selector source 0.123456"));
+  safe_stored_immediate_conditional_result.steps.push_back(
+      resolved_step(0x49, "set saved selector"));
+  safe_stored_immediate_conditional_result.steps.push_back(resolved_step_with_mnemonic_at(
+      stored_conditional_address, 0xe9, "К x=0 9",
+      indirect_target_comment("9", "3", target)));
+  safe_stored_immediate_conditional_result.steps.push_back(
+      resolved_step_at(stored_conditional_address + 1, 0x35, "frac fallthrough"));
+  safe_stored_immediate_conditional_result.steps.push_back(
+      resolved_step_at(target, 0x35, "frac branch"));
+  safe_stored_immediate_conditional_result.steps.push_back(
+      resolved_step(0x69, "recall saved selector"));
+  safe_stored_immediate_conditional_result.steps.push_back(resolved_step(0x35, "frac()"));
+  require(optimizer_static_proof_gate_accepts_for_testing(
+              safe_dead_integer_options, safe_stored_immediate_conditional_result),
+          "dead-integer fractional selector elision should accept a stored selector immediately "
+          "used by proved conditional indirect flow when both successors erase live X");
+
+  CompileResult unsafe_stored_immediate_conditional_result =
+      safe_stored_immediate_conditional_result;
+  unsafe_stored_immediate_conditional_result.steps.at(
+      unsafe_stored_immediate_conditional_result.steps.size() - 3U) =
+      resolved_step_at(target, 0x10, "branch consumes live selector");
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              safe_dead_integer_options, unsafe_stored_immediate_conditional_result),
+          "dead-integer fractional selector elision must reject immediate stored-selector "
+          "conditional flow when one successor can consume the live X carrier");
+  const std::optional<std::string> unsafe_stored_immediate_conditional_reason =
+      optimizer_static_proof_gate_rejection_reason_for_testing(
+          safe_dead_integer_options, unsafe_stored_immediate_conditional_result);
+  require(unsafe_stored_immediate_conditional_reason.has_value() &&
+              unsafe_stored_immediate_conditional_reason->find(
+                  "is stored before К x=0 9 instead of immediate K {x}") != std::string::npos &&
+              unsafe_stored_immediate_conditional_reason->find(
+                  "xLivenessProofScope=conditional-indirect-flow") != std::string::npos,
+          "dead-integer stored conditional-flow rejection should expose the successor erasure "
+          "proof gap");
+
+  CompileResult safe_stored_immediate_call_result = forward_result;
+  safe_stored_immediate_call_result.optimizations.push_back(
+      optimization_report("dead-integer-fractional-selector-use"));
+  safe_stored_immediate_call_result.steps.push_back(
+      resolved_step(0x69, "preload const 3.123456; fractional selector source 0.123456"));
+  safe_stored_immediate_call_result.steps.push_back(resolved_step(0x49, "set saved selector"));
+  safe_stored_immediate_call_result.steps.push_back(resolved_step_with_mnemonic(
+      0xa9, "К ПП 9", indirect_target_comment("9", "3", target)));
+  safe_stored_immediate_call_result.steps.push_back(
+      resolved_step_at(target, 0x35, "callee erases stored selector"));
+  safe_stored_immediate_call_result.steps.push_back(
+      resolved_step(0x69, "recall saved selector"));
+  safe_stored_immediate_call_result.steps.push_back(resolved_step(0x35, "frac()"));
+  require(optimizer_static_proof_gate_accepts_for_testing(safe_dead_integer_options,
+                                                          safe_stored_immediate_call_result),
+          "dead-integer fractional selector elision should accept a stored selector immediately "
+          "used by a proved indirect call whose callee entry erases live X");
+
+  CompileResult unsafe_stored_immediate_call_result = safe_stored_immediate_call_result;
+  unsafe_stored_immediate_call_result.steps.at(
+      unsafe_stored_immediate_call_result.steps.size() - 3U) =
+      resolved_step_at(target, 0x10, "callee consumes live selector");
+  require(!optimizer_static_proof_gate_accepts_for_testing(safe_dead_integer_options,
+                                                           unsafe_stored_immediate_call_result),
+          "dead-integer fractional selector elision must reject immediate stored-selector "
+          "indirect calls when the callee can consume live X before K {x}");
+  const std::optional<std::string> unsafe_stored_immediate_call_reason =
+      optimizer_static_proof_gate_rejection_reason_for_testing(
+          safe_dead_integer_options, unsafe_stored_immediate_call_result);
+  require(unsafe_stored_immediate_call_reason.has_value() &&
+              unsafe_stored_immediate_call_reason->find(
+                  "is stored before К ПП 9 instead of immediate K {x}") != std::string::npos &&
+              unsafe_stored_immediate_call_reason->find(
+                  "xLivenessProofScope=indirect-call-return") != std::string::npos,
+          "dead-integer stored indirect-call rejection should expose the callee-entry erasure "
+          "proof gap");
+
   CompileResult unsafe_stored_immediate_memory_store_result =
       safe_stored_immediate_memory_recall_result;
   unsafe_stored_immediate_memory_store_result.steps.at(
