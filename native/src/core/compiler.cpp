@@ -48445,11 +48445,12 @@ SizeAttributionReport build_size_attribution_report(
           std::vector<std::string> callee_effect_parts;
           std::vector<std::string> callee_mutating_cell_parts;
           std::vector<std::string> callee_mutating_opcode_parts;
+          std::vector<std::string> callee_abi_preservation_parts;
+          std::vector<std::string> callee_abi_refactor_targets;
           bool all_required_callees_stack_preserving = !call_preservation_inputs_by_label.empty();
           bool saw_stack_mutating_required_callee = false;
           callee_effect_parts.reserve(call_preservation_inputs_by_label.size());
-          for (const auto& [label, unused_inputs] : call_preservation_inputs_by_label) {
-            (void)unused_inputs;
+          for (const auto& [label, inputs] : call_preservation_inputs_by_label) {
             const HelperStackEffectSummary effect = helper_stack_effect_summary(label);
             callee_effect_parts.push_back(helper_stack_effect_summary_text(label, effect));
             if (effect.mutating_cells > 0) {
@@ -48463,6 +48464,10 @@ SizeAttributionReport build_size_attribution_report(
             if (effect.status == "stack-mutating") {
               saw_stack_mutating_required_callee = true;
               call_preservation_has_stack_mutating_callee = true;
+              const std::string input_list =
+                  join_strings(std::vector<std::string>(inputs.begin(), inputs.end()), ",");
+              callee_abi_preservation_parts.push_back(label + ":" + input_list);
+              callee_abi_refactor_targets.push_back(label);
             }
           }
           if (!callee_effect_parts.empty()) {
@@ -48480,6 +48485,18 @@ SizeAttributionReport build_size_attribution_report(
                     : (saw_stack_mutating_required_callee
                            ? "blocked-by-callee-stack-mutation"
                            : "requires-nested-callee-proof");
+            if (saw_stack_mutating_required_callee) {
+              helper.details["valueAwareCalleeAbiRefactorKind"] =
+                  "stack-preserving-entry-for-live-caller-inputs";
+              helper.details["valueAwareCalleeAbiRefactorTargets"] =
+                  join_strings(callee_abi_refactor_targets, ",");
+              helper.details["valueAwareCalleeAbiPreservationPlan"] =
+                  join_strings(callee_abi_preservation_parts, ";");
+              helper.details["valueAwareCalleeAbiSafetyProof"] =
+                  "prove-live-stack-inputs-survive-nested-callee-entry";
+              helper.details["valueAwareCalleeAbiImplementationStatus"] =
+                  "required-before-stack-input-scheduling";
+            }
           }
           if (!call_preservation_site_parts.empty()) {
             helper.details["valueAwareCallPreservationSites"] =

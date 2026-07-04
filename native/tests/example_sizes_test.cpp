@@ -527,6 +527,28 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.at("valueAwareCallPreservationCalleeStatus") ==
                       "blocked-by-callee-stack-mutation" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiRefactorKind") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiRefactorKind") ==
+                      "stack-preserving-entry-for-live-caller-inputs" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiRefactorTargets") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiRefactorTargets") ==
+                      "packed-line score accumulator helper" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPreservationPlan") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiPreservationPlan")
+                          .find("packed-line score accumulator helper:x,y") !=
+                      std::string::npos &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiSafetyProof") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiSafetyProof") ==
+                      "prove-live-stack-inputs-survive-nested-callee-entry" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiImplementationStatus") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiImplementationStatus") ==
+                      "required-before-stack-input-scheduling" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareSuggestedResidentInputNames") &&
                   candidate_score_zero->details.at("valueAwareSuggestedResidentInputNames")
                           .find("y") != std::string::npos &&
@@ -635,6 +657,16 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCallPreservationCalleeStatus") &&
                   mark_lines_helper->details.at("valueAwareCallPreservationCalleeStatus") ==
                       "blocked-by-callee-stack-mutation" &&
+                  mark_lines_helper->details.contains("valueAwareCalleeAbiRefactorTargets") &&
+                  mark_lines_helper->details.at("valueAwareCalleeAbiRefactorTargets")
+                          .find("mark_one") != std::string::npos &&
+                  mark_lines_helper->details.at("valueAwareCalleeAbiRefactorTargets")
+                          .find("normalize") != std::string::npos &&
+                  mark_lines_helper->details.contains("valueAwareCalleeAbiPreservationPlan") &&
+                  mark_lines_helper->details.at("valueAwareCalleeAbiPreservationPlan")
+                          .find("mark_one:x,y") != std::string::npos &&
+                  mark_lines_helper->details.at("valueAwareCalleeAbiPreservationPlan")
+                          .find("normalize:x,y") != std::string::npos &&
                   mark_lines_helper->details.contains("valueAwareNestedCallLabels") &&
                   mark_lines_helper->details.at("valueAwareNestedCallLabels").find("mark_one") !=
                       std::string::npos &&
@@ -946,6 +978,17 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCallPreservationMutatingOpcodes")
                           .find("packed-line score accumulator helper:86://consume-y-drop") !=
                       std::string::npos &&
+                  callee_abi_required_action->best_details.contains(
+                      "valueAwareCalleeAbiRefactorKind") &&
+                  callee_abi_required_action->best_details.at(
+                      "valueAwareCalleeAbiRefactorKind") ==
+                      "stack-preserving-entry-for-live-caller-inputs" &&
+                  callee_abi_required_action->best_details.contains(
+                      "valueAwareCalleeAbiPreservationPlan") &&
+                  callee_abi_required_action->best_details.at(
+                      "valueAwareCalleeAbiPreservationPlan")
+                          .find("packed-line score accumulator helper:x,y") !=
+                      std::string::npos &&
                   callee_abi_required_action->best_details.contains("registerTrafficBreakdown") &&
                   callee_abi_required_action->best_details.contains(
                       "valueAwareStackInputNames") &&
@@ -997,7 +1040,12 @@ void example_sizes_match_typescript_baselines() {
                   callee_abi_action->best_details.contains(
                       "valueAwareCallPreservationMutatingCells") &&
                   callee_abi_action->best_details.at("valueAwareCallPreservationMutatingCells") ==
-                      "packed-line score accumulator helper:4",
+                      "packed-line score accumulator helper:4" &&
+                  callee_abi_action->best_details.contains(
+                      "valueAwareCalleeAbiRefactorTargets") &&
+                  callee_abi_action->best_details.at(
+                      "valueAwareCalleeAbiRefactorTargets") ==
+                      "packed-line score accumulator helper",
               "tic-tac-toe-4x4 size attribution should rank profitable stack inputs blocked by "
               "stack-mutating callees as the next value-aware scheduler action");
     }
