@@ -74,6 +74,17 @@ const CandidateReport* find_candidate(const std::vector<CandidateReport>& candid
   return it == candidates.end() ? nullptr : &*it;
 }
 
+const SizeSelectedOptimizationReport* find_size_selected_optimization(
+    const CompileResult& result, const std::string& variant) {
+  const auto it = std::find_if(
+      result.size_attribution.selected_optimizations.begin(),
+      result.size_attribution.selected_optimizations.end(),
+      [&](const SizeSelectedOptimizationReport& selected) {
+        return selected.variant == variant;
+      });
+  return it == result.size_attribution.selected_optimizations.end() ? nullptr : &*it;
+}
+
 bool warnings_contain(const CompileResult& result, const std::string& text) {
   return std::any_of(result.warnings.begin(), result.warnings.end(),
                      [&](const std::string& warning) {
@@ -226,6 +237,23 @@ void compiler_examples_match_typescript_contract() {
     require(has_proof(result, "value-ranges"), "human.mkpro should report value-range proofs");
     require(has_proof(result, "code-data-overlay"),
             "human.mkpro should report code-data-overlay final-artifact proof");
+    const SizeSelectedOptimizationReport* selected_overlay =
+        find_size_selected_optimization(result, "address-code-overlay");
+    require(selected_overlay != nullptr && selected_overlay->site == "layout" &&
+                selected_overlay->current_steps == static_cast<int>(result.steps.size()) &&
+                selected_overlay->baseline_steps == static_cast<int>(result.steps.size()) + 1 &&
+                selected_overlay->savings == 1 &&
+                selected_overlay->details.contains("estimateKind") &&
+                selected_overlay->details.at("estimateKind") ==
+                    "exact-selected-address-code-overlay-cells" &&
+                selected_overlay->details.contains("overlayCount") &&
+                selected_overlay->details.at("overlayCount") == "1" &&
+                selected_overlay->details.contains("proofStatus") &&
+                selected_overlay->details.at("proofStatus") ==
+                    "final-artifact-code-data-overlay-proof" &&
+                selected_overlay->details.contains("layoutAction") &&
+                selected_overlay->details.at("layoutAction") == "address-code-overlay",
+            "human.mkpro size attribution should expose selected address/code overlay savings");
     // The TS oracle surfaces, for human.mkpro, a "numeric-dispatch-residual-chain" optimization
     // label plus "dark-indirect-table" / "super-dark-dispatch" considered-but-rejected dispatch
     // candidates (mirroring selectDispatchCandidate). These are report-only entries; the emitted

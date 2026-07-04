@@ -47488,6 +47488,19 @@ std::optional<int> selected_indirect_flow_replacement_count(
   }
 }
 
+std::optional<int> selected_address_code_overlay_count(
+    const OptimizationReport& optimization) {
+  static const std::regex overlaid(R"(Overlaid\s+(\d+)\s+executable cell)");
+  std::smatch match;
+  if (!std::regex_search(optimization.detail, match, overlaid))
+    return std::nullopt;
+  try {
+    return std::stoi(match[1].str());
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
 std::string selected_optimization_site(const std::string& name) {
   if (name.find("indirect-flow") != std::string::npos ||
       name.find("indirect-call") != std::string::npos ||
@@ -47528,6 +47541,18 @@ std::vector<SizeSelectedOptimizationReport> selected_size_optimization_reports(
       details["replacementCount"] = std::to_string(*replacements);
       details["savingsModel"] = "one-cell-saved-per-replaced-direct-branch-call";
       details["baselineStepsStatus"] = "estimated-gross-before-overlapping-layout-effects";
+    } else if (optimization.name == "address-code-overlay") {
+      const std::optional<int> overlays = selected_address_code_overlay_count(optimization);
+      if (!overlays.has_value() || *overlays <= 0)
+        continue;
+      baseline_steps = current_steps + *overlays;
+      savings = *overlays;
+      details["estimateKind"] = "exact-selected-address-code-overlay-cells";
+      details["overlayCount"] = std::to_string(*overlays);
+      details["savingsModel"] = "one-cell-saved-per-overlaid-executable-cell";
+      details["baselineStepsStatus"] = "exact-post-layout-deleted-cells";
+      details["proofStatus"] = "final-artifact-code-data-overlay-proof";
+      details["layoutAction"] = "address-code-overlay";
     } else {
       continue;
     }

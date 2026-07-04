@@ -917,7 +917,8 @@ void print_human_analysis_report(const mkpro::CompileResult& result) {
                 << " savings=" << selected.savings;
       print_size_detail_suffix(selected.details,
                                {"estimateKind", "replacementCount", "savingsModel",
-                                "baselineStepsStatus", "savingsAggregation"});
+                                "baselineStepsStatus", "overlayCount", "proofStatus",
+                                "layoutAction", "savingsAggregation"});
       if (!selected.reason.empty())
         std::cout << " - " << selected.reason;
       std::cout << "\n";
