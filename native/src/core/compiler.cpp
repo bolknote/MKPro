@@ -46786,6 +46786,114 @@ std::string selector_data_cost_model_action(const std::string& resolution_status
              : "";
 }
 
+std::string selector_data_register_range_text(int first, int last) {
+  return core::register_name_for_index(first) + ".." + core::register_name_for_index(last);
+}
+
+std::optional<std::vector<int>>
+selector_data_sorted_register_indices(const std::set<std::string>& registers) {
+  std::vector<int> indices;
+  indices.reserve(registers.size());
+  for (const std::string& reg : registers) {
+    try {
+      indices.push_back(register_index(reg));
+    } catch (const std::exception&) {
+      return std::nullopt;
+    }
+  }
+  std::sort(indices.begin(), indices.end());
+  return indices;
+}
+
+bool selector_data_registers_are_contiguous(const std::vector<int>& indices) {
+  if (indices.empty())
+    return false;
+  for (std::size_t index = 1; index < indices.size(); ++index) {
+    if (indices.at(index) != indices.at(index - 1) + 1)
+      return false;
+  }
+  return true;
+}
+
+bool selector_data_window_overlaps_registers(int first, int count,
+                                             const std::set<std::string>& registers) {
+  const int last = first + count - 1;
+  for (const std::string& reg : registers) {
+    const int index = register_index(reg);
+    if (index >= first && index <= last)
+      return true;
+  }
+  return false;
+}
+
+std::vector<std::pair<std::string, std::string>> selector_data_payload_layout_details(
+    const std::set<std::string>& target_registers,
+    const std::set<std::string>& selector_registers,
+    const std::set<std::string>& overlap_registers,
+    const std::string& resolution_status) {
+  std::vector<std::pair<std::string, std::string>> fields;
+  const std::optional<std::vector<int>> target_indices =
+      selector_data_sorted_register_indices(target_registers);
+  if (!target_indices.has_value() || !selector_data_registers_are_contiguous(*target_indices))
+    return fields;
+
+  const int first = target_indices->front();
+  const int last = target_indices->back();
+  const int count = static_cast<int>(target_indices->size());
+  fields.emplace_back("selectorDataPayloadLayout", "contiguous-indirect-window");
+  fields.emplace_back("selectorDataPayloadTargetRange",
+                      selector_data_register_range_text(first, last));
+  fields.emplace_back("selectorDataPayloadRegisterCount", std::to_string(count));
+
+  if (resolution_status != "proved-selector-data-overlap-requires-payload-repacking")
+    return fields;
+
+  fields.emplace_back("selectorDataRequiredFreeSelectorCount",
+                      std::to_string(overlap_registers.size()));
+  if (!overlap_registers.empty()) {
+    const int selector_free_budget = count - static_cast<int>(overlap_registers.size());
+    fields.emplace_back("selectorDataPayloadRegistersToFree",
+                        static_proof_gate_join_values(overlap_registers));
+    fields.emplace_back("selectorDataPayloadRegisterBudgetAfterFreeingSelectors",
+                        std::to_string(std::max(0, selector_free_budget)));
+    fields.emplace_back("selectorDataPayloadCompressionRequirement",
+                        std::to_string(count) + "->" +
+                            std::to_string(std::max(0, selector_free_budget)));
+    fields.emplace_back("selectorDataPayloadCompressionReason",
+                        "free-overlapping-flow-selectors");
+  }
+  std::vector<std::string> relocation_windows;
+  bool has_selector_free_window = false;
+  for (int pointer = core::k_min_register_index; pointer <= core::k_max_register_index; ++pointer) {
+    if (!core::emit::lowering::is_preincrement_indirect_register(pointer))
+      continue;
+    const int window_first = pointer + 1;
+    const int window_last = window_first + count - 1;
+    if (window_last > core::k_max_register_index)
+      continue;
+    const bool overlaps =
+        selector_data_window_overlaps_registers(window_first, count, selector_registers);
+    has_selector_free_window = has_selector_free_window || !overlaps;
+    relocation_windows.push_back(selector_data_register_range_text(window_first, window_last) +
+                                 ":" +
+                                 (overlaps ? "overlaps-flow-selectors"
+                                           : "selector-free"));
+  }
+  if (!relocation_windows.empty())
+    fields.emplace_back("selectorDataContiguousRelocationWindows",
+                        join_strings(relocation_windows, "+"));
+  fields.emplace_back("selectorDataContiguousRelocationStatus",
+                      has_selector_free_window ? "selector-free-window-available"
+                                               : "no-selector-free-contiguous-window");
+  if (!has_selector_free_window) {
+    fields.emplace_back("selectorDataPayloadPackingRequirement",
+                        "pack-or-split-contiguous-indirect-payload");
+    fields.emplace_back("selectorDataPayloadPackingReason",
+                        "contiguous-window-overlaps-flow-selectors");
+  }
+  return fields;
+}
+
 std::set<std::string>
 free_stable_selector_registers(const std::map<std::string, std::string>& allocated_registers) {
   std::set<std::string> allocated;
@@ -46899,46 +47007,48 @@ std::optional<std::string> indirect_flow_selector_preservation_rejection_reason(
         selector_data_resolution_status(conflicting_proof_gaps, overlapping_selector_registers,
                                         free_stable_selectors);
     const std::string required_action = selector_data_required_action(resolution_status);
+    std::vector<std::pair<std::string, std::string>> fields = {
+        {"proofFamily", "indirect-flow-targets"},
+        {"missingProof", "selector-register-preservation"},
+        {"candidateSelectorRegisters", selector_registers_text},
+        {"selectorRegister", first_selector},
+        {"allocatedName", first_name},
+        {"conflictingSelectorRegisters",
+         static_proof_gate_join_values(conflicting_selector_registers)},
+        {"conflictingAllocatedNames",
+         static_proof_gate_join_values(conflicting_allocated_names)},
+        {"selectorDataConflictKind", first_access_kind},
+        {"selectorDataConflictTargets", first_access_targets},
+        {"selectorDataConflictPrecision", first_access_precision},
+        {"selectorDataConflictKinds", static_proof_gate_join_values(conflicting_access_kinds)},
+        {"selectorDataConflictPrecisions",
+         static_proof_gate_join_values(conflicting_access_precisions)},
+        {"selectorDataConflictAccesses", join_strings(conflicting_access_parts, "+")},
+        {"selectorDataAllConflictTargets",
+         static_proof_gate_join_values(conflicting_target_registers)},
+        {"selectorDataOverlapRegisters",
+         static_proof_gate_join_values(overlapping_selector_registers)},
+        {"selectorDataOverlapCount", std::to_string(overlapping_selector_registers.size())},
+        {"selectorDataProofGap", static_proof_gate_join_values(conflicting_proof_gaps)},
+        {"selectorDataNextProofAction", static_proof_gate_join_values(conflicting_proof_actions)},
+        {"selectorDataConflictResolutionStatus", resolution_status},
+        {"proofFailure", "selector-register-used-as-data"},
+        {"proofDisposition", selector_data_proof_disposition(resolution_status)},
+        {"consumerAddress", safe_format_label_address(first_consumer->address)},
+        {"consumerOpcodeHex", opcode_hex_text(first_consumer->opcode)},
+        {"consumerOpcode", indirect_flow_step_text(*first_consumer)},
+        {"freeStableSelectorRegisters", free_stable_selector_text},
+        {"selectorSplitStatus", selector_split_status},
+        {"layoutAction", selector_data_layout_action(resolution_status)},
+        {"costModelAction", selector_data_cost_model_action(resolution_status)},
+        {"requiredAction", required_action},
+    };
+    const std::vector<std::pair<std::string, std::string>> payload_details =
+        selector_data_payload_layout_details(conflicting_target_registers, selector_registers,
+                                             overlapping_selector_registers, resolution_status);
+    fields.insert(fields.end(), payload_details.begin(), payload_details.end());
     return "static proof gate rejected candidate; " +
-           static_proof_gate_key_values({
-               {"proofFamily", "indirect-flow-targets"},
-               {"missingProof", "selector-register-preservation"},
-               {"candidateSelectorRegisters", selector_registers_text},
-               {"selectorRegister", first_selector},
-               {"allocatedName", first_name},
-               {"conflictingSelectorRegisters",
-               static_proof_gate_join_values(conflicting_selector_registers)},
-               {"conflictingAllocatedNames",
-                static_proof_gate_join_values(conflicting_allocated_names)},
-               {"selectorDataConflictKind", first_access_kind},
-               {"selectorDataConflictTargets", first_access_targets},
-               {"selectorDataConflictPrecision", first_access_precision},
-               {"selectorDataConflictKinds",
-                static_proof_gate_join_values(conflicting_access_kinds)},
-               {"selectorDataConflictPrecisions",
-                static_proof_gate_join_values(conflicting_access_precisions)},
-               {"selectorDataConflictAccesses", join_strings(conflicting_access_parts, "+")},
-               {"selectorDataAllConflictTargets",
-                static_proof_gate_join_values(conflicting_target_registers)},
-               {"selectorDataOverlapRegisters",
-                static_proof_gate_join_values(overlapping_selector_registers)},
-               {"selectorDataOverlapCount",
-                std::to_string(overlapping_selector_registers.size())},
-               {"selectorDataProofGap", static_proof_gate_join_values(conflicting_proof_gaps)},
-               {"selectorDataNextProofAction",
-                static_proof_gate_join_values(conflicting_proof_actions)},
-               {"selectorDataConflictResolutionStatus", resolution_status},
-               {"proofFailure", "selector-register-used-as-data"},
-               {"proofDisposition", selector_data_proof_disposition(resolution_status)},
-               {"consumerAddress", safe_format_label_address(first_consumer->address)},
-               {"consumerOpcodeHex", opcode_hex_text(first_consumer->opcode)},
-               {"consumerOpcode", indirect_flow_step_text(*first_consumer)},
-               {"freeStableSelectorRegisters", free_stable_selector_text},
-               {"selectorSplitStatus", selector_split_status},
-               {"layoutAction", selector_data_layout_action(resolution_status)},
-               {"costModelAction", selector_data_cost_model_action(resolution_status)},
-               {"requiredAction", required_action},
-           });
+           static_proof_gate_key_values(fields);
   }
 
   return std::nullopt;
@@ -48078,6 +48188,8 @@ void add_size_opportunity_flow_target_details(
   }
 }
 
+std::map<std::string, std::string> semicolon_key_value_details(const std::string& text);
+
 std::map<std::string, std::string>
 size_opportunity_details(const CandidateReport& candidate,
                          const std::map<int, SizeReportFlowTargetStats>& flow_stats,
@@ -48124,6 +48236,8 @@ size_opportunity_details(const CandidateReport& candidate,
       details[key] = reason.substr(value_start, value_end - value_start);
     cursor = value_end == value_start ? equals + 1U : value_end;
   }
+  for (const auto& [key, value] : semicolon_key_value_details(reason))
+    details[key] = value;
   const bool dead_integer_recovery_order_reason =
       reason.find("before K {x}") != std::string::npos ||
       reason.find("instead of immediate K {x}") != std::string::npos;
@@ -48414,6 +48528,14 @@ void attach_rejected_candidate_size_details(std::map<std::string, std::string>& 
       savings > 0 ? "measured-positive-vs-current"
                   : (savings == 0 ? "measured-break-even-vs-current"
                                   : "measured-negative-vs-current");
+  if (savings > 0 && details.contains("selectorDataPayloadPackingRequirement")) {
+    details["selectorDataPayloadPackingOverheadBudgetCells"] = std::to_string(savings);
+    details["selectorDataPayloadPackingBreakEvenCells"] = std::to_string(savings);
+    details["selectorDataPayloadPackingCostModelStatus"] =
+        "unestimated-payload-access-overhead";
+    details["selectorDataPayloadPackingCostModelRequirement"] =
+        "packed-or-split-access-overhead-must-not-exceed-candidate-savings";
+  }
   details.emplace("proofStatus",
                   blocker_kind == "nonwinning-candidate"
                       ? "not-blocked-by-proof-selected-candidate-is-smaller-or-equal"
@@ -49633,6 +49755,16 @@ SizeAttributionReport build_size_attribution_report(
           if (state_output_cells > 0)
             helper.details["valueAwareEstimatedNetSavingsExcludes"] =
                 "persistent-state-output-stores";
+        }
+        if (call_preservation_has_stack_mutating_callee && adjusted_estimated_net_cells > 0) {
+          helper.details["valueAwareCalleeAbiOverheadBudgetCells"] =
+              std::to_string(adjusted_estimated_net_cells);
+          helper.details["valueAwareCalleeAbiBreakEvenAddedCells"] =
+              std::to_string(adjusted_estimated_net_cells);
+          helper.details["valueAwareCalleeAbiCostModelStatus"] =
+              "unestimated-stack-preserving-entry-overhead";
+          helper.details["valueAwareCalleeAbiCostModelRequirement"] =
+              "stack-preserving-callee-abi-overhead-must-not-exceed-estimated-net-savings";
         }
         if (!direct_stack_input_names.empty()) {
           helper.details["valueAwareDirectStackInputNames"] =

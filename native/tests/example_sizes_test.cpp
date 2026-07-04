@@ -302,6 +302,8 @@ void example_sizes_match_typescript_baselines() {
                   indirect_flow->details.at("consumerAddress") == "14" &&
                   indirect_flow->details.contains("consumerOpcodeHex") &&
                   indirect_flow->details.at("consumerOpcodeHex") == "D5" &&
+                  indirect_flow->details.contains("consumerOpcode") &&
+                  indirect_flow->details.at("consumerOpcode") == "К П->X 5" &&
                   indirect_flow->details.contains("selectorDataConflictKind") &&
                   indirect_flow->details.at("selectorDataConflictKind") ==
                       "indirect-memory-recall" &&
@@ -325,6 +327,43 @@ void example_sizes_match_typescript_baselines() {
                   indirect_flow->details.at("selectorDataOverlapRegisters") == "7+8+9" &&
                   indirect_flow->details.contains("selectorDataOverlapCount") &&
                   indirect_flow->details.at("selectorDataOverlapCount") == "3" &&
+                  indirect_flow->details.contains("selectorDataPayloadLayout") &&
+                  indirect_flow->details.at("selectorDataPayloadLayout") ==
+                      "contiguous-indirect-window" &&
+                  indirect_flow->details.contains("selectorDataPayloadTargetRange") &&
+                  indirect_flow->details.at("selectorDataPayloadTargetRange") == "6..e" &&
+                  indirect_flow->details.contains("selectorDataPayloadRegisterCount") &&
+                  indirect_flow->details.at("selectorDataPayloadRegisterCount") == "9" &&
+                  indirect_flow->details.contains("selectorDataRequiredFreeSelectorCount") &&
+                  indirect_flow->details.at("selectorDataRequiredFreeSelectorCount") == "3" &&
+                  indirect_flow->details.contains("selectorDataPayloadRegistersToFree") &&
+                  indirect_flow->details.at("selectorDataPayloadRegistersToFree") ==
+                      "7+8+9" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadRegisterBudgetAfterFreeingSelectors") &&
+                  indirect_flow->details.at(
+                      "selectorDataPayloadRegisterBudgetAfterFreeingSelectors") == "6" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadCompressionRequirement") &&
+                  indirect_flow->details.at("selectorDataPayloadCompressionRequirement") ==
+                      "9->6" &&
+                  indirect_flow->details.contains("selectorDataPayloadCompressionReason") &&
+                  indirect_flow->details.at("selectorDataPayloadCompressionReason") ==
+                      "free-overlapping-flow-selectors" &&
+                  indirect_flow->details.contains("selectorDataContiguousRelocationWindows") &&
+                  indirect_flow->details.at("selectorDataContiguousRelocationWindows")
+                          .find("5..d:overlaps-flow-selectors") != std::string::npos &&
+                  indirect_flow->details.at("selectorDataContiguousRelocationWindows")
+                          .find("6..e:overlaps-flow-selectors") != std::string::npos &&
+                  indirect_flow->details.contains("selectorDataContiguousRelocationStatus") &&
+                  indirect_flow->details.at("selectorDataContiguousRelocationStatus") ==
+                      "no-selector-free-contiguous-window" &&
+                  indirect_flow->details.contains("selectorDataPayloadPackingRequirement") &&
+                  indirect_flow->details.at("selectorDataPayloadPackingRequirement") ==
+                      "pack-or-split-contiguous-indirect-payload" &&
+                  indirect_flow->details.contains("selectorDataPayloadPackingReason") &&
+                  indirect_flow->details.at("selectorDataPayloadPackingReason") ==
+                      "contiguous-window-overlaps-flow-selectors" &&
                   indirect_flow->details.contains("selectorDataProofGap") &&
                   indirect_flow->details.at("selectorDataProofGap") ==
                       "annotated-target-overlaps-selector-data" &&
@@ -348,6 +387,23 @@ void example_sizes_match_typescript_baselines() {
                   indirect_flow->details.contains("costModelAction") &&
                   indirect_flow->details.at("costModelAction") ==
                       "estimate-payload-packing-for-selector-freeing" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadPackingOverheadBudgetCells") &&
+                  indirect_flow->details.at("selectorDataPayloadPackingOverheadBudgetCells") ==
+                      "5" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadPackingBreakEvenCells") &&
+                  indirect_flow->details.at("selectorDataPayloadPackingBreakEvenCells") ==
+                      "5" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadPackingCostModelStatus") &&
+                  indirect_flow->details.at("selectorDataPayloadPackingCostModelStatus") ==
+                      "unestimated-payload-access-overhead" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadPackingCostModelRequirement") &&
+                  indirect_flow->details.at(
+                      "selectorDataPayloadPackingCostModelRequirement") ==
+                      "packed-or-split-access-overhead-must-not-exceed-candidate-savings" &&
                   indirect_flow->details.contains("requiredAction") &&
                   indirect_flow->details.at("requiredAction") ==
                       "pack-data-away-from-flow-selectors",
@@ -364,6 +420,8 @@ void example_sizes_match_typescript_baselines() {
                       "selector-register-used-as-data" &&
                   selector_action->best_details.contains("consumerOpcodeHex") &&
                   selector_action->best_details.at("consumerOpcodeHex") == "D5" &&
+                  selector_action->best_details.contains("consumerOpcode") &&
+                  selector_action->best_details.at("consumerOpcode") == "К П->X 5" &&
                   selector_action->best_details.contains("conflictingSelectorRegisters") &&
                   selector_action->best_details.at("conflictingSelectorRegisters") == "7+8+9" &&
                   selector_action->best_details.contains("selectorDataConflictPrecision") &&
@@ -385,7 +443,19 @@ void example_sizes_match_typescript_baselines() {
                   selector_action->best_details.at("freeStableSelectorRegisters") == "none" &&
                   selector_action->best_details.contains("selectorSplitStatus") &&
                   selector_action->best_details.at("selectorSplitStatus") ==
-                      "no-free-stable-selector-register",
+                      "no-free-stable-selector-register" &&
+                  selector_action->best_details.contains(
+                      "selectorDataPayloadPackingRequirement") &&
+                  selector_action->best_details.at("selectorDataPayloadPackingRequirement") ==
+                      "pack-or-split-contiguous-indirect-payload" &&
+                  selector_action->best_details.contains(
+                      "selectorDataPayloadCompressionRequirement") &&
+                  selector_action->best_details.at(
+                      "selectorDataPayloadCompressionRequirement") == "9->6" &&
+                  selector_action->best_details.contains(
+                      "selectorDataPayloadPackingOverheadBudgetCells") &&
+                  selector_action->best_details.at(
+                      "selectorDataPayloadPackingOverheadBudgetCells") == "5",
               "fox-hunt-mk61 size attribution should rank selector/data payload packing as the "
               "next action for the 60-cell post-layout candidates");
       const SizeNextActionSummaryReport* layout_action =
@@ -399,7 +469,20 @@ void example_sizes_match_typescript_baselines() {
       require(cost_model_action != nullptr && cost_model_action->potential_savings == 5 &&
                   cost_model_action->best_details.contains("selectorDataAllConflictTargets") &&
                   cost_model_action->best_details.at("selectorDataAllConflictTargets") ==
-                      "6+7+8+9+a+b+c+d+e",
+                      "6+7+8+9+a+b+c+d+e" &&
+                  cost_model_action->best_details.contains(
+                      "selectorDataContiguousRelocationStatus") &&
+                  cost_model_action->best_details.at("selectorDataContiguousRelocationStatus") ==
+                      "no-selector-free-contiguous-window" &&
+                  cost_model_action->best_details.contains(
+                      "selectorDataPayloadRegisterBudgetAfterFreeingSelectors") &&
+                  cost_model_action->best_details.at(
+                      "selectorDataPayloadRegisterBudgetAfterFreeingSelectors") == "6" &&
+                  cost_model_action->best_details.contains(
+                      "selectorDataPayloadPackingCostModelRequirement") &&
+                  cost_model_action->best_details.at(
+                      "selectorDataPayloadPackingCostModelRequirement") ==
+                      "packed-or-split-access-overhead-must-not-exceed-candidate-savings",
               "fox-hunt-mk61 size attribution should expose the packing cost-model action");
     }
     if (name == "dangerous-loading") {
@@ -854,6 +937,24 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiImplementationStatus") ==
                       "required-before-stack-input-scheduling" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiOverheadBudgetCells") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiOverheadBudgetCells") ==
+                      "1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBreakEvenAddedCells") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiBreakEvenAddedCells") ==
+                      "1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiCostModelStatus") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiCostModelStatus") ==
+                      "unestimated-stack-preserving-entry-overhead" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiCostModelRequirement") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiCostModelRequirement") ==
+                      "stack-preserving-callee-abi-overhead-must-not-exceed-estimated-net-"
+                      "savings" &&
                   candidate_score_zero->details.contains(
                       "valueAwareSuggestedResidentInputNames") &&
                   candidate_score_zero->details.at("valueAwareSuggestedResidentInputNames")
@@ -1350,6 +1451,16 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCalleeAbiPreservationPlan")
                           .find("packed-line score accumulator helper:x,y") !=
                       std::string::npos &&
+                  callee_abi_required_action->best_details.contains(
+                      "valueAwareCalleeAbiOverheadBudgetCells") &&
+                  callee_abi_required_action->best_details.at(
+                      "valueAwareCalleeAbiOverheadBudgetCells") == "1" &&
+                  callee_abi_required_action->best_details.contains(
+                      "valueAwareCalleeAbiCostModelRequirement") &&
+                  callee_abi_required_action->best_details.at(
+                      "valueAwareCalleeAbiCostModelRequirement") ==
+                      "stack-preserving-callee-abi-overhead-must-not-exceed-estimated-net-"
+                      "savings" &&
                   callee_abi_required_action->best_details.contains("registerTrafficBreakdown") &&
                   callee_abi_required_action->best_details.contains(
                       "valueAwareStackInputNames") &&
@@ -1414,7 +1525,16 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCalleeAbiRefactorTargets") &&
                   callee_abi_action->best_details.at(
                       "valueAwareCalleeAbiRefactorTargets") ==
-                      "packed-line score accumulator helper",
+                      "packed-line score accumulator helper" &&
+                  callee_abi_action->best_details.contains(
+                      "valueAwareCalleeAbiBreakEvenAddedCells") &&
+                  callee_abi_action->best_details.at(
+                      "valueAwareCalleeAbiBreakEvenAddedCells") == "1" &&
+                  callee_abi_action->best_details.contains(
+                      "valueAwareCalleeAbiCostModelStatus") &&
+                  callee_abi_action->best_details.at(
+                      "valueAwareCalleeAbiCostModelStatus") ==
+                      "unestimated-stack-preserving-entry-overhead",
               "tic-tac-toe-4x4 size attribution should rank profitable stack inputs blocked by "
               "stack-mutating callees as the next value-aware scheduler action");
     }

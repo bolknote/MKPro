@@ -1250,6 +1250,18 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
               fox_aggressive_rejection->find(
                   "proofDisposition=proved-conflict-needs-layout-change") !=
                   std::string::npos &&
+              fox_aggressive_rejection->find(
+                  "selectorDataPayloadLayout=contiguous-indirect-window") !=
+                  std::string::npos &&
+              fox_aggressive_rejection->find(
+                  "selectorDataPayloadTargetRange=6..e") != std::string::npos &&
+              fox_aggressive_rejection->find(
+                  "selectorDataContiguousRelocationStatus="
+                  "no-selector-free-contiguous-window") != std::string::npos &&
+              fox_aggressive_rejection->find(
+                  "selectorDataPayloadPackingRequirement="
+                  "pack-or-split-contiguous-indirect-payload") !=
+                  std::string::npos &&
               fox_aggressive_rejection->find("requiredAction=pack-data-away-from-flow-selectors") !=
                   std::string::npos,
           "fox-hunt aggressive post-layout indirect-flow rejection should explain the selector "
