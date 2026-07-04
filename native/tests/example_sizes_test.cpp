@@ -1586,6 +1586,20 @@ void example_sizes_match_typescript_baselines() {
       require(stack_helper_action == nullptr,
               "tic-tac-toe-4x4 size attribution should not rank net-negative stack-entry ABI "
               "implementation as a positive next action");
+      const SizeNextActionSummaryReport* stack_helper_cost_action = find_size_next_action(
+          result, "costModelAction", "find-more-stack-entry-call-sites-or-inline-helper");
+      require(stack_helper_cost_action != nullptr &&
+                  stack_helper_cost_action->status == "stalled-nonpositive" &&
+                  stack_helper_cost_action->best_savings == -9 &&
+                  stack_helper_cost_action->best_variant == "stack-helper-abi" &&
+                  stack_helper_cost_action->best_blocker_kind == "stack-helper-abi" &&
+                  stack_helper_cost_action->best_details.contains(
+                      "additionalCallSitesToBreakEven") &&
+                  stack_helper_cost_action->best_details.at("additionalCallSitesToBreakEven") ==
+                      "5",
+              "tic-tac-toe-4x4 size attribution should surface net-negative stack-entry ABI "
+              "work as a stalled cost-model action rather than a positive implementation "
+              "action");
       const SizeNextActionSummaryReport* callee_abi_required_action = find_size_next_action(
           result, "requiredAction", "refactor-stack-mutating-callee-abi");
       require(callee_abi_required_action == nullptr,
@@ -1627,6 +1641,23 @@ void example_sizes_match_typescript_baselines() {
       require(stack_input_scheduler_action == nullptr,
               "tic-tac-toe-4x4 size attribution should not rank direct stack-input helper "
               "scheduling when callsite materialization makes it net-zero");
+      const SizeNextActionSummaryReport* stack_input_cost_model_action = find_size_next_action(
+          result, "costModelAction",
+          "find-profitable-stack-input-call-sites-or-reduce-materialization-cost");
+      require(stack_input_cost_model_action != nullptr &&
+                  stack_input_cost_model_action->status == "stalled-nonpositive" &&
+                  stack_input_cost_model_action->potential_savings == 0 &&
+                  stack_input_cost_model_action->best_savings == 0 &&
+                  stack_input_cost_model_action->best_variant == "helper-register-traffic" &&
+                  stack_input_cost_model_action->best_blocker_kind ==
+                      "value-aware-stack-register-scheduler" &&
+                  stack_input_cost_model_action->best_details.contains(
+                      "valueAwareProfitableStackInputPlanStatus") &&
+                  stack_input_cost_model_action->best_details.at(
+                      "valueAwareProfitableStackInputPlanStatus") ==
+                      "no-profitable-stack-input-materialization",
+              "tic-tac-toe-4x4 size attribution should surface net-zero stack-input scheduling "
+              "as a stalled cost-model action instead of a positive traffic-shape action");
       const SizeNextActionSummaryReport* staged_stack_input_action = find_size_next_action(
           result, "trafficShapeAction", "split-or-stage-stack-input-helper-values");
       require(staged_stack_input_action == nullptr,

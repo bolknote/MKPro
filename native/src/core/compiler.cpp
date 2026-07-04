@@ -51943,6 +51943,8 @@ SizeAttributionReport build_size_attribution_report(
       details["valueAwareEstimatedNetSavingsAfterMaterialization"] = "0";
       details["valueAwareEstimatedNetSavingsModel"] =
           "profitable-stack-input-recalls-minus-callsite-materialization-plus-state-outputs";
+      details["costModelAction"] =
+          "find-profitable-stack-input-call-sites-or-reduce-materialization-cost";
     }
     const auto stack_capacity_it = details.find("valueAwareStackCapacityStatus");
     if (stack_capacity_it != details.end() &&
@@ -52259,6 +52261,26 @@ SizeAttributionReport build_size_attribution_report(
         add_next_action(opportunity, "requiredAction", required_it->second, index,
                         "stalled-nonpositive");
       }
+      if (const auto cost_it = opportunity.details.find("costModelAction");
+          cost_it != opportunity.details.end()) {
+        add_next_action(opportunity, "costModelAction", cost_it->second, index,
+                        "stalled-nonpositive");
+      }
+      continue;
+    }
+    if (opportunity.blocker_kind == "stack-helper-abi") {
+      if (const auto cost_it = opportunity.details.find("costModelAction");
+          cost_it != opportunity.details.end()) {
+        add_next_action(opportunity, "costModelAction", cost_it->second, index,
+                        "stalled-nonpositive");
+      }
+      continue;
+    }
+    if (const auto stack_input_plan_it =
+            opportunity.details.find("valueAwareProfitableStackInputPlanStatus");
+        opportunity.blocker_kind == "value-aware-stack-register-scheduler" &&
+        stack_input_plan_it != opportunity.details.end() &&
+        stack_input_plan_it->second == "no-profitable-stack-input-materialization") {
       if (const auto cost_it = opportunity.details.find("costModelAction");
           cost_it != opportunity.details.end()) {
         add_next_action(opportunity, "costModelAction", cost_it->second, index,
