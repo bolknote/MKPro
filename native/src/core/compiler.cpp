@@ -47393,6 +47393,10 @@ std::optional<std::string> value_aware_scheduler_traffic_shape_action(
   if (shape == "stack-inputs-only")
     return exceeds_stack_capacity ? "split-or-stage-stack-input-helper-values"
                                   : "schedule-stack-input-helper-values";
+  if (shape == "nested-call-inputs-only")
+    return "refactor-nested-helper-state-inputs";
+  if (shape == "stack-inputs-and-nested-call-inputs")
+    return "split-stack-inputs-from-nested-helper-state-inputs";
   if (exceeds_stack_capacity)
     return "split-or-stage-stack-input-helper-values";
   if (shape == "deferred-state-outputs-only")
@@ -47758,6 +47762,11 @@ SizeAttributionReport build_size_attribution_report(
                 return left.helper_label < right.helper_label;
               return left.name < right.name;
             });
+  std::map<std::string, std::set<std::string>> helper_recall_names;
+  for (const SizeHelperSpillSummaryReport& spill : report.helper_spills) {
+    if (spill.recall_cells > 0)
+      helper_recall_names[spill.helper_label].insert(spill.name);
+  }
   std::map<std::string, std::size_t> helper_summary_by_label;
   for (std::size_t index = 0; index < report.helpers.size(); ++index)
     helper_summary_by_label.emplace(report.helpers.at(index).label, index);
@@ -47772,13 +47781,20 @@ SizeAttributionReport build_size_attribution_report(
   }
   std::map<std::string, int> helper_nested_call_cells;
   std::map<std::string, std::set<std::string>> helper_nested_call_labels;
+  std::map<std::string, std::set<std::string>> helper_nested_call_input_names;
   for (const HelperRegionRange& region : helper_regions) {
     for (const CallSite& call_site : call_sites) {
       if (call_site.start_index < region.start || call_site.start_index >= region.end)
         continue;
       helper_nested_call_cells[region.label] += call_site.cells;
-      if (!call_site.label.empty())
+      if (!call_site.label.empty()) {
         helper_nested_call_labels[region.label].insert(call_site.label);
+        if (const auto recall_it = helper_recall_names.find(call_site.label);
+            recall_it != helper_recall_names.end()) {
+          helper_nested_call_input_names[region.label].insert(recall_it->second.begin(),
+                                                              recall_it->second.end());
+        }
+      }
     }
   }
   std::map<std::string, std::set<int>> helper_spill_registers;
@@ -47894,19 +47910,28 @@ SizeAttributionReport build_size_attribution_report(
           size_report_helper_spill_breakdown(spills->second);
       std::set<std::string> stack_input_names;
       std::set<std::string> state_output_names;
+      std::set<std::string> nested_call_input_names;
       std::set<std::string> mixed_state_names;
       std::map<std::string, int> stack_input_cells_by_name;
       int stack_input_cells = 0;
       int state_output_cells = 0;
+      int nested_call_input_cells = 0;
       int mixed_state_cells = 0;
+      const auto nested_input_it = helper_nested_call_input_names.find(helper.label);
       for (const SizeHelperSpillSummaryReport& spill : spills->second) {
         if (spill.recall_cells > 0 && spill.store_cells == 0) {
           stack_input_names.insert(spill.name);
           stack_input_cells += spill.total_cells;
           stack_input_cells_by_name[spill.name] += spill.total_cells;
         } else if (spill.store_cells > 0 && spill.recall_cells == 0) {
-          state_output_names.insert(spill.name);
-          state_output_cells += spill.total_cells;
+          if (nested_input_it != helper_nested_call_input_names.end() &&
+              nested_input_it->second.contains(spill.name)) {
+            nested_call_input_names.insert(spill.name);
+            nested_call_input_cells += spill.total_cells;
+          } else {
+            state_output_names.insert(spill.name);
+            state_output_cells += spill.total_cells;
+          }
         } else {
           mixed_state_names.insert(spill.name);
           mixed_state_cells += spill.total_cells;
@@ -48060,6 +48085,16 @@ SizeAttributionReport build_size_attribution_report(
                          ",");
         helper.details["valueAwareStateOutputCells"] = std::to_string(state_output_cells);
       }
+      if (!nested_call_input_names.empty()) {
+        helper.details["valueAwareNestedCallInputNames"] =
+            join_strings(std::vector<std::string>(nested_call_input_names.begin(),
+                                                  nested_call_input_names.end()),
+                         ",");
+        helper.details["valueAwareNestedCallInputCells"] =
+            std::to_string(nested_call_input_cells);
+        helper.details["valueAwareNestedCallInputReason"] =
+            "store-only values are read by nested helper calls before they can be deferred";
+      }
       if (!mixed_state_names.empty()) {
         helper.details["valueAwareMixedStateNames"] =
             join_strings(std::vector<std::string>(mixed_state_names.begin(),
@@ -48068,13 +48103,21 @@ SizeAttributionReport build_size_attribution_report(
         helper.details["valueAwareMixedStateCells"] = std::to_string(mixed_state_cells);
       }
       if (!stack_input_names.empty() || !state_output_names.empty() ||
+          !nested_call_input_names.empty() ||
           !mixed_state_names.empty()) {
         if (!stack_input_names.empty() && state_output_names.empty() &&
-            mixed_state_names.empty()) {
+            nested_call_input_names.empty() && mixed_state_names.empty()) {
           helper.details["valueAwareSchedulerTrafficShape"] = "stack-inputs-only";
         } else if (stack_input_names.empty() && !state_output_names.empty() &&
-                   mixed_state_names.empty()) {
+                   nested_call_input_names.empty() && mixed_state_names.empty()) {
           helper.details["valueAwareSchedulerTrafficShape"] = "deferred-state-outputs-only";
+        } else if (stack_input_names.empty() && state_output_names.empty() &&
+                   !nested_call_input_names.empty() && mixed_state_names.empty()) {
+          helper.details["valueAwareSchedulerTrafficShape"] = "nested-call-inputs-only";
+        } else if (!stack_input_names.empty() && state_output_names.empty() &&
+                   !nested_call_input_names.empty() && mixed_state_names.empty()) {
+          helper.details["valueAwareSchedulerTrafficShape"] =
+              "stack-inputs-and-nested-call-inputs";
         } else if (stack_input_names.empty() && state_output_names.empty()) {
           helper.details["valueAwareSchedulerTrafficShape"] = "mixed-state-traffic";
         } else {

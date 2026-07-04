@@ -515,14 +515,18 @@ void example_sizes_match_typescript_baselines() {
                       std::string::npos &&
                   mark_lines_helper->details.at("valueAwareStackInputNames").find("y") !=
                       std::string::npos &&
-                  mark_lines_helper->details.contains("valueAwareStateOutputNames") &&
-                  mark_lines_helper->details.at("valueAwareStateOutputNames")
+                  !mark_lines_helper->details.contains("valueAwareStateOutputNames") &&
+                  mark_lines_helper->details.contains("valueAwareNestedCallInputNames") &&
+                  mark_lines_helper->details.at("valueAwareNestedCallInputNames")
                           .find("best_score") != std::string::npos &&
-                  mark_lines_helper->details.at("valueAwareStateOutputNames").find("slot") !=
+                  mark_lines_helper->details.at("valueAwareNestedCallInputNames").find("slot") !=
                       std::string::npos &&
+                  mark_lines_helper->details.contains("valueAwareNestedCallInputCells") &&
+                  mark_lines_helper->details.at("valueAwareNestedCallInputCells") == "2" &&
+                  mark_lines_helper->details.contains("valueAwareNestedCallInputReason") &&
                   mark_lines_helper->details.contains("valueAwareSchedulerTrafficShape") &&
                   mark_lines_helper->details.at("valueAwareSchedulerTrafficShape") ==
-                      "stack-inputs-and-deferred-state-outputs" &&
+                      "stack-inputs-and-nested-call-inputs" &&
                   mark_lines_helper->details.contains("valueAwareStackInputPlanStatus") &&
                   mark_lines_helper->details.at("valueAwareStackInputPlanStatus") ==
                       "requires-call-preserving-stack-proof" &&
@@ -537,9 +541,9 @@ void example_sizes_match_typescript_baselines() {
                   mark_lines_helper->details.contains(
                       "valueAwareEstimatedNetSavingsAfterMaterialization") &&
                   mark_lines_helper->details.at(
-                      "valueAwareEstimatedNetSavingsAfterMaterialization") == "4",
+                      "valueAwareEstimatedNetSavingsAfterMaterialization") == "2",
               "tic-tac-toe-4x4 mark_lines_and_check helper should classify stack inputs "
-              "separately from deferred state outputs and nested helper-call blockers");
+              "separately from nested-call state inputs and nested helper-call blockers");
       const SizeOpportunityReport* cell_mask_register_traffic = find_size_opportunity_detail(
           result, "helper-register-traffic", "helperLabel", "expr cell_mask(x, y)");
       require(cell_mask_register_traffic != nullptr &&
@@ -805,14 +809,14 @@ void example_sizes_match_typescript_baselines() {
           result, "requiredAction", "value-aware-stack-register-scheduling");
       require(value_aware_scheduler_action != nullptr &&
                   value_aware_scheduler_action->opportunities == 2 &&
-                  value_aware_scheduler_action->potential_savings == 7 &&
-                  value_aware_scheduler_action->best_savings == 4 &&
+                  value_aware_scheduler_action->potential_savings == 5 &&
+                  value_aware_scheduler_action->best_savings == 3 &&
                   value_aware_scheduler_action->best_blocker_kind ==
                       "value-aware-stack-register-scheduler" &&
                   value_aware_scheduler_action->best_variant == "helper-register-traffic" &&
                   value_aware_scheduler_action->best_details.contains("helperLabel") &&
                   value_aware_scheduler_action->best_details.at("helperLabel") ==
-                      "mark_lines_and_check" &&
+                      "candidate_score zero-accumulator entry" &&
                   value_aware_scheduler_action->best_details.contains("savingsModel") &&
                   value_aware_scheduler_action->best_details.at("savingsModel") ==
                       "estimated-net-after-callsite-materialization" &&
@@ -828,7 +832,7 @@ void example_sizes_match_typescript_baselines() {
                   value_aware_scheduler_action->best_details.contains("schedulerScope") &&
                   value_aware_scheduler_action->best_details.contains("proofStatus") &&
                   value_aware_scheduler_action->best_details.at("proofStatus") ==
-                      "nested-helper-calls-may-clobber-stack-inputs" &&
+                      "stack-inputs-exceed-x-y-z-t-capacity" &&
                   value_aware_scheduler_action->best_details.contains("registerTrafficBreakdown") &&
                   value_aware_scheduler_action->best_details.contains(
                       "valueAwareStackInputNames") &&
@@ -837,7 +841,9 @@ void example_sizes_match_typescript_baselines() {
                   value_aware_scheduler_action->best_details.at("valueAwareStackInputNames")
                           .find("y") != std::string::npos &&
                   value_aware_scheduler_action->best_details.contains(
-                      "valueAwareStateOutputNames") &&
+                      "valueAwareStackCapacityStatus") &&
+                  value_aware_scheduler_action->best_details.at(
+                      "valueAwareStackCapacityStatus") == "exceeds-x-y-z-t-capacity" &&
                   value_aware_scheduler_action->best_details.contains(
                       "valueAwareSchedulerTrafficShape"),
               "tic-tac-toe-4x4 size attribution should rank value-aware stack/register "
@@ -864,11 +870,18 @@ void example_sizes_match_typescript_baselines() {
           result, "trafficShapeAction", "prove-stack-input-survives-nested-helper-calls");
       require(split_scheduler_action != nullptr &&
                   split_scheduler_action->opportunities >= 1 &&
+                  split_scheduler_action->potential_savings == 2 &&
+                  split_scheduler_action->best_savings == 2 &&
                   split_scheduler_action->best_details.contains("helperLabel") &&
                   split_scheduler_action->best_details.at("helperLabel") ==
                       "mark_lines_and_check" &&
                   split_scheduler_action->best_details.contains("valueAwareStackInputNames") &&
-                  split_scheduler_action->best_details.contains("valueAwareStateOutputNames") &&
+                  split_scheduler_action->best_details.contains(
+                      "valueAwareNestedCallInputNames") &&
+                  split_scheduler_action->best_details.at("valueAwareNestedCallInputNames")
+                          .find("best_score") != std::string::npos &&
+                  split_scheduler_action->best_details.at("valueAwareNestedCallInputNames")
+                          .find("slot") != std::string::npos &&
                   split_scheduler_action->best_details.contains("valueAwareStackInputPlanStatus") &&
                   split_scheduler_action->best_details.at("valueAwareStackInputPlanStatus") ==
                       "requires-call-preserving-stack-proof",
