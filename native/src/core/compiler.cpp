@@ -35163,30 +35163,36 @@ bool expression_references_same_indexed_cell(const Expression& expression,
   });
 }
 
-bool can_compile_indexed_stack_temp_expression(const Expression& expression,
+bool can_compile_indexed_stack_temp_expression(const LoweringContext& context,
+                                               const Expression& expression,
                                                const std::string& temp) {
   if (core::emit::count_identifier_reads(expression, temp) != 1)
     return false;
   if (expression.kind == "identifier")
     return expression.name == temp;
   if (expression.kind == "unary" && expression.expr != nullptr)
-    return can_compile_indexed_stack_temp_expression(*expression.expr, temp);
+    return can_compile_indexed_stack_temp_expression(context, *expression.expr, temp);
   if (expression.kind == "call" && lower_ascii(expression.callee) == "sum")
-    return can_compile_indexed_stack_temp_expression(sum_expressions(expression.args), temp);
+    return can_compile_indexed_stack_temp_expression(context, sum_expressions(expression.args),
+                                                     temp);
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "bit_mask") {
+    return context.shared_bit_mask_helper_calls && expression.args.size() == 1U &&
+           can_compile_indexed_stack_temp_expression(context, expression.args.front(), temp);
+  }
   if (const std::optional<StackUnaryTransformCall> transform =
           stack_unary_transform_call(expression)) {
     return transform->arg != nullptr &&
-           can_compile_indexed_stack_temp_expression(*transform->arg, temp);
+           can_compile_indexed_stack_temp_expression(context, *transform->arg, temp);
   }
   if (expression.kind == "binary" && expression.left != nullptr && expression.right != nullptr) {
     const int left_reads = core::emit::count_identifier_reads(*expression.left, temp);
     const int right_reads = core::emit::count_identifier_reads(*expression.right, temp);
     if (left_reads == 1 && right_reads == 0) {
-      return can_compile_indexed_stack_temp_expression(*expression.left, temp) &&
+      return can_compile_indexed_stack_temp_expression(context, *expression.left, temp) &&
              expression_pure_for_substitution(*expression.right);
     }
     if (left_reads == 0 && right_reads == 1) {
-      return can_compile_indexed_stack_temp_expression(*expression.right, temp) &&
+      return can_compile_indexed_stack_temp_expression(context, *expression.right, temp) &&
              expression_pure_for_substitution(*expression.left) &&
              (expression.op == "+" || expression.op == "*" ||
               is_simple_stack_load(*expression.left));
@@ -35219,6 +35225,22 @@ bool lower_indexed_stack_temp_expression_to_x(
     context.emitter.emit_op(0x0b, "/-/", "stack temp unary minus", line);
     context.emitter.current_x_variable.reset();
     context.emitter.current_x_aliases.clear();
+    return true;
+  }
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "bit_mask" &&
+      context.shared_bit_mask_helper_calls) {
+    if (expression.args.size() != 1U)
+      return false;
+    if (!lower_indexed_stack_temp_expression_to_x(context, expression.args.front(), temp,
+                                                  indexed_target, prepared_selector, line))
+      return false;
+    if (!emit_bit_mask_helper_call_from_current_x(context, line))
+      return false;
+    context.optimizations.push_back(OptimizationReport{
+        .name = "bit-mask-helper-stack-argument-call",
+        .detail = "Entered shared bit_mask helper with indexed stack-temp argument at line " +
+                  std::to_string(line) + ".",
+    });
     return true;
   }
   if (expression.kind == "call" && lower_ascii(expression.callee) == "sum") {
@@ -35931,7 +35953,7 @@ bool lower_stack_resident_indexed_temp(LoweringContext& context,
   }
   if (!expression_references_same_indexed_cell(consumer.expression, consumer.target))
     return false;
-  if (!can_compile_indexed_stack_temp_expression(consumer.expression, *temp.target))
+  if (!can_compile_indexed_stack_temp_expression(context, consumer.expression, *temp.target))
     return false;
 
   std::optional<PreparedIndexedSelector> prepared_selector;
@@ -36122,7 +36144,7 @@ bool lower_single_use_stack_temp(LoweringContext& context,
 
   const Expression consumer_expression = parse_expression(*consumer.expr, consumer.line);
   if (core::emit::count_identifier_reads(consumer_expression, *temp.target) != 1 ||
-      !can_compile_indexed_stack_temp_expression(consumer_expression, *temp.target)) {
+      !can_compile_indexed_stack_temp_expression(context, consumer_expression, *temp.target)) {
     return false;
   }
 

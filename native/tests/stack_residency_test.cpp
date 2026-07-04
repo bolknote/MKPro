@@ -364,6 +364,43 @@ program StackResidentIndexedSumUpdateConsumer {
   }
 
   {
+    CompileOptions options;
+    options.budget = 999999;
+    options.stack_resident_temps = true;
+    options.shared_bit_mask_helper_calls = true;
+    options.disable_candidate_search = true;
+    const CompileResult result = compile_source(R"mkpro(
+program StackResidentIndexedBitMaskUpdateConsumer {
+  state {
+    cells: packed[1..3] = [10, 20, 30]
+    slot: counter 1..3 = 2
+    x: counter 0..7 = 1
+    y: counter 0..7 = 2
+    tmp: counter 0..7 = 0
+  }
+
+  loop {
+    tmp = x + y
+    cells[slot] += bit_mask(tmp)
+    halt(cells[slot])
+  }
+}
+)mkpro",
+                                                options);
+    require_clean_compile(result, "stack-resident indexed bit_mask update consumer");
+    require(has_optimization(result, "stack-resident-indexed-temp"),
+            "indexed bit_mask update should keep tmp on the stack");
+    require(has_optimization(result, "bit-mask-helper-stack-argument-call"),
+            "indexed bit_mask update should enter the shared helper with tmp in X");
+    require(has_optimization(result, "bit-mask-helper-call"),
+            "indexed bit_mask update should still use the shared helper body");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "indexed bit_mask update should not store tmp before the indexed update");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "indexed bit_mask update should not recall tmp inside the indexed update");
+  }
+
+  {
     const std::string stack_helper_abi_source = R"mkpro(
 program StackHelperAbiAggregation {
   state {
