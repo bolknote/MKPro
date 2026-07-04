@@ -51376,6 +51376,7 @@ SizeAttributionReport build_size_attribution_report(
             !call_preservation_input_names.empty();
         bool call_preservation_has_stack_mutating_callee = false;
         int callee_abi_mutation_surface_cells = 0;
+        int callee_abi_refactor_target_count = 0;
         std::vector<std::string> direct_stack_input_names;
         int direct_stack_input_gross_cells = 0;
         int direct_stack_input_materialize_cells = 0;
@@ -51533,6 +51534,8 @@ SizeAttributionReport build_size_attribution_report(
                   "prove-live-stack-inputs-survive-nested-callee-entry";
               helper.details["valueAwareCalleeAbiImplementationStatus"] =
                   "required-before-stack-input-scheduling";
+              callee_abi_refactor_target_count =
+                  static_cast<int>(callee_abi_refactor_targets.size());
             }
           }
           if (!call_preservation_site_parts.empty()) {
@@ -51603,10 +51606,22 @@ SizeAttributionReport build_size_attribution_report(
                 "persistent-state-output-stores";
         }
         if (call_preservation_has_stack_mutating_callee && adjusted_estimated_net_cells > 0) {
+          const int callee_abi_overhead_lower_bound_cells =
+              callee_abi_refactor_target_count;
           helper.details["valueAwareCalleeAbiOverheadBudgetCells"] =
               std::to_string(adjusted_estimated_net_cells);
+          helper.details["valueAwareCalleeAbiPositiveOverheadBudgetCells"] =
+              std::to_string(std::max(0, adjusted_estimated_net_cells - 1));
           helper.details["valueAwareCalleeAbiBreakEvenAddedCells"] =
               std::to_string(adjusted_estimated_net_cells);
+          helper.details["valueAwareCalleeAbiOverheadLowerBoundCells"] =
+              std::to_string(callee_abi_overhead_lower_bound_cells);
+          helper.details["valueAwareCalleeAbiOverheadLowerBoundBasis"] =
+              "one-shared-entry-or-restore-cell-per-stack-mutating-callee";
+          helper.details["valueAwareCalleeAbiOverheadLowerBoundStatus"] =
+              callee_abi_overhead_lower_bound_cells >= adjusted_estimated_net_cells
+                  ? "reaches-or-exceeds-break-even-budget"
+                  : "below-break-even-budget";
           if (callee_abi_mutation_surface_cells > 0) {
             helper.details["valueAwareCalleeAbiMutationSurfaceCells"] =
                 std::to_string(callee_abi_mutation_surface_cells);
@@ -51620,16 +51635,23 @@ SizeAttributionReport build_size_attribution_report(
           const bool mutation_surface_exceeds_budget =
               mutation_surface_status_it != helper.details.end() &&
               mutation_surface_status_it->second == "exceeds-overhead-budget";
+          const bool overhead_lower_bound_reaches_break_even =
+              callee_abi_overhead_lower_bound_cells >= adjusted_estimated_net_cells;
           helper.details["valueAwareCalleeAbiCostModelStatus"] =
-              mutation_surface_exceeds_budget
-                  ? "mutation-surface-exceeds-overhead-budget"
-                  : "unestimated-stack-preserving-entry-overhead";
+              overhead_lower_bound_reaches_break_even
+                  ? "overhead-lower-bound-not-positive"
+                  : (mutation_surface_exceeds_budget
+                         ? "mutation-surface-exceeds-overhead-budget"
+                         : "unestimated-stack-preserving-entry-overhead");
           helper.details["valueAwareCalleeAbiCostModelRequirement"] =
-              helper.details["valueAwareCalleeAbiCostModelStatus"] ==
-                      "mutation-surface-exceeds-overhead-budget"
-                  ? "prove-stack-preserving-callee-abi-overhead-below-mutation-surface-before-"
-                    "ranking"
-                  : "stack-preserving-callee-abi-overhead-must-not-exceed-estimated-net-savings";
+              overhead_lower_bound_reaches_break_even
+                  ? "find-additional-stack-input-savings-before-callee-abi-refactor"
+                  : (helper.details["valueAwareCalleeAbiCostModelStatus"] ==
+                             "mutation-surface-exceeds-overhead-budget"
+                         ? "prove-stack-preserving-callee-abi-overhead-below-mutation-surface-"
+                           "before-ranking"
+                         : "stack-preserving-callee-abi-overhead-must-not-exceed-estimated-net-"
+                           "savings");
         }
         if (!direct_stack_input_names.empty()) {
           helper.details["valueAwareDirectStackInputNames"] =
@@ -52104,17 +52126,32 @@ SizeAttributionReport build_size_attribution_report(
           "helper-entry-callsite-stack-values-and-callee-abi-refactor";
       if (const auto abi_status_it = details.find("valueAwareCalleeAbiCostModelStatus");
           abi_status_it != details.end() &&
-          abi_status_it->second == "mutation-surface-exceeds-overhead-budget") {
+          (abi_status_it->second == "mutation-surface-exceeds-overhead-budget" ||
+           abi_status_it->second == "overhead-lower-bound-not-positive")) {
+        const bool lower_bound_not_positive =
+            abi_status_it->second == "overhead-lower-bound-not-positive";
         opportunity_savings = 0;
         details["candidateStepsStatus"] = "not-a-positive-size-opportunity";
         details["sizeImpactStatus"] = "estimated-nonpositive-net";
         details["netSavingsStatus"] =
-            "stack-preserving-callee-abi-mutation-surface-exceeds-budget";
-        details["estimateKind"] = "estimated-net-after-callee-abi-surface";
-        details["savingsModel"] = "estimated-net-after-callee-abi-surface-budget";
-        details["requiredAction"] = "prove-or-reduce-stack-preserving-callee-abi-overhead";
+            lower_bound_not_positive
+                ? "stack-preserving-callee-abi-lower-bound-reaches-break-even"
+                : "stack-preserving-callee-abi-mutation-surface-exceeds-budget";
+        details["estimateKind"] =
+            lower_bound_not_positive ? "estimated-net-after-callee-abi-lower-bound"
+                                     : "estimated-net-after-callee-abi-surface";
+        details["savingsModel"] =
+            lower_bound_not_positive
+                ? "estimated-net-after-callee-abi-overhead-lower-bound"
+                : "estimated-net-after-callee-abi-surface-budget";
+        details["requiredAction"] =
+            lower_bound_not_positive
+                ? "find-additional-stack-input-savings-before-callee-abi-refactor"
+                : "prove-or-reduce-stack-preserving-callee-abi-overhead";
         details["costModelAction"] =
-            "estimate-stack-preserving-callee-abi-overhead-from-mutation-surface";
+            lower_bound_not_positive
+                ? "increase-value-aware-savings-before-callee-abi-refactor"
+                : "estimate-stack-preserving-callee-abi-overhead-from-mutation-surface";
       }
     }
     if (const std::optional<std::string> traffic_shape_action =
@@ -52413,7 +52450,8 @@ SizeAttributionReport build_size_attribution_report(
     }
     const auto abi_status_it = opportunity.details.find("valueAwareCalleeAbiCostModelStatus");
     if (abi_status_it == opportunity.details.end() ||
-        abi_status_it->second != "mutation-surface-exceeds-overhead-budget") {
+        (abi_status_it->second != "mutation-surface-exceeds-overhead-budget" &&
+         abi_status_it->second != "overhead-lower-bound-not-positive")) {
       continue;
     }
     if (const auto required_it = opportunity.details.find("requiredAction");

@@ -44,6 +44,14 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   bodies back to their internal `recall name` / `set name` cells, exposing cases
   where a shared helper is locally cheap but still reloads values that a future
   value-aware scheduler might carry through X/Y/Z/T at selected call sites.
+  When helper-local stack inputs cross nested helper calls, the helper summary
+  reports the live-input preservation matrix and callee ABI cost model. A
+  stack-mutating callee now exposes both the diagnostic mutation surface
+  (`valueAwareCalleeAbiMutationSurface*`) and a proof-oriented lower bound
+  (`valueAwareCalleeAbiOverheadLowerBound*`): if even one shared
+  stack-preserving entry or restore cell would consume the remaining net saving,
+  the opportunity is ranked as non-positive until more stack-input savings are
+  found, rather than treating the number of mutating opcodes as the ABI cost.
   The `abiBlockers` array reports cases where such a stack-resident caller
   already exists, but the shared helper only has a register-entry ABI; those rows
   identify the source expression, line, materialization cost of the safe fallback,

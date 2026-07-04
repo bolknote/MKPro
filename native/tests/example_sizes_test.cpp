@@ -1072,6 +1072,24 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.at("valueAwareCalleeAbiBreakEvenAddedCells") ==
                       "1" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPositiveOverheadBudgetCells") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPositiveOverheadBudgetCells") == "0" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiOverheadLowerBoundCells") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiOverheadLowerBoundCells") == "1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiOverheadLowerBoundBasis") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiOverheadLowerBoundBasis") ==
+                      "one-shared-entry-or-restore-cell-per-stack-mutating-callee" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiOverheadLowerBoundStatus") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiOverheadLowerBoundStatus") ==
+                      "reaches-or-exceeds-break-even-budget" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiMutationSurfaceCells") &&
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiMutationSurfaceCells") == "4" &&
@@ -1083,13 +1101,12 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiCostModelStatus") &&
                   candidate_score_zero->details.at("valueAwareCalleeAbiCostModelStatus") ==
-                      "mutation-surface-exceeds-overhead-budget" &&
+                      "overhead-lower-bound-not-positive" &&
                   candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiCostModelRequirement") &&
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiCostModelRequirement") ==
-                      "prove-stack-preserving-callee-abi-overhead-below-mutation-surface-"
-                      "before-ranking" &&
+                      "find-additional-stack-input-savings-before-callee-abi-refactor" &&
                   candidate_score_zero->details.contains(
                       "valueAwareSuggestedResidentInputNames") &&
                   candidate_score_zero->details.at("valueAwareSuggestedResidentInputNames")
@@ -1531,10 +1548,10 @@ void example_sizes_match_typescript_baselines() {
                       "value-aware-stack-register-scheduler" &&
                   candidate_score_register_traffic->details.contains("savingsModel") &&
                   candidate_score_register_traffic->details.at("savingsModel") ==
-                      "estimated-net-after-callee-abi-surface-budget" &&
+                      "estimated-net-after-callee-abi-overhead-lower-bound" &&
                   candidate_score_register_traffic->details.contains("estimateKind") &&
                   candidate_score_register_traffic->details.at("estimateKind") ==
-                      "estimated-net-after-callee-abi-surface" &&
+                      "estimated-net-after-callee-abi-lower-bound" &&
                   candidate_score_register_traffic->details.contains("candidateStepsStatus") &&
                   candidate_score_register_traffic->details.at("candidateStepsStatus") ==
                       "not-a-positive-size-opportunity" &&
@@ -1543,13 +1560,31 @@ void example_sizes_match_typescript_baselines() {
                       "estimated-nonpositive-net" &&
                   candidate_score_register_traffic->details.contains("netSavingsStatus") &&
                   candidate_score_register_traffic->details.at("netSavingsStatus") ==
-                      "stack-preserving-callee-abi-mutation-surface-exceeds-budget" &&
+                      "stack-preserving-callee-abi-lower-bound-reaches-break-even" &&
                   candidate_score_register_traffic->details.contains("requiredAction") &&
                   candidate_score_register_traffic->details.at("requiredAction") ==
-                      "prove-or-reduce-stack-preserving-callee-abi-overhead" &&
+                      "find-additional-stack-input-savings-before-callee-abi-refactor" &&
                   candidate_score_register_traffic->details.contains("costModelAction") &&
                   candidate_score_register_traffic->details.at("costModelAction") ==
-                      "estimate-stack-preserving-callee-abi-overhead-from-mutation-surface" &&
+                      "increase-value-aware-savings-before-callee-abi-refactor" &&
+                  candidate_score_register_traffic->details.contains(
+                      "valueAwareCalleeAbiCostModelStatus") &&
+                  candidate_score_register_traffic->details.at(
+                      "valueAwareCalleeAbiCostModelStatus") ==
+                      "overhead-lower-bound-not-positive" &&
+                  candidate_score_register_traffic->details.contains(
+                      "valueAwareCalleeAbiOverheadLowerBoundCells") &&
+                  candidate_score_register_traffic->details.at(
+                      "valueAwareCalleeAbiOverheadLowerBoundCells") == "1" &&
+                  candidate_score_register_traffic->details.contains(
+                      "valueAwareCalleeAbiOverheadLowerBoundStatus") &&
+                  candidate_score_register_traffic->details.at(
+                      "valueAwareCalleeAbiOverheadLowerBoundStatus") ==
+                      "reaches-or-exceeds-break-even-budget" &&
+                  candidate_score_register_traffic->details.contains(
+                      "valueAwareCalleeAbiPositiveOverheadBudgetCells") &&
+                  candidate_score_register_traffic->details.at(
+                      "valueAwareCalleeAbiPositiveOverheadBudgetCells") == "0" &&
                   candidate_score_register_traffic->details.contains(
                       "valueAwareCalleeAbiMutationSurfaceCells") &&
                   candidate_score_register_traffic->details.at(
@@ -1559,7 +1594,7 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_register_traffic->details.at(
                       "valueAwareCalleeAbiOverheadBudgetCells") == "1",
               "tic-tac-toe-4x4 size attribution should keep the candidate_score scheduler "
-              "opportunity visible while ranking the overbudget callee ABI surface as "
+              "opportunity visible while proving the callee ABI lower bound is "
               "nonpositive");
       const SizeNextActionSummaryReport* required_action = find_size_next_action(
           result, "requiredAction", "keep-fractional-erase-before-data-arithmetic");
@@ -1606,7 +1641,8 @@ void example_sizes_match_typescript_baselines() {
               "tic-tac-toe-4x4 size attribution should not rank overbudget callee ABI "
               "refactoring as a positive required action");
       const SizeNextActionSummaryReport* callee_abi_proof_action = find_size_next_action(
-          result, "requiredAction", "prove-or-reduce-stack-preserving-callee-abi-overhead");
+          result, "requiredAction",
+          "find-additional-stack-input-savings-before-callee-abi-refactor");
       require(callee_abi_proof_action != nullptr &&
                   callee_abi_proof_action->status == "stalled-nonpositive" &&
                   callee_abi_proof_action->potential_savings == 0 &&
@@ -1620,8 +1656,7 @@ void example_sizes_match_typescript_baselines() {
               "tic-tac-toe-4x4 size attribution should rank overbudget callee ABI proof work "
               "as a stalled nonpositive next action");
       const SizeNextActionSummaryReport* callee_abi_cost_model_action = find_size_next_action(
-          result, "costModelAction",
-          "estimate-stack-preserving-callee-abi-overhead-from-mutation-surface");
+          result, "costModelAction", "increase-value-aware-savings-before-callee-abi-refactor");
       require(callee_abi_cost_model_action != nullptr &&
                   callee_abi_cost_model_action->status == "stalled-nonpositive" &&
                   callee_abi_cost_model_action->potential_savings == 0 &&
@@ -1633,9 +1668,9 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCalleeAbiCostModelStatus") &&
                   callee_abi_cost_model_action->best_details.at(
                       "valueAwareCalleeAbiCostModelStatus") ==
-                      "mutation-surface-exceeds-overhead-budget",
-              "tic-tac-toe-4x4 size attribution should rank the overbudget callee ABI cost "
-              "model as a stalled nonpositive next action");
+                      "overhead-lower-bound-not-positive",
+              "tic-tac-toe-4x4 size attribution should rank the callee ABI lower-bound cost "
+              "model as stalled nonpositive until more scheduler savings exist");
       const SizeNextActionSummaryReport* stack_input_scheduler_action = find_size_next_action(
           result, "trafficShapeAction", "schedule-stack-input-helper-values");
       require(stack_input_scheduler_action == nullptr,
