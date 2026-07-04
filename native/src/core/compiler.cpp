@@ -47325,6 +47325,53 @@ bool size_opportunity_uses_alternative_savings(const SizeOpportunityReport& oppo
   return it != opportunity.details.end() && it->second == "alternative-candidate";
 }
 
+std::string rejected_candidate_required_action(const CandidateReport& candidate,
+                                               const std::string& blocker_kind,
+                                               int savings) {
+  if (blocker_kind == "nonwinning-candidate")
+    return savings > 0 ? "inspect-candidate-search-ranking" : "keep-current-smaller-candidate";
+  if (blocker_kind == "static-proof-gate")
+    return "extend-static-proof";
+  if (blocker_kind == "missing-proof")
+    return "add-or-tighten-proof";
+  if (blocker_kind == "dead-integer-unknown-consumer")
+    return "refine-dead-integer-consumer-proof";
+  if (candidate.site == "layout")
+    return "improve-layout-proof-or-cost-model";
+  if (candidate.site == "candidate-search")
+    return "improve-candidate-cost-model-or-proof";
+  return "inspect-rejected-candidate";
+}
+
+void attach_rejected_candidate_size_details(std::map<std::string, std::string>& details,
+                                            const CandidateReport& candidate,
+                                            int current_steps,
+                                            const std::string& blocker_kind) {
+  const int savings = current_steps - candidate.steps;
+  details["currentSteps"] = std::to_string(current_steps);
+  details["candidateSteps"] = std::to_string(candidate.steps);
+  details["candidateDeltaCells"] = std::to_string(candidate.steps - current_steps);
+  details["candidateSavings"] = std::to_string(savings);
+  details["savingsModel"] = "candidate-steps-vs-current-selected";
+  details["estimateKind"] = "measured-rejected-candidate-delta";
+  details["candidateStepsStatus"] =
+      savings > 0 ? "smaller-than-current-but-rejected"
+                  : (savings == 0 ? "same-size-as-current" : "larger-than-current");
+  details["sizeImpactStatus"] =
+      savings > 0 ? "positive-rejected-candidate-delta"
+                  : (savings == 0 ? "neutral-rejected-candidate-delta"
+                                  : "negative-rejected-candidate-delta");
+  details["netSavingsStatus"] =
+      savings > 0 ? "measured-positive-vs-current"
+                  : (savings == 0 ? "measured-break-even-vs-current"
+                                  : "measured-negative-vs-current");
+  details["proofStatus"] = blocker_kind == "nonwinning-candidate"
+                               ? "not-blocked-by-proof-selected-candidate-is-smaller-or-equal"
+                               : blocker_kind;
+  details["requiredAction"] =
+      rejected_candidate_required_action(candidate, blocker_kind, savings);
+}
+
 std::string size_opportunity_potential_group(const SizeOpportunityReport& opportunity,
                                              const std::string& summary_key,
                                              std::size_t opportunity_index) {
@@ -48645,6 +48692,8 @@ SizeAttributionReport build_size_attribution_report(
                                  overlay_action_by_address);
     if (candidate.site == "candidate-search" || candidate.site == "layout")
       details.emplace("savingsAggregation", "alternative-candidate");
+    const std::string blocker_kind = size_opportunity_blocker_kind(candidate);
+    attach_rejected_candidate_size_details(details, candidate, current_steps, blocker_kind);
     report.opportunities.push_back(SizeOpportunityReport{
         .site = candidate.site,
         .variant = candidate.variant,
@@ -48652,7 +48701,7 @@ SizeAttributionReport build_size_attribution_report(
         .candidate_steps = candidate.steps,
         .savings = current_steps - candidate.steps,
         .reason = candidate.reason,
-        .blocker_kind = size_opportunity_blocker_kind(candidate),
+        .blocker_kind = blocker_kind,
         .details = std::move(details),
     });
   }

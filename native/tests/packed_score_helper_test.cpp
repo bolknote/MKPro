@@ -1062,6 +1062,19 @@ program PackedScoreMixedAccumulatorFallback {
           "size attribution should surface the nonwinning packed_score accumulator candidate");
   require(accumulator_opportunity->candidate_steps == rejected_accumulator->steps,
           "size attribution should preserve the packed_score accumulator candidate size");
+  require(accumulator_opportunity->details.contains("candidateStepsStatus") &&
+              accumulator_opportunity->details.at("candidateStepsStatus") ==
+                  "larger-than-current",
+          "nonwinning packed_score candidate should report that it is larger than current");
+  require(accumulator_opportunity->details.contains("sizeImpactStatus") &&
+              accumulator_opportunity->details.at("sizeImpactStatus") ==
+                  "negative-rejected-candidate-delta",
+          "nonwinning packed_score candidate should report its negative size impact");
+  require(accumulator_opportunity->details.contains("requiredAction") &&
+              accumulator_opportunity->details.at("requiredAction") ==
+                  "keep-current-smaller-candidate",
+          "nonwinning packed_score candidate should tell the optimizer to keep the smaller "
+          "current candidate");
 }
 
 } // namespace mkpro::tests
