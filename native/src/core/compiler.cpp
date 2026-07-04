@@ -48379,6 +48379,47 @@ void attach_packed_score_accumulator_helper_details(
   }
 }
 
+const SizeHelperSummaryReport* size_report_helper_by_label(
+    const std::vector<SizeHelperSummaryReport>& helpers, const std::string& label) {
+  const auto it = std::find_if(helpers.begin(), helpers.end(),
+                               [&](const SizeHelperSummaryReport& helper) {
+                                 return helper.label == label;
+                               });
+  return it == helpers.end() ? nullptr : &*it;
+}
+
+void attach_generic_packed_score_fallback_details(
+    std::map<std::string, std::string>& details, const CandidateReport& candidate,
+    int current_steps, const std::vector<SizeHelperSummaryReport>& helpers) {
+  if (candidate.variant != "generic-packed-score-accumulator-fallback")
+    return;
+  const SizeHelperSummaryReport* selected =
+      size_report_helper_by_label(helpers, "packed-line score accumulator helper");
+  details["packedScoreFallbackFamily"] = "generic-expression-accumulator";
+  details["packedScoreFallbackComparedAgainst"] = "packed-line-family-score";
+  details["packedScoreFallbackDeltaCells"] = std::to_string(candidate.steps - current_steps);
+  details["packedScoreFallbackLossModel"] =
+      "measured-generic-candidate-minus-selected-packed-line-pipeline";
+  details["packedScoreFallbackDominantLoss"] = "loses-shared-diagonal-tail";
+  details["packedScoreFallbackAction"] =
+      "teach-generic-accumulator-to-share-returned-index-tail-before-replacing-specialized-score";
+  if (selected == nullptr)
+    return;
+  details["selectedPackedScoreHelperTotalCells"] = std::to_string(selected->total_cells);
+  details["selectedPackedScoreHelperBodyCells"] = std::to_string(selected->body_cells);
+  details["selectedPackedScoreHelperCallSiteCells"] =
+      std::to_string(selected->call_site_cells);
+  details["selectedPackedScoreHelperCallOccurrences"] =
+      std::to_string(selected->call_occurrences);
+  for (const std::string& key : {"pipelineShape", "accumulatorTerms", "sharedTailTerms",
+                                 "bodyCellsPerAccumulatorTerm",
+                                 "pow10ScaleLineValuePolicy"}) {
+    const auto detail_it = selected->details.find(key);
+    if (detail_it != selected->details.end())
+      details["selectedPackedScoreHelper." + key] = detail_it->second;
+  }
+}
+
 SizeAttributionReport build_size_attribution_report(
     const std::vector<ResolvedStep>& steps,
     const std::vector<CandidateReport>& rejected_candidates,
@@ -49945,6 +49986,8 @@ SizeAttributionReport build_size_attribution_report(
       details.emplace("savingsAggregation", "alternative-candidate");
     const std::string blocker_kind = size_opportunity_blocker_kind(candidate);
     attach_rejected_candidate_size_details(details, candidate, current_steps, blocker_kind);
+    attach_generic_packed_score_fallback_details(details, candidate, current_steps,
+                                                 report.helpers);
     int opportunity_savings = current_steps - candidate.steps;
     int opportunity_candidate_steps = candidate.steps;
     if (const auto net_lower_bound_it =

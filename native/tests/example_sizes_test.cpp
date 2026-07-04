@@ -674,6 +674,31 @@ void example_sizes_match_typescript_baselines() {
                   generic_packed_score_fallback->steps > static_cast<int>(result.steps.size()),
               "tic-tac-toe-4x4 should measure the generic packed_score accumulator fallback and "
               "keep the current specialized scorer when the fallback is larger");
+      const SizeOpportunityReport* generic_packed_score_opportunity =
+          find_size_opportunity(result, "generic-packed-score-accumulator-fallback");
+      require(generic_packed_score_opportunity != nullptr &&
+                  generic_packed_score_opportunity->details.contains(
+                      "packedScoreFallbackFamily") &&
+                  generic_packed_score_opportunity->details.at("packedScoreFallbackFamily") ==
+                      "generic-expression-accumulator" &&
+                  generic_packed_score_opportunity->details.contains(
+                      "packedScoreFallbackDominantLoss") &&
+                  generic_packed_score_opportunity->details.at(
+                      "packedScoreFallbackDominantLoss") ==
+                      "loses-shared-diagonal-tail" &&
+                  generic_packed_score_opportunity->details.contains(
+                      "selectedPackedScoreHelper.pipelineShape") &&
+                  generic_packed_score_opportunity->details.at(
+                      "selectedPackedScoreHelper.pipelineShape") ==
+                      "packed-line-family-score" &&
+                  generic_packed_score_opportunity->details.contains(
+                      "selectedPackedScoreHelper.sharedTailTerms") &&
+                  generic_packed_score_opportunity->details.at(
+                      "selectedPackedScoreHelper.sharedTailTerms") == "4" &&
+                  generic_packed_score_opportunity->details.contains(
+                      "packedScoreFallbackAction"),
+              "tic-tac-toe-4x4 generic packed_score fallback size opportunity should explain "
+              "that it loses the selected packed-line shared-tail pipeline");
       const CandidateReport* rejected_dead_integer =
           find_candidate(result.rejected_candidates, "fractional-constant-selector-dead-int");
       require(rejected_dead_integer == nullptr,
