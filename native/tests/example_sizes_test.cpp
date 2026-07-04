@@ -544,28 +544,35 @@ void example_sizes_match_typescript_baselines() {
           result, "helper-register-traffic", "helperLabel", "expr cell_mask(x, y)");
       require(cell_mask_register_traffic != nullptr &&
                   cell_mask_register_traffic->site == "helper" &&
-                  cell_mask_register_traffic->savings ==
-                      cell_mask_helper->register_traffic_cells &&
+                  cell_mask_register_traffic->savings == 0 &&
                   cell_mask_register_traffic->candidate_steps ==
-                      static_cast<int>(result.steps.size()) -
-                          cell_mask_helper->register_traffic_cells &&
+                      static_cast<int>(result.steps.size()) &&
                   cell_mask_register_traffic->blocker_kind ==
                       "value-aware-stack-register-scheduler" &&
                   cell_mask_register_traffic->details.contains("savingsModel") &&
                   cell_mask_register_traffic->details.at("savingsModel") ==
-                      "gross-helper-register-traffic-before-callsite-proof" &&
+                      "estimated-net-after-callsite-materialization" &&
                   cell_mask_register_traffic->details.contains("estimateKind") &&
                   cell_mask_register_traffic->details.at("estimateKind") ==
-                      "gross-upper-bound" &&
+                      "estimated-net-after-materialization" &&
                   cell_mask_register_traffic->details.contains("candidateStepsStatus") &&
                   cell_mask_register_traffic->details.at("candidateStepsStatus") ==
-                      "synthetic-upper-bound-not-compiled" &&
+                      "not-a-positive-size-opportunity" &&
                   cell_mask_register_traffic->details.contains("sizeImpactStatus") &&
                   cell_mask_register_traffic->details.at("sizeImpactStatus") ==
-                      "blocked-unmeasured" &&
+                      "estimated-nonpositive-net" &&
                   cell_mask_register_traffic->details.contains("netSavingsStatus") &&
                   cell_mask_register_traffic->details.at("netSavingsStatus") ==
-                      "unproved-before-callsite-stack-proof" &&
+                      "no-profitable-stack-inputs-after-callsite-materialization" &&
+                  cell_mask_register_traffic->details.contains(
+                      "estimatedGrossRegisterTrafficCells") &&
+                  cell_mask_register_traffic->details.at(
+                      "estimatedGrossRegisterTrafficCells") ==
+                      std::to_string(cell_mask_helper->register_traffic_cells) &&
+                  cell_mask_register_traffic->details.contains(
+                      "valueAwareEstimatedNetSavingsAfterMaterialization") &&
+                  cell_mask_register_traffic->details.at(
+                      "valueAwareEstimatedNetSavingsAfterMaterialization") == "0" &&
                   cell_mask_register_traffic->details.contains("proofStatus") &&
                   cell_mask_register_traffic->details.at("proofStatus") ==
                       "missing-callsite-stack-value-proof" &&
@@ -582,8 +589,9 @@ void example_sizes_match_typescript_baselines() {
                       std::string::npos &&
                   cell_mask_register_traffic->details.at("registerTrafficBreakdown").find("y:") !=
                       std::string::npos,
-              "tic-tac-toe-4x4 size attribution should rank helper-local register traffic as a "
-              "gross value-aware scheduler opportunity");
+              "tic-tac-toe-4x4 size attribution should keep net-zero helper-local register "
+              "traffic visible without ranking it as a positive value-aware scheduler "
+              "opportunity");
       const SizeHelperSummaryReport* mark_one_helper = find_size_helper(result, "mark_one");
       require(mark_one_helper != nullptr &&
                   mark_one_helper->details.contains("selectorBoundRegisterTrafficNames") &&
@@ -600,7 +608,15 @@ void example_sizes_match_typescript_baselines() {
       const SizeOpportunityReport* mark_one_register_traffic = find_size_opportunity_detail(
           result, "helper-register-traffic", "helperLabel", "mark_one");
       require(mark_one_register_traffic != nullptr &&
-                  mark_one_register_traffic->savings == 1 &&
+                  mark_one_register_traffic->savings == 0 &&
+                  mark_one_register_traffic->candidate_steps ==
+                      static_cast<int>(result.steps.size()) &&
+                  mark_one_register_traffic->details.contains("savingsModel") &&
+                  mark_one_register_traffic->details.at("savingsModel") ==
+                      "estimated-net-after-callsite-materialization" &&
+                  mark_one_register_traffic->details.contains("netSavingsStatus") &&
+                  mark_one_register_traffic->details.at("netSavingsStatus") ==
+                      "no-profitable-stack-inputs-after-callsite-materialization" &&
                   mark_one_register_traffic->details.contains("registerTrafficNames") &&
                   mark_one_register_traffic->details.at("registerTrafficNames").find("slot") ==
                       std::string::npos &&
@@ -610,8 +626,9 @@ void example_sizes_match_typescript_baselines() {
                       "selectorBoundRegisterTrafficNames") &&
                   mark_one_register_traffic->details.at("selectorBoundRegisterTrafficNames") ==
                       "slot",
-              "tic-tac-toe-4x4 value-aware scheduler opportunity should not count the indirect "
-              "selector as removable stack/register traffic");
+              "tic-tac-toe-4x4 value-aware scheduler attribution should keep net-zero helper "
+              "traffic visible and should not count the indirect selector as removable "
+              "stack/register traffic");
       const SizeAbiBlockerReport* stack_helper_abi = find_size_abi_blocker(
           result, "stack-helper-abi", "cell_mask(x, y)");
       require(stack_helper_abi != nullptr && stack_helper_abi->line == 103 &&
@@ -787,48 +804,49 @@ void example_sizes_match_typescript_baselines() {
       const SizeNextActionSummaryReport* value_aware_scheduler_action = find_size_next_action(
           result, "requiredAction", "value-aware-stack-register-scheduling");
       require(value_aware_scheduler_action != nullptr &&
-                  value_aware_scheduler_action->opportunities >= 1 &&
-                  value_aware_scheduler_action->potential_savings >=
-                      cell_mask_helper->register_traffic_cells &&
-                  value_aware_scheduler_action->best_savings >=
-                      cell_mask_helper->register_traffic_cells &&
+                  value_aware_scheduler_action->opportunities == 2 &&
+                  value_aware_scheduler_action->potential_savings == 7 &&
+                  value_aware_scheduler_action->best_savings == 4 &&
                   value_aware_scheduler_action->best_blocker_kind ==
                       "value-aware-stack-register-scheduler" &&
                   value_aware_scheduler_action->best_variant == "helper-register-traffic" &&
+                  value_aware_scheduler_action->best_details.contains("helperLabel") &&
+                  value_aware_scheduler_action->best_details.at("helperLabel") ==
+                      "mark_lines_and_check" &&
                   value_aware_scheduler_action->best_details.contains("savingsModel") &&
+                  value_aware_scheduler_action->best_details.at("savingsModel") ==
+                      "estimated-net-after-callsite-materialization" &&
                   value_aware_scheduler_action->best_details.contains("estimateKind") &&
+                  value_aware_scheduler_action->best_details.at("estimateKind") ==
+                      "estimated-net-after-materialization" &&
                   value_aware_scheduler_action->best_details.contains("candidateStepsStatus") &&
+                  value_aware_scheduler_action->best_details.at("candidateStepsStatus") ==
+                      "synthetic-net-estimate-not-compiled" &&
                   value_aware_scheduler_action->best_details.contains("sizeImpactStatus") &&
+                  value_aware_scheduler_action->best_details.at("sizeImpactStatus") ==
+                      "blocked-estimated-positive-net" &&
                   value_aware_scheduler_action->best_details.contains("schedulerScope") &&
                   value_aware_scheduler_action->best_details.contains("proofStatus") &&
                   value_aware_scheduler_action->best_details.at("proofStatus") ==
-                      "stack-inputs-exceed-x-y-z-t-capacity" &&
+                      "nested-helper-calls-may-clobber-stack-inputs" &&
                   value_aware_scheduler_action->best_details.contains("registerTrafficBreakdown") &&
                   value_aware_scheduler_action->best_details.contains(
                       "valueAwareStackInputNames") &&
+                  value_aware_scheduler_action->best_details.at("valueAwareStackInputNames")
+                          .find("x") != std::string::npos &&
+                  value_aware_scheduler_action->best_details.at("valueAwareStackInputNames")
+                          .find("y") != std::string::npos &&
                   value_aware_scheduler_action->best_details.contains(
-                      "valueAwareStackCapacityStatus") &&
-                  value_aware_scheduler_action->best_details.at(
-                      "valueAwareStackCapacityStatus") == "exceeds-x-y-z-t-capacity" &&
+                      "valueAwareStateOutputNames") &&
                   value_aware_scheduler_action->best_details.contains(
                       "valueAwareSchedulerTrafficShape"),
               "tic-tac-toe-4x4 size attribution should rank value-aware stack/register "
-              "scheduling as a next action when helper-local register traffic is visible");
+              "scheduling by net estimated size instead of gross helper-local register traffic");
       const SizeNextActionSummaryReport* stack_input_scheduler_action = find_size_next_action(
           result, "trafficShapeAction", "schedule-stack-input-helper-values");
-      require(stack_input_scheduler_action != nullptr &&
-                  stack_input_scheduler_action->opportunities >= 2 &&
-                  stack_input_scheduler_action->potential_savings >=
-                      cell_mask_helper->register_traffic_cells &&
-                  stack_input_scheduler_action->best_details.contains("helperLabel") &&
-                  stack_input_scheduler_action->best_details.at("helperLabel") ==
-                      "expr cell_mask(x, y)" &&
-                  stack_input_scheduler_action->best_details.contains(
-                      "valueAwareSchedulerTrafficShape") &&
-                  stack_input_scheduler_action->best_details.at(
-                      "valueAwareSchedulerTrafficShape") == "stack-inputs-only",
-              "tic-tac-toe-4x4 size attribution should separately rank stack-input-only helper "
-              "traffic for the value-aware scheduler");
+      require(stack_input_scheduler_action == nullptr,
+              "tic-tac-toe-4x4 size attribution should not rank direct stack-input helper "
+              "scheduling when callsite materialization makes it net-zero");
       const SizeNextActionSummaryReport* staged_stack_input_action = find_size_next_action(
           result, "trafficShapeAction", "split-or-stage-stack-input-helper-values");
       require(staged_stack_input_action != nullptr &&

@@ -48247,12 +48247,46 @@ SizeAttributionReport build_size_attribution_report(
     details["proofStatus"] = "missing-callsite-stack-value-proof";
     details["requiredAction"] = "value-aware-stack-register-scheduling";
     details["schedulerScope"] = "helper-entry-and-callsite-stack-values";
+    int opportunity_savings = value_aware_register_traffic_cells;
+    details["estimatedGrossRegisterTrafficCells"] =
+        std::to_string(value_aware_register_traffic_cells);
+    if (const auto net_it = details.find("valueAwareEstimatedNetSavingsAfterMaterialization");
+        net_it != details.end()) {
+      try {
+        opportunity_savings = std::stoi(net_it->second);
+        details["savingsModel"] = "estimated-net-after-callsite-materialization";
+        details["estimateKind"] = "estimated-net-after-materialization";
+        details["candidateStepsStatus"] = "synthetic-net-estimate-not-compiled";
+        details["sizeImpactStatus"] = opportunity_savings > 0 ? "blocked-estimated-positive-net"
+                                                              : "estimated-nonpositive-net";
+        details["netSavingsStatus"] =
+            opportunity_savings > 0 ? "estimated-positive-after-callsite-materialization"
+                                    : "estimated-nonpositive-after-callsite-materialization";
+      } catch (const std::exception&) {
+        opportunity_savings = value_aware_register_traffic_cells;
+      }
+    } else if (const auto plan_it = details.find("valueAwareProfitableStackInputPlanStatus");
+               plan_it != details.end() &&
+               plan_it->second == "no-profitable-stack-input-materialization") {
+      opportunity_savings = 0;
+      details["savingsModel"] = "estimated-net-after-callsite-materialization";
+      details["estimateKind"] = "estimated-net-after-materialization";
+      details["candidateStepsStatus"] = "not-a-positive-size-opportunity";
+      details["sizeImpactStatus"] = "estimated-nonpositive-net";
+      details["netSavingsStatus"] =
+          "no-profitable-stack-inputs-after-callsite-materialization";
+      details["valueAwareEstimatedNetSavingsAfterMaterialization"] = "0";
+      details["valueAwareEstimatedNetSavingsModel"] =
+          "profitable-stack-input-recalls-minus-callsite-materialization-plus-state-outputs";
+    }
     const auto stack_capacity_it = details.find("valueAwareStackCapacityStatus");
     if (stack_capacity_it != details.end() &&
         stack_capacity_it->second == "exceeds-x-y-z-t-capacity") {
-      details["estimateKind"] = "gross-upper-bound-exceeds-stack-capacity";
-      details["candidateStepsStatus"] = "synthetic-upper-bound-not-directly-schedulable";
-      details["netSavingsStatus"] = "requires-staged-or-spilled-stack-input-plan";
+      if (details["savingsModel"] == "gross-helper-register-traffic-before-callsite-proof") {
+        details["estimateKind"] = "gross-upper-bound-exceeds-stack-capacity";
+        details["candidateStepsStatus"] = "synthetic-upper-bound-not-directly-schedulable";
+        details["netSavingsStatus"] = "requires-staged-or-spilled-stack-input-plan";
+      }
       details["proofStatus"] = "stack-inputs-exceed-x-y-z-t-capacity";
       details["schedulerScope"] =
           "helper-entry-callsite-stack-values-and-staged-materialization";
@@ -48260,8 +48294,10 @@ SizeAttributionReport build_size_attribution_report(
     const auto stack_plan_it = details.find("valueAwareStackInputPlanStatus");
     if (stack_plan_it != details.end() &&
         stack_plan_it->second == "requires-call-preserving-stack-proof") {
-      details["candidateStepsStatus"] = "synthetic-upper-bound-not-directly-schedulable";
-      details["netSavingsStatus"] = "requires-nested-helper-stack-preservation-proof";
+      if (details["savingsModel"] == "gross-helper-register-traffic-before-callsite-proof") {
+        details["candidateStepsStatus"] = "synthetic-upper-bound-not-directly-schedulable";
+        details["netSavingsStatus"] = "requires-nested-helper-stack-preservation-proof";
+      }
       details["proofStatus"] = "nested-helper-calls-may-clobber-stack-inputs";
       details["schedulerScope"] =
           "helper-entry-callsite-stack-values-and-nested-call-stack-preservation";
@@ -48274,8 +48310,8 @@ SizeAttributionReport build_size_attribution_report(
         .site = "helper",
         .variant = "helper-register-traffic",
         .current_steps = current_steps,
-        .candidate_steps = current_steps - value_aware_register_traffic_cells,
-        .savings = value_aware_register_traffic_cells,
+        .candidate_steps = current_steps - opportunity_savings,
+        .savings = opportunity_savings,
         .reason = "helper-local register traffic requires value-aware stack/register scheduling "
                   "proof before it can be removed",
         .blocker_kind = "value-aware-stack-register-scheduler",
