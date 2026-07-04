@@ -78,6 +78,18 @@ const SizeHelperSummaryReport* find_size_helper(const CompileResult& result,
   return it == result.size_attribution.helpers.end() ? nullptr : &*it;
 }
 
+const SizeNextActionSummaryReport* find_size_next_action(const CompileResult& result,
+                                                         const std::string& source,
+                                                         const std::string& action) {
+  const auto it = std::find_if(result.size_attribution.next_actions.begin(),
+                               result.size_attribution.next_actions.end(),
+                               [&](const SizeNextActionSummaryReport& next_action) {
+                                 return next_action.source == source &&
+                                        next_action.action == action;
+                               });
+  return it == result.size_attribution.next_actions.end() ? nullptr : &*it;
+}
+
 // Pin the shared-helper / direct-call (ПП) structure this suite verifies by
 // suppressing the default-on aggressive post-layout indirect-flow repacking.
 CompileOptions pinned_options() {
@@ -308,6 +320,16 @@ program PackedScoreSmallSignedDirectExpressionAccumulator {
               small_signed_cost_opportunity->details.at("requiredAction") ==
                   "keep-standalone-helper-until-more-signed-terms",
           "small signed packed_score cost report should expose term split, cost model, and action");
+  const SizeNextActionSummaryReport* small_signed_cost_action = find_size_next_action(
+      small_signed_direct_expression_sum, "costModelAction",
+      "find-more-signed-packed-score-terms-or-reuse-subtractor-helper");
+  require(small_signed_cost_action != nullptr,
+          "small signed packed_score cost report should surface a stalled cost-model next action");
+  require(small_signed_cost_action->status == "stalled-nonpositive" &&
+              small_signed_cost_action->best_savings == -6 &&
+              small_signed_cost_action->best_variant ==
+                  "packed-score-signed-accumulator-local-cost",
+          "small signed packed_score stalled action should preserve the nonpositive size impact");
 
   const CompileResult signed_direct_expression_sum = compile_source(R"mkpro(
 program PackedScoreSignedDirectExpressionAccumulator {

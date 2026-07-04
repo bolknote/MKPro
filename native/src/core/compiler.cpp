@@ -52253,6 +52253,19 @@ SizeAttributionReport build_size_attribution_report(
     const SizeOpportunityReport& opportunity = report.opportunities.at(index);
     if (opportunity.savings > 0)
       continue;
+    if (opportunity.blocker_kind == "local-cost-model") {
+      if (const auto required_it = opportunity.details.find("requiredAction");
+          required_it != opportunity.details.end()) {
+        add_next_action(opportunity, "requiredAction", required_it->second, index,
+                        "stalled-nonpositive");
+      }
+      if (const auto cost_it = opportunity.details.find("costModelAction");
+          cost_it != opportunity.details.end()) {
+        add_next_action(opportunity, "costModelAction", cost_it->second, index,
+                        "stalled-nonpositive");
+      }
+      continue;
+    }
     const auto abi_status_it = opportunity.details.find("valueAwareCalleeAbiCostModelStatus");
     if (abi_status_it == opportunity.details.end() ||
         abi_status_it->second != "mutation-surface-exceeds-overhead-budget") {
