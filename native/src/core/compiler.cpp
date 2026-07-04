@@ -45586,6 +45586,7 @@ void append_candidate_report_once(std::vector<CandidateReport>& reports,
 bool should_report_nonwinning_candidate(std::string_view name) {
   return name == "packed-score-accumulator-helper" ||
          name == "packed-score-accumulator-aggressive-post-layout" ||
+         name == "packed-score-accumulator-stack-helper-entries" ||
          name == "generic-packed-score-accumulator-fallback" ||
          name == "packed-line-family-update-check-tail" ||
          name == "packed-line-family-mutating-selector-update-check-tail" ||
@@ -52915,6 +52916,17 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       "stack-resident-helper-entries",
       "Kept temporaries stack-resident and entered eligible shared helpers through their "
       "stack-argument ABI");
+  if (may_use_packed_score_accumulator) {
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.stack_resident_temps = true;
+          candidate_options.stack_argument_helper_entries = true;
+          candidate_options.packed_score_accumulator_helpers = true;
+        },
+        "packed-score-accumulator-stack-helper-entries",
+        "Combined packed_score accumulator helpers with stack-resident temporaries and "
+        "stack-argument helper entries");
+  }
   add_candidate(
       [](CompileOptions& candidate_options) {
         candidate_options.stack_resident_temps = true;

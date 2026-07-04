@@ -824,6 +824,15 @@ program PackedScoreAccumulatorSearchesRepeatedPairs {
               pair_accumulator_opportunity->details.at("candidateStepsStatus") ==
                   "larger-than-current",
           "repeated-pair accumulator candidate should report that it is larger than current");
+  const CandidateReport* rejected_pair_accumulator_stack_entries =
+      find_candidate(searched_pair_groups.rejected_candidates,
+                     "packed-score-accumulator-stack-helper-entries");
+  require(rejected_pair_accumulator_stack_entries != nullptr,
+          "analysis candidate search should consider packed_score accumulator helpers together "
+          "with stack-resident helper entries");
+  require(rejected_pair_accumulator_stack_entries->steps >=
+              static_cast<int>(searched_pair_groups.steps.size()),
+          "combined packed_score/stack-entry candidate should not hide a smaller listing");
 
   const CompileResult x_param_sequence = compile_source(R"mkpro(
 program PackedScoreXParamAccumulatorHelper {
