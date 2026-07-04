@@ -674,6 +674,14 @@ void example_sizes_match_typescript_baselines() {
                   generic_packed_score_fallback->steps > static_cast<int>(result.steps.size()),
               "tic-tac-toe-4x4 should measure the generic packed_score accumulator fallback and "
               "keep the current specialized scorer when the fallback is larger");
+      const CandidateReport* generic_packed_score_aggressive_fallback =
+          find_candidate(result.rejected_candidates,
+                         "generic-packed-score-accumulator-aggressive-fallback");
+      require(generic_packed_score_aggressive_fallback != nullptr &&
+                  generic_packed_score_aggressive_fallback->steps >=
+                      static_cast<int>(result.steps.size()),
+              "tic-tac-toe-4x4 should measure the generic packed_score fallback together with "
+              "aggressive post-layout repacking without hiding a smaller listing");
       const CandidateReport* generic_packed_score_stack_fallback =
           find_candidate(result.rejected_candidates,
                          "generic-packed-score-accumulator-stack-helper-fallback");
@@ -682,6 +690,14 @@ void example_sizes_match_typescript_baselines() {
                       static_cast<int>(result.steps.size()),
               "tic-tac-toe-4x4 should also measure the generic packed_score fallback together "
               "with stack-resident helper entries without hiding a smaller listing");
+      const CandidateReport* generic_packed_score_stack_aggressive_fallback =
+          find_candidate(result.rejected_candidates,
+                         "generic-packed-score-accumulator-stack-helper-aggressive-fallback");
+      require(generic_packed_score_stack_aggressive_fallback != nullptr &&
+                  generic_packed_score_stack_aggressive_fallback->steps >=
+                      static_cast<int>(result.steps.size()),
+              "tic-tac-toe-4x4 should measure the generic packed_score fallback together with "
+              "stack-resident helper entries and aggressive post-layout repacking");
       const SizeOpportunityReport* generic_packed_score_opportunity =
           find_size_opportunity(result, "generic-packed-score-accumulator-fallback");
       require(generic_packed_score_opportunity != nullptr &&
@@ -734,6 +750,26 @@ void example_sizes_match_typescript_baselines() {
                       "packedScoreFallbackAction"),
               "tic-tac-toe-4x4 generic packed_score stack-entry fallback should carry the same "
               "fallback attribution plus its stack-entry combination");
+      const SizeOpportunityReport* generic_packed_score_aggressive_opportunity =
+          find_size_opportunity(result, "generic-packed-score-accumulator-aggressive-fallback");
+      require(generic_packed_score_aggressive_opportunity != nullptr &&
+                  generic_packed_score_aggressive_opportunity->details.contains(
+                      "packedScoreFallbackPostLayoutCombination") &&
+                  generic_packed_score_aggressive_opportunity->details.at(
+                      "packedScoreFallbackPostLayoutCombination") ==
+                      "aggressive-post-layout-indirect-flow",
+              "tic-tac-toe-4x4 generic packed_score aggressive fallback should explain that it "
+              "was compared with post-layout indirect-flow repacking");
+      const SizeOpportunityReport* generic_packed_score_stack_aggressive_opportunity =
+          find_size_opportunity(
+              result, "generic-packed-score-accumulator-stack-helper-aggressive-fallback");
+      require(generic_packed_score_stack_aggressive_opportunity != nullptr &&
+                  generic_packed_score_stack_aggressive_opportunity->details.contains(
+                      "packedScoreFallbackCombination") &&
+                  generic_packed_score_stack_aggressive_opportunity->details.contains(
+                      "packedScoreFallbackPostLayoutCombination"),
+              "tic-tac-toe-4x4 generic packed_score stack-entry aggressive fallback should carry "
+              "both stack-entry and post-layout fallback attribution");
       const CandidateReport* rejected_dead_integer =
           find_candidate(result.rejected_candidates, "fractional-constant-selector-dead-int");
       require(rejected_dead_integer == nullptr,

@@ -45588,7 +45588,9 @@ bool should_report_nonwinning_candidate(std::string_view name) {
          name == "packed-score-accumulator-aggressive-post-layout" ||
          name == "packed-score-accumulator-stack-helper-entries" ||
          name == "generic-packed-score-accumulator-fallback" ||
+         name == "generic-packed-score-accumulator-aggressive-fallback" ||
          name == "generic-packed-score-accumulator-stack-helper-fallback" ||
+         name == "generic-packed-score-accumulator-stack-helper-aggressive-fallback" ||
          name == "packed-line-family-update-check-tail" ||
          name == "packed-line-family-mutating-selector-update-check-tail" ||
          name == "packed-line-family-borrowed-mutating-selector-update-check-tail" ||
@@ -48707,14 +48709,22 @@ void attach_generic_packed_score_fallback_details(
     std::map<std::string, std::string>& details, const CandidateReport& candidate,
     int current_steps, const std::vector<SizeHelperSummaryReport>& helpers) {
   if (candidate.variant != "generic-packed-score-accumulator-fallback" &&
-      candidate.variant != "generic-packed-score-accumulator-stack-helper-fallback")
+      candidate.variant != "generic-packed-score-accumulator-aggressive-fallback" &&
+      candidate.variant != "generic-packed-score-accumulator-stack-helper-fallback" &&
+      candidate.variant != "generic-packed-score-accumulator-stack-helper-aggressive-fallback")
     return;
   const SizeHelperSummaryReport* selected =
       size_report_helper_by_label(helpers, "packed-line score accumulator helper");
   details["packedScoreFallbackFamily"] = "generic-expression-accumulator";
-  if (candidate.variant == "generic-packed-score-accumulator-stack-helper-fallback") {
+  if (candidate.variant == "generic-packed-score-accumulator-stack-helper-fallback" ||
+      candidate.variant == "generic-packed-score-accumulator-stack-helper-aggressive-fallback") {
     details["packedScoreFallbackCombination"] =
         "stack-resident-temporaries-and-stack-argument-helper-entries";
+  }
+  if (candidate.variant == "generic-packed-score-accumulator-aggressive-fallback" ||
+      candidate.variant == "generic-packed-score-accumulator-stack-helper-aggressive-fallback") {
+    details["packedScoreFallbackPostLayoutCombination"] =
+        "aggressive-post-layout-indirect-flow";
   }
   details["packedScoreFallbackComparedAgainst"] = "packed-line-family-score";
   details["packedScoreFallbackDeltaCells"] = std::to_string(candidate.steps - current_steps);
@@ -52715,6 +52725,18 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         "generic-packed-score-accumulator-fallback",
         "Compared generic packed_score() accumulator lowering against specialized score lowering",
         CandidateGate::SizeRescue);
+    if (allow_aggressive_post_layout) {
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.packed_score_accumulator_helpers = true;
+            candidate_options.disable_packed_line_family_score_accumulator = true;
+            candidate_options.aggressive_post_layout_indirect_flow = true;
+          },
+          "generic-packed-score-accumulator-aggressive-fallback",
+          "Compared generic packed_score() accumulator lowering plus proven post-layout "
+          "indirect-flow repacking against specialized score lowering",
+          CandidateGate::SizeRescue);
+    }
     add_candidate(
         [](CompileOptions& candidate_options) {
           candidate_options.packed_score_accumulator_helpers = true;
@@ -52726,6 +52748,21 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         "Compared generic packed_score() accumulator lowering plus stack-resident helper entries "
         "against specialized score lowering",
         CandidateGate::SizeRescue);
+    if (allow_aggressive_post_layout) {
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.packed_score_accumulator_helpers = true;
+            candidate_options.disable_packed_line_family_score_accumulator = true;
+            candidate_options.stack_resident_temps = true;
+            candidate_options.stack_argument_helper_entries = true;
+            candidate_options.aggressive_post_layout_indirect_flow = true;
+          },
+          "generic-packed-score-accumulator-stack-helper-aggressive-fallback",
+          "Compared generic packed_score() accumulator lowering plus stack-resident helper "
+          "entries and proven post-layout indirect-flow repacking against specialized score "
+          "lowering",
+          CandidateGate::SizeRescue);
+    }
   }
   for (const std::vector<std::string>& names :
        discover_packed_counter_stripe_variant_names(source)) {
