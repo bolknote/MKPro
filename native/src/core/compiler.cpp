@@ -1520,7 +1520,7 @@ bool collect_stack_accumulator_target_sum_terms_with_initial_syntax(
     return false;
   }
   if (!expression_preserves_previous_x_as_y_for_stack_analysis(expression) &&
-      !(count == 0 && stack_accumulator_initial_addend_can_start(expression))) {
+      !stack_accumulator_initial_addend_can_start(expression)) {
     return false;
   }
   has_initial = true;
@@ -1567,7 +1567,7 @@ bool collect_stack_accumulator_sum_terms_with_initial_syntax(
     return false;
   }
   if (!expression_preserves_previous_x_as_y_for_stack_analysis(expression) &&
-      !(count == 0 && stack_accumulator_initial_addend_can_start(expression))) {
+      !stack_accumulator_initial_addend_can_start(expression)) {
     return false;
   }
   has_initial = true;
@@ -17648,7 +17648,7 @@ bool collect_stack_accumulator_target_sum_terms_with_initial(
     return false;
   }
   if (!expression_preserves_previous_x_as_y_for_stack_analysis(expression) &&
-      !(terms.empty() && stack_accumulator_initial_addend_can_start(expression))) {
+      !stack_accumulator_initial_addend_can_start(expression)) {
     return false;
   }
   append_stack_accumulator_initial(initial, expression);
@@ -17693,7 +17693,7 @@ bool collect_stack_accumulator_sum_terms_with_initial(const Expression& expressi
     return false;
   }
   if (!expression_preserves_previous_x_as_y_for_stack_analysis(expression) &&
-      !(terms.empty() && stack_accumulator_initial_addend_can_start(expression))) {
+      !stack_accumulator_initial_addend_can_start(expression)) {
     return false;
   }
   append_stack_accumulator_initial(initial, expression);
