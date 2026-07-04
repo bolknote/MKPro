@@ -900,6 +900,90 @@ program StackPackedScoreHelperIndexArg {
 
   {
     const CompileResult result = compile_stack_variant(R"mkpro(
+program StackPackedScoreInlineCurrentXIndexArg {
+  state {
+    line: packed = 44444.4
+    index: counter 0..7 = 3
+    guard: flag = false
+    tmp: counter 0..7 = 0
+    out: packed = 0
+  }
+
+  fn hot() {
+    tmp = index
+    if guard {
+    }
+    out += packed_score(line, tmp)
+  }
+
+  loop {
+    hot()
+    halt(out)
+  }
+}
+)mkpro");
+    require_clean_compile(result, "stack-resident inline packed_score current-X index argument");
+    require(has_optimization(result, "stack-carried-assignment-delayed"),
+            "inline packed_score(line, tmp) should be recognized as a delayed current-X "
+            "consumer without requiring the shared helper");
+    require(has_optimization(result, "packed-score-inline-stack-argument-lowering"),
+            "inline packed_score(line, tmp) should consume tmp directly from X");
+    require(has_optimization(result, "packed-score-current-x-update"),
+            "inline packed_score(line, tmp) update should add the accumulator after current-X "
+            "scoring");
+    require(!has_optimization(result, "packed-score-stack-helper"),
+            "single inline current-X packed_score should not force the shared helper body");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "inline current-X packed_score index argument should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "inline current-X packed_score index argument should not recall tmp");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackPackedScoreInlineCurrentXLineArg {
+  state {
+    line: packed = 44444.4
+    index: counter 0..7 = 3
+    guard: flag = false
+    tmp_line: packed = 0
+    out: packed = 0
+  }
+
+  fn hot() {
+    tmp_line = line
+    if guard {
+    }
+    out += packed_score(tmp_line, index)
+  }
+
+  loop {
+    hot()
+    halt(out)
+  }
+}
+)mkpro");
+    require_clean_compile(result, "stack-resident inline packed_score current-X line argument");
+    require(has_optimization(result, "stack-carried-assignment-delayed"),
+            "inline packed_score(tmp_line, index) should keep the line value in X until the "
+            "score update");
+    require(has_optimization(result, "packed-score-inline-stack-argument-lowering"),
+            "inline packed_score(tmp_line, index) should consume the line argument directly "
+            "from X");
+    require(has_optimization(result, "packed-score-current-x-update"),
+            "inline packed_score(tmp_line, index) update should add the accumulator after "
+            "current-X scoring");
+    require(!has_optimization(result, "packed-score-stack-helper"),
+            "single inline current-X packed_score line argument should not force the shared "
+            "helper body");
+    require(count_steps_with_comment(result, "set tmp_line") == 0,
+            "inline current-X packed_score line argument should not store tmp_line");
+    require(count_steps_with_comment(result, "recall tmp_line") == 0,
+            "inline current-X packed_score line argument should not recall tmp_line");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
 program StackCarriedPowAlias {
   state {
     index: counter 0..7 = 3

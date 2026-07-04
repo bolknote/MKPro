@@ -11295,6 +11295,11 @@ bool lower_expression_to_x(LoweringContext& context, const Expression& expressio
 bool lower_call_to_x(LoweringContext& context, const Expression& expression);
 bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expression& expression,
                                           const std::vector<std::string>& temps, int line);
+bool packed_score_stack_argument_shape_safe(const Expression& expression,
+                                            const std::vector<std::string>& temps);
+bool lower_stack_argument_packed_score_inline(LoweringContext& context,
+                                              const Expression& expression,
+                                              const std::vector<std::string>& temps, int line);
 bool ensure_hidden_register(LoweringContext& context, const std::string& name);
 bool expression_is_deterministic_for_test_and_set(const Expression& expression);
 bool x_holds_identifier(const LoweringContext& context, const std::string& name);
@@ -18585,10 +18590,16 @@ bool expression_is_shared_bit_mask_current_x_consumer(const LoweringContext& con
 bool expression_is_packed_score_current_x_consumer(const LoweringContext& context,
                                                    const Expression& expression,
                                                    const std::string& target) {
-  if (!context.use_packed_score_helper || expression.kind != "call" ||
+  if (expression.kind != "call" ||
       lower_ascii(expression.callee) != "packed_score" || expression.args.size() != 2U) {
     return false;
   }
+  if (!context.use_packed_score_helper &&
+      packed_score_stack_argument_shape_safe(expression, {target})) {
+    return true;
+  }
+  if (!context.use_packed_score_helper)
+    return false;
   const bool line_current = expression_derives_current_x_identifier(expression.args.at(0), target);
   const bool index_current = expression_derives_current_x_identifier(expression.args.at(1), target);
   if (line_current == index_current)
@@ -21911,6 +21922,14 @@ bool lower_expression_to_x(LoweringContext& context, const Expression& expressio
         return true;
       }
     }
+  }
+
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "packed_score" &&
+      context.emitter.current_x_variable.has_value() &&
+      packed_score_stack_argument_shape_safe(expression, {*context.emitter.current_x_variable}) &&
+      lower_stack_argument_packed_score_inline(context, expression,
+                                               {*context.emitter.current_x_variable}, 0)) {
+    return true;
   }
 
   if ((expression.kind == "binary" ||
