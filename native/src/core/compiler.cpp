@@ -47977,7 +47977,9 @@ SizeAttributionReport build_size_attribution_report(
   for (std::size_t index = 0; index < report.helpers.size(); ++index)
     helper_summary_by_label.emplace(report.helpers.at(index).label, index);
   std::map<std::string, std::set<int>> helper_indirect_memory_selector_registers;
+  std::map<std::string, HelperRegionRange> helper_region_by_label;
   for (const HelperRegionRange& region : helper_regions) {
+    helper_region_by_label.emplace(region.label, region);
     std::set<int>& registers = helper_indirect_memory_selector_registers[region.label];
     for (std::size_t index = region.start; index < region.end && index < steps.size(); ++index) {
       const int opcode = steps.at(index).opcode;
@@ -48014,6 +48016,79 @@ SizeAttributionReport build_size_attribution_report(
       }
     }
   }
+  struct HelperStackEffectSummary {
+    std::string status = "missing-helper-region";
+    int preserves = 0;
+    int shifts = 0;
+    int consume_y_drop = 0;
+    int consume_y_keep = 0;
+    int exposes = 0;
+    int barriers = 0;
+    int unknown = 0;
+    int nested_calls = 0;
+  };
+  const auto helper_stack_effect_summary = [&](const std::string& label) {
+    HelperStackEffectSummary summary;
+    const auto region_it = helper_region_by_label.find(label);
+    if (region_it == helper_region_by_label.end())
+      return summary;
+    const HelperRegionRange& region = region_it->second;
+    for (std::size_t index = region.start; index < region.end && index < steps.size(); ++index) {
+      if (index > region.start && steps.at(index - 1U).address + 1 == steps.at(index).address &&
+          opcode_by_code(steps.at(index - 1U).opcode).takes_address) {
+        continue;
+      }
+      const int opcode = steps.at(index).opcode;
+      if (opcode == 0x52)
+        continue;
+      if (opcode == 0x53 || (opcode >= 0xa0 && opcode <= 0xae))
+        ++summary.nested_calls;
+      switch (opcode_by_code(opcode).stack_effect) {
+        case StackEffect::Preserves:
+          ++summary.preserves;
+          break;
+        case StackEffect::Shifts:
+          ++summary.shifts;
+          break;
+        case StackEffect::ConsumeYDrop:
+          ++summary.consume_y_drop;
+          break;
+        case StackEffect::ConsumeYKeep:
+          ++summary.consume_y_keep;
+          break;
+        case StackEffect::Exposes:
+          ++summary.exposes;
+          break;
+        case StackEffect::Barrier:
+          ++summary.barriers;
+          break;
+        case StackEffect::Unknown:
+          ++summary.unknown;
+          break;
+      }
+    }
+    const bool has_stack_mutation =
+        summary.shifts > 0 || summary.consume_y_drop > 0 || summary.consume_y_keep > 0 ||
+        summary.exposes > 0 || summary.barriers > 0 || summary.unknown > 0;
+    if (has_stack_mutation) {
+      summary.status = "stack-mutating";
+    } else if (summary.nested_calls > 0) {
+      summary.status = "requires-nested-callee-proof";
+    } else {
+      summary.status = "stack-preserving";
+    }
+    return summary;
+  };
+  const auto helper_stack_effect_summary_text = [](const std::string& label,
+                                                   const HelperStackEffectSummary& summary) {
+    std::ostringstream out;
+    out << label << ":" << summary.status << "(preserves=" << summary.preserves
+        << ",shifts=" << summary.shifts << ",consumeYDrop=" << summary.consume_y_drop
+        << ",consumeYKeep=" << summary.consume_y_keep << ",exposes=" << summary.exposes
+        << ",barriers=" << summary.barriers << ",unknown=" << summary.unknown
+        << ",nestedCalls=" << summary.nested_calls << ")";
+    return out.str();
+  };
   std::map<std::string, std::set<int>> helper_spill_registers;
   for (const HelperRegionRange& region : helper_regions) {
     for (std::size_t index = region.start; index < region.end && index < steps.size(); ++index) {
@@ -48333,6 +48408,29 @@ SizeAttributionReport build_size_attribution_report(
           }
           helper.details["valueAwareCallPreservationMatrix"] =
               join_strings(matrix_parts, ";");
+          std::vector<std::string> callee_effect_parts;
+          bool all_required_callees_stack_preserving = !call_preservation_inputs_by_label.empty();
+          bool saw_stack_mutating_required_callee = false;
+          callee_effect_parts.reserve(call_preservation_inputs_by_label.size());
+          for (const auto& [label, unused_inputs] : call_preservation_inputs_by_label) {
+            (void)unused_inputs;
+            const HelperStackEffectSummary effect = helper_stack_effect_summary(label);
+            callee_effect_parts.push_back(helper_stack_effect_summary_text(label, effect));
+            if (effect.status != "stack-preserving")
+              all_required_callees_stack_preserving = false;
+            if (effect.status == "stack-mutating")
+              saw_stack_mutating_required_callee = true;
+          }
+          if (!callee_effect_parts.empty()) {
+            helper.details["valueAwareCallPreservationCalleeEffects"] =
+                join_strings(callee_effect_parts, ";");
+            helper.details["valueAwareCallPreservationCalleeStatus"] =
+                all_required_callees_stack_preserving
+                    ? "proved-callee-stack-preserving"
+                    : (saw_stack_mutating_required_callee
+                           ? "blocked-by-callee-stack-mutation"
+                           : "requires-nested-callee-proof");
+          }
           if (!call_preservation_site_parts.empty()) {
             helper.details["valueAwareCallPreservationSites"] =
                 join_strings(call_preservation_site_parts, ";");

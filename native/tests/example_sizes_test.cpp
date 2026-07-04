@@ -500,6 +500,17 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.at("valueAwareCallPreservationProofAction") ==
                       "prove-callee-stack-effect-for-listed-sites" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCallPreservationCalleeEffects") &&
+                  candidate_score_zero->details.at("valueAwareCallPreservationCalleeEffects")
+                          .find("packed-line score accumulator helper:stack-mutating") !=
+                      std::string::npos &&
+                  candidate_score_zero->details.at("valueAwareCallPreservationCalleeEffects")
+                          .find("consumeYDrop=3") != std::string::npos &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCallPreservationCalleeStatus") &&
+                  candidate_score_zero->details.at("valueAwareCallPreservationCalleeStatus") ==
+                      "blocked-by-callee-stack-mutation" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareSuggestedResidentInputNames") &&
                   candidate_score_zero->details.at("valueAwareSuggestedResidentInputNames")
                           .find("y") != std::string::npos &&
@@ -592,6 +603,16 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCallPreservationProofAction") &&
                   mark_lines_helper->details.at("valueAwareCallPreservationProofAction") ==
                       "prove-callee-stack-effect-for-listed-sites" &&
+                  mark_lines_helper->details.contains(
+                      "valueAwareCallPreservationCalleeEffects") &&
+                  mark_lines_helper->details.at("valueAwareCallPreservationCalleeEffects")
+                          .find("mark_one:stack-mutating") != std::string::npos &&
+                  mark_lines_helper->details.at("valueAwareCallPreservationCalleeEffects")
+                          .find("normalize:stack-mutating") != std::string::npos &&
+                  mark_lines_helper->details.contains(
+                      "valueAwareCallPreservationCalleeStatus") &&
+                  mark_lines_helper->details.at("valueAwareCallPreservationCalleeStatus") ==
+                      "blocked-by-callee-stack-mutation" &&
                   mark_lines_helper->details.contains("valueAwareNestedCallLabels") &&
                   mark_lines_helper->details.at("valueAwareNestedCallLabels").find("mark_one") !=
                       std::string::npos &&
