@@ -47018,6 +47018,15 @@ bool dead_integer_fractional_selector_direct_jump_use_proved(const ResolvedStep&
 
 constexpr int kDeadIntegerFractionalEraseOpcode = 0x35;  // К {x}
 
+bool dead_integer_fractional_selector_indirect_call_opcode(int opcode) {
+  if (opcode < 0)
+    return false;
+  const int offset = opcode & 0x0f;
+  if (offset > 0x0e)
+    return false;
+  return opcode - offset == 0xa0;
+}
+
 bool dead_integer_fractional_selector_conditional_flow_opcode(int opcode) {
   if (opcode < 0)
     return false;
@@ -47072,6 +47081,31 @@ bool dead_integer_fractional_selector_conditional_flow_use_proved(
       unique_resolved_step_index_by_address(steps, step.address + 1);
   return resolved_step_erases_dead_integer_fractional_selector(steps, branch) &&
          resolved_step_erases_dead_integer_fractional_selector(steps, fallthrough);
+}
+
+bool dead_integer_fractional_selector_indirect_call_use_proved(
+    const std::vector<ResolvedStep>& steps, std::size_t call_index, int register_index,
+    std::optional<int> selector_target) {
+  if (call_index >= steps.size())
+    return false;
+  const ResolvedStep& step = steps.at(call_index);
+  if (!dead_integer_fractional_selector_indirect_call_opcode(step.opcode))
+    return false;
+  const std::optional<std::string> register_name = indirect_flow_register_for_opcode(step.opcode);
+  if (!register_name.has_value() ||
+      *register_name != core::register_name_for_index(register_index)) {
+    return false;
+  }
+  const std::optional<PreloadedSelectorAnnotation> annotation =
+      preloaded_selector_annotation_from_comment(step.comment, *register_name);
+  if (!annotation.has_value())
+    return false;
+  if (selector_target.has_value() && annotation->target != *selector_target)
+    return false;
+
+  const std::optional<std::size_t> callee =
+      unique_resolved_step_index_by_address(steps, annotation->target);
+  return resolved_step_erases_dead_integer_fractional_selector(steps, callee);
 }
 
 std::string dead_integer_fractional_selector_next_step_name(const ResolvedStep& step) {
@@ -47194,8 +47228,16 @@ std::optional<std::string> stored_dead_integer_fractional_selector_later_rejecti
       // address, not as the fractional data value. Accept it only when the same
       // final step carries an indirect-flow artifact; the indirect-flow proof
       // then checks that the target re-resolves from the delivered selector.
-      if (dead_integer_fractional_selector_indirect_use_proved(step, register_index))
+      if (dead_integer_fractional_selector_direct_jump_use_proved(step, register_index))
         continue;
+      if (dead_integer_fractional_selector_conditional_flow_use_proved(
+              steps, index, register_index, selector_target)) {
+        continue;
+      }
+      if (dead_integer_fractional_selector_indirect_call_use_proved(
+              steps, index, register_index, selector_target)) {
+        continue;
+      }
       if (dead_integer_fractional_selector_memory_recall_use_proved(step, register_index,
                                                                     carrier_value)) {
         continue;
@@ -47303,6 +47345,11 @@ std::optional<std::string> dead_integer_fractional_selector_uses_rejection_reaso
       continue;
     }
     if (dead_integer_fractional_selector_conditional_flow_use_proved(
+            steps, index + 1U, source_register, selector_target)) {
+      proved_values.insert(normalized_source);
+      continue;
+    }
+    if (dead_integer_fractional_selector_indirect_call_use_proved(
             steps, index + 1U, source_register, selector_target)) {
       proved_values.insert(normalized_source);
       continue;
@@ -47485,9 +47532,9 @@ std::vector<ProofReport> build_proof_report(const ProgramAst& ast,
         .status = "proved",
         .detail =
             "Every dead-integer fractional-selector recall is either immediately erased by K {x} "
-            "or used only as a proved indirect jump or indirect-memory recall selector / stored "
-            "selector whose live X value is erased or overwritten by a proved indirect-memory "
-            "recall before data consumption.",
+            "or used only as a proved indirect jump, conditional flow, indirect call whose callee "
+            "entry erases X, or indirect-memory selector / stored selector whose live X value is "
+            "erased or overwritten before data consumption.",
     });
   }
   if (suppressed_constant_preloads_proved(options, preloads)) {

@@ -1441,6 +1441,14 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
           "dead-integer indirect-call rejection should expose the callee-return X-liveness "
           "proof gap");
 
+  CompileResult safe_direct_dead_integer_call_result = direct_dead_integer_call_result;
+  safe_direct_dead_integer_call_result.steps.push_back(
+      resolved_step_at(*direct_dead_integer_target, 0x35, "callee erases live selector"));
+  require(optimizer_static_proof_gate_accepts_for_testing(direct_dead_integer_options,
+                                                          safe_direct_dead_integer_call_result),
+          "dead-integer fractional selector elision should accept a proved indirect call whose "
+          "callee immediately erases the live X carrier");
+
   CompileResult safe_stored_dead_integer_result = forward_result;
   safe_stored_dead_integer_result.optimizations.push_back(
       optimization_report("dead-integer-fractional-selector-use"));
@@ -1483,6 +1491,38 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
                                                           safe_stored_memory_store_result),
           "dead-integer fractional selector elision should allow proved stored selector "
           "indirect-memory stores while still requiring data recalls to be erased");
+
+  CompileResult safe_stored_indirect_call_result = safe_stored_dead_integer_result;
+  safe_stored_indirect_call_result.steps.insert(
+      safe_stored_indirect_call_result.steps.end() - 2,
+      resolved_step_with_mnemonic(0xa9, "К ПП 9",
+                                  indirect_target_comment("9", "3", target)));
+  safe_stored_indirect_call_result.steps.insert(
+      safe_stored_indirect_call_result.steps.end() - 2,
+      resolved_step_at(target, 0x35, "callee erases stored selector"));
+  require(optimizer_static_proof_gate_accepts_for_testing(safe_dead_integer_options,
+                                                          safe_stored_indirect_call_result),
+          "dead-integer fractional selector elision should allow proved stored selector "
+          "indirect calls when the callee immediately erases the live X carrier");
+
+  CompileResult unsafe_stored_indirect_call_result = safe_stored_indirect_call_result;
+  unsafe_stored_indirect_call_result.steps.at(
+      unsafe_stored_indirect_call_result.steps.size() - 3U) =
+      resolved_step_at(target, 0x10, "callee consumes live selector");
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              safe_dead_integer_options, unsafe_stored_indirect_call_result),
+          "dead-integer fractional selector elision must reject stored selector indirect calls "
+          "when the callee can consume the live X carrier before K {x}");
+  const std::optional<std::string> unsafe_stored_indirect_call_reason =
+      optimizer_static_proof_gate_rejection_reason_for_testing(
+          safe_dead_integer_options, unsafe_stored_indirect_call_result);
+  require(unsafe_stored_indirect_call_reason.has_value() &&
+              unsafe_stored_indirect_call_reason->find("stored in R9 reaches К ПП 9 before "
+                                                       "K {x}") != std::string::npos &&
+              unsafe_stored_indirect_call_reason->find("xLivenessProofScope=indirect-call-return") !=
+                  std::string::npos,
+          "dead-integer rejection reason must classify stored-selector indirect-call callee "
+          "entry gaps");
 
   CompileResult mismatched_stored_memory_store_result = safe_stored_memory_store_result;
   mismatched_stored_memory_store_result.steps.at(
