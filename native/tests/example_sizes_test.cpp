@@ -922,6 +922,18 @@ void example_sizes_match_typescript_baselines() {
                           .find("packed-line score accumulator helper:x,y") !=
                       std::string::npos &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPreserveDepthByCallee") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiPreserveDepthByCallee") ==
+                      "packed-line score accumulator helper:2" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiMaxPreserveDepth") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiMaxPreserveDepth") ==
+                      "2" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPreserveDepthBasis") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiPreserveDepthBasis") ==
+                      "live-caller-stack-inputs-after-nested-call" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiSafetyProof") &&
                   candidate_score_zero->details.at("valueAwareCalleeAbiSafetyProof") ==
                       "prove-live-stack-inputs-survive-nested-callee-entry" &&
@@ -1104,6 +1116,14 @@ void example_sizes_match_typescript_baselines() {
                           .find("mark_one:x,y") != std::string::npos &&
                   mark_lines_helper->details.at("valueAwareCalleeAbiPreservationPlan")
                           .find("normalize:x,y") != std::string::npos &&
+                  mark_lines_helper->details.contains(
+                      "valueAwareCalleeAbiPreserveDepthByCallee") &&
+                  mark_lines_helper->details.at("valueAwareCalleeAbiPreserveDepthByCallee")
+                          .find("mark_one:2") != std::string::npos &&
+                  mark_lines_helper->details.at("valueAwareCalleeAbiPreserveDepthByCallee")
+                          .find("normalize:2") != std::string::npos &&
+                  mark_lines_helper->details.contains("valueAwareCalleeAbiMaxPreserveDepth") &&
+                  mark_lines_helper->details.at("valueAwareCalleeAbiMaxPreserveDepth") == "2" &&
                   mark_lines_helper->details.contains("valueAwareNestedCallLabels") &&
                   mark_lines_helper->details.at("valueAwareNestedCallLabels").find("mark_one") !=
                       std::string::npos &&

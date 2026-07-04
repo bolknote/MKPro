@@ -49076,9 +49076,11 @@ SizeAttributionReport build_size_attribution_report(
           std::vector<std::string> callee_mutating_cell_parts;
           std::vector<std::string> callee_mutating_opcode_parts;
           std::vector<std::string> callee_abi_preservation_parts;
+          std::vector<std::string> callee_abi_preserve_depth_parts;
           std::vector<std::string> callee_abi_refactor_targets;
           bool all_required_callees_stack_preserving = !call_preservation_inputs_by_label.empty();
           bool saw_stack_mutating_required_callee = false;
+          int callee_abi_max_preserve_depth = 0;
           callee_effect_parts.reserve(call_preservation_inputs_by_label.size());
           for (const auto& [label, inputs] : call_preservation_inputs_by_label) {
             const HelperStackEffectSummary effect = helper_stack_effect_summary(label);
@@ -49098,6 +49100,11 @@ SizeAttributionReport build_size_attribution_report(
               const std::string input_list =
                   join_strings(std::vector<std::string>(inputs.begin(), inputs.end()), ",");
               callee_abi_preservation_parts.push_back(label + ":" + input_list);
+              const int preserve_depth = static_cast<int>(inputs.size());
+              callee_abi_preserve_depth_parts.push_back(label + ":" +
+                                                        std::to_string(preserve_depth));
+              callee_abi_max_preserve_depth =
+                  std::max(callee_abi_max_preserve_depth, preserve_depth);
               callee_abi_refactor_targets.push_back(label);
             }
           }
@@ -49123,6 +49130,12 @@ SizeAttributionReport build_size_attribution_report(
                   join_strings(callee_abi_refactor_targets, ",");
               helper.details["valueAwareCalleeAbiPreservationPlan"] =
                   join_strings(callee_abi_preservation_parts, ";");
+              helper.details["valueAwareCalleeAbiPreserveDepthByCallee"] =
+                  join_strings(callee_abi_preserve_depth_parts, ";");
+              helper.details["valueAwareCalleeAbiMaxPreserveDepth"] =
+                  std::to_string(callee_abi_max_preserve_depth);
+              helper.details["valueAwareCalleeAbiPreserveDepthBasis"] =
+                  "live-caller-stack-inputs-after-nested-call";
               helper.details["valueAwareCalleeAbiSafetyProof"] =
                   "prove-live-stack-inputs-survive-nested-callee-entry";
               helper.details["valueAwareCalleeAbiImplementationStatus"] =
