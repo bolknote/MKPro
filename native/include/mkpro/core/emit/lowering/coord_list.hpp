@@ -16,6 +16,7 @@ struct CoordListIndirectContext {
   Expression cell;
   int count = 0;
   int pointer_start = 0;
+  std::vector<int> item_registers;
   std::string pointer;
   std::string counter;
 };
@@ -44,8 +45,9 @@ struct CoordListEmitApi {
 
 void emit_coord_list_loop_setup(CoordListEmitApi& api,
                                 const CoordListIndirectContext& context, int source_line);
-void emit_coord_list_indirect_recall(CoordListEmitApi& api, const std::string& pointer,
-                                     int source_line, const std::string& comment);
+void emit_coord_list_indirect_recall(CoordListEmitApi& api,
+                                     const CoordListIndirectContext& context, int source_line,
+                                     const std::string& comment);
 void emit_coord_list_counter_loop(CoordListEmitApi& api, const std::string& counter,
                                   const std::string& target, int source_line,
                                   const std::string& comment);

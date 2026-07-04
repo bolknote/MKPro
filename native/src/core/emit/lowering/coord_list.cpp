@@ -1,7 +1,9 @@
 #include "mkpro/core/emit/lowering/coord_list.hpp"
 
 #include "mkpro/core/emit/lowering_helpers.hpp"
+#include "mkpro/core/register_allocator.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <string>
 
@@ -19,6 +21,21 @@ std::string lower_ascii(std::string value) {
 
 bool is_preincrement_indirect_register(int index) {
   return index >= 4 && index <= 6;
+}
+
+std::string coord_list_indirect_targets_suffix(const CoordListIndirectContext& context) {
+  if (context.item_registers.empty())
+    return "";
+  std::vector<int> targets = context.item_registers;
+  std::sort(targets.begin(), targets.end());
+  targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+  std::string suffix = "; indirect-memory-targets=";
+  for (std::size_t index = 0; index < targets.size(); ++index) {
+    if (index > 0)
+      suffix += ",";
+    suffix += register_name_for_index(targets.at(index));
+  }
+  return suffix;
 }
 
 std::optional<std::vector<std::string>> coord_list_items_for(
@@ -78,6 +95,7 @@ std::optional<CoordListIndirectContext> coord_list_indirect_context(
       .cell = call.args.at(1),
       .count = static_cast<int>(items->size()),
       .pointer_start = item_indices.front() - 1,
+      .item_registers = item_indices,
       .pointer = pointer_name,
       .counter = counter_name,
   };
@@ -91,11 +109,12 @@ void emit_coord_list_loop_setup(CoordListEmitApi& api,
   api.emit_store(context.counter, "coord_list counter");
 }
 
-void emit_coord_list_indirect_recall(CoordListEmitApi& api, const std::string& pointer,
-                                     int source_line, const std::string& comment) {
-  const int pointer_index = api.register_index_for(pointer);
-  api.emitter.emit_op(0xd0 + pointer_index, "К П->X " + api.register_text_for(pointer),
-                      comment, source_line);
+void emit_coord_list_indirect_recall(CoordListEmitApi& api,
+                                     const CoordListIndirectContext& context, int source_line,
+                                     const std::string& comment) {
+  const int pointer_index = api.register_index_for(context.pointer);
+  api.emitter.emit_op(0xd0 + pointer_index, "К П->X " + api.register_text_for(context.pointer),
+                      comment + coord_list_indirect_targets_suffix(context), source_line);
   api.emitter.current_x_variable.reset();
   api.emitter.current_x_aliases.clear();
 }
@@ -161,7 +180,7 @@ bool lower_coord_list_line_count_assignment(CoordListEmitApi& api,
   const Expression current = identifier_expression(std::string(k_coord_list_current));
 
   api.emitter.emit_label(start_label);
-  emit_coord_list_indirect_recall(api, context.pointer, source_line, "coord_list candidate");
+  emit_coord_list_indirect_recall(api, context, source_line, "coord_list candidate");
   api.emit_store(std::string(k_coord_list_current), "coord_list current");
 
   if (!emit_coord_digit_ones_to_x(api, current, source_line))
@@ -220,8 +239,7 @@ bool lower_coord_list_remove(CoordListEmitApi& api, const CoordListIndirectConte
   api.emitter.emit_label(start_label);
   if (!api.lower_expression_to_x(context.cell))
     return false;
-  emit_coord_list_indirect_recall(api, context.pointer, source_line,
-                                  "coord_list remove candidate");
+  emit_coord_list_indirect_recall(api, context, source_line, "coord_list remove candidate");
   api.emitter.emit_op(0x11, "-", "coord_list remove compare", source_line);
   api.emitter.current_x_variable.reset();
   api.emitter.current_x_aliases.clear();

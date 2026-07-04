@@ -98,7 +98,7 @@
    18 | 05    | 5                       |
    19 | 42    | X→П 2                   | coord_list counter
    20 | 65    | П→X 5                   | recall shot
-   21 | D6    | К П→X 6                 | coord_list candidate
+   21 | D6    | К П→X 6                 | coord_list candidate; indirect-memory-targets=7,8,9,a,b
    22 | 11    | −                       | coord_list hit compare
    23 | 57    | F x≠0                   | coord_list hit
    24 | 29    | 29                      | coord_list hit
@@ -111,7 +111,7 @@
    31 | 05    | 5                       |
    32 | 42    | X→П 2                   | coord_list counter
    33 | 65    | П→X 5                   | recall shot
-   34 | D6    | К П→X 6                 | coord_list remove candidate
+   34 | D6    | К П→X 6                 | coord_list remove candidate; indirect-memory-targets=7,8,9,a,b
    35 | 11    | −                       | coord_list remove compare
    36 | 57    | F x≠0                   | coord_list remove hit
    37 | 42    | 42                      | coord_list remove hit

@@ -15244,7 +15244,7 @@ bool lower_coord_list_line_count_assignment(LoweringContext& context, const std:
   const Expression current = identifier_expression(std::string(kCoordListCurrent));
 
   context.emitter.emit_label(start_label);
-  core::emit::lowering::emit_coord_list_indirect_recall(api, indirect->pointer, source_line,
+  core::emit::lowering::emit_coord_list_indirect_recall(api, *indirect, source_line,
                                                         "coord_list candidate");
   emit_store(context, std::string(kCoordListCurrent), "coord_list current");
 
@@ -21447,7 +21447,7 @@ bool lower_coord_list_contains_false_branch(LoweringContext& context, const V2Pr
       context.emitter.emit_label(start_label, {.hidden = true});
       if (!lower_expression_to_x(context, indirect->cell))
         return false;
-      core::emit::lowering::emit_coord_list_indirect_recall(api, indirect->pointer, source_line,
+      core::emit::lowering::emit_coord_list_indirect_recall(api, *indirect, source_line,
                                                             "coord_list candidate");
       context.emitter.emit_op(0x11, "-", "coord_list hit compare", source_line);
       context.emitter.emit_jump(0x57, "F x!=0", true_label, "coord_list hit", source_line);
@@ -35162,7 +35162,7 @@ bool lower_fused_coord_list_scan(LoweringContext& context,
   const std::string visible_label = context.emitter.fresh_label("coord_list_fused_visible");
   const std::string count_next_label = context.emitter.fresh_label("coord_list_fused_next");
   context.emitter.emit_label(start_label);
-  core::emit::lowering::emit_coord_list_indirect_recall(api, indirect->pointer, branch.line,
+  core::emit::lowering::emit_coord_list_indirect_recall(api, *indirect, branch.line,
                                                         "coord_list fused candidate");
   emit_store(context, std::string(kCoordListCurrent), "coord_list fused current");
   if (context.removable_coord_lists.contains(line_count_call->list_name)) {

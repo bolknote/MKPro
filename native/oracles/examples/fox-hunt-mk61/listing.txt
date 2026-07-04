@@ -81,7 +81,7 @@
    11 | 45       | X→П 5                   | coord_list pointer
    12 | 09       | 9                       |
    13 | 42       | X→П 2                   | coord_list counter
-   14 | D5       | К П→X 5                 | coord_list fused candidate
+   14 | D5       | К П→X 5                 | coord_list fused candidate; indirect-memory-targets=6,7,8,9,a,b,c,d,e
    15 | 40       | X→П 0                   | coord_list fused current
    16 | 63       | П→X 3                   | recall cell
    17 | 60       | П→X 0                   | coord_list fused current
