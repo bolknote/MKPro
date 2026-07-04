@@ -48235,6 +48235,8 @@ SizeAttributionReport build_size_attribution_report(
             profitable_stack_input_gross_cells - profitable_stack_input_materialize_cells;
         std::map<std::string, std::set<std::string>> call_preservation_inputs_by_label;
         std::set<std::string> call_preservation_input_names;
+        std::map<std::string, std::set<int>> call_preservation_recall_addresses_by_name;
+        std::vector<std::string> call_preservation_site_parts;
         const auto nested_call_sites_it = helper_nested_call_sites.find(helper.label);
         const auto recall_indices_it = helper_recall_indices_by_name.find(helper.label);
         if (nested_call_sites_it != helper_nested_call_sites.end() &&
@@ -48247,15 +48249,22 @@ SizeAttributionReport build_size_attribution_report(
             for (const CallSite& call_site : nested_call_sites_it->second) {
               const std::size_t call_end =
                   call_site.start_index + static_cast<std::size_t>(std::max(1, call_site.cells));
-              const bool has_recall_after_call =
-                  std::any_of(input_recalls_it->second.begin(), input_recalls_it->second.end(),
-                              [&](std::size_t recall_index) {
-                                return recall_index >= call_end;
-                              });
-              if (!has_recall_after_call)
+              std::vector<std::string> recall_addresses;
+              for (const std::size_t recall_index : input_recalls_it->second) {
+                if (recall_index < call_end || recall_index >= steps.size())
+                  continue;
+                recall_addresses.push_back(
+                    safe_format_label_address(steps.at(recall_index).address));
+                call_preservation_recall_addresses_by_name[name].insert(
+                    steps.at(recall_index).address);
+              }
+              if (recall_addresses.empty())
                 continue;
               call_preservation_input_names.insert(name);
               call_preservation_inputs_by_label[call_site.label].insert(name);
+              call_preservation_site_parts.push_back(
+                  call_site.label + "@" + safe_format_label_address(call_site.address) + ":" +
+                  name + "@" + join_strings(recall_addresses, "/"));
             }
           }
         }
@@ -48324,6 +48333,25 @@ SizeAttributionReport build_size_attribution_report(
           }
           helper.details["valueAwareCallPreservationMatrix"] =
               join_strings(matrix_parts, ";");
+          if (!call_preservation_site_parts.empty()) {
+            helper.details["valueAwareCallPreservationSites"] =
+                join_strings(call_preservation_site_parts, ";");
+          }
+          std::vector<std::string> recall_address_parts;
+          recall_address_parts.reserve(call_preservation_recall_addresses_by_name.size());
+          for (const auto& [name, addresses] : call_preservation_recall_addresses_by_name) {
+            std::vector<std::string> formatted;
+            formatted.reserve(addresses.size());
+            for (const int address : addresses)
+              formatted.push_back(safe_format_label_address(address));
+            recall_address_parts.push_back(name + ":" + join_strings(formatted, ","));
+          }
+          if (!recall_address_parts.empty()) {
+            helper.details["valueAwareCallPreservationRecallAddresses"] =
+                join_strings(recall_address_parts, ";");
+          }
+          helper.details["valueAwareCallPreservationProofAction"] =
+              "prove-callee-stack-effect-for-listed-sites";
           helper.details["valueAwareCallPreservationReason"] =
               "profitable stack inputs have helper-local recalls after nested helper calls";
         }

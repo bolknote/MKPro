@@ -484,6 +484,22 @@ void example_sizes_match_typescript_baselines() {
                           .find("packed-line score accumulator helper") !=
                       std::string::npos &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCallPreservationSites") &&
+                  candidate_score_zero->details.at("valueAwareCallPreservationSites")
+                          .find("packed-line score accumulator helper@71:y@73/76/80") !=
+                      std::string::npos &&
+                  candidate_score_zero->details.at("valueAwareCallPreservationSites")
+                          .find("packed-line score accumulator helper@74:x@82") !=
+                      std::string::npos &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCallPreservationRecallAddresses") &&
+                  candidate_score_zero->details.at("valueAwareCallPreservationRecallAddresses") ==
+                      "x:82;y:73,76,80" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCallPreservationProofAction") &&
+                  candidate_score_zero->details.at("valueAwareCallPreservationProofAction") ==
+                      "prove-callee-stack-effect-for-listed-sites" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareSuggestedResidentInputNames") &&
                   candidate_score_zero->details.at("valueAwareSuggestedResidentInputNames")
                           .find("y") != std::string::npos &&
@@ -561,6 +577,21 @@ void example_sizes_match_typescript_baselines() {
                   mark_lines_helper->details.contains("valueAwareCallPreservationMatrix") &&
                   mark_lines_helper->details.at("valueAwareCallPreservationMatrix")
                           .find("mark_one") != std::string::npos &&
+                  mark_lines_helper->details.contains("valueAwareCallPreservationSites") &&
+                  mark_lines_helper->details.at("valueAwareCallPreservationSites")
+                          .find("mark_one@97:x@A2/>6C") != std::string::npos &&
+                  mark_lines_helper->details.at("valueAwareCallPreservationSites")
+                          .find("normalize@>69:y@>6D") != std::string::npos &&
+                  mark_lines_helper->details.contains(
+                      "valueAwareCallPreservationRecallAddresses") &&
+                  mark_lines_helper->details.at("valueAwareCallPreservationRecallAddresses")
+                          .find("x:A2,>6C") != std::string::npos &&
+                  mark_lines_helper->details.at("valueAwareCallPreservationRecallAddresses")
+                          .find("y:99,A3,>6D") != std::string::npos &&
+                  mark_lines_helper->details.contains(
+                      "valueAwareCallPreservationProofAction") &&
+                  mark_lines_helper->details.at("valueAwareCallPreservationProofAction") ==
+                      "prove-callee-stack-effect-for-listed-sites" &&
                   mark_lines_helper->details.contains("valueAwareNestedCallLabels") &&
                   mark_lines_helper->details.at("valueAwareNestedCallLabels").find("mark_one") !=
                       std::string::npos &&
