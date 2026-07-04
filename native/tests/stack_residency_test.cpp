@@ -499,6 +499,39 @@ program ValueAwareDirectStackInputNestedCall {
 
   {
     const CompileResult result = compile_stack_variant(R"mkpro(
+program StackResidentRepeatedSum {
+  state {
+    x: packed = 2
+    y: packed = 3
+    tmp: packed = 0
+    out: packed = 0
+    guard: flag = false
+  }
+
+  loop {
+    tmp = x + y
+    if guard {
+    }
+    out = sum(tmp, tmp, tmp, tmp)
+    halt(out)
+  }
+}
+)mkpro");
+    require_clean_compile(result, "stack-resident repeated sum");
+    require(has_optimization(result, "stack-resident-repeated-sum"),
+            "repeated sum should use stack-resident duplication instead of recalling tmp");
+    require(count_steps_with_comment(result, "duplicate repeated stack input") == 3,
+            "sum(tmp, tmp, tmp, tmp) should duplicate the stack-resident temp three times");
+    require(count_steps_with_comment(result, "stack-resident repeated sum") == 3,
+            "sum(tmp, tmp, tmp, tmp) should use three stack-resident additions");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-resident repeated sum should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-resident repeated sum should not recall tmp");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
 program StackCarriedImmediateConsumer {
   state {
     x: packed = 2

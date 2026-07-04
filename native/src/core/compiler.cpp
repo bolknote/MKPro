@@ -34022,6 +34022,49 @@ bool stack_expression_references_any_temp(const Expression& expression,
   });
 }
 
+bool collect_repeated_stack_temp_sum_terms(const Expression& expression, const std::string& temp,
+                                           int& count) {
+  if (expression.kind == "identifier" && expression.name == temp) {
+    ++count;
+    return true;
+  }
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "sum") {
+    return std::all_of(expression.args.begin(), expression.args.end(), [&](const Expression& arg) {
+      return collect_repeated_stack_temp_sum_terms(arg, temp, count);
+    });
+  }
+  if (expression.kind == "binary" && expression.op == "+" && expression.left != nullptr &&
+      expression.right != nullptr) {
+    return collect_repeated_stack_temp_sum_terms(*expression.left, temp, count) &&
+           collect_repeated_stack_temp_sum_terms(*expression.right, temp, count);
+  }
+  return false;
+}
+
+bool lower_repeated_stack_temp_sum_to_x(LoweringContext& context, const Expression& expression,
+                                        const std::vector<std::string>& temps, int line) {
+  if (temps.size() != 1U)
+    return false;
+  int count = 0;
+  if (!collect_repeated_stack_temp_sum_terms(expression, temps.front(), count) || count < 3 ||
+      count > 4) {
+    return false;
+  }
+  emit_stack_resident_restore(context, 0U, 1U, line);
+  mark_current_x(context, temps.front());
+  for (int copy = 1; copy < count; ++copy)
+    context.emitter.emit_op(0x0e, "В↑", "duplicate repeated stack input", line);
+  for (int add = 1; add < count; ++add)
+    context.emitter.emit_op(0x10, "+", "stack-resident repeated sum", line);
+  clear_current_x_facts(context);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "stack-resident-repeated-sum",
+      .detail = "Summed " + std::to_string(count) + " copies of stack-resident " + temps.front() +
+                " without recalling it.",
+  });
+  return true;
+}
+
 bool lower_stack_argument_expression_helper_call(LoweringContext& context,
                                                  const Expression& expression,
                                                  const std::vector<std::string>& temps,
@@ -34049,6 +34092,8 @@ bool lower_stack_argument_expression_helper_call(LoweringContext& context,
 
 bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expression& expression,
                                           const std::vector<std::string>& temps, int line) {
+  if (lower_repeated_stack_temp_sum_to_x(context, expression, temps, line))
+    return true;
   if (expression.kind == "identifier") {
     const auto found = std::find(temps.begin(), temps.end(), expression.name);
     if (found == temps.end())

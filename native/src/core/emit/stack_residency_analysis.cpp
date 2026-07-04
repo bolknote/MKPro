@@ -273,6 +273,34 @@ bool expression_duplicates_single_stack_temp(const Expression& expression,
          validate_stack_resident_expression(*expression.left, temps);
 }
 
+bool collect_repeated_sum_stack_temp(const Expression& expression, const std::string& temp,
+                                     int& count) {
+  if (expression.kind == "identifier" && expression.name == temp) {
+    ++count;
+    return true;
+  }
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "sum") {
+    return std::all_of(expression.args.begin(), expression.args.end(), [&](const Expression& arg) {
+      return collect_repeated_sum_stack_temp(arg, temp, count);
+    });
+  }
+  if (expression.kind == "binary" && expression.op == "+" && expression.left != nullptr &&
+      expression.right != nullptr) {
+    return collect_repeated_sum_stack_temp(*expression.left, temp, count) &&
+           collect_repeated_sum_stack_temp(*expression.right, temp, count);
+  }
+  return false;
+}
+
+bool expression_repeats_single_stack_temp_sum(const Expression& expression,
+                                              const std::vector<std::string>& temps) {
+  if (temps.size() != 1U)
+    return false;
+  int count = 0;
+  return collect_repeated_sum_stack_temp(expression, temps.front(), count) && count >= 2 &&
+         count <= 4;
+}
+
 bool assign_temp_is_safe(const V2Statement& statement, const std::set<std::string>& targets) {
   if (statement.kind != "v2_assign" || !statement.target.has_value() ||
       !statement.expr.has_value()) {
@@ -396,6 +424,8 @@ int count_identifier_reads(const Expression& expression, const std::string& name
 bool can_lower_stack_resident_expression(const Expression& expression,
                                          const std::vector<std::string>& temps) {
   if (expression_duplicates_single_stack_temp(expression, temps))
+    return true;
+  if (expression_repeats_single_stack_temp_sum(expression, temps))
     return true;
   for (const std::string& temp : temps) {
     if (count_identifier_reads(expression, temp) != 1)
