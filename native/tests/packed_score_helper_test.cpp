@@ -774,6 +774,57 @@ program PackedScoreAccumulatorReusesPlannedHelperForEarlierPair {
           "planned packed_score pair should store the earlier extra once before the later "
           "accumulator overwrites X/Y");
 
+  CompileOptions pair_search_options;
+  pair_search_options.analysis = true;
+  pair_search_options.budget = 999999;
+  pair_search_options.disable_aggressive_post_layout = true;
+  const CompileResult searched_pair_groups = compile_source(R"mkpro(
+program PackedScoreAccumulatorSearchesRepeatedPairs {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    d: packed = 44447.4
+    e: packed = 44448.4
+    f: packed = 44449.4
+    g: packed = 44450.4
+    h: packed = 44451.4
+    first: packed = 0
+    second: packed = 0
+    third: packed = 0
+    fourth: packed = 0
+  }
+  loop {
+    first = packed_score(a, 1) + packed_score(b, 2)
+    second = packed_score(c, 3) + packed_score(d, 4)
+    third = packed_score(e, 5) + packed_score(f, 6)
+    fourth = packed_score(g, 1) + packed_score(h, 2)
+    halt(first + second + third + fourth)
+  }
+}
+)mkpro",
+                                                        pair_search_options);
+  require(searched_pair_groups.implemented,
+          "analysis candidate search should compile repeated packed_score pairs");
+  require(searched_pair_groups.diagnostics.empty(),
+          "analysis candidate search should not report diagnostics for repeated packed_score "
+          "pairs");
+  const CandidateReport* rejected_pair_accumulator =
+      find_candidate(searched_pair_groups.rejected_candidates, "packed-score-accumulator-helper");
+  require(rejected_pair_accumulator != nullptr,
+          "analysis candidate search should consider the accumulator helper for repeated "
+          "packed_score pairs");
+  require(rejected_pair_accumulator->steps >= static_cast<int>(searched_pair_groups.steps.size()),
+          "repeated packed_score pair accumulator candidate should not hide a smaller listing");
+  const SizeOpportunityReport* pair_accumulator_opportunity =
+      find_size_opportunity(searched_pair_groups, "packed-score-accumulator-helper");
+  require(pair_accumulator_opportunity != nullptr,
+          "size attribution should surface the repeated-pair packed_score accumulator candidate");
+  require(pair_accumulator_opportunity->details.contains("candidateStepsStatus") &&
+              pair_accumulator_opportunity->details.at("candidateStepsStatus") ==
+                  "larger-than-current",
+          "repeated-pair accumulator candidate should report that it is larger than current");
+
   const CompileResult x_param_sequence = compile_source(R"mkpro(
 program PackedScoreXParamAccumulatorHelper {
   state {

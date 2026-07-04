@@ -1584,7 +1584,7 @@ int packed_score_accumulator_eligible_call_count(const Expression& expression) {
   int sum_count = 0;
   bool has_initial = false;
   if (collect_packed_score_sum_terms_with_initial_syntax(expression, sum_count, has_initial) &&
-      sum_count >= 3) {
+      sum_count >= 2) {
     return sum_count;
   }
   int count = 0;
@@ -1980,10 +1980,15 @@ int x_param_packed_score_accumulator_eligible_call_count_in_statement(
   return count;
 }
 
-int packed_score_accumulator_eligible_call_count_in_program(const V2Program& program) {
+int packed_score_accumulator_regular_eligible_call_count_in_program(const V2Program& program) {
   int count = packed_score_accumulator_eligible_call_count_in_statements(program.body);
   for (const V2Rule& rule : program.rules)
     count += packed_score_accumulator_eligible_call_count_in_statements(rule.body);
+  return count;
+}
+
+int x_param_packed_score_accumulator_eligible_call_count_in_program(const V2Program& program) {
+  int count = 0;
   const std::map<std::string, std::string> return_x_by_rule =
       packed_score_x_param_return_names_for_accumulator_syntax(program);
   count += x_param_packed_score_accumulator_eligible_call_count_in_statements(program.body,
@@ -1993,6 +1998,16 @@ int packed_score_accumulator_eligible_call_count_in_program(const V2Program& pro
         rule.body, return_x_by_rule);
   }
   return count;
+}
+
+int packed_score_accumulator_eligible_call_count_in_program(const V2Program& program) {
+  return packed_score_accumulator_regular_eligible_call_count_in_program(program) +
+         x_param_packed_score_accumulator_eligible_call_count_in_program(program);
+}
+
+bool packed_score_accumulator_helper_has_cost_effective_family(const V2Program& program) {
+  return packed_score_accumulator_regular_eligible_call_count_in_program(program) >= 3 ||
+         x_param_packed_score_accumulator_eligible_call_count_in_program(program) >= 3;
 }
 
 std::set<std::string> collect_value_function_names(const V2Program& program) {
@@ -10024,7 +10039,8 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   const int accumulator_packed_score_calls =
       packed_score_accumulator_eligible_call_count_in_program(program);
   context.use_packed_score_accumulator_helper =
-      context.packed_score_accumulator_helpers && accumulator_packed_score_calls >= 3;
+      context.packed_score_accumulator_helpers &&
+      packed_score_accumulator_helper_has_cost_effective_family(program);
   const int non_accumulator_group_packed_score_calls =
       std::max(0, packed_score_calls - accumulator_packed_score_calls);
   context.use_packed_score_accumulator_for_singletons =
@@ -51392,7 +51408,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   }
   const bool may_use_packed_score_accumulator =
       selector_probe_program.has_value() &&
-      packed_score_accumulator_eligible_call_count_in_program(*selector_probe_program) >= 3;
+      packed_score_accumulator_helper_has_cost_effective_family(*selector_probe_program);
   const int packed_score_call_count =
       selector_probe_program.has_value()
           ? count_expression_calls_in_program(*selector_probe_program, "packed_score")
