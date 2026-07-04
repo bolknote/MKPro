@@ -476,6 +476,10 @@ void print_json_size_attribution(const mkpro::SizeAttributionReport& report, std
     print_json_string(std::cout, action.source);
     std::cout << ", \"action\": ";
     print_json_string(std::cout, action.action);
+    if (!action.status.empty()) {
+      std::cout << ", \"status\": ";
+      print_json_string(std::cout, action.status);
+    }
     std::cout << ", \"opportunities\": " << action.opportunities;
     std::cout << ", \"potentialSavings\": " << action.potential_savings;
     std::cout << ", \"bestSavings\": " << action.best_savings;
@@ -1006,6 +1010,7 @@ void print_human_analysis_report(const mkpro::CompileResult& result) {
       if (printed >= 12U)
         break;
       std::cout << "- " << action.source << "=" << action.action
+                << " status=" << (action.status.empty() ? "positive" : action.status)
                 << " opportunities=" << action.opportunities
                 << " potentialSavings=" << action.potential_savings
                 << " best=" << action.best_savings;
@@ -1022,6 +1027,9 @@ void print_human_analysis_report(const mkpro::CompileResult& result) {
                                 "valueAwareSuggestedResidentInputNames",
                                 "valueAwareSuggestedStagedInputNames",
                                 "valueAwareStackInputPressure",
+                                "valueAwareCalleeAbiMutationSurfaceCells",
+                                "valueAwareCalleeAbiOverheadBudgetCells",
+                                "valueAwareCalleeAbiCostModelStatus",
                                 "layoutAction", "safeSavingsAction", "candidateDiscoveryAction"});
       if (!action.best_reason.empty())
         std::cout << " - " << action.best_reason;

@@ -51773,21 +51773,23 @@ SizeAttributionReport build_size_attribution_report(
   std::map<std::string, SizeNextActionSummaryReport> next_action_summaries;
   std::map<std::string, std::map<std::string, int>> next_action_group_savings;
   auto add_next_action = [&](const SizeOpportunityReport& opportunity, const std::string& source,
-                             const std::string& action, std::size_t opportunity_index) {
+                             const std::string& action, std::size_t opportunity_index,
+                             const std::string& status) {
     if (action.empty())
       return;
-    const std::string summary_key = source + "\x1f" + action;
+    const std::string summary_key = status + "\x1f" + source + "\x1f" + action;
     SizeNextActionSummaryReport& summary = next_action_summaries[summary_key];
     if (summary.action.empty()) {
       summary.source = source;
       summary.action = action;
+      summary.status = status;
     }
     ++summary.opportunities;
     const std::string group =
         size_opportunity_potential_group(opportunity, summary_key, opportunity_index);
     int& group_savings = next_action_group_savings[summary_key][group];
     group_savings = std::max(group_savings, opportunity.savings);
-    if (opportunity.savings > summary.best_savings) {
+    if (summary.best_site.empty() || opportunity.savings > summary.best_savings) {
       summary.best_savings = opportunity.savings;
       summary.best_site = opportunity.site;
       summary.best_variant = opportunity.variant;
@@ -51802,27 +51804,49 @@ SizeAttributionReport build_size_attribution_report(
       continue;
     if (const auto required_it = opportunity.details.find("requiredAction");
         required_it != opportunity.details.end()) {
-      add_next_action(opportunity, "requiredAction", required_it->second, index);
+      add_next_action(opportunity, "requiredAction", required_it->second, index, "positive");
     }
     if (const auto layout_it = opportunity.details.find("layoutAction");
         layout_it != opportunity.details.end()) {
-      add_next_action(opportunity, "layoutAction", layout_it->second, index);
+      add_next_action(opportunity, "layoutAction", layout_it->second, index, "positive");
     }
     if (const auto safe_it = opportunity.details.find("safeSavingsAction");
         safe_it != opportunity.details.end()) {
-      add_next_action(opportunity, "safeSavingsAction", safe_it->second, index);
+      add_next_action(opportunity, "safeSavingsAction", safe_it->second, index, "positive");
     }
     if (const auto discovery_it = opportunity.details.find("candidateDiscoveryAction");
         discovery_it != opportunity.details.end()) {
-      add_next_action(opportunity, "candidateDiscoveryAction", discovery_it->second, index);
+      add_next_action(opportunity, "candidateDiscoveryAction", discovery_it->second, index,
+                      "positive");
     }
     if (const auto cost_it = opportunity.details.find("costModelAction");
         cost_it != opportunity.details.end()) {
-      add_next_action(opportunity, "costModelAction", cost_it->second, index);
+      add_next_action(opportunity, "costModelAction", cost_it->second, index, "positive");
     }
     if (const auto traffic_shape_it = opportunity.details.find("trafficShapeAction");
         traffic_shape_it != opportunity.details.end()) {
-      add_next_action(opportunity, "trafficShapeAction", traffic_shape_it->second, index);
+      add_next_action(opportunity, "trafficShapeAction", traffic_shape_it->second, index,
+                      "positive");
+    }
+  }
+  for (std::size_t index = 0; index < report.opportunities.size(); ++index) {
+    const SizeOpportunityReport& opportunity = report.opportunities.at(index);
+    if (opportunity.savings > 0)
+      continue;
+    const auto abi_status_it = opportunity.details.find("valueAwareCalleeAbiCostModelStatus");
+    if (abi_status_it == opportunity.details.end() ||
+        abi_status_it->second != "mutation-surface-exceeds-overhead-budget") {
+      continue;
+    }
+    if (const auto required_it = opportunity.details.find("requiredAction");
+        required_it != opportunity.details.end()) {
+      add_next_action(opportunity, "requiredAction", required_it->second, index,
+                      "stalled-nonpositive");
+    }
+    if (const auto cost_it = opportunity.details.find("costModelAction");
+        cost_it != opportunity.details.end()) {
+      add_next_action(opportunity, "costModelAction", cost_it->second, index,
+                      "stalled-nonpositive");
     }
   }
   report.next_actions.reserve(next_action_summaries.size());

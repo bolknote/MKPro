@@ -137,6 +137,7 @@ struct SizeBlockerSummaryReport {
 struct SizeNextActionSummaryReport {
   std::string source;
   std::string action;
+  std::string status;
   int opportunities = 0;
   int potential_savings = 0;
   int best_savings = 0;

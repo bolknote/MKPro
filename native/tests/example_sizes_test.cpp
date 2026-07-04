@@ -1593,15 +1593,35 @@ void example_sizes_match_typescript_baselines() {
               "refactoring as a positive required action");
       const SizeNextActionSummaryReport* callee_abi_proof_action = find_size_next_action(
           result, "requiredAction", "prove-or-reduce-stack-preserving-callee-abi-overhead");
-      require(callee_abi_proof_action == nullptr,
-              "tic-tac-toe-4x4 size attribution should keep overbudget callee ABI proof work "
-              "visible only on the nonpositive opportunity");
+      require(callee_abi_proof_action != nullptr &&
+                  callee_abi_proof_action->status == "stalled-nonpositive" &&
+                  callee_abi_proof_action->potential_savings == 0 &&
+                  callee_abi_proof_action->best_savings == 0 &&
+                  callee_abi_proof_action->best_variant == "helper-register-traffic" &&
+                  callee_abi_proof_action->best_blocker_kind ==
+                      "value-aware-stack-register-scheduler" &&
+                  callee_abi_proof_action->best_details.contains("helperLabel") &&
+                  callee_abi_proof_action->best_details.at("helperLabel") ==
+                      "candidate_score zero-accumulator entry",
+              "tic-tac-toe-4x4 size attribution should rank overbudget callee ABI proof work "
+              "as a stalled nonpositive next action");
       const SizeNextActionSummaryReport* callee_abi_cost_model_action = find_size_next_action(
           result, "costModelAction",
           "estimate-stack-preserving-callee-abi-overhead-from-mutation-surface");
-      require(callee_abi_cost_model_action == nullptr,
-              "tic-tac-toe-4x4 size attribution should not rank the overbudget callee ABI cost "
-              "model as a positive next action");
+      require(callee_abi_cost_model_action != nullptr &&
+                  callee_abi_cost_model_action->status == "stalled-nonpositive" &&
+                  callee_abi_cost_model_action->potential_savings == 0 &&
+                  callee_abi_cost_model_action->best_savings == 0 &&
+                  callee_abi_cost_model_action->best_variant == "helper-register-traffic" &&
+                  callee_abi_cost_model_action->best_blocker_kind ==
+                      "value-aware-stack-register-scheduler" &&
+                  callee_abi_cost_model_action->best_details.contains(
+                      "valueAwareCalleeAbiCostModelStatus") &&
+                  callee_abi_cost_model_action->best_details.at(
+                      "valueAwareCalleeAbiCostModelStatus") ==
+                      "mutation-surface-exceeds-overhead-budget",
+              "tic-tac-toe-4x4 size attribution should rank the overbudget callee ABI cost "
+              "model as a stalled nonpositive next action");
       const SizeNextActionSummaryReport* stack_input_scheduler_action = find_size_next_action(
           result, "trafficShapeAction", "schedule-stack-input-helper-values");
       require(stack_input_scheduler_action == nullptr,
