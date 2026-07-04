@@ -47,6 +47,6 @@ Generated with `npm run examples:size`.
 | `teleport.mkpro` | 96 | 105 | -9 | ok: <= reference | main+setup load ok |
 | `tic-tac-toe.mkpro` | 99 | - | - | ok: no reference | load ok |
 | `tiny-game.mkpro` | 27 | - | - | ok: no reference | load ok |
-| `treasure-hunter-2.mkpro` | 99 | 105 | -6 | ok: <= reference | main+setup load ok |
+| `treasure-hunter-2.mkpro` | 98 | 105 | -7 | ok: <= reference | main+setup load ok |
 | `wumpus.mkpro` | 103 | - | - | ok: no reference | main+setup load ok |
 | `pending-optimizer/tic-tac-toe-4x4.mkpro` | 141 | 105 | +36 | pending optimizer | not loaded: main >105 |

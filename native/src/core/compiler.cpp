@@ -7453,6 +7453,22 @@ bool collection_unit_increment_expression(const Expression& expression,
          (is_pointer(*expression.right) && is_numeric_literal_value(*expression.left, 1));
 }
 
+bool collection_unit_decrement_expression(const Expression& expression,
+                                          const std::string& pointer) {
+  if (expression.kind != "binary" || expression.left == nullptr || expression.right == nullptr)
+    return false;
+  const auto is_pointer = [&](const Expression& candidate) {
+    return candidate.kind == "identifier" && candidate.name == pointer;
+  };
+  if (expression.op == "-")
+    return is_pointer(*expression.left) && is_numeric_literal_value(*expression.right, 1);
+  if (expression.op == "+") {
+    return (is_pointer(*expression.left) && is_numeric_literal_value(*expression.right, -1)) ||
+           (is_pointer(*expression.right) && is_numeric_literal_value(*expression.left, -1));
+  }
+  return false;
+}
+
 bool collection_preincrement_indexed_store_shape(const LoweringContext& context,
                                                  const V2Statement& store_statement,
                                                  const V2Statement* next_statement) {
@@ -7476,6 +7492,95 @@ bool collection_preincrement_indexed_store_shape(const LoweringContext& context,
   } catch (const std::exception&) {
     return false;
   }
+}
+
+bool collection_preincrement_indexed_recall_shape(const LoweringContext& context,
+                                                  const V2Statement& recall_statement,
+                                                  const V2Statement* next_statement) {
+  if (next_statement == nullptr || recall_statement.kind != "v2_assign" ||
+      !recall_statement.expr.has_value() || !next_statement->target.has_value() ||
+      !next_statement->expr.has_value()) {
+    return false;
+  }
+  if (next_statement->kind != "v2_update" || !next_statement->op.has_value() ||
+      *next_statement->op != "+=") {
+    return false;
+  }
+  const std::string pointer = *next_statement->target;
+  try {
+    if (!is_numeric_literal_value(parse_expression(*next_statement->expr, next_statement->line), 1))
+      return false;
+    const Expression expression = parse_expression(*recall_statement.expr, recall_statement.line);
+    return expression.kind == "indexed" && expression.index != nullptr &&
+           context.state_banks.contains(bank_member_key(expression.base, expression.field)) &&
+           collection_unit_increment_expression(*expression.index, pointer);
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+bool collection_predecrement_indexed_store_shape(const LoweringContext& context,
+                                                 const V2Statement& store_statement,
+                                                 const V2Statement* next_statement) {
+  if (next_statement == nullptr || !store_statement.target.has_value() ||
+      !next_statement->target.has_value() || !next_statement->expr.has_value()) {
+    return false;
+  }
+  if ((store_statement.kind != "v2_assign" && store_statement.kind != "v2_update") ||
+      next_statement->kind != "v2_update" || !next_statement->op.has_value() ||
+      *next_statement->op != "-=") {
+    return false;
+  }
+  const std::string pointer = *next_statement->target;
+  try {
+    if (!is_numeric_literal_value(parse_expression(*next_statement->expr, next_statement->line), 1))
+      return false;
+    const Expression target = parse_expression(*store_statement.target, store_statement.line);
+    return target.kind == "indexed" && target.index != nullptr &&
+           context.state_banks.contains(bank_member_key(target.base, target.field)) &&
+           collection_unit_decrement_expression(*target.index, pointer);
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+bool collection_predecrement_indexed_recall_shape(const LoweringContext& context,
+                                                  const V2Statement& recall_statement,
+                                                  const V2Statement* next_statement) {
+  if (next_statement == nullptr || recall_statement.kind != "v2_assign" ||
+      !recall_statement.expr.has_value() || !next_statement->target.has_value() ||
+      !next_statement->expr.has_value()) {
+    return false;
+  }
+  if (next_statement->kind != "v2_update" || !next_statement->op.has_value() ||
+      *next_statement->op != "-=") {
+    return false;
+  }
+  const std::string pointer = *next_statement->target;
+  try {
+    if (!is_numeric_literal_value(parse_expression(*next_statement->expr, next_statement->line), 1))
+      return false;
+    const Expression expression = parse_expression(*recall_statement.expr, recall_statement.line);
+    return expression.kind == "indexed" && expression.index != nullptr &&
+           context.state_banks.contains(bank_member_key(expression.base, expression.field)) &&
+           collection_unit_decrement_expression(*expression.index, pointer);
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+bool collection_mutating_indexed_store_shape(const LoweringContext& context,
+                                             const V2Statement& store_statement,
+                                             const V2Statement* next_statement) {
+  return collection_preincrement_indexed_store_shape(context, store_statement, next_statement) ||
+         collection_predecrement_indexed_store_shape(context, store_statement, next_statement);
+}
+
+bool collection_mutating_indexed_recall_shape(const LoweringContext& context,
+                                              const V2Statement& recall_statement,
+                                              const V2Statement* next_statement) {
+  return collection_preincrement_indexed_recall_shape(context, recall_statement, next_statement) ||
+         collection_predecrement_indexed_recall_shape(context, recall_statement, next_statement);
 }
 
 bool cells_contains_clear_prefix_statement(const LoweringContext& context,
@@ -7539,7 +7644,7 @@ void collect_locals_from_statement(LoweringContext& context, RegisterCollection&
     if (!(statement.kind == "v2_read" &&
           context.ephemeral_input_targets.contains(*statement.target))) {
       if (excluded.contains(*statement.target)) {
-      } else if (collection_preincrement_indexed_store_shape(context, statement, next_statement)) {
+      } else if (collection_mutating_indexed_store_shape(context, statement, next_statement)) {
         try {
           const Expression target = parse_expression(*statement.target, statement.line);
           if (target.index != nullptr)
@@ -7579,6 +7684,13 @@ void collect_locals_from_statement(LoweringContext& context, RegisterCollection&
       add_coord_list_line_count_assignment_scratch(collection);
       for (const Expression& arg : expression.args)
         collect_locals_from_expression_excluding(context, collection, arg, excluded);
+    } else if (collection_mutating_indexed_recall_shape(context, statement, next_statement)) {
+      try {
+        if (expression.index != nullptr)
+          collect_locals_from_expression_excluding(context, collection, *expression.index,
+                                                   excluded);
+      } catch (const std::exception&) {
+      }
     } else if (statement.kind == "v2_match") {
       const std::set<std::string> merged =
           merge_exclusions(excluded, context.ephemeral_input_targets);
@@ -8026,7 +8138,7 @@ void collect_state_bank_selector_requirements_from_statement(
   };
 
   if (statement.target.has_value()) {
-    if (collection_preincrement_indexed_store_shape(context, statement, next_statement)) {
+    if (collection_mutating_indexed_store_shape(context, statement, next_statement)) {
       try {
         const Expression target = parse_expression(*statement.target, statement.line);
         if (target.index != nullptr) {
@@ -8039,8 +8151,20 @@ void collect_state_bank_selector_requirements_from_statement(
       visit_text(*statement.target, statement.line);
     }
   }
-  if (statement.expr.has_value())
-    visit_text(*statement.expr, statement.line);
+  if (statement.expr.has_value()) {
+    if (collection_mutating_indexed_recall_shape(context, statement, next_statement)) {
+      try {
+        const Expression expression = parse_expression(*statement.expr, statement.line);
+        if (expression.index != nullptr) {
+          collect_state_bank_selector_requirements_from_expression(
+              context, collection, hints, *expression.index, required, required_order);
+        }
+      } catch (const std::exception&) {
+      }
+    } else {
+      visit_text(*statement.expr, statement.line);
+    }
+  }
   if (statement.kind == "v2_stop" && statement.target.has_value())
     visit_text(*statement.target, statement.line);
   if (statement.predicate.has_value()) {
@@ -8310,8 +8434,9 @@ void collect_preincrement_indexed_store_pointers_from_statements(
   for (std::size_t index = 0; index < statements.size(); ++index) {
     const V2Statement& statement = statements.at(index);
     const V2Statement* next = index + 1U < statements.size() ? &statements.at(index + 1U) : nullptr;
-    if (collection_preincrement_indexed_store_shape(context, statement, next) && next != nullptr &&
-        next->target.has_value()) {
+    if ((collection_preincrement_indexed_store_shape(context, statement, next) ||
+         collection_preincrement_indexed_recall_shape(context, statement, next)) &&
+        next != nullptr && next->target.has_value()) {
       pointers.insert(*next->target);
     }
     collect_preincrement_indexed_store_pointers_from_statements(context, statement.body, pointers);
@@ -8342,6 +8467,45 @@ std::set<std::string> collect_preincrement_indexed_store_pointers(const Lowering
   return pointers;
 }
 
+void collect_predecrement_indexed_store_pointers_from_statements(
+    const LoweringContext& context, const std::vector<V2Statement>& statements,
+    std::set<std::string>& pointers) {
+  for (std::size_t index = 0; index < statements.size(); ++index) {
+    const V2Statement& statement = statements.at(index);
+    const V2Statement* next = index + 1U < statements.size() ? &statements.at(index + 1U) : nullptr;
+    if ((collection_predecrement_indexed_store_shape(context, statement, next) ||
+         collection_predecrement_indexed_recall_shape(context, statement, next)) &&
+        next != nullptr && next->target.has_value()) {
+      pointers.insert(*next->target);
+    }
+    collect_predecrement_indexed_store_pointers_from_statements(context, statement.body, pointers);
+    collect_predecrement_indexed_store_pointers_from_statements(context, statement.then_body,
+                                                                pointers);
+    collect_predecrement_indexed_store_pointers_from_statements(context, statement.else_body,
+                                                                pointers);
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.action != nullptr) {
+        collect_predecrement_indexed_store_pointers_from_statements(
+            context, std::vector<V2Statement>{*match_case.action}, pointers);
+      }
+    }
+    if (statement.otherwise != nullptr) {
+      collect_predecrement_indexed_store_pointers_from_statements(
+          context, std::vector<V2Statement>{*statement.otherwise}, pointers);
+    }
+  }
+}
+
+std::set<std::string> collect_predecrement_indexed_store_pointers(const LoweringContext& context,
+                                                                  const V2Program& program) {
+  std::set<std::string> pointers;
+  collect_predecrement_indexed_store_pointers_from_statements(context, program.body, pointers);
+  for (const V2Rule& rule : program.rules) {
+    collect_predecrement_indexed_store_pointers_from_statements(context, rule.body, pointers);
+  }
+  return pointers;
+}
+
 void apply_unit_update_hints(const LoweringContext& context, const V2Program& program,
                              const RegisterCollection& collection, RegisterHints& hints) {
   std::vector<std::string> decrements;
@@ -8353,19 +8517,30 @@ void apply_unit_update_hints(const LoweringContext& context, const V2Program& pr
       collect_unit_update_targets(context, statement, decrements, increments);
   }
 
+  const std::set<std::string> predecrement_pointers =
+      collect_predecrement_indexed_store_pointers(context, program);
   const std::vector<int> decrement_preference = {0x2, 0x3, 0x1, 0x0};
   std::size_t decrement_cursor = 0;
-  for (const std::string& variable : decrements) {
+  const auto assign_decrement_hint = [&](const std::string& variable) {
     if (!collection.variables.contains(variable) || hints.contains(variable))
-      continue;
+      return true;
     while (decrement_cursor < decrement_preference.size() &&
            hint_register_is_used(hints, decrement_preference[decrement_cursor])) {
       ++decrement_cursor;
     }
     if (decrement_cursor >= decrement_preference.size())
-      break;
+      return false;
     hints[variable] = RegisterHint{.mode = RegisterHintMode::Prefer,
                                    .index = decrement_preference[decrement_cursor++]};
+    return true;
+  };
+  for (const std::string& variable : decrements) {
+    if (predecrement_pointers.contains(variable) && !assign_decrement_hint(variable))
+      break;
+  }
+  for (const std::string& variable : decrements) {
+    if (!predecrement_pointers.contains(variable) && !assign_decrement_hint(variable))
+      break;
   }
 
   const std::set<std::string> preincrement_pointers =
@@ -20595,13 +20770,25 @@ const ExpressionHelperRequest* shared_expression_helper(LoweringContext& context
   return ensure_expression_helper(context, expression);
 }
 
+std::optional<std::size_t>
+cell_mask_stack_entry_arg0_index(const Expression& expression,
+                                 const std::vector<std::string>& temps) {
+  if (temps.size() != 2U || expression.kind != "call" ||
+      lower_ascii(expression.callee) != "cell_mask" || expression.args.size() != 2U ||
+      expression.args.at(0).kind != "identifier" ||
+      expression.args.at(1).kind != "identifier") {
+    return std::nullopt;
+  }
+  const auto first = std::find(temps.begin(), temps.end(), expression.args.at(0).name);
+  const auto second = std::find(temps.begin(), temps.end(), expression.args.at(1).name);
+  if (first == temps.end() || second == temps.end() || first == second)
+    return std::nullopt;
+  return static_cast<std::size_t>(first - temps.begin());
+}
+
 bool expression_is_cell_mask_of_stack_temps(const Expression& expression,
                                             const std::vector<std::string>& temps) {
-  return temps.size() == 2U && expression.kind == "call" &&
-         lower_ascii(expression.callee) == "cell_mask" && expression.args.size() == 2U &&
-         expression.args.at(0).kind == "identifier" &&
-         expression.args.at(1).kind == "identifier" &&
-         expression.args.at(0).name == temps.at(0) && expression.args.at(1).name == temps.at(1);
+  return cell_mask_stack_entry_arg0_index(expression, temps).has_value();
 }
 
 std::string expression_helper_stack_entry_label(const ExpressionHelperRequest& helper) {
@@ -20617,8 +20804,7 @@ ExpressionHelperStackEntryRequest& ensure_expression_helper_stack_entry(
         .key = helper.key,
         .helper_label = helper.label,
         .entry_label = expression_helper_stack_entry_label(helper),
-        .first = temps.at(0),
-        .second = temps.at(1),
+        .temps = temps,
     };
   }
   ++entry.call_sites;
@@ -23511,6 +23697,84 @@ bool lower_assign_then_domain_trap(LoweringContext& context, const V2Statement& 
                               " 0\" terminal-error branch through " + plan->trap_mnemonic + "."
                         : "Fused " + target->name + " store and terminal-error branch through " +
                               plan->trap_mnemonic + ".",
+  });
+  return true;
+}
+
+std::optional<Expression> equality_to_integer_operand(const V2Predicate& predicate, int line,
+                                                      int value) {
+  if (predicate.kind != "v2_compare" || predicate.op != "==")
+    return std::nullopt;
+  const Expression left = parse_expression(predicate.left, line);
+  const Expression right = parse_expression(predicate.right, line);
+  if (is_numeric_literal_value(left, value))
+    return right;
+  if (is_numeric_literal_value(right, value))
+    return left;
+  return std::nullopt;
+}
+
+bool lower_multiway_lg_domain_trap_guard(LoweringContext& context, const V2Statement& guard,
+                                         const V2Statement& branch) {
+  if (!context.domain_error_guards || guard.kind != "v2_if" || branch.kind != "v2_if" ||
+      !guard.predicate.has_value() || !branch.predicate.has_value() || guard.negated ||
+      branch.negated || guard.has_else_body || !guard.else_body.empty()) {
+    return false;
+  }
+  if (!statements_are_domain_error_trap(context, guard.then_body))
+    return false;
+  if (branch.then_body.empty() && branch.else_body.empty())
+    return false;
+
+  const std::optional<DomainErrorGuardPlan> plan =
+      plan_domain_error_guard(context, *guard.predicate, guard.line);
+  if (!plan.has_value() || plan->second.has_value())
+    return false;
+  std::optional<int> zero_result_input;
+  if (plan->trap_opcode == 0x17) {
+    zero_result_input = 1;
+  } else if (plan->trap_opcode == 0x21) {
+    zero_result_input = 0;
+  } else {
+    return false;
+  }
+
+  const std::optional<Expression> equality_operand =
+      equality_to_integer_operand(*branch.predicate, branch.line, *zero_result_input);
+  if (!equality_operand.has_value() || !expression_equals(*equality_operand, plan->first))
+    return false;
+
+  if (plan->first.kind == "identifier" && x_holds_identifier(context, plan->first.name)) {
+  } else if (!lower_expression_to_x(context, plan->first)) {
+    return false;
+  }
+  emit_domain_trap_on_x(context, *plan, "multiway domain-error guard trap", guard.line);
+
+  const bool has_else = branch.has_else_body || !branch.else_body.empty();
+  const std::string false_label = context.emitter.fresh_label(has_else ? "if_else" : "if_end");
+  const bool then_stops = statements_always_stop(context, branch.then_body);
+  const std::string end_label =
+      has_else && !then_stops ? context.emitter.fresh_label("if_end") : false_label;
+  context.emitter.emit_jump(0x57, "F x!=0", false_label, "false branch for domain(value)=0",
+                            branch.line);
+  if (!lower_statement_block(context, branch.then_body))
+    return false;
+  if (has_else) {
+    if (!then_stops)
+      context.emitter.emit_jump(0x51, "БП", end_label, "if end", branch.line);
+    context.emitter.emit_label(false_label, {.hidden = true});
+    if (!lower_statement_block(context, branch.else_body))
+      return false;
+    if (!then_stops)
+      context.emitter.emit_label(end_label, {.hidden = true});
+  } else {
+    context.emitter.emit_label(false_label, {.hidden = true});
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = "multiway-domain-trap-guard",
+      .detail = "Used " + plan->trap_mnemonic + " for the terminal error guard at line " +
+                std::to_string(guard.line) + " and the following \"" +
+                condition_text(*branch.predicate) + "\" zero/nonzero branch.",
   });
   return true;
 }
@@ -28018,6 +28282,121 @@ bool lower_packed_score_y_stack_update(LoweringContext& context, const V2Stateme
   return true;
 }
 
+bool expression_is_sum_with_one(const Expression& expression, const Expression& value) {
+  if (expression.kind != "binary" || expression.op != "+" || expression.left == nullptr ||
+      expression.right == nullptr) {
+    return false;
+  }
+  return (expression_equals(*expression.left, value) &&
+          is_numeric_literal_value(*expression.right, 1)) ||
+         (expression_equals(*expression.right, value) &&
+          is_numeric_literal_value(*expression.left, 1));
+}
+
+bool expression_is_five_times(const Expression& expression, const Expression& value) {
+  if (expression.kind != "binary" || expression.op != "*" || expression.left == nullptr ||
+      expression.right == nullptr) {
+    return false;
+  }
+  return (is_numeric_literal_value(*expression.left, 5) &&
+          expression_equals(*expression.right, value)) ||
+         (is_numeric_literal_value(*expression.right, 5) &&
+          expression_equals(*expression.left, value));
+}
+
+bool expression_is_five_times_value_plus_five(const Expression& expression,
+                                             const Expression& value) {
+  if (expression_is_five_times(expression, value))
+    return false;
+  if (expression.kind == "binary" && expression.op == "*" && expression.left != nullptr &&
+      expression.right != nullptr) {
+    if (is_numeric_literal_value(*expression.left, 5) &&
+        expression_is_sum_with_one(*expression.right, value)) {
+      return true;
+    }
+    if (is_numeric_literal_value(*expression.right, 5) &&
+        expression_is_sum_with_one(*expression.left, value)) {
+      return true;
+    }
+  }
+  if (expression.kind != "binary" || expression.op != "+" || expression.left == nullptr ||
+      expression.right == nullptr) {
+    return false;
+  }
+  return (is_numeric_literal_value(*expression.left, 5) &&
+          expression_is_five_times(*expression.right, value)) ||
+         (is_numeric_literal_value(*expression.right, 5) &&
+          expression_is_five_times(*expression.left, value));
+}
+
+bool expression_is_target_preserving_digit_extract(const Expression& expression,
+                                                  const Expression& target) {
+  if (expression.kind != "binary" || expression.op != "/" || expression.left == nullptr ||
+      expression.right == nullptr || !analysis_simple_stack_load(*expression.right)) {
+    return false;
+  }
+  const Expression& frac = *expression.left;
+  if (frac.kind != "call" || lower_ascii(frac.callee) != "frac" || frac.args.size() != 1U)
+    return false;
+  const Expression& bit_and = frac.args.front();
+  if (bit_and.kind != "call" || lower_ascii(bit_and.callee) != "bit_and" ||
+      bit_and.args.size() != 2U) {
+    return false;
+  }
+  const Expression* mask = nullptr;
+  if (expression_equals(bit_and.args.at(0), target)) {
+    mask = &bit_and.args.at(1);
+  } else if (expression_equals(bit_and.args.at(1), target)) {
+    mask = &bit_and.args.at(0);
+  } else {
+    return false;
+  }
+  return expression_is_five_times_value_plus_five(*mask, *expression.right);
+}
+
+const Expression* target_preserving_digit_extract_in_delta(const Expression& delta,
+                                                          const Expression& target) {
+  if (expression_is_target_preserving_digit_extract(delta, target))
+    return &delta;
+  if (delta.kind != "binary" || delta.op != "*" || delta.left == nullptr ||
+      delta.right == nullptr) {
+    return nullptr;
+  }
+  if (!analysis_simple_stack_load(*delta.right))
+    return nullptr;
+  return expression_is_target_preserving_digit_extract(*delta.left, target) ? delta.left.get()
+                                                                           : nullptr;
+}
+
+bool can_reuse_indirect_y_for_indexed_subtract(LoweringContext& context,
+                                               const Expression& target,
+                                               const Expression& delta) {
+  const Expression* digit = target_preserving_digit_extract_in_delta(delta, target);
+  return digit != nullptr && !context.emitting_expression_helper &&
+         should_share_expression(context, *digit);
+}
+
+const Expression* indirect_y_reusable_indexed_subtract_assignment_delta(
+    LoweringContext& context, const Expression& target, const Expression& expression) {
+  if (expression.kind != "binary" || expression.op != "-" || expression.left == nullptr ||
+      expression.right == nullptr || !expression_equals(*expression.left, target)) {
+    return nullptr;
+  }
+  return can_reuse_indirect_y_for_indexed_subtract(context, target, *expression.right)
+             ? expression.right.get()
+             : nullptr;
+}
+
+void report_indexed_subtract_indirect_y_reuse(LoweringContext& context,
+                                              const Expression& target, int line) {
+  context.optimizations.push_back(OptimizationReport{
+      .name = "indexed-subtract-indirect-y-reuse",
+      .detail = "Reused " + bank_member_key(target.base, target.field) +
+                " left in Y by the digit helper while updating the indexed cell at line " +
+                std::to_string(line) + ".",
+  });
+}
+
 bool lower_update_statement(LoweringContext& context, const V2Statement& statement) {
   const bool entered_with_errors = has_errors(context.diagnostics);
 
@@ -28116,15 +28495,20 @@ bool lower_update_statement(LoweringContext& context, const V2Statement& stateme
     } else {
       return false;
     }
+    const Expression expression = parse_expression(*statement.expr, statement.line);
     const std::optional<PreparedIndexedSelector> prepared_selector =
         prepare_indirect_index_selector(context, target_expression, statement.line);
-    if (prepared_selector.has_value()) {
-      emit_prepared_indirect_indexed_recall(context, target_expression, *prepared_selector,
-                                            statement.line);
-    } else if (!emit_indexed_recall(context, target_expression, statement.line)) {
-      return false;
+    const bool reuse_indirect_y =
+        statement.op == "-=" &&
+        can_reuse_indirect_y_for_indexed_subtract(context, target_expression, expression);
+    if (!reuse_indirect_y) {
+      if (prepared_selector.has_value()) {
+        emit_prepared_indirect_indexed_recall(context, target_expression, *prepared_selector,
+                                              statement.line);
+      } else if (!emit_indexed_recall(context, target_expression, statement.line)) {
+        return false;
+      }
     }
-    const Expression expression = parse_expression(*statement.expr, statement.line);
     if (!lower_expression_to_x(context, expression))
       return false;
     context.emitter.emit_op(opcode, mnemonic, "expr " + mnemonic, statement.line);
@@ -28133,9 +28517,14 @@ bool lower_update_statement(LoweringContext& context, const V2Statement& stateme
     if (prepared_selector.has_value()) {
       emit_prepared_indirect_indexed_store(context, target_expression, *prepared_selector,
                                            statement.line);
+      if (reuse_indirect_y)
+        report_indexed_subtract_indirect_y_reuse(context, target_expression, statement.line);
       return true;
     }
-    return emit_indexed_store(context, target_expression, statement.line);
+    const bool stored = emit_indexed_store(context, target_expression, statement.line);
+    if (stored && reuse_indirect_y)
+      report_indexed_subtract_indirect_y_reuse(context, target_expression, statement.line);
+    return stored;
   }
 
   if (statement.op == "+=" && statement.expr == "1" &&
@@ -29476,14 +29865,28 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
       const std::optional<PreparedIndexedSelector> prepared_selector =
           prepare_indirect_index_selector(context, target_expression, statement.line);
       const Expression expression = parse_expression(*statement.expr, statement.line);
-      if (!lower_expression_to_x(context, expression))
+      const Expression* reusable_delta =
+          indirect_y_reusable_indexed_subtract_assignment_delta(context, target_expression,
+                                                               expression);
+      if (reusable_delta != nullptr) {
+        if (!lower_expression_to_x(context, *reusable_delta))
+          return false;
+        context.emitter.emit_op(0x11, "-", "expr -", statement.line);
+        clear_current_x_facts(context);
+      } else if (!lower_expression_to_x(context, expression)) {
         return false;
+      }
       if (prepared_selector.has_value()) {
         emit_prepared_indirect_indexed_store(context, target_expression, *prepared_selector,
                                              statement.line);
+        if (reusable_delta != nullptr)
+          report_indexed_subtract_indirect_y_reuse(context, target_expression, statement.line);
         return true;
       }
-      return emit_indexed_store(context, target_expression, statement.line);
+      const bool stored = emit_indexed_store(context, target_expression, statement.line);
+      if (stored && reusable_delta != nullptr)
+        report_indexed_subtract_indirect_y_reuse(context, target_expression, statement.line);
+      return stored;
     }
 
     if (context.constants.contains(*statement.target)) {
@@ -34084,6 +34487,11 @@ bool lower_stack_argument_expression_helper_call(LoweringContext& context,
   const ExpressionHelperRequest* helper = shared_expression_helper(context, expression);
   if (helper == nullptr)
     return false;
+  const auto existing_entry = context.expression_helper_stack_entries.find(helper->key);
+  if (existing_entry != context.expression_helper_stack_entries.end() &&
+      existing_entry->second.temps != temps) {
+    return false;
+  }
   ExpressionHelperStackEntryRequest& entry =
       ensure_expression_helper_stack_entry(context, *helper, temps);
   context.emitter.emit_jump(0x53, "ПП", entry.entry_label,
@@ -34092,7 +34500,7 @@ bool lower_stack_argument_expression_helper_call(LoweringContext& context,
   context.optimizations.push_back(OptimizationReport{
       .name = "expression-helper-stack-entry-call",
       .detail = "Entered shared helper for " + expression_to_source(expression) +
-                " with " + entry.second + " in X and " + entry.first + " in Y at line " +
+                " with " + entry.temps.at(1) + " in X and " + entry.temps.at(0) + " in Y at line " +
                 std::to_string(line) + ".",
   });
   return true;
@@ -34414,9 +34822,30 @@ bool is_unit_increment_expression(const Expression& expression, const std::strin
          (is_pointer(*expression.right) && is_numeric_literal_value(*expression.left, 1));
 }
 
+bool is_unit_decrement_expression(const Expression& expression, const std::string& pointer) {
+  if (expression.kind != "binary" || expression.left == nullptr || expression.right == nullptr)
+    return false;
+  const auto is_pointer = [&](const Expression& candidate) {
+    return candidate.kind == "identifier" && candidate.name == pointer;
+  };
+  if (expression.op == "-")
+    return is_pointer(*expression.left) && is_numeric_literal_value(*expression.right, 1);
+  if (expression.op == "+") {
+    return (is_pointer(*expression.left) && is_numeric_literal_value(*expression.right, -1)) ||
+           (is_pointer(*expression.right) && is_numeric_literal_value(*expression.left, -1));
+  }
+  return false;
+}
+
 bool is_unit_increment_statement(const V2Statement& statement, const std::string& pointer) {
   return statement.kind == "v2_update" && statement.target.has_value() &&
          *statement.target == pointer && statement.op.has_value() && *statement.op == "+=" &&
+         statement.expr.has_value() && expression_is_number(*statement.expr, "1", statement.line);
+}
+
+bool is_unit_decrement_statement(const V2Statement& statement, const std::string& pointer) {
+  return statement.kind == "v2_update" && statement.target.has_value() &&
+         *statement.target == pointer && statement.op.has_value() && *statement.op == "-=" &&
          statement.expr.has_value() && expression_is_number(*statement.expr, "1", statement.line);
 }
 
@@ -34475,6 +34904,153 @@ bool lower_preincrement_indexed_store(LoweringContext& context, const V2Statemen
                 ".",
   });
   return true;
+}
+
+bool lower_predecrement_indexed_store(LoweringContext& context, const V2Statement& store_statement,
+                                      const V2Statement& decrement_statement) {
+  const std::optional<IndexedAssignmentConsumer> store =
+      indexed_assignment_consumer(store_statement);
+  if (!store.has_value() || store->target.index == nullptr)
+    return false;
+
+  if (decrement_statement.kind != "v2_update" || !decrement_statement.target.has_value())
+    return false;
+  const std::string pointer = *decrement_statement.target;
+  if (!is_unit_decrement_statement(decrement_statement, pointer) ||
+      !is_unit_decrement_expression(*store->target.index, pointer)) {
+    return false;
+  }
+
+  const auto pointer_register_it = context.register_index_by_name.find(pointer);
+  if (pointer_register_it == context.register_index_by_name.end() ||
+      core::indirect_selector_mutation(pointer_register_it->second) !=
+          core::IndirectSelectorMutation::PreDecrement) {
+    return false;
+  }
+  const V2StateField* field = indexed_state_field(context, store->target);
+  if (field == nullptr)
+    return false;
+  const std::optional<int> selector_offset =
+      indirect_memory_selector_offset_for_field(context, *field);
+  if (!selector_offset.has_value() || *selector_offset != 0)
+    return false;
+
+  if (is_zero_expression(context, store->expression)) {
+    if (!emit_zero(context, "set " + bank_member_key(store->target.base, store->target.field),
+                   store->line)) {
+      context.emitter.emit_number("0");
+    }
+  } else if (!lower_expression_to_x(context, store->expression)) {
+    return false;
+  }
+
+  const int pointer_register = pointer_register_it->second;
+  const PreparedIndexedSelector prepared_selector{.selector = pointer};
+  context.emitter.emit_op(0xb0 + pointer_register, "К X->П " + register_text_for(context, pointer),
+                          indexed_memory_comment(context, "predecrement indexed set",
+                                                 store->target, *field, prepared_selector),
+                          store->line);
+  context.emitter.current_x_variable.reset();
+  context.emitter.current_x_expression.reset();
+  context.emitter.current_x_aliases.clear();
+  context.emitter.current_x_known_zero = false;
+  context.optimizations.push_back(OptimizationReport{
+      .name = "predecrement-indexed-store",
+      .detail = "Lowered " + bank_member_key(store->target.base, store->target.field) + "[" +
+                pointer + "-1] and " + pointer + "-- through К X->П " +
+                register_text_for(context, pointer) + " at line " + std::to_string(store->line) +
+                ".",
+  });
+  return true;
+}
+
+bool lower_mutating_indexed_recall_assignment(LoweringContext& context,
+                                              const V2Statement& recall_statement,
+                                              const V2Statement& update_statement,
+                                              core::IndirectSelectorMutation mutation,
+                                              const std::string& optimization_name,
+                                              const std::string& action) {
+  if (recall_statement.kind != "v2_assign" || !recall_statement.target.has_value() ||
+      !recall_statement.expr.has_value() || update_statement.kind != "v2_update" ||
+      !update_statement.target.has_value()) {
+    return false;
+  }
+
+  const Expression target = parse_expression(*recall_statement.target, recall_statement.line);
+  if (target.kind != "identifier" || context.constants.contains(target.name))
+    return false;
+  const std::string pointer = *update_statement.target;
+  if (target.name == pointer)
+    return false;
+
+  const Expression expression = parse_expression(*recall_statement.expr, recall_statement.line);
+  if (expression.kind != "indexed" || expression.index == nullptr)
+    return false;
+
+  const bool unit_update = mutation == core::IndirectSelectorMutation::PreIncrement
+                               ? is_unit_increment_statement(update_statement, pointer) &&
+                                     is_unit_increment_expression(*expression.index, pointer)
+                               : is_unit_decrement_statement(update_statement, pointer) &&
+                                     is_unit_decrement_expression(*expression.index, pointer);
+  if (!unit_update)
+    return false;
+
+  const auto pointer_register_it = context.register_index_by_name.find(pointer);
+  if (pointer_register_it == context.register_index_by_name.end() ||
+      core::indirect_selector_mutation(pointer_register_it->second) != mutation) {
+    return false;
+  }
+  const V2StateField* field = indexed_state_field(context, expression);
+  if (field == nullptr)
+    return false;
+  const std::optional<int> selector_offset =
+      indirect_memory_selector_offset_for_field(context, *field);
+  if (!selector_offset.has_value() || *selector_offset != 0)
+    return false;
+
+  const int pointer_register = pointer_register_it->second;
+  const PreparedIndexedSelector prepared_selector{.selector = pointer};
+  context.emitter.emit_op(0xd0 + pointer_register, "К П->X " + register_text_for(context, pointer),
+                          indexed_memory_comment(context, action + " indexed recall", expression,
+                                                 *field, prepared_selector),
+                          recall_statement.line);
+  context.emitter.current_x_variable.reset();
+  context.emitter.current_x_expression = std::make_shared<Expression>(expression);
+  context.emitter.current_x_aliases.clear();
+  context.emitter.current_x_known_zero = false;
+  mark_current_x(context, target.name);
+  if (context.stack_only_state_fields.contains(target.name)) {
+    report_stack_only_state_field(context, target.name, recall_statement.line);
+  } else {
+    emit_store(context, target.name, "set " + target.name);
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = optimization_name,
+      .detail = "Lowered " + target.name + " = " +
+                bank_member_key(expression.base, expression.field) + "[" + pointer +
+                (mutation == core::IndirectSelectorMutation::PreIncrement ? "+1] and " : "-1] and ") +
+                pointer +
+                (mutation == core::IndirectSelectorMutation::PreIncrement ? "++" : "--") +
+                " through К П->X " + register_text_for(context, pointer) + " at line " +
+                std::to_string(recall_statement.line) + ".",
+  });
+  return true;
+}
+
+bool lower_preincrement_indexed_recall(LoweringContext& context,
+                                       const V2Statement& recall_statement,
+                                       const V2Statement& increment_statement) {
+  return lower_mutating_indexed_recall_assignment(
+      context, recall_statement, increment_statement, core::IndirectSelectorMutation::PreIncrement,
+      "preincrement-indexed-recall", "preincrement");
+}
+
+bool lower_predecrement_indexed_recall(LoweringContext& context,
+                                       const V2Statement& recall_statement,
+                                       const V2Statement& decrement_statement) {
+  return lower_mutating_indexed_recall_assignment(
+      context, recall_statement, decrement_statement, core::IndirectSelectorMutation::PreDecrement,
+      "predecrement-indexed-recall", "predecrement");
 }
 
 std::optional<std::string> x_param_y_stack_stored_entry_target(const LoweringContext& context,
@@ -35608,6 +36184,14 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (has_errors(context.diagnostics))
       return false;
     if (index + 1U < statements.size() &&
+        lower_multiway_lg_domain_trap_guard(context, statements.at(index),
+                                            statements.at(index + 1U))) {
+      ++index;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    if (index + 1U < statements.size() &&
         lower_assign_then_domain_trap(context, statements.at(index), statements.at(index + 1U))) {
       ++index;
       continue;
@@ -35625,6 +36209,30 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (index + 1U < statements.size() &&
         lower_preincrement_indexed_store(context, statements.at(index),
                                          statements.at(index + 1U))) {
+      ++index;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    if (index + 1U < statements.size() &&
+        lower_preincrement_indexed_recall(context, statements.at(index),
+                                          statements.at(index + 1U))) {
+      ++index;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    if (index + 1U < statements.size() &&
+        lower_predecrement_indexed_store(context, statements.at(index),
+                                         statements.at(index + 1U))) {
+      ++index;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    if (index + 1U < statements.size() &&
+        lower_predecrement_indexed_recall(context, statements.at(index),
+                                          statements.at(index + 1U))) {
       ++index;
       continue;
     }
@@ -35828,10 +36436,37 @@ bool lower_random_cell_helpers(LoweringContext& context) {
   return true;
 }
 
+void emit_cell_mask_expression_helper_row_mask(LoweringContext& context, int line) {
+  emit_number_or_preload(context, format_number_literal(cell_mask_row_constant(4)), std::nullopt,
+                         line);
+  context.emitter.emit_op(0x12, "*", "expr *", line);
+  context.emitter.emit_op(0x15, "F 10^x", "pow10()", line);
+  context.emitter.emit_op(0x34, "К [x]", "int()", line);
+}
+
+void emit_cell_mask_expression_helper_row_tail(LoweringContext& context, int line) {
+  emit_cell_mask_expression_helper_row_mask(context, line);
+  context.emitter.emit_op(0x10, "+", "expr +", line);
+}
+
+void emit_cell_mask_expression_helper_stack_prefix_to_tail(
+    LoweringContext& context, std::size_t arg0_stack_index, int line) {
+  if (arg0_stack_index == 0U) {
+    context.emitter.emit_op(0x14, "X↔Y", "expression helper stack-entry x", line);
+    context.emitter.emit_op(0x15, "F 10^x", "expression helper stack-entry pow10", line);
+    context.emitter.emit_op(0x14, "X↔Y", "expression helper stack-entry y", line);
+    return;
+  }
+  context.emitter.emit_op(0x15, "F 10^x", "expression helper stack-entry pow10", line);
+  context.emitter.emit_op(0x14, "X↔Y", "expression helper stack-entry y", line);
+}
+
 bool lower_cell_mask_expression_helper_with_stack_entry(
     LoweringContext& context, const ExpressionHelperRequest& helper,
     const ExpressionHelperStackEntryRequest& entry) {
-  if (!expression_is_cell_mask_of_stack_temps(helper.expr, {entry.first, entry.second}))
+  const std::optional<std::size_t> arg0_stack_index =
+      cell_mask_stack_entry_arg0_index(helper.expr, entry.temps);
+  if (!arg0_stack_index.has_value())
     return false;
   const int line = helper.line;
   const std::string tail_label = helper.label + "_stack_tail";
@@ -35845,17 +36480,10 @@ bool lower_cell_mask_expression_helper_with_stack_entry(
   context.emitter.emit_jump(0x51, "БП", tail_label, "expression helper stack-entry tail", line);
 
   context.emitter.emit_label(entry.entry_label, {.hidden = true});
-  context.emitter.emit_op(0x14, "X↔Y", "expression helper stack-entry x", line);
-  context.emitter.emit_op(0x15, "F 10^x", "expression helper stack-entry pow10", line);
-  context.emitter.emit_op(0x14, "X↔Y", "expression helper stack-entry y", line);
+  emit_cell_mask_expression_helper_stack_prefix_to_tail(context, *arg0_stack_index, line);
 
   context.emitter.emit_label(tail_label, {.hidden = true});
-  emit_number_or_preload(context, format_number_literal(cell_mask_row_constant(4)), std::nullopt,
-                         line);
-  context.emitter.emit_op(0x12, "*", "expr *", line);
-  context.emitter.emit_op(0x15, "F 10^x", "pow10()", line);
-  context.emitter.emit_op(0x34, "К [x]", "int()", line);
-  context.emitter.emit_op(0x10, "+", "expr +", line);
+  emit_cell_mask_expression_helper_row_tail(context, line);
   clear_current_x_facts(context);
   return true;
 }
@@ -35863,16 +36491,20 @@ bool lower_cell_mask_expression_helper_with_stack_entry(
 bool lower_cell_mask_expression_helper_stack_only_entry(
     LoweringContext& context, const ExpressionHelperRequest& helper,
     const ExpressionHelperStackEntryRequest& entry) {
-  if (!expression_is_cell_mask_of_stack_temps(helper.expr, {entry.first, entry.second}))
+  const std::optional<std::size_t> arg0_stack_index =
+      cell_mask_stack_entry_arg0_index(helper.expr, entry.temps);
+  if (!arg0_stack_index.has_value())
     return false;
   const int line = helper.line;
+  if (*arg0_stack_index == 1U) {
+    emit_cell_mask_expression_helper_stack_prefix_to_tail(context, *arg0_stack_index, line);
+    emit_cell_mask_expression_helper_row_tail(context, line);
+    clear_current_x_facts(context);
+    return true;
+  }
   // Stack-entry ABI arrives with the second argument in X and the first in Y.
   // Build the row mask from X first, then swap once to add the column mask.
-  emit_number_or_preload(context, format_number_literal(cell_mask_row_constant(4)), std::nullopt,
-                         line);
-  context.emitter.emit_op(0x12, "*", "expr *", line);
-  context.emitter.emit_op(0x15, "F 10^x", "pow10()", line);
-  context.emitter.emit_op(0x34, "К [x]", "int()", line);
+  emit_cell_mask_expression_helper_row_mask(context, line);
   context.emitter.emit_op(0x14, "X↔Y", "expression helper stack-entry x", line);
   context.emitter.emit_op(0x15, "F 10^x", "expression helper stack-entry pow10", line);
   context.emitter.emit_op(0x10, "+", "expr +", line);
@@ -47341,12 +47973,9 @@ estimated_stack_entry_helper_overhead_cells(const std::map<std::string, std::str
   try {
     const int line = detail_int_or_zero(details, "line");
     const Expression expression = parse_expression(expression_it->second, line);
-    if (expression.kind == "call" && lower_ascii(expression.callee) == "cell_mask" &&
-        expression.args.size() == 2U && expression.args.at(0).kind == "identifier" &&
-        expression.args.at(1).kind == "identifier" && expression.args.at(0).name == temps.at(0) &&
-        expression.args.at(1).name == temps.at(1)) {
+    if (expression_is_cell_mask_of_stack_temps(expression, temps)) {
       // Stack-only cell_mask helper entries can now consume the incoming X/Y
-      // values in row-first order and pay one swap instead of two.
+      // values in either proven argument order.
       return 11;
     }
   } catch (const std::exception&) {

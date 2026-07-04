@@ -103,53 +103,52 @@
    42 | 0C       | ВП                      | display packed row restore
    43 | 50       | С/П                     | show __inline_show_115_0
    44 | 5E       | F x=0                   | false branch for ==
-   45 | 54       | 54                      | false branch for ==
-   46 | DD       | К П→X d                 | indexed recall rows.row; indirect-memory-targets=1,2,3,4,5,6,7,8,9
-   47 | A8       | К ПП 8                  | expr frac(bit_and(rows[floor].row, 5 * pos + 5)) / pos; preloaded R8=B3 indirect-target=1 indirect flow
-   48 | 60       | П→X 0                   | recall pos
-   49 | 12       | ×                       | expr *
-   50 | 11       | −                       | expr -
-   51 | BD       | К X→П d                 | indexed set rows.row; indirect-memory-targets=1,2,3,4,5,6,7,8,9
-   52 | A9       | К ПП 9                  | proc call descend; preloaded R9=C4 indirect-target=12 indirect flow
-   53 | 87       | К БП 7                  | if end; preloaded R7=30 indirect-target=30 indirect flow
-   54 | 6B       | П→X b                   | preload const 100
-   55 | 1D       | F cos                   | cos()
-   56 | 5E       | F x=0                   | false branch for ==
-   57 | 69       | 69                      | false branch for ==
-   58 | A8       | К ПП 8                  | expr frac(bit_and(rows[floor].row, 5 * pos + 5)) / pos; preloaded R8=B3 indirect-target=1 indirect flow
-   59 | 57       | F x≠0                   | case mismatch
-   60 | 52       | 52                      | shared terminal tail
-   61 | 01       | 1                       |
-   62 | 11       | −                       | dispatch residual compare
-   63 | E7       | К x=0 7                 | case mismatch; preloaded R7=30 indirect-target=30 indirect flow
-   64 | 01       | 1                       |
-   65 | 6D       | П→X d                   | recall floor
-   66 | 10       | +                       | expr +
-   67 | 4D       | X→П d                   | set floor
-   68 | 8C       | К БП c                  | tail jump inspect_cell; preloaded Rc=C9 indirect-target=17 indirect flow
-   69 | 6B       | П→X b                   | preload const 100
-   70 | 1D       | F cos                   | cos()
-   71 | 5C       | F x<0                   | false branch for <
-   72 | 79       | 79                      | false branch for <
-   73 | 60       | П→X 0                   | recall pos
-   74 | 01 00    | 10                      |
-   76 | 13       | ÷                       | expr /
-   77 | 40       | X→П 0                   | set pos
-   78 | 8C       | К БП c                  | tail jump inspect_cell; preloaded Rc=C9 indirect-target=17 indirect flow
-   79 | 60       | П→X 0                   | recall pos
-   80 | 00 0A 01 | 0.1                     |
-   83 | 11       | −                       | condition compare
-   84 | 5E       | F x=0                   | false branch for ==
-   85 | 93       | 93                      | false branch for ==
-   86 | 6D       | П→X d                   | recall floor
-   87 | 01       | 1                       |
-   88 | 11       | −                       | condition compare
-   89 | E7       | К x=0 7                 | false branch for ==; preloaded R7=30 indirect-target=30 indirect flow
-   90 | 6A       | П→X a                   | recall treasure
-   91 | 50       | С/П                     | halt
-   92 | 87       | К БП 7                  | if end; preloaded R7=30 indirect-target=30 indirect flow
-   93 | 01 00    | 10                      |
-   95 | 60       | П→X 0                   | recall pos
-   96 | 12       | ×                       | expr *
-   97 | 51       | БП                      | shared terminal tail
-   98 | 77       | 77                      | shared terminal tail
+   45 | 53       | 53                      | false branch for ==
+   46 | A8       | К ПП 8                  | expr frac(bit_and(rows[floor].row, 5 * pos + 5)) / pos; preloaded R8=B3 indirect-target=1 indirect flow
+   47 | 60       | П→X 0                   | recall pos
+   48 | 12       | ×                       | expr *
+   49 | 11       | −                       | expr -
+   50 | BD       | К X→П d                 | indexed set rows.row; indirect-memory-targets=1,2,3,4,5,6,7,8,9
+   51 | A9       | К ПП 9                  | proc call descend; preloaded R9=C4 indirect-target=12 indirect flow
+   52 | 87       | К БП 7                  | if end; preloaded R7=30 indirect-target=30 indirect flow
+   53 | 6B       | П→X b                   | preload const 100
+   54 | 1D       | F cos                   | cos()
+   55 | 5E       | F x=0                   | false branch for ==
+   56 | 68       | 68                      | false branch for ==
+   57 | A8       | К ПП 8                  | expr frac(bit_and(rows[floor].row, 5 * pos + 5)) / pos; preloaded R8=B3 indirect-target=1 indirect flow
+   58 | 57       | F x≠0                   | case mismatch
+   59 | 51       | 51                      | shared terminal tail
+   60 | 01       | 1                       |
+   61 | 11       | −                       | dispatch residual compare
+   62 | E7       | К x=0 7                 | case mismatch; preloaded R7=30 indirect-target=30 indirect flow
+   63 | 01       | 1                       |
+   64 | 6D       | П→X d                   | recall floor
+   65 | 10       | +                       | expr +
+   66 | 4D       | X→П d                   | set floor
+   67 | 8C       | К БП c                  | tail jump inspect_cell; preloaded Rc=C9 indirect-target=17 indirect flow
+   68 | 6B       | П→X b                   | preload const 100
+   69 | 1D       | F cos                   | cos()
+   70 | 5C       | F x<0                   | false branch for <
+   71 | 78       | 78                      | false branch for <
+   72 | 60       | П→X 0                   | recall pos
+   73 | 01 00    | 10                      |
+   75 | 13       | ÷                       | expr /
+   76 | 40       | X→П 0                   | set pos
+   77 | 8C       | К БП c                  | tail jump inspect_cell; preloaded Rc=C9 indirect-target=17 indirect flow
+   78 | 60       | П→X 0                   | recall pos
+   79 | 00 0A 01 | 0.1                     |
+   82 | 11       | −                       | condition compare
+   83 | 5E       | F x=0                   | false branch for ==
+   84 | 92       | 92                      | false branch for ==
+   85 | 6D       | П→X d                   | recall floor
+   86 | 01       | 1                       |
+   87 | 11       | −                       | condition compare
+   88 | E7       | К x=0 7                 | false branch for ==; preloaded R7=30 indirect-target=30 indirect flow
+   89 | 6A       | П→X a                   | recall treasure
+   90 | 50       | С/П                     | halt
+   91 | 87       | К БП 7                  | if end; preloaded R7=30 indirect-target=30 indirect flow
+   92 | 01 00    | 10                      |
+   94 | 60       | П→X 0                   | recall pos
+   95 | 12       | ×                       | expr *
+   96 | 51       | БП                      | shared terminal tail
+   97 | 76       | 76                      | shared terminal tail

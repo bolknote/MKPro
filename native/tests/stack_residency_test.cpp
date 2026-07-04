@@ -438,6 +438,96 @@ program StackHelperAbiAggregation {
                 nullptr,
             "stack helper argument-entry variant should satisfy the stack-helper ABI blocker");
 
+    const std::string reversed_stack_helper_abi_source = R"mkpro(
+program StackHelperAbiReversed {
+  state {
+    x: counter 1..4 = 1
+    y: counter 1..4 = 2
+    sx: counter 1..4 = 1
+    sy: counter 1..4 = 1
+    line: packed = 0
+    out: packed = 0
+  }
+
+  loop {
+    part_a()
+    part_b()
+    part_c()
+    halt(out)
+  }
+
+  fn part_a() {
+    sx = x
+    sy = y
+    line = cell_mask(sy, sx)
+    out += line
+    sx = x
+    sy = y
+    line = cell_mask(sy, sx)
+    out += line
+  }
+
+  fn part_b() {
+    sx = x
+    sy = y
+    line = cell_mask(sy, sx)
+    out += line
+    sx = x
+    sy = y
+    line = cell_mask(sy, sx)
+    out += line
+  }
+
+  fn part_c() {
+    sx = x
+    sy = y
+    line = cell_mask(sy, sx)
+    out += line
+    sx = x
+    sy = y
+    line = cell_mask(sy, sx)
+    out += line
+  }
+}
+)mkpro";
+    const CompileResult reversed_result = compile_stack_analysis(reversed_stack_helper_abi_source);
+    require_clean_compile(reversed_result, "reversed stack helper ABI aggregation");
+    const SizeAbiBlockerReport* reversed_blocker =
+        find_size_abi_blocker(reversed_result, "stack-helper-abi", "cell_mask(sy, sx)");
+    require(reversed_blocker != nullptr,
+            "size attribution should report reversed stack helper ABI blockers");
+    require(reversed_blocker->details.contains("estimatedStackEntryOverheadCells") &&
+                reversed_blocker->details.at("estimatedStackEntryOverheadCells") == "11" &&
+                reversed_blocker->details.contains("estimatedNetSavings") &&
+                reversed_blocker->details.at("estimatedNetSavings") == "1" &&
+                reversed_blocker->details.contains("costModelAction") &&
+                reversed_blocker->details.at("costModelAction") ==
+                    "implement-stack-argument-helper-entry",
+            "reversed stack helper ABI report should model a stack-entry implementation");
+
+    const CompileResult reversed_stack_entry =
+        compile_source(reversed_stack_helper_abi_source, stack_entry_options);
+    require_clean_compile(reversed_stack_entry, "reversed stack helper argument-entry variant");
+    require(static_cast<int>(reversed_stack_entry.steps.size()) ==
+                static_cast<int>(reversed_result.steps.size()) - 1,
+            "reversed stack helper argument-entry variant should realize the one-cell "
+            "stack-entry saving");
+    require(has_optimization(reversed_stack_entry, "expression-helper-stack-entry-primary"),
+            "reversed stack helper argument-entry variant should emit a primary stack helper "
+            "entry when all calls use the stack ABI");
+    require(count_steps_with_comment_prefix_and_opcode(
+                reversed_stack_entry, "expr cell_mask(sy, sx) stack entry", 0x53) == 6,
+            "reversed stack helper argument-entry variant should route stack-resident "
+            "cell_mask calls through the stack entry");
+    require(count_steps_with_comment(reversed_stack_entry,
+                                     "expression helper stack-entry pow10") >= 1,
+            "reversed stack helper argument-entry variant should compute the X-resident "
+            "argument before swapping to the row argument");
+    require(find_size_abi_blocker(reversed_stack_entry, "stack-helper-abi",
+                                  "cell_mask(sy, sx)") == nullptr,
+            "reversed stack helper argument-entry variant should satisfy the stack-helper ABI "
+            "blocker");
+
     CompileOptions selected_options;
     selected_options.analysis = true;
     selected_options.budget = 999999;
@@ -2039,6 +2129,34 @@ program StackResidentUnaryCallControlFlow {
             "stack-resident unary call should apply frac() to the restored stack temp");
     require(count_steps_with_comment(result, "recall a") == 0,
             "stack-resident unary call should not recall the temp from memory");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program IndexedSubtractIndirectYReuse {
+  state {
+    floor: counter 1..2 = 1
+    pos: packed = 0.1
+    rows: group(1..2) {
+      row: packed = 8.5555555
+    }
+    out: packed = 0
+  }
+
+  loop {
+    rows[floor].row -= frac(bit_and(rows[floor].row, 5 * (pos + 1))) / pos * pos
+    out = frac(bit_and(rows[floor].row, 5 * (pos + 1))) / pos
+    halt(out)
+  }
+}
+)mkpro");
+    require_clean_compile(result, "indexed subtract indirect-Y reuse");
+    require(has_optimization(result, "indexed-subtract-indirect-y-reuse"),
+            "indexed subtract should reuse the helper-preserved indexed row from Y");
+    require(has_optimization(result, "expression-helper"),
+            "digit extraction should be shared so the Y-preservation proof matches the emitted helper");
+    require(count_steps_with_comment_prefix_and_opcode(result, "indexed recall rows.row", 0xdd) == 1,
+            "only the shared digit helper body should recall the indexed row through Rd");
   }
 }
 

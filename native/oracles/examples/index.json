@@ -428,7 +428,7 @@
       "id": "tic-tac-toe",
       "sourcePath": "examples/tic-tac-toe.mkpro",
       "sourceSha256": "70713dcb611e672fc246ec1bcec5c9c2ad5ecb06de6a8927dbef637bb326d6e4",
-      "steps": 99,
+      "steps": 98,
       "artifacts": {
         "bytes": "tic-tac-toe/bytes.txt",
         "hex": "tic-tac-toe/hex.txt",
