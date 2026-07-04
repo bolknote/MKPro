@@ -45185,7 +45185,8 @@ bool should_report_nonwinning_candidate(std::string_view name) {
          name == "packed-score-accumulator-aggressive-post-layout" ||
          name == "packed-line-family-update-check-tail" ||
          name == "packed-line-family-mutating-selector-update-check-tail" ||
-         name == "packed-line-family-borrowed-mutating-selector-update-check-tail";
+         name == "packed-line-family-borrowed-mutating-selector-update-check-tail" ||
+         name == "stack-resident-helper-entries";
 }
 
 OptimizerReport build_optimizer_report(const std::vector<OptimizationReport>& optimizations,
@@ -50797,6 +50798,14 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       "stack-resident-temps",
       "Kept short-lived single-use temporaries on the X/Y/Z/T stack instead of spilling them to "
       "registers");
+  add_candidate(
+      [](CompileOptions& candidate_options) {
+        candidate_options.stack_resident_temps = true;
+        candidate_options.stack_argument_helper_entries = true;
+      },
+      "stack-resident-helper-entries",
+      "Kept temporaries stack-resident and entered eligible shared helpers through their "
+      "stack-argument ABI");
   add_candidate(
       [](CompileOptions& candidate_options) {
         candidate_options.stack_resident_temps = true;

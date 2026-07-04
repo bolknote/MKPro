@@ -141,6 +141,15 @@ const SizeOpportunityReport* find_size_opportunity(const CompileResult& result,
   return it == result.size_attribution.opportunities.end() ? nullptr : &*it;
 }
 
+const CandidateReport* find_candidate(const std::vector<CandidateReport>& candidates,
+                                      const std::string& variant) {
+  const auto it = std::find_if(candidates.begin(), candidates.end(),
+                               [&](const CandidateReport& candidate) {
+                                 return candidate.variant == variant;
+                               });
+  return it == candidates.end() ? nullptr : &*it;
+}
+
 const SizeNextActionSummaryReport* find_size_next_action(const CompileResult& result,
                                                          const std::string& source,
                                                          const std::string& action) {
@@ -418,6 +427,19 @@ program StackHelperAbiAggregation {
     require(find_size_abi_blocker(stack_entry, "stack-helper-abi", "cell_mask(sx, sy)") ==
                 nullptr,
             "stack helper argument-entry variant should satisfy the stack-helper ABI blocker");
+
+    CompileOptions selected_options;
+    selected_options.analysis = true;
+    selected_options.budget = 999999;
+    selected_options.disable_aggressive_post_layout = true;
+    const CompileResult selected = compile_source(stack_helper_abi_source, selected_options);
+    require_clean_compile(selected, "candidate-searched stack helper argument-entry variant");
+    const CandidateReport* stack_entry_candidate =
+        find_candidate(selected.rejected_candidates, "stack-resident-helper-entries");
+    require(stack_entry_candidate != nullptr && !stack_entry_candidate->selected &&
+                stack_entry_candidate->steps == static_cast<int>(stack_entry.steps.size()),
+            "candidate search should evaluate stack helper argument-entry lowering even when a "
+            "larger shared-body rewrite wins");
   }
 
   {
