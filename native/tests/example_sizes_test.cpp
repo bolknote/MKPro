@@ -281,12 +281,24 @@ void example_sizes_match_typescript_baselines() {
                       "selector-register-used-as-data" &&
                   indirect_flow->details.contains("selectorRegister") &&
                   indirect_flow->details.at("selectorRegister") == "7" &&
+                  indirect_flow->details.contains("candidateSelectorRegisters") &&
+                  indirect_flow->details.at("candidateSelectorRegisters") == "7+8+9" &&
+                  indirect_flow->details.contains("conflictingSelectorRegisters") &&
+                  indirect_flow->details.at("conflictingSelectorRegisters") == "7+8+9" &&
                   indirect_flow->details.contains("allocatedName") &&
                   indirect_flow->details.at("allocatedName") == "__coord_list_foxes_1" &&
+                  indirect_flow->details.contains("conflictingAllocatedNames") &&
+                  indirect_flow->details.at("conflictingAllocatedNames") ==
+                      "__coord_list_foxes_1+__coord_list_foxes_2+__coord_list_foxes_3" &&
                   indirect_flow->details.contains("consumerAddress") &&
                   indirect_flow->details.at("consumerAddress") == "14" &&
                   indirect_flow->details.contains("consumerOpcodeHex") &&
                   indirect_flow->details.at("consumerOpcodeHex") == "D5" &&
+                  indirect_flow->details.contains("freeStableSelectorRegisters") &&
+                  indirect_flow->details.at("freeStableSelectorRegisters") == "none" &&
+                  indirect_flow->details.contains("selectorSplitStatus") &&
+                  indirect_flow->details.at("selectorSplitStatus") ==
+                      "no-free-stable-selector-register" &&
                   indirect_flow->details.contains("requiredAction") &&
                   indirect_flow->details.at("requiredAction") ==
                       "split-selector-register-or-prove-dual-use-data-selector",
@@ -302,7 +314,14 @@ void example_sizes_match_typescript_baselines() {
                   selector_action->best_details.at("proofFailure") ==
                       "selector-register-used-as-data" &&
                   selector_action->best_details.contains("consumerOpcodeHex") &&
-                  selector_action->best_details.at("consumerOpcodeHex") == "D5",
+                  selector_action->best_details.at("consumerOpcodeHex") == "D5" &&
+                  selector_action->best_details.contains("conflictingSelectorRegisters") &&
+                  selector_action->best_details.at("conflictingSelectorRegisters") == "7+8+9" &&
+                  selector_action->best_details.contains("freeStableSelectorRegisters") &&
+                  selector_action->best_details.at("freeStableSelectorRegisters") == "none" &&
+                  selector_action->best_details.contains("selectorSplitStatus") &&
+                  selector_action->best_details.at("selectorSplitStatus") ==
+                      "no-free-stable-selector-register",
               "fox-hunt-mk61 size attribution should rank selector/data dual-use proof as the "
               "next action for the 60-cell post-layout candidates");
     }

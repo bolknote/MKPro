@@ -46025,6 +46025,12 @@ std::string static_proof_gate_key_values(const std::vector<std::pair<std::string
   return join_strings(parts, "; ");
 }
 
+std::string static_proof_gate_join_values(const std::set<std::string>& values) {
+  if (values.empty())
+    return "none";
+  return join_strings(std::vector<std::string>(values.begin(), values.end()), "+");
+}
+
 std::string indirect_flow_step_text(const ResolvedStep& step) {
   std::string text = step.mnemonic.empty() ? opcode_by_code(step.opcode).name : step.mnemonic;
   if (text.empty())
@@ -46038,10 +46044,34 @@ std::string opcode_hex_text(int opcode) {
   return out.str();
 }
 
+std::set<std::string>
+free_stable_selector_registers(const std::map<std::string, std::string>& allocated_registers) {
+  std::set<std::string> allocated;
+  for (const auto& [unused, reg] : allocated_registers) {
+    (void)unused;
+    allocated.insert(reg);
+  }
+  std::set<std::string> free;
+  for (int index = 0; index <= 0x0e; ++index) {
+    const std::string reg = core::register_name_for_index(index);
+    if (core::is_stable_indirect_selector(reg) && !allocated.contains(reg))
+      free.insert(reg);
+  }
+  return free;
+}
+
 std::optional<std::string> indirect_flow_selector_preservation_rejection_reason(
     const std::set<std::string>& selector_registers,
     const std::map<std::string, std::string>& allocated_registers,
     const std::vector<ResolvedStep>& steps) {
+  const std::string selector_registers_text = static_proof_gate_join_values(selector_registers);
+  const std::set<std::string> free_stable_selectors =
+      free_stable_selector_registers(allocated_registers);
+  const std::string free_stable_selector_text =
+      static_proof_gate_join_values(free_stable_selectors);
+  const std::string selector_split_status =
+      free_stable_selectors.empty() ? "no-free-stable-selector-register"
+                                    : "free-stable-selector-register-available";
   for (const ResolvedStep& step : steps) {
     if (!step_writes_indirect_flow_selector(step, selector_registers))
       continue;
@@ -46052,15 +46082,23 @@ std::optional<std::string> indirect_flow_selector_preservation_rejection_reason(
            static_proof_gate_key_values({
                {"proofFamily", "indirect-flow-targets"},
                {"missingProof", "selector-register-preservation"},
+               {"candidateSelectorRegisters", selector_registers_text},
                {"selectorRegister", selector},
                {"proofFailure", "selector-register-overwritten"},
                {"consumerAddress", safe_format_label_address(step.address)},
                {"consumerOpcodeHex", opcode_hex_text(step.opcode)},
                {"consumerOpcode", indirect_flow_step_text(step)},
+               {"freeStableSelectorRegisters", free_stable_selector_text},
+               {"selectorSplitStatus", selector_split_status},
                {"requiredAction", "keep-selector-register-stable-or-retarget-indirect-flow"},
            });
   }
 
+  std::set<std::string> conflicting_selector_registers;
+  std::set<std::string> conflicting_allocated_names;
+  const ResolvedStep* first_consumer = nullptr;
+  std::string first_selector;
+  std::string first_name;
   for (const auto& [name, allocated_register] : allocated_registers) {
     if (compiler_owned_indirect_flow_allocation(name))
       continue;
@@ -46070,19 +46108,37 @@ std::optional<std::string> indirect_flow_selector_preservation_rejection_reason(
     for (const ResolvedStep& step : steps) {
       if (!step_accesses_selector_as_data(step, allocated_selector))
         continue;
-      return "static proof gate rejected candidate; " +
-             static_proof_gate_key_values({
-                 {"proofFamily", "indirect-flow-targets"},
-                 {"missingProof", "selector-register-preservation"},
-                 {"selectorRegister", allocated_register},
-                 {"allocatedName", name},
-                 {"proofFailure", "selector-register-used-as-data"},
-                 {"consumerAddress", safe_format_label_address(step.address)},
-                 {"consumerOpcodeHex", opcode_hex_text(step.opcode)},
-                 {"consumerOpcode", indirect_flow_step_text(step)},
-                 {"requiredAction", "split-selector-register-or-prove-dual-use-data-selector"},
-             });
+      conflicting_selector_registers.insert(allocated_register);
+      conflicting_allocated_names.insert(name);
+      if (first_consumer == nullptr) {
+        first_consumer = &step;
+        first_selector = allocated_register;
+        first_name = name;
+      }
+      break;
     }
+  }
+
+  if (first_consumer != nullptr) {
+    return "static proof gate rejected candidate; " +
+           static_proof_gate_key_values({
+               {"proofFamily", "indirect-flow-targets"},
+               {"missingProof", "selector-register-preservation"},
+               {"candidateSelectorRegisters", selector_registers_text},
+               {"selectorRegister", first_selector},
+               {"allocatedName", first_name},
+               {"conflictingSelectorRegisters",
+                static_proof_gate_join_values(conflicting_selector_registers)},
+               {"conflictingAllocatedNames",
+                static_proof_gate_join_values(conflicting_allocated_names)},
+               {"proofFailure", "selector-register-used-as-data"},
+               {"consumerAddress", safe_format_label_address(first_consumer->address)},
+               {"consumerOpcodeHex", opcode_hex_text(first_consumer->opcode)},
+               {"consumerOpcode", indirect_flow_step_text(*first_consumer)},
+               {"freeStableSelectorRegisters", free_stable_selector_text},
+               {"selectorSplitStatus", selector_split_status},
+               {"requiredAction", "split-selector-register-or-prove-dual-use-data-selector"},
+           });
   }
 
   return std::nullopt;
