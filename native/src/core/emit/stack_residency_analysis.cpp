@@ -171,8 +171,13 @@ bool statements_preserve_stack_residency_block(const std::vector<V2Statement>& s
 }
 
 bool is_stack_resident_consumer(const V2Statement& statement) {
-  return statement.kind == "v2_assign" || statement.kind == "v2_stop" ||
-         statement.kind == "v2_preview" || statement.kind == "v2_return";
+  if (statement.kind == "v2_assign" || statement.kind == "v2_stop" ||
+      statement.kind == "v2_preview" || statement.kind == "v2_return") {
+    return true;
+  }
+  return statement.kind == "v2_update" && statement.target.has_value() &&
+         statement.expr.has_value() && statement.op.has_value() &&
+         (*statement.op == "+=" || *statement.op == "-=");
 }
 
 std::optional<std::string> consumer_overwrite_target(const V2Statement& consumer) {
@@ -548,6 +553,12 @@ find_stack_resident_fusion_site(const std::vector<V2Statement>& statements, std:
   for (const std::string& name : temp_names) {
     if (!stack_temp_value_dead_after_consumer(name, overwrite, tail))
       return std::nullopt;
+  }
+  if (consumer.kind == "v2_update") {
+    for (const std::string& name : temp_names) {
+      if (expression_text_references_identifier(consumer.target, name, consumer.line))
+        return std::nullopt;
+    }
   }
   if (!can_lower_stack_resident_expression(*consumer_expr, temp_names))
     return std::nullopt;

@@ -222,6 +222,19 @@ void stack_residency_matches_typescript_contract() {
 
   {
     const std::vector<V2Statement> body = {
+        assign("x", "a + b", 1),
+        assign("y", "c + d", 2),
+        update("out", "+=", "x * y", 3),
+    };
+    const std::optional<core::emit::StackResidentFusionSite> site =
+        find_stack_resident_fusion_site(body, 0);
+    require(site.has_value(), "stack-residency should accept update consumers over temps");
+    require(site->consumer.kind == "v2_update" && site->consumer_index == 2,
+            "stack-residency should keep the update as the temp consumer");
+  }
+
+  {
+    const std::vector<V2Statement> body = {
         assign("a", "x", 1),
         assign("b", "y", 2),
         empty_if("x", "==", "0", 3),
@@ -300,6 +313,84 @@ program DualStack {
     require(has_optimization(result, "stack-resident-temps"),
             "stack-resident dual-temp add should report stack-resident-temps");
     require(result.steps.size() < 20, "stack-resident dual-temp add should stay compact");
+  }
+
+  const std::string update_stack = R"mkpro(
+program UpdateStack {
+  state {
+    a: packed = 2
+    b: packed = 3
+    c: packed = 4
+    d: packed = 5
+    out: packed = 0
+    x: packed = 0
+    y: packed = 0
+  }
+
+  loop {
+    x = a + b
+    y = c + d
+    out += x * y
+    halt(out)
+  }
+}
+)mkpro";
+
+  {
+    const CompileResult baseline = compile_stack_variant(update_stack, false);
+    require_clean_compile(baseline, "baseline stack-resident update consumer");
+    const CompileResult result = compile_stack_variant(update_stack);
+    require_clean_compile(result, "stack-resident update consumer");
+    require(has_optimization(result, "stack-resident-temps"),
+            "update consumer should keep both temps on the X/Y/Z/T stack");
+    require(count_steps_with_comment(result, "set x") == 0 &&
+                count_steps_with_comment(result, "set y") == 0,
+            "stack-resident update consumer should not store temporary operands");
+    require(count_steps_with_comment(result, "recall x") == 0 &&
+                count_steps_with_comment(result, "recall y") == 0,
+            "stack-resident update consumer should not recall temporary operands");
+    require(count_steps_with_comment(result, "stack-resident update +=") == 1,
+            "stack-resident update consumer should accumulate directly into the target");
+    require(result.steps.size() + 3U <= baseline.steps.size(),
+            "stack-resident update consumer should reduce the program size");
+  }
+
+  const std::string subtract_update_stack = R"mkpro(
+program SubtractUpdateStack {
+  state {
+    a: packed = 9
+    b: packed = 3
+    c: packed = 8
+    d: packed = 2
+    out: packed = 100
+    x: packed = 0
+    y: packed = 0
+  }
+
+  loop {
+    x = a - b
+    y = c - d
+    out -= x * y
+    halt(out)
+  }
+}
+)mkpro";
+
+  {
+    const CompileResult result = compile_stack_variant(subtract_update_stack);
+    require_clean_compile(result, "stack-resident subtract update consumer");
+    require(has_optimization(result, "stack-resident-temps"),
+            "subtract update consumer should keep both temps on the X/Y/Z/T stack");
+    require(count_steps_with_comment(result, "set x") == 0 &&
+                count_steps_with_comment(result, "set y") == 0,
+            "subtract update consumer should not store temporary operands");
+    require(count_steps_with_comment(result, "recall x") == 0 &&
+                count_steps_with_comment(result, "recall y") == 0,
+            "subtract update consumer should not recall temporary operands");
+    require(count_steps_with_comment(result, "stack-resident update operand order") == 1,
+            "subtract update consumer should preserve target-minus-delta order");
+    require(count_steps_with_comment(result, "stack-resident update -=") == 1,
+            "subtract update consumer should lower the target update directly");
   }
 
   {

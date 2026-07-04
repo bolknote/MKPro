@@ -36724,6 +36724,31 @@ bool lower_stack_resident_consumer(LoweringContext& context, const V2Statement& 
     emit_store(context, *consumer.target, "set " + *consumer.target);
     return true;
   }
+  if (consumer.kind == "v2_update" && consumer.target.has_value() && consumer.op.has_value() &&
+      (*consumer.op == "+=" || *consumer.op == "-=")) {
+    Expression target;
+    try {
+      target = parse_expression(*consumer.target, consumer.line);
+    } catch (const std::exception&) {
+      return false;
+    }
+    if (target.kind != "identifier" || !context.register_index_by_name.contains(target.name) ||
+        context.stack_only_state_fields.contains(target.name) ||
+        is_coord_list_state_name(context, target.name) ||
+        is_segmented_cells_name(context, target.name) || is_cells_state_name(context, target.name) ||
+        context.scaled_coord_cell_names.contains(target.name)) {
+      return false;
+    }
+    emit_recall(context, target.name);
+    if (*consumer.op == "-=")
+      context.emitter.emit_op(0x14, "X↔Y", "stack-resident update operand order",
+                              consumer.line);
+    context.emitter.emit_op(*consumer.op == "+=" ? 0x10 : 0x11,
+                            *consumer.op == "+=" ? "+" : "-",
+                            "stack-resident update " + *consumer.op, consumer.line);
+    emit_store(context, target.name, "set " + target.name);
+    return true;
+  }
   if (consumer.kind == "v2_stop") {
     context.emitter.emit_op(0x50, "С/П", "halt", consumer.line);
     return true;
