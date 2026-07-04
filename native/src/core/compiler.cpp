@@ -35171,6 +35171,11 @@ bool can_compile_indexed_stack_temp_expression(const Expression& expression,
     return expression.name == temp;
   if (expression.kind == "unary" && expression.expr != nullptr)
     return can_compile_indexed_stack_temp_expression(*expression.expr, temp);
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression)) {
+    return transform->arg != nullptr &&
+           can_compile_indexed_stack_temp_expression(*transform->arg, temp);
+  }
   if (expression.kind == "binary" && expression.left != nullptr && expression.right != nullptr) {
     const int left_reads = core::emit::count_identifier_reads(*expression.left, temp);
     const int right_reads = core::emit::count_identifier_reads(*expression.right, temp);
@@ -35212,6 +35217,18 @@ bool lower_indexed_stack_temp_expression_to_x(
     context.emitter.emit_op(0x0b, "/-/", "stack temp unary minus", line);
     context.emitter.current_x_variable.reset();
     context.emitter.current_x_aliases.clear();
+    return true;
+  }
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression)) {
+    if (transform->arg == nullptr)
+      return false;
+    if (!lower_indexed_stack_temp_expression_to_x(context, *transform->arg, temp, indexed_target,
+                                                  prepared_selector, line))
+      return false;
+    context.emitter.emit_op(transform->opcode, transform->mnemonic,
+                            "stack temp " + transform->comment_name, line);
+    clear_current_x_facts(context);
     return true;
   }
   if (expression.kind != "binary" || expression.left == nullptr || expression.right == nullptr)

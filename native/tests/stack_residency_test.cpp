@@ -303,6 +303,36 @@ program DualStack {
   }
 
   {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackResidentIndexedUnaryBuiltinUpdateConsumer {
+  state {
+    cells: packed[1..3] = [10, 20, 30]
+    slot: counter 1..3 = 2
+    x: packed = -8.75
+    y: packed = 3
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    cells[slot] += abs(tmp)
+    halt(cells[slot])
+  }
+}
+)mkpro",
+                                                       true);
+    require_clean_compile(result, "stack-resident indexed unary builtin update consumer");
+    require(has_optimization(result, "stack-resident-indexed-temp"),
+            "indexed unary update should keep tmp on the stack");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "indexed unary update should not store tmp before the indexed update");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "indexed unary update should not recall tmp inside the indexed update");
+    require(count_steps_with_comment(result, "stack temp abs") == 1,
+            "indexed unary update should apply abs() to the stack-carried temp");
+  }
+
+  {
     const std::string stack_helper_abi_source = R"mkpro(
 program StackHelperAbiAggregation {
   state {
