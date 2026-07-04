@@ -250,6 +250,40 @@ program PackedScoreDirectExpressionAccumulatorWithInitial {
                                    "packed_score accumulator zero") == 0,
           "initial-addend packed_score expression should use the addend as accumulator");
 
+  const CompileResult direct_expression_sum_with_negative_initial = compile_source(R"mkpro(
+program PackedScoreDirectExpressionAccumulatorWithNegativeInitial {
+  state {
+    penalty: packed = 7
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+  }
+  loop {
+    halt(packed_score(a, 1) + packed_score(b, 2) + packed_score(c, 3) - penalty)
+  }
+}
+)mkpro",
+                                                                            pinned_options());
+
+  require(direct_expression_sum_with_negative_initial.implemented,
+          "native compiler should lower packed_score expressions with a negative initial addend");
+  require(direct_expression_sum_with_negative_initial.diagnostics.empty(),
+          "negative-initial packed_score expression compile should not report diagnostics");
+  require(has_optimization(direct_expression_sum_with_negative_initial,
+                           "packed-score-sum-accumulator"),
+          "negative-initial packed_score expression should report accumulator lowering");
+  require(count_optimization(direct_expression_sum_with_negative_initial,
+                             "packed-score-stack-helper-call") == 0,
+          "negative-initial packed_score expression should not use standalone helper calls");
+  require(count_packed_score_helper_jumps(direct_expression_sum_with_negative_initial) == 0,
+          "negative-initial packed_score expression should not emit standalone helper calls");
+  require(count_packed_score_accumulator_helper_jumps(
+              direct_expression_sum_with_negative_initial) == 3,
+          "negative-initial packed_score expression should emit three accumulator helper calls");
+  require(count_steps_with_comment(direct_expression_sum_with_negative_initial,
+                                   "packed_score accumulator zero") == 0,
+          "negative-initial packed_score expression should use -penalty as accumulator");
+
   const CompileResult direct_expression_sum_with_indexed_initial = compile_source(R"mkpro(
 program PackedScoreDirectExpressionAccumulatorWithIndexedInitial {
   state {
@@ -379,6 +413,36 @@ program PackedScoreDirectExpressionAccumulatorWithExpressionLine {
   require(count_packed_score_accumulator_helper_jumps(
               direct_expression_sum_with_expression_line) == 3,
           "expression-line packed_score sum should emit three accumulator helper calls");
+
+  const CompileResult direct_expression_sum_with_dynamic_bank_line = compile_source(R"mkpro(
+program PackedScoreDirectExpressionAccumulatorWithDynamicBankLine {
+  state {
+    lines: packed[1..3] = [44444.4, 44445.4, 44446.4]
+    selector: counter 1..3 = 2
+    slot: counter 0..7 = 4
+  }
+  loop {
+    halt(sum(packed_score(lines[selector], slot), packed_score(lines[selector], slot + 1), packed_score(lines[selector], slot + 2)))
+  }
+}
+)mkpro",
+                                                                                 pinned_options());
+
+  require(direct_expression_sum_with_dynamic_bank_line.implemented,
+          "native compiler should lower packed_score sums with dynamic bank line expressions");
+  require(direct_expression_sum_with_dynamic_bank_line.diagnostics.empty(),
+          "dynamic-bank-line packed_score compile should not report diagnostics");
+  require(has_optimization(direct_expression_sum_with_dynamic_bank_line,
+                           "packed-score-sum-accumulator"),
+          "dynamic-bank-line packed_score sum should report accumulator lowering");
+  require(count_optimization(direct_expression_sum_with_dynamic_bank_line,
+                             "packed-score-stack-helper-call") == 0,
+          "dynamic-bank-line packed_score sum should not use standalone helper calls");
+  require(count_packed_score_helper_jumps(direct_expression_sum_with_dynamic_bank_line) == 0,
+          "dynamic-bank-line packed_score sum should not emit standalone helper calls");
+  require(count_packed_score_accumulator_helper_jumps(
+              direct_expression_sum_with_dynamic_bank_line) == 3,
+          "dynamic-bank-line packed_score sum should emit three accumulator helper calls");
 
   const CompileResult assignment_sum = compile_source(R"mkpro(
 program PackedScoreAssignmentAccumulator {
@@ -520,6 +584,125 @@ program PackedScoreContinuationInitialAccumulator {
   require(count_steps_with_comment(continuation_with_initial, "recall bonus_a") == 1 &&
               count_steps_with_comment(continuation_with_initial, "recall bonus_b") == 1,
           "continuation initial addends should fold both bonuses into the initial accumulator");
+
+  const CompileResult continuation_with_negative_initial = compile_source(R"mkpro(
+program PackedScoreContinuationNegativeInitialAccumulator {
+  state {
+    line: packed = 44444.4
+    slot_a: counter 0..7 = 4
+    slot_b: counter 0..7 = 5
+    slot_c: counter 0..7 = 6
+    score: packed = 0
+    penalty: packed = 2
+  }
+  loop {
+    score = packed_score(line, slot_a)
+    score = score + packed_score(line, slot_b) - penalty
+    score += packed_score(line, slot_c)
+    halt(score)
+  }
+}
+)mkpro",
+                                                                        pinned_options());
+  require(continuation_with_negative_initial.implemented,
+          "native compiler should lower continuation packed_score accumulators with negative "
+          "initial addends");
+  require(continuation_with_negative_initial.diagnostics.empty(),
+          "continuation packed_score negative addends should not report diagnostics");
+  require(has_optimization(continuation_with_negative_initial,
+                           "packed-score-sequence-stack-accumulator"),
+          "continuation packed_score negative addends should report sequence stack lowering");
+  require(count_optimization(continuation_with_negative_initial,
+                             "packed-score-stack-helper-call") == 0,
+          "continuation packed_score negative addends should not use standalone helper calls");
+  require(count_packed_score_helper_jumps(continuation_with_negative_initial) == 0,
+          "continuation packed_score negative addends should not emit standalone helper calls");
+  require(count_packed_score_accumulator_helper_jumps(continuation_with_negative_initial) == 3,
+          "continuation packed_score negative addends should emit three accumulator helper calls");
+  require(count_steps_with_comment(continuation_with_negative_initial, "set score") == 0,
+          "continuation negative addends should keep score on the stack for the direct consumer");
+  require(count_steps_with_comment(continuation_with_negative_initial, "recall score") == 0,
+          "continuation negative addends should not recall the stack-resident score");
+  require(count_steps_with_comment(continuation_with_negative_initial, "recall penalty") == 1,
+          "continuation negative addends should fold the penalty into the initial accumulator");
+
+  const CompileResult continuation_with_standalone_addends = compile_source(R"mkpro(
+program PackedScoreContinuationStandaloneAddendsAccumulator {
+  state {
+    line: packed = 44444.4
+    slot_a: counter 0..7 = 4
+    slot_b: counter 0..7 = 5
+    slot_c: counter 0..7 = 6
+    score: packed = 0
+    bonus: packed = 3
+    penalty: packed = 2
+  }
+  loop {
+    score = packed_score(line, slot_a)
+    score += bonus
+    score += packed_score(line, slot_b)
+    score -= penalty
+    score = score + packed_score(line, slot_c)
+    halt(score)
+  }
+}
+)mkpro",
+                                                                         pinned_options());
+  require(continuation_with_standalone_addends.implemented,
+          "native compiler should keep standalone add/sub updates inside packed_score "
+          "accumulator runs");
+  require(continuation_with_standalone_addends.diagnostics.empty(),
+          "standalone packed_score accumulator addends should not report diagnostics");
+  require(has_optimization(continuation_with_standalone_addends,
+                           "packed-score-sequence-stack-accumulator"),
+          "standalone addends should still report sequence stack lowering");
+  require(count_optimization(continuation_with_standalone_addends,
+                             "packed-score-stack-helper-call") == 0,
+          "standalone addends should not force standalone packed_score helper calls");
+  require(count_packed_score_helper_jumps(continuation_with_standalone_addends) == 0,
+          "standalone addends should not emit standalone helper calls");
+  require(count_packed_score_accumulator_helper_jumps(continuation_with_standalone_addends) == 3,
+          "standalone addends should preserve the three accumulator helper calls");
+  require(count_steps_with_comment(continuation_with_standalone_addends,
+                                   "packed_score accumulator addend") == 2,
+          "standalone add/sub updates should be emitted as ordered accumulator addends");
+  require(count_steps_with_comment(continuation_with_standalone_addends, "set score") == 0,
+          "standalone addends should keep score on the stack for the direct consumer");
+  require(count_steps_with_comment(continuation_with_standalone_addends, "recall score") == 0,
+          "standalone addends should not recall the stack-resident score");
+  require(count_steps_with_comment(continuation_with_standalone_addends, "recall bonus") == 1 &&
+              count_steps_with_comment(continuation_with_standalone_addends, "recall penalty") ==
+                  1,
+          "standalone addends should load each addend once inside the accumulator pipeline");
+
+  const CompileResult unsafe_standalone_addend = compile_source(R"mkpro(
+program PackedScoreContinuationUnsafeStandaloneAddend {
+  state {
+    line: packed = 44444.4
+    slot_a: counter 0..7 = 4
+    slot_b: counter 0..7 = 5
+    slot_c: counter 0..7 = 6
+    bonus_bank: packed[1..3] = [3, 4, 5]
+    pick: counter 1..3 = 2
+    score: packed = 0
+  }
+  loop {
+    score = packed_score(line, slot_a)
+    score += bonus_bank[pick]
+    score += packed_score(line, slot_b)
+    score += packed_score(line, slot_c)
+    halt(score)
+  }
+}
+)mkpro",
+                                                                 pinned_options());
+  require(unsafe_standalone_addend.implemented,
+          "native compiler should still compile accumulator runs split by unsafe addends");
+  require(unsafe_standalone_addend.diagnostics.empty(),
+          "unsafe standalone addend split should not report diagnostics");
+  require(count_steps_with_comment(unsafe_standalone_addend,
+                                   "packed_score accumulator addend") == 0,
+          "dynamic indexed addends should not be emitted as ordered accumulator addends");
 
   const CompileResult nested_binary_continuation = compile_source(R"mkpro(
 program PackedScoreNestedBinaryContinuation {
@@ -1086,6 +1269,63 @@ program PackedScoreXParamInitialAddendAccumulatorHelper {
   require(count_steps_with_comment(x_param_initial_addend_sequence,
                                    "packed_score stack accumulator") == 0,
           "x-param packed_score initial-addend sequence should not need separate accumulator add "
+          "cells");
+
+  const CompileResult x_param_negative_initial_addend_sequence = compile_source(R"mkpro(
+program PackedScoreXParamNegativeInitialAddendAccumulatorHelper {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    bonus_a: packed = 7
+    bonus_b: packed = 8
+    bonus_c: packed = 9
+    penalty_a: packed = 1
+    penalty_b: packed = 2
+    penalty_c: packed = 3
+    offset_a: packed = 1
+    offset_b: packed = 2
+    offset_c: packed = 3
+    x: counter 0..7 = 2
+    y: counter 0..7 = 3
+    line: packed = 0
+    score: packed = 0
+  }
+  loop {
+    score = 0
+    normalize(x + y)
+    score += sum(bonus_a - penalty_a, packed_score(a + offset_a, line))
+    normalize(x - y)
+    score = sum(score, bonus_b - penalty_b, packed_score(b + offset_b, line))
+    normalize(y + 1)
+    score = score + bonus_c - penalty_c + packed_score(c + offset_c, line)
+    halt(score)
+  }
+
+  fn normalize(raw_line) {
+    line = frac((raw_line + 3) / 4) * 4 + 1
+  }
+}
+)mkpro",
+                                                                                 pinned_options());
+  require(x_param_negative_initial_addend_sequence.implemented,
+          "x-param packed_score negative-initial accumulator-helper program should compile");
+  require(x_param_negative_initial_addend_sequence.diagnostics.empty(),
+          "x-param packed_score negative-initial compile should not report diagnostics");
+  require(count_optimization(x_param_negative_initial_addend_sequence,
+                             "x-param-packed-score-line-stack-accumulate") == 3,
+          "x-param packed_score negative-initial sequence should keep returned-index updates "
+          "stack-carried");
+  require(count_packed_score_accumulator_helper_jumps(
+              x_param_negative_initial_addend_sequence) == 3,
+          "x-param packed_score negative-initial sequence should call the accumulator helper for "
+          "each term");
+  require(count_packed_score_helper_jumps(x_param_negative_initial_addend_sequence) == 0,
+          "x-param packed_score negative-initial sequence should not use the standalone helper "
+          "fallback");
+  require(count_steps_with_comment(x_param_negative_initial_addend_sequence,
+                                   "packed_score stack accumulator") == 0,
+          "x-param packed_score negative-initial sequence should not need separate accumulator add "
           "cells");
 
   const CompileResult mixed = compile_source(R"mkpro(

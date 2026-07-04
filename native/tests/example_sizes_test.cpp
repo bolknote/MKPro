@@ -220,7 +220,7 @@ void example_sizes_match_typescript_baselines() {
       {"teleport", 96},
       {"tic-tac-toe", 99},
       {"tiny-game", 23},
-      {"treasure-hunter-2", 99},
+      {"treasure-hunter-2", 98},
       {"wumpus", 105},
   };
   const std::map<std::string, std::size_t> PENDING_BASELINE{
@@ -442,6 +442,12 @@ void example_sizes_match_typescript_baselines() {
                       "candidate-steps-plus-minimum-payload-packing-overhead" &&
                   indirect_flow->details.contains("requiredAction") &&
                   indirect_flow->details.at("requiredAction") ==
+                      "find-nonpacked-selector-layout-or-reduce-payload-access-overhead" &&
+                  indirect_flow->details.contains("blockedProof") &&
+                  indirect_flow->details.at("blockedProof") ==
+                      "indirect-flow-targets:selector-register-used-as-data" &&
+                  indirect_flow->details.contains("blockedProofAction") &&
+                  indirect_flow->details.at("blockedProofAction") ==
                       "find-nonpacked-selector-layout-or-reduce-payload-access-overhead",
               "fox-hunt-mk61 size attribution should explain why the 60-cell indirect-flow "
               "candidate is blocked by proved selector/data overlap");

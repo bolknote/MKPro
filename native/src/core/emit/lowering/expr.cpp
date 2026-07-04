@@ -799,6 +799,13 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
         .detail =
             "Lowered " + expression.callee + "() to reusable 4x4 grid/packed-line arithmetic.",
     });
+    if (callee == "digit_at" || callee == "packed_digit") {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "exact-decimal-digit-extraction",
+          .detail = "Lowered " + expression.callee +
+                    "() through fractional scaling followed by К [x] truncation.",
+      });
+    }
     return true;
   }
 
@@ -827,6 +834,10 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
         .name = "packed-grid-primitive-lowering",
         .detail =
             "Lowered " + expression.callee + "() to reusable 4x4 grid/packed-line arithmetic.",
+    });
+    context.optimizations.push_back(OptimizationReport{
+        .name = "exact-decimal-digit-extraction",
+        .detail = "Lowered digit_at() through fractional scaling followed by К [x] truncation.",
     });
     return true;
   }

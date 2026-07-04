@@ -2597,6 +2597,13 @@ program DigitAtCall {
           "digit_at should extract an integer digit through the TS macro expansion");
   require(has_optimization(digit_at_call, "packed-grid-primitive-lowering"),
           "digit_at should report the TS packed-grid strategy name");
+  require(has_optimization(digit_at_call, "exact-decimal-digit-extraction"),
+          "digit_at should report exact decimal digit extraction");
+  require(std::any_of(digit_at_call.steps.begin(), digit_at_call.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x34 && step.comment == "int()";
+                      }),
+          "digit_at should end extraction with integer truncation, not a rounding shortcut");
 
   const CompileResult small_set_call = compile_source(R"mkpro(
 program SmallSetCalls {
@@ -3290,6 +3297,116 @@ program IndexedPreincrementStore {
                          return step.comment.has_value() && *step.comment == "increment pointer";
                        }),
           "preincrement indexed store should consume the separate pointer increment");
+
+  const CompileResult preincrement_indexed_recall = compile_source(R"mkpro(
+program IndexedPreincrementRecall {
+  state {
+    slots: packed[2..4] = [8, 7, 6]
+    pointer: counter 1..4 = 1
+    value: packed = 0
+  }
+
+  loop {
+    value = slots[pointer + 1]
+    pointer++
+    halt(value)
+  }
+}
+)mkpro",
+                                                                   preincrement_indexed_options);
+  require(preincrement_indexed_recall.implemented,
+          "native compiler should lower preincrement indexed recall");
+  require(has_optimization(preincrement_indexed_recall, "preincrement-indexed-recall"),
+          "preincrement indexed recall should report the TS strategy name");
+  require(std::any_of(preincrement_indexed_recall.steps.begin(),
+                      preincrement_indexed_recall.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.comment.has_value() &&
+                               step.comment->rfind("preincrement indexed recall slots", 0) == 0 &&
+                               step.mnemonic.rfind("К П->X ", 0) == 0;
+                      }),
+          "preincrement indexed recall should use the fused indirect recall comment");
+  require(std::none_of(preincrement_indexed_recall.steps.begin(),
+                       preincrement_indexed_recall.steps.end(),
+                       [](const ResolvedStep& step) {
+                         return step.comment.has_value() && *step.comment == "increment pointer";
+                       }),
+          "preincrement indexed recall should consume the separate pointer increment");
+
+  CompileOptions predecrement_indexed_options;
+  predecrement_indexed_options.budget = 999;
+  predecrement_indexed_options.analysis = true;
+  predecrement_indexed_options.disable_interprocedural_opts = true;
+  predecrement_indexed_options.disable_candidate_search = true;
+  const CompileResult predecrement_indexed_store = compile_source(R"mkpro(
+program IndexedPredecrementStore {
+  state {
+    slots: packed[7..9] = 0
+    pointer: counter 8..10 = 10
+    value: packed = 7
+  }
+
+  loop {
+    slots[pointer - 1] = value
+    pointer--
+    halt(slots[9])
+  }
+}
+)mkpro",
+                                                                  predecrement_indexed_options);
+  require(predecrement_indexed_store.implemented,
+          "native compiler should lower predecrement indexed store");
+  require(has_optimization(predecrement_indexed_store, "predecrement-indexed-store"),
+          "predecrement indexed store should report the TS strategy name");
+  require(std::any_of(predecrement_indexed_store.steps.begin(),
+                      predecrement_indexed_store.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.comment.has_value() &&
+                               step.comment->rfind("predecrement indexed set slots", 0) == 0 &&
+                               step.mnemonic.rfind("К X->П ", 0) == 0;
+                      }),
+          "predecrement indexed store should use the fused indirect store comment");
+  require(std::none_of(predecrement_indexed_store.steps.begin(),
+                       predecrement_indexed_store.steps.end(),
+                       [](const ResolvedStep& step) {
+                         return step.comment.has_value() && *step.comment == "decrement pointer";
+                       }),
+          "predecrement indexed store should consume the separate pointer decrement");
+
+  const CompileResult predecrement_indexed_recall = compile_source(R"mkpro(
+program IndexedPredecrementRecall {
+  state {
+    slots: packed[7..9] = [8, 7, 6]
+    pointer: counter 8..10 = 10
+    value: packed = 0
+  }
+
+  loop {
+    value = slots[pointer - 1]
+    pointer--
+    halt(value)
+  }
+}
+)mkpro",
+                                                                   predecrement_indexed_options);
+  require(predecrement_indexed_recall.implemented,
+          "native compiler should lower predecrement indexed recall");
+  require(has_optimization(predecrement_indexed_recall, "predecrement-indexed-recall"),
+          "predecrement indexed recall should report the TS strategy name");
+  require(std::any_of(predecrement_indexed_recall.steps.begin(),
+                      predecrement_indexed_recall.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.comment.has_value() &&
+                               step.comment->rfind("predecrement indexed recall slots", 0) == 0 &&
+                               step.mnemonic.rfind("К П->X ", 0) == 0;
+                      }),
+          "predecrement indexed recall should use the fused indirect recall comment");
+  require(std::none_of(predecrement_indexed_recall.steps.begin(),
+                       predecrement_indexed_recall.steps.end(),
+                       [](const ResolvedStep& step) {
+                         return step.comment.has_value() && *step.comment == "decrement pointer";
+                       }),
+          "predecrement indexed recall should consume the separate pointer decrement");
 
   const CompileResult zero_fallback_store = compile_source(R"mkpro(
 program ZeroFallbackStore {
@@ -4505,6 +4622,128 @@ program DomainErrorGuards {
                         return step.opcode == 0x23 && step.comment == "domain-error guard trap";
                       }),
           "x == 0 guard should use F 1/x");
+
+  const CompileResult multiway_domain_guard = compile_source(R"mkpro(
+program MultiwayDomainTrapGuard {
+  state {
+    floor: counter 0..9 = 1
+  }
+
+  loop {
+    if floor <= 0 { halt("ЕГГОГ") }
+    if floor == 1 {
+      halt(11)
+    }
+    else {
+      halt(22)
+    }
+  }
+}
+)mkpro",
+                                                          domain_options);
+  require(multiway_domain_guard.implemented,
+          "native compiler should lower multiway domain-trap guards");
+  require(multiway_domain_guard.diagnostics.empty(),
+          "multiway domain-trap guard compile should not report diagnostics");
+  require(has_optimization(multiway_domain_guard, "multiway-domain-trap-guard"),
+          "multiway domain-trap guard should report the TS strategy name");
+  require(std::any_of(multiway_domain_guard.steps.begin(), multiway_domain_guard.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x17 &&
+                               step.comment == "multiway domain-error guard trap";
+                      }),
+          "floor <= 0 / floor == 1 should use F lg as a trap and branch value");
+  require(std::any_of(multiway_domain_guard.steps.begin(), multiway_domain_guard.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x57 &&
+                               step.comment == "false branch for domain(value)=0";
+                      }),
+          "multiway domain-trap guard should branch on the F lg zero result");
+
+  const CompileResult sqrt_multiway_domain_guard = compile_source(R"mkpro(
+program SqrtMultiwayDomainTrapGuard {
+  state {
+    dx: counter -9..9 = 0
+  }
+
+  loop {
+    if dx < 0 { halt("ЕГГОГ") }
+    if dx == 0 {
+      halt(11)
+    }
+    else {
+      halt(22)
+    }
+  }
+}
+)mkpro",
+                                                               domain_options);
+  require(sqrt_multiway_domain_guard.implemented,
+          "native compiler should lower sqrt multiway domain-trap guards");
+  require(sqrt_multiway_domain_guard.diagnostics.empty(),
+          "sqrt multiway domain-trap guard compile should not report diagnostics");
+  require(has_optimization(sqrt_multiway_domain_guard, "multiway-domain-trap-guard"),
+          "sqrt multiway domain-trap guard should report the TS strategy name");
+  require(std::any_of(sqrt_multiway_domain_guard.steps.begin(),
+                      sqrt_multiway_domain_guard.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x21 &&
+                               step.comment == "multiway domain-error guard trap";
+                      }),
+          "dx < 0 / dx == 0 should use F sqrt as a trap and branch value");
+  require(std::any_of(sqrt_multiway_domain_guard.steps.begin(),
+                      sqrt_multiway_domain_guard.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x57 &&
+                               step.comment == "false branch for domain(value)=0";
+                      }),
+          "sqrt multiway domain-trap guard should branch on the F sqrt zero result");
+
+  const CompileResult reciprocal_multiway_domain_guard = compile_source(R"mkpro(
+program ReciprocalMultiwayDomainTrapGuard {
+  state {
+    charge: counter 0..9 = 1
+  }
+
+  loop {
+    if charge == 0 { halt("ЕГГОГ") }
+    if charge == 1 {
+      halt(11)
+    }
+    else {
+      halt(22)
+    }
+  }
+}
+)mkpro",
+                                                                     domain_options);
+  require(reciprocal_multiway_domain_guard.implemented,
+          "native compiler should lower reciprocal multiway domain-trap guards");
+  require(reciprocal_multiway_domain_guard.diagnostics.empty(),
+          "reciprocal multiway domain-trap guard compile should not report diagnostics");
+  require(has_optimization(reciprocal_multiway_domain_guard, "multiway-domain-trap-guard"),
+          "reciprocal multiway domain-trap guard should report the TS strategy name");
+  require(std::any_of(reciprocal_multiway_domain_guard.steps.begin(),
+                      reciprocal_multiway_domain_guard.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x23 &&
+                               step.comment == "multiway domain-error guard trap";
+                      }),
+          "charge == 0 / charge == 1 should use F 1/x as a trap and branch value");
+  require(std::any_of(reciprocal_multiway_domain_guard.steps.begin(),
+                      reciprocal_multiway_domain_guard.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x11 &&
+                               step.comment == "multiway reciprocal equality offset";
+                      }),
+          "reciprocal multiway domain-trap guard should offset 1/x before branching");
+  require(std::any_of(reciprocal_multiway_domain_guard.steps.begin(),
+                      reciprocal_multiway_domain_guard.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x57 &&
+                               step.comment == "false branch for domain(value)=0";
+                      }),
+          "reciprocal multiway domain-trap guard should branch on the adjusted zero result");
 
   const CompileResult domain_difference = compile_source(R"mkpro(
 program DomainErrorDifference {

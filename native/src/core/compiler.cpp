@@ -725,6 +725,40 @@ std::optional<std::pair<int, std::string>> x_transform_unary_opcode(const std::s
   return it->second;
 }
 
+struct StackUnaryTransformCall {
+  int opcode = 0;
+  std::string mnemonic;
+  std::string comment_name;
+  const Expression* arg = nullptr;
+};
+
+std::optional<StackUnaryTransformCall> stack_unary_transform_call(const Expression& expression) {
+  if (expression.kind != "call")
+    return std::nullopt;
+  if (expression.args.size() == 1U) {
+    const std::optional<std::pair<int, std::string>> opcode =
+        x_transform_unary_opcode(expression.callee);
+    if (!opcode.has_value())
+      return std::nullopt;
+    return StackUnaryTransformCall{
+        .opcode = opcode->first,
+        .mnemonic = opcode->second,
+        .comment_name = lower_ascii(expression.callee),
+        .arg = &expression.args.front(),
+    };
+  }
+  if (lower_ascii(expression.callee) == "pow" && expression.args.size() == 2U &&
+      is_numeric_literal_value(expression.args.at(0), 10)) {
+    return StackUnaryTransformCall{
+        .opcode = 0x15,
+        .mnemonic = "F 10^x",
+        .comment_name = "pow10",
+        .arg = &expression.args.at(1),
+    };
+  }
+  return std::nullopt;
+}
+
 std::optional<std::pair<int, std::string>> binary_opcode(const std::string& op) {
   if (op == "+")
     return std::pair{0x10, std::string("+")};
@@ -778,9 +812,9 @@ bool expression_can_consume_identifier_from_x(const Expression& expression,
            expression_can_consume_identifier_from_x(*expression.right, name) &&
            expression_pure_for_substitution(*expression.left);
   }
-  return expression.kind == "call" && expression.args.size() == 1 &&
-         x_transform_unary_opcode(expression.callee).has_value() &&
-         expression_can_consume_identifier_from_x(expression.args.front(), name);
+  const std::optional<StackUnaryTransformCall> transform = stack_unary_transform_call(expression);
+  return transform.has_value() && transform->arg != nullptr &&
+         expression_can_consume_identifier_from_x(*transform->arg, name);
 }
 
 int count_identifier_reads(const Expression& expression, const std::string& name) {
@@ -1463,10 +1497,16 @@ bool packed_score_accumulator_arg_syntax_safe(const Expression& expression) {
          core::numeric_index_value(*expression.index).has_value();
 }
 
+bool packed_score_accumulator_line_arg_syntax_safe(const Expression& expression) {
+  if (packed_score_accumulator_arg_syntax_safe(expression))
+    return true;
+  return expression.kind == "indexed" && expression.index != nullptr;
+}
+
 bool packed_score_accumulator_term_syntax_safe(const Expression& expression) {
   if (expression.kind == "call") {
     return lower_ascii(expression.callee) == "packed_score" && expression.args.size() == 2U &&
-           packed_score_accumulator_arg_syntax_safe(expression.args.at(0)) &&
+           packed_score_accumulator_line_arg_syntax_safe(expression.args.at(0)) &&
            packed_score_accumulator_arg_syntax_safe(expression.args.at(1));
   }
   return false;
@@ -1484,6 +1524,10 @@ bool stack_accumulator_initial_addend_can_start(const Expression& expression) {
   std::vector<const Expression*> calls;
   collect_expression_calls(expression, calls);
   return calls.empty();
+}
+
+void append_stack_accumulator_initial_syntax(bool& has_initial) {
+  has_initial = true;
 }
 
 bool expression_is_identifier_named(const Expression& expression, const std::string& name);
@@ -1517,6 +1561,23 @@ bool collect_stack_accumulator_target_sum_terms_with_initial_syntax(
            collect_stack_accumulator_target_sum_terms_with_initial_syntax(
                *expression.right, target, term_safe, count, saw_target, has_initial);
   }
+  if (expression.kind == "binary" && expression.op == "-" && expression.left != nullptr &&
+      expression.right != nullptr) {
+    if (expression_contains_identifier(*expression.right, target) ||
+        expression_contains_packed_score_call_for_accumulator(*expression.right)) {
+      return false;
+    }
+    if (!expression_preserves_previous_x_as_y_for_stack_analysis(*expression.right) &&
+        !stack_accumulator_initial_addend_can_start(*expression.right)) {
+      return false;
+    }
+    if (!collect_stack_accumulator_target_sum_terms_with_initial_syntax(
+            *expression.left, target, term_safe, count, saw_target, has_initial)) {
+      return false;
+    }
+    append_stack_accumulator_initial_syntax(has_initial);
+    return true;
+  }
   if (expression_contains_identifier(expression, target) ||
       expression_contains_packed_score_call_for_accumulator(expression)) {
     return false;
@@ -1529,18 +1590,32 @@ bool collect_stack_accumulator_target_sum_terms_with_initial_syntax(
   return true;
 }
 
-int packed_score_target_sum_terms_with_initial_syntax_count(const Expression& expression,
-                                                            const std::string& target) {
+struct StackAccumulatorSyntaxCount {
+  int terms = 0;
+  bool has_initial = false;
+};
+
+std::optional<StackAccumulatorSyntaxCount>
+packed_score_target_sum_terms_with_initial_syntax(const Expression& expression,
+                                                  const std::string& target) {
   int count = 0;
   bool saw_target = false;
   bool has_initial = false;
-  (void)has_initial;
   if (!collect_stack_accumulator_target_sum_terms_with_initial_syntax(
           expression, target, packed_score_accumulator_term_syntax_safe, count, saw_target,
           has_initial)) {
-    return 0;
+    return std::nullopt;
   }
-  return saw_target ? count : 0;
+  if (!saw_target)
+    return std::nullopt;
+  return StackAccumulatorSyntaxCount{.terms = count, .has_initial = has_initial};
+}
+
+int packed_score_target_sum_terms_with_initial_syntax_count(const Expression& expression,
+                                                            const std::string& target) {
+  const std::optional<StackAccumulatorSyntaxCount> count =
+      packed_score_target_sum_terms_with_initial_syntax(expression, target);
+  return count.has_value() ? count->terms : 0;
 }
 
 bool collect_stack_accumulator_sum_terms_with_initial_syntax(
@@ -1564,6 +1639,21 @@ bool collect_stack_accumulator_sum_terms_with_initial_syntax(
                                                                    count, has_initial) &&
            collect_stack_accumulator_sum_terms_with_initial_syntax(*expression.right, term_safe,
                                                                    count, has_initial);
+  }
+  if (expression.kind == "binary" && expression.op == "-" && expression.left != nullptr &&
+      expression.right != nullptr) {
+    if (expression_contains_packed_score_call_for_accumulator(*expression.right))
+      return false;
+    if (!expression_preserves_previous_x_as_y_for_stack_analysis(*expression.right) &&
+        !stack_accumulator_initial_addend_can_start(*expression.right)) {
+      return false;
+    }
+    if (!collect_stack_accumulator_sum_terms_with_initial_syntax(*expression.left, term_safe,
+                                                                 count, has_initial)) {
+      return false;
+    }
+    append_stack_accumulator_initial_syntax(has_initial);
+    return true;
   }
   if (expression_contains_packed_score_call_for_accumulator(expression)) {
     return false;
@@ -1645,25 +1735,50 @@ std::optional<std::string> packed_score_sequence_start_syntax(const V2Statement&
   return std::nullopt;
 }
 
-int packed_score_sequence_accumulator_syntax_count(const V2Statement& statement,
-                                                   const std::string& target) {
+std::optional<int> packed_score_sequence_accumulator_syntax_count(
+    const V2Statement& statement, const std::string& target) {
   if (!statement.target.has_value() || !statement.expr.has_value())
-    return 0;
+    return std::nullopt;
   const Expression target_expression = parse_expression(*statement.target, statement.line);
   if (!expression_is_identifier_named(target_expression, target))
-    return 0;
+    return std::nullopt;
 
   const Expression expression = parse_expression(*statement.expr, statement.line);
   if (statement.kind == "v2_update" && statement.op.has_value() && *statement.op == "+=") {
+    if (expression_contains_identifier(expression, target))
+      return std::nullopt;
     int count = 0;
     bool has_initial = false;
-    return collect_packed_score_sum_terms_with_initial_syntax(expression, count, has_initial)
-               ? count
-               : 0;
+    if (!collect_packed_score_sum_terms_with_initial_syntax(expression, count, has_initial) ||
+        (count <= 0 && !has_initial)) {
+      return std::nullopt;
+    }
+    if (count <= 0 && !expression_preserves_previous_x_as_y_for_stack_analysis(expression))
+      return std::nullopt;
+    return count;
   }
-  if (statement.kind == "v2_assign")
-    return packed_score_target_sum_terms_with_initial_syntax_count(expression, target);
-  return 0;
+  if (statement.kind == "v2_update" && statement.op.has_value() && *statement.op == "-=") {
+    if (expression_contains_identifier(expression, target) ||
+        expression_contains_packed_score_call_for_accumulator(expression)) {
+      return std::nullopt;
+    }
+    if (!expression_preserves_previous_x_as_y_for_stack_analysis(expression)) {
+      return std::nullopt;
+    }
+    return 0;
+  }
+  if (statement.kind == "v2_assign") {
+    const std::optional<StackAccumulatorSyntaxCount> count =
+        packed_score_target_sum_terms_with_initial_syntax(expression, target);
+    if (!count.has_value() || (count->terms <= 0 && !count->has_initial))
+      return std::nullopt;
+    if (count->terms <= 0 &&
+        !expression_preserves_previous_x_as_y_for_stack_analysis(expression)) {
+      return std::nullopt;
+    }
+    return count->terms;
+  }
+  return std::nullopt;
 }
 
 struct StackAccumulatorSequenceSyntaxRun {
@@ -1675,7 +1790,8 @@ struct StackAccumulatorSequenceSyntaxRun {
 std::optional<StackAccumulatorSequenceSyntaxRun> stack_accumulator_sequence_syntax_run(
     const std::vector<V2Statement>& statements, std::size_t start,
     const std::function<std::optional<std::string>(const V2Statement&, int&)>& start_matcher,
-    const std::function<int(const V2Statement&, const std::string&)>& continuation_counter) {
+    const std::function<std::optional<int>(const V2Statement&, const std::string&)>&
+        continuation_counter) {
   if (start >= statements.size())
     return std::nullopt;
   int start_count = 0;
@@ -1685,10 +1801,11 @@ std::optional<StackAccumulatorSequenceSyntaxRun> stack_accumulator_sequence_synt
   int total = start_count;
   std::size_t consumed = 1;
   while (start + consumed < statements.size()) {
-    const int next_count = continuation_counter(statements.at(start + consumed), *target);
-    if (next_count <= 0)
+    const std::optional<int> next_count =
+        continuation_counter(statements.at(start + consumed), *target);
+    if (!next_count.has_value())
       break;
-    total += next_count;
+    total += *next_count;
     ++consumed;
   }
   if (consumed < 2U || total < 3)
@@ -1778,6 +1895,23 @@ bool collect_x_param_packed_score_accumulator_syntax_items(
                *expression.left, target, return_x, allow_target, items) &&
            collect_x_param_packed_score_accumulator_syntax_items(
                *expression.right, target, return_x, allow_target, items);
+  }
+  if (expression.kind == "binary" && expression.op == "-" && expression.left != nullptr &&
+      expression.right != nullptr) {
+    if (expression_contains_identifier(*expression.right, target) ||
+        expression_contains_identifier(*expression.right, return_x) ||
+        expression_contains_packed_score_call_for_accumulator(*expression.right)) {
+      return false;
+    }
+    if (!expression_preserves_previous_x_as_y_for_stack_analysis(*expression.right) &&
+        items.prefix_terms > 0) {
+      return false;
+    }
+    if (!collect_x_param_packed_score_accumulator_syntax_items(
+            *expression.left, target, return_x, allow_target, items)) {
+      return false;
+    }
+    return !items.closed;
   }
 
   if (items.closed || expression_contains_identifier(expression, target) ||
@@ -2028,11 +2162,11 @@ int x_param_packed_score_shared_tail_eligible_call_count_in_rule(
 
   std::size_t tail_start = 1U;
   while (tail_start + 4U < rule.body.size()) {
-    const int next_count =
+    const std::optional<int> next_count =
         packed_score_sequence_accumulator_syntax_count(rule.body.at(tail_start), *target);
-    if (next_count <= 0)
+    if (!next_count.has_value() || *next_count <= 0)
       return 0;
-    prefix_count += next_count;
+    prefix_count += *next_count;
     ++tail_start;
   }
   if (prefix_count < 2 || tail_start + 4U != rule.body.size())
@@ -6602,17 +6736,14 @@ collect_input_unary_chain(const Expression& expression,
                           const std::function<bool(const Expression&)>& is_leaf) {
   if (is_leaf(expression))
     return std::vector<std::pair<int, std::string>>{};
-  if (expression.kind != "call" || expression.args.size() != 1)
-    return std::nullopt;
-  const std::optional<std::pair<int, std::string>> opcode =
-      x_transform_unary_opcode(expression.callee);
-  if (!opcode.has_value())
+  const std::optional<StackUnaryTransformCall> transform = stack_unary_transform_call(expression);
+  if (!transform.has_value() || transform->arg == nullptr)
     return std::nullopt;
   std::optional<std::vector<std::pair<int, std::string>>> inner =
-      collect_input_unary_chain(expression.args.front(), is_leaf);
+      collect_input_unary_chain(*transform->arg, is_leaf);
   if (!inner.has_value())
     return std::nullopt;
-  inner->push_back(*opcode);
+  inner->push_back({transform->opcode, transform->mnemonic});
   return inner;
 }
 
@@ -7550,6 +7681,22 @@ bool collection_unit_increment_expression(const Expression& expression,
          (is_pointer(*expression.right) && is_numeric_literal_value(*expression.left, 1));
 }
 
+bool collection_unit_decrement_expression(const Expression& expression,
+                                          const std::string& pointer) {
+  if (expression.kind != "binary" || expression.left == nullptr || expression.right == nullptr)
+    return false;
+  const auto is_pointer = [&](const Expression& candidate) {
+    return candidate.kind == "identifier" && candidate.name == pointer;
+  };
+  if (expression.op == "-")
+    return is_pointer(*expression.left) && is_numeric_literal_value(*expression.right, 1);
+  if (expression.op == "+") {
+    return (is_pointer(*expression.left) && is_numeric_literal_value(*expression.right, -1)) ||
+           (is_pointer(*expression.right) && is_numeric_literal_value(*expression.left, -1));
+  }
+  return false;
+}
+
 bool collection_preincrement_indexed_store_shape(const LoweringContext& context,
                                                  const V2Statement& store_statement,
                                                  const V2Statement* next_statement) {
@@ -7573,6 +7720,95 @@ bool collection_preincrement_indexed_store_shape(const LoweringContext& context,
   } catch (const std::exception&) {
     return false;
   }
+}
+
+bool collection_preincrement_indexed_recall_shape(const LoweringContext& context,
+                                                  const V2Statement& recall_statement,
+                                                  const V2Statement* next_statement) {
+  if (next_statement == nullptr || recall_statement.kind != "v2_assign" ||
+      !recall_statement.expr.has_value() || !next_statement->target.has_value() ||
+      !next_statement->expr.has_value()) {
+    return false;
+  }
+  if (next_statement->kind != "v2_update" || !next_statement->op.has_value() ||
+      *next_statement->op != "+=") {
+    return false;
+  }
+  const std::string pointer = *next_statement->target;
+  try {
+    if (!is_numeric_literal_value(parse_expression(*next_statement->expr, next_statement->line), 1))
+      return false;
+    const Expression expression = parse_expression(*recall_statement.expr, recall_statement.line);
+    return expression.kind == "indexed" && expression.index != nullptr &&
+           context.state_banks.contains(bank_member_key(expression.base, expression.field)) &&
+           collection_unit_increment_expression(*expression.index, pointer);
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+bool collection_predecrement_indexed_store_shape(const LoweringContext& context,
+                                                 const V2Statement& store_statement,
+                                                 const V2Statement* next_statement) {
+  if (next_statement == nullptr || !store_statement.target.has_value() ||
+      !next_statement->target.has_value() || !next_statement->expr.has_value()) {
+    return false;
+  }
+  if ((store_statement.kind != "v2_assign" && store_statement.kind != "v2_update") ||
+      next_statement->kind != "v2_update" || !next_statement->op.has_value() ||
+      *next_statement->op != "-=") {
+    return false;
+  }
+  const std::string pointer = *next_statement->target;
+  try {
+    if (!is_numeric_literal_value(parse_expression(*next_statement->expr, next_statement->line), 1))
+      return false;
+    const Expression target = parse_expression(*store_statement.target, store_statement.line);
+    return target.kind == "indexed" && target.index != nullptr &&
+           context.state_banks.contains(bank_member_key(target.base, target.field)) &&
+           collection_unit_decrement_expression(*target.index, pointer);
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+bool collection_predecrement_indexed_recall_shape(const LoweringContext& context,
+                                                  const V2Statement& recall_statement,
+                                                  const V2Statement* next_statement) {
+  if (next_statement == nullptr || recall_statement.kind != "v2_assign" ||
+      !recall_statement.expr.has_value() || !next_statement->target.has_value() ||
+      !next_statement->expr.has_value()) {
+    return false;
+  }
+  if (next_statement->kind != "v2_update" || !next_statement->op.has_value() ||
+      *next_statement->op != "-=") {
+    return false;
+  }
+  const std::string pointer = *next_statement->target;
+  try {
+    if (!is_numeric_literal_value(parse_expression(*next_statement->expr, next_statement->line), 1))
+      return false;
+    const Expression expression = parse_expression(*recall_statement.expr, recall_statement.line);
+    return expression.kind == "indexed" && expression.index != nullptr &&
+           context.state_banks.contains(bank_member_key(expression.base, expression.field)) &&
+           collection_unit_decrement_expression(*expression.index, pointer);
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+bool collection_mutating_indexed_store_shape(const LoweringContext& context,
+                                             const V2Statement& store_statement,
+                                             const V2Statement* next_statement) {
+  return collection_preincrement_indexed_store_shape(context, store_statement, next_statement) ||
+         collection_predecrement_indexed_store_shape(context, store_statement, next_statement);
+}
+
+bool collection_mutating_indexed_recall_shape(const LoweringContext& context,
+                                              const V2Statement& recall_statement,
+                                              const V2Statement* next_statement) {
+  return collection_preincrement_indexed_recall_shape(context, recall_statement, next_statement) ||
+         collection_predecrement_indexed_recall_shape(context, recall_statement, next_statement);
 }
 
 bool cells_contains_clear_prefix_statement(const LoweringContext& context,
@@ -7636,7 +7872,7 @@ void collect_locals_from_statement(LoweringContext& context, RegisterCollection&
     if (!(statement.kind == "v2_read" &&
           context.ephemeral_input_targets.contains(*statement.target))) {
       if (excluded.contains(*statement.target)) {
-      } else if (collection_preincrement_indexed_store_shape(context, statement, next_statement)) {
+      } else if (collection_mutating_indexed_store_shape(context, statement, next_statement)) {
         try {
           const Expression target = parse_expression(*statement.target, statement.line);
           if (target.index != nullptr)
@@ -7676,6 +7912,13 @@ void collect_locals_from_statement(LoweringContext& context, RegisterCollection&
       add_coord_list_line_count_assignment_scratch(collection);
       for (const Expression& arg : expression.args)
         collect_locals_from_expression_excluding(context, collection, arg, excluded);
+    } else if (collection_mutating_indexed_recall_shape(context, statement, next_statement)) {
+      try {
+        if (expression.index != nullptr)
+          collect_locals_from_expression_excluding(context, collection, *expression.index,
+                                                   excluded);
+      } catch (const std::exception&) {
+      }
     } else if (statement.kind == "v2_match") {
       const std::set<std::string> merged =
           merge_exclusions(excluded, context.ephemeral_input_targets);
@@ -8123,7 +8366,7 @@ void collect_state_bank_selector_requirements_from_statement(
   };
 
   if (statement.target.has_value()) {
-    if (collection_preincrement_indexed_store_shape(context, statement, next_statement)) {
+    if (collection_mutating_indexed_store_shape(context, statement, next_statement)) {
       try {
         const Expression target = parse_expression(*statement.target, statement.line);
         if (target.index != nullptr) {
@@ -8136,8 +8379,20 @@ void collect_state_bank_selector_requirements_from_statement(
       visit_text(*statement.target, statement.line);
     }
   }
-  if (statement.expr.has_value())
-    visit_text(*statement.expr, statement.line);
+  if (statement.expr.has_value()) {
+    if (collection_mutating_indexed_recall_shape(context, statement, next_statement)) {
+      try {
+        const Expression expression = parse_expression(*statement.expr, statement.line);
+        if (expression.index != nullptr) {
+          collect_state_bank_selector_requirements_from_expression(
+              context, collection, hints, *expression.index, required, required_order);
+        }
+      } catch (const std::exception&) {
+      }
+    } else {
+      visit_text(*statement.expr, statement.line);
+    }
+  }
   if (statement.kind == "v2_stop" && statement.target.has_value())
     visit_text(*statement.target, statement.line);
   if (statement.predicate.has_value()) {
@@ -8407,8 +8662,9 @@ void collect_preincrement_indexed_store_pointers_from_statements(
   for (std::size_t index = 0; index < statements.size(); ++index) {
     const V2Statement& statement = statements.at(index);
     const V2Statement* next = index + 1U < statements.size() ? &statements.at(index + 1U) : nullptr;
-    if (collection_preincrement_indexed_store_shape(context, statement, next) && next != nullptr &&
-        next->target.has_value()) {
+    if ((collection_preincrement_indexed_store_shape(context, statement, next) ||
+         collection_preincrement_indexed_recall_shape(context, statement, next)) &&
+        next != nullptr && next->target.has_value()) {
       pointers.insert(*next->target);
     }
     collect_preincrement_indexed_store_pointers_from_statements(context, statement.body, pointers);
@@ -8439,6 +8695,45 @@ std::set<std::string> collect_preincrement_indexed_store_pointers(const Lowering
   return pointers;
 }
 
+void collect_predecrement_indexed_store_pointers_from_statements(
+    const LoweringContext& context, const std::vector<V2Statement>& statements,
+    std::set<std::string>& pointers) {
+  for (std::size_t index = 0; index < statements.size(); ++index) {
+    const V2Statement& statement = statements.at(index);
+    const V2Statement* next = index + 1U < statements.size() ? &statements.at(index + 1U) : nullptr;
+    if ((collection_predecrement_indexed_store_shape(context, statement, next) ||
+         collection_predecrement_indexed_recall_shape(context, statement, next)) &&
+        next != nullptr && next->target.has_value()) {
+      pointers.insert(*next->target);
+    }
+    collect_predecrement_indexed_store_pointers_from_statements(context, statement.body, pointers);
+    collect_predecrement_indexed_store_pointers_from_statements(context, statement.then_body,
+                                                                pointers);
+    collect_predecrement_indexed_store_pointers_from_statements(context, statement.else_body,
+                                                                pointers);
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.action != nullptr) {
+        collect_predecrement_indexed_store_pointers_from_statements(
+            context, std::vector<V2Statement>{*match_case.action}, pointers);
+      }
+    }
+    if (statement.otherwise != nullptr) {
+      collect_predecrement_indexed_store_pointers_from_statements(
+          context, std::vector<V2Statement>{*statement.otherwise}, pointers);
+    }
+  }
+}
+
+std::set<std::string> collect_predecrement_indexed_store_pointers(const LoweringContext& context,
+                                                                  const V2Program& program) {
+  std::set<std::string> pointers;
+  collect_predecrement_indexed_store_pointers_from_statements(context, program.body, pointers);
+  for (const V2Rule& rule : program.rules) {
+    collect_predecrement_indexed_store_pointers_from_statements(context, rule.body, pointers);
+  }
+  return pointers;
+}
+
 void apply_unit_update_hints(const LoweringContext& context, const V2Program& program,
                              const RegisterCollection& collection, RegisterHints& hints) {
   std::vector<std::string> decrements;
@@ -8450,19 +8745,30 @@ void apply_unit_update_hints(const LoweringContext& context, const V2Program& pr
       collect_unit_update_targets(context, statement, decrements, increments);
   }
 
+  const std::set<std::string> predecrement_pointers =
+      collect_predecrement_indexed_store_pointers(context, program);
   const std::vector<int> decrement_preference = {0x2, 0x3, 0x1, 0x0};
   std::size_t decrement_cursor = 0;
-  for (const std::string& variable : decrements) {
+  const auto assign_decrement_hint = [&](const std::string& variable) {
     if (!collection.variables.contains(variable) || hints.contains(variable))
-      continue;
+      return true;
     while (decrement_cursor < decrement_preference.size() &&
            hint_register_is_used(hints, decrement_preference[decrement_cursor])) {
       ++decrement_cursor;
     }
     if (decrement_cursor >= decrement_preference.size())
-      break;
+      return false;
     hints[variable] = RegisterHint{.mode = RegisterHintMode::Prefer,
                                    .index = decrement_preference[decrement_cursor++]};
+    return true;
+  };
+  for (const std::string& variable : decrements) {
+    if (predecrement_pointers.contains(variable) && !assign_decrement_hint(variable))
+      break;
+  }
+  for (const std::string& variable : decrements) {
+    if (!predecrement_pointers.contains(variable) && !assign_decrement_hint(variable))
+      break;
   }
 
   const std::set<std::string> preincrement_pointers =
@@ -9457,9 +9763,10 @@ bool expression_preserves_previous_x_as_y_for_stack_analysis(const Expression& e
            expression_preserves_previous_x_as_y_for_stack_analysis(*expression.left) &&
            expression_preserves_previous_x_as_y_for_stack_analysis(*expression.right);
   }
-  if (expression.kind == "call") {
-    return expression.args.size() == 1U && x_transform_unary_opcode(expression.callee).has_value() &&
-           expression_preserves_previous_x_as_y_for_stack_analysis(expression.args.front());
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression)) {
+    return transform->arg != nullptr &&
+           expression_preserves_previous_x_as_y_for_stack_analysis(*transform->arg);
   }
   return false;
 }
@@ -9486,9 +9793,10 @@ bool x_param_expression_preserves_caller_y_for_stack_analysis(const Expression& 
            x_param_expression_preserves_caller_y_for_stack_analysis(*expression.right, param) &&
            analysis_simple_stack_load(*expression.left);
   }
-  if (expression.kind == "call") {
-    return expression.args.size() == 1U && x_transform_unary_opcode(expression.callee).has_value() &&
-           x_param_expression_preserves_caller_y_for_stack_analysis(expression.args.front(), param);
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression)) {
+    return transform->arg != nullptr &&
+           x_param_expression_preserves_caller_y_for_stack_analysis(*transform->arg, param);
   }
   return false;
 }
@@ -11069,6 +11377,11 @@ bool lower_expression_to_x(LoweringContext& context, const Expression& expressio
 bool lower_call_to_x(LoweringContext& context, const Expression& expression);
 bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expression& expression,
                                           const std::vector<std::string>& temps, int line);
+bool packed_score_stack_argument_shape_safe(const Expression& expression,
+                                            const std::vector<std::string>& temps);
+bool lower_stack_argument_packed_score_inline(LoweringContext& context,
+                                              const Expression& expression,
+                                              const std::vector<std::string>& temps, int line);
 bool ensure_hidden_register(LoweringContext& context, const std::string& name);
 bool expression_is_deterministic_for_test_and_set(const Expression& expression);
 bool x_holds_identifier(const LoweringContext& context, const std::string& name);
@@ -17428,15 +17741,14 @@ bool compile_x_param_first_expression(LoweringContext& context, const Expression
     context.emitter.current_x_aliases.clear();
     return true;
   }
-  if (expression.kind == "call" && expression.args.size() == 1) {
-    if (!compile_x_param_first_expression(context, expression.args.front(), param, line))
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression)) {
+    if (transform->arg == nullptr)
       return false;
-    const std::optional<std::pair<int, std::string>> opcode =
-        x_transform_unary_opcode(expression.callee);
-    if (!opcode.has_value())
+    if (!compile_x_param_first_expression(context, *transform->arg, param, line))
       return false;
-    context.emitter.emit_op(opcode->first, opcode->second, "x-param " + expression.callee + "()",
-                            line);
+    context.emitter.emit_op(transform->opcode, transform->mnemonic,
+                            "x-param " + transform->comment_name + "()", line);
     return true;
   }
   return false;
@@ -17650,6 +17962,19 @@ struct PackedScoreTerm {
   int line = 0;
 };
 
+struct PackedScoreAccumulatorStep {
+  enum class Kind {
+    Term,
+    Addend,
+    Subtrahend,
+  };
+
+  Kind kind = Kind::Term;
+  PackedScoreTerm term;
+  Expression expression;
+  int line = 0;
+};
+
 struct PackedLineFamilyScoreRule {
   std::string score;
   std::string normalizer;
@@ -17696,12 +18021,20 @@ bool packed_score_accumulator_stack_load_safe(const LoweringContext& context,
          context.state_banks.contains(bank_member_key(expression.base, expression.field));
 }
 
+bool packed_score_accumulator_line_value_safe(const LoweringContext& context,
+                                              const Expression& expression) {
+  if (packed_score_accumulator_stack_load_safe(context, expression))
+    return true;
+  return expression.kind == "indexed" && expression.index != nullptr &&
+         context.state_banks.contains(bank_member_key(expression.base, expression.field));
+}
+
 std::optional<PackedScoreTerm> packed_score_accumulator_expression_term(
     const LoweringContext& context, const Expression& expression) {
   const std::optional<PackedScoreTerm> term = packed_score_term(expression, 0);
   if (!term.has_value())
     return std::nullopt;
-  if (!packed_score_accumulator_stack_load_safe(context, term->line_value) ||
+  if (!packed_score_accumulator_line_value_safe(context, term->line_value) ||
       !packed_score_accumulator_stack_load_safe(context, term->index)) {
     return std::nullopt;
   }
@@ -17741,6 +18074,23 @@ bool collect_stack_accumulator_target_sum_terms_with_initial(
            collect_stack_accumulator_target_sum_terms_with_initial<Term>(
                *expression.right, target, matcher, zero_matcher, terms, initial, saw_target);
   }
+  if (expression.kind == "binary" && expression.op == "-" && expression.left != nullptr &&
+      expression.right != nullptr) {
+    if (expression_contains_identifier(*expression.right, target) ||
+        expression_contains_packed_score_call_for_accumulator(*expression.right)) {
+      return false;
+    }
+    if (!expression_preserves_previous_x_as_y_for_stack_analysis(*expression.right) &&
+        !stack_accumulator_initial_addend_can_start(*expression.right)) {
+      return false;
+    }
+    if (!collect_stack_accumulator_target_sum_terms_with_initial<Term>(
+            *expression.left, target, matcher, zero_matcher, terms, initial, saw_target)) {
+      return false;
+    }
+    append_stack_accumulator_initial(initial, unary_expression("-", *expression.right));
+    return true;
+  }
   if (expression_contains_identifier(expression, target) ||
       expression_contains_packed_score_call_for_accumulator(expression)) {
     return false;
@@ -17760,6 +18110,11 @@ void append_stack_accumulator_initial(std::optional<Expression>& initial,
   } else {
     initial = expression;
   }
+}
+
+void append_stack_accumulator_negative_initial(std::optional<Expression>& initial,
+                                               const Expression& expression) {
+  append_stack_accumulator_initial(initial, unary_expression("-", expression));
 }
 
 template <typename Term, typename Matcher, typename ZeroMatcher>
@@ -17786,6 +18141,21 @@ bool collect_stack_accumulator_sum_terms_with_initial(const Expression& expressi
                                                                   zero_matcher, terms, initial) &&
            collect_stack_accumulator_sum_terms_with_initial<Term>(*expression.right, matcher,
                                                                   zero_matcher, terms, initial);
+  }
+  if (expression.kind == "binary" && expression.op == "-" && expression.left != nullptr &&
+      expression.right != nullptr) {
+    if (expression_contains_packed_score_call_for_accumulator(*expression.right))
+      return false;
+    if (!expression_preserves_previous_x_as_y_for_stack_analysis(*expression.right) &&
+        !stack_accumulator_initial_addend_can_start(*expression.right)) {
+      return false;
+    }
+    if (!collect_stack_accumulator_sum_terms_with_initial<Term>(*expression.left, matcher,
+                                                                zero_matcher, terms, initial)) {
+      return false;
+    }
+    append_stack_accumulator_negative_initial(initial, *expression.right);
+    return true;
   }
   if (expression_contains_packed_score_call_for_accumulator(expression)) {
     return false;
@@ -17850,6 +18220,52 @@ bool emit_packed_score_accumulator_term(LoweringContext& context, const std::str
   context.emitter.emit_jump(0x53, "ПП", helper, "packed_score accumulator helper");
   clear_current_x_facts(context);
   return true;
+}
+
+PackedScoreAccumulatorStep packed_score_accumulator_term_step(const PackedScoreTerm& term) {
+  return PackedScoreAccumulatorStep{.kind = PackedScoreAccumulatorStep::Kind::Term,
+                                    .term = term,
+                                    .line = term.line};
+}
+
+PackedScoreAccumulatorStep packed_score_accumulator_addend_step(const Expression& expression,
+                                                                int line) {
+  return PackedScoreAccumulatorStep{.kind = PackedScoreAccumulatorStep::Kind::Addend,
+                                    .expression = expression,
+                                    .line = line};
+}
+
+PackedScoreAccumulatorStep packed_score_accumulator_subtrahend_step(
+    const Expression& expression, int line) {
+  return PackedScoreAccumulatorStep{.kind = PackedScoreAccumulatorStep::Kind::Subtrahend,
+                                    .expression = expression,
+                                    .line = line};
+}
+
+void append_packed_score_accumulator_term_steps(
+    std::vector<PackedScoreAccumulatorStep>& steps, const std::vector<PackedScoreTerm>& terms) {
+  for (const PackedScoreTerm& term : terms)
+    steps.push_back(packed_score_accumulator_term_step(term));
+}
+
+bool emit_packed_score_accumulator_addend(LoweringContext& context,
+                                          const PackedScoreAccumulatorStep& step) {
+  if (!lower_expression_to_x(context, step.expression))
+    return false;
+  if (step.kind == PackedScoreAccumulatorStep::Kind::Addend) {
+    context.emitter.emit_op(0x10, "+", "packed_score accumulator addend", step.line);
+  } else {
+    context.emitter.emit_op(0x11, "-", "packed_score accumulator addend", step.line);
+  }
+  clear_current_x_facts(context);
+  return true;
+}
+
+bool emit_packed_score_accumulator_step(LoweringContext& context, const std::string& helper,
+                                        const PackedScoreAccumulatorStep& step) {
+  if (step.kind == PackedScoreAccumulatorStep::Kind::Term)
+    return emit_packed_score_accumulator_term(context, helper, step.term);
+  return emit_packed_score_accumulator_addend(context, step);
 }
 
 bool lower_packed_score_sum_accumulator_to_x(LoweringContext& context,
@@ -17957,44 +18373,6 @@ std::optional<StackAccumulatorSequenceStart> stack_accumulator_sequence_start_te
   return std::nullopt;
 }
 
-template <typename Term, typename InitialCollector, typename TargetInitialCollector>
-bool collect_stack_accumulator_sequence_terms(const V2Statement& statement,
-                                              const std::string& target,
-                                              const InitialCollector& collect_terms,
-                                              const TargetInitialCollector& collect_target_terms,
-                                              std::vector<Term>& terms,
-                                              std::optional<Expression>& initial) {
-  if (!statement.target.has_value() || !statement.expr.has_value())
-    return false;
-  const Expression target_expression = parse_expression(*statement.target, statement.line);
-  if (!expression_is_identifier_named(target_expression, target))
-    return false;
-
-  const Expression expression = parse_expression(*statement.expr, statement.line);
-  std::vector<Term> collected;
-  if (statement.kind == "v2_update" && statement.op.has_value() && *statement.op == "+=") {
-    std::optional<Expression> collected_initial;
-    if (!collect_terms(expression, collected, collected_initial) || collected.empty())
-      return false;
-    if (collected_initial.has_value())
-      append_stack_accumulator_initial(initial, *collected_initial);
-    terms.insert(terms.end(), collected.begin(), collected.end());
-    return true;
-  }
-  if (statement.kind == "v2_assign") {
-    std::optional<Expression> collected_initial;
-    if (!collect_target_terms(expression, target, collected, collected_initial) ||
-        collected.empty()) {
-      return false;
-    }
-    if (collected_initial.has_value())
-      append_stack_accumulator_initial(initial, *collected_initial);
-    terms.insert(terms.end(), collected.begin(), collected.end());
-    return true;
-  }
-  return false;
-}
-
 std::optional<StackAccumulatorSequenceStart> packed_score_sequence_start_terms(
     LoweringContext& context, const V2Statement& statement, std::vector<PackedScoreTerm>& terms) {
   const auto collect_terms = [&](const Expression& expression,
@@ -18023,24 +18401,58 @@ std::optional<StackAccumulatorSequenceStart> packed_score_sequence_start_terms(
                                                 collect_target_terms, terms);
 }
 
-bool collect_packed_score_sequence_accumulator_terms(LoweringContext& context,
-                                                     const V2Statement& statement,
-                                                     const std::string& target,
-                                                     std::vector<PackedScoreTerm>& terms,
-                                                     std::optional<Expression>& initial) {
-  const auto collect_terms = [&](const Expression& expression,
-                                 std::vector<PackedScoreTerm>& collected,
-                                 std::optional<Expression>& collected_initial) {
-    return collect_packed_score_sum_terms_with_initial(context, expression, collected,
-                                                       collected_initial);
-  };
-  const auto collect_target_terms = [&](const Expression& expression,
-                                        const std::string& target_name,
-                                        std::vector<PackedScoreTerm>& collected,
-                                        std::optional<Expression>& collected_initial) {
+bool collect_packed_score_sequence_accumulator_steps(
+    LoweringContext& context, const V2Statement& statement, const std::string& target,
+    std::vector<PackedScoreAccumulatorStep>& steps, std::size_t& term_count,
+    std::optional<Expression>& initial) {
+  if (!statement.target.has_value() || !statement.expr.has_value())
+    return false;
+  const Expression target_expression = parse_expression(*statement.target, statement.line);
+  if (!expression_is_identifier_named(target_expression, target))
+    return false;
+
+  const Expression expression = parse_expression(*statement.expr, statement.line);
+  if (statement.kind == "v2_update" && statement.op.has_value() && *statement.op == "+=") {
+    if (expression_contains_identifier(expression, target))
+      return false;
+    std::vector<PackedScoreTerm> collected;
+    std::optional<Expression> collected_initial;
+    if (!collect_packed_score_sum_terms_with_initial(context, expression, collected,
+                                                     collected_initial) ||
+        (collected.empty() && !collected_initial.has_value())) {
+      return false;
+    }
+    if (collected.empty()) {
+      if (!expression_preserves_previous_x_as_y_for_stack_analysis(*collected_initial))
+        return false;
+      steps.push_back(packed_score_accumulator_addend_step(*collected_initial, statement.line));
+      return true;
+    }
+    if (collected_initial.has_value())
+      append_stack_accumulator_initial(initial, *collected_initial);
+    append_packed_score_accumulator_term_steps(steps, collected);
+    term_count += collected.size();
+    return true;
+  }
+
+  if (statement.kind == "v2_update" && statement.op.has_value() && *statement.op == "-=") {
+    if (expression_contains_identifier(expression, target) ||
+        expression_contains_packed_score_call_for_accumulator(expression)) {
+      return false;
+    }
+    if (!expression_preserves_previous_x_as_y_for_stack_analysis(expression)) {
+      return false;
+    }
+    steps.push_back(packed_score_accumulator_subtrahend_step(expression, statement.line));
+    return true;
+  }
+
+  if (statement.kind == "v2_assign") {
+    std::vector<PackedScoreTerm> collected;
+    std::optional<Expression> collected_initial;
     bool saw_target = false;
     const bool ok = collect_stack_accumulator_target_sum_terms_with_initial<PackedScoreTerm>(
-        expression, target_name,
+        expression, target,
         [&](const Expression& item) {
           return packed_score_accumulator_expression_term(context, item);
         },
@@ -18049,10 +18461,48 @@ bool collect_packed_score_sequence_accumulator_terms(LoweringContext& context,
           return value.has_value() && std::abs(*value) < 1e-12;
         },
         collected, collected_initial, saw_target);
-    return ok && saw_target;
-  };
-  return collect_stack_accumulator_sequence_terms(statement, target, collect_terms,
-                                                  collect_target_terms, terms, initial);
+    if (!ok || !saw_target || (collected.empty() && !collected_initial.has_value()))
+      return false;
+    if (collected.empty()) {
+      if (!expression_preserves_previous_x_as_y_for_stack_analysis(*collected_initial))
+        return false;
+      steps.push_back(packed_score_accumulator_addend_step(*collected_initial, statement.line));
+      return true;
+    }
+    if (collected_initial.has_value())
+      append_stack_accumulator_initial(initial, *collected_initial);
+    append_packed_score_accumulator_term_steps(steps, collected);
+    term_count += collected.size();
+    return true;
+  }
+
+  return false;
+}
+
+bool collect_packed_score_sequence_accumulator_terms(LoweringContext& context,
+                                                     const V2Statement& statement,
+                                                     const std::string& target,
+                                                     std::vector<PackedScoreTerm>& terms,
+                                                     std::optional<Expression>& initial) {
+  std::vector<PackedScoreAccumulatorStep> steps;
+  std::size_t term_count = 0;
+  std::optional<Expression> next_initial = initial;
+  if (!collect_packed_score_sequence_accumulator_steps(context, statement, target, steps,
+                                                       term_count, next_initial)) {
+    return false;
+  }
+  if (term_count != steps.size())
+    return false;
+  std::vector<PackedScoreTerm> collected;
+  collected.reserve(steps.size());
+  for (const PackedScoreAccumulatorStep& step : steps) {
+    if (step.kind != PackedScoreAccumulatorStep::Kind::Term)
+      return false;
+    collected.push_back(step.term);
+  }
+  initial = std::move(next_initial);
+  terms.insert(terms.end(), collected.begin(), collected.end());
+  return true;
 }
 
 std::optional<PackedScoreTerm> x_param_packed_score_accumulator_expression_term(
@@ -18144,6 +18594,26 @@ bool collect_x_param_packed_score_accumulator_items(
            collect_x_param_packed_score_accumulator_items(context, *expression.right, target,
                                                           return_x, line, allow_target, items);
   }
+  if (expression.kind == "binary" && expression.op == "-" && expression.left != nullptr &&
+      expression.right != nullptr) {
+    if (expression_contains_identifier(*expression.right, target) ||
+        expression_contains_identifier(*expression.right, return_x) ||
+        expression_contains_packed_score_call_for_accumulator(*expression.right)) {
+      return false;
+    }
+    if (!expression_preserves_previous_x_as_y_for_stack_analysis(*expression.right) &&
+        !items.prefix_terms.empty()) {
+      return false;
+    }
+    if (!collect_x_param_packed_score_accumulator_items(context, *expression.left, target,
+                                                        return_x, line, allow_target, items)) {
+      return false;
+    }
+    if (items.closed)
+      return false;
+    append_stack_accumulator_negative_initial(items.initial, *expression.right);
+    return true;
+  }
 
   if (items.closed || expression_contains_identifier(expression, target) ||
       expression_contains_identifier(expression, return_x) ||
@@ -18209,11 +18679,42 @@ bool expression_derives_current_x_identifier(const Expression& expression,
     return true;
   if (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr)
     return expression_derives_current_x_identifier(*expression.expr, target);
-  if (expression.kind == "call" && expression.args.size() == 1U &&
-      x_transform_unary_opcode(expression.callee).has_value()) {
-    return expression_derives_current_x_identifier(expression.args.front(), target);
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression)) {
+    return transform->arg != nullptr &&
+           expression_derives_current_x_identifier(*transform->arg, target);
   }
   return false;
+}
+
+bool expression_is_shared_bit_mask_current_x_consumer(const LoweringContext& context,
+                                                      const Expression& expression,
+                                                      const std::string& target) {
+  return context.shared_bit_mask_helper_calls && expression.kind == "call" &&
+         lower_ascii(expression.callee) == "bit_mask" && expression.args.size() == 1U &&
+         expression_derives_current_x_identifier(expression.args.front(), target);
+}
+
+bool expression_is_packed_score_current_x_consumer(const LoweringContext& context,
+                                                   const Expression& expression,
+                                                   const std::string& target) {
+  if (expression.kind != "call" ||
+      lower_ascii(expression.callee) != "packed_score" || expression.args.size() != 2U) {
+    return false;
+  }
+  if (!context.use_packed_score_helper &&
+      packed_score_stack_argument_shape_safe(expression, {target})) {
+    return true;
+  }
+  if (!context.use_packed_score_helper)
+    return false;
+  const bool line_current = expression_derives_current_x_identifier(expression.args.at(0), target);
+  const bool index_current = expression_derives_current_x_identifier(expression.args.at(1), target);
+  if (line_current == index_current)
+    return false;
+  const Expression& other = line_current ? expression.args.at(1) : expression.args.at(0);
+  return expression_preserves_previous_x_as_y_for_stack_analysis(other) &&
+         !expression_contains_identifier(other, target);
 }
 
 bool expression_duplicates_current_x_identifier(const Expression& expression,
@@ -18295,21 +18796,27 @@ bool statement_directly_consumes_current_x_identifier(LoweringContext& context,
 
     if ((statement.kind == "v2_stop" || statement.kind == "v2_show") &&
         statement.target.has_value()) {
-      return expression_consumes_current_x_identifier(
-          parse_expression(*statement.target, statement.line), target);
+      const Expression expression = parse_expression(*statement.target, statement.line);
+      return expression_is_shared_bit_mask_current_x_consumer(context, expression, target) ||
+             expression_is_packed_score_current_x_consumer(context, expression, target) ||
+             expression_consumes_current_x_identifier(expression, target);
     }
     if ((statement.kind == "v2_return" || statement.kind == "v2_preview") &&
         statement.expr.has_value()) {
-      return expression_consumes_current_x_identifier(
-          parse_expression(*statement.expr, statement.line), target);
+      const Expression expression = parse_expression(*statement.expr, statement.line);
+      return expression_is_shared_bit_mask_current_x_consumer(context, expression, target) ||
+             expression_is_packed_score_current_x_consumer(context, expression, target) ||
+             expression_consumes_current_x_identifier(expression, target);
     }
     if (statement.kind == "v2_assign" && statement.target.has_value() &&
         statement.expr.has_value()) {
       const Expression assignment_target = parse_expression(*statement.target, statement.line);
       if (expression_contains_identifier(assignment_target, target))
         return false;
-      return expression_consumes_current_x_identifier(
-          parse_expression(*statement.expr, statement.line), target);
+      const Expression expression = parse_expression(*statement.expr, statement.line);
+      return expression_is_shared_bit_mask_current_x_consumer(context, expression, target) ||
+             expression_is_packed_score_current_x_consumer(context, expression, target) ||
+             expression_consumes_current_x_identifier(expression, target);
     }
     if (statement.kind == "v2_update" && statement.target.has_value() &&
         statement.expr.has_value() && statement.op.has_value() &&
@@ -18322,8 +18829,9 @@ bool statement_directly_consumes_current_x_identifier(LoweringContext& context,
           expression_contains_identifier(update_target, target)) {
         return false;
       }
-      return expression_derives_current_x_identifier(
-          parse_expression(*statement.expr, statement.line), target);
+      const Expression expression = parse_expression(*statement.expr, statement.line);
+      return expression_is_packed_score_current_x_consumer(context, expression, target) ||
+             expression_derives_current_x_identifier(expression, target);
     }
     if (statement.kind == "v2_if" && statement.predicate.has_value()) {
       if (!branch_predicate_consumes_current_x(*statement.predicate, statement.negated,
@@ -18355,17 +18863,20 @@ bool lower_packed_score_sequence_accumulator_run(LoweringContext& context,
   if (!context.use_packed_score_accumulator_helper || start >= statements.size())
     return false;
 
-  std::vector<PackedScoreTerm> terms;
+  std::vector<PackedScoreTerm> start_terms;
   std::optional<StackAccumulatorSequenceStart> sequence_start =
-      packed_score_sequence_start_terms(context, statements.at(start), terms);
+      packed_score_sequence_start_terms(context, statements.at(start), start_terms);
   if (!sequence_start.has_value())
     return false;
   const std::string& target = sequence_start->target;
+  std::vector<PackedScoreAccumulatorStep> steps;
+  append_packed_score_accumulator_term_steps(steps, start_terms);
+  std::size_t term_count = start_terms.size();
 
   std::size_t run = 1;
   while (start + run < statements.size()) {
-    if (!collect_packed_score_sequence_accumulator_terms(context, statements.at(start + run),
-                                                         target, terms,
+    if (!collect_packed_score_sequence_accumulator_steps(context, statements.at(start + run),
+                                                         target, steps, term_count,
                                                          sequence_start->initial)) {
       break;
     }
@@ -18378,8 +18889,8 @@ bool lower_packed_score_sequence_accumulator_run(LoweringContext& context,
       statement_directly_consumes_current_x_identifier(context, statements.at(next_index),
                                                        target);
   const bool reuse_planned_accumulator_helper =
-      terms.size() >= 2U && context.use_packed_score_accumulator_helper;
-  if ((terms.size() < 3U && !reuse_planned_accumulator_helper) ||
+      term_count >= 2U && context.use_packed_score_accumulator_helper;
+  if ((term_count < 3U && !reuse_planned_accumulator_helper) ||
       (run < 2U && !stack_only_target && !direct_consumer))
     return false;
 
@@ -18392,12 +18903,11 @@ bool lower_packed_score_sequence_accumulator_run(LoweringContext& context,
       context.emitter.items.back().comment = "packed_score accumulator zero";
     return true;
   };
-  if (!lower_stack_accumulator_terms_to_x_with_initial<PackedScoreTerm>(
-          terms, emit_initial,
-          [&](const PackedScoreTerm& term) {
-            return emit_packed_score_accumulator_term(context, helper, term);
-          })) {
+  if (!emit_initial())
     return false;
+  for (const PackedScoreAccumulatorStep& step : steps) {
+    if (!emit_packed_score_accumulator_step(context, helper, step))
+      return false;
   }
   mark_current_x(context, target);
   context.emitter.current_x_known_zero = false;
@@ -18425,7 +18935,7 @@ bool lower_packed_score_sequence_accumulator_run(LoweringContext& context,
                             : "packed-score-assignment-stack-accumulator")
                   : (stored ? "packed-score-sequence-accumulator"
                             : "packed-score-sequence-stack-accumulator"),
-      .detail = "Lowered " + std::to_string(terms.size()) + " packed_score() terms across " +
+      .detail = "Lowered " + std::to_string(term_count) + " packed_score() terms across " +
                 std::to_string(run) + " assignment statement" + (run == 1U ? "" : "s") +
                 " into " + target + " as one stack accumulator pipeline.",
   });
@@ -19977,9 +20487,10 @@ bool expression_preserves_previous_x_as_y_for_packed_line(const Expression& expr
            expression_preserves_previous_x_as_y_for_packed_line(*expression.left) &&
            expression_preserves_previous_x_as_y_for_packed_line(*expression.right);
   }
-  if (expression.kind == "call") {
-    return expression.args.size() == 1 && x_transform_unary_opcode(expression.callee).has_value() &&
-           expression_preserves_previous_x_as_y_for_packed_line(expression.args.front());
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression)) {
+    return transform->arg != nullptr &&
+           expression_preserves_previous_x_as_y_for_packed_line(*transform->arg);
   }
   return false;
 }
@@ -20174,14 +20685,14 @@ bool lower_expression_preserving_previous_x_as_y(LoweringContext& context,
     clear_current_x_facts(context);
     return true;
   }
-  if (expression.kind == "call" && expression.args.size() == 1) {
-    const std::optional<std::pair<int, std::string>> opcode =
-        x_transform_unary_opcode(expression.callee);
-    if (!opcode.has_value())
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression)) {
+    if (transform->arg == nullptr)
       return false;
-    if (!lower_expression_preserving_previous_x_as_y(context, expression.args.front(), line))
+    if (!lower_expression_preserving_previous_x_as_y(context, *transform->arg, line))
       return false;
-    context.emitter.emit_op(opcode->first, opcode->second, expression.callee + "()", line);
+    context.emitter.emit_op(transform->opcode, transform->mnemonic,
+                            transform->comment_name + "()", line);
     return true;
   }
   return false;
@@ -20693,13 +21204,25 @@ const ExpressionHelperRequest* shared_expression_helper(LoweringContext& context
   return ensure_expression_helper(context, expression);
 }
 
+std::optional<std::size_t>
+cell_mask_stack_entry_arg0_index(const Expression& expression,
+                                 const std::vector<std::string>& temps) {
+  if (temps.size() != 2U || expression.kind != "call" ||
+      lower_ascii(expression.callee) != "cell_mask" || expression.args.size() != 2U ||
+      expression.args.at(0).kind != "identifier" ||
+      expression.args.at(1).kind != "identifier") {
+    return std::nullopt;
+  }
+  const auto first = std::find(temps.begin(), temps.end(), expression.args.at(0).name);
+  const auto second = std::find(temps.begin(), temps.end(), expression.args.at(1).name);
+  if (first == temps.end() || second == temps.end() || first == second)
+    return std::nullopt;
+  return static_cast<std::size_t>(first - temps.begin());
+}
+
 bool expression_is_cell_mask_of_stack_temps(const Expression& expression,
                                             const std::vector<std::string>& temps) {
-  return temps.size() == 2U && expression.kind == "call" &&
-         lower_ascii(expression.callee) == "cell_mask" && expression.args.size() == 2U &&
-         expression.args.at(0).kind == "identifier" &&
-         expression.args.at(1).kind == "identifier" &&
-         expression.args.at(0).name == temps.at(0) && expression.args.at(1).name == temps.at(1);
+  return cell_mask_stack_entry_arg0_index(expression, temps).has_value();
 }
 
 std::string expression_helper_stack_entry_label(const ExpressionHelperRequest& helper) {
@@ -20715,8 +21238,7 @@ ExpressionHelperStackEntryRequest& ensure_expression_helper_stack_entry(
         .key = helper.key,
         .helper_label = helper.label,
         .entry_label = expression_helper_stack_entry_label(helper),
-        .first = temps.at(0),
-        .second = temps.at(1),
+        .temps = temps,
     };
   }
   ++entry.call_sites;
@@ -21443,6 +21965,79 @@ bool lower_expression_to_x(LoweringContext& context, const Expression& expressio
   if (expression.kind == "call" && lower_ascii(expression.callee) == "bit_not" &&
       expression.args.size() == 1U && expression.args.front().kind == "binary") {
     return lower_call_to_x(context, expression);
+  }
+
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "bit_mask" &&
+      context.shared_bit_mask_helper_calls) {
+    if (expression.args.size() != 1U) {
+      context.diagnostics.push_back(
+          diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                     "Function " + expression.callee + " expects one argument"));
+      return false;
+    }
+    const std::optional<std::string> current_x_arg =
+        expression.args.front().kind == "identifier" &&
+                x_holds_identifier(context, expression.args.front().name)
+            ? std::optional<std::string>{expression.args.front().name}
+            : std::nullopt;
+    if (!lower_bit_mask_to_x(context, expression.args.front(), 0))
+      return false;
+    if (current_x_arg.has_value()) {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "bit-mask-helper-stack-argument-call",
+          .detail = "Entered shared bit_mask helper with " + *current_x_arg +
+                    " already in X.",
+      });
+    }
+    return true;
+  }
+
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "packed_score" &&
+      context.use_packed_score_helper) {
+    if (expression.args.size() != 2U) {
+      context.diagnostics.push_back(
+          diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                     "Function " + expression.callee + " expects two arguments"));
+      return false;
+    }
+    const bool line_current =
+        expression.args.at(0).kind == "identifier" &&
+        x_holds_identifier(context, expression.args.at(0).name);
+    const bool index_current =
+        expression.args.at(1).kind == "identifier" &&
+        x_holds_identifier(context, expression.args.at(1).name);
+    if (line_current != index_current) {
+      const Expression& other = line_current ? expression.args.at(1) : expression.args.at(0);
+      if (expression_preserves_previous_x_as_y_for_stack_analysis(other)) {
+        if (!lower_expression_to_x(context, other))
+          return false;
+        if (index_current)
+          context.emitter.emit_op(0x14, "X↔Y", "packed_score current-X argument order");
+        context.emitter.emit_jump(0x53, "ПП", packed_score_helper_label(context),
+                                  "packed_score helper");
+        clear_current_x_facts(context);
+        context.optimizations.push_back(OptimizationReport{
+            .name = "packed-score-helper-stack-argument-call",
+            .detail = "Entered shared packed_score helper with " +
+                      expression_to_source(line_current ? expression.args.at(0)
+                                                        : expression.args.at(1)) +
+                      " already in X.",
+        });
+        context.optimizations.push_back(OptimizationReport{
+            .name = "packed-score-stack-helper-call",
+            .detail = "Reused shared packed_score stack helper with a current-X argument.",
+        });
+        return true;
+      }
+    }
+  }
+
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "packed_score" &&
+      context.emitter.current_x_variable.has_value() &&
+      packed_score_stack_argument_shape_safe(expression, {*context.emitter.current_x_variable}) &&
+      lower_stack_argument_packed_score_inline(context, expression,
+                                               {*context.emitter.current_x_variable}, 0)) {
+    return true;
   }
 
   if ((expression.kind == "binary" ||
@@ -23613,6 +24208,92 @@ bool lower_assign_then_domain_trap(LoweringContext& context, const V2Statement& 
   return true;
 }
 
+std::optional<Expression> equality_to_integer_operand(const V2Predicate& predicate, int line,
+                                                      int value) {
+  if (predicate.kind != "v2_compare" || predicate.op != "==")
+    return std::nullopt;
+  const Expression left = parse_expression(predicate.left, line);
+  const Expression right = parse_expression(predicate.right, line);
+  if (is_numeric_literal_value(left, value))
+    return right;
+  if (is_numeric_literal_value(right, value))
+    return left;
+  return std::nullopt;
+}
+
+bool lower_multiway_lg_domain_trap_guard(LoweringContext& context, const V2Statement& guard,
+                                         const V2Statement& branch) {
+  if (!context.domain_error_guards || guard.kind != "v2_if" || branch.kind != "v2_if" ||
+      !guard.predicate.has_value() || !branch.predicate.has_value() || guard.negated ||
+      branch.negated || guard.has_else_body || !guard.else_body.empty()) {
+    return false;
+  }
+  if (!statements_are_domain_error_trap(context, guard.then_body))
+    return false;
+  if (branch.then_body.empty() && branch.else_body.empty())
+    return false;
+
+  const std::optional<DomainErrorGuardPlan> plan =
+      plan_domain_error_guard(context, *guard.predicate, guard.line);
+  if (!plan.has_value() || plan->second.has_value())
+    return false;
+  std::optional<int> zero_result_input;
+  bool subtract_one_after_trap = false;
+  if (plan->trap_opcode == 0x17) {
+    zero_result_input = 1;
+  } else if (plan->trap_opcode == 0x21) {
+    zero_result_input = 0;
+  } else if (plan->trap_opcode == 0x23) {
+    zero_result_input = 1;
+    subtract_one_after_trap = true;
+  } else {
+    return false;
+  }
+
+  const std::optional<Expression> equality_operand =
+      equality_to_integer_operand(*branch.predicate, branch.line, *zero_result_input);
+  if (!equality_operand.has_value() || !expression_equals(*equality_operand, plan->first))
+    return false;
+
+  if (plan->first.kind == "identifier" && x_holds_identifier(context, plan->first.name)) {
+  } else if (!lower_expression_to_x(context, plan->first)) {
+    return false;
+  }
+  emit_domain_trap_on_x(context, *plan, "multiway domain-error guard trap", guard.line);
+  if (subtract_one_after_trap) {
+    emit_number_or_preload(context, "1", std::nullopt, branch.line);
+    context.emitter.emit_op(0x11, "-", "multiway reciprocal equality offset", branch.line);
+  }
+
+  const bool has_else = branch.has_else_body || !branch.else_body.empty();
+  const std::string false_label = context.emitter.fresh_label(has_else ? "if_else" : "if_end");
+  const bool then_stops = statements_always_stop(context, branch.then_body);
+  const std::string end_label =
+      has_else && !then_stops ? context.emitter.fresh_label("if_end") : false_label;
+  context.emitter.emit_jump(0x57, "F x!=0", false_label, "false branch for domain(value)=0",
+                            branch.line);
+  if (!lower_statement_block(context, branch.then_body))
+    return false;
+  if (has_else) {
+    if (!then_stops)
+      context.emitter.emit_jump(0x51, "БП", end_label, "if end", branch.line);
+    context.emitter.emit_label(false_label, {.hidden = true});
+    if (!lower_statement_block(context, branch.else_body))
+      return false;
+    if (!then_stops)
+      context.emitter.emit_label(end_label, {.hidden = true});
+  } else {
+    context.emitter.emit_label(false_label, {.hidden = true});
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = "multiway-domain-trap-guard",
+      .detail = "Used " + plan->trap_mnemonic + " for the terminal error guard at line " +
+                std::to_string(guard.line) + " and the following \"" +
+                condition_text(*branch.predicate) + "\" zero/nonzero branch.",
+  });
+  return true;
+}
+
 std::optional<double> numeric_self_update_delta(const std::string& target,
                                                 const V2Statement& statement) {
   if (!statement.target.has_value() || *statement.target != target || !statement.expr.has_value())
@@ -23794,17 +24475,14 @@ struct StackUnaryDerivationCall {
 
 std::optional<StackUnaryDerivationCall>
 match_stack_unary_derivation_call(const Expression& expression) {
-  if (expression.kind != "call" || expression.args.size() != 1U)
-    return std::nullopt;
-  const std::string fn = lower_ascii(expression.callee);
-  const std::optional<std::pair<int, std::string>> opcode = x_transform_unary_opcode(fn);
-  if (!opcode.has_value())
+  const std::optional<StackUnaryTransformCall> transform = stack_unary_transform_call(expression);
+  if (!transform.has_value() || transform->arg == nullptr)
     return std::nullopt;
   return StackUnaryDerivationCall{
-      .fn = fn,
-      .opcode = opcode->first,
-      .mnemonic = opcode->second,
-      .arg = expression.args.front(),
+      .fn = transform->comment_name,
+      .opcode = transform->opcode,
+      .mnemonic = transform->mnemonic,
+      .arg = *transform->arg,
   };
 }
 
@@ -28344,6 +29022,121 @@ bool lower_packed_score_y_stack_update(LoweringContext& context, const V2Stateme
   return true;
 }
 
+bool expression_is_sum_with_one(const Expression& expression, const Expression& value) {
+  if (expression.kind != "binary" || expression.op != "+" || expression.left == nullptr ||
+      expression.right == nullptr) {
+    return false;
+  }
+  return (expression_equals(*expression.left, value) &&
+          is_numeric_literal_value(*expression.right, 1)) ||
+         (expression_equals(*expression.right, value) &&
+          is_numeric_literal_value(*expression.left, 1));
+}
+
+bool expression_is_five_times(const Expression& expression, const Expression& value) {
+  if (expression.kind != "binary" || expression.op != "*" || expression.left == nullptr ||
+      expression.right == nullptr) {
+    return false;
+  }
+  return (is_numeric_literal_value(*expression.left, 5) &&
+          expression_equals(*expression.right, value)) ||
+         (is_numeric_literal_value(*expression.right, 5) &&
+          expression_equals(*expression.left, value));
+}
+
+bool expression_is_five_times_value_plus_five(const Expression& expression,
+                                             const Expression& value) {
+  if (expression_is_five_times(expression, value))
+    return false;
+  if (expression.kind == "binary" && expression.op == "*" && expression.left != nullptr &&
+      expression.right != nullptr) {
+    if (is_numeric_literal_value(*expression.left, 5) &&
+        expression_is_sum_with_one(*expression.right, value)) {
+      return true;
+    }
+    if (is_numeric_literal_value(*expression.right, 5) &&
+        expression_is_sum_with_one(*expression.left, value)) {
+      return true;
+    }
+  }
+  if (expression.kind != "binary" || expression.op != "+" || expression.left == nullptr ||
+      expression.right == nullptr) {
+    return false;
+  }
+  return (is_numeric_literal_value(*expression.left, 5) &&
+          expression_is_five_times(*expression.right, value)) ||
+         (is_numeric_literal_value(*expression.right, 5) &&
+          expression_is_five_times(*expression.left, value));
+}
+
+bool expression_is_target_preserving_digit_extract(const Expression& expression,
+                                                  const Expression& target) {
+  if (expression.kind != "binary" || expression.op != "/" || expression.left == nullptr ||
+      expression.right == nullptr || !analysis_simple_stack_load(*expression.right)) {
+    return false;
+  }
+  const Expression& frac = *expression.left;
+  if (frac.kind != "call" || lower_ascii(frac.callee) != "frac" || frac.args.size() != 1U)
+    return false;
+  const Expression& bit_and = frac.args.front();
+  if (bit_and.kind != "call" || lower_ascii(bit_and.callee) != "bit_and" ||
+      bit_and.args.size() != 2U) {
+    return false;
+  }
+  const Expression* mask = nullptr;
+  if (expression_equals(bit_and.args.at(0), target)) {
+    mask = &bit_and.args.at(1);
+  } else if (expression_equals(bit_and.args.at(1), target)) {
+    mask = &bit_and.args.at(0);
+  } else {
+    return false;
+  }
+  return expression_is_five_times_value_plus_five(*mask, *expression.right);
+}
+
+const Expression* target_preserving_digit_extract_in_delta(const Expression& delta,
+                                                          const Expression& target) {
+  if (expression_is_target_preserving_digit_extract(delta, target))
+    return &delta;
+  if (delta.kind != "binary" || delta.op != "*" || delta.left == nullptr ||
+      delta.right == nullptr) {
+    return nullptr;
+  }
+  if (!analysis_simple_stack_load(*delta.right))
+    return nullptr;
+  return expression_is_target_preserving_digit_extract(*delta.left, target) ? delta.left.get()
+                                                                           : nullptr;
+}
+
+bool can_reuse_indirect_y_for_indexed_subtract(LoweringContext& context,
+                                               const Expression& target,
+                                               const Expression& delta) {
+  const Expression* digit = target_preserving_digit_extract_in_delta(delta, target);
+  return digit != nullptr && !context.emitting_expression_helper &&
+         should_share_expression(context, *digit);
+}
+
+const Expression* indirect_y_reusable_indexed_subtract_assignment_delta(
+    LoweringContext& context, const Expression& target, const Expression& expression) {
+  if (expression.kind != "binary" || expression.op != "-" || expression.left == nullptr ||
+      expression.right == nullptr || !expression_equals(*expression.left, target)) {
+    return nullptr;
+  }
+  return can_reuse_indirect_y_for_indexed_subtract(context, target, *expression.right)
+             ? expression.right.get()
+             : nullptr;
+}
+
+void report_indexed_subtract_indirect_y_reuse(LoweringContext& context,
+                                              const Expression& target, int line) {
+  context.optimizations.push_back(OptimizationReport{
+      .name = "indexed-subtract-indirect-y-reuse",
+      .detail = "Reused " + bank_member_key(target.base, target.field) +
+                " left in Y by the digit helper while updating the indexed cell at line " +
+                std::to_string(line) + ".",
+  });
+}
+
 bool lower_update_statement(LoweringContext& context, const V2Statement& statement) {
   const bool entered_with_errors = has_errors(context.diagnostics);
 
@@ -28442,15 +29235,20 @@ bool lower_update_statement(LoweringContext& context, const V2Statement& stateme
     } else {
       return false;
     }
+    const Expression expression = parse_expression(*statement.expr, statement.line);
     const std::optional<PreparedIndexedSelector> prepared_selector =
         prepare_indirect_index_selector(context, target_expression, statement.line);
-    if (prepared_selector.has_value()) {
-      emit_prepared_indirect_indexed_recall(context, target_expression, *prepared_selector,
-                                            statement.line);
-    } else if (!emit_indexed_recall(context, target_expression, statement.line)) {
-      return false;
+    const bool reuse_indirect_y =
+        statement.op == "-=" &&
+        can_reuse_indirect_y_for_indexed_subtract(context, target_expression, expression);
+    if (!reuse_indirect_y) {
+      if (prepared_selector.has_value()) {
+        emit_prepared_indirect_indexed_recall(context, target_expression, *prepared_selector,
+                                              statement.line);
+      } else if (!emit_indexed_recall(context, target_expression, statement.line)) {
+        return false;
+      }
     }
-    const Expression expression = parse_expression(*statement.expr, statement.line);
     if (!lower_expression_to_x(context, expression))
       return false;
     context.emitter.emit_op(opcode, mnemonic, "expr " + mnemonic, statement.line);
@@ -28459,9 +29257,14 @@ bool lower_update_statement(LoweringContext& context, const V2Statement& stateme
     if (prepared_selector.has_value()) {
       emit_prepared_indirect_indexed_store(context, target_expression, *prepared_selector,
                                            statement.line);
+      if (reuse_indirect_y)
+        report_indexed_subtract_indirect_y_reuse(context, target_expression, statement.line);
       return true;
     }
-    return emit_indexed_store(context, target_expression, statement.line);
+    const bool stored = emit_indexed_store(context, target_expression, statement.line);
+    if (stored && reuse_indirect_y)
+      report_indexed_subtract_indirect_y_reuse(context, target_expression, statement.line);
+    return stored;
   }
 
   if (statement.op == "+=" && statement.expr == "1" &&
@@ -28475,6 +29278,24 @@ bool lower_update_statement(LoweringContext& context, const V2Statement& stateme
 
   Expression target = identifier_expression(*statement.target);
   Expression delta = parse_expression(*statement.expr, statement.line);
+  const std::string current_x_name = context.emitter.current_x_variable.value_or("");
+  if (statement.op == "+=" && !x_holds_identifier(context, *statement.target) &&
+      expression_is_packed_score_current_x_consumer(context, delta, current_x_name)) {
+    if (!lower_expression_to_x(context, delta))
+      return false;
+    if (!lower_expression_to_x(context, target))
+      return false;
+    context.emitter.emit_op(0x10, "+", "expr +", statement.line);
+    clear_current_x_facts(context);
+    emit_store(context, *statement.target, "set " + *statement.target);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "packed-score-current-x-update",
+        .detail = "Updated " + *statement.target +
+                  " after computing packed_score() from a current-X argument at line " +
+                  std::to_string(statement.line) + ".",
+    });
+    return true;
+  }
   if (statement.op == "+=" && delta.kind == "number") {
     if (!lower_expression_to_x(context, delta))
       return false;
@@ -29802,14 +30623,28 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
       const std::optional<PreparedIndexedSelector> prepared_selector =
           prepare_indirect_index_selector(context, target_expression, statement.line);
       const Expression expression = parse_expression(*statement.expr, statement.line);
-      if (!lower_expression_to_x(context, expression))
+      const Expression* reusable_delta =
+          indirect_y_reusable_indexed_subtract_assignment_delta(context, target_expression,
+                                                               expression);
+      if (reusable_delta != nullptr) {
+        if (!lower_expression_to_x(context, *reusable_delta))
+          return false;
+        context.emitter.emit_op(0x11, "-", "expr -", statement.line);
+        clear_current_x_facts(context);
+      } else if (!lower_expression_to_x(context, expression)) {
         return false;
+      }
       if (prepared_selector.has_value()) {
         emit_prepared_indirect_indexed_store(context, target_expression, *prepared_selector,
                                              statement.line);
+        if (reusable_delta != nullptr)
+          report_indexed_subtract_indirect_y_reuse(context, target_expression, statement.line);
         return true;
       }
-      return emit_indexed_store(context, target_expression, statement.line);
+      const bool stored = emit_indexed_store(context, target_expression, statement.line);
+      if (stored && reusable_delta != nullptr)
+        report_indexed_subtract_indirect_y_reuse(context, target_expression, statement.line);
+      return stored;
     }
 
     if (context.constants.contains(*statement.target)) {
@@ -34413,6 +35248,11 @@ bool lower_stack_argument_expression_helper_call(LoweringContext& context,
   const ExpressionHelperRequest* helper = shared_expression_helper(context, expression);
   if (helper == nullptr)
     return false;
+  const auto existing_entry = context.expression_helper_stack_entries.find(helper->key);
+  if (existing_entry != context.expression_helper_stack_entries.end() &&
+      existing_entry->second.temps != temps) {
+    return false;
+  }
   ExpressionHelperStackEntryRequest& entry =
       ensure_expression_helper_stack_entry(context, *helper, temps);
   context.emitter.emit_jump(0x53, "ПП", entry.entry_label,
@@ -34421,8 +35261,162 @@ bool lower_stack_argument_expression_helper_call(LoweringContext& context,
   context.optimizations.push_back(OptimizationReport{
       .name = "expression-helper-stack-entry-call",
       .detail = "Entered shared helper for " + expression_to_source(expression) +
-                " with " + entry.second + " in X and " + entry.first + " in Y at line " +
+                " with " + entry.temps.at(1) + " in X and " + entry.temps.at(0) + " in Y at line " +
                 std::to_string(line) + ".",
+  });
+  return true;
+}
+
+bool lower_stack_argument_bit_mask_helper_call(LoweringContext& context,
+                                               const Expression& expression,
+                                               const std::vector<std::string>& temps, int line) {
+  if (!context.shared_bit_mask_helper_calls || expression.kind != "call" ||
+      lower_ascii(expression.callee) != "bit_mask" || expression.args.size() != 1U ||
+      expression.args.front().kind != "identifier") {
+    return false;
+  }
+  const auto found = std::find(temps.begin(), temps.end(), expression.args.front().name);
+  if (found == temps.end())
+    return false;
+
+  emit_stack_resident_restore(context, static_cast<std::size_t>(found - temps.begin()),
+                              temps.size(), line);
+  if (!emit_bit_mask_helper_call_from_current_x(context, line))
+    return false;
+  context.optimizations.push_back(OptimizationReport{
+      .name = "bit-mask-helper-stack-argument-call",
+      .detail = "Entered shared bit_mask helper with stack-resident " +
+                expression.args.front().name + " in X at line " + std::to_string(line) + ".",
+  });
+  return true;
+}
+
+std::optional<std::size_t> stack_temp_identifier_index(const Expression& expression,
+                                                       const std::vector<std::string>& temps) {
+  if (expression.kind != "identifier")
+    return std::nullopt;
+  const auto found = std::find(temps.begin(), temps.end(), expression.name);
+  if (found == temps.end())
+    return std::nullopt;
+  return static_cast<std::size_t>(found - temps.begin());
+}
+
+bool packed_score_stack_argument_shape_safe(const Expression& expression,
+                                            const std::vector<std::string>& temps) {
+  if (expression.kind != "call" || lower_ascii(expression.callee) != "packed_score" ||
+      expression.args.size() != 2U) {
+    return false;
+  }
+  const Expression& line_value = expression.args.at(0);
+  const Expression& index = expression.args.at(1);
+  const std::optional<std::size_t> line_temp = stack_temp_identifier_index(line_value, temps);
+  const std::optional<std::size_t> index_temp = stack_temp_identifier_index(index, temps);
+  if (line_temp.has_value() && index_temp.has_value())
+    return temps.size() == 2U && *line_temp != *index_temp;
+  if (line_temp.has_value()) {
+    return !stack_expression_references_any_temp(index, temps) &&
+           expression_preserves_previous_x_as_y_for_stack_analysis(index);
+  }
+  if (index_temp.has_value()) {
+    return !stack_expression_references_any_temp(line_value, temps) &&
+           expression_preserves_previous_x_as_y_for_stack_analysis(line_value);
+  }
+  return false;
+}
+
+bool lower_stack_argument_packed_score_helper_call(LoweringContext& context,
+                                                   const Expression& expression,
+                                                   const std::vector<std::string>& temps,
+                                                   int line) {
+  if (!context.use_packed_score_helper || expression.kind != "call" ||
+      lower_ascii(expression.callee) != "packed_score" || expression.args.size() != 2U) {
+    return false;
+  }
+
+  const Expression& line_value = expression.args.at(0);
+  const Expression& index = expression.args.at(1);
+  const std::optional<std::size_t> line_temp = stack_temp_identifier_index(line_value, temps);
+  const std::optional<std::size_t> index_temp = stack_temp_identifier_index(index, temps);
+  if (line_temp.has_value() && index_temp.has_value() && temps.size() == 2U) {
+    if (*line_temp == *index_temp)
+      return false;
+    if (*line_temp == 1U && *index_temp == 0U)
+      context.emitter.emit_op(0x14, "X↔Y", "packed_score stack-argument order", line);
+    context.emitter.emit_jump(0x53, "ПП", packed_score_helper_label(context),
+                              "packed_score helper", line);
+  } else if (line_temp.has_value() && !stack_expression_references_any_temp(index, temps) &&
+             expression_preserves_previous_x_as_y_for_stack_analysis(index)) {
+    emit_stack_resident_restore(context, *line_temp, temps.size(), line);
+    if (!lower_expression_to_x(context, index))
+      return false;
+    context.emitter.emit_jump(0x53, "ПП", packed_score_helper_label(context),
+                              "packed_score helper", line);
+  } else if (index_temp.has_value() && !stack_expression_references_any_temp(line_value, temps) &&
+             expression_preserves_previous_x_as_y_for_stack_analysis(line_value)) {
+    emit_stack_resident_restore(context, *index_temp, temps.size(), line);
+    if (!lower_expression_to_x(context, line_value))
+      return false;
+    context.emitter.emit_op(0x14, "X↔Y", "packed_score stack-argument order", line);
+    context.emitter.emit_jump(0x53, "ПП", packed_score_helper_label(context),
+                              "packed_score helper", line);
+  } else {
+    return false;
+  }
+
+  clear_current_x_facts(context);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-score-helper-stack-argument-call",
+      .detail = "Entered shared packed_score helper with stack-resident argument(s) for " +
+                expression_to_source(expression) + " at line " + std::to_string(line) + ".",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-score-stack-helper-call",
+      .detail = "Reused shared packed_score stack helper with stack-resident argument(s).",
+  });
+  return true;
+}
+
+bool lower_stack_argument_packed_score_inline(LoweringContext& context,
+                                              const Expression& expression,
+                                              const std::vector<std::string>& temps, int line) {
+  if (!packed_score_stack_argument_shape_safe(expression, temps))
+    return false;
+
+  const Expression& line_value = expression.args.at(0);
+  const Expression& index = expression.args.at(1);
+  const std::optional<std::size_t> line_temp = stack_temp_identifier_index(line_value, temps);
+  const std::optional<std::size_t> index_temp = stack_temp_identifier_index(index, temps);
+  if (line_temp.has_value() && index_temp.has_value()) {
+    if (*line_temp == 1U && *index_temp == 0U)
+      context.emitter.emit_op(0x14, "X↔Y", "packed_score stack-argument order", line);
+  } else if (line_temp.has_value()) {
+    emit_stack_resident_restore(context, *line_temp, temps.size(), line);
+    if (!lower_expression_preserving_previous_x_as_y(context, index, line))
+      return false;
+  } else if (index_temp.has_value()) {
+    emit_stack_resident_restore(context, *index_temp, temps.size(), line);
+    if (!lower_expression_preserving_previous_x_as_y(context, line_value, line))
+      return false;
+    context.emitter.emit_op(0x14, "X↔Y", "packed_score stack-argument order", line);
+  } else {
+    return false;
+  }
+
+  context.emitter.emit_op(0x15, "F 10^x", "pow10()", line);
+  context.emitter.emit_op(0x13, "/", "expr /", line);
+  context.emitter.emit_op(0x35, "К {x}", "frac()", line);
+  emit_number_or_preload(context, "0.41200076", std::nullopt, line);
+  context.emitter.emit_op(0x11, "-", "expr -", line);
+  context.emitter.emit_op(0x22, "F x^2", "sqr()", line);
+  clear_current_x_facts(context);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-score-inline-stack-argument-lowering",
+      .detail = "Lowered " + expression_to_source(expression) +
+                " inline with stack-resident argument(s) at line " + std::to_string(line) + ".",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-grid-primitive-lowering",
+      .detail = "Lowered packed_score() to reusable 4x4 grid/packed-line arithmetic.",
   });
   return true;
 }
@@ -34450,21 +35444,31 @@ bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expres
     });
     return true;
   }
-  if (expression.kind == "call" && expression.args.size() == 1U &&
-      stack_expression_references_any_temp(expression.args.front(), temps)) {
-    const std::optional<std::pair<int, std::string>> opcode =
-        x_transform_unary_opcode(expression.callee);
-    if (!opcode.has_value())
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression);
+      transform.has_value() && transform->arg != nullptr &&
+      stack_expression_references_any_temp(*transform->arg, temps)) {
+    if (!lower_stack_resident_expression_to_x(context, *transform->arg, temps, line))
       return false;
-    if (!lower_stack_resident_expression_to_x(context, expression.args.front(), temps, line))
-      return false;
-    context.emitter.emit_op(opcode->first, opcode->second,
-                            "stack-resident " + lower_ascii(expression.callee), line);
+    context.emitter.emit_op(transform->opcode, transform->mnemonic,
+                            "stack-resident " + transform->comment_name, line);
     clear_current_x_facts(context);
     return true;
   }
   if (expression.kind == "number" || expression.kind == "string" || expression.kind == "indexed" ||
       expression.kind == "call") {
+    if (expression.kind == "call" &&
+        lower_stack_argument_bit_mask_helper_call(context, expression, temps, line)) {
+      return true;
+    }
+    if (expression.kind == "call" &&
+        lower_stack_argument_packed_score_helper_call(context, expression, temps, line)) {
+      return true;
+    }
+    if (expression.kind == "call" &&
+        lower_stack_argument_packed_score_inline(context, expression, temps, line)) {
+      return true;
+    }
     if (expression.kind == "call" &&
         lower_stack_argument_expression_helper_call(context, expression, temps, line)) {
       return true;
@@ -34605,23 +35609,38 @@ bool expression_references_same_indexed_cell(const Expression& expression,
   });
 }
 
-bool can_compile_indexed_stack_temp_expression(const Expression& expression,
+bool can_compile_indexed_stack_temp_expression(const LoweringContext& context,
+                                               const Expression& expression,
                                                const std::string& temp) {
   if (core::emit::count_identifier_reads(expression, temp) != 1)
     return false;
   if (expression.kind == "identifier")
     return expression.name == temp;
   if (expression.kind == "unary" && expression.expr != nullptr)
-    return can_compile_indexed_stack_temp_expression(*expression.expr, temp);
+    return can_compile_indexed_stack_temp_expression(context, *expression.expr, temp);
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "sum")
+    return can_compile_indexed_stack_temp_expression(context, sum_expressions(expression.args),
+                                                     temp);
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "bit_mask") {
+    return context.shared_bit_mask_helper_calls && expression.args.size() == 1U &&
+           can_compile_indexed_stack_temp_expression(context, expression.args.front(), temp);
+  }
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "packed_score")
+    return packed_score_stack_argument_shape_safe(expression, {temp});
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression)) {
+    return transform->arg != nullptr &&
+           can_compile_indexed_stack_temp_expression(context, *transform->arg, temp);
+  }
   if (expression.kind == "binary" && expression.left != nullptr && expression.right != nullptr) {
     const int left_reads = core::emit::count_identifier_reads(*expression.left, temp);
     const int right_reads = core::emit::count_identifier_reads(*expression.right, temp);
     if (left_reads == 1 && right_reads == 0) {
-      return can_compile_indexed_stack_temp_expression(*expression.left, temp) &&
+      return can_compile_indexed_stack_temp_expression(context, *expression.left, temp) &&
              expression_pure_for_substitution(*expression.right);
     }
     if (left_reads == 0 && right_reads == 1) {
-      return can_compile_indexed_stack_temp_expression(*expression.right, temp) &&
+      return can_compile_indexed_stack_temp_expression(context, *expression.right, temp) &&
              expression_pure_for_substitution(*expression.left) &&
              (expression.op == "+" || expression.op == "*" ||
               is_simple_stack_load(*expression.left));
@@ -34654,6 +35673,56 @@ bool lower_indexed_stack_temp_expression_to_x(
     context.emitter.emit_op(0x0b, "/-/", "stack temp unary minus", line);
     context.emitter.current_x_variable.reset();
     context.emitter.current_x_aliases.clear();
+    return true;
+  }
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "bit_mask" &&
+      context.shared_bit_mask_helper_calls) {
+    if (expression.args.size() != 1U)
+      return false;
+    if (!lower_indexed_stack_temp_expression_to_x(context, expression.args.front(), temp,
+                                                  indexed_target, prepared_selector, line))
+      return false;
+    if (!emit_bit_mask_helper_call_from_current_x(context, line))
+      return false;
+    context.optimizations.push_back(OptimizationReport{
+        .name = "bit-mask-helper-stack-argument-call",
+        .detail = "Entered shared bit_mask helper with indexed stack-temp argument at line " +
+                  std::to_string(line) + ".",
+    });
+    return true;
+  }
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "sum") {
+    if (!lower_indexed_stack_temp_expression_to_x(context, sum_expressions(expression.args), temp,
+                                                  indexed_target, prepared_selector, line)) {
+      return false;
+    }
+    context.optimizations.push_back(OptimizationReport{
+        .name = "sum-primitive-lowering",
+        .detail = "Lowered indexed stack-temp sum(...) to an arithmetic addition chain.",
+    });
+    return true;
+  }
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "packed_score" &&
+      context.use_packed_score_helper) {
+    if (!lower_stack_argument_packed_score_helper_call(context, expression, {temp}, line))
+      return false;
+    return true;
+  }
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "packed_score") {
+    if (!lower_stack_argument_packed_score_inline(context, expression, {temp}, line))
+      return false;
+    return true;
+  }
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression)) {
+    if (transform->arg == nullptr)
+      return false;
+    if (!lower_indexed_stack_temp_expression_to_x(context, *transform->arg, temp, indexed_target,
+                                                  prepared_selector, line))
+      return false;
+    context.emitter.emit_op(transform->opcode, transform->mnemonic,
+                            "stack temp " + transform->comment_name, line);
+    clear_current_x_facts(context);
     return true;
   }
   if (expression.kind != "binary" || expression.left == nullptr || expression.right == nullptr)
@@ -34743,9 +35812,30 @@ bool is_unit_increment_expression(const Expression& expression, const std::strin
          (is_pointer(*expression.right) && is_numeric_literal_value(*expression.left, 1));
 }
 
+bool is_unit_decrement_expression(const Expression& expression, const std::string& pointer) {
+  if (expression.kind != "binary" || expression.left == nullptr || expression.right == nullptr)
+    return false;
+  const auto is_pointer = [&](const Expression& candidate) {
+    return candidate.kind == "identifier" && candidate.name == pointer;
+  };
+  if (expression.op == "-")
+    return is_pointer(*expression.left) && is_numeric_literal_value(*expression.right, 1);
+  if (expression.op == "+") {
+    return (is_pointer(*expression.left) && is_numeric_literal_value(*expression.right, -1)) ||
+           (is_pointer(*expression.right) && is_numeric_literal_value(*expression.left, -1));
+  }
+  return false;
+}
+
 bool is_unit_increment_statement(const V2Statement& statement, const std::string& pointer) {
   return statement.kind == "v2_update" && statement.target.has_value() &&
          *statement.target == pointer && statement.op.has_value() && *statement.op == "+=" &&
+         statement.expr.has_value() && expression_is_number(*statement.expr, "1", statement.line);
+}
+
+bool is_unit_decrement_statement(const V2Statement& statement, const std::string& pointer) {
+  return statement.kind == "v2_update" && statement.target.has_value() &&
+         *statement.target == pointer && statement.op.has_value() && *statement.op == "-=" &&
          statement.expr.has_value() && expression_is_number(*statement.expr, "1", statement.line);
 }
 
@@ -34804,6 +35894,153 @@ bool lower_preincrement_indexed_store(LoweringContext& context, const V2Statemen
                 ".",
   });
   return true;
+}
+
+bool lower_predecrement_indexed_store(LoweringContext& context, const V2Statement& store_statement,
+                                      const V2Statement& decrement_statement) {
+  const std::optional<IndexedAssignmentConsumer> store =
+      indexed_assignment_consumer(store_statement);
+  if (!store.has_value() || store->target.index == nullptr)
+    return false;
+
+  if (decrement_statement.kind != "v2_update" || !decrement_statement.target.has_value())
+    return false;
+  const std::string pointer = *decrement_statement.target;
+  if (!is_unit_decrement_statement(decrement_statement, pointer) ||
+      !is_unit_decrement_expression(*store->target.index, pointer)) {
+    return false;
+  }
+
+  const auto pointer_register_it = context.register_index_by_name.find(pointer);
+  if (pointer_register_it == context.register_index_by_name.end() ||
+      core::indirect_selector_mutation(pointer_register_it->second) !=
+          core::IndirectSelectorMutation::PreDecrement) {
+    return false;
+  }
+  const V2StateField* field = indexed_state_field(context, store->target);
+  if (field == nullptr)
+    return false;
+  const std::optional<int> selector_offset =
+      indirect_memory_selector_offset_for_field(context, *field);
+  if (!selector_offset.has_value() || *selector_offset != 0)
+    return false;
+
+  if (is_zero_expression(context, store->expression)) {
+    if (!emit_zero(context, "set " + bank_member_key(store->target.base, store->target.field),
+                   store->line)) {
+      context.emitter.emit_number("0");
+    }
+  } else if (!lower_expression_to_x(context, store->expression)) {
+    return false;
+  }
+
+  const int pointer_register = pointer_register_it->second;
+  const PreparedIndexedSelector prepared_selector{.selector = pointer};
+  context.emitter.emit_op(0xb0 + pointer_register, "К X->П " + register_text_for(context, pointer),
+                          indexed_memory_comment(context, "predecrement indexed set",
+                                                 store->target, *field, prepared_selector),
+                          store->line);
+  context.emitter.current_x_variable.reset();
+  context.emitter.current_x_expression.reset();
+  context.emitter.current_x_aliases.clear();
+  context.emitter.current_x_known_zero = false;
+  context.optimizations.push_back(OptimizationReport{
+      .name = "predecrement-indexed-store",
+      .detail = "Lowered " + bank_member_key(store->target.base, store->target.field) + "[" +
+                pointer + "-1] and " + pointer + "-- through К X->П " +
+                register_text_for(context, pointer) + " at line " + std::to_string(store->line) +
+                ".",
+  });
+  return true;
+}
+
+bool lower_mutating_indexed_recall_assignment(LoweringContext& context,
+                                              const V2Statement& recall_statement,
+                                              const V2Statement& update_statement,
+                                              core::IndirectSelectorMutation mutation,
+                                              const std::string& optimization_name,
+                                              const std::string& action) {
+  if (recall_statement.kind != "v2_assign" || !recall_statement.target.has_value() ||
+      !recall_statement.expr.has_value() || update_statement.kind != "v2_update" ||
+      !update_statement.target.has_value()) {
+    return false;
+  }
+
+  const Expression target = parse_expression(*recall_statement.target, recall_statement.line);
+  if (target.kind != "identifier" || context.constants.contains(target.name))
+    return false;
+  const std::string pointer = *update_statement.target;
+  if (target.name == pointer)
+    return false;
+
+  const Expression expression = parse_expression(*recall_statement.expr, recall_statement.line);
+  if (expression.kind != "indexed" || expression.index == nullptr)
+    return false;
+
+  const bool unit_update = mutation == core::IndirectSelectorMutation::PreIncrement
+                               ? is_unit_increment_statement(update_statement, pointer) &&
+                                     is_unit_increment_expression(*expression.index, pointer)
+                               : is_unit_decrement_statement(update_statement, pointer) &&
+                                     is_unit_decrement_expression(*expression.index, pointer);
+  if (!unit_update)
+    return false;
+
+  const auto pointer_register_it = context.register_index_by_name.find(pointer);
+  if (pointer_register_it == context.register_index_by_name.end() ||
+      core::indirect_selector_mutation(pointer_register_it->second) != mutation) {
+    return false;
+  }
+  const V2StateField* field = indexed_state_field(context, expression);
+  if (field == nullptr)
+    return false;
+  const std::optional<int> selector_offset =
+      indirect_memory_selector_offset_for_field(context, *field);
+  if (!selector_offset.has_value() || *selector_offset != 0)
+    return false;
+
+  const int pointer_register = pointer_register_it->second;
+  const PreparedIndexedSelector prepared_selector{.selector = pointer};
+  context.emitter.emit_op(0xd0 + pointer_register, "К П->X " + register_text_for(context, pointer),
+                          indexed_memory_comment(context, action + " indexed recall", expression,
+                                                 *field, prepared_selector),
+                          recall_statement.line);
+  context.emitter.current_x_variable.reset();
+  context.emitter.current_x_expression = std::make_shared<Expression>(expression);
+  context.emitter.current_x_aliases.clear();
+  context.emitter.current_x_known_zero = false;
+  mark_current_x(context, target.name);
+  if (context.stack_only_state_fields.contains(target.name)) {
+    report_stack_only_state_field(context, target.name, recall_statement.line);
+  } else {
+    emit_store(context, target.name, "set " + target.name);
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = optimization_name,
+      .detail = "Lowered " + target.name + " = " +
+                bank_member_key(expression.base, expression.field) + "[" + pointer +
+                (mutation == core::IndirectSelectorMutation::PreIncrement ? "+1] and " : "-1] and ") +
+                pointer +
+                (mutation == core::IndirectSelectorMutation::PreIncrement ? "++" : "--") +
+                " through К П->X " + register_text_for(context, pointer) + " at line " +
+                std::to_string(recall_statement.line) + ".",
+  });
+  return true;
+}
+
+bool lower_preincrement_indexed_recall(LoweringContext& context,
+                                       const V2Statement& recall_statement,
+                                       const V2Statement& increment_statement) {
+  return lower_mutating_indexed_recall_assignment(
+      context, recall_statement, increment_statement, core::IndirectSelectorMutation::PreIncrement,
+      "preincrement-indexed-recall", "preincrement");
+}
+
+bool lower_predecrement_indexed_recall(LoweringContext& context,
+                                       const V2Statement& recall_statement,
+                                       const V2Statement& decrement_statement) {
+  return lower_mutating_indexed_recall_assignment(
+      context, recall_statement, decrement_statement, core::IndirectSelectorMutation::PreDecrement,
+      "predecrement-indexed-recall", "predecrement");
 }
 
 std::optional<std::string> x_param_y_stack_stored_entry_target(const LoweringContext& context,
@@ -35175,7 +36412,7 @@ bool lower_stack_resident_indexed_temp(LoweringContext& context,
   }
   if (!expression_references_same_indexed_cell(consumer.expression, consumer.target))
     return false;
-  if (!can_compile_indexed_stack_temp_expression(consumer.expression, *temp.target))
+  if (!can_compile_indexed_stack_temp_expression(context, consumer.expression, *temp.target))
     return false;
 
   std::optional<PreparedIndexedSelector> prepared_selector;
@@ -35366,7 +36603,7 @@ bool lower_single_use_stack_temp(LoweringContext& context,
 
   const Expression consumer_expression = parse_expression(*consumer.expr, consumer.line);
   if (core::emit::count_identifier_reads(consumer_expression, *temp.target) != 1 ||
-      !can_compile_indexed_stack_temp_expression(consumer_expression, *temp.target)) {
+      !can_compile_indexed_stack_temp_expression(context, consumer_expression, *temp.target)) {
     return false;
   }
 
@@ -35937,6 +37174,14 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (has_errors(context.diagnostics))
       return false;
     if (index + 1U < statements.size() &&
+        lower_multiway_lg_domain_trap_guard(context, statements.at(index),
+                                            statements.at(index + 1U))) {
+      ++index;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    if (index + 1U < statements.size() &&
         lower_assign_then_domain_trap(context, statements.at(index), statements.at(index + 1U))) {
       ++index;
       continue;
@@ -35954,6 +37199,30 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (index + 1U < statements.size() &&
         lower_preincrement_indexed_store(context, statements.at(index),
                                          statements.at(index + 1U))) {
+      ++index;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    if (index + 1U < statements.size() &&
+        lower_preincrement_indexed_recall(context, statements.at(index),
+                                          statements.at(index + 1U))) {
+      ++index;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    if (index + 1U < statements.size() &&
+        lower_predecrement_indexed_store(context, statements.at(index),
+                                         statements.at(index + 1U))) {
+      ++index;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    if (index + 1U < statements.size() &&
+        lower_predecrement_indexed_recall(context, statements.at(index),
+                                          statements.at(index + 1U))) {
       ++index;
       continue;
     }
@@ -36157,10 +37426,37 @@ bool lower_random_cell_helpers(LoweringContext& context) {
   return true;
 }
 
+void emit_cell_mask_expression_helper_row_mask(LoweringContext& context, int line) {
+  emit_number_or_preload(context, format_number_literal(cell_mask_row_constant(4)), std::nullopt,
+                         line);
+  context.emitter.emit_op(0x12, "*", "expr *", line);
+  context.emitter.emit_op(0x15, "F 10^x", "pow10()", line);
+  context.emitter.emit_op(0x34, "К [x]", "int()", line);
+}
+
+void emit_cell_mask_expression_helper_row_tail(LoweringContext& context, int line) {
+  emit_cell_mask_expression_helper_row_mask(context, line);
+  context.emitter.emit_op(0x10, "+", "expr +", line);
+}
+
+void emit_cell_mask_expression_helper_stack_prefix_to_tail(
+    LoweringContext& context, std::size_t arg0_stack_index, int line) {
+  if (arg0_stack_index == 0U) {
+    context.emitter.emit_op(0x14, "X↔Y", "expression helper stack-entry x", line);
+    context.emitter.emit_op(0x15, "F 10^x", "expression helper stack-entry pow10", line);
+    context.emitter.emit_op(0x14, "X↔Y", "expression helper stack-entry y", line);
+    return;
+  }
+  context.emitter.emit_op(0x15, "F 10^x", "expression helper stack-entry pow10", line);
+  context.emitter.emit_op(0x14, "X↔Y", "expression helper stack-entry y", line);
+}
+
 bool lower_cell_mask_expression_helper_with_stack_entry(
     LoweringContext& context, const ExpressionHelperRequest& helper,
     const ExpressionHelperStackEntryRequest& entry) {
-  if (!expression_is_cell_mask_of_stack_temps(helper.expr, {entry.first, entry.second}))
+  const std::optional<std::size_t> arg0_stack_index =
+      cell_mask_stack_entry_arg0_index(helper.expr, entry.temps);
+  if (!arg0_stack_index.has_value())
     return false;
   const int line = helper.line;
   const std::string tail_label = helper.label + "_stack_tail";
@@ -36174,17 +37470,10 @@ bool lower_cell_mask_expression_helper_with_stack_entry(
   context.emitter.emit_jump(0x51, "БП", tail_label, "expression helper stack-entry tail", line);
 
   context.emitter.emit_label(entry.entry_label, {.hidden = true});
-  context.emitter.emit_op(0x14, "X↔Y", "expression helper stack-entry x", line);
-  context.emitter.emit_op(0x15, "F 10^x", "expression helper stack-entry pow10", line);
-  context.emitter.emit_op(0x14, "X↔Y", "expression helper stack-entry y", line);
+  emit_cell_mask_expression_helper_stack_prefix_to_tail(context, *arg0_stack_index, line);
 
   context.emitter.emit_label(tail_label, {.hidden = true});
-  emit_number_or_preload(context, format_number_literal(cell_mask_row_constant(4)), std::nullopt,
-                         line);
-  context.emitter.emit_op(0x12, "*", "expr *", line);
-  context.emitter.emit_op(0x15, "F 10^x", "pow10()", line);
-  context.emitter.emit_op(0x34, "К [x]", "int()", line);
-  context.emitter.emit_op(0x10, "+", "expr +", line);
+  emit_cell_mask_expression_helper_row_tail(context, line);
   clear_current_x_facts(context);
   return true;
 }
@@ -36192,16 +37481,20 @@ bool lower_cell_mask_expression_helper_with_stack_entry(
 bool lower_cell_mask_expression_helper_stack_only_entry(
     LoweringContext& context, const ExpressionHelperRequest& helper,
     const ExpressionHelperStackEntryRequest& entry) {
-  if (!expression_is_cell_mask_of_stack_temps(helper.expr, {entry.first, entry.second}))
+  const std::optional<std::size_t> arg0_stack_index =
+      cell_mask_stack_entry_arg0_index(helper.expr, entry.temps);
+  if (!arg0_stack_index.has_value())
     return false;
   const int line = helper.line;
+  if (*arg0_stack_index == 1U) {
+    emit_cell_mask_expression_helper_stack_prefix_to_tail(context, *arg0_stack_index, line);
+    emit_cell_mask_expression_helper_row_tail(context, line);
+    clear_current_x_facts(context);
+    return true;
+  }
   // Stack-entry ABI arrives with the second argument in X and the first in Y.
   // Build the row mask from X first, then swap once to add the column mask.
-  emit_number_or_preload(context, format_number_literal(cell_mask_row_constant(4)), std::nullopt,
-                         line);
-  context.emitter.emit_op(0x12, "*", "expr *", line);
-  context.emitter.emit_op(0x15, "F 10^x", "pow10()", line);
-  context.emitter.emit_op(0x34, "К [x]", "int()", line);
+  emit_cell_mask_expression_helper_row_mask(context, line);
   context.emitter.emit_op(0x14, "X↔Y", "expression helper stack-entry x", line);
   context.emitter.emit_op(0x15, "F 10^x", "expression helper stack-entry pow10", line);
   context.emitter.emit_op(0x10, "+", "expr +", line);
@@ -48288,12 +49581,9 @@ estimated_stack_entry_helper_overhead_cells(const std::map<std::string, std::str
   try {
     const int line = detail_int_or_zero(details, "line");
     const Expression expression = parse_expression(expression_it->second, line);
-    if (expression.kind == "call" && lower_ascii(expression.callee) == "cell_mask" &&
-        expression.args.size() == 2U && expression.args.at(0).kind == "identifier" &&
-        expression.args.at(1).kind == "identifier" && expression.args.at(0).name == temps.at(0) &&
-        expression.args.at(1).name == temps.at(1)) {
+    if (expression_is_cell_mask_of_stack_temps(expression, temps)) {
       // Stack-only cell_mask helper entries can now consume the incoming X/Y
-      // values in row-first order and pay one swap instead of two.
+      // values in either proven argument order.
       return 11;
     }
   } catch (const std::exception&) {
@@ -48336,6 +49626,23 @@ std::string rejected_candidate_required_action(const CandidateReport& candidate,
   if (candidate.site == "candidate-search")
     return "improve-candidate-cost-model-or-proof";
   return "inspect-rejected-candidate";
+}
+
+std::string rejected_candidate_blocked_proof(
+    const std::map<std::string, std::string>& details, const std::string& blocker_kind) {
+  if (blocker_kind == "nonwinning-candidate")
+    return "none";
+  const auto family_it = details.find("proofFamily");
+  const auto failure_it = details.find("proofFailure");
+  if (family_it != details.end() && failure_it != details.end())
+    return family_it->second + ":" + failure_it->second;
+  const auto disposition_it = details.find("proofDisposition");
+  if (disposition_it != details.end())
+    return disposition_it->second;
+  const auto proof_it = details.find("proofStatus");
+  if (proof_it != details.end())
+    return proof_it->second;
+  return blocker_kind.empty() ? std::string("unknown") : blocker_kind;
 }
 
 std::optional<std::pair<int, int>> selector_data_payload_compression_requirement(
@@ -48425,6 +49732,11 @@ void attach_rejected_candidate_size_details(std::map<std::string, std::string>& 
                       : blocker_kind);
   details.emplace("requiredAction",
                   rejected_candidate_required_action(candidate, blocker_kind, savings));
+  details["blockedProof"] = rejected_candidate_blocked_proof(details, blocker_kind);
+  const auto required_action_it = details.find("requiredAction");
+  details["blockedProofAction"] =
+      required_action_it == details.end() ? std::string("inspect-rejected-candidate")
+                                          : required_action_it->second;
 }
 
 std::string size_opportunity_potential_group(const SizeOpportunityReport& opportunity,

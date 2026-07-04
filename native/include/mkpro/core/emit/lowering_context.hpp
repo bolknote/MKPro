@@ -99,8 +99,7 @@ struct ExpressionHelperStackEntryRequest {
   std::string key;
   std::string helper_label;
   std::string entry_label;
-  std::string first;
-  std::string second;
+  std::vector<std::string> temps;
   int call_sites = 0;
 };
 

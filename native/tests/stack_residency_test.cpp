@@ -303,6 +303,226 @@ program DualStack {
   }
 
   {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackResidentIndexedUnaryBuiltinUpdateConsumer {
+  state {
+    cells: packed[1..3] = [10, 20, 30]
+    slot: counter 1..3 = 2
+    x: packed = -8.75
+    y: packed = 3
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    cells[slot] += abs(tmp)
+    halt(cells[slot])
+  }
+}
+)mkpro",
+                                                       true);
+    require_clean_compile(result, "stack-resident indexed unary builtin update consumer");
+    require(has_optimization(result, "stack-resident-indexed-temp"),
+            "indexed unary update should keep tmp on the stack");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "indexed unary update should not store tmp before the indexed update");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "indexed unary update should not recall tmp inside the indexed update");
+    require(count_steps_with_comment(result, "stack temp abs") == 1,
+            "indexed unary update should apply abs() to the stack-carried temp");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackResidentIndexedSumUpdateConsumer {
+  state {
+    cells: packed[1..3] = [10, 20, 30]
+    slot: counter 1..3 = 2
+    x: packed = 1
+    y: packed = 2
+    bonus: packed = 4
+    tmp: packed = 0
+  }
+
+  loop {
+    tmp = x + y
+    cells[slot] += sum(tmp, bonus)
+    halt(cells[slot])
+  }
+}
+)mkpro",
+                                                       true);
+    require_clean_compile(result, "stack-resident indexed sum update consumer");
+    require(has_optimization(result, "stack-resident-indexed-temp"),
+            "indexed sum update should keep tmp on the stack");
+    require(has_optimization(result, "sum-primitive-lowering"),
+            "indexed sum update should still lower sum(...) through the primitive path");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "indexed sum update should not store tmp before the indexed update");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "indexed sum update should not recall tmp inside the indexed update");
+  }
+
+  {
+    CompileOptions options;
+    options.budget = 999999;
+    options.stack_resident_temps = true;
+    options.disable_candidate_search = true;
+    const CompileResult result = compile_source(R"mkpro(
+program StackResidentIndexedInlinePackedScoreUpdateConsumer {
+  state {
+    cells: packed[1..3] = [10, 20, 30]
+    slot: counter 1..3 = 2
+    line: packed = 44444.4
+    x: counter 0..7 = 1
+    y: counter 0..7 = 2
+    tmp: counter 0..7 = 0
+  }
+
+  loop {
+    tmp = x + y
+    cells[slot] += packed_score(line, tmp)
+    halt(cells[slot])
+  }
+}
+)mkpro",
+                                                options);
+    require_clean_compile(result, "stack-resident indexed inline packed_score update consumer");
+    require(has_optimization(result, "stack-resident-indexed-temp"),
+            "indexed inline packed_score update should keep tmp on the stack");
+    require(has_optimization(result, "packed-score-inline-stack-argument-lowering"),
+            "indexed inline packed_score update should consume tmp from the stack");
+    require(has_optimization(result, "packed-grid-primitive-lowering"),
+            "indexed inline packed_score update should still report packed-grid lowering");
+    require(!has_optimization(result, "packed-score-stack-helper"),
+            "single inline packed_score update should not force the shared helper body");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "indexed inline packed_score update should not store tmp before the indexed update");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "indexed inline packed_score update should not recall tmp inside the indexed update");
+  }
+
+  {
+    CompileOptions options;
+    options.budget = 999999;
+    options.stack_resident_temps = true;
+    options.disable_candidate_search = true;
+    const CompileResult result = compile_source(R"mkpro(
+program StackResidentProcInlinePackedScoreUpdateConsumer {
+  state {
+    cells: packed[1..3] = [10, 20, 30]
+    slot: counter 1..3 = 2
+    line: packed = 44444.4
+    x: counter 0..7 = 1
+    y: counter 0..7 = 2
+    tmp: counter 0..7 = 0
+  }
+
+  fn hot() {
+    tmp = x + y
+    cells[slot] += packed_score(line, tmp)
+  }
+
+  loop {
+    hot()
+    hot()
+    hot()
+    halt(cells[slot])
+  }
+}
+)mkpro",
+                                                options);
+    require_clean_compile(result, "stack-resident proc inline packed_score update consumer");
+    require(has_optimization(result, "stack-resident-indexed-temp"),
+            "proc inline packed_score update should keep tmp on the stack inside the helper");
+    require(has_optimization(result, "packed-score-inline-stack-argument-lowering"),
+            "proc inline packed_score update should consume tmp from the stack");
+    require(!has_optimization(result, "packed-score-stack-helper"),
+            "single static packed_score in proc should not force the shared helper body");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "proc inline packed_score update should not store tmp in the helper body");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "proc inline packed_score update should not recall tmp in the helper body");
+  }
+
+  {
+    CompileOptions options;
+    options.budget = 999999;
+    options.stack_resident_temps = true;
+    options.shared_bit_mask_helper_calls = true;
+    options.disable_candidate_search = true;
+    const CompileResult result = compile_source(R"mkpro(
+program StackResidentIndexedBitMaskUpdateConsumer {
+  state {
+    cells: packed[1..3] = [10, 20, 30]
+    slot: counter 1..3 = 2
+    x: counter 0..7 = 1
+    y: counter 0..7 = 2
+    tmp: counter 0..7 = 0
+  }
+
+  loop {
+    tmp = x + y
+    cells[slot] += bit_mask(tmp)
+    halt(cells[slot])
+  }
+}
+)mkpro",
+                                                options);
+    require_clean_compile(result, "stack-resident indexed bit_mask update consumer");
+    require(has_optimization(result, "stack-resident-indexed-temp"),
+            "indexed bit_mask update should keep tmp on the stack");
+    require(has_optimization(result, "bit-mask-helper-stack-argument-call"),
+            "indexed bit_mask update should enter the shared helper with tmp in X");
+    require(has_optimization(result, "bit-mask-helper-call"),
+            "indexed bit_mask update should still use the shared helper body");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "indexed bit_mask update should not store tmp before the indexed update");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "indexed bit_mask update should not recall tmp inside the indexed update");
+  }
+
+  {
+    CompileOptions options;
+    options.budget = 999999;
+    options.stack_resident_temps = true;
+    options.disable_candidate_search = true;
+    const CompileResult result = compile_source(R"mkpro(
+program StackResidentIndexedPackedScoreUpdateConsumer {
+  state {
+    cells: packed[1..3] = [10, 20, 30]
+    slot: counter 1..3 = 2
+    line: packed = 44444.4
+    index: counter 0..7 = 3
+    tmp: counter 0..7 = 0
+  }
+
+  loop {
+    tmp = index
+    cells[slot] += packed_score(line, tmp)
+    cells[slot] += packed_score(line, index)
+    cells[slot] += packed_score(line, index + 1)
+    halt(cells[slot])
+  }
+}
+)mkpro",
+                                                options);
+    require_clean_compile(result, "stack-resident indexed packed_score update consumer");
+    require(has_optimization(result, "stack-resident-indexed-temp"),
+            "indexed packed_score update should keep tmp on the stack");
+    require(has_optimization(result, "packed-score-helper-stack-argument-call"),
+            "indexed packed_score update should enter the shared helper with tmp in X");
+    require(has_optimization(result, "packed-score-stack-helper"),
+            "indexed packed_score update should still use the shared helper body");
+    require(count_steps_with_comment_prefix_and_opcode(result, "packed_score helper", 0x53) == 3,
+            "indexed packed_score update should emit one helper call per scoring term");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "indexed packed_score update should not store tmp before the indexed update");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "indexed packed_score update should not recall tmp inside the indexed update");
+  }
+
+  {
     const std::string stack_helper_abi_source = R"mkpro(
 program StackHelperAbiAggregation {
   state {
@@ -438,6 +658,96 @@ program StackHelperAbiAggregation {
                 nullptr,
             "stack helper argument-entry variant should satisfy the stack-helper ABI blocker");
 
+    const std::string reversed_stack_helper_abi_source = R"mkpro(
+program StackHelperAbiReversed {
+  state {
+    x: counter 1..4 = 1
+    y: counter 1..4 = 2
+    sx: counter 1..4 = 1
+    sy: counter 1..4 = 1
+    line: packed = 0
+    out: packed = 0
+  }
+
+  loop {
+    part_a()
+    part_b()
+    part_c()
+    halt(out)
+  }
+
+  fn part_a() {
+    sx = x
+    sy = y
+    line = cell_mask(sy, sx)
+    out += line
+    sx = x
+    sy = y
+    line = cell_mask(sy, sx)
+    out += line
+  }
+
+  fn part_b() {
+    sx = x
+    sy = y
+    line = cell_mask(sy, sx)
+    out += line
+    sx = x
+    sy = y
+    line = cell_mask(sy, sx)
+    out += line
+  }
+
+  fn part_c() {
+    sx = x
+    sy = y
+    line = cell_mask(sy, sx)
+    out += line
+    sx = x
+    sy = y
+    line = cell_mask(sy, sx)
+    out += line
+  }
+}
+)mkpro";
+    const CompileResult reversed_result = compile_stack_analysis(reversed_stack_helper_abi_source);
+    require_clean_compile(reversed_result, "reversed stack helper ABI aggregation");
+    const SizeAbiBlockerReport* reversed_blocker =
+        find_size_abi_blocker(reversed_result, "stack-helper-abi", "cell_mask(sy, sx)");
+    require(reversed_blocker != nullptr,
+            "size attribution should report reversed stack helper ABI blockers");
+    require(reversed_blocker->details.contains("estimatedStackEntryOverheadCells") &&
+                reversed_blocker->details.at("estimatedStackEntryOverheadCells") == "11" &&
+                reversed_blocker->details.contains("estimatedNetSavings") &&
+                reversed_blocker->details.at("estimatedNetSavings") == "1" &&
+                reversed_blocker->details.contains("costModelAction") &&
+                reversed_blocker->details.at("costModelAction") ==
+                    "implement-stack-argument-helper-entry",
+            "reversed stack helper ABI report should model a stack-entry implementation");
+
+    const CompileResult reversed_stack_entry =
+        compile_source(reversed_stack_helper_abi_source, stack_entry_options);
+    require_clean_compile(reversed_stack_entry, "reversed stack helper argument-entry variant");
+    require(static_cast<int>(reversed_stack_entry.steps.size()) ==
+                static_cast<int>(reversed_result.steps.size()) - 1,
+            "reversed stack helper argument-entry variant should realize the one-cell "
+            "stack-entry saving");
+    require(has_optimization(reversed_stack_entry, "expression-helper-stack-entry-primary"),
+            "reversed stack helper argument-entry variant should emit a primary stack helper "
+            "entry when all calls use the stack ABI");
+    require(count_steps_with_comment_prefix_and_opcode(
+                reversed_stack_entry, "expr cell_mask(sy, sx) stack entry", 0x53) == 6,
+            "reversed stack helper argument-entry variant should route stack-resident "
+            "cell_mask calls through the stack entry");
+    require(count_steps_with_comment(reversed_stack_entry,
+                                     "expression helper stack-entry pow10") >= 1,
+            "reversed stack helper argument-entry variant should compute the X-resident "
+            "argument before swapping to the row argument");
+    require(find_size_abi_blocker(reversed_stack_entry, "stack-helper-abi",
+                                  "cell_mask(sy, sx)") == nullptr,
+            "reversed stack helper argument-entry variant should satisfy the stack-helper ABI "
+            "blocker");
+
     CompileOptions selected_options;
     selected_options.analysis = true;
     selected_options.budget = 999999;
@@ -495,6 +805,212 @@ program ValueAwareDirectStackInputNestedCall {
     require(hot->details.contains("valueAwareStackInputPlanStatus") &&
                 hot->details.at("valueAwareStackInputPlanStatus") == "direct-stack-fit",
             "nested calls should not block profitable stack inputs that are dead before them");
+  }
+
+  {
+    CompileOptions options;
+    options.budget = 999999;
+    options.stack_resident_temps = true;
+    options.shared_bit_mask_helper_calls = true;
+    options.disable_candidate_search = true;
+    const CompileResult result = compile_source(R"mkpro(
+program StackBitMaskHelperArg {
+  state {
+    index: counter 0..7 = 3
+    guard: flag = false
+    tmp: counter 0..7 = 0
+    out: packed = 0
+  }
+
+  fn hot() {
+    tmp = index
+    if guard {
+    }
+    out = bit_mask(tmp)
+  }
+
+  loop {
+    hot()
+    hot()
+    halt(out)
+  }
+}
+)mkpro",
+                                                options);
+    require_clean_compile(result, "stack-resident bit_mask helper argument");
+    require(has_optimization(result, "stack-carried-assignment-delayed"),
+            "bit_mask(tmp) should be recognized as a delayed current-X consumer");
+    require(has_optimization(result, "bit-mask-helper-stack-argument-call"),
+            "bit_mask(tmp) should call the shared helper with tmp restored directly to X");
+    require(has_optimization(result, "bit-mask-helper-call"),
+            "stack-resident bit_mask should still use the shared bit-mask helper");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-resident bit_mask helper argument should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-resident bit_mask helper argument should not recall tmp");
+  }
+
+  {
+    CompileOptions options;
+    options.budget = 999999;
+    options.stack_resident_temps = true;
+    options.disable_candidate_search = true;
+    const CompileResult result = compile_source(R"mkpro(
+program StackPackedScoreHelperIndexArg {
+  state {
+    line: packed = 44444.4
+    index: counter 0..7 = 3
+    guard: flag = false
+    tmp: counter 0..7 = 0
+    out: packed = 0
+  }
+
+  fn hot() {
+    tmp = index
+    if guard {
+    }
+    out += packed_score(line, tmp)
+    out += packed_score(line, index)
+    out += packed_score(line, index + 1)
+  }
+
+  loop {
+    hot()
+    halt(out)
+  }
+}
+)mkpro",
+                                                options);
+    require_clean_compile(result, "stack-resident packed_score helper index argument");
+    require(has_optimization(result, "stack-carried-assignment-delayed"),
+            "packed_score(line, tmp) should be recognized as a delayed current-X consumer");
+    require(has_optimization(result, "packed-score-helper-stack-argument-call"),
+            "packed_score(line, tmp) should call the shared helper with tmp restored directly");
+    require(has_optimization(result, "packed-score-current-x-update"),
+            "packed_score(line, tmp) update should add the accumulator after current-X scoring");
+    require(has_optimization(result, "packed-score-stack-helper"),
+            "stack-resident packed_score should still use the shared packed_score helper body");
+    require(count_steps_with_comment_prefix_and_opcode(result, "packed_score helper", 0x53) == 3,
+            "stack-resident packed_score should emit one helper call per hot() call");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-resident packed_score helper argument should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-resident packed_score helper argument should not recall tmp");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackPackedScoreInlineCurrentXIndexArg {
+  state {
+    line: packed = 44444.4
+    index: counter 0..7 = 3
+    guard: flag = false
+    tmp: counter 0..7 = 0
+    out: packed = 0
+  }
+
+  fn hot() {
+    tmp = index
+    if guard {
+    }
+    out += packed_score(line, tmp)
+  }
+
+  loop {
+    hot()
+    halt(out)
+  }
+}
+)mkpro");
+    require_clean_compile(result, "stack-resident inline packed_score current-X index argument");
+    require(has_optimization(result, "stack-carried-assignment-delayed"),
+            "inline packed_score(line, tmp) should be recognized as a delayed current-X "
+            "consumer without requiring the shared helper");
+    require(has_optimization(result, "packed-score-inline-stack-argument-lowering"),
+            "inline packed_score(line, tmp) should consume tmp directly from X");
+    require(has_optimization(result, "packed-score-current-x-update"),
+            "inline packed_score(line, tmp) update should add the accumulator after current-X "
+            "scoring");
+    require(!has_optimization(result, "packed-score-stack-helper"),
+            "single inline current-X packed_score should not force the shared helper body");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "inline current-X packed_score index argument should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "inline current-X packed_score index argument should not recall tmp");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackPackedScoreInlineCurrentXLineArg {
+  state {
+    line: packed = 44444.4
+    index: counter 0..7 = 3
+    guard: flag = false
+    tmp_line: packed = 0
+    out: packed = 0
+  }
+
+  fn hot() {
+    tmp_line = line
+    if guard {
+    }
+    out += packed_score(tmp_line, index)
+  }
+
+  loop {
+    hot()
+    halt(out)
+  }
+}
+)mkpro");
+    require_clean_compile(result, "stack-resident inline packed_score current-X line argument");
+    require(has_optimization(result, "stack-carried-assignment-delayed"),
+            "inline packed_score(tmp_line, index) should keep the line value in X until the "
+            "score update");
+    require(has_optimization(result, "packed-score-inline-stack-argument-lowering"),
+            "inline packed_score(tmp_line, index) should consume the line argument directly "
+            "from X");
+    require(has_optimization(result, "packed-score-current-x-update"),
+            "inline packed_score(tmp_line, index) update should add the accumulator after "
+            "current-X scoring");
+    require(!has_optimization(result, "packed-score-stack-helper"),
+            "single inline current-X packed_score line argument should not force the shared "
+            "helper body");
+    require(count_steps_with_comment(result, "set tmp_line") == 0,
+            "inline current-X packed_score line argument should not store tmp_line");
+    require(count_steps_with_comment(result, "recall tmp_line") == 0,
+            "inline current-X packed_score line argument should not recall tmp_line");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program StackCarriedPowAlias {
+  state {
+    index: counter 0..7 = 3
+    guard: flag = false
+    tmp: counter 0..7 = 0
+    out: packed = 0
+  }
+
+  loop {
+    tmp = index
+    if guard {
+    }
+    out = pow(10, tmp)
+    halt(out)
+  }
+}
+)mkpro",
+                                                       false);
+    require_clean_compile(result, "stack-carried pow(10, tmp) alias");
+    require(has_optimization(result, "stack-carried-assignment-delayed"),
+            "pow(10, tmp) should be recognized as a delayed current-X consumer");
+    require(has_optimization(result, "pow10-opcode-lowering"),
+            "pow(10, tmp) should still lower through the native pow10 opcode");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "stack-carried pow(10, tmp) should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "stack-carried pow(10, tmp) should not recall tmp");
   }
 
   {
@@ -2039,6 +2555,34 @@ program StackResidentUnaryCallControlFlow {
             "stack-resident unary call should apply frac() to the restored stack temp");
     require(count_steps_with_comment(result, "recall a") == 0,
             "stack-resident unary call should not recall the temp from memory");
+  }
+
+  {
+    const CompileResult result = compile_stack_variant(R"mkpro(
+program IndexedSubtractIndirectYReuse {
+  state {
+    floor: counter 1..2 = 1
+    pos: packed = 0.1
+    rows: group(1..2) {
+      row: packed = 8.5555555
+    }
+    out: packed = 0
+  }
+
+  loop {
+    rows[floor].row -= frac(bit_and(rows[floor].row, 5 * (pos + 1))) / pos * pos
+    out = frac(bit_and(rows[floor].row, 5 * (pos + 1))) / pos
+    halt(out)
+  }
+}
+)mkpro");
+    require_clean_compile(result, "indexed subtract indirect-Y reuse");
+    require(has_optimization(result, "indexed-subtract-indirect-y-reuse"),
+            "indexed subtract should reuse the helper-preserved indexed row from Y");
+    require(has_optimization(result, "expression-helper"),
+            "digit extraction should be shared so the Y-preservation proof matches the emitted helper");
+    require(count_steps_with_comment_prefix_and_opcode(result, "indexed recall rows.row", 0xdd) == 1,
+            "only the shared digit helper body should recall the indexed row through Rd");
   }
 }
 
