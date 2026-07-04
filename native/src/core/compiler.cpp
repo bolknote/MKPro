@@ -2162,11 +2162,11 @@ int x_param_packed_score_shared_tail_eligible_call_count_in_rule(
 
   std::size_t tail_start = 1U;
   while (tail_start + 4U < rule.body.size()) {
-    const int next_count =
+    const std::optional<int> next_count =
         packed_score_sequence_accumulator_syntax_count(rule.body.at(tail_start), *target);
-    if (next_count <= 0)
+    if (!next_count.has_value() || *next_count <= 0)
       return 0;
-    prefix_count += next_count;
+    prefix_count += *next_count;
     ++tail_start;
   }
   if (prefix_count < 2 || tail_start + 4U != rule.body.size())
@@ -18477,6 +18477,32 @@ bool collect_packed_score_sequence_accumulator_steps(
   }
 
   return false;
+}
+
+bool collect_packed_score_sequence_accumulator_terms(LoweringContext& context,
+                                                     const V2Statement& statement,
+                                                     const std::string& target,
+                                                     std::vector<PackedScoreTerm>& terms,
+                                                     std::optional<Expression>& initial) {
+  std::vector<PackedScoreAccumulatorStep> steps;
+  std::size_t term_count = 0;
+  std::optional<Expression> next_initial = initial;
+  if (!collect_packed_score_sequence_accumulator_steps(context, statement, target, steps,
+                                                       term_count, next_initial)) {
+    return false;
+  }
+  if (term_count != steps.size())
+    return false;
+  std::vector<PackedScoreTerm> collected;
+  collected.reserve(steps.size());
+  for (const PackedScoreAccumulatorStep& step : steps) {
+    if (step.kind != PackedScoreAccumulatorStep::Kind::Term)
+      return false;
+    collected.push_back(step.term);
+  }
+  initial = std::move(next_initial);
+  terms.insert(terms.end(), collected.begin(), collected.end());
+  return true;
 }
 
 std::optional<PackedScoreTerm> x_param_packed_score_accumulator_expression_term(
