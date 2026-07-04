@@ -18485,8 +18485,12 @@ bool lower_packed_score_sum_accumulator_to_x(LoweringContext& context,
   context.optimizations.push_back(OptimizationReport{
       .name = "packed-score-sum-accumulator",
       .detail = "Lowered " + std::to_string(term_count) +
-                " packed_score() terms as one " +
-                std::string(has_negative_term ? "signed " : "") +
+                " packed_score() terms" +
+                std::string(has_negative_term
+                                ? " (positive=" + std::to_string(positive_term_count) +
+                                      ", negative=" + std::to_string(negative_term_count) + ")"
+                                : "") +
+                " as one " + std::string(has_negative_term ? "signed " : "") +
                 "stack accumulator pipeline.",
   });
   return true;
@@ -50208,48 +50212,101 @@ struct PackedScoreAccumulatorHelperUsage {
   int groups = 0;
   int x_param_terms = 0;
   int shared_tail_terms = 0;
+  int signed_positive_terms = 0;
+  int signed_negative_terms = 0;
+  int signed_groups = 0;
 };
 
-int packed_score_accumulator_terms_from_detail(const OptimizationReport& optimization) {
+struct PackedScoreAccumulatorTermBreakdown {
+  int positive_terms = 0;
+  int negative_terms = 0;
+  bool signed_expression = false;
+
+  int total_terms() const { return positive_terms + negative_terms; }
+};
+
+PackedScoreAccumulatorTermBreakdown
+packed_score_accumulator_terms_from_detail(const OptimizationReport& optimization) {
+  static const std::regex signed_terms(
+      R"((?:Lowered|Accumulated)\s+(\d+)\s+packed_score\(\)\s+terms\s+\(positive=(\d+),\s+negative=(\d+)\))");
   static const std::regex numeric_terms(
       R"((?:Lowered|Accumulated)\s+(\d+)\s+packed_score\(\)\s+terms)");
   std::smatch match;
+  if (std::regex_search(optimization.detail, match, signed_terms)) {
+    try {
+      const int total = std::stoi(match[1].str());
+      const int positive = std::stoi(match[2].str());
+      const int negative = std::stoi(match[3].str());
+      if (total != positive + negative)
+        return {};
+      return PackedScoreAccumulatorTermBreakdown{
+          .positive_terms = positive,
+          .negative_terms = negative,
+          .signed_expression = true,
+      };
+    } catch (const std::exception&) {
+      return {};
+    }
+  }
   if (std::regex_search(optimization.detail, match, numeric_terms)) {
     try {
-      return std::stoi(match[1].str());
+      return PackedScoreAccumulatorTermBreakdown{.positive_terms = std::stoi(match[1].str())};
     } catch (const std::exception&) {
-      return 0;
+      return {};
     }
   }
   if (optimization.name == "packed-line-family-score-accumulator" &&
       optimization.detail.find("Accumulated four packed_score() terms") != std::string::npos) {
-    return 4;
+    return PackedScoreAccumulatorTermBreakdown{.positive_terms = 4};
   }
   if (optimization.name == "x-param-packed-score-line-stack-accumulate")
-    return 1;
-  return 0;
+    return PackedScoreAccumulatorTermBreakdown{.positive_terms = 1};
+  return {};
 }
 
 std::map<std::string, PackedScoreAccumulatorHelperUsage>
 packed_score_accumulator_helper_usage_by_label(
     const std::vector<OptimizationReport>& optimizations) {
   std::map<std::string, PackedScoreAccumulatorHelperUsage> usage_by_label;
-  for (const OptimizationReport& optimization : optimizations) {
-    if (optimization.name == "packed-score-accumulator-helper")
-      continue;
-    const int terms = packed_score_accumulator_terms_from_detail(optimization);
+  const auto add_usage = [&](const std::string& label, int terms, bool signed_expression,
+                             bool negative_terms, bool x_param, bool packed_line) {
     if (terms <= 0)
-      continue;
-    const bool packed_line = optimization.name == "packed-line-family-score-accumulator";
-    const std::string label =
-        packed_line ? "packed-line score accumulator helper" : "packed_score accumulator helper";
+      return;
     PackedScoreAccumulatorHelperUsage& usage = usage_by_label[label];
     usage.terms += terms;
     ++usage.groups;
-    if (optimization.name == "x-param-packed-score-line-stack-accumulate")
+    if (signed_expression) {
+      ++usage.signed_groups;
+      if (negative_terms) {
+        usage.signed_negative_terms += terms;
+      } else {
+        usage.signed_positive_terms += terms;
+      }
+    }
+    if (x_param)
       usage.x_param_terms += terms;
     if (packed_line)
       usage.shared_tail_terms += terms;
+  };
+  for (const OptimizationReport& optimization : optimizations) {
+    if (optimization.name == "packed-score-accumulator-helper" ||
+        optimization.name == "packed-score-subtractor-accumulator-helper")
+      continue;
+    const PackedScoreAccumulatorTermBreakdown terms =
+        packed_score_accumulator_terms_from_detail(optimization);
+    if (terms.total_terms() <= 0)
+      continue;
+    const bool packed_line = optimization.name == "packed-line-family-score-accumulator";
+    const bool x_param = optimization.name == "x-param-packed-score-line-stack-accumulate";
+    if (packed_line) {
+      add_usage("packed-line score accumulator helper", terms.positive_terms,
+                terms.signed_expression, /*negative_terms=*/false, x_param, packed_line);
+      continue;
+    }
+    add_usage("packed_score accumulator helper", terms.positive_terms,
+              terms.signed_expression, /*negative_terms=*/false, x_param, packed_line);
+    add_usage("packed_score subtractor helper", terms.negative_terms, terms.signed_expression,
+              /*negative_terms=*/true, x_param, packed_line);
   }
   return usage_by_label;
 }
@@ -50264,7 +50321,9 @@ void attach_packed_score_accumulator_helper_details(
     if (helper_it == helper_summaries.end())
       continue;
     SizeHelperSummaryReport& helper = helper_it->second;
-    helper.details["role"] = "packed-score-accumulator";
+    helper.details["role"] = label == "packed_score subtractor helper"
+                                  ? "packed-score-subtractor-accumulator"
+                                  : "packed-score-accumulator";
     helper.details["accumulatorTerms"] = std::to_string(usage.terms);
     helper.details["accumulatorGroups"] = std::to_string(usage.groups);
     helper.details["bodyCells"] = std::to_string(helper.body_cells);
@@ -50278,6 +50337,20 @@ void attach_packed_score_accumulator_helper_details(
     if (label == "packed_score accumulator helper") {
       helper.details["pipelineShape"] = "expression-accumulator";
       helper.details["selectionThresholdTerms"] = "3";
+      if (usage.signed_positive_terms > 0) {
+        helper.details["signedPositiveTerms"] = std::to_string(usage.signed_positive_terms);
+        helper.details["signedAccumulatorGroups"] = std::to_string(usage.signed_groups);
+        helper.details["signedSubtractorHelper"] = "packed_score subtractor helper";
+        if (usage.terms == usage.signed_positive_terms)
+          helper.details["pipelineShape"] = "signed-expression-accumulator";
+      }
+    }
+    if (label == "packed_score subtractor helper") {
+      helper.details["pipelineShape"] = "signed-expression-accumulator";
+      helper.details["selectionThresholdTerms"] = "signed-local-profit-model";
+      helper.details["signedNegativeTerms"] = std::to_string(usage.signed_negative_terms);
+      helper.details["signedAccumulatorGroups"] = std::to_string(usage.signed_groups);
+      helper.details["pairedAccumulatorHelper"] = "packed_score accumulator helper";
     }
     if (usage.x_param_terms > 0)
       helper.details["xParamTerms"] = std::to_string(usage.x_param_terms);

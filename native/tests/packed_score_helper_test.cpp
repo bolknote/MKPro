@@ -327,6 +327,47 @@ program PackedScoreSignedDirectExpressionAccumulator {
   require(count_steps_with_comment(signed_direct_expression_sum,
                                    "packed_score accumulator zero") == 0,
           "signed packed_score expression should use the addend as accumulator");
+  const SizeHelperSummaryReport* signed_accumulator_helper =
+      find_size_helper(signed_direct_expression_sum, "packed_score accumulator helper");
+  require(signed_accumulator_helper != nullptr,
+          "signed packed_score expression should expose positive accumulator helper summary");
+  require(signed_accumulator_helper->details.contains("role") &&
+              signed_accumulator_helper->details.at("role") == "packed-score-accumulator" &&
+              signed_accumulator_helper->details.contains("accumulatorTerms") &&
+              signed_accumulator_helper->details.at("accumulatorTerms") == "5" &&
+              signed_accumulator_helper->details.contains("signedPositiveTerms") &&
+              signed_accumulator_helper->details.at("signedPositiveTerms") == "5" &&
+              signed_accumulator_helper->details.contains("signedSubtractorHelper") &&
+              signed_accumulator_helper->details.at("signedSubtractorHelper") ==
+                  "packed_score subtractor helper" &&
+              signed_accumulator_helper->details.contains("pipelineShape") &&
+              signed_accumulator_helper->details.at("pipelineShape") ==
+                  "signed-expression-accumulator" &&
+              signed_accumulator_helper->details.contains("callOccurrences") &&
+              signed_accumulator_helper->details.at("callOccurrences") == "5",
+          "signed positive helper summary should expose signed term split and call accounting");
+  const SizeHelperSummaryReport* signed_subtractor_helper =
+      find_size_helper(signed_direct_expression_sum, "packed_score subtractor helper");
+  require(signed_subtractor_helper != nullptr,
+          "signed packed_score expression should expose subtractor helper summary");
+  require(signed_subtractor_helper->details.contains("role") &&
+              signed_subtractor_helper->details.at("role") ==
+                  "packed-score-subtractor-accumulator" &&
+              signed_subtractor_helper->details.contains("accumulatorTerms") &&
+              signed_subtractor_helper->details.at("accumulatorTerms") == "5" &&
+              signed_subtractor_helper->details.contains("signedNegativeTerms") &&
+              signed_subtractor_helper->details.at("signedNegativeTerms") == "5" &&
+              signed_subtractor_helper->details.contains("pairedAccumulatorHelper") &&
+              signed_subtractor_helper->details.at("pairedAccumulatorHelper") ==
+                  "packed_score accumulator helper" &&
+              signed_subtractor_helper->details.contains("pipelineShape") &&
+              signed_subtractor_helper->details.at("pipelineShape") ==
+                  "signed-expression-accumulator" &&
+              signed_subtractor_helper->details.contains("bodyCells") &&
+              signed_subtractor_helper->details.contains("callSiteCells") &&
+              signed_subtractor_helper->details.contains("callOccurrences") &&
+              signed_subtractor_helper->details.at("callOccurrences") == "5",
+          "signed subtractor helper summary should expose negative term split and cost details");
 
   const CompileResult direct_expression_sum_with_negative_initial = compile_source(R"mkpro(
 program PackedScoreDirectExpressionAccumulatorWithNegativeInitial {
