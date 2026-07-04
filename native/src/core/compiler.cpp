@@ -47877,6 +47877,22 @@ std::string rejected_candidate_required_action(const CandidateReport& candidate,
   return "inspect-rejected-candidate";
 }
 
+std::optional<std::pair<int, int>> selector_data_payload_compression_requirement(
+    const std::map<std::string, std::string>& details) {
+  const auto it = details.find("selectorDataPayloadCompressionRequirement");
+  if (it == details.end())
+    return std::nullopt;
+  static const std::regex requirement_regex(R"(^\s*(\d+)\s*->\s*(\d+)\s*$)");
+  std::smatch match;
+  if (!std::regex_match(it->second, match, requirement_regex))
+    return std::nullopt;
+  try {
+    return std::pair<int, int>{std::stoi(match[1].str()), std::stoi(match[2].str())};
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
 void attach_rejected_candidate_size_details(std::map<std::string, std::string>& details,
                                             const CandidateReport& candidate,
                                             int current_steps,
@@ -47906,6 +47922,41 @@ void attach_rejected_candidate_size_details(std::map<std::string, std::string>& 
         "unestimated-payload-access-overhead";
     details["selectorDataPayloadPackingCostModelRequirement"] =
         "packed-or-split-access-overhead-must-not-exceed-candidate-savings";
+    if (const std::optional<std::pair<int, int>> compression =
+            selector_data_payload_compression_requirement(details);
+        compression.has_value() && compression->first > compression->second) {
+      const int registers_to_pack = compression->first - compression->second;
+      const int min_packed_logical_accesses = registers_to_pack * 2;
+      const int net_lower_bound_savings = savings - min_packed_logical_accesses;
+      details["selectorDataPayloadRegistersToPackMinimum"] =
+          std::to_string(registers_to_pack);
+      details["selectorDataPayloadMinPackedLogicalAccesses"] =
+          std::to_string(min_packed_logical_accesses);
+      details["selectorDataPayloadMinPackedAccessOverheadCells"] =
+          std::to_string(min_packed_logical_accesses);
+      details["selectorDataPayloadPackingLowerBoundModel"] =
+          "each-register-saved-requires-two-packed-logical-access-extractions";
+      details["selectorDataPayloadPackingNetLowerBoundCells"] =
+          std::to_string(net_lower_bound_savings);
+      details["estimatedCandidateStepsAfterPayloadPackingLowerBound"] =
+          std::to_string(candidate.steps + min_packed_logical_accesses);
+      if (net_lower_bound_savings <= 0) {
+        details["selectorDataPayloadPackingLowerBoundStatus"] =
+            net_lower_bound_savings == 0 ? "break-even-with-candidate-savings"
+                                         : "exceeds-candidate-savings";
+        details["selectorDataPayloadPackingCostModelStatus"] =
+            "minimum-packed-access-overhead-not-positive";
+        details["selectorDataPayloadPackingCostModelRequirement"] =
+            "find-nonpacked-selector-layout-or-reduce-packed-access-overhead";
+        details["costModelAction"] =
+            "find-nonpacked-selector-layout-or-reduce-packed-access-overhead";
+        details["requiredAction"] =
+            "find-nonpacked-selector-layout-or-reduce-payload-access-overhead";
+      } else {
+        details["selectorDataPayloadPackingLowerBoundStatus"] =
+            "below-candidate-savings";
+      }
+    }
   }
   details.emplace("proofStatus",
                   blocker_kind == "nonwinning-candidate"
@@ -49749,12 +49800,43 @@ SizeAttributionReport build_size_attribution_report(
       details.emplace("savingsAggregation", "alternative-candidate");
     const std::string blocker_kind = size_opportunity_blocker_kind(candidate);
     attach_rejected_candidate_size_details(details, candidate, current_steps, blocker_kind);
+    int opportunity_savings = current_steps - candidate.steps;
+    int opportunity_candidate_steps = candidate.steps;
+    if (const auto net_lower_bound_it =
+            details.find("selectorDataPayloadPackingNetLowerBoundCells");
+        net_lower_bound_it != details.end()) {
+      try {
+        const int net_lower_bound_savings = std::stoi(net_lower_bound_it->second);
+        if (net_lower_bound_savings <= 0) {
+          opportunity_savings = net_lower_bound_savings;
+          if (const auto estimated_steps_it =
+                  details.find("estimatedCandidateStepsAfterPayloadPackingLowerBound");
+              estimated_steps_it != details.end()) {
+            opportunity_candidate_steps = std::stoi(estimated_steps_it->second);
+          } else {
+            opportunity_candidate_steps = current_steps - opportunity_savings;
+          }
+          details["candidateStepsStatus"] =
+              net_lower_bound_savings == 0
+                  ? "estimated-payload-packing-lower-bound-break-even"
+                  : "estimated-payload-packing-lower-bound-larger-than-current";
+          details["sizeImpactStatus"] = "estimated-nonpositive-net";
+          details["netSavingsStatus"] =
+              net_lower_bound_savings == 0
+                  ? "payload-packing-lower-bound-break-even"
+                  : "payload-packing-lower-bound-exceeds-candidate-savings";
+          details["estimateKind"] = "estimated-net-after-payload-packing-lower-bound";
+          details["savingsModel"] = "candidate-steps-plus-minimum-payload-packing-overhead";
+        }
+      } catch (const std::exception&) {
+      }
+    }
     report.opportunities.push_back(SizeOpportunityReport{
         .site = candidate.site,
         .variant = candidate.variant,
         .current_steps = current_steps,
-        .candidate_steps = candidate.steps,
-        .savings = current_steps - candidate.steps,
+        .candidate_steps = opportunity_candidate_steps,
+        .savings = opportunity_savings,
         .reason = candidate.reason,
         .blocker_kind = blocker_kind,
         .details = std::move(details),

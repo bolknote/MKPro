@@ -277,7 +277,7 @@ void example_sizes_match_typescript_baselines() {
       const SizeOpportunityReport* indirect_flow =
           find_size_opportunity(result, "aggressive-post-layout-indirect-flow");
       require(indirect_flow != nullptr && indirect_flow->current_steps == 65 &&
-                  indirect_flow->candidate_steps == 60 && indirect_flow->savings == 5 &&
+                  indirect_flow->candidate_steps == 66 && indirect_flow->savings == -1 &&
                   indirect_flow->blocker_kind == "static-proof-gate" &&
                   indirect_flow->details.contains("proofFamily") &&
                   indirect_flow->details.at("proofFamily") == "indirect-flow-targets" &&
@@ -386,7 +386,7 @@ void example_sizes_match_typescript_baselines() {
                       "free-stable-selector-registers" &&
                   indirect_flow->details.contains("costModelAction") &&
                   indirect_flow->details.at("costModelAction") ==
-                      "estimate-payload-packing-for-selector-freeing" &&
+                      "find-nonpacked-selector-layout-or-reduce-packed-access-overhead" &&
                   indirect_flow->details.contains(
                       "selectorDataPayloadPackingOverheadBudgetCells") &&
                   indirect_flow->details.at("selectorDataPayloadPackingOverheadBudgetCells") ==
@@ -398,92 +398,85 @@ void example_sizes_match_typescript_baselines() {
                   indirect_flow->details.contains(
                       "selectorDataPayloadPackingCostModelStatus") &&
                   indirect_flow->details.at("selectorDataPayloadPackingCostModelStatus") ==
-                      "unestimated-payload-access-overhead" &&
+                      "minimum-packed-access-overhead-not-positive" &&
                   indirect_flow->details.contains(
                       "selectorDataPayloadPackingCostModelRequirement") &&
                   indirect_flow->details.at(
                       "selectorDataPayloadPackingCostModelRequirement") ==
-                      "packed-or-split-access-overhead-must-not-exceed-candidate-savings" &&
+                      "find-nonpacked-selector-layout-or-reduce-packed-access-overhead" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadRegistersToPackMinimum") &&
+                  indirect_flow->details.at("selectorDataPayloadRegistersToPackMinimum") ==
+                      "3" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadMinPackedLogicalAccesses") &&
+                  indirect_flow->details.at("selectorDataPayloadMinPackedLogicalAccesses") ==
+                      "6" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadMinPackedAccessOverheadCells") &&
+                  indirect_flow->details.at(
+                      "selectorDataPayloadMinPackedAccessOverheadCells") == "6" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadPackingLowerBoundStatus") &&
+                  indirect_flow->details.at(
+                      "selectorDataPayloadPackingLowerBoundStatus") ==
+                      "exceeds-candidate-savings" &&
+                  indirect_flow->details.contains(
+                      "selectorDataPayloadPackingNetLowerBoundCells") &&
+                  indirect_flow->details.at("selectorDataPayloadPackingNetLowerBoundCells") ==
+                      "-1" &&
+                  indirect_flow->details.contains(
+                      "estimatedCandidateStepsAfterPayloadPackingLowerBound") &&
+                  indirect_flow->details.at(
+                      "estimatedCandidateStepsAfterPayloadPackingLowerBound") == "66" &&
+                  indirect_flow->details.contains("candidateStepsStatus") &&
+                  indirect_flow->details.at("candidateStepsStatus") ==
+                      "estimated-payload-packing-lower-bound-larger-than-current" &&
+                  indirect_flow->details.contains("sizeImpactStatus") &&
+                  indirect_flow->details.at("sizeImpactStatus") == "estimated-nonpositive-net" &&
+                  indirect_flow->details.contains("netSavingsStatus") &&
+                  indirect_flow->details.at("netSavingsStatus") ==
+                      "payload-packing-lower-bound-exceeds-candidate-savings" &&
+                  indirect_flow->details.contains("savingsModel") &&
+                  indirect_flow->details.at("savingsModel") ==
+                      "candidate-steps-plus-minimum-payload-packing-overhead" &&
                   indirect_flow->details.contains("requiredAction") &&
                   indirect_flow->details.at("requiredAction") ==
-                      "pack-data-away-from-flow-selectors",
+                      "find-nonpacked-selector-layout-or-reduce-payload-access-overhead",
               "fox-hunt-mk61 size attribution should explain why the 60-cell indirect-flow "
               "candidate is blocked by proved selector/data overlap");
+      require(indirect_flow->savings == -1 &&
+                  indirect_flow->candidate_steps ==
+                      static_cast<int>(result.steps.size()) + 1,
+              "fox-hunt-mk61 size attribution should rank selector payload packing by the "
+              "minimum packed-access overhead lower bound");
       const SizeNextActionSummaryReport* selector_action = find_size_next_action(
           result, "requiredAction", "pack-data-away-from-flow-selectors");
-      require(selector_action != nullptr && selector_action->opportunities == 6 &&
-                  selector_action->potential_savings == 5 &&
-                  selector_action->best_savings == 5 &&
-                  selector_action->best_blocker_kind == "static-proof-gate" &&
-                  selector_action->best_details.contains("proofFailure") &&
-                  selector_action->best_details.at("proofFailure") ==
-                      "selector-register-used-as-data" &&
-                  selector_action->best_details.contains("consumerOpcodeHex") &&
-                  selector_action->best_details.at("consumerOpcodeHex") == "D5" &&
-                  selector_action->best_details.contains("consumerOpcode") &&
-                  selector_action->best_details.at("consumerOpcode") == "К П->X 5" &&
-                  selector_action->best_details.contains("conflictingSelectorRegisters") &&
-                  selector_action->best_details.at("conflictingSelectorRegisters") == "7+8+9" &&
-                  selector_action->best_details.contains("selectorDataConflictPrecision") &&
-                  selector_action->best_details.at("selectorDataConflictPrecision") ==
-                      "annotated-indirect-memory-targets" &&
-                  selector_action->best_details.contains("selectorDataProofGap") &&
-                  selector_action->best_details.at("selectorDataProofGap") ==
-                      "annotated-target-overlaps-selector-data" &&
-                  selector_action->best_details.contains("selectorDataNextProofAction") &&
-                  selector_action->best_details.at("selectorDataNextProofAction") ==
-                      "split-selector-register-or-pack-data-away-from-flow-selectors" &&
-                  selector_action->best_details.contains("selectorDataConflictResolutionStatus") &&
-                  selector_action->best_details.at("selectorDataConflictResolutionStatus") ==
-                      "proved-selector-data-overlap-requires-payload-repacking" &&
-                  selector_action->best_details.contains("proofDisposition") &&
-                  selector_action->best_details.at("proofDisposition") ==
-                      "proved-conflict-needs-layout-change" &&
-                  selector_action->best_details.contains("freeStableSelectorRegisters") &&
-                  selector_action->best_details.at("freeStableSelectorRegisters") == "none" &&
-                  selector_action->best_details.contains("selectorSplitStatus") &&
-                  selector_action->best_details.at("selectorSplitStatus") ==
-                      "no-free-stable-selector-register" &&
-                  selector_action->best_details.contains(
-                      "selectorDataPayloadPackingRequirement") &&
-                  selector_action->best_details.at("selectorDataPayloadPackingRequirement") ==
-                      "pack-or-split-contiguous-indirect-payload" &&
-                  selector_action->best_details.contains(
-                      "selectorDataPayloadCompressionRequirement") &&
-                  selector_action->best_details.at(
-                      "selectorDataPayloadCompressionRequirement") == "9->6" &&
-                  selector_action->best_details.contains(
-                      "selectorDataPayloadPackingOverheadBudgetCells") &&
-                  selector_action->best_details.at(
-                      "selectorDataPayloadPackingOverheadBudgetCells") == "5",
-              "fox-hunt-mk61 size attribution should rank selector/data payload packing as the "
-              "next action for the 60-cell post-layout candidates");
+      require(selector_action == nullptr,
+              "fox-hunt-mk61 size attribution should not rank selector/data payload packing as "
+              "a positive next action when minimum extraction overhead exceeds savings");
+      const SizeNextActionSummaryReport* reduce_payload_action = find_size_next_action(
+          result, "requiredAction",
+          "find-nonpacked-selector-layout-or-reduce-payload-access-overhead");
+      require(reduce_payload_action == nullptr,
+              "fox-hunt-mk61 size attribution should keep overbudget selector payload work "
+              "visible only on the nonpositive opportunity");
       const SizeNextActionSummaryReport* layout_action =
           find_size_next_action(result, "layoutAction", "free-stable-selector-registers");
-      require(layout_action != nullptr && layout_action->potential_savings == 5 &&
-                  layout_action->best_details.contains("selectorDataOverlapRegisters") &&
-                  layout_action->best_details.at("selectorDataOverlapRegisters") == "7+8+9",
-              "fox-hunt-mk61 size attribution should expose the concrete register-layout action");
+      require(layout_action == nullptr,
+              "fox-hunt-mk61 size attribution should not rank register relayout as positive "
+              "when the required payload packing lower bound is nonpositive");
       const SizeNextActionSummaryReport* cost_model_action = find_size_next_action(
           result, "costModelAction", "estimate-payload-packing-for-selector-freeing");
-      require(cost_model_action != nullptr && cost_model_action->potential_savings == 5 &&
-                  cost_model_action->best_details.contains("selectorDataAllConflictTargets") &&
-                  cost_model_action->best_details.at("selectorDataAllConflictTargets") ==
-                      "6+7+8+9+a+b+c+d+e" &&
-                  cost_model_action->best_details.contains(
-                      "selectorDataContiguousRelocationStatus") &&
-                  cost_model_action->best_details.at("selectorDataContiguousRelocationStatus") ==
-                      "no-selector-free-contiguous-window" &&
-                  cost_model_action->best_details.contains(
-                      "selectorDataPayloadRegisterBudgetAfterFreeingSelectors") &&
-                  cost_model_action->best_details.at(
-                      "selectorDataPayloadRegisterBudgetAfterFreeingSelectors") == "6" &&
-                  cost_model_action->best_details.contains(
-                      "selectorDataPayloadPackingCostModelRequirement") &&
-                  cost_model_action->best_details.at(
-                      "selectorDataPayloadPackingCostModelRequirement") ==
-                      "packed-or-split-access-overhead-must-not-exceed-candidate-savings",
-              "fox-hunt-mk61 size attribution should expose the packing cost-model action");
+      require(cost_model_action == nullptr,
+              "fox-hunt-mk61 size attribution should not rank the old unestimated payload "
+              "packing cost-model action after lower-bound accounting");
+      const SizeNextActionSummaryReport* reduce_packing_cost_action = find_size_next_action(
+          result, "costModelAction",
+          "find-nonpacked-selector-layout-or-reduce-packed-access-overhead");
+      require(reduce_packing_cost_action == nullptr,
+              "fox-hunt-mk61 size attribution should keep the payload lower-bound cost model "
+              "visible only on the nonpositive opportunity");
     }
     if (name == "dangerous-loading") {
       const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
