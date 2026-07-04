@@ -48947,6 +48947,7 @@ SizeAttributionReport build_size_attribution_report(
         const bool requires_call_preserving_stack_proof =
             !call_preservation_input_names.empty();
         bool call_preservation_has_stack_mutating_callee = false;
+        int callee_abi_mutation_surface_cells = 0;
         std::vector<std::string> direct_stack_input_names;
         int direct_stack_input_gross_cells = 0;
         int direct_stack_input_materialize_cells = 0;
@@ -49026,6 +49027,7 @@ SizeAttributionReport build_size_attribution_report(
             if (effect.status == "stack-mutating") {
               saw_stack_mutating_required_callee = true;
               call_preservation_has_stack_mutating_callee = true;
+              callee_abi_mutation_surface_cells += effect.mutating_cells;
               const std::string input_list =
                   join_strings(std::vector<std::string>(inputs.begin(), inputs.end()), ",");
               callee_abi_preservation_parts.push_back(label + ":" + input_list);
@@ -49132,10 +49134,29 @@ SizeAttributionReport build_size_attribution_report(
               std::to_string(adjusted_estimated_net_cells);
           helper.details["valueAwareCalleeAbiBreakEvenAddedCells"] =
               std::to_string(adjusted_estimated_net_cells);
+          if (callee_abi_mutation_surface_cells > 0) {
+            helper.details["valueAwareCalleeAbiMutationSurfaceCells"] =
+                std::to_string(callee_abi_mutation_surface_cells);
+            helper.details["valueAwareCalleeAbiMutationSurfaceStatus"] =
+                callee_abi_mutation_surface_cells > adjusted_estimated_net_cells
+                    ? "exceeds-overhead-budget"
+                    : "within-overhead-budget";
+          }
+          const auto mutation_surface_status_it =
+              helper.details.find("valueAwareCalleeAbiMutationSurfaceStatus");
+          const bool mutation_surface_exceeds_budget =
+              mutation_surface_status_it != helper.details.end() &&
+              mutation_surface_status_it->second == "exceeds-overhead-budget";
           helper.details["valueAwareCalleeAbiCostModelStatus"] =
-              "unestimated-stack-preserving-entry-overhead";
+              mutation_surface_exceeds_budget
+                  ? "mutation-surface-exceeds-overhead-budget"
+                  : "unestimated-stack-preserving-entry-overhead";
           helper.details["valueAwareCalleeAbiCostModelRequirement"] =
-              "stack-preserving-callee-abi-overhead-must-not-exceed-estimated-net-savings";
+              helper.details["valueAwareCalleeAbiCostModelStatus"] ==
+                      "mutation-surface-exceeds-overhead-budget"
+                  ? "prove-stack-preserving-callee-abi-overhead-below-mutation-surface-before-"
+                    "ranking"
+                  : "stack-preserving-callee-abi-overhead-must-not-exceed-estimated-net-savings";
         }
         if (!direct_stack_input_names.empty()) {
           helper.details["valueAwareDirectStackInputNames"] =
@@ -49606,6 +49627,20 @@ SizeAttributionReport build_size_attribution_report(
       details["requiredAction"] = "refactor-stack-mutating-callee-abi";
       details["schedulerScope"] =
           "helper-entry-callsite-stack-values-and-callee-abi-refactor";
+      if (const auto abi_status_it = details.find("valueAwareCalleeAbiCostModelStatus");
+          abi_status_it != details.end() &&
+          abi_status_it->second == "mutation-surface-exceeds-overhead-budget") {
+        opportunity_savings = 0;
+        details["candidateStepsStatus"] = "not-a-positive-size-opportunity";
+        details["sizeImpactStatus"] = "estimated-nonpositive-net";
+        details["netSavingsStatus"] =
+            "stack-preserving-callee-abi-mutation-surface-exceeds-budget";
+        details["estimateKind"] = "estimated-net-after-callee-abi-surface";
+        details["savingsModel"] = "estimated-net-after-callee-abi-surface-budget";
+        details["requiredAction"] = "prove-or-reduce-stack-preserving-callee-abi-overhead";
+        details["costModelAction"] =
+            "estimate-stack-preserving-callee-abi-overhead-from-mutation-surface";
+      }
     }
     if (const std::optional<std::string> traffic_shape_action =
             value_aware_scheduler_traffic_shape_action(details)) {
