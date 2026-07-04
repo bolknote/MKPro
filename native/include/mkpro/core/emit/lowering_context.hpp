@@ -183,6 +183,7 @@ struct LoweringContext {
   std::optional<std::string> packed_score_helper;
   std::optional<std::string> packed_score_accumulator_helper;
   std::optional<std::string> packed_score_subtractor_accumulator_helper;
+  std::set<std::string> reported_signed_packed_score_accumulator_rejections;
   std::map<std::string, std::string> spatial_sum_helper_labels;
   std::map<std::string, SpatialHitHelperRequest> spatial_hit_helpers;
   std::vector<std::string> spatial_hit_helper_order;

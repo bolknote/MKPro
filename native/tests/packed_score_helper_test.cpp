@@ -283,6 +283,31 @@ program PackedScoreSmallSignedDirectExpressionAccumulator {
           "small signed packed_score expression should not emit the subtractor helper");
   require(count_packed_score_helper_jumps(small_signed_direct_expression_sum) == 3,
           "small signed packed_score expression should keep the standalone helper calls");
+  const SizeOpportunityReport* small_signed_cost_opportunity = find_size_opportunity(
+      small_signed_direct_expression_sum, "packed-score-signed-accumulator-local-cost");
+  require(small_signed_cost_opportunity != nullptr,
+          "small signed packed_score expression should report the rejected signed accumulator "
+          "cost");
+  require(small_signed_cost_opportunity->savings == -6 &&
+              small_signed_cost_opportunity->candidate_steps ==
+                  static_cast<int>(small_signed_direct_expression_sum.steps.size()) + 6,
+          "small signed packed_score cost report should preserve the estimated negative size "
+          "delta");
+  require(small_signed_cost_opportunity->details.contains("positiveTerms") &&
+              small_signed_cost_opportunity->details.at("positiveTerms") == "2" &&
+              small_signed_cost_opportunity->details.contains("negativeTerms") &&
+              small_signed_cost_opportunity->details.at("negativeTerms") == "1" &&
+              small_signed_cost_opportunity->details.contains("removableOperatorCells") &&
+              small_signed_cost_opportunity->details.at("removableOperatorCells") == "3" &&
+              small_signed_cost_opportunity->details.contains("extraHelperBodyCells") &&
+              small_signed_cost_opportunity->details.at("extraHelperBodyCells") == "9" &&
+              small_signed_cost_opportunity->details.contains("sizeImpactStatus") &&
+              small_signed_cost_opportunity->details.at("sizeImpactStatus") ==
+                  "estimated-negative-net" &&
+              small_signed_cost_opportunity->details.contains("requiredAction") &&
+              small_signed_cost_opportunity->details.at("requiredAction") ==
+                  "keep-standalone-helper-until-more-signed-terms",
+          "small signed packed_score cost report should expose term split, cost model, and action");
 
   const CompileResult signed_direct_expression_sum = compile_source(R"mkpro(
 program PackedScoreSignedDirectExpressionAccumulator {

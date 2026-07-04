@@ -1608,15 +1608,33 @@ constexpr int kPackedScoreStackHelperBodyCells = 7;
 constexpr int kPackedScoreAccumulatorHelperBodyCells = 8;
 constexpr int kPackedScoreSubtractorAccumulatorHelperBodyCells = 8;
 
-bool packed_score_signed_accumulator_locally_profitable(
+struct PackedScoreSignedAccumulatorLocalCost {
+  int terms = 0;
+  int positive_terms = 0;
+  int negative_terms = 0;
+  bool has_initial = false;
+  int removable_operator_cells = 0;
+  int extra_helper_body_cells = 0;
+  int net_savings = 0;
+
+  int candidate_delta_cells() const { return -net_savings; }
+};
+
+PackedScoreSignedAccumulatorLocalCost packed_score_signed_accumulator_local_cost(
     int positive_terms, int negative_terms, bool has_initial,
     bool positive_helper_already_planned = false,
     bool subtractor_helper_already_planned = false) {
   const int terms = positive_terms + negative_terms;
+  PackedScoreSignedAccumulatorLocalCost cost{
+      .terms = terms,
+      .positive_terms = positive_terms,
+      .negative_terms = negative_terms,
+      .has_initial = has_initial,
+  };
   if (terms <= 0 || negative_terms <= 0)
-    return false;
+    return cost;
 
-  const int removed_operator_cells = has_initial ? terms : std::max(0, terms - 2);
+  cost.removable_operator_cells = has_initial ? terms : std::max(0, terms - 2);
   int extra_body_cells = 0;
   if (positive_terms > 0 && !positive_helper_already_planned)
     extra_body_cells += kPackedScoreAccumulatorHelperBodyCells;
@@ -1624,7 +1642,19 @@ bool packed_score_signed_accumulator_locally_profitable(
     extra_body_cells += kPackedScoreSubtractorAccumulatorHelperBodyCells;
   if (extra_body_cells > 0)
     extra_body_cells = std::max(0, extra_body_cells - kPackedScoreStackHelperBodyCells);
-  return removed_operator_cells > extra_body_cells;
+  cost.extra_helper_body_cells = extra_body_cells;
+  cost.net_savings = cost.removable_operator_cells - cost.extra_helper_body_cells;
+  return cost;
+}
+
+bool packed_score_signed_accumulator_locally_profitable(
+    int positive_terms, int negative_terms, bool has_initial,
+    bool positive_helper_already_planned = false,
+    bool subtractor_helper_already_planned = false) {
+  return packed_score_signed_accumulator_local_cost(
+             positive_terms, negative_terms, has_initial, positive_helper_already_planned,
+             subtractor_helper_already_planned)
+             .net_savings > 0;
 }
 
 std::optional<StackAccumulatorSyntaxCount>
@@ -18416,11 +18446,36 @@ bool emit_packed_score_accumulator_step(LoweringContext& context, const std::str
   return emit_packed_score_accumulator_addend(context, step);
 }
 
+void report_signed_packed_score_accumulator_rejection(
+    LoweringContext& context, const Expression& expression,
+    const PackedScoreSignedAccumulatorLocalCost& cost) {
+  if (cost.negative_terms <= 0 || cost.terms < 3 || cost.net_savings > 0)
+    return;
+  const std::string expression_source = expression_to_source(expression);
+  const std::string key = expression_source + "|" + std::to_string(cost.positive_terms) + "|" +
+                          std::to_string(cost.negative_terms) + "|" +
+                          std::to_string(cost.has_initial ? 1 : 0);
+  if (!context.reported_signed_packed_score_accumulator_rejections.insert(key).second)
+    return;
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-score-signed-accumulator-rejected",
+      .detail = "Rejected signed packed_score accumulator local cost; expression=" +
+                expression_source + "; totalTerms=" + std::to_string(cost.terms) +
+                "; positiveTerms=" + std::to_string(cost.positive_terms) +
+                "; negativeTerms=" + std::to_string(cost.negative_terms) +
+                "; hasInitial=" + std::string(cost.has_initial ? "1" : "0") +
+                "; removableOperatorCells=" +
+                std::to_string(cost.removable_operator_cells) +
+                "; extraHelperBodyCells=" + std::to_string(cost.extra_helper_body_cells) +
+                "; estimatedNetSavings=" + std::to_string(cost.net_savings) +
+                "; candidateDeltaCells=" + std::to_string(cost.candidate_delta_cells()) +
+                "; requiredAction=keep-standalone-helper-until-more-signed-terms" +
+                "; costModelAction=find-more-signed-packed-score-terms-or-reuse-subtractor-helper",
+  });
+}
+
 bool lower_packed_score_sum_accumulator_to_x(LoweringContext& context,
                                              const Expression& expression) {
-  if (!context.use_packed_score_accumulator_helper)
-    return false;
-
   std::vector<PackedScoreAccumulatorStep> steps;
   std::optional<Expression> initial;
   if (!collect_packed_score_signed_sum_steps_with_initial(context, expression, steps, initial)) {
@@ -18442,13 +18497,20 @@ bool lower_packed_score_sum_accumulator_to_x(LoweringContext& context,
 
   const bool has_positive_term = positive_term_count > 0U;
   const bool has_negative_term = negative_term_count > 0U;
-  if (has_negative_term &&
-      !packed_score_signed_accumulator_locally_profitable(
-          static_cast<int>(positive_term_count), static_cast<int>(negative_term_count),
-          initial.has_value(), context.packed_score_accumulator_helper.has_value(),
-          context.packed_score_subtractor_accumulator_helper.has_value())) {
-    return false;
+  if (has_negative_term) {
+    const PackedScoreSignedAccumulatorLocalCost signed_cost =
+        packed_score_signed_accumulator_local_cost(
+            static_cast<int>(positive_term_count), static_cast<int>(negative_term_count),
+            initial.has_value(), context.packed_score_accumulator_helper.has_value(),
+            context.packed_score_subtractor_accumulator_helper.has_value());
+    if (signed_cost.net_savings <= 0) {
+      report_signed_packed_score_accumulator_rejection(context, expression, signed_cost);
+      return false;
+    }
   }
+  if (!context.use_packed_score_accumulator_helper)
+    return false;
+
   const std::optional<std::string> helper =
       has_positive_term ? std::optional<std::string>(packed_score_accumulator_helper_label(context))
                         : std::nullopt;
@@ -50424,6 +50486,53 @@ void attach_generic_packed_score_fallback_details(
   }
 }
 
+void add_signed_packed_score_accumulator_cost_opportunities(
+    SizeAttributionReport& report, const std::vector<OptimizationReport>& optimizations,
+    int current_steps) {
+  std::set<std::string> seen;
+  for (const OptimizationReport& optimization : optimizations) {
+    if (optimization.name != "packed-score-signed-accumulator-rejected")
+      continue;
+    std::map<std::string, std::string> details =
+        semicolon_key_value_details(optimization.detail);
+    const int net_savings = detail_int_or_zero(details, "estimatedNetSavings");
+    const int candidate_delta = detail_int_or_zero(details, "candidateDeltaCells");
+    if (net_savings > 0 || candidate_delta < 0)
+      continue;
+    const std::string expression =
+        details.contains("expression") ? details.at("expression") : std::string{};
+    const std::string key = expression + "|" + details["positiveTerms"] + "|" +
+                            details["negativeTerms"] + "|" + details["hasInitial"];
+    if (!seen.insert(key).second)
+      continue;
+    details["savingsModel"] = "estimated-local-signed-accumulator-cost";
+    details["estimateKind"] = "estimated-net-after-helper-body-cost";
+    details["candidateStepsStatus"] =
+        net_savings == 0 ? "same-size-as-current" : "larger-than-current";
+    details["sizeImpactStatus"] =
+        net_savings == 0 ? "estimated-break-even-net" : "estimated-negative-net";
+    details["netSavingsStatus"] = net_savings_status_for_estimate(net_savings);
+    details["proofStatus"] = "not-blocked-by-proof-local-cost-model-not-positive";
+    details.emplace("blockedProof", "none");
+    details.emplace("blockedProofAction",
+                    "keep-standalone-helper-until-more-signed-terms");
+    details.emplace("standaloneHelper", "packed_score helper");
+    details.emplace("candidateHelpers",
+                    "packed_score accumulator helper,packed_score subtractor helper");
+    report.opportunities.push_back(SizeOpportunityReport{
+        .site = "expression-lowering",
+        .variant = "packed-score-signed-accumulator-local-cost",
+        .current_steps = current_steps,
+        .candidate_steps = current_steps + candidate_delta,
+        .savings = net_savings,
+        .reason =
+            "signed packed_score accumulator local cost model rejected a non-smaller helper pair",
+        .blocker_kind = "local-cost-model",
+        .details = std::move(details),
+    });
+  }
+}
+
 SizeAttributionReport build_size_attribution_report(
     const std::vector<ResolvedStep>& steps,
     const std::vector<CandidateReport>& rejected_candidates,
@@ -52034,6 +52143,7 @@ SizeAttributionReport build_size_attribution_report(
         .details = std::move(details),
     });
   }
+  add_signed_packed_score_accumulator_cost_opportunities(report, optimizations, current_steps);
   std::sort(report.opportunities.begin(), report.opportunities.end(),
             [](const SizeOpportunityReport& left, const SizeOpportunityReport& right) {
               if (left.savings != right.savings)
