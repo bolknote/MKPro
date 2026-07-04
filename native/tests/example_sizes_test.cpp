@@ -489,9 +489,20 @@ void example_sizes_match_typescript_baselines() {
                       std::string::npos &&
                   mark_lines_helper->details.contains("valueAwareSchedulerTrafficShape") &&
                   mark_lines_helper->details.at("valueAwareSchedulerTrafficShape") ==
-                      "stack-inputs-and-deferred-state-outputs",
+                      "stack-inputs-and-deferred-state-outputs" &&
+                  mark_lines_helper->details.contains("valueAwareStackInputPlanStatus") &&
+                  mark_lines_helper->details.at("valueAwareStackInputPlanStatus") ==
+                      "requires-call-preserving-stack-proof" &&
+                  mark_lines_helper->details.contains("valueAwareStackInputPlanBlocker") &&
+                  mark_lines_helper->details.at("valueAwareStackInputPlanBlocker") ==
+                      "nested-helper-calls-may-clobber-x-y-z-t" &&
+                  mark_lines_helper->details.contains("valueAwareNestedCallLabels") &&
+                  mark_lines_helper->details.at("valueAwareNestedCallLabels").find("mark_one") !=
+                      std::string::npos &&
+                  mark_lines_helper->details.at("valueAwareNestedCallLabels").find("normalize") !=
+                      std::string::npos,
               "tic-tac-toe-4x4 mark_lines_and_check helper should classify stack inputs "
-              "separately from deferred state outputs");
+              "separately from deferred state outputs and nested helper-call blockers");
       const SizeOpportunityReport* cell_mask_register_traffic = find_size_opportunity_detail(
           result, "helper-register-traffic", "helperLabel", "expr cell_mask(x, y)");
       require(cell_mask_register_traffic != nullptr &&
@@ -795,16 +806,19 @@ void example_sizes_match_typescript_baselines() {
               "tic-tac-toe-4x4 size attribution should not rank six-input candidate_score as "
               "a direct stack-input scheduling action");
       const SizeNextActionSummaryReport* split_scheduler_action = find_size_next_action(
-          result, "trafficShapeAction", "split-stack-inputs-from-deferred-state-outputs");
+          result, "trafficShapeAction", "prove-stack-input-survives-nested-helper-calls");
       require(split_scheduler_action != nullptr &&
                   split_scheduler_action->opportunities >= 1 &&
                   split_scheduler_action->best_details.contains("helperLabel") &&
                   split_scheduler_action->best_details.at("helperLabel") ==
                       "mark_lines_and_check" &&
                   split_scheduler_action->best_details.contains("valueAwareStackInputNames") &&
-                  split_scheduler_action->best_details.contains("valueAwareStateOutputNames"),
-              "tic-tac-toe-4x4 size attribution should split mixed helper traffic into a "
-              "separate scheduler action");
+                  split_scheduler_action->best_details.contains("valueAwareStateOutputNames") &&
+                  split_scheduler_action->best_details.contains("valueAwareStackInputPlanStatus") &&
+                  split_scheduler_action->best_details.at("valueAwareStackInputPlanStatus") ==
+                      "requires-call-preserving-stack-proof",
+              "tic-tac-toe-4x4 size attribution should split nested-call helper traffic into a "
+              "separate scheduler proof action");
     }
   }
 }

@@ -47380,6 +47380,11 @@ std::optional<std::string> value_aware_scheduler_traffic_shape_action(
   const auto shape_it = details.find("valueAwareSchedulerTrafficShape");
   if (shape_it == details.end())
     return std::nullopt;
+  const auto plan_it = details.find("valueAwareStackInputPlanStatus");
+  if (plan_it != details.end() &&
+      plan_it->second == "requires-call-preserving-stack-proof") {
+    return "prove-stack-input-survives-nested-helper-calls";
+  }
   const std::string& shape = shape_it->second;
   const auto stack_capacity_it = details.find("valueAwareStackCapacityStatus");
   const bool exceeds_stack_capacity =
@@ -47765,6 +47770,17 @@ SizeAttributionReport build_size_attribution_report(
         registers.insert(opcode & 0x0f);
     }
   }
+  std::map<std::string, int> helper_nested_call_cells;
+  std::map<std::string, std::set<std::string>> helper_nested_call_labels;
+  for (const HelperRegionRange& region : helper_regions) {
+    for (const CallSite& call_site : call_sites) {
+      if (call_site.start_index < region.start || call_site.start_index >= region.end)
+        continue;
+      helper_nested_call_cells[region.label] += call_site.cells;
+      if (!call_site.label.empty())
+        helper_nested_call_labels[region.label].insert(call_site.label);
+    }
+  }
   std::map<std::string, std::set<int>> helper_spill_registers;
   for (const HelperRegionRange& region : helper_regions) {
     for (std::size_t index = region.start; index < region.end && index < steps.size(); ++index) {
@@ -47962,7 +47978,23 @@ SizeAttributionReport build_size_attribution_report(
           helper.details["valueAwareSuggestedStagedInputCount"] =
               std::to_string(ranked_stack_inputs.size() - stack_capacity);
         } else {
-          helper.details["valueAwareStackInputPlanStatus"] = "direct-stack-fit";
+          const int nested_call_cells = helper_nested_call_cells[helper.label];
+          if (nested_call_cells > 0) {
+            helper.details["valueAwareNestedCallCells"] = std::to_string(nested_call_cells);
+            if (const auto nested_labels = helper_nested_call_labels.find(helper.label);
+                nested_labels != helper_nested_call_labels.end()) {
+              helper.details["valueAwareNestedCallLabels"] =
+                  join_strings(std::vector<std::string>(nested_labels->second.begin(),
+                                                        nested_labels->second.end()),
+                               ",");
+            }
+            helper.details["valueAwareStackInputPlanStatus"] =
+                "requires-call-preserving-stack-proof";
+            helper.details["valueAwareStackInputPlanBlocker"] =
+                "nested-helper-calls-may-clobber-x-y-z-t";
+          } else {
+            helper.details["valueAwareStackInputPlanStatus"] = "direct-stack-fit";
+          }
         }
       }
       if (!state_output_names.empty()) {
@@ -48168,6 +48200,15 @@ SizeAttributionReport build_size_attribution_report(
       details["proofStatus"] = "stack-inputs-exceed-x-y-z-t-capacity";
       details["schedulerScope"] =
           "helper-entry-callsite-stack-values-and-staged-materialization";
+    }
+    const auto stack_plan_it = details.find("valueAwareStackInputPlanStatus");
+    if (stack_plan_it != details.end() &&
+        stack_plan_it->second == "requires-call-preserving-stack-proof") {
+      details["candidateStepsStatus"] = "synthetic-upper-bound-not-directly-schedulable";
+      details["netSavingsStatus"] = "requires-nested-helper-stack-preservation-proof";
+      details["proofStatus"] = "nested-helper-calls-may-clobber-stack-inputs";
+      details["schedulerScope"] =
+          "helper-entry-callsite-stack-values-and-nested-call-stack-preservation";
     }
     if (const std::optional<std::string> traffic_shape_action =
             value_aware_scheduler_traffic_shape_action(details)) {
