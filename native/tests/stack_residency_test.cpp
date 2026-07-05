@@ -953,6 +953,8 @@ program StackFunctionEntry {
             "stack function argument-entry variant should reduce caller argument stores");
     require(has_optimization(stack_entry, "function-stack-entry-primary"),
             "stack function argument-entry variant should emit a callee stack entry");
+    require(count_steps_with_comment(stack_entry, "function regular entry") == 0,
+            "primary stack-entry combine should not reserve a secondary regular entry");
     require(has_optimization(stack_entry, "function-stack-entry-call"),
             "stack function argument-entry variant should route safe calls through the stack "
             "entry");
@@ -1006,6 +1008,8 @@ program StackFunctionNestedValueEntry {
             "nested stack function argument-entry variant should reduce caller argument stores");
     require(has_optimization(stack_entry, "function-stack-entry-primary"),
             "nested stack function argument-entry variant should emit a callee stack entry");
+    require(count_steps_with_comment(stack_entry, "function regular entry") == 0,
+            "primary nested stack-entry combine should not reserve a secondary regular entry");
     require(has_optimization(stack_entry, "function-stack-entry-call"),
             "nested stack function argument-entry variant should route safe calls through the "
             "stack entry");
@@ -1066,6 +1070,8 @@ program StackFunctionPackedScoreEntry {
             "packed_score function stack-entry variant should reduce parameter traffic");
     require(has_optimization(stack_entry, "function-stack-entry-primary"),
             "packed_score function stack-entry variant should emit a callee stack entry");
+    require(count_steps_with_comment(stack_entry, "function regular entry") == 0,
+            "primary packed_score stack-entry should not reserve a secondary regular entry");
     require(has_optimization(stack_entry, "function-stack-entry-call"),
             "packed_score function stack-entry variant should route calls through the stack entry");
     require(has_optimization(stack_entry, "packed-score-inline-stack-argument-lowering"),
@@ -1125,6 +1131,8 @@ program StackFunctionPackedScoreSumEntry {
             "packed_score sum function stack-entry variant should reduce parameter traffic");
     require(has_optimization(stack_entry, "function-stack-entry-primary"),
             "packed_score sum function stack-entry variant should emit a callee stack entry");
+    require(count_steps_with_comment(stack_entry, "function regular entry") == 0,
+            "primary packed_score sum stack-entry should not reserve a secondary regular entry");
     require(has_optimization(stack_entry, "function-stack-entry-call"),
             "packed_score sum function stack-entry variant should route calls through the stack "
             "entry");

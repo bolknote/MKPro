@@ -18283,7 +18283,9 @@ bool lower_stack_argument_function_call(LoweringContext& context, const V2Rule& 
     if (!lower_expression_to_x(context, arg))
       return false;
   }
-  context.emitter.emit_jump(0x53, "ПП", function_stack_entry_label(rule.name),
+  context.emitter.emit_jump(0x53, "ПП",
+                            plan_it->second.primary ? function_label(rule.name)
+                                                    : function_stack_entry_label(rule.name),
                             std::string(comment_prefix) + rule.name + " stack entry", line);
   mark_last_emitted_call_role(context, "stack-argument-function-call");
   mark_function_call_result_x(context, rule);
@@ -18461,13 +18463,18 @@ void plan_stack_argument_function_entries(LoweringContext& context, const V2Prog
     collect_stack_entry_function_call_sites_in_statements(context, rule.body, safe_calls);
   for (const V2Rule& rule : program.rules) {
     const auto safe_it = safe_calls.find(rule.name);
+    const int total_calls =
+        context.proc_call_counts.contains(rule.name) ? context.proc_call_counts.at(rule.name) : 0;
     if (safe_it == safe_calls.end() || safe_it->second <= 0 ||
+        total_calls <= 0 || safe_it->second > total_calls ||
         !stack_entry_value_function_rule_eligible(context, rule)) {
       continue;
     }
     context.stack_entry_functions[rule.name] = FunctionStackEntryPlan{
         .params = rule.params,
         .call_sites = safe_it->second,
+        .total_call_sites = total_calls,
+        .primary = safe_it->second == total_calls,
     };
   }
 }
@@ -32453,6 +32460,19 @@ bool emit_stack_argument_function_entry_prefix(LoweringContext& context, const V
   if (!returned.has_value())
     return false;
   const int line = rule.body.empty() ? rule.line : rule.body.front().line;
+  if (plan_it->second.primary) {
+    if (!lower_stack_resident_expression_to_x(context, *returned, plan_it->second.params, line))
+      return false;
+    context.emitter.emit_op(0x52, "В/О", "return value", line);
+    clear_current_x_facts(context);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "function-stack-entry-primary",
+        .detail = "Compiled value function " + rule.name +
+                  " with its stack-argument entry as the primary entry after all " +
+                  std::to_string(plan_it->second.total_call_sites) + " call site(s) proved safe.",
+    });
+    return true;
+  }
   const std::string regular_label = function_label(rule.name) + "_regular_entry";
   context.emitter.emit_jump(0x51, "БП", regular_label, "function regular entry", line);
   context.emitter.emit_label(function_stack_entry_label(rule.name), {.hidden = true});
@@ -32467,6 +32487,12 @@ bool emit_stack_argument_function_entry_prefix(LoweringContext& context, const V
                 std::to_string(plan_it->second.call_sites) + " safe call site(s).",
   });
   return true;
+}
+
+bool stack_argument_function_entry_is_primary(const LoweringContext& context,
+                                              const V2Rule& rule) {
+  const auto plan_it = context.stack_entry_functions.find(rule.name);
+  return plan_it != context.stack_entry_functions.end() && plan_it->second.primary;
 }
 
 bool lower_stack_input_rule_update_prefix(LoweringContext& context, const V2Statement& statement,
@@ -32711,6 +32737,8 @@ bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
   ProcedureBoundaryScope procedure_scope{context, function_label(rule.name)};
   if (!emit_stack_argument_function_entry_prefix(context, rule))
     return false;
+  if (stack_argument_function_entry_is_primary(context, rule))
+    return true;
   if (current_x_value_function_rule_eligible(context, rule)) {
     const int line = rule.body.empty() ? rule.line : rule.body.front().line;
     if (!lower_current_x_value_function_body(context, rule, line))

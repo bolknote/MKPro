@@ -106,6 +106,8 @@ struct ExpressionHelperStackEntryRequest {
 struct FunctionStackEntryPlan {
   std::vector<std::string> params;
   int call_sites = 0;
+  int total_call_sites = 0;
+  bool primary = false;
 };
 
 struct RuleStackInputEntryPlan {
