@@ -1334,6 +1334,22 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCalleeAbiPrimaryEntryArgumentRestageSitesByCallee") ==
                       "packed-line score accumulator helper:71:x,74:y" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundCells") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundCells") == "1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundByCallee") ==
+                      "packed-line score accumulator helper:1cells(required=2,natural=1,"
+                      "shortfall=1,argumentRestage=2)" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundBasis") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundBasis") ==
+                      "live-input-preservation-shortfall-beyond-natural-callee-stack-"
+                      "survivors" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiPrimaryEntryElidableOverheadCells") &&
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiPrimaryEntryElidableOverheadCells") == "1" &&
@@ -1396,49 +1412,48 @@ void example_sizes_match_typescript_baselines() {
                       "gross:5/materialize:2/arg-preserve:2/entry-lower-bound:0/net:+1/"
                       "need:0" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryPlacementCostBreakdown") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryPlacementCostBreakdown") ==
+                      "gross:5/materialize:2/arg-preserve:2/entry-lower-bound:0/"
+                      "placement-lower-bound:1/net:+0/need:1" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiPrimaryEntryNetAfterLowerBoundCells") &&
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiPrimaryEntryNetAfterLowerBoundCells") == "1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryNetAfterPlacementLowerBoundCells") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryNetAfterPlacementLowerBoundCells") ==
+                      "0" &&
                   candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiPrimaryEntryAdditionalNetCellsToPositive") &&
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiPrimaryEntryAdditionalNetCellsToPositive") == "0" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryPlacementAdditionalNetCellsToPositive") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryPlacementAdditionalNetCellsToPositive") ==
+                      "1" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiPrimaryEntryStatus") &&
                   candidate_score_zero->details.at("valueAwareCalleeAbiPrimaryEntryStatus") ==
                       "positive-after-primary-entry-lower-bound" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryPlacementStatus") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryPlacementStatus") ==
+                      "break-even-after-primary-entry-placement-lower-bound" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiPrimaryEntryRequiredAction") &&
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiPrimaryEntryRequiredAction") ==
-                      "implement-primary-stack-preserving-callee-entry-and-argument-"
-                      "preservation-proof" &&
-                  candidate_score_zero->details.contains(
+                      "reduce-primary-entry-stack-placement-cost-or-find-additional-stack-"
+                      "input-savings" &&
+                  !candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiNearPositiveAction") &&
+                  !candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiNearPositiveProofStatus") &&
-                  candidate_score_zero->details.at(
-                      "valueAwareCalleeAbiNearPositiveProofStatus") ==
-                      "requires-stack-placement-proof" &&
-                  candidate_score_zero->details.contains(
-                      "valueAwareCalleeAbiNearPositiveStackPlacementStatus") &&
-                  candidate_score_zero->details.at(
-                      "valueAwareCalleeAbiNearPositiveStackPlacementStatus") ==
-                      "unproved-live-input-and-helper-argument-placement" &&
-                  candidate_score_zero->details.contains(
-                      "valueAwareCalleeAbiNearPositiveStackPlacementBasis") &&
-                  candidate_score_zero->details.at(
-                      "valueAwareCalleeAbiNearPositiveStackPlacementBasis") ==
-                      "callee-inputs:X=index,Y=line,Z=accumulator;selected-inputs-must-remain-"
-                      "live-after-nested-call" &&
-                  candidate_score_zero->details.contains(
-                      "valueAwareCalleeAbiNearPositiveStackPlacementRequiredAction") &&
-                  candidate_score_zero->details.at(
-                      "valueAwareCalleeAbiNearPositiveStackPlacementRequiredAction") ==
-                      "prove-score-and-live-inputs-can-be-staged-around-nested-helper-calls" &&
-                  candidate_score_zero->details.contains(
-                      "valueAwareCalleeAbiNearPositiveNaturalSurvivorLimit") &&
-                  candidate_score_zero->details.at(
-                      "valueAwareCalleeAbiNearPositiveNaturalSurvivorLimit") ==
-                      "natural-callee-survival-only-preserves-T-slot" &&
                   candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiPositiveGapCells") &&
                   candidate_score_zero->details.at("valueAwareCalleeAbiPositiveGapCells") ==
@@ -1526,10 +1541,25 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCalleeAbiBestSubsetPrimaryEntryNetAfterLowerBoundCells") ==
                       "1" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetPrimaryEntryPlacementLowerBoundCells") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetPrimaryEntryPlacementLowerBoundCells") ==
+                      "1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetPrimaryEntryNetAfterPlacementLowerBoundCells") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetPrimaryEntryNetAfterPlacementLowerBoundCells") ==
+                      "0" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiBestSubsetPrimaryEntryAdditionalNetCellsToPositive") &&
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiBestSubsetPrimaryEntryAdditionalNetCellsToPositive") ==
                       "0" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetPrimaryEntryPlacementAdditionalNetCellsToPositive") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetPrimaryEntryPlacementAdditionalNetCellsToPositive") ==
+                      "1" &&
                   candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiBestSubsetAdditionalNetCellsToPositive") &&
                   candidate_score_zero->details.at(
@@ -1547,36 +1577,25 @@ void example_sizes_match_typescript_baselines() {
                       "gross:5/materialize:2/arg-preserve:2/entry-lower-bound:0/net:+1/"
                       "need:0" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetPrimaryEntryPlacementCostBreakdown") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetPrimaryEntryPlacementCostBreakdown") ==
+                      "gross:5/materialize:2/arg-preserve:2/entry-lower-bound:0/"
+                      "placement-lower-bound:1/net:+0/need:1" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiBestSubsetPrimaryEntryStatus") &&
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiBestSubsetPrimaryEntryStatus") ==
                       "positive-after-primary-entry-lower-bound" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetPrimaryEntryPlacementStatus") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetPrimaryEntryPlacementStatus") ==
+                      "break-even-after-primary-entry-placement-lower-bound" &&
+                  !candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetNearPositiveAction") &&
+                  !candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiBestSubsetNearPositiveProofStatus") &&
-                  candidate_score_zero->details.at(
-                      "valueAwareCalleeAbiBestSubsetNearPositiveProofStatus") ==
-                      "requires-stack-placement-proof" &&
-                  candidate_score_zero->details.contains(
-                      "valueAwareCalleeAbiBestSubsetNearPositiveStackPlacementStatus") &&
-                  candidate_score_zero->details.at(
-                      "valueAwareCalleeAbiBestSubsetNearPositiveStackPlacementStatus") ==
-                      "unproved-live-input-and-helper-argument-placement" &&
-                  candidate_score_zero->details.contains(
-                      "valueAwareCalleeAbiBestSubsetNearPositiveStackPlacementBasis") &&
-                  candidate_score_zero->details.at(
-                      "valueAwareCalleeAbiBestSubsetNearPositiveStackPlacementBasis") ==
-                      "callee-inputs:X=index,Y=line,Z=accumulator;selected-inputs-must-remain-"
-                      "live-after-nested-call" &&
-                  candidate_score_zero->details.contains(
-                      "valueAwareCalleeAbiBestSubsetNearPositiveStackPlacementRequiredAction") &&
-                  candidate_score_zero->details.at(
-                      "valueAwareCalleeAbiBestSubsetNearPositiveStackPlacementRequiredAction") ==
-                      "prove-score-and-live-inputs-can-be-staged-around-nested-helper-calls" &&
-                  candidate_score_zero->details.contains(
-                      "valueAwareCalleeAbiBestSubsetNearPositiveNaturalSurvivorLimit") &&
-                  candidate_score_zero->details.at(
-                      "valueAwareCalleeAbiBestSubsetNearPositiveNaturalSurvivorLimit") ==
-                      "natural-callee-survival-only-preserves-T-slot" &&
                   candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiBestSubsetPositiveGapCells") &&
                   candidate_score_zero->details.at(
@@ -2185,54 +2204,29 @@ void example_sizes_match_typescript_baselines() {
                       "gross:5/materialize:2/arg-preserve:2/entry-lower-bound:0/net:+1/"
                       "need:0" &&
                   candidate_score_register_traffic->details.contains(
-                      "valueAwareCalleeAbiNearPositiveStatus") &&
+                      "valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundCells") &&
                   candidate_score_register_traffic->details.at(
-                      "valueAwareCalleeAbiNearPositiveStatus") ==
-                      "primary-entry-positive-current-lower-bound-nonpositive" &&
+                      "valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundCells") == "1" &&
                   candidate_score_register_traffic->details.contains(
-                      "valueAwareCalleeAbiNearPositiveGapCells") &&
+                      "valueAwareCalleeAbiPrimaryEntryPlacementCostBreakdown") &&
                   candidate_score_register_traffic->details.at(
-                      "valueAwareCalleeAbiNearPositiveGapCells") == "1" &&
+                      "valueAwareCalleeAbiPrimaryEntryPlacementCostBreakdown") ==
+                      "gross:5/materialize:2/arg-preserve:2/entry-lower-bound:0/"
+                      "placement-lower-bound:1/net:+0/need:1" &&
                   candidate_score_register_traffic->details.contains(
-                      "valueAwareCalleeAbiNearPositiveCurrentNetCells") &&
+                      "valueAwareCalleeAbiPrimaryEntryNetAfterPlacementLowerBoundCells") &&
                   candidate_score_register_traffic->details.at(
-                      "valueAwareCalleeAbiNearPositiveCurrentNetCells") == "0" &&
+                      "valueAwareCalleeAbiPrimaryEntryNetAfterPlacementLowerBoundCells") ==
+                      "0" &&
                   candidate_score_register_traffic->details.contains(
-                      "valueAwareCalleeAbiNearPositivePrimaryNetCells") &&
+                      "valueAwareCalleeAbiPrimaryEntryPlacementStatus") &&
                   candidate_score_register_traffic->details.at(
-                      "valueAwareCalleeAbiNearPositivePrimaryNetCells") == "1" &&
-                  candidate_score_register_traffic->details.contains(
-                      "valueAwareCalleeAbiNearPositivePrimaryStatus") &&
-                  candidate_score_register_traffic->details.at(
-                      "valueAwareCalleeAbiNearPositivePrimaryStatus") ==
-                      "positive-after-primary-entry-lower-bound" &&
-                  candidate_score_register_traffic->details.contains(
-                      "valueAwareCalleeAbiNearPositiveReason") &&
-                  candidate_score_register_traffic->details.at(
-                      "valueAwareCalleeAbiNearPositiveReason") ==
-                      "primary-entry-elides-callee-entry-lower-bound-but-general-entry-"
-                      "breaks-even" &&
-                  candidate_score_register_traffic->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryPlacementStatus") ==
+                      "break-even-after-primary-entry-placement-lower-bound" &&
+                  !candidate_score_register_traffic->details.contains(
                       "valueAwareCalleeAbiNearPositiveAction") &&
-                  candidate_score_register_traffic->details.at(
-                      "valueAwareCalleeAbiNearPositiveAction") ==
-                      "implement-primary-stack-preserving-callee-entry-and-argument-"
-                      "preservation-proof" &&
-                  candidate_score_register_traffic->details.contains(
-                      "valueAwareCalleeAbiNearPositiveProofStatus") &&
-                  candidate_score_register_traffic->details.at(
-                      "valueAwareCalleeAbiNearPositiveProofStatus") ==
-                      "requires-stack-placement-proof" &&
-                  candidate_score_register_traffic->details.contains(
-                      "valueAwareCalleeAbiNearPositiveStackPlacementStatus") &&
-                  candidate_score_register_traffic->details.at(
-                      "valueAwareCalleeAbiNearPositiveStackPlacementStatus") ==
-                      "unproved-live-input-and-helper-argument-placement" &&
-                  candidate_score_register_traffic->details.contains(
-                      "valueAwareCalleeAbiNearPositiveStackPlacementRequiredAction") &&
-                  candidate_score_register_traffic->details.at(
-                      "valueAwareCalleeAbiNearPositiveStackPlacementRequiredAction") ==
-                      "prove-score-and-live-inputs-can-be-staged-around-nested-helper-calls" &&
+                  !candidate_score_register_traffic->details.contains(
+                      "valueAwareCalleeAbiNearPositiveStatus") &&
                   candidate_score_register_traffic->details.contains(
                       "valueAwareCalleeAbiMutationSurfaceCells") &&
                   candidate_score_register_traffic->details.at(
@@ -2328,34 +2322,9 @@ void example_sizes_match_typescript_baselines() {
           find_size_next_action(result, "valueAwareCalleeAbiNearPositiveAction",
                                 "implement-primary-stack-preserving-callee-entry-and-argument-"
                                 "preservation-proof");
-      require(callee_abi_primary_entry_action != nullptr &&
-                  callee_abi_primary_entry_action->status == "stalled-near-positive" &&
-                  callee_abi_primary_entry_action->potential_savings == 1 &&
-                  callee_abi_primary_entry_action->best_savings == 1 &&
-                  callee_abi_primary_entry_action->best_variant == "helper-register-traffic" &&
-                  callee_abi_primary_entry_action->best_blocker_kind ==
-                      "value-aware-stack-register-scheduler" &&
-                  callee_abi_primary_entry_action->best_details.contains(
-                      "valueAwareCalleeAbiNearPositiveStatus") &&
-                  callee_abi_primary_entry_action->best_details.at(
-                      "valueAwareCalleeAbiNearPositiveStatus") ==
-                      "primary-entry-positive-current-lower-bound-nonpositive" &&
-                  callee_abi_primary_entry_action->best_details.contains(
-                      "valueAwareCalleeAbiNearPositivePrimaryNetCells") &&
-                  callee_abi_primary_entry_action->best_details.at(
-                      "valueAwareCalleeAbiNearPositivePrimaryNetCells") == "1" &&
-                  callee_abi_primary_entry_action->best_details.contains(
-                      "valueAwareCalleeAbiNearPositiveProofStatus") &&
-                  callee_abi_primary_entry_action->best_details.at(
-                      "valueAwareCalleeAbiNearPositiveProofStatus") ==
-                      "requires-stack-placement-proof" &&
-                  callee_abi_primary_entry_action->best_details.contains(
-                      "valueAwareCalleeAbiNearPositiveStackPlacementRequiredAction") &&
-                  callee_abi_primary_entry_action->best_details.at(
-                      "valueAwareCalleeAbiNearPositiveStackPlacementRequiredAction") ==
-                      "prove-score-and-live-inputs-can-be-staged-around-nested-helper-calls",
-              "tic-tac-toe-4x4 size attribution should rank the primary-entry ABI proof as "
-              "a near-positive scheduler target without promoting it to a positive saving");
+      require(callee_abi_primary_entry_action == nullptr,
+              "tic-tac-toe-4x4 size attribution should not rank primary-entry ABI proof as "
+              "near-positive after stack placement lower-bound cost removes the raw +1");
       const SizeNextActionSummaryReport* call_argument_x2_action = find_size_next_action(
           result, "valueAwareCallArgumentX2RequiredAction",
           "refactor-callee-to-preserve-x2-or-use-explicit-stack-copy");

@@ -498,37 +498,85 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCalleeAbiPrimaryEntryArgumentRestageSitesByCallee',
       ),
+      calleeAbiPrimaryEntryPlacementLowerBound: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundCells',
+      ),
+      calleeAbiPrimaryEntryPlacementLowerBoundByCallee: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundByCallee',
+      ),
+      calleeAbiPrimaryEntryPlacementLowerBoundBasis: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundBasis',
+      ),
       calleeAbiPrimaryEntryCostBreakdown: detail(
         details,
         'valueAwareCalleeAbiPrimaryEntryCostBreakdown',
+      ),
+      calleeAbiPrimaryEntryPlacementCostBreakdown: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPlacementCostBreakdown',
       ),
       calleeAbiPrimaryEntryNet: detail(
         details,
         'valueAwareCalleeAbiPrimaryEntryNetAfterLowerBoundCells',
       ),
+      calleeAbiPrimaryEntryPlacementNet: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryNetAfterPlacementLowerBoundCells',
+      ),
       calleeAbiPrimaryEntryNeed: detail(
         details,
         'valueAwareCalleeAbiPrimaryEntryAdditionalNetCellsToPositive',
+      ),
+      calleeAbiPrimaryEntryPlacementNeed: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPlacementAdditionalNetCellsToPositive',
       ),
       calleeAbiPrimaryEntryStatus: detail(
         details,
         'valueAwareCalleeAbiPrimaryEntryStatus',
       ),
+      calleeAbiPrimaryEntryPlacementStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPlacementStatus',
+      ),
       calleeAbiBestSubsetPrimaryEntryCostBreakdown: detail(
         details,
         'valueAwareCalleeAbiBestSubsetPrimaryEntryCostBreakdown',
+      ),
+      calleeAbiBestSubsetPrimaryEntryPlacementCostBreakdown: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetPrimaryEntryPlacementCostBreakdown',
       ),
       calleeAbiBestSubsetPrimaryEntryNet: detail(
         details,
         'valueAwareCalleeAbiBestSubsetPrimaryEntryNetAfterLowerBoundCells',
       ),
+      calleeAbiBestSubsetPrimaryEntryPlacementLowerBound: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetPrimaryEntryPlacementLowerBoundCells',
+      ),
+      calleeAbiBestSubsetPrimaryEntryPlacementNet: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetPrimaryEntryNetAfterPlacementLowerBoundCells',
+      ),
       calleeAbiBestSubsetPrimaryEntryNeed: detail(
         details,
         'valueAwareCalleeAbiBestSubsetPrimaryEntryAdditionalNetCellsToPositive',
       ),
+      calleeAbiBestSubsetPrimaryEntryPlacementNeed: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetPrimaryEntryPlacementAdditionalNetCellsToPositive',
+      ),
       calleeAbiBestSubsetPrimaryEntryStatus: detail(
         details,
         'valueAwareCalleeAbiBestSubsetPrimaryEntryStatus',
+      ),
+      calleeAbiBestSubsetPrimaryEntryPlacementStatus: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetPrimaryEntryPlacementStatus',
       ),
       calleeAbiStatus:
         detail(details, 'valueAwareCalleeAbiCostModelStatus') ||
@@ -825,6 +873,9 @@ function actionDetailSuffix(row) {
     ['abiProtocolAction', row.calleeAbiPrimaryEntryProtocolAction],
     ['abiArgRestage', row.calleeAbiPrimaryEntryArgumentRestage],
     ['abiArgRestageSites', row.calleeAbiPrimaryEntryArgumentRestageSites],
+    ['abiPrimaryPlacement', row.calleeAbiPrimaryEntryPlacementLowerBoundByCallee],
+    ['abiPrimaryPlacementNet', row.calleeAbiPrimaryEntryPlacementNet],
+    ['abiPrimaryPlacementStatus', row.calleeAbiPrimaryEntryPlacementStatus],
   ];
   const details = fields
     .filter(([, value]) => value !== undefined && value !== null && value !== '')
@@ -957,14 +1008,25 @@ function printHelper(row) {
       ` abiPrimaryProtocolAction=${row.calleeAbiPrimaryEntryProtocolAction || '-'}` +
       ` abiPrimaryArgRestage=${row.calleeAbiPrimaryEntryArgumentRestage || '-'}` +
       ` abiPrimaryArgRestageSites=${row.calleeAbiPrimaryEntryArgumentRestageSites || '-'}` +
+      ` abiPrimaryPlacement=${row.calleeAbiPrimaryEntryPlacementLowerBoundByCallee || '-'}` +
+      ` abiPrimaryPlacementBasis=${row.calleeAbiPrimaryEntryPlacementLowerBoundBasis || '-'}` +
       ` abiPrimaryCost=${row.calleeAbiPrimaryEntryCostBreakdown || '-'}` +
+      ` abiPrimaryPlacementCost=${row.calleeAbiPrimaryEntryPlacementCostBreakdown || '-'}` +
       ` abiPrimaryNet=${row.calleeAbiPrimaryEntryNet || '-'}` +
+      ` abiPrimaryPlacementNet=${row.calleeAbiPrimaryEntryPlacementNet || '-'}` +
       ` abiPrimaryNeed=${row.calleeAbiPrimaryEntryNeed || '-'}` +
+      ` abiPrimaryPlacementNeed=${row.calleeAbiPrimaryEntryPlacementNeed || '-'}` +
       ` abiPrimaryStatus=${row.calleeAbiPrimaryEntryStatus || '-'}` +
+      ` abiPrimaryPlacementStatus=${row.calleeAbiPrimaryEntryPlacementStatus || '-'}` +
       ` abiSubsetPrimaryCost=${row.calleeAbiBestSubsetPrimaryEntryCostBreakdown || '-'}` +
+      ` abiSubsetPrimaryPlacementCost=${row.calleeAbiBestSubsetPrimaryEntryPlacementCostBreakdown || '-'}` +
       ` abiSubsetPrimaryNet=${row.calleeAbiBestSubsetPrimaryEntryNet || '-'}` +
+      ` abiSubsetPrimaryPlacement=${row.calleeAbiBestSubsetPrimaryEntryPlacementLowerBound || '-'}` +
+      ` abiSubsetPrimaryPlacementNet=${row.calleeAbiBestSubsetPrimaryEntryPlacementNet || '-'}` +
       ` abiSubsetPrimaryNeed=${row.calleeAbiBestSubsetPrimaryEntryNeed || '-'}` +
+      ` abiSubsetPrimaryPlacementNeed=${row.calleeAbiBestSubsetPrimaryEntryPlacementNeed || '-'}` +
       ` abiSubsetPrimaryStatus=${row.calleeAbiBestSubsetPrimaryEntryStatus || '-'}` +
+      ` abiSubsetPrimaryPlacementStatus=${row.calleeAbiBestSubsetPrimaryEntryPlacementStatus || '-'}` +
       ` callee=${row.calleeAbiStatus || '-'}`,
   );
 }
@@ -991,6 +1053,9 @@ function printActionSummary(row) {
     ['abiProofDisposition', row.calleeAbiPrimaryEntryProofDisposition],
     ['abiProtocol', row.calleeAbiPrimaryEntryProtocol],
     ['abiArgRestage', row.calleeAbiPrimaryEntryArgumentRestage],
+    ['abiPrimaryPlacement', row.calleeAbiPrimaryEntryPlacementLowerBoundByCallee],
+    ['abiPrimaryPlacementNet', row.calleeAbiPrimaryEntryPlacementNet],
+    ['abiPrimaryPlacementStatus', row.calleeAbiPrimaryEntryPlacementStatus],
   ];
   const suffix = fields
     .filter(([, value]) => value !== undefined && value !== null && value !== '')
