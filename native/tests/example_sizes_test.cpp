@@ -674,6 +674,56 @@ void example_sizes_match_typescript_baselines() {
       require(packed_line_update_tail->steps >= static_cast<int>(result.steps.size()),
               "tic-tac-toe-4x4 packed-line update/check tail should not be reported as a hidden "
               "smaller candidate");
+      const SizeOpportunityReport* packed_line_update_tail_opportunity =
+          find_size_opportunity(result, "packed-line-family-update-check-tail");
+      require(packed_line_update_tail_opportunity != nullptr &&
+                  packed_line_update_tail_opportunity->details.contains(
+                      "packedLineUpdateCheckTailFamily") &&
+                  packed_line_update_tail_opportunity->details.at(
+                      "packedLineUpdateCheckTailFamily") ==
+                      "packed-line-family-update-check-tail" &&
+                  packed_line_update_tail_opportunity->details.contains(
+                      "packedLineUpdateCheckTailMode") &&
+                  packed_line_update_tail_opportunity->details.at(
+                      "packedLineUpdateCheckTailMode") == "direct-shared-tail" &&
+                  packed_line_update_tail_opportunity->details.contains(
+                      "packedLineUpdateCheckTailSharedLayoutGap") &&
+                  packed_line_update_tail_opportunity->details.at(
+                      "packedLineUpdateCheckTailSharedLayoutGap") ==
+                      "multi-entry-layout-sharing-between-update-check-tail-and-score-walker" &&
+                  packed_line_update_tail_opportunity->details.contains(
+                      "packedLineUpdateCheckTailDominantLoss") &&
+                  packed_line_update_tail_opportunity->details.at(
+                      "packedLineUpdateCheckTailDominantLoss") ==
+                      "update-check-tail-without-shared-score-walker-layout-is-larger" &&
+                  packed_line_update_tail_opportunity->details.contains("layoutAction") &&
+                  packed_line_update_tail_opportunity->details.at("layoutAction") ==
+                      "co-design-packed-line-update-check-tail-and-score-walker-layout" &&
+                  packed_line_update_tail_opportunity->details.contains("layoutActionStatus") &&
+                  packed_line_update_tail_opportunity->details.at("layoutActionStatus") ==
+                      "stalled-nonpositive" &&
+                  packed_line_update_tail_opportunity->details.contains(
+                      "selectedPackedLineScoreHelper.pipelineShape") &&
+                  packed_line_update_tail_opportunity->details.at(
+                      "selectedPackedLineScoreHelper.pipelineShape") ==
+                      "packed-line-family-score" &&
+                  packed_line_update_tail_opportunity->details.contains(
+                      "selectedPackedLineScoreHelper.sharedTailTerms") &&
+                  packed_line_update_tail_opportunity->details.at(
+                      "selectedPackedLineScoreHelper.sharedTailTerms") == "4",
+              "tic-tac-toe-4x4 packed-line update/check-tail opportunity should explain that "
+              "the current standalone tail candidate loses without shared score-walker layout");
+      const SizeNextActionSummaryReport* packed_line_update_tail_layout_action =
+          find_size_next_action(
+              result, "layoutAction",
+              "co-design-packed-line-update-check-tail-and-score-walker-layout");
+      require(packed_line_update_tail_layout_action != nullptr &&
+                  packed_line_update_tail_layout_action->status == "stalled-nonpositive" &&
+                  packed_line_update_tail_layout_action->best_savings <= 0 &&
+                  packed_line_update_tail_layout_action->best_details.contains(
+                      "packedLineUpdateCheckTailSharedLayoutGap"),
+              "tic-tac-toe-4x4 size next actions should show the stalled packed-line shared "
+              "layout work without ranking it as a positive saving");
       const CandidateReport* generic_packed_score_fallback =
           find_candidate(result.rejected_candidates, "generic-packed-score-accumulator-fallback");
       require(generic_packed_score_fallback != nullptr &&

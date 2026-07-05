@@ -952,7 +952,12 @@ void print_human_analysis_report(const mkpro::CompileResult& result) {
                                 "valueAwareSuggestedStagedInputNames",
                                 "valueAwareStackInputPressure",
                                 "registerTrafficBreakdown", "layoutAction", "safeSavingsAction",
-                                "candidateDiscoveryAction"});
+                                "candidateDiscoveryAction", "layoutActionStatus",
+                                "packedLineUpdateCheckTailMode",
+                                "packedLineUpdateCheckTailSharedLayoutGap",
+                                "packedLineUpdateCheckTailDominantLoss",
+                                "selectedPackedLineScoreHelper.pipelineShape",
+                                "selectedPackedLineScoreHelper.sharedTailTerms"});
       if (!opportunity.reason.empty())
         std::cout << " - " << opportunity.reason;
       std::cout << "\n";
@@ -1030,7 +1035,12 @@ void print_human_analysis_report(const mkpro::CompileResult& result) {
                                 "valueAwareCalleeAbiMutationSurfaceCells",
                                 "valueAwareCalleeAbiOverheadBudgetCells",
                                 "valueAwareCalleeAbiCostModelStatus",
-                                "layoutAction", "safeSavingsAction", "candidateDiscoveryAction"});
+                                "layoutAction", "safeSavingsAction", "candidateDiscoveryAction",
+                                "layoutActionStatus", "packedLineUpdateCheckTailMode",
+                                "packedLineUpdateCheckTailSharedLayoutGap",
+                                "packedLineUpdateCheckTailDominantLoss",
+                                "selectedPackedLineScoreHelper.pipelineShape",
+                                "selectedPackedLineScoreHelper.sharedTailTerms"});
       if (!action.best_reason.empty())
         std::cout << " - " << action.best_reason;
       std::cout << "\n";

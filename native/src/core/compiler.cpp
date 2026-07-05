@@ -50559,6 +50559,76 @@ const SizeHelperSummaryReport* size_report_helper_by_label(
   return it == helpers.end() ? nullptr : &*it;
 }
 
+std::optional<std::string> packed_line_update_check_tail_mode(std::string_view variant) {
+  if (variant == "packed-line-family-update-check-tail")
+    return "direct-shared-tail";
+  if (variant == "packed-line-family-mutating-selector-update-check-tail")
+    return "mutating-selector-descending-bank";
+  if (variant == "packed-line-family-borrowed-mutating-selector-update-check-tail")
+    return "borrowed-mutating-selector-descending-bank";
+  return std::nullopt;
+}
+
+void attach_packed_line_update_check_tail_details(
+    std::map<std::string, std::string>& details, const CandidateReport& candidate,
+    int current_steps, const std::vector<SizeHelperSummaryReport>& helpers) {
+  const std::optional<std::string> mode =
+      packed_line_update_check_tail_mode(candidate.variant);
+  if (!mode.has_value())
+    return;
+
+  const int delta_cells = candidate.steps - current_steps;
+  details["packedLineUpdateCheckTailFamily"] = "packed-line-family-update-check-tail";
+  details["packedLineUpdateCheckTailMode"] = *mode;
+  details["packedLineUpdateCheckTailComparedAgainst"] =
+      "selected-packed-line-score-accumulator";
+  details["packedLineUpdateCheckTailDeltaCells"] = std::to_string(delta_cells);
+  details["packedLineUpdateCheckTailSharedLayoutGap"] =
+      "multi-entry-layout-sharing-between-update-check-tail-and-score-walker";
+  details["packedLineUpdateCheckTailMeasurementLimit"] =
+      "rejected-candidate-report-retains-size-delta-not-candidate-breakdown";
+  details["packedLineUpdateCheckTailAction"] =
+      "co-design-packed-line-update-check-tail-and-score-walker-layout";
+  details["layoutAction"] =
+      "co-design-packed-line-update-check-tail-and-score-walker-layout";
+  details["layoutActionStatus"] =
+      delta_cells > 0 ? "stalled-nonpositive" : "candidate-can-win-or-break-even";
+  if (delta_cells > 0) {
+    details["packedLineUpdateCheckTailSizeDisposition"] =
+        "larger-than-current-selected-layout";
+    details["packedLineUpdateCheckTailDominantLoss"] =
+        "update-check-tail-without-shared-score-walker-layout-is-larger";
+  } else if (delta_cells == 0) {
+    details["packedLineUpdateCheckTailSizeDisposition"] =
+        "same-size-as-current-selected-layout";
+    details["packedLineUpdateCheckTailDominantLoss"] =
+        "candidate-breaks-even-without-shared-score-walker-layout";
+  } else {
+    details["packedLineUpdateCheckTailSizeDisposition"] =
+        "smaller-than-current-selected-layout";
+    details["packedLineUpdateCheckTailDominantLoss"] =
+        "candidate-smaller-but-not-selected";
+  }
+
+  const SizeHelperSummaryReport* selected =
+      size_report_helper_by_label(helpers, "packed-line score accumulator helper");
+  if (selected == nullptr)
+    return;
+  details["selectedPackedLineScoreHelperTotalCells"] = std::to_string(selected->total_cells);
+  details["selectedPackedLineScoreHelperBodyCells"] = std::to_string(selected->body_cells);
+  details["selectedPackedLineScoreHelperCallSiteCells"] =
+      std::to_string(selected->call_site_cells);
+  details["selectedPackedLineScoreHelperCallOccurrences"] =
+      std::to_string(selected->call_occurrences);
+  for (const std::string& key : {"pipelineShape", "accumulatorTerms", "sharedTailTerms",
+                                 "bodyCellsPerAccumulatorTerm",
+                                 "pow10ScaleLineValuePolicy", "nextPipelineAction"}) {
+    const auto detail_it = selected->details.find(key);
+    if (detail_it != selected->details.end())
+      details["selectedPackedLineScoreHelper." + key] = detail_it->second;
+  }
+}
+
 void attach_generic_packed_score_fallback_details(
     std::map<std::string, std::string>& details, const CandidateReport& candidate,
     int current_steps, const std::vector<SizeHelperSummaryReport>& helpers) {
@@ -52263,6 +52333,8 @@ SizeAttributionReport build_size_attribution_report(
     attach_rejected_candidate_size_details(details, candidate, current_steps, blocker_kind);
     attach_generic_packed_score_fallback_details(details, candidate, current_steps,
                                                  report.helpers);
+    attach_packed_line_update_check_tail_details(details, candidate, current_steps,
+                                                 report.helpers);
     int opportunity_savings = current_steps - candidate.steps;
     int opportunity_candidate_steps = candidate.steps;
     if (const auto net_lower_bound_it =
@@ -52432,6 +52504,16 @@ SizeAttributionReport build_size_attribution_report(
       if (const auto cost_it = opportunity.details.find("costModelAction");
           cost_it != opportunity.details.end()) {
         add_next_action(opportunity, "costModelAction", cost_it->second, index,
+                        "stalled-nonpositive");
+      }
+      continue;
+    }
+    if (const auto layout_status_it = opportunity.details.find("layoutActionStatus");
+        layout_status_it != opportunity.details.end() &&
+        layout_status_it->second == "stalled-nonpositive") {
+      if (const auto layout_it = opportunity.details.find("layoutAction");
+          layout_it != opportunity.details.end()) {
+        add_next_action(opportunity, "layoutAction", layout_it->second, index,
                         "stalled-nonpositive");
       }
       continue;
