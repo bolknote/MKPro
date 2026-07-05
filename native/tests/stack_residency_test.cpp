@@ -1263,6 +1263,60 @@ program RuleStackInputPredicateEntryProbe {
 
   {
     const std::string source = R"mkpro(
+program RuleStackInputEntryRetainedStateReadProbe {
+  state {
+    x: packed = 3
+    score: packed = 0
+    flag: packed = 0
+  }
+
+  fn uses_x() {
+    score = score + x
+  }
+
+  fn hot() {
+    if x == 1 {
+      flag = 1
+    }
+    else {
+      uses_x()
+    }
+  }
+
+  loop {
+    hot()
+    x--
+    hot()
+    x++
+    hot()
+    halt(score + x + flag)
+  }
+}
+)mkpro";
+    CompileOptions stack_input_options;
+    stack_input_options.budget = 999999;
+    stack_input_options.stack_resident_temps = true;
+    stack_input_options.stack_argument_function_entries = true;
+    stack_input_options.disable_candidate_search = true;
+    const CompileResult stack_input = compile_source(source, stack_input_options);
+    require_clean_compile(stack_input, "rule stack-input retained state read variant");
+    require(has_optimization(stack_input, "rule-stack-input-entry-secondary"),
+            "secondary stack-input entry should still handle the first predicate from X");
+    require(count_steps_with_comment_prefix_and_opcode(
+                stack_input, "proc call hot stack-input entry", 0x53) == 0,
+            "retained stores should keep secondary stack-input calls on the regular entry");
+    require(count_steps_with_comment(stack_input, "regular stack-input preload x") == 1,
+            "the ordinary hot call should use the regular preload entry");
+    require(count_steps_with_comment(stack_input, "set x") == 2,
+            "stack-carried updates must keep x stores when the callee reads x after entry");
+    require(!has_optimization(stack_input, "stack-carried-update"),
+            "stored-state reads after entry should block no-store stack-carried updates");
+    require(count_steps_with_comment(stack_input, "recall x") >= 1,
+            "the later nested state read should still recall the stored x value");
+  }
+
+  {
+    const std::string source = R"mkpro(
 program RuleStackInputUpdateEntryProbe {
   state {
     x: packed = 0

@@ -20575,6 +20575,9 @@ bool expression_has_target_aware_assignment_lowering(const LoweringContext& cont
           is_x_param_value_function_call(context, expression));
 }
 
+bool stack_carried_consumer_requires_stored_state_after_entry(
+    LoweringContext& context, const V2Statement& consumer, const std::string& target);
+
 bool lower_stack_carried_assignment_run(LoweringContext& context,
                                         const std::vector<V2Statement>& statements,
                                         std::size_t start, std::size_t& consumed) {
@@ -20608,6 +20611,8 @@ bool lower_stack_carried_assignment_run(LoweringContext& context,
   }
   if (!statement_directly_consumes_current_x_identifier(context, consumer, target.name))
     return false;
+  if (stack_carried_consumer_requires_stored_state_after_entry(context, consumer, target.name))
+    return false;
   if (!stack_carried_assignment_future_safe(context, statements, start, start + 1U, target.name))
     return false;
 
@@ -20635,6 +20640,83 @@ bool stack_carried_consumer_read_count_supported(LoweringContext& context,
       return true;
   }
   return count_identifier_reads_in_statement(consumer, target) == 1;
+}
+
+bool statements_may_read_identifier_deep(LoweringContext& context,
+                                         const std::vector<V2Statement>& statements,
+                                         const std::string& target,
+                                         std::set<std::string>& seen_rules);
+
+bool statement_may_read_identifier_deep(LoweringContext& context, const V2Statement& statement,
+                                        const std::string& target,
+                                        std::set<std::string>& seen_rules) {
+  if (statement_reads_identifier(statement, target, false))
+    return true;
+  if (statement.kind == "v2_invoke" && statement.name.has_value()) {
+    if (seen_rules.contains(*statement.name))
+      return true;
+    const auto rule_it = context.rules.find(*statement.name);
+    if (rule_it == context.rules.end() || rule_it->second == nullptr)
+      return true;
+    seen_rules.insert(*statement.name);
+    const bool reads =
+        statements_may_read_identifier_deep(context, rule_it->second->body, target, seen_rules);
+    seen_rules.erase(*statement.name);
+    return reads;
+  }
+  return false;
+}
+
+bool statements_may_read_identifier_deep(LoweringContext& context,
+                                         const std::vector<V2Statement>& statements,
+                                         const std::string& target,
+                                         std::set<std::string>& seen_rules) {
+  return std::any_of(statements.begin(), statements.end(), [&](const V2Statement& statement) {
+    return statement_may_read_identifier_deep(context, statement, target, seen_rules);
+  });
+}
+
+bool statement_blocks_may_read_identifier(LoweringContext& context,
+                                          const V2Statement& statement,
+                                          const std::string& target) {
+  std::set<std::string> seen_rules;
+  if (statements_may_read_identifier_deep(context, statement.body, target, seen_rules) ||
+      statements_may_read_identifier_deep(context, statement.then_body, target, seen_rules) ||
+      statements_may_read_identifier_deep(context, statement.else_body, target, seen_rules)) {
+    return true;
+  }
+  for (const V2MatchCase& match_case : statement.cases) {
+    seen_rules.clear();
+    if (match_case.action != nullptr &&
+        statement_may_read_identifier_deep(context, *match_case.action, target, seen_rules)) {
+      return true;
+    }
+  }
+  seen_rules.clear();
+  return statement.otherwise != nullptr &&
+         statement_may_read_identifier_deep(context, *statement.otherwise, target, seen_rules);
+}
+
+bool stack_carried_consumer_requires_stored_state_after_entry(
+    LoweringContext& context, const V2Statement& consumer, const std::string& target) {
+  if (consumer.kind != "v2_invoke" || !consumer.name.has_value() || !consumer.args.empty())
+    return false;
+  const auto plan_it = context.stack_input_rule_entries.find(*consumer.name);
+  if (plan_it == context.stack_input_rule_entries.end() || plan_it->second.input != target)
+    return false;
+  const auto rule_it = context.rules.find(*consumer.name);
+  if (rule_it == context.rules.end() || rule_it->second == nullptr ||
+      rule_it->second->body.empty()) {
+    return true;
+  }
+  const V2Rule& rule = *rule_it->second;
+  if (statement_blocks_may_read_identifier(context, rule.body.front(), target))
+    return true;
+  if (rule.body.size() <= 1U)
+    return false;
+  const std::vector<V2Statement> rest(rule.body.begin() + 1, rule.body.end());
+  std::set<std::string> seen_rules;
+  return statements_may_read_identifier_deep(context, rest, target, seen_rules);
 }
 
 bool lower_delayed_stack_carried_assignment_run(LoweringContext& context,
@@ -20684,6 +20766,8 @@ bool lower_delayed_stack_carried_assignment_run(LoweringContext& context,
   if (consumer.kind == "v2_if" && statements_are_domain_error_trap(context, consumer.then_body))
     return false;
   if (!stack_carried_consumer_read_count_supported(context, consumer, target.name))
+    return false;
+  if (stack_carried_consumer_requires_stored_state_after_entry(context, consumer, target.name))
     return false;
   if (!stack_carried_assignment_future_safe(context, statements, start, consumer_index,
                                             target.name)) {
@@ -20767,6 +20851,8 @@ bool lower_stack_carried_update_run(LoweringContext& context,
     return false;
   if (!statement_directly_consumes_current_x_identifier(context, consumer, target.name))
     return false;
+  if (stack_carried_consumer_requires_stored_state_after_entry(context, consumer, target.name))
+    return false;
   if (!stack_carried_assignment_future_safe(context, statements, start, start + 1U, target.name))
     return false;
 
@@ -20841,6 +20927,8 @@ bool lower_delayed_stack_carried_update_run(LoweringContext& context,
   if (consumer.kind == "v2_if" && statements_are_domain_error_trap(context, consumer.then_body))
     return false;
   if (!stack_carried_consumer_read_count_supported(context, consumer, target.name))
+    return false;
+  if (stack_carried_consumer_requires_stored_state_after_entry(context, consumer, target.name))
     return false;
   if (!stack_carried_assignment_future_safe(context, statements, start, consumer_index,
                                             target.name)) {
