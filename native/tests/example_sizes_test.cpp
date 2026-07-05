@@ -202,7 +202,7 @@ void example_sizes_match_typescript_baselines() {
       {"dangerous-loading", 84},
       {"dungeon", 75},
       {"e-94-digits", 64},
-      {"functions-demo", 21},
+      {"functions-demo", 16},
       {"fox-hunt-100", 103},
       {"fox-hunt-mk61", 65},
       {"game-100-pig", 97},
@@ -524,47 +524,21 @@ void example_sizes_match_typescript_baselines() {
     }
     if (name == "functions-demo") {
       const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
-      const SizeHelperSummaryReport* sum_of_squares =
-          find_size_helper(result, "sum_of_squares");
-      require(sum_of_squares != nullptr &&
-                  sum_of_squares->details.contains("valueAwareCallArgumentStoreCells") &&
-                  sum_of_squares->details.at("valueAwareCallArgumentStoreCells") == "2" &&
-                  sum_of_squares->details.contains("valueAwareCallArgumentStoreCellsByName") &&
-                  sum_of_squares->details.at("valueAwareCallArgumentStoreCellsByName")
-                          .find("a:1") != std::string::npos &&
-                  sum_of_squares->details.at("valueAwareCallArgumentStoreCellsByName")
-                          .find("b:1") != std::string::npos &&
-                  sum_of_squares->details.contains(
-                      "valueAwareCallerArgStoreAdjustedStackInputNetCells") &&
-                  sum_of_squares->details.at(
-                      "valueAwareCallerArgStoreAdjustedStackInputNetCells") == "2" &&
-                  sum_of_squares->details.contains(
-                      "valueAwareCallerArgStoreAdjustedStackInputProfitBreakdown") &&
-                  sum_of_squares->details.at(
-                      "valueAwareCallerArgStoreAdjustedStackInputProfitBreakdown")
-                          .find("a:1g/1m/1a/+1n") != std::string::npos &&
-                  sum_of_squares->details.at(
-                      "valueAwareCallerArgStoreAdjustedStackInputProfitBreakdown")
-                          .find("b:1g/1m/1a/+1n") != std::string::npos &&
-                  sum_of_squares->details.contains("valueAwareCallerArgStorePlanStatus") &&
-                  sum_of_squares->details.at("valueAwareCallerArgStorePlanStatus") ==
-                      "positive-before-function-stack-entry-cost" &&
-                  sum_of_squares->details.contains("valueAwareCallerArgStoreRequiredAction") &&
-                  sum_of_squares->details.at("valueAwareCallerArgStoreRequiredAction") ==
-                      "model-stack-entry-function-abi-cost",
-              "functions-demo value-aware attribution should expose removable caller argument "
-              "stores separately from the old inserted-recall materialization model");
-      const SizeOpportunityReport* register_traffic = find_size_opportunity_detail(
-          result, "helper-register-traffic", "helperLabel", "sum_of_squares");
-      require(register_traffic != nullptr && register_traffic->savings == 0 &&
-                  register_traffic->details.contains("valueAwareCallerArgStorePlanStatus") &&
-                  register_traffic->details.at("valueAwareCallerArgStorePlanStatus") ==
-                      "positive-before-function-stack-entry-cost" &&
-                  register_traffic->details.contains("costModelAction") &&
-                  register_traffic->details.at("costModelAction") ==
-                      "find-profitable-stack-input-call-sites-or-reduce-materialization-cost",
-              "caller argument-store elision should be visible as a positive pre-entry-cost "
-              "target without being ranked as an enabled size win before ABI cost is modeled");
+      const SizeHelperSummaryReport* sum_of_squares_stack_entry =
+          find_size_helper(result, "sum_of_squares stack entry");
+      require(sum_of_squares_stack_entry != nullptr && sum_of_squares_stack_entry->body_cells == 5 &&
+                  sum_of_squares_stack_entry->call_site_cells == 2 &&
+                  sum_of_squares_stack_entry->call_occurrences == 1,
+              "functions-demo stack-entry helper should account for the selected compact "
+              "sum_of_squares body and call site");
+      const SizeSelectedOptimizationReport* stack_entry =
+          find_size_selected_optimization(result, "stack-resident-function-entries");
+      require(stack_entry != nullptr && stack_entry->current_steps == 16 &&
+                  stack_entry->baseline_steps == 21 && stack_entry->savings == 5 &&
+                  stack_entry->details.contains("estimateKind") &&
+                  stack_entry->details.at("estimateKind") == "measured-selected-candidate-delta",
+              "functions-demo value-aware attribution should report the selected stack-entry "
+              "function ABI as a measured size win");
     }
     if (name == "game-100-pig") {
       const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);

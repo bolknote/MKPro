@@ -724,10 +724,19 @@ committed example oracles under `native/oracles/`.
 - `function-stack-entry-primary` / `function-stack-entry-call` — add a
   secondary stack-argument entry for simple value functions whose single
   `return` expression can be lowered by the generic stack-resident expression
-  emitter. The first implementation accepts up to four parameters, simple
-  identifier/number call arguments, and return expressions without nested user
-  function calls; unsafe or mixed call sites keep the ordinary register-entry
+  emitter. It accepts up to four parameters, simple identifier/number call
+  arguments, and nested calls to one-argument value functions that are provably
+  current-X-only transforms (for example `n * n`, `frac(n)`, or equivalent unary
+  transform chains). Unsafe or mixed call sites keep the ordinary register-entry
   ABI.
+- `function-current-x-value-call` / `function-current-x-value-inline` — compile
+  one-argument value functions whose body is a pure transform of the current X
+  without assigning the parameter to a register. This is the general form behind
+  compact `square(n) { return n * n }` style helpers.
+- `function-stack-entry-nested-call` / `stack-resident-value-pipeline` — keep
+  nested current-X value calls inside stack-entry return expressions and evaluate
+  two independent stack argument terms through X/Y without materializing either
+  term in a register.
 - `x-param-proc-entry` — alternative procedure entry through X when cheaper. The
   first assignment may be a direct copy, `param + other`, or a pure expression
   that consumes the single-use parameter from the X register through a
@@ -2780,7 +2789,7 @@ the deferral policy is lifted.
      acceptance.
 
   Measured, proof-gated wins (`MKPRO_NATIVE_BLESS=1` re-blessed,
-  `git diff` step deltas ≤ 0): `basic` 8→7, `functions-demo` 25→21,
+  `git diff` step deltas ≤ 0): `basic` 8→7, `functions-demo` 25→16,
   `human` 27→23, `tiny-game` 27→23. The `human` shrink is independently checked
   by `emulator_indirect_flow_equivalence_matches_typescript_contract` (now
   comparing the default aggressive compile against a `disable_candidate_search`

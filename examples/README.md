@@ -31,7 +31,7 @@ Generated with `npm run examples:size`.
 | `e-94-digits.mkpro` | 64 | 64 | 0 | ok: <= reference | load ok |
 | `fox-hunt-100.mkpro` | 103 | 105 | -2 | ok: <= reference | main+setup load ok |
 | `fox-hunt-mk61.mkpro` | 60 | 92 | -32 | ok: <= reference | main+setup load ok |
-| `functions-demo.mkpro` | 25 | - | - | ok: no reference | load ok |
+| `functions-demo.mkpro` | 16 | - | - | ok: no reference | load ok |
 | `game-100-pig.mkpro` | 97 | 103 | -6 | ok: <= reference | main+setup load ok |
 | `giants-country.mkpro` | 103 | 999999 | -999896 | ok: <= reference | main+setup load ok |
 | `human.mkpro` | 27 | - | - | ok: no reference | load ok |

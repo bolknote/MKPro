@@ -905,6 +905,65 @@ program StackFunctionEntry {
   }
 
   {
+    const std::string nested_stack_function_entry_source = R"mkpro(
+program StackFunctionNestedValueEntry {
+  state {
+    x: packed = 2
+    y: packed = 3
+    out: packed = 0
+  }
+
+  fn norm(n) {
+    return n * n
+  }
+
+  fn combine(a, b) {
+    return norm(a) + norm(b)
+  }
+
+  loop {
+    out = combine(x, y)
+    out += combine(y, x)
+    out += combine(x, 4)
+    halt(out)
+  }
+}
+)mkpro";
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.disable_candidate_search = true;
+    const CompileResult baseline =
+        compile_source(nested_stack_function_entry_source, baseline_options);
+    require_clean_compile(baseline, "nested stack function entry baseline");
+
+    CompileOptions stack_entry_options = baseline_options;
+    stack_entry_options.stack_resident_temps = true;
+    stack_entry_options.stack_argument_function_entries = true;
+    const CompileResult stack_entry =
+        compile_source(nested_stack_function_entry_source, stack_entry_options);
+    require_clean_compile(stack_entry, "nested stack function argument-entry variant");
+    require(stack_entry.steps.size() < baseline.steps.size(),
+            "nested stack function argument-entry variant should reduce caller argument stores");
+    require(has_optimization(stack_entry, "function-stack-entry-primary"),
+            "nested stack function argument-entry variant should emit a callee stack entry");
+    require(has_optimization(stack_entry, "function-stack-entry-call"),
+            "nested stack function argument-entry variant should route safe calls through the "
+            "stack entry");
+    require(has_optimization(stack_entry, "function-stack-entry-nested-call"),
+            "nested stack function argument-entry variant should inline nested current-X value "
+            "calls");
+    require(has_optimization(stack_entry, "stack-resident-value-pipeline"),
+            "nested stack function argument-entry variant should evaluate value terms through "
+            "X/Y");
+    require(count_steps_with_comment(stack_entry, "arg a for combine") == 0 &&
+                count_steps_with_comment(stack_entry, "arg b for combine") == 0,
+            "nested stack-entry combine calls should not store caller arguments");
+    require(count_steps_with_comment_prefix_and_opcode(
+                stack_entry, "call function combine stack entry", 0x53) == 3,
+            "all safe nested combine calls should use the function stack-entry label");
+  }
+
+  {
     const CompileResult result = compile_stack_analysis(R"mkpro(
 program ValueAwareDirectStackInputNestedCall {
   state {
@@ -2705,7 +2764,9 @@ program StackResidentUnaryCallControlFlow {
     require_clean_compile(result, "stack-resident unary call control-flow");
     require(has_optimization(result, "stack-resident-control-flow"),
             "unary call over stack temps should stay stack-resident across control flow");
-    require(count_steps_with_comment(result, "stack-resident frac") == 1,
+    require(count_steps_with_comment(result, "stack-resident frac") +
+                    count_steps_with_comment(result, "current-X value frac") ==
+                1,
             "stack-resident unary call should apply frac() to the restored stack temp");
     require(count_steps_with_comment(result, "recall a") == 0,
             "stack-resident unary call should not recall the temp from memory");

@@ -7393,20 +7393,6 @@ void apply_forced_register_shares(LoweringContext& context,
   }
 }
 
-bool is_functions_demo_shape(const V2Program& program) {
-  if (program.rules.size() != 2)
-    return false;
-  const bool has_square =
-      std::any_of(program.rules.begin(), program.rules.end(), [](const V2Rule& rule) {
-        return rule.name == "square" && rule.params == std::vector<std::string>{"n"};
-      });
-  const bool has_sum =
-      std::any_of(program.rules.begin(), program.rules.end(), [](const V2Rule& rule) {
-        return rule.name == "sum_of_squares" && rule.params == std::vector<std::string>{"a", "b"};
-      });
-  return has_square && has_sum;
-}
-
 std::size_t explicit_state_field_count(const V2Program& program) {
   return static_cast<std::size_t>(
       std::count_if(program.state.begin(), program.state.end(),
@@ -10553,14 +10539,6 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   context.scaled_coord_cell_names = collect_scaled_coord_cell_names(context, program);
   context.scaled_coord_line_count_targets =
       collect_scaled_coord_line_count_targets(context, program);
-  if (is_functions_demo_shape(program)) {
-    bind_register(context, "__mkpro_call_1", 0);
-    bind_register(context, "x", 2);
-    bind_register(context, "a", 2);
-    bind_register(context, "y", 3);
-    bind_register(context, "b", 3);
-    bind_register(context, "result", 5);
-  }
   if (context.tiny_game_shape) {
     bind_register(context, "dial", 0);
     bind_register(context, "charge", 2);
@@ -17831,36 +17809,225 @@ std::optional<Expression> stack_entry_value_function_return_expression(const V2R
   return parse_expression(*statement.expr, statement.line);
 }
 
-bool stack_entry_return_expression_has_supported_calls(const Expression& expression) {
+bool current_x_value_function_rule_eligible(const LoweringContext& context, const V2Rule& rule);
+
+bool stack_entry_return_expression_has_supported_calls(const LoweringContext& context,
+                                                       const Expression& expression) {
   if (const std::optional<StackUnaryTransformCall> transform =
           stack_unary_transform_call(expression)) {
     return transform->arg != nullptr &&
-           stack_entry_return_expression_has_supported_calls(*transform->arg);
+           stack_entry_return_expression_has_supported_calls(context, *transform->arg);
   }
   if (expression.kind == "call") {
-    if (lower_ascii(expression.callee) != "sum")
-      return false;
+    if (lower_ascii(expression.callee) != "sum") {
+      const auto rule_it = context.rules.find(expression.callee);
+      return rule_it != context.rules.end() && rule_it->second != nullptr &&
+             current_x_value_function_rule_eligible(context, *rule_it->second) &&
+             std::all_of(expression.args.begin(), expression.args.end(),
+                         [&](const Expression& arg) {
+                           return stack_entry_return_expression_has_supported_calls(context, arg);
+                         });
+    }
     return std::all_of(expression.args.begin(), expression.args.end(),
-                       stack_entry_return_expression_has_supported_calls);
+                       [&](const Expression& arg) {
+                         return stack_entry_return_expression_has_supported_calls(context, arg);
+                       });
   }
   if (expression.index != nullptr &&
-      !stack_entry_return_expression_has_supported_calls(*expression.index)) {
+      !stack_entry_return_expression_has_supported_calls(context, *expression.index)) {
     return false;
   }
   if (expression.expr != nullptr &&
-      !stack_entry_return_expression_has_supported_calls(*expression.expr)) {
+      !stack_entry_return_expression_has_supported_calls(context, *expression.expr)) {
     return false;
   }
   if (expression.left != nullptr &&
-      !stack_entry_return_expression_has_supported_calls(*expression.left)) {
+      !stack_entry_return_expression_has_supported_calls(context, *expression.left)) {
     return false;
   }
   if (expression.right != nullptr &&
-      !stack_entry_return_expression_has_supported_calls(*expression.right)) {
+      !stack_entry_return_expression_has_supported_calls(context, *expression.right)) {
     return false;
   }
   return std::all_of(expression.args.begin(), expression.args.end(),
-                     stack_entry_return_expression_has_supported_calls);
+                     [&](const Expression& arg) {
+                       return stack_entry_return_expression_has_supported_calls(context, arg);
+                     });
+}
+
+bool current_x_value_function_transform_expression(const Expression& expression,
+                                                   const std::string& param) {
+  if (expression.kind == "identifier")
+    return expression.name == param;
+  if (expression.kind == "unary") {
+    return expression.op == "-" && expression.expr != nullptr &&
+           current_x_value_function_transform_expression(*expression.expr, param);
+  }
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression)) {
+    return transform->arg != nullptr &&
+           current_x_value_function_transform_expression(*transform->arg, param);
+  }
+  if (expression.kind == "binary" && expression.op == "*" && expression.left != nullptr &&
+      expression.right != nullptr &&
+      expression_to_json(*expression.left) == expression_to_json(*expression.right)) {
+    return current_x_value_function_transform_expression(*expression.left, param);
+  }
+  return false;
+}
+
+std::optional<Expression> current_x_value_function_return_expression(const V2Rule& rule) {
+  if (rule.params.size() != 1U)
+    return std::nullopt;
+  const std::optional<Expression> returned = stack_entry_value_function_return_expression(rule);
+  if (!returned.has_value())
+    return std::nullopt;
+  if (!current_x_value_function_transform_expression(*returned, rule.params.front()))
+    return std::nullopt;
+  return returned;
+}
+
+bool current_x_value_function_rule_eligible(const LoweringContext& context, const V2Rule& rule) {
+  (void)context;
+  return current_x_value_function_return_expression(rule).has_value();
+}
+
+bool current_x_value_function_call_for_temp(const LoweringContext& context,
+                                            const Expression& expression,
+                                            const std::string& temp) {
+  if (expression.kind != "call" || expression.args.size() != 1U)
+    return false;
+  const auto rule_it = context.rules.find(expression.callee);
+  return rule_it != context.rules.end() && rule_it->second != nullptr &&
+         current_x_value_function_rule_eligible(context, *rule_it->second) &&
+         current_x_value_function_transform_expression(expression.args.front(), temp);
+}
+
+bool current_x_preserving_y_expression_for_temp(const LoweringContext& context,
+                                                const Expression& expression,
+                                                const std::string& temp) {
+  return current_x_value_function_transform_expression(expression, temp) ||
+         current_x_value_function_call_for_temp(context, expression, temp);
+}
+
+std::optional<std::size_t> current_x_preserving_y_stack_temp_expression_index(
+    const LoweringContext& context, const Expression& expression,
+    const std::vector<std::string>& temps) {
+  std::optional<std::size_t> found;
+  for (std::size_t index = 0; index < temps.size(); ++index) {
+    if (count_identifier_reads(expression, temps.at(index)) == 0)
+      continue;
+    if (found.has_value())
+      return std::nullopt;
+    found = index;
+  }
+  if (!found.has_value())
+    return std::nullopt;
+  if (!current_x_preserving_y_expression_for_temp(context, expression, temps.at(*found)))
+    return std::nullopt;
+  return found;
+}
+
+bool stack_entry_expression_references_any_temp(const Expression& expression,
+                                                const std::vector<std::string>& temps) {
+  return std::any_of(temps.begin(), temps.end(), [&](const std::string& temp) {
+    return count_identifier_reads(expression, temp) > 0;
+  });
+}
+
+bool stack_entry_non_temp_operand_safe(const Expression& expression) {
+  return expression.kind != "call" && expression_pure_for_substitution(expression);
+}
+
+bool stack_entry_expression_has_supported_shape(const LoweringContext& context,
+                                                const Expression& expression,
+                                                const std::vector<std::string>& temps);
+
+bool stack_entry_binary_expression_has_supported_shape(const LoweringContext& context,
+                                                       const Expression& expression,
+                                                       const std::vector<std::string>& temps) {
+  if (expression.left == nullptr || expression.right == nullptr)
+    return false;
+  const bool left_refs = stack_entry_expression_references_any_temp(*expression.left, temps);
+  const bool right_refs = stack_entry_expression_references_any_temp(*expression.right, temps);
+
+  if (left_refs && right_refs && expression_equals(*expression.left, *expression.right))
+    return stack_entry_expression_has_supported_shape(context, *expression.left, temps);
+
+  if (left_refs && right_refs && expression.left->kind == "identifier" &&
+      expression.right->kind == "identifier") {
+    const bool left_is_temp =
+        std::find(temps.begin(), temps.end(), expression.left->name) != temps.end();
+    const bool right_is_temp =
+        std::find(temps.begin(), temps.end(), expression.right->name) != temps.end();
+    return left_is_temp && right_is_temp;
+  }
+
+  if (temps.size() == 2U && left_refs && right_refs &&
+      (expression.op == "+" || expression.op == "*")) {
+    const std::optional<std::size_t> left_index =
+        current_x_preserving_y_stack_temp_expression_index(context, *expression.left, temps);
+    const std::optional<std::size_t> right_index =
+        current_x_preserving_y_stack_temp_expression_index(context, *expression.right, temps);
+    return left_index.has_value() && right_index.has_value() && *left_index != *right_index;
+  }
+
+  if (left_refs && right_refs)
+    return false;
+
+  if (left_refs) {
+    return stack_entry_expression_has_supported_shape(context, *expression.left, temps) &&
+           stack_entry_non_temp_operand_safe(*expression.right);
+  }
+
+  if (right_refs) {
+    return (expression.op == "+" || expression.op == "*") &&
+           stack_entry_expression_has_supported_shape(context, *expression.right, temps) &&
+           stack_entry_non_temp_operand_safe(*expression.left);
+  }
+
+  return stack_entry_non_temp_operand_safe(*expression.left) &&
+         stack_entry_non_temp_operand_safe(*expression.right);
+}
+
+bool stack_entry_expression_has_supported_shape(const LoweringContext& context,
+                                                const Expression& expression,
+                                                const std::vector<std::string>& temps) {
+  if (expression.kind == "number" || expression.kind == "string")
+    return true;
+  if (expression.kind == "identifier")
+    return std::find(temps.begin(), temps.end(), expression.name) != temps.end();
+  if (expression.kind == "indexed")
+    return false;
+  if (expression.kind == "unary")
+    return expression.expr != nullptr &&
+           stack_entry_expression_has_supported_shape(context, *expression.expr, temps);
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression)) {
+    return transform->arg != nullptr &&
+           stack_entry_expression_has_supported_shape(context, *transform->arg, temps);
+  }
+  if (expression.kind == "call") {
+    if (lower_ascii(expression.callee) == "sum")
+      return stack_entry_expression_has_supported_shape(context, sum_expressions(expression.args),
+                                                       temps);
+    const auto rule_it = context.rules.find(expression.callee);
+    return expression.args.size() == 1U && rule_it != context.rules.end() &&
+           rule_it->second != nullptr &&
+           current_x_value_function_rule_eligible(context, *rule_it->second) &&
+           stack_entry_expression_has_supported_shape(context, expression.args.front(), temps);
+  }
+  if (expression.kind == "binary")
+    return stack_entry_binary_expression_has_supported_shape(context, expression, temps);
+  return false;
+}
+
+bool can_lower_stack_entry_value_expression(const LoweringContext& context,
+                                            const Expression& expression,
+                                            const std::vector<std::string>& params) {
+  return stack_entry_return_expression_has_supported_calls(context, expression) &&
+         core::emit::can_lower_stack_resident_expression(expression, params) &&
+         stack_entry_expression_has_supported_shape(context, expression, params);
 }
 
 bool stack_entry_value_function_rule_eligible(const LoweringContext& context,
@@ -17870,15 +18037,14 @@ bool stack_entry_value_function_rule_eligible(const LoweringContext& context,
   const std::optional<Expression> returned = stack_entry_value_function_return_expression(rule);
   if (!returned.has_value())
     return false;
-  if (rule.name == "square" || match_trig_near_rule(rule).has_value() ||
+  if (current_x_value_function_rule_eligible(context, rule) ||
+      match_trig_near_rule(rule).has_value() ||
       match_x_param_return_decay(rule).has_value() ||
       match_x_param_stack_stop_risk_rule(rule).has_value() ||
       match_x_param_value_function(rule).has_value()) {
     return false;
   }
-  if (!stack_entry_return_expression_has_supported_calls(*returned))
-    return false;
-  return core::emit::can_lower_stack_resident_expression(*returned, rule.params);
+  return can_lower_stack_entry_value_expression(context, *returned, rule.params);
 }
 
 bool stack_entry_function_call_arguments_safe(const V2Rule& rule,
@@ -22141,35 +22307,25 @@ bool lower_call_to_x(LoweringContext& context, const Expression& expression) {
     });
     return true;
   }
-  if (rule.name == "square") {
-    if (expression.args.size() != 1) {
-      context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
-                                               "square expects one native argument"));
-      return false;
-    }
-    if (!lower_expression_to_x(context, expression.args.at(0)))
-      return false;
-    context.emitter.emit_jump(0x53, "ПП", function_label("square"), "call function square");
-    context.emitter.current_x_variable.reset();
-    context.emitter.current_x_aliases.clear();
+  if (lower_stack_argument_function_call(context, rule, expression.args, 0, "call function "))
     return true;
-  }
-  if (rule.name == "sum_of_squares") {
-    if (expression.args.size() != 2) {
-      context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
-                                               "sum_of_squares expects two native arguments"));
+  if (current_x_value_function_rule_eligible(context, rule)) {
+    if (expression.args.size() != 1U) {
+      context.diagnostics.push_back(diagnostic(
+          DiagnosticSeverity::Error, "native-unsupported",
+          rule.name + " expects one native argument for current-X value lowering"));
       return false;
     }
-    if (!lower_expression_to_x(context, expression.args.at(0)))
+    if (!lower_expression_to_x(context, expression.args.front()))
       return false;
-    emit_store(context, "a", "arg a for sum_of_squares");
-    if (!lower_expression_to_x(context, expression.args.at(1)))
-      return false;
-    emit_store(context, "b", "arg b for sum_of_squares");
-    context.emitter.emit_jump(0x53, "ПП", function_label("sum_of_squares"),
-                              "call function sum_of_squares");
-    context.emitter.current_x_variable.reset();
-    context.emitter.current_x_aliases.clear();
+    context.emitter.emit_jump(0x53, "ПП", function_label(rule.name),
+                              "call function " + rule.name);
+    clear_current_x_facts(context);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "function-current-x-value-call",
+        .detail = "Called value function " + rule.name +
+                  " with its argument already staged in X.",
+    });
     return true;
   }
   if (lower_x_param_value_function_call(context, rule, expression.args, 0))
@@ -22213,8 +22369,6 @@ bool lower_call_to_x(LoweringContext& context, const Expression& expression) {
     return true;
   if (context.x_param_procs.contains(rule.name))
     return lower_x_param_rule_call(context, rule, expression.args, 0);
-  if (lower_stack_argument_function_call(context, rule, expression.args, 0, "call function "))
-    return true;
   if (expression.args.empty() && context.emitter.current_x_known_zero &&
       !context.disable_packed_line_family_score_accumulator) {
     const std::optional<PackedLineFamilyScoreRule> score_rule =
@@ -31422,6 +31576,8 @@ bool emit_stack_argument_function_entry_prefix(LoweringContext& context, const V
   return true;
 }
 
+bool lower_current_x_value_function_body(LoweringContext& context, const V2Rule& rule, int line);
+
 // Recognise a no-argument procedure whose entire body is
 //   selector--; lines[selector] = packed_add(lines[selector], ...);
 //   report = bit_and(lines[selector], MASK); if frac(report) != 0 { halt(report) }
@@ -31569,13 +31725,12 @@ bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
   ProcedureBoundaryScope procedure_scope{context, function_label(rule.name)};
   if (!emit_stack_argument_function_entry_prefix(context, rule))
     return false;
-  if (rule.name == "square") {
-    context.emitter.emit_op(0x22, "F x^2", "square repeated operand", rule.line);
-    context.emitter.emit_op(0x52, "В/О", "return value", rule.line);
+  if (current_x_value_function_rule_eligible(context, rule)) {
+    const int line = rule.body.empty() ? rule.line : rule.body.front().line;
+    if (!lower_current_x_value_function_body(context, rule, line))
+      return false;
+    context.emitter.emit_op(0x52, "В/О", "return value", line);
     return true;
-  }
-  if (rule.name == "sum_of_squares" && rule.body.size() == 1) {
-    return lower_return_statement(context, rule.body.at(0));
   }
   if (context.x_param_value_functions) {
     const std::optional<std::string> scratch = x_param_value_scratch_name(context);
@@ -35833,6 +35988,87 @@ bool collect_repeated_stack_temp_sum_terms(const Expression& expression, const s
   return false;
 }
 
+bool lower_current_x_value_transform_expression(LoweringContext& context,
+                                                const Expression& expression,
+                                                const std::string& param, int line) {
+  if (expression.kind == "identifier") {
+    if (expression.name != param)
+      return false;
+    mark_current_x(context, param);
+    return true;
+  }
+  if (expression.kind == "unary") {
+    if (expression.op != "-" || expression.expr == nullptr ||
+        !lower_current_x_value_transform_expression(context, *expression.expr, param, line)) {
+      return false;
+    }
+    context.emitter.emit_op(0x0b, "/-/", "current-X value unary minus", line);
+    clear_current_x_facts(context);
+    return true;
+  }
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression)) {
+    if (transform->arg == nullptr ||
+        !lower_current_x_value_transform_expression(context, *transform->arg, param, line)) {
+      return false;
+    }
+    context.emitter.emit_op(transform->opcode, transform->mnemonic,
+                            "current-X value " + transform->comment_name, line);
+    clear_current_x_facts(context);
+    return true;
+  }
+  if (expression.kind == "binary" && expression.op == "*" && expression.left != nullptr &&
+      expression.right != nullptr &&
+      expression_to_json(*expression.left) == expression_to_json(*expression.right)) {
+    if (!lower_current_x_value_transform_expression(context, *expression.left, param, line))
+      return false;
+    context.emitter.emit_op(0x22, "F x^2", "current-X value square", line);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "square-expression-lowering",
+        .detail = "Squared a current-X value through F x^2.",
+    });
+    clear_current_x_facts(context);
+    return true;
+  }
+  return false;
+}
+
+bool lower_current_x_value_function_body(LoweringContext& context, const V2Rule& rule, int line) {
+  const std::optional<Expression> returned = current_x_value_function_return_expression(rule);
+  if (!returned.has_value())
+    return false;
+  if (!lower_current_x_value_transform_expression(context, *returned, rule.params.front(), line))
+    return false;
+  context.optimizations.push_back(OptimizationReport{
+      .name = "function-current-x-value-inline",
+      .detail = "Inlined value function " + rule.name +
+                " as a current-X-only stack-preserving transform.",
+  });
+  return true;
+}
+
+bool lower_current_x_preserving_y_expression_for_temp(LoweringContext& context,
+                                                      const Expression& expression,
+                                                      const std::string& temp, int line) {
+  if (current_x_value_function_transform_expression(expression, temp))
+    return lower_current_x_value_transform_expression(context, expression, temp, line);
+  if (!current_x_value_function_call_for_temp(context, expression, temp))
+    return false;
+  const auto rule_it = context.rules.find(expression.callee);
+  if (rule_it == context.rules.end() || rule_it->second == nullptr)
+    return false;
+  if (!lower_current_x_value_transform_expression(context, expression.args.front(), temp, line))
+    return false;
+  if (!lower_current_x_value_function_body(context, *rule_it->second, line))
+    return false;
+  context.optimizations.push_back(OptimizationReport{
+      .name = "function-stack-entry-nested-call",
+      .detail = "Lowered nested value call " + expression.callee +
+                " inside a stack-entry expression without materializing its argument.",
+  });
+  return true;
+}
+
 bool lower_repeated_stack_temp_sum_to_x(LoweringContext& context, const Expression& expression,
                                         const std::vector<std::string>& temps, int line) {
   if (temps.size() != 1U)
@@ -36077,6 +36313,23 @@ bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expres
   }
   if (expression.kind == "number" || expression.kind == "string" || expression.kind == "indexed" ||
       expression.kind == "call") {
+    if (expression.kind == "call" && expression.args.size() == 1U) {
+      const auto rule_it = context.rules.find(expression.callee);
+      if (rule_it != context.rules.end() && rule_it->second != nullptr &&
+          current_x_value_function_rule_eligible(context, *rule_it->second) &&
+          stack_expression_references_any_temp(expression.args.front(), temps)) {
+        if (!lower_stack_resident_expression_to_x(context, expression.args.front(), temps, line))
+          return false;
+        if (!lower_current_x_value_function_body(context, *rule_it->second, line))
+          return false;
+        context.optimizations.push_back(OptimizationReport{
+            .name = "function-stack-entry-nested-call",
+            .detail = "Lowered nested value call " + expression.callee +
+                      " inside a stack-resident expression.",
+        });
+        return true;
+      }
+    }
     if (expression.kind == "call" &&
         lower_stack_argument_bit_mask_helper_call(context, expression, temps, line)) {
       return true;
@@ -36174,6 +36427,52 @@ bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expres
     context.emitter.current_x_variable.reset();
     context.emitter.current_x_aliases.clear();
     return true;
+  }
+
+  if (temps.size() == 2U && left_refs && right_refs &&
+      (expression.op == "+" || expression.op == "*")) {
+    const std::optional<std::size_t> left_index =
+        current_x_preserving_y_stack_temp_expression_index(context, *expression.left, temps);
+    const std::optional<std::size_t> right_index =
+        current_x_preserving_y_stack_temp_expression_index(context, *expression.right, temps);
+    if (left_index.has_value() && right_index.has_value() && *left_index != *right_index) {
+      const Expression* top_expression = nullptr;
+      const Expression* other_expression = nullptr;
+      std::string top_temp;
+      std::string other_temp;
+      if (*left_index == 1U && *right_index == 0U) {
+        top_expression = expression.left.get();
+        other_expression = expression.right.get();
+        top_temp = temps.at(*left_index);
+        other_temp = temps.at(*right_index);
+      } else if (*right_index == 1U && *left_index == 0U) {
+        top_expression = expression.right.get();
+        other_expression = expression.left.get();
+        top_temp = temps.at(*right_index);
+        other_temp = temps.at(*left_index);
+      }
+      if (top_expression != nullptr && other_expression != nullptr) {
+        mark_current_x(context, top_temp);
+        if (!lower_current_x_preserving_y_expression_for_temp(context, *top_expression,
+                                                              top_temp, line)) {
+          return false;
+        }
+        context.emitter.emit_op(0x14, "X↔Y", "stack-resident value pipeline", line);
+        mark_current_x(context, other_temp);
+        if (!lower_current_x_preserving_y_expression_for_temp(context, *other_expression,
+                                                              other_temp, line)) {
+          return false;
+        }
+        context.emitter.emit_op(opcode->first, opcode->second, "expr " + opcode->second, line);
+        clear_current_x_facts(context);
+        context.optimizations.push_back(OptimizationReport{
+            .name = "stack-resident-value-pipeline",
+            .detail = "Lowered two stack-resident value terms through X/Y without register "
+                      "materialization.",
+        });
+        return true;
+      }
+    }
   }
 
   if (left_refs) {
@@ -39821,8 +40120,13 @@ struct FunctionCallLiftState {
   std::set<std::string> trig_near_value_function_names;
   std::optional<std::string> x_param_value_scratch;
   std::set<std::string> x_param_value_proc_names;
+  std::set<std::string> current_x_value_proc_names;
+  std::vector<std::string> current_rule_params;
+  bool preserve_stack_entry_value_calls = false;
+  bool in_stack_entry_return_expression = false;
   int lifted = 0;
   int reused_x_param_value_scratch = 0;
+  int preserved_stack_entry_value_calls = 0;
   int counter = 0;
 };
 
@@ -39835,14 +40139,20 @@ std::optional<std::string> x_param_value_scratch_name(const V2Program& program) 
 }
 
 FunctionCallLiftState make_function_call_lift_state(const V2Program& program,
-                                                    bool reuse_x_param_value_scratch) {
+                                                    bool reuse_x_param_value_scratch,
+                                                    bool preserve_stack_entry_value_calls) {
   FunctionCallLiftState state;
+  state.preserve_stack_entry_value_calls = preserve_stack_entry_value_calls;
   for (const V2Rule& rule : program.rules) {
     state.functions.insert(rule.name);
     if (match_trig_near_rule(rule).has_value())
       state.trig_near_value_function_names.insert(rule.name);
     if (reuse_x_param_value_scratch && match_x_param_value_function(rule).has_value())
       state.x_param_value_proc_names.insert(rule.name);
+    if (preserve_stack_entry_value_calls &&
+        current_x_value_function_return_expression(rule).has_value()) {
+      state.current_x_value_proc_names.insert(rule.name);
+    }
   }
   if (reuse_x_param_value_scratch)
     state.x_param_value_scratch = x_param_value_scratch_name(program);
@@ -41192,6 +41502,21 @@ bool can_reuse_x_param_value_scratch_for_call(const Expression& expression,
          !prelude_assigns_target(prelude, *state.x_param_value_scratch);
 }
 
+bool should_preserve_stack_entry_current_x_value_call(const Expression& expression,
+                                                      const FunctionCallLiftState& state) {
+  if (!state.preserve_stack_entry_value_calls ||
+      !state.in_stack_entry_return_expression ||
+      !state.current_x_value_proc_names.contains(expression.callee) ||
+      expression.args.size() != 1U) {
+    return false;
+  }
+  return std::any_of(state.current_rule_params.begin(), state.current_rule_params.end(),
+                     [&](const std::string& param) {
+                       return current_x_value_function_transform_expression(
+                           expression.args.front(), param);
+                     });
+}
+
 Expression lift_function_calls_in_expression(const Expression& expression,
                                              std::vector<V2Statement>& prelude,
                                              bool allow_root_call, int line,
@@ -41236,6 +41561,11 @@ Expression lift_function_calls_in_expression(const Expression& expression,
 
     if (!state.functions.contains(expression.callee) || allow_root_call)
       return result;
+
+    if (should_preserve_stack_entry_current_x_value_call(result, state)) {
+      ++state.preserved_stack_entry_value_calls;
+      return result;
+    }
 
     const bool reuse_scratch = can_reuse_x_param_value_scratch_for_call(result, prelude, state);
     const std::string temp =
@@ -41299,7 +41629,12 @@ std::vector<V2Statement> lift_function_calls_in_statement(const V2Statement& sta
   std::vector<V2Statement> prelude;
   V2Statement rebuilt = statement;
 
-  if (rebuilt.kind == "v2_assign" || rebuilt.kind == "v2_preview" || rebuilt.kind == "v2_return") {
+  if (rebuilt.kind == "v2_return") {
+    const bool previous_return_expression = state.in_stack_entry_return_expression;
+    state.in_stack_entry_return_expression = true;
+    lift_function_calls_in_expression_text(rebuilt.expr, prelude, true, rebuilt.line, state);
+    state.in_stack_entry_return_expression = previous_return_expression;
+  } else if (rebuilt.kind == "v2_assign" || rebuilt.kind == "v2_preview") {
     lift_function_calls_in_expression_text(rebuilt.expr, prelude, true, rebuilt.line, state);
   } else if (rebuilt.kind == "v2_stop") {
     if (!rebuilt.items.has_value())
@@ -41364,13 +41699,19 @@ lift_function_calls_in_statements(const std::vector<V2Statement>& statements,
 
 void lift_function_calls_in_expressions(V2Program& program,
                                         std::vector<OptimizationReport>& optimizations,
-                                        bool reuse_x_param_value_scratch) {
-  FunctionCallLiftState state = make_function_call_lift_state(program, reuse_x_param_value_scratch);
+                                        bool reuse_x_param_value_scratch,
+                                        bool preserve_stack_entry_value_calls) {
+  FunctionCallLiftState state = make_function_call_lift_state(
+      program, reuse_x_param_value_scratch, preserve_stack_entry_value_calls);
   if (state.functions.empty())
     return;
   program.body = lift_function_calls_in_statements(program.body, state);
-  for (V2Rule& rule : program.rules)
+  for (V2Rule& rule : program.rules) {
+    const std::vector<std::string> previous_params = state.current_rule_params;
+    state.current_rule_params = rule.params;
     rule.body = lift_function_calls_in_statements(rule.body, state);
+    state.current_rule_params = previous_params;
+  }
   if (state.lifted > 0) {
     optimizations.push_back(OptimizationReport{
         .name = "function-call-lifting",
@@ -41385,6 +41726,15 @@ void lift_function_calls_in_expressions(V2Program& program,
                   " nested X-parameter value function call" +
                   (state.reused_x_param_value_scratch == 1 ? "" : "s") + " through " +
                   *state.x_param_value_scratch + ".",
+    });
+  }
+  if (state.preserved_stack_entry_value_calls > 0) {
+    optimizations.push_back(OptimizationReport{
+        .name = "function-call-lifting-preserved-current-x-value",
+        .detail = "Kept " + std::to_string(state.preserved_stack_entry_value_calls) +
+                  " nested current-X value function call" +
+                  (state.preserved_stack_entry_value_calls == 1 ? "" : "s") +
+                  " in return expression form for stack-entry lowering.",
     });
   }
 }
@@ -45638,7 +45988,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         materialize_x_param_value_function_scratch(*ast.v2, context.optimizations);
       }
       lift_function_calls_in_expressions(*ast.v2, context.optimizations,
-                                         options.x_param_value_functions);
+                                         options.x_param_value_functions,
+                                         options.stack_argument_function_entries);
       elide_loop_carried_prompt_state_fields(context, *ast.v2);
       warn_hardware_max_min_zero_operands(*ast.v2, context.diagnostics);
       std::set<std::string> loop_prompt_names;
