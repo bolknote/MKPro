@@ -62,6 +62,10 @@ contexts:
       captures:
         1: keyword.control.toplevel.mkpro
         2: entity.name.namespace.reference.mkpro
+    - match: '^\s*(feature)\s+(mk61s-mini-expand)\b'
+      captures:
+        1: keyword.control.toplevel.mkpro
+        2: constant.language.feature-profile.mkpro
     - match: '^\s*(program)\s+({{ident}})\s*(\{)'
       captures:
         1: keyword.declaration.program.mkpro
