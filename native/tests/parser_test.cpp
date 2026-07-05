@@ -28,7 +28,24 @@ void parser_matches_initial_v2_source_contract() {
   require_throws_contains("", "one V2 program block");
   require_throws_contains("target mk61\n", "Unexpected top-level line");
   require_throws_contains("feature turnip\nprogram Bad { loop { halt(0) } }\n",
-                          "feature mk61s-mini-expand");
+                          "feature mk61");
+  require(feature_profile_id(FeatureProfile::Standard) == "mk61",
+          "default feature profile id should be mk61");
+  require(parse_feature_profile("mk61") == FeatureProfile::Standard,
+          "mk61 should parse as the default feature profile");
+  require(parse_feature_profile("standard") == FeatureProfile::Standard,
+          "standard should remain a compatibility alias for the default feature profile");
+
+  const ProgramAst mk61_feature_program = parse_program(R"mkpro(
+feature mk61
+program DefaultFeature {
+  loop {
+    halt(0)
+  }
+}
+)mkpro");
+  require(mk61_feature_program.feature_profile == FeatureProfile::Standard,
+          "feature mk61 should parse as the default feature profile");
 
   const ProgramAst const_program = parse_program(R"mkpro(
 program WithConst {

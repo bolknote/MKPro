@@ -23,11 +23,11 @@ inline std::optional<FeatureProfile> parse_feature_profile(std::string_view valu
 inline std::string_view feature_profile_id(FeatureProfile profile) {
   switch (profile) {
     case FeatureProfile::Standard:
-      return "standard";
+      return "mk61";
     case FeatureProfile::Mk61SMiniExpanded:
       return kMk61SMiniExpandedFeatureId;
   }
-  return "standard";
+  return "mk61";
 }
 
 inline bool feature_profile_has_expanded_program_space(FeatureProfile profile) {

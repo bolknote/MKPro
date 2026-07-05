@@ -76,7 +76,7 @@ This reference uses the traditional MK-61 notation:
 | Code | Input | Operation | Notes |
 | --- | --- | --- | --- |
 | `40`..`4E` | `X->П R` | Store `X` in `R0`..`Re` | Low hex digit selects the register. |
-| `4F` | `X->П Rf` in `mk61s-mini-expand`; otherwise not normally entered | Store `X` in `Rf` under the expanded profile; standard profile treats it as `R0` alias behavior | Raw hex remains accepted, but symbolic `X->П f` requires `mk61s-mini-expand`. |
+| `4F` | `X->П Rf` in `mk61s-mini-expand`; otherwise not normally entered | Store `X` in `Rf` under the expanded profile; default `mk61` profile treats it as `R0` alias behavior | Raw hex remains accepted, but symbolic `X->П f` requires `mk61s-mini-expand`. |
 | `50` | `С/П` | Stop/start | If pressed during execution, the command counter points to the next command, even if normal flow would not. |
 | `51` | `БП` | Unconditional jump | Consumes next step as address. |
 | `52` | `В/О` | Return | Uses a 5-cell return stack. With an all-zero return stack, it is equivalent to `БП 01`. |
@@ -94,7 +94,7 @@ This reference uses the traditional MK-61 notation:
 | `5E` | `F x=0` | Conditional test | True means fall through; false means jump. |
 | `5F` | not normally entered | Raw display-side transform | In this MK-61 emulator ROM it does not hang. It leaves internal `X` intact but changes the display/raw state, for example `X=5` shows `0,5000000000,0,`. |
 | `60`..`6E` | `П->X R` | Recall `R0`..`Re` into `X` | Low hex digit selects the register. |
-| `6F` | `П->X Rf` in `mk61s-mini-expand`; otherwise not normally entered | Recall `Rf` under the expanded profile; standard profile treats it as `R0` alias behavior | Raw hex remains accepted, but symbolic `П->X f` requires `mk61s-mini-expand`. |
+| `6F` | `П->X Rf` in `mk61s-mini-expand`; otherwise not normally entered | Recall `Rf` under the expanded profile; default `mk61` profile treats it as `R0` alias behavior | Raw hex remains accepted, but symbolic `П->X f` requires `mk61s-mini-expand`. |
 
 ## Indirect Command Blocks
 
@@ -130,7 +130,7 @@ ROM microprograms.
 
 - `3D` behaves as `К °->′"` for checked inputs, but its ROM words differ from
   `2A`.
-- In the standard profile, `4F` stores to `R0`, and `6F` recalls from `R0`.
+- In the default `mk61` profile, `4F` stores to `R0`, and `6F` recalls from `R0`.
   In `mk61s-mini-expand`, those bytes are modeled as direct `Rf` store/recall.
 - The indirect `*F` aliases (`7F`, `8F`, `9F`, `AF`, `BF`, `CF`, `DF`, `EF`)
   behaved the same as the corresponding `*0` commands in probes, including

@@ -1222,9 +1222,9 @@ public:
       if (starts_with(line.text, "feature ")) {
         const std::string value = trim(line.text.substr(std::string("feature ").size()));
         const std::optional<FeatureProfile> parsed = parse_feature_profile(value);
-        if (!parsed.has_value() || *parsed == FeatureProfile::Standard) {
+        if (!parsed.has_value()) {
           throw ParseError("Unknown feature profile '" + value +
-                               "'; expected 'feature mk61s-mini-expand'",
+                               "'; expected 'feature mk61' or 'feature mk61s-mini-expand'",
                            line.line);
         }
         if (feature_profile.has_value() && *feature_profile != *parsed) {

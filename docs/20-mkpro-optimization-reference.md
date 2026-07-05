@@ -22,7 +22,7 @@ The optimizer works in multiple passes, not in a single “on/off” mode.
 8. Run layout and apply layout-sensitive indirect/dark-entry candidates.
 9. Optionally compile and optimize setup program (for initializers requiring work).
 10. Select the best lowering variant by cell count under the selected feature
-    profile's official window (105 cells for `standard`, 112 cells for
+    profile's official window (105 cells for `mk61`, 112 cells for
     `mk61s-mini-expand`), using estimated startup+program cost as a tie-break
     for over-budget variants.
 
@@ -2600,7 +2600,8 @@ These are not independent optimizations; they gate whether the lowering strategy
 
 - `report.machine` — fixed to `mk61` for this toolchain.
 - `featureProfile` / `report.featureProfile` — the selected machine feature
-  profile id (`standard` or `mk61s-mini-expand`) in JSON output.
+  profile id (`mk61` or `mk61s-mini-expand`) in JSON output. `mk61` is the
+  default profile and may be omitted in source.
 - `report.machineFeaturesUsed` — feature names set from successful candidate/evidence, as listed above.
 - Feature-profile entries such as `rf-register` and `expanded-program-space`
   are added when the source declares `feature mk61s-mini-expand` or when the
@@ -2610,7 +2611,7 @@ These are not independent optimizations; they gate whether the lowering strategy
   can select `Rf` and recall them through `6F`.
 - The profile changes only the modeled machine resources below:
 
-| Resource | `standard` | `mk61s-mini-expand` |
+| Resource | `mk61` | `mk61s-mini-expand` |
 | --- | --- | --- |
 | Direct data registers | `R0`..`Re` | `R0`..`Rf` |
 | Official program cells | 105, `00`..`A4` | 112, `00`..`B1` |
@@ -2620,7 +2621,7 @@ These are not independent optimizations; they gate whether the lowering strategy
 | X2/display-side register | present but not addressable | unchanged |
 
 - `4F` and `6F` are interpreted as direct `Rf` store/recall only under
-  `mk61s-mini-expand`. In the standard profile, symbolic direct `Rf` raw access
+  `mk61s-mini-expand`. In the default `mk61` profile, symbolic direct `Rf` raw access
   is rejected and raw `4F`/`6F` stay stock low-level bytes/R0-alias behavior.
   Symbolic indirect `К ... f` forms remain invalid; indirect `*F` raw bytes stay
   stock R0 aliases.
@@ -2971,14 +2972,14 @@ Current local proof obligations:
   use a stable selector register, have a matching final selector value for that
   register, and that value must statically resolve to the annotated target.
   Annotated targets outside the selected profile's official MK-61 program
-  address range (`0..104` for `standard`, `0..111` for
+  address range (`0..104` for `mk61`, `0..111` for
   `mk61s-mini-expand`) are not proof artifacts.
 - `runtime-indirect-call-targets`: runtime indirect-call rewrites, including
   aggressive threshold variants, must enter the target literal digits immediately
   before the selector store, store into the same stable register used by the
   annotated indirect call, and avoid any later store that overwrites that
   register first. The annotated target must be in the selected profile's
-  official MK-61 program address range (`0..104` for `standard`, `0..111` for
+  official MK-61 program address range (`0..104` for `mk61`, `0..111` for
   `mk61s-mini-expand`).
 - `fractional-selector-data-values`: selector reuse and forced fractional selector
   preloads must prove every required selector value individually. Each value must

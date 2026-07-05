@@ -42,7 +42,8 @@ Output and execution model:
                                   not-normally-enterable commands. manual is the
                                   default.
   --budget N                      Set the maximum accepted compiled program size.
-  --feature mk61s-mini-expand     Override the source feature profile:
+  --feature mk61|mk61s-mini-expand
+                                  Override the source feature profile:
                                   RF register and 112 real program cells A5..B1.
   --analysis                      Include optimizer analysis/report data. With
                                   --out all, also print a human-readable report.
@@ -1356,7 +1357,7 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       }
       const std::string value = args[++index];
       const std::optional<mkpro::FeatureProfile> parsed = mkpro::parse_feature_profile(value);
-      if (!parsed.has_value() || *parsed == mkpro::FeatureProfile::Standard) {
+      if (!parsed.has_value()) {
         std::cerr << "unknown --feature value: " << value << "\n";
         return 64;
       }

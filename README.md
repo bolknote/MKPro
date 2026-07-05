@@ -54,12 +54,13 @@ Flags:
   image previews. Terminal renderers such as `kitty` and `vt` emit terminal
   control sequences and only work in compatible terminals with direct stdout.
 - `--budget N` overrides the selected profile's official program window
-  (105 cells for `standard`, 112 for `mk61s-mini-expand`). Hard error if
+  (105 cells for default `mk61`, 112 for `mk61s-mini-expand`). Hard error if
   exceeded.
-- `feature mk61s-mini-expand` in the source enables the expanded MK61S_MINI
+- `feature mk61` is the default and may be omitted. `feature mk61s-mini-expand`
+  in the source enables the expanded MK61S_MINI
   profile with direct `Rf` access through `4F`/`6F` and 112 official program
-  cells `00`..`B1`. `--feature mk61s-mini-expand` is also available as a CLI
-  override for experiments and tooling.
+  cells `00`..`B1`. `--feature mk61|mk61s-mini-expand` is also available as a
+  CLI override for experiments and tooling.
 - `--analysis`, `--strict` and various optimizer toggles (e.g.
   `--return-stack-script`/`--no-return-stack-script`) are also available; see
   `mkpro-native` with no arguments for the full usage.
