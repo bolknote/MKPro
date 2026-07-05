@@ -53701,6 +53701,71 @@ SizeAttributionReport build_size_attribution_report(
         }
         return stores;
       };
+  using SymbolicStackSnapshot = std::array<std::string, 4>;
+  const auto unknown_symbolic_stack = []() {
+    return SymbolicStackSnapshot{"?", "?", "?", "?"};
+  };
+  const auto apply_symbolic_stack_effect =
+      [&](SymbolicStackSnapshot& stack, const ResolvedStep& step) {
+        const SymbolicStackSnapshot old = stack;
+        const std::optional<SizeSpillAccess> access = size_report_spill_access(step);
+        if (access.has_value() && access->kind == SizeSpillAccessKind::Recall) {
+          stack = {access->name, old.at(0), old.at(1), old.at(2)};
+          return;
+        }
+        const int opcode = step.opcode;
+        if (opcode == 0x53 || (opcode >= 0xa0 && opcode <= 0xae)) {
+          stack = unknown_symbolic_stack();
+          return;
+        }
+        const StackEffect effect = opcode_by_code(opcode).stack_effect;
+        switch (effect) {
+          case StackEffect::Preserves:
+            if (direct_register_store_index(opcode).has_value() ||
+                opcode_by_code(opcode).takes_address) {
+              stack = old;
+            } else {
+              stack = {"?", old.at(1), old.at(2), old.at(3)};
+            }
+            break;
+          case StackEffect::Shifts:
+            stack = {"?", old.at(0), old.at(1), old.at(2)};
+            break;
+          case StackEffect::ConsumeYDrop:
+            stack = {"?", old.at(2), old.at(3), old.at(3)};
+            break;
+          case StackEffect::ConsumeYKeep:
+            if (opcode == 0x14) {
+              stack = {old.at(1), old.at(0), old.at(2), old.at(3)};
+            } else {
+              stack = {"?", old.at(1), old.at(2), old.at(3)};
+            }
+            break;
+          case StackEffect::Exposes:
+            stack = {old.at(1), old.at(2), old.at(3), old.at(3)};
+            break;
+          case StackEffect::Barrier:
+          case StackEffect::Unknown:
+            stack = unknown_symbolic_stack();
+            break;
+        }
+      };
+  std::map<std::string, std::map<std::size_t, SymbolicStackSnapshot>>
+      helper_symbolic_stack_before_index;
+  for (const HelperRegionRange& region : helper_regions) {
+    SymbolicStackSnapshot stack = unknown_symbolic_stack();
+    std::map<std::size_t, SymbolicStackSnapshot>& snapshots =
+        helper_symbolic_stack_before_index[region.label];
+    for (std::size_t index = region.start; index < region.end && index < steps.size();
+         ++index) {
+      snapshots[index] = stack;
+      if (index > region.start && steps.at(index - 1U).address + 1 == steps.at(index).address &&
+          opcode_by_code(steps.at(index - 1U).opcode).takes_address) {
+        continue;
+      }
+      apply_symbolic_stack_effect(stack, steps.at(index));
+    }
+  }
   std::map<std::string, std::set<int>> helper_spill_registers;
   for (const HelperRegionRange& region : helper_regions) {
     for (std::size_t index = region.start; index < region.end && index < steps.size(); ++index) {
@@ -54167,6 +54232,10 @@ SizeAttributionReport build_size_attribution_report(
             call_argument_inputs_by_label_address;
         std::map<std::string, std::map<int, std::vector<std::pair<std::string, int>>>>
             immediate_pre_call_recalls_by_label_address;
+        std::map<std::string, std::map<int, SymbolicStackSnapshot>>
+            pre_call_stack_before_recalls_by_label_address;
+        std::map<std::string, std::map<int, int>>
+            pre_call_stack_before_recalls_address_by_label_address;
         std::map<std::string, int> call_argument_preservation_cells_by_label;
         std::map<std::string, int> call_argument_preservation_cells_by_name;
         std::vector<std::string> call_argument_site_parts;
@@ -54178,8 +54247,30 @@ SizeAttributionReport build_size_attribution_report(
         const auto recall_indices_it = helper_recall_indices_by_name.find(helper.label);
         if (nested_call_sites_it != helper_nested_call_sites.end()) {
           for (const CallSite& call_site : nested_call_sites_it->second) {
-            immediate_pre_call_recalls_by_label_address[call_site.label][call_site.address] =
+            const std::vector<std::pair<std::string, int>> immediate_recalls =
                 immediate_pre_call_stack_recalls(call_site);
+            immediate_pre_call_recalls_by_label_address[call_site.label][call_site.address] =
+                immediate_recalls;
+            if (call_site.start_index >= immediate_recalls.size()) {
+              const std::size_t pre_call_index =
+                  call_site.start_index - immediate_recalls.size();
+              if (const auto snapshots_by_index_it =
+                      helper_symbolic_stack_before_index.find(helper.label);
+                  snapshots_by_index_it != helper_symbolic_stack_before_index.end()) {
+                if (const auto snapshot_it =
+                        snapshots_by_index_it->second.find(pre_call_index);
+                    snapshot_it != snapshots_by_index_it->second.end()) {
+                  pre_call_stack_before_recalls_by_label_address[call_site.label]
+                                                               [call_site.address] =
+                      snapshot_it->second;
+                  if (pre_call_index < steps.size()) {
+                    pre_call_stack_before_recalls_address_by_label_address[call_site.label]
+                                                                         [call_site.address] =
+                        steps.at(pre_call_index).address;
+                  }
+                }
+              }
+            }
           }
         }
         if (nested_call_sites_it != helper_nested_call_sites.end() &&
@@ -54498,9 +54589,14 @@ SizeAttributionReport build_size_attribution_report(
           std::vector<std::string> callee_abi_primary_entry_site_model_status_parts;
           std::vector<std::string> callee_abi_primary_entry_pre_call_placement_parts;
           std::vector<std::string> callee_abi_primary_entry_pre_call_placement_status_parts;
+          std::vector<std::string> callee_abi_primary_entry_pre_call_placement_proof_parts;
+          std::vector<std::string>
+              callee_abi_primary_entry_pre_call_placement_proof_status_parts;
           bool callee_abi_primary_entry_pre_call_placement_has_divergent_slot_values =
               false;
           bool callee_abi_primary_entry_pre_call_placement_has_overwritten_slot = false;
+          bool callee_abi_primary_entry_pre_call_placement_has_unknown_actual = false;
+          bool callee_abi_primary_entry_pre_call_placement_has_conflicting_actual = false;
           bool callee_abi_primary_entry_site_model_has_divergent_survivors = false;
           bool callee_abi_primary_entry_site_model_has_no_choice = false;
           bool all_required_callees_stack_preserving = !call_preservation_inputs_by_label.empty();
@@ -54577,9 +54673,15 @@ SizeAttributionReport build_size_attribution_report(
             std::set<std::string> natural_first_recall_choice_names;
             std::vector<std::string> natural_first_recall_choice_site_parts;
             std::vector<std::string> natural_first_recall_choice_pre_call_placement_parts;
+            std::vector<std::string>
+                natural_first_recall_choice_pre_call_placement_proof_parts;
             std::map<int, std::set<std::string>>
                 natural_first_recall_choice_names_by_pre_call_slot;
             bool natural_first_recall_choice_has_overwritten_pre_call_slot = false;
+            int natural_first_recall_choice_pre_call_proved_sites = 0;
+            int natural_first_recall_choice_pre_call_unknown_sites = 0;
+            int natural_first_recall_choice_pre_call_conflict_sites = 0;
+            int natural_first_recall_choice_pre_call_overwritten_sites = 0;
             const auto coverage_it =
                 call_preservation_recall_counts_by_label_address_name.find(label);
             if (coverage_it != call_preservation_recall_counts_by_label_address_name.end()) {
@@ -54676,6 +54778,46 @@ SizeAttributionReport build_size_attribution_report(
                     const std::string pre_call_slot_text =
                         pre_call_slot >= 0 ? original_stack_slot_name(pre_call_slot)
                                            : std::string("overwritten");
+                    std::string actual_pre_call_value = "?";
+                    std::optional<int> pre_call_chain_start_address;
+                    if (pre_call_slot >= 0) {
+                      if (const auto stack_by_address_it =
+                              pre_call_stack_before_recalls_by_label_address.find(label);
+                          stack_by_address_it !=
+                          pre_call_stack_before_recalls_by_label_address.end()) {
+                        if (const auto stack_it =
+                                stack_by_address_it->second.find(address);
+                            stack_it != stack_by_address_it->second.end()) {
+                          actual_pre_call_value =
+                              stack_it->second.at(static_cast<std::size_t>(pre_call_slot));
+                        }
+                      }
+                      if (const auto address_by_call_it =
+                              pre_call_stack_before_recalls_address_by_label_address.find(
+                                  label);
+                          address_by_call_it !=
+                          pre_call_stack_before_recalls_address_by_label_address.end()) {
+                        if (const auto address_it =
+                                address_by_call_it->second.find(address);
+                            address_it != address_by_call_it->second.end()) {
+                          pre_call_chain_start_address = address_it->second;
+                        }
+                      }
+                    }
+                    std::string proof_status;
+                    if (pre_call_slot < 0) {
+                      proof_status = "overwritten";
+                      ++natural_first_recall_choice_pre_call_overwritten_sites;
+                    } else if (actual_pre_call_value == best_survivor_choice->first) {
+                      proof_status = "proved";
+                      ++natural_first_recall_choice_pre_call_proved_sites;
+                    } else if (actual_pre_call_value == "?") {
+                      proof_status = "unknown";
+                      ++natural_first_recall_choice_pre_call_unknown_sites;
+                    } else {
+                      proof_status = "conflict";
+                      ++natural_first_recall_choice_pre_call_conflict_sites;
+                    }
                     natural_first_recall_choice_pre_call_placement_parts.push_back(
                         safe_format_label_address(address) + ":" +
                         best_survivor_choice->first + "<-precall-" + pre_call_slot_text +
@@ -54685,6 +54827,15 @@ SizeAttributionReport build_size_attribution_report(
                         "recalls,arg=" + argument_text + ",recalls=" +
                         (recall_parts.empty() ? std::string("-")
                                               : join_strings(recall_parts, "/")) +
+                        ")");
+                    natural_first_recall_choice_pre_call_placement_proof_parts.push_back(
+                        safe_format_label_address(address) + ":" + pre_call_slot_text +
+                        "=" + actual_pre_call_value + " need=" +
+                        best_survivor_choice->first + " status=" + proof_status +
+                        "(before=" +
+                        (pre_call_chain_start_address.has_value()
+                             ? safe_format_label_address(*pre_call_chain_start_address)
+                             : std::string("?")) +
                         ")");
                   }
                 } else if (future_input_count > 0) {
@@ -54903,6 +55054,44 @@ SizeAttributionReport build_size_attribution_report(
                   callee_abi_primary_entry_pre_call_placement_status_parts.push_back(
                       label + ":" + pre_call_status);
                 }
+                if (!natural_first_recall_choice_pre_call_placement_proof_parts.empty()) {
+                  callee_abi_primary_entry_pre_call_placement_proof_parts.push_back(
+                      label + ":" +
+                      join_strings(
+                          natural_first_recall_choice_pre_call_placement_proof_parts,
+                          ","));
+                  std::string proof_status;
+                  if (natural_first_recall_choice_pre_call_overwritten_sites > 0) {
+                    proof_status =
+                        "overwritten-precall-slot-values-require-recall-chain-refactor";
+                    callee_abi_primary_entry_pre_call_placement_has_overwritten_slot =
+                        true;
+                  } else if (natural_first_recall_choice_pre_call_conflict_sites > 0) {
+                    proof_status =
+                        "conflicting-precall-slot-values-require-stack-rewrite";
+                    callee_abi_primary_entry_pre_call_placement_has_conflicting_actual =
+                        true;
+                  } else if (natural_first_recall_choice_pre_call_unknown_sites > 0) {
+                    proof_status =
+                        "unknown-precall-slot-values-require-symbolic-stack-search";
+                    callee_abi_primary_entry_pre_call_placement_has_unknown_actual = true;
+                  } else {
+                    proof_status = "proved-precall-slot-values";
+                  }
+                  proof_status +=
+                      "(proved=" +
+                      std::to_string(natural_first_recall_choice_pre_call_proved_sites) +
+                      ",unknown=" +
+                      std::to_string(natural_first_recall_choice_pre_call_unknown_sites) +
+                      ",conflict=" +
+                      std::to_string(natural_first_recall_choice_pre_call_conflict_sites) +
+                      ",overwritten=" +
+                      std::to_string(
+                          natural_first_recall_choice_pre_call_overwritten_sites) +
+                      ")";
+                  callee_abi_primary_entry_pre_call_placement_proof_status_parts.push_back(
+                      label + ":" + proof_status);
+                }
               } else {
                 callee_abi_primary_entry_blocked_targets.push_back(label);
                 ++callee_abi_primary_entry_remaining_overhead_lower_bound_cells;
@@ -55107,6 +55296,38 @@ SizeAttributionReport build_size_attribution_report(
                     helper.details
                         ["valueAwareCalleeAbiPrimaryEntryPreCallPlacementAction"] =
                         "prove-pre-call-stack-placement-cost";
+                  }
+                }
+                if (!callee_abi_primary_entry_pre_call_placement_proof_parts.empty()) {
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofByCallee"] =
+                      join_strings(callee_abi_primary_entry_pre_call_placement_proof_parts,
+                                   ";");
+                }
+                if (!callee_abi_primary_entry_pre_call_placement_proof_status_parts.empty()) {
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofStatus"] =
+                      join_strings(
+                          callee_abi_primary_entry_pre_call_placement_proof_status_parts,
+                          ";");
+                  if (callee_abi_primary_entry_pre_call_placement_has_overwritten_slot) {
+                    helper.details
+                        ["valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofAction"] =
+                        "refactor-immediate-recall-chain-before-primary-entry-lowering";
+                  } else if (
+                      callee_abi_primary_entry_pre_call_placement_has_conflicting_actual) {
+                    helper.details
+                        ["valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofAction"] =
+                        "rewrite-conflicting-precall-stack-slot-values";
+                  } else if (
+                      callee_abi_primary_entry_pre_call_placement_has_unknown_actual) {
+                    helper.details
+                        ["valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofAction"] =
+                        "extend-symbolic-stack-search-through-precall-region";
+                  } else {
+                    helper.details
+                        ["valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofAction"] =
+                        "lower-primary-entry-with-proved-precall-stack-placement";
                   }
                 }
                 helper.details["valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundCells"] =

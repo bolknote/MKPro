@@ -530,6 +530,18 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCalleeAbiPrimaryEntryPreCallPlacementAction',
       ),
+      calleeAbiPrimaryEntryPreCallPlacementProof: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofByCallee',
+      ),
+      calleeAbiPrimaryEntryPreCallPlacementProofStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofStatus',
+      ),
+      calleeAbiPrimaryEntryPreCallPlacementProofAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofAction',
+      ),
       calleeAbiPrimaryEntryPlacementLowerBound: detail(
         details,
         'valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundCells',
@@ -752,6 +764,18 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCalleeAbiPrimaryEntryPreCallPlacementAction',
       ),
+      calleeAbiPrimaryEntryPreCallPlacementProof: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofByCallee',
+      ),
+      calleeAbiPrimaryEntryPreCallPlacementProofStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofStatus',
+      ),
+      calleeAbiPrimaryEntryPreCallPlacementProofAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofAction',
+      ),
     };
   });
   return {
@@ -944,6 +968,9 @@ function actionDetailSuffix(row) {
     ['abiPrimaryPreCallPlacement', row.calleeAbiPrimaryEntryPreCallPlacement],
     ['abiPrimaryPreCallPlacementStatus', row.calleeAbiPrimaryEntryPreCallPlacementStatus],
     ['abiPrimaryPreCallPlacementAction', row.calleeAbiPrimaryEntryPreCallPlacementAction],
+    ['abiPrimaryPreCallProof', row.calleeAbiPrimaryEntryPreCallPlacementProof],
+    ['abiPrimaryPreCallProofStatus', row.calleeAbiPrimaryEntryPreCallPlacementProofStatus],
+    ['abiPrimaryPreCallProofAction', row.calleeAbiPrimaryEntryPreCallPlacementProofAction],
     ['abiPrimaryPlacement', row.calleeAbiPrimaryEntryPlacementLowerBoundByCallee],
     ['abiPrimaryPlacementNet', row.calleeAbiPrimaryEntryPlacementNet],
     ['abiPrimaryPlacementStatus', row.calleeAbiPrimaryEntryPlacementStatus],
@@ -1087,6 +1114,9 @@ function printHelper(row) {
       ` abiPrimaryPreCallPlacement=${row.calleeAbiPrimaryEntryPreCallPlacement || '-'}` +
       ` abiPrimaryPreCallPlacementStatus=${row.calleeAbiPrimaryEntryPreCallPlacementStatus || '-'}` +
       ` abiPrimaryPreCallPlacementAction=${row.calleeAbiPrimaryEntryPreCallPlacementAction || '-'}` +
+      ` abiPrimaryPreCallProof=${row.calleeAbiPrimaryEntryPreCallPlacementProof || '-'}` +
+      ` abiPrimaryPreCallProofStatus=${row.calleeAbiPrimaryEntryPreCallPlacementProofStatus || '-'}` +
+      ` abiPrimaryPreCallProofAction=${row.calleeAbiPrimaryEntryPreCallPlacementProofAction || '-'}` +
       ` abiPrimaryPlacement=${row.calleeAbiPrimaryEntryPlacementLowerBoundByCallee || '-'}` +
       ` abiPrimaryPlacementBasis=${row.calleeAbiPrimaryEntryPlacementLowerBoundBasis || '-'}` +
       ` abiPrimaryCost=${row.calleeAbiPrimaryEntryCostBreakdown || '-'}` +
@@ -1139,6 +1169,9 @@ function printActionSummary(row) {
     ['abiPrimaryPreCallPlacement', row.calleeAbiPrimaryEntryPreCallPlacement],
     ['abiPrimaryPreCallPlacementStatus', row.calleeAbiPrimaryEntryPreCallPlacementStatus],
     ['abiPrimaryPreCallPlacementAction', row.calleeAbiPrimaryEntryPreCallPlacementAction],
+    ['abiPrimaryPreCallProof', row.calleeAbiPrimaryEntryPreCallPlacementProof],
+    ['abiPrimaryPreCallProofStatus', row.calleeAbiPrimaryEntryPreCallPlacementProofStatus],
+    ['abiPrimaryPreCallProofAction', row.calleeAbiPrimaryEntryPreCallPlacementProofAction],
     ['abiPrimaryPlacement', row.calleeAbiPrimaryEntryPlacementLowerBoundByCallee],
     ['abiPrimaryPlacementNet', row.calleeAbiPrimaryEntryPlacementNet],
     ['abiPrimaryPlacementStatus', row.calleeAbiPrimaryEntryPlacementStatus],

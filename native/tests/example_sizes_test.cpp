@@ -1384,6 +1384,25 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCalleeAbiPrimaryEntryPreCallPlacementAction") ==
                       "enumerate-pre-call-stack-placement-rewrites" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofByCallee") ==
+                      "packed-line score accumulator helper:"
+                      "71:Y=? need=y status=unknown(before=69),"
+                      "74:Y=? need=x status=unknown(before=72)" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofStatus") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofStatus") ==
+                      "packed-line score accumulator helper:"
+                      "unknown-precall-slot-values-require-symbolic-stack-search"
+                      "(proved=0,unknown=2,conflict=0,overwritten=0)" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofAction") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofAction") ==
+                      "extend-symbolic-stack-search-through-precall-region" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundCells") &&
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundCells") == "1" &&
