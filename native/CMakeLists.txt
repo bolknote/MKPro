@@ -122,6 +122,7 @@ target_compile_features(mkpro_debug PUBLIC cxx_std_23)
 
 add_executable(mkpro-native src/main.cpp)
 target_link_libraries(mkpro-native PRIVATE mkpro_debug)
+add_custom_target(mkpro_cli DEPENDS mkpro-native)
 
 add_executable(mkpro_tests
   tests/address_formula_solver_test.cpp
