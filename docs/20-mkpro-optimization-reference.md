@@ -54,6 +54,9 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   best input's net and additional recall cells needed to become profitable, so
   `no-profitable-stack-input-materialization` reports say which materialization
   cost is blocking the pass rather than just naming the rejected input set.
+  Break-even inputs are kept separate as `valueAwareBreakEvenStackInputNames`
+  and the corpus script prints them as `breakEven=...`, so a zero-net helper is
+  not confused with either a missing proof or a negative materialization case.
   `valueAwareStackInputMaterializeCellsByName` refines that cost per input as
   inserted call-site recalls minus immediate pre-call recalls that already
   materialize the same value, and direct-stack-fit rows summarize the remaining

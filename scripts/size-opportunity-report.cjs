@@ -145,6 +145,7 @@ function analyzeFile(compiler, file) {
       estimatedNet: detail(details, 'valueAwareEstimatedNetSavingsAfterMaterialization'),
       estimatedModel: detail(details, 'valueAwareEstimatedNetSavingsModel'),
       profitableInputs: detail(details, 'valueAwareProfitableStackInputNames'),
+      breakEvenInputs: detail(details, 'valueAwareBreakEvenStackInputNames'),
       unprofitableInputs: detail(details, 'valueAwareUnprofitableStackInputNames'),
       suggestedResidentInputs: detail(details, 'valueAwareSuggestedResidentInputNames'),
       profitBreakdown: detail(details, 'valueAwareStackInputProfitBreakdown'),
@@ -279,6 +280,14 @@ function printGroup(group) {
   );
 }
 
+function helperInputSummary(row) {
+  return row.suggestedResidentInputs ||
+    row.profitableInputs ||
+    row.breakEvenInputs ||
+    row.unprofitableInputs ||
+    '-';
+}
+
 function printHelper(row) {
   console.log(
     `- ${row.savings} ${row.file} :: ${row.helper}` +
@@ -287,7 +296,8 @@ function printHelper(row) {
       ` plan=${row.planStatus || '-'}` +
       ` required=${row.requiredAction || '-'}` +
       ` cost=${row.costModelAction || '-'}` +
-      ` inputs=${row.suggestedResidentInputs || row.profitableInputs || row.unprofitableInputs || '-'}` +
+      ` inputs=${helperInputSummary(row)}` +
+      ` breakEven=${row.breakEvenInputs || '-'}` +
       ` bestInput=${row.bestInput || '-'}` +
       ` bestNet=${row.bestInputNet || '-'}` +
       ` need=${row.bestInputAdditionalRecallCellsToProfit || '-'}` +
