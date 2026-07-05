@@ -148,6 +148,12 @@ function analyzeFile(compiler, file) {
       unprofitableInputs: detail(details, 'valueAwareUnprofitableStackInputNames'),
       suggestedResidentInputs: detail(details, 'valueAwareSuggestedResidentInputNames'),
       profitBreakdown: detail(details, 'valueAwareStackInputProfitBreakdown'),
+      materializeCellsByName: detail(details, 'valueAwareStackInputMaterializeCellsByName'),
+      directMaterialization: detail(details, 'valueAwareDirectStackInputMaterialization'),
+      directMaterializationStatus: detail(
+        details,
+        'valueAwareDirectStackInputMaterializationStatus',
+      ),
       bestInput: detail(details, 'valueAwareBestStackInputCandidate'),
       bestInputNet: detail(details, 'valueAwareBestStackInputNetCells'),
       bestInputAdditionalRecallCellsToProfit:
@@ -261,6 +267,8 @@ function printHelper(row) {
       ` bestNet=${row.bestInputNet || '-'}` +
       ` need=${row.bestInputAdditionalRecallCellsToProfit || '-'}` +
       ` profit=${row.profitBreakdown || '-'}` +
+      ` materialize=${row.materializeCellsByName || '-'}` +
+      ` directMat=${row.directMaterializationStatus || '-'}:${row.directMaterialization || '-'}` +
       ` callee=${row.calleeAbiStatus || '-'}`,
   );
 }

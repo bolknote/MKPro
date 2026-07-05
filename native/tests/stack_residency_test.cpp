@@ -891,6 +891,18 @@ program ValueAwareDirectStackInputNestedCall {
                 hot->details.at("valueAwareDirectStackInputNames").find("x") !=
                     std::string::npos,
             "x should be classified as directly schedulable before the nested call");
+    require(hot->details.contains("valueAwareStackInputMaterializeCellsByName") &&
+                hot->details.at("valueAwareStackInputMaterializeCellsByName").find(
+                    "x:2m/0e/2c") != std::string::npos,
+            "direct stack input attribution should expose inserted/existing/callsite "
+            "materialization cost");
+    require(hot->details.contains("valueAwareDirectStackInputMaterialization") &&
+                hot->details.at("valueAwareDirectStackInputMaterialization") ==
+                    "x:2insert/0existing" &&
+                hot->details.contains("valueAwareDirectStackInputMaterializationStatus") &&
+                hot->details.at("valueAwareDirectStackInputMaterializationStatus") ==
+                    "needs-inserted-callsite-recalls",
+            "direct stack input attribution should summarize the remaining callsite recall plan");
     require(!hot->details.contains("valueAwareCallPreservationInputNames"),
             "x should not require call-preserving proof when it is not recalled after cold");
     require(hot->details.contains("valueAwareStackInputPlanStatus") &&

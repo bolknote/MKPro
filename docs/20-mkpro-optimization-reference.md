@@ -53,7 +53,12 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   scheduler rows also expose `valueAwareStackInputProfitBreakdown` plus the
   best input's net and additional recall cells needed to become profitable, so
   `no-profitable-stack-input-materialization` reports say which materialization
-  cost is blocking the pass rather than just naming the rejected input set. A
+  cost is blocking the pass rather than just naming the rejected input set.
+  `valueAwareStackInputMaterializeCellsByName` refines that cost per input as
+  inserted call-site recalls minus immediate pre-call recalls that already
+  materialize the same value, and direct-stack-fit rows summarize the remaining
+  inserted/existing materialization cells before a stack-entry helper rewrite is
+  attempted. A
   stack-mutating callee now exposes both the diagnostic mutation surface
   (`valueAwareCalleeAbiMutationSurface*`) and a proof-oriented lower bound
   (`valueAwareCalleeAbiOverheadLowerBound*`): if even one shared

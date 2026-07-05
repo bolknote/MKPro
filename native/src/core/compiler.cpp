@@ -51054,6 +51054,11 @@ SizeAttributionReport build_size_attribution_report(
   std::map<std::string, std::set<std::string>> helper_nested_call_labels;
   std::map<std::string, std::set<std::string>> helper_nested_call_input_names;
   std::map<std::string, std::vector<CallSite>> helper_nested_call_sites;
+  std::map<std::string, std::vector<CallSite>> call_sites_by_label;
+  for (const CallSite& call_site : call_sites) {
+    if (!call_site.label.empty())
+      call_sites_by_label[call_site.label].push_back(call_site);
+  }
   std::map<std::string, std::map<std::string, std::vector<std::size_t>>>
       helper_recall_indices_by_name;
   for (const HelperRegionRange& region : helper_regions) {
@@ -51163,6 +51168,20 @@ SizeAttributionReport build_size_attribution_report(
         << ",mutatingCells=" << summary.mutating_cells << ")";
     return out.str();
   };
+  const auto immediate_pre_call_stack_recalls =
+      [&](const CallSite& call_site) {
+        std::vector<std::pair<std::string, int>> recalls;
+        std::size_t index = call_site.start_index;
+        while (index > 0U && recalls.size() < 4U) {
+          --index;
+          const ResolvedStep& producer = steps.at(index);
+          const std::optional<SizeSpillAccess> access = size_report_spill_access(producer);
+          if (!access.has_value() || access->kind != SizeSpillAccessKind::Recall)
+            break;
+          recalls.emplace_back(access->name, producer.address);
+        }
+        return recalls;
+      };
   std::map<std::string, std::set<int>> helper_spill_registers;
   for (const HelperRegionRange& region : helper_regions) {
     for (std::size_t index = region.start; index < region.end && index < steps.size(); ++index) {
@@ -51402,7 +51421,50 @@ SizeAttributionReport build_size_attribution_report(
                              ",");
           }
         }
-        const int materialize_cells_per_input = std::max(1, helper.call_occurrences);
+        const int default_materialize_cells_per_input = std::max(1, helper.call_occurrences);
+        std::map<std::string, int> existing_stack_materialize_cells_by_name;
+        std::map<std::string, int> inserted_stack_materialize_cells_by_name;
+        std::vector<std::string> existing_stack_materialize_parts;
+        if (const auto helper_call_sites = call_sites_by_label.find(helper.label);
+            helper_call_sites != call_sites_by_label.end()) {
+          for (const CallSite& call_site : helper_call_sites->second) {
+            std::set<std::string> counted_names_at_site;
+            for (const auto& [name, address] : immediate_pre_call_stack_recalls(call_site)) {
+              if (!stack_input_names.contains(name) || counted_names_at_site.contains(name))
+                continue;
+              counted_names_at_site.insert(name);
+              ++existing_stack_materialize_cells_by_name[name];
+              existing_stack_materialize_parts.push_back(
+                  name + "@call" + safe_format_label_address(call_site.address) +
+                  "<-recall" + safe_format_label_address(address));
+            }
+          }
+        }
+        for (const auto& [name, unused_cells] : ranked_stack_inputs) {
+          (void)unused_cells;
+          const int existing_cells = existing_stack_materialize_cells_by_name[name];
+          inserted_stack_materialize_cells_by_name[name] =
+              std::max(0, default_materialize_cells_per_input - existing_cells);
+        }
+        const auto materialize_cells_for_input = [&](const std::string& name) {
+          const auto inserted_it = inserted_stack_materialize_cells_by_name.find(name);
+          if (inserted_it == inserted_stack_materialize_cells_by_name.end())
+            return default_materialize_cells_per_input;
+          return inserted_it->second;
+        };
+        std::vector<std::string> materialize_cost_parts;
+        materialize_cost_parts.reserve(ranked_stack_inputs.size());
+        int existing_stack_materialize_cells = 0;
+        for (const auto& [name, unused_cells] : ranked_stack_inputs) {
+          (void)unused_cells;
+          const int existing_cells = existing_stack_materialize_cells_by_name[name];
+          const int inserted_cells = materialize_cells_for_input(name);
+          existing_stack_materialize_cells += existing_cells;
+          materialize_cost_parts.push_back(name + ":" + std::to_string(inserted_cells) +
+                                           "m/" + std::to_string(existing_cells) + "e/" +
+                                           std::to_string(default_materialize_cells_per_input) +
+                                           "c");
+        }
         int profitable_stack_input_gross_cells = 0;
         int profitable_stack_input_materialize_cells = 0;
         std::vector<std::pair<std::string, int>> ranked_profitable_stack_inputs;
@@ -51412,25 +51474,28 @@ SizeAttributionReport build_size_attribution_report(
         std::vector<std::string> stack_input_profit_parts;
         std::string best_stack_input_candidate;
         int best_stack_input_gross_cells = 0;
+        int best_stack_input_materialize_cells = default_materialize_cells_per_input;
         int best_stack_input_net_cells = std::numeric_limits<int>::min();
         const auto signed_cells_text = [](int cells) {
           return cells >= 0 ? "+" + std::to_string(cells) : std::to_string(cells);
         };
         for (const auto& [name, cells] : ranked_stack_inputs) {
-          const int net_cells = cells - materialize_cells_per_input;
+          const int materialize_cells = materialize_cells_for_input(name);
+          const int net_cells = cells - materialize_cells;
           stack_input_profit_parts.push_back(name + ":" + std::to_string(cells) + "g/" +
-                                             std::to_string(materialize_cells_per_input) +
+                                             std::to_string(materialize_cells) +
                                              "m/" + signed_cells_text(net_cells) + "n");
           if (net_cells > best_stack_input_net_cells) {
             best_stack_input_candidate = name;
             best_stack_input_gross_cells = cells;
+            best_stack_input_materialize_cells = materialize_cells;
             best_stack_input_net_cells = net_cells;
           }
           if (net_cells > 0) {
             ranked_profitable_stack_inputs.emplace_back(name, cells);
             profitable_stack_input_names.push_back(name);
             profitable_stack_input_gross_cells += cells;
-            profitable_stack_input_materialize_cells += materialize_cells_per_input;
+            profitable_stack_input_materialize_cells += materialize_cells;
           } else if (net_cells == 0) {
             break_even_stack_input_names.push_back(name);
           } else {
@@ -51508,12 +51573,24 @@ SizeAttributionReport build_size_attribution_report(
             continue;
           direct_stack_input_names.push_back(name);
           direct_stack_input_gross_cells += cells;
-          direct_stack_input_materialize_cells += materialize_cells_per_input;
+          direct_stack_input_materialize_cells += materialize_cells_for_input(name);
         }
         const int direct_stack_input_net_cells =
             direct_stack_input_gross_cells - direct_stack_input_materialize_cells;
         helper.details["valueAwareStackInputMaterializeCellsPerInput"] =
-            std::to_string(materialize_cells_per_input);
+            std::to_string(default_materialize_cells_per_input);
+        helper.details["valueAwareStackInputMaterializeCostModel"] =
+            existing_stack_materialize_cells > 0
+                ? "one-callsite-recall-per-input-minus-immediate-pre-call-recalls"
+                : "one-callsite-recall-per-input";
+        helper.details["valueAwareStackInputMaterializeCellsByName"] =
+            join_strings(materialize_cost_parts, ";");
+        if (existing_stack_materialize_cells > 0) {
+          helper.details["valueAwareExistingStackInputMaterializeCells"] =
+              std::to_string(existing_stack_materialize_cells);
+          helper.details["valueAwareExistingStackInputMaterializeSites"] =
+              join_strings(existing_stack_materialize_parts, ";");
+        }
         helper.details["valueAwareStackInputProfitBreakdown"] =
             join_strings(stack_input_profit_parts, ";");
         helper.details["valueAwareBestStackInputCandidate"] = best_stack_input_candidate;
@@ -51523,7 +51600,8 @@ SizeAttributionReport build_size_attribution_report(
             std::to_string(best_stack_input_net_cells);
         helper.details["valueAwareBestStackInputAdditionalRecallCellsToProfit"] =
             std::to_string(
-                std::max(0, materialize_cells_per_input + 1 - best_stack_input_gross_cells));
+                std::max(0, best_stack_input_materialize_cells + 1 -
+                                best_stack_input_gross_cells));
         helper.details["valueAwareProfitableStackInputGrossCells"] =
             std::to_string(profitable_stack_input_gross_cells);
         helper.details["valueAwareProfitableStackInputMaterializeCells"] =
@@ -51787,6 +51865,19 @@ SizeAttributionReport build_size_attribution_report(
                            "savings");
         }
         if (!direct_stack_input_names.empty()) {
+          std::vector<std::string> direct_materialization_parts;
+          direct_materialization_parts.reserve(direct_stack_input_names.size());
+          int direct_existing_materialize_cells = 0;
+          int direct_inserted_materialize_cells = 0;
+          for (const std::string& name : direct_stack_input_names) {
+            const int existing_cells = existing_stack_materialize_cells_by_name[name];
+            const int inserted_cells = materialize_cells_for_input(name);
+            direct_existing_materialize_cells += existing_cells;
+            direct_inserted_materialize_cells += inserted_cells;
+            direct_materialization_parts.push_back(
+                name + ":" + std::to_string(inserted_cells) + "insert/" +
+                std::to_string(existing_cells) + "existing");
+          }
           helper.details["valueAwareDirectStackInputNames"] =
               join_strings(direct_stack_input_names, ",");
           helper.details["valueAwareDirectStackInputGrossCells"] =
@@ -51797,6 +51888,18 @@ SizeAttributionReport build_size_attribution_report(
               std::to_string(direct_stack_input_net_cells);
           helper.details["valueAwareDirectStackInputReason"] =
               "profitable stack inputs are not recalled after nested helper calls";
+          helper.details["valueAwareDirectStackInputMaterialization"] =
+              join_strings(direct_materialization_parts, ";");
+          helper.details["valueAwareDirectStackInputInsertedMaterializeCells"] =
+              std::to_string(direct_inserted_materialize_cells);
+          helper.details["valueAwareDirectStackInputExistingMaterializeCells"] =
+              std::to_string(direct_existing_materialize_cells);
+          helper.details["valueAwareDirectStackInputMaterializationStatus"] =
+              direct_inserted_materialize_cells == 0
+                  ? "covered-by-existing-immediate-pre-call-recalls"
+                  : (direct_existing_materialize_cells > 0
+                         ? "partially-covered-needs-inserted-callsite-recalls"
+                         : "needs-inserted-callsite-recalls");
         }
         helper.details["valueAwareAllStackCapacityStatus"] =
             ranked_stack_inputs.size() <= stack_capacity ? "fits-x-y-z-t-capacity"
