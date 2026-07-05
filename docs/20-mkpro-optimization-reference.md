@@ -90,6 +90,13 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   implementing a stack-argument helper entry once the entry-body cost model says
   it is net-positive,
   instead of leaving them buried inside free-form rejection text.
+  For corpus-level prioritization, run
+  `node scripts/size-opportunity-report.cjs --compiler native/build/mkpro-native`.
+  The script reuses compiler JSON rather than reimplementing optimizer logic:
+  it groups positive and stalled `nextActions`, helper register-traffic
+  opportunities, and their plan/cost-model statuses across `examples/` and
+  `examples/pending-optimizer/`, so pass work can be chosen from current
+  measured signals instead of one-off `explain` output.
   Dead-integer fractional-selector blockers append the same
   actionable selector/layout hints to `reason` and expose them as structured
   JSON under `details` / `bestDetails`: `consumerAddress` identifies the final
