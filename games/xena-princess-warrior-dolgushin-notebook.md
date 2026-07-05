@@ -1,7 +1,7 @@
 # XENA-PRINCESS WARRIOR
 
 - Автор: Александр Долгушин
-- Источник: тетрадь Александра Долгушина "Мои игры МК-61", Рисунок (48).jpg; Рисунок (49).jpg; Рисунок (50).jpg; Рисунок (51).jpg
+- Источник: [тетрадь Александра Долгушина "Мои игры МК-61"](https://vk.com/wall-115251268_97), Рисунок (48).jpg; Рисунок (49).jpg; Рисунок (50).jpg; Рисунок (51).jpg
 - Программа: [xena-princess-warrior-dolgushin-notebook.txt](xena-princess-warrior-dolgushin-notebook.txt)
 
 ## Предыстория

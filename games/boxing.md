@@ -6,7 +6,7 @@
 
 ## Listing Note
 
-The listing and play instructions were additionally cross-checked against pages 18-19 of Aleksandr Dolgushin's notebook.
+The listing and play instructions were additionally cross-checked against pages 18-19 of [Aleksandr Dolgushin's notebook](https://vk.com/wall-115251268_97).
 
 ## Description
 

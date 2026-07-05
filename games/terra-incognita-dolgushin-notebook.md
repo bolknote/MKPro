@@ -2,7 +2,7 @@
 
 - Автор: Александр Долгушин
 
-- Источник: тетрадь Александра Долгушина "Мои игры МК-61", программа 39, «TERRA INCOGNITA»
+- Источник: [тетрадь Александра Долгушина "Мои игры МК-61"](https://vk.com/wall-115251268_97), программа 39, «TERRA INCOGNITA»
 - Программа: [terra-incognita-dolgushin-notebook.txt](terra-incognita-dolgushin-notebook.txt)
 
 ## Описание

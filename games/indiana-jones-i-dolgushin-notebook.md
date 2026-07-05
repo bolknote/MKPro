@@ -2,7 +2,7 @@
 
 - Автор: Александр Долгушин
 
-- Источник: тетрадь Александра Долгушина "Мои игры МК-61", программа 46, «INDIANA JONES I»
+- Источник: [тетрадь Александра Долгушина "Мои игры МК-61"](https://vk.com/wall-115251268_97), программа 46, «INDIANA JONES I»
 - Программа: [indiana-jones-i-dolgushin-notebook.txt](indiana-jones-i-dolgushin-notebook.txt)
 
 ## Описание

@@ -2,7 +2,7 @@
 
 - Автор: Александр Долгушин
 
-- Источник: тетрадь Александра Долгушина "Мои игры МК-61", программа 43, «BUSSINESMAN»
+- Источник: [тетрадь Александра Долгушина "Мои игры МК-61"](https://vk.com/wall-115251268_97), программа 43, «BUSSINESMAN»
 - Программа: [bussinesman-dolgushin-notebook.txt](bussinesman-dolgushin-notebook.txt)
 
 ## Описание

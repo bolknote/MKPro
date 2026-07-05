@@ -2,7 +2,7 @@
 
 - Автор: Александр Долгушин
 
-- Источник: тетрадь Александра Долгушина "Мои игры МК-61", программа 41, «HOGAN'S ALLEY»
+- Источник: [тетрадь Александра Долгушина "Мои игры МК-61"](https://vk.com/wall-115251268_97), программа 41, «HOGAN'S ALLEY»
 - Программа: [hogans-alley-dolgushin-notebook.txt](hogans-alley-dolgushin-notebook.txt)
 
 ## Описание
