@@ -18133,6 +18133,26 @@ bool lower_stack_argument_function_call(LoweringContext& context, const V2Rule& 
   return true;
 }
 
+bool lower_stack_input_rule_call(LoweringContext& context, const V2Rule& rule,
+                                 const std::vector<Expression>& args, int line,
+                                 std::string_view comment_prefix) {
+  const auto plan_it = context.stack_input_rule_entries.find(rule.name);
+  if (plan_it == context.stack_input_rule_entries.end() || !args.empty())
+    return false;
+  if (!x_holds_identifier(context, plan_it->second.input))
+    return false;
+  context.emitter.emit_jump(0x53, "ПП", function_label(rule.name),
+                            std::string(comment_prefix) + rule.name + " stack-input entry",
+                            line);
+  clear_current_x_facts(context);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "rule-stack-input-entry-call",
+      .detail = "Entered " + rule.name + " with state input " + plan_it->second.input +
+                " already staged in X.",
+  });
+  return true;
+}
+
 void collect_stack_entry_function_call_sites_in_expression(
     LoweringContext& context, const Expression& expression, std::map<std::string, int>& safe_calls);
 
@@ -18266,6 +18286,161 @@ void plan_stack_argument_function_entries(LoweringContext& context, const V2Prog
     context.stack_entry_functions[rule.name] = FunctionStackEntryPlan{
         .params = rule.params,
         .call_sites = safe_it->second,
+    };
+  }
+}
+
+std::optional<Expression> stack_input_entry_statement_expression(const V2Statement& statement) {
+  if ((statement.kind == "v2_assign" || statement.kind == "v2_update") &&
+      statement.expr.has_value()) {
+    return parse_expression(*statement.expr, statement.line);
+  }
+  if ((statement.kind == "v2_stop" || statement.kind == "v2_show") &&
+      statement.target.has_value()) {
+    return parse_expression(*statement.target, statement.line);
+  }
+  if ((statement.kind == "v2_return" || statement.kind == "v2_preview") &&
+      statement.expr.has_value()) {
+    return parse_expression(*statement.expr, statement.line);
+  }
+  return std::nullopt;
+}
+
+bool statement_writes_scalar_name(const V2Statement& statement, const std::string& name) {
+  const std::optional<std::string> target = scalar_statement_target_name(statement);
+  return target.has_value() && *target == name &&
+         (statement.kind == "v2_assign" || statement.kind == "v2_update" ||
+          statement.kind == "v2_read");
+}
+
+int collect_natural_current_x_rule_call_sites_in_statements(
+    const std::vector<V2Statement>& statements, const std::string& rule_name,
+    const std::string& input);
+
+int collect_natural_current_x_rule_call_sites_in_statement(const V2Statement& statement,
+                                                           const std::string& rule_name,
+                                                           const std::string& input) {
+  int count = 0;
+  count += collect_natural_current_x_rule_call_sites_in_statements(statement.body, rule_name,
+                                                                  input);
+  count += collect_natural_current_x_rule_call_sites_in_statements(statement.then_body, rule_name,
+                                                                  input);
+  count += collect_natural_current_x_rule_call_sites_in_statements(statement.else_body, rule_name,
+                                                                  input);
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr)
+      count += collect_natural_current_x_rule_call_sites_in_statement(*match_case.action,
+                                                                     rule_name, input);
+  }
+  if (statement.otherwise != nullptr) {
+    count += collect_natural_current_x_rule_call_sites_in_statement(*statement.otherwise,
+                                                                   rule_name, input);
+  }
+  return count;
+}
+
+int collect_natural_current_x_rule_call_sites_in_statements(
+    const std::vector<V2Statement>& statements, const std::string& rule_name,
+    const std::string& input) {
+  int count = 0;
+  for (std::size_t index = 0; index < statements.size(); ++index) {
+    const V2Statement& statement = statements.at(index);
+    if (statement.kind == "v2_invoke" && statement.name == rule_name && statement.args.empty() &&
+        index > 0U && statement_writes_scalar_name(statements.at(index - 1U), input)) {
+      ++count;
+    }
+    count += collect_natural_current_x_rule_call_sites_in_statement(statement, rule_name, input);
+  }
+  return count;
+}
+
+std::set<std::string> explicit_scalar_state_names(const V2Program& program) {
+  std::set<std::string> names;
+  for (const V2StateField& field : program.state) {
+    if (!field.implicit && !field.bank.has_value() && field.type != "coord_list")
+      names.insert(field.name);
+  }
+  return names;
+}
+
+std::optional<std::string> stack_input_rule_entry_candidate(
+    const LoweringContext& context, const V2Rule& rule, const V2Program& program,
+    const std::set<std::string>& state_names) {
+  if (rule.params.size() != 0U || rule.body.empty() ||
+      context.inline_statement_rules.contains(rule.name))
+    return std::nullopt;
+  if (current_x_value_function_rule_eligible(context, rule) ||
+      match_trig_near_rule(rule).has_value() ||
+      match_x_param_return_decay(rule).has_value() ||
+      match_x_param_stack_stop_risk_rule(rule).has_value() ||
+      context.x_param_procs.contains(rule.name)) {
+    return std::nullopt;
+  }
+
+  const V2Statement& first = rule.body.front();
+  if (first.kind != "v2_assign" || !first.target.has_value() || !first.expr.has_value())
+    return std::nullopt;
+  const std::optional<Expression> expression = stack_input_entry_statement_expression(first);
+  if (!expression.has_value())
+    return std::nullopt;
+  const Expression target = parse_expression(*first.target, first.line);
+  if (target.kind != "identifier")
+    return std::nullopt;
+
+  const int total_calls =
+      context.proc_call_counts.contains(rule.name) ? context.proc_call_counts.at(rule.name) : 0;
+  if (total_calls <= 0)
+    return std::nullopt;
+
+  std::optional<std::string> best_input;
+  int best_reads = 0;
+  for (const std::string& input : state_names) {
+    if (context.constants.contains(input))
+      continue;
+    if ((first.kind == "v2_assign" || first.kind == "v2_update") && first.target.has_value() &&
+        expression_contains_identifier(parse_expression(*first.target, first.line), input)) {
+      continue;
+    }
+    const int first_reads = count_identifier_reads(*expression, input);
+    if (first_reads < 1)
+      continue;
+    if (count_identifier_reads_in_statements(rule.body, input) != first_reads)
+      continue;
+    if (!core::emit::can_lower_stack_resident_expression(*expression, {input}) ||
+        !stack_entry_expression_has_supported_shape(context, *expression, {input})) {
+      continue;
+    }
+    const int natural_calls =
+        collect_natural_current_x_rule_call_sites_in_statements(program.body, rule.name, input) +
+        std::accumulate(program.rules.begin(), program.rules.end(), 0,
+                        [&](int total, const V2Rule& candidate) {
+                          return total + collect_natural_current_x_rule_call_sites_in_statements(
+                                             candidate.body, rule.name, input);
+                        });
+    if (natural_calls != total_calls)
+      continue;
+    if (first_reads > best_reads) {
+      best_input = input;
+      best_reads = first_reads;
+    }
+  }
+  return best_input;
+}
+
+void plan_stack_input_rule_entries(LoweringContext& context, const V2Program& program) {
+  if (!context.stack_resident_temps || !context.stack_argument_function_entries)
+    return;
+  const std::set<std::string> state_names = explicit_scalar_state_names(program);
+  for (const V2Rule& rule : program.rules) {
+    const std::optional<std::string> input =
+        stack_input_rule_entry_candidate(context, rule, program, state_names);
+    if (!input.has_value())
+      continue;
+    context.stack_input_rule_entries[rule.name] = RuleStackInputEntryPlan{
+        .input = *input,
+        .call_sites = context.proc_call_counts.contains(rule.name)
+                          ? context.proc_call_counts.at(rule.name)
+                          : 0,
     };
   }
 }
@@ -29166,6 +29341,8 @@ bool lower_invoke_statement(LoweringContext& context, const V2Statement& stateme
     return lower_x_param_rule_call(context, rule, args, statement.line);
   if (lower_stack_argument_function_call(context, rule, args, statement.line, "proc call "))
     return true;
+  if (lower_stack_input_rule_call(context, rule, args, statement.line, "proc call "))
+    return true;
   if (args.empty() && context.emitter.current_x_known_zero &&
       !context.disable_packed_line_family_score_accumulator) {
     const std::optional<PackedLineFamilyScoreRule> score_rule =
@@ -31674,6 +31851,50 @@ bool emit_stack_argument_function_entry_prefix(LoweringContext& context, const V
   return true;
 }
 
+bool lower_stack_input_rule_primary_body(LoweringContext& context, const V2Rule& rule) {
+  const auto plan_it = context.stack_input_rule_entries.find(rule.name);
+  if (plan_it == context.stack_input_rule_entries.end())
+    return false;
+  if (rule.body.empty())
+    return false;
+  const V2Statement& first = rule.body.front();
+  if (first.kind != "v2_assign" || !first.target.has_value() || !first.expr.has_value())
+    return false;
+  const Expression target = parse_expression(*first.target, first.line);
+  if (target.kind != "identifier" || expression_contains_identifier(target, plan_it->second.input))
+    return false;
+  const Expression expression = parse_expression(*first.expr, first.line);
+  mark_current_x(context, plan_it->second.input);
+  if (!lower_stack_resident_expression_to_x(context, expression, {plan_it->second.input},
+                                            first.line)) {
+    return false;
+  }
+  if (context.stack_only_state_fields.contains(target.name)) {
+    report_stack_only_state_field(context, target.name, first.line);
+    mark_current_x(context, target.name);
+    context.emitter.current_x_known_zero = false;
+  } else {
+    emit_store(context, target.name, "set " + target.name);
+  }
+
+  std::vector<V2Statement> rest;
+  if (rule.body.size() > 1U)
+    rest.assign(rule.body.begin() + 1, rule.body.end());
+  if (!lower_statement_block(context, rest))
+    return false;
+  if (!rule.body.empty() &&
+      (rule.body.back().kind == "v2_return" || direct_terminal_statements_stop(context, rule.body)))
+    return true;
+  context.emitter.emit_op(0x52, "В/О", "implicit return from proc", rule.line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "rule-stack-input-entry-primary",
+      .detail = "Compiled " + rule.name + " as a primary stack-input entry for " +
+                plan_it->second.input + " after " + std::to_string(plan_it->second.call_sites) +
+                " natural current-X call site(s).",
+  });
+  return true;
+}
+
 bool lower_current_x_value_function_body(LoweringContext& context, const V2Rule& rule, int line);
 
 // Recognise a no-argument procedure whose entire body is
@@ -31983,6 +32204,9 @@ bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
     context.emitter.emit_op(0x52, "В/О", "implicit return from proc", rule.line);
     return true;
   }
+
+  if (context.stack_input_rule_entries.contains(rule.name))
+    return lower_stack_input_rule_primary_body(context, rule);
 
   if (lower_self_decrement_indexed_fractional_report_tail_rule(context, rule))
     return true;
@@ -46113,6 +46337,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         index_rules(context, *ast.v2);
         trace_stage("metadata-plan-stack-function-entries");
         plan_stack_argument_function_entries(context, *ast.v2);
+        plan_stack_input_rule_entries(context, *ast.v2);
         if (context.indirect_underflow_decrement) {
           context.terminal_underflow_unit_decrements =
               collect_terminal_underflow_unit_decrements(context, *ast.v2);

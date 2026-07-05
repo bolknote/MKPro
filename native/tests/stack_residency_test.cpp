@@ -1021,6 +1021,63 @@ program ValueAwareDirectStackInputNestedCall {
   }
 
   {
+    const std::string source = R"mkpro(
+program RuleStackInputEntryProbe {
+  state {
+    x: packed = 0
+    score: packed = 0
+    scratch: packed = 0
+  }
+
+  fn cold() {
+    scratch = scratch + 1
+  }
+
+  fn hot() {
+    score = x + 1
+    cold()
+    cold()
+    cold()
+  }
+
+  loop {
+    x = 3
+    hot()
+    x = 4
+    hot()
+    halt(score)
+  }
+}
+)mkpro";
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.stack_resident_temps = true;
+    baseline_options.disable_candidate_search = true;
+    const CompileResult baseline = compile_source(source, baseline_options);
+    require_clean_compile(baseline, "rule stack-input baseline");
+    require(count_steps_with_comment(baseline, "recall x") == 1,
+            "baseline helper should recall x inside hot");
+    require(count_steps_with_comment(baseline, "set x") == 2,
+            "baseline should materialize x before regular helper calls");
+
+    CompileOptions stack_input_options = baseline_options;
+    stack_input_options.stack_argument_function_entries = true;
+    const CompileResult stack_input = compile_source(source, stack_input_options);
+    require_clean_compile(stack_input, "rule stack-input entry variant");
+    require(stack_input.steps.size() + 3U == baseline.steps.size(),
+            "rule stack-input entry should remove the helper recall and now-dead x stores");
+    require(has_optimization(stack_input, "rule-stack-input-entry-primary"),
+            "rule stack-input entry variant should compile hot as a primary stack-input entry");
+    require(count_steps_with_comment_prefix_and_opcode(
+                stack_input, "proc call hot stack-input entry", 0x53) == 2,
+            "both natural current-X hot calls should use the stack-input entry");
+    require(count_steps_with_comment(stack_input, "recall x") == 0 &&
+                count_steps_with_comment(stack_input, "set x") == 0,
+            "stack-input entry should consume x directly from X without helper recalls or "
+            "dead stores");
+  }
+
+  {
     CompileOptions options;
     options.budget = 999999;
     options.stack_resident_temps = true;

@@ -108,6 +108,11 @@ struct FunctionStackEntryPlan {
   int call_sites = 0;
 };
 
+struct RuleStackInputEntryPlan {
+  std::string input;
+  int call_sites = 0;
+};
+
 struct NearAnyHelperRequest {
   std::string key;
   std::string label;
@@ -217,6 +222,7 @@ struct LoweringContext {
   std::vector<ExpressionHelperRequest> expression_helpers;
   std::map<std::string, ExpressionHelperStackEntryRequest> expression_helper_stack_entries;
   std::map<std::string, FunctionStackEntryPlan> stack_entry_functions;
+  std::map<std::string, RuleStackInputEntryPlan> stack_input_rule_entries;
   std::map<std::string, NearAnyHelperStats> near_any_helper_stats;
   std::map<std::string, std::string> near_any_helper_labels;
   std::vector<NearAnyHelperRequest> near_any_helpers;
