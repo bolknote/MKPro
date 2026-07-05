@@ -261,6 +261,7 @@ struct LoweringContext {
   bool packed_score_accumulator_helpers = false;
   bool use_packed_score_accumulator_helper = false;
   bool use_packed_score_accumulator_for_singletons = false;
+  bool packed_score_helper_paid_by_non_accumulator_groups = false;
   bool share_packed_line_score_accumulator_with_generic_helper = false;
   bool disable_packed_line_family_score_accumulator = false;
   bool stack_resident_temps = false;

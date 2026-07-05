@@ -1135,6 +1135,55 @@ program PackedScoreUpdateStartedStatementAccumulator {
   require(count_steps_with_comment(update_started_sequence, "set score") == 0,
           "immediately consumed update-started accumulator should not store score");
 
+  const CompileResult planned_paid_seeded_sequence = compile_source(R"mkpro(
+program PackedScoreAccumulatorSeedsFromPlannedStandaloneHelper {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    d: packed = 44447.4
+    e: packed = 44448.4
+    f: packed = 44449.4
+    g: packed = 44450.4
+    h: packed = 44451.4
+    i: packed = 44452.4
+    j: packed = 44453.4
+    k: packed = 44454.4
+    value: packed = 0
+  }
+  loop {
+    value = packed_score(a, 1) + packed_score(b, 2)
+    value += packed_score(c, 3)
+    preview(packed_score(d, 4))
+    preview(packed_score(e, 5))
+    preview(packed_score(f, 6))
+    preview(packed_score(g, 7))
+    preview(packed_score(h, 8))
+    preview(packed_score(i, 1))
+    preview(packed_score(j, 2))
+    preview(packed_score(k, 3))
+    halt(value)
+  }
+}
+)mkpro",
+                                                            pinned_options());
+  require(planned_paid_seeded_sequence.implemented,
+          "native compiler should seed a packed_score accumulator from a planned paid helper");
+  require(planned_paid_seeded_sequence.diagnostics.empty(),
+          "planned-helper seeded accumulator should not report diagnostics");
+  require(has_optimization(planned_paid_seeded_sequence,
+                           "packed-score-seeded-sequence-accumulator"),
+          "planned-helper accumulator should report seeded sequence lowering");
+  require(count_packed_score_helper_jumps(planned_paid_seeded_sequence) == 9,
+          "planned-helper seeded accumulator should use the standalone helper for eight "
+          "non-accumulator calls and the first accumulator term");
+  require(count_packed_score_accumulator_helper_jumps(planned_paid_seeded_sequence) == 2,
+          "planned-helper seeded accumulator should use the accumulator helper for the remaining "
+          "terms");
+  require(count_steps_with_comment(planned_paid_seeded_sequence,
+                                   "packed_score accumulator zero") == 0,
+          "planned-helper seeded accumulator should not enter an explicit zero");
+
   const CompileResult paid_helper_pair = compile_source(R"mkpro(
 program PackedScoreAccumulatorReusesPaidHelperForPair {
   state {

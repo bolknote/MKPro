@@ -10583,6 +10583,9 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
       context.use_packed_score_accumulator_helper &&
       non_accumulator_group_packed_score_calls <= 7;
   context.use_packed_score_helper = packed_score_calls >= 3;
+  context.packed_score_helper_paid_by_non_accumulator_groups =
+      context.use_packed_score_helper && !context.use_packed_score_accumulator_for_singletons &&
+      non_accumulator_group_packed_score_calls > 0;
   context.removable_coord_lists = collect_removable_coord_list_names(program);
   context.scaled_coord_lists = collect_scaled_coord_list_names(context, program);
   context.scaled_coord_cell_names = collect_scaled_coord_cell_names(context, program);
@@ -19452,6 +19455,43 @@ bool emit_packed_score_accumulator_step(LoweringContext& context, const std::str
   return emit_packed_score_accumulator_addend(context, step);
 }
 
+bool can_seed_packed_score_accumulator_from_existing_helper(
+    const LoweringContext& context, const std::vector<PackedScoreAccumulatorStep>& steps,
+    const std::optional<Expression>& initial, std::size_t term_count) {
+  return term_count >= 2U && !initial.has_value() &&
+         (context.packed_score_helper.has_value() ||
+          context.packed_score_helper_paid_by_non_accumulator_groups) &&
+         !steps.empty() && steps.front().kind == PackedScoreAccumulatorStep::Kind::Term;
+}
+
+bool emit_seeded_packed_score_accumulator_steps(
+    LoweringContext& context, const std::vector<PackedScoreAccumulatorStep>& steps,
+    const std::string& helper, const std::string* subtract_helper, int line,
+    const std::string& optimization_name, const std::string& optimization_subject) {
+  if (steps.empty() || steps.front().kind != PackedScoreAccumulatorStep::Kind::Term ||
+      (!context.packed_score_helper.has_value() &&
+       !context.packed_score_helper_paid_by_non_accumulator_groups)) {
+    return false;
+  }
+  const std::string score_helper = packed_score_helper_label(context);
+  if (!emit_packed_score_accumulator_term(context, score_helper, steps.front().term,
+                                          "packed_score helper")) {
+    return false;
+  }
+  for (std::size_t index = 1; index < steps.size(); ++index) {
+    if (!emit_packed_score_accumulator_step(context, helper, steps.at(index), subtract_helper))
+      return false;
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = optimization_name,
+      .detail = "Seeded " + optimization_subject +
+                " from the already-paid packed_score helper before continuing through the "
+                "accumulator helper at line " +
+                std::to_string(line) + ".",
+  });
+  return true;
+}
+
 void report_signed_packed_score_accumulator_rejection(
     LoweringContext& context, const Expression& expression,
     const PackedScoreSignedAccumulatorLocalCost& cost) {
@@ -19524,31 +19564,42 @@ bool lower_packed_score_sum_accumulator_to_x(LoweringContext& context,
       has_negative_term
           ? std::optional<std::string>(packed_score_subtractor_accumulator_helper_label(context))
           : std::nullopt;
-  const auto emit_initial = [&]() {
-    if (initial.has_value())
-      return lower_expression_to_x(context, *initial);
-    context.emitter.emit_number("0");
-    if (!context.emitter.items.empty())
-      context.emitter.items.back().comment = "packed_score accumulator zero";
-    return true;
-  };
-  if (!lower_stack_accumulator_terms_to_x_with_initial<PackedScoreAccumulatorStep>(
-          steps, emit_initial,
-          [&](const PackedScoreAccumulatorStep& step) {
-            if (step.kind == PackedScoreAccumulatorStep::Kind::Term) {
-              if (!helper.has_value())
-                return false;
-              return emit_packed_score_accumulator_term(context, *helper, step.term);
-            }
-            if (step.kind == PackedScoreAccumulatorStep::Kind::NegativeTerm) {
-              if (!subtract_helper.has_value())
-                return false;
-              return emit_packed_score_accumulator_term(context, *subtract_helper, step.term,
-                                                       "packed_score subtractor helper");
-            }
-            return emit_packed_score_accumulator_addend(context, step);
-          })) {
-    return false;
+  if (can_seed_packed_score_accumulator_from_existing_helper(context, steps, initial, term_count)) {
+    if (!helper.has_value())
+      return false;
+    if (!emit_seeded_packed_score_accumulator_steps(
+            context, steps, *helper, subtract_helper.has_value() ? &*subtract_helper : nullptr,
+            steps.front().line, "packed-score-seeded-sum-accumulator",
+            std::to_string(term_count) + "-term packed_score() sum")) {
+      return false;
+    }
+  } else {
+    const auto emit_initial = [&]() {
+      if (initial.has_value())
+        return lower_expression_to_x(context, *initial);
+      context.emitter.emit_number("0");
+      if (!context.emitter.items.empty())
+        context.emitter.items.back().comment = "packed_score accumulator zero";
+      return true;
+    };
+    if (!lower_stack_accumulator_terms_to_x_with_initial<PackedScoreAccumulatorStep>(
+            steps, emit_initial,
+            [&](const PackedScoreAccumulatorStep& step) {
+              if (step.kind == PackedScoreAccumulatorStep::Kind::Term) {
+                if (!helper.has_value())
+                  return false;
+                return emit_packed_score_accumulator_term(context, *helper, step.term);
+              }
+              if (step.kind == PackedScoreAccumulatorStep::Kind::NegativeTerm) {
+                if (!subtract_helper.has_value())
+                  return false;
+                return emit_packed_score_accumulator_term(context, *subtract_helper, step.term,
+                                                         "packed_score subtractor helper");
+              }
+              return emit_packed_score_accumulator_addend(context, step);
+            })) {
+      return false;
+    }
   }
   context.optimizations.push_back(OptimizationReport{
       .name = "packed-score-sum-accumulator",
@@ -20422,21 +20473,31 @@ bool lower_packed_score_sequence_accumulator_run(LoweringContext& context,
       }
     }
     if (!emitted_current_x_plan) {
-      const auto emit_initial = [&]() {
-        if (sequence_start->initial.has_value())
-          return lower_expression_to_x(context, *sequence_start->initial);
-        context.emitter.emit_number("0");
-        if (!context.emitter.items.empty())
-          context.emitter.items.back().comment = "packed_score accumulator zero";
-        return true;
-      };
-      if (!emit_initial())
-        return false;
-      for (const PackedScoreAccumulatorStep& step : steps) {
-        if (!emit_packed_score_accumulator_step(
-                context, helper, step, subtract_helper.has_value() ? &*subtract_helper
-                                                                   : nullptr)) {
+      if (can_seed_packed_score_accumulator_from_existing_helper(
+              context, steps, sequence_start->initial, term_count)) {
+        if (!emit_seeded_packed_score_accumulator_steps(
+                context, steps, helper, subtract_helper.has_value() ? &*subtract_helper : nullptr,
+                statements.at(start).line, "packed-score-seeded-sequence-accumulator",
+                std::to_string(term_count) + "-term packed_score() sequence into " + target)) {
           return false;
+        }
+      } else {
+        const auto emit_initial = [&]() {
+          if (sequence_start->initial.has_value())
+            return lower_expression_to_x(context, *sequence_start->initial);
+          context.emitter.emit_number("0");
+          if (!context.emitter.items.empty())
+            context.emitter.items.back().comment = "packed_score accumulator zero";
+          return true;
+        };
+        if (!emit_initial())
+          return false;
+        for (const PackedScoreAccumulatorStep& step : steps) {
+          if (!emit_packed_score_accumulator_step(
+                  context, helper, step, subtract_helper.has_value() ? &*subtract_helper
+                                                                     : nullptr)) {
+            return false;
+          }
         }
       }
     }
