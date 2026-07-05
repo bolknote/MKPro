@@ -54452,6 +54452,7 @@ SizeAttributionReport build_size_attribution_report(
           std::vector<std::string> callee_natural_first_recall_site_parts;
           std::vector<std::string> callee_natural_first_recall_status_parts;
           std::vector<std::string> callee_remaining_preserve_parts;
+          std::vector<std::string> callee_pure_stack_placement_parts;
           std::vector<std::string> callee_mutating_cell_parts;
           std::vector<std::string> callee_mutating_opcode_parts;
           std::vector<std::string> callee_abi_preservation_parts;
@@ -54469,6 +54470,7 @@ SizeAttributionReport build_size_attribution_report(
           bool all_required_callees_stack_preserving = !call_preservation_inputs_by_label.empty();
           bool saw_stack_mutating_required_callee = false;
           bool call_argument_x2_restore_blocked = false;
+          bool callee_abi_requires_register_restage = false;
           int callee_abi_max_preserve_depth = 0;
           int callee_abi_preservation_slot_crossings = 0;
           callee_effect_parts.reserve(call_preservation_inputs_by_label.size());
@@ -54564,6 +54566,26 @@ SizeAttributionReport build_size_attribution_report(
                 label + ":" +
                 std::to_string(std::max(0, requested_preserve_depth -
                                                effect.preserved_original_slot_count)));
+            const int natural_survivor_shortfall =
+                std::max(0, requested_preserve_depth - effect.preserved_original_slot_count);
+            const int argument_restages =
+                call_argument_preservation_cells_by_label.contains(label)
+                    ? call_argument_preservation_cells_by_label.at(label)
+                    : 0;
+            if (natural_survivor_shortfall > 0 || argument_restages > 0) {
+              callee_abi_requires_register_restage = true;
+              callee_pure_stack_placement_parts.push_back(
+                  label + ":register-restage-required(required=" +
+                  std::to_string(requested_preserve_depth) + ",natural=" +
+                  std::to_string(effect.preserved_original_slot_count) + ",shortfall=" +
+                  std::to_string(natural_survivor_shortfall) + ",argumentRestage=" +
+                  std::to_string(argument_restages) + ")");
+            } else {
+              callee_pure_stack_placement_parts.push_back(
+                  label + ":pure-stack-placement-possible(required=" +
+                  std::to_string(requested_preserve_depth) + ",natural=" +
+                  std::to_string(effect.preserved_original_slot_count) + ")");
+            }
             if (effect.mutating_cells > 0) {
               callee_mutating_cell_parts.push_back(label + ":" +
                                                    std::to_string(effect.mutating_cells));
@@ -54678,6 +54700,17 @@ SizeAttributionReport build_size_attribution_report(
                 join_strings(callee_natural_first_recall_status_parts, ";");
             helper.details["valueAwareCalleeAbiRemainingPreserveDepthByCallee"] =
                 join_strings(callee_remaining_preserve_parts, ";");
+            if (!callee_pure_stack_placement_parts.empty()) {
+              helper.details["valueAwareCalleeAbiPureStackPlacementByCallee"] =
+                  join_strings(callee_pure_stack_placement_parts, ";");
+              helper.details["valueAwareCalleeAbiPureStackPlacementStatus"] =
+                  callee_abi_requires_register_restage ? "register-restage-required"
+                                                       : "pure-stack-placement-possible";
+              helper.details["valueAwareCalleeAbiPrimaryEntryProofDisposition"] =
+                  callee_abi_requires_register_restage
+                      ? "primary-entry-lowering-must-restage-live-helper-arguments"
+                      : "primary-entry-lowering-can-use-natural-stack-survivors";
+            }
             if (!callee_mutating_cell_parts.empty()) {
               helper.details["valueAwareCallPreservationMutatingCells"] =
                   join_strings(callee_mutating_cell_parts, ";");

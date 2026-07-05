@@ -1208,6 +1208,22 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCalleeAbiRemainingPreserveDepthByCallee") ==
                       "packed-line score accumulator helper:1" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPureStackPlacementByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPureStackPlacementByCallee") ==
+                      "packed-line score accumulator helper:register-restage-required("
+                      "required=2,natural=1,shortfall=1,argumentRestage=2)" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPureStackPlacementStatus") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPureStackPlacementStatus") ==
+                      "register-restage-required" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryProofDisposition") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryProofDisposition") ==
+                      "primary-entry-lowering-must-restage-live-helper-arguments" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCallPreservationMutatingCells") &&
                   candidate_score_zero->details.at("valueAwareCallPreservationMutatingCells") ==
                       "packed-line score accumulator helper:4" &&

@@ -297,6 +297,18 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCalleeAbiRemainingPreserveDepthByCallee',
       ),
+      calleeAbiPureStackPlacement: detail(
+        details,
+        'valueAwareCalleeAbiPureStackPlacementByCallee',
+      ),
+      calleeAbiPureStackPlacementStatus: detail(
+        details,
+        'valueAwareCalleeAbiPureStackPlacementStatus',
+      ),
+      calleeAbiPrimaryEntryProofDisposition: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryProofDisposition',
+      ),
       calleeAbiNetAfterLowerBound: detail(
         details,
         'valueAwareCalleeAbiNetAfterLowerBoundCells',
@@ -596,6 +608,18 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCalleeAbiNearPositiveStackPlacementRequiredAction',
       ),
+      calleeAbiPureStackPlacement: detail(
+        details,
+        'valueAwareCalleeAbiPureStackPlacementByCallee',
+      ),
+      calleeAbiPureStackPlacementStatus: detail(
+        details,
+        'valueAwareCalleeAbiPureStackPlacementStatus',
+      ),
+      calleeAbiPrimaryEntryProofDisposition: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryProofDisposition',
+      ),
       calleeAbiPrimaryEntryProtocol: detail(
         details,
         'valueAwareCalleeAbiPrimaryEntryProtocolByCallee',
@@ -794,6 +818,8 @@ function actionDetailSuffix(row) {
     ['abiPlacement', row.calleeAbiNearPositiveStackPlacementStatus],
     ['abiPlacementBasis', row.calleeAbiNearPositiveStackPlacementBasis],
     ['abiPlacementAction', row.calleeAbiNearPositiveStackPlacementRequiredAction],
+    ['abiPureStack', row.calleeAbiPureStackPlacement],
+    ['abiProofDisposition', row.calleeAbiPrimaryEntryProofDisposition],
     ['abiProtocol', row.calleeAbiPrimaryEntryProtocol],
     ['abiProtocolStatus', row.calleeAbiPrimaryEntryProtocolStatus],
     ['abiProtocolAction', row.calleeAbiPrimaryEntryProtocolAction],
@@ -877,6 +903,9 @@ function printHelper(row) {
       ` firstRecall=${row.calleeNaturalFirstRecallCoverage || '-'}` +
       ` firstRecallStatus=${row.calleeNaturalFirstRecallStatus || '-'}` +
       ` remaining=${row.calleeRemainingPreserveDepth || '-'}` +
+      ` abiPureStack=${row.calleeAbiPureStackPlacement || '-'}` +
+      ` abiPureStackStatus=${row.calleeAbiPureStackPlacementStatus || '-'}` +
+      ` abiProofDisposition=${row.calleeAbiPrimaryEntryProofDisposition || '-'}` +
       ` abiCost=${row.calleeAbiCostBreakdown || '-'}` +
       ` abiNet=${row.calleeAbiNetAfterLowerBound || '-'}` +
       ` abiNeed=${row.calleeAbiAdditionalNetToPositive || '-'}` +
@@ -958,6 +987,8 @@ function printActionSummary(row) {
     ['abiNearPrimaryNet', row.calleeAbiNearPositivePrimaryNet],
     ['abiPlacement', row.calleeAbiNearPositiveStackPlacementStatus],
     ['abiPlacementAction', row.calleeAbiNearPositiveStackPlacementRequiredAction],
+    ['abiPureStack', row.calleeAbiPureStackPlacement],
+    ['abiProofDisposition', row.calleeAbiPrimaryEntryProofDisposition],
     ['abiProtocol', row.calleeAbiPrimaryEntryProtocol],
     ['abiArgRestage', row.calleeAbiPrimaryEntryArgumentRestage],
   ];
