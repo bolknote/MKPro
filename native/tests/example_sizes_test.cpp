@@ -1364,6 +1364,26 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCalleeAbiPrimaryEntryPlacementSiteModelAction") ==
                       "run-stack-placement-search-for-divergent-natural-survivors" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryPreCallPlacementByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryPreCallPlacementByCallee") ==
+                      "packed-line score accumulator helper:"
+                      "71:y<-precall-Y(helper=T,after=2recalls,arg=x,"
+                      "recalls=x@70/lines_7@69),"
+                      "74:x<-precall-Y(helper=T,after=2recalls,arg=y,"
+                      "recalls=y@73/lines_6@72)" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryPreCallPlacementStatus") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryPreCallPlacementStatus") ==
+                      "packed-line score accumulator helper:"
+                      "divergent-precall-slot-values-require-placement-search(Y=x,y)" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryPreCallPlacementAction") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryPreCallPlacementAction") ==
+                      "enumerate-pre-call-stack-placement-rewrites" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundCells") &&
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundCells") == "1" &&
