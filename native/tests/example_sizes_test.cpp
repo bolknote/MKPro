@@ -981,6 +981,19 @@ void example_sizes_match_typescript_baselines() {
                           .find("x") != std::string::npos &&
                   cell_mask_helper->details.at("valueAwareUnprofitableStackInputNames")
                           .find("y") != std::string::npos &&
+                  cell_mask_helper->details.contains("valueAwareStackInputProfitBreakdown") &&
+                  cell_mask_helper->details.at("valueAwareStackInputProfitBreakdown")
+                          .find("x:1g/3m/-2n") != std::string::npos &&
+                  cell_mask_helper->details.at("valueAwareStackInputProfitBreakdown")
+                          .find("y:1g/3m/-2n") != std::string::npos &&
+                  cell_mask_helper->details.contains("valueAwareBestStackInputCandidate") &&
+                  cell_mask_helper->details.at("valueAwareBestStackInputCandidate") == "x" &&
+                  cell_mask_helper->details.contains("valueAwareBestStackInputNetCells") &&
+                  cell_mask_helper->details.at("valueAwareBestStackInputNetCells") == "-2" &&
+                  cell_mask_helper->details.contains(
+                      "valueAwareBestStackInputAdditionalRecallCellsToProfit") &&
+                  cell_mask_helper->details.at(
+                      "valueAwareBestStackInputAdditionalRecallCellsToProfit") == "3" &&
                   !cell_mask_helper->details.contains("valueAwareStateOutputNames"),
               "tic-tac-toe-4x4 helper summary should aggregate helper-local register traffic "
               "and callsite materialization costs for value-aware scheduler attribution");
@@ -1015,6 +1028,22 @@ void example_sizes_match_typescript_baselines() {
                       std::string::npos &&
                   candidate_score_zero->details.at("valueAwareStackInputRanking").find("x:2") !=
                       std::string::npos &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareStackInputProfitBreakdown") &&
+                  candidate_score_zero->details.at("valueAwareStackInputProfitBreakdown")
+                          .find("y:3g/1m/+2n") != std::string::npos &&
+                  candidate_score_zero->details.at("valueAwareStackInputProfitBreakdown")
+                          .find("x:2g/1m/+1n") != std::string::npos &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareBestStackInputCandidate") &&
+                  candidate_score_zero->details.at("valueAwareBestStackInputCandidate") ==
+                      "y" &&
+                  candidate_score_zero->details.contains("valueAwareBestStackInputNetCells") &&
+                  candidate_score_zero->details.at("valueAwareBestStackInputNetCells") == "2" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareBestStackInputAdditionalRecallCellsToProfit") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareBestStackInputAdditionalRecallCellsToProfit") == "0" &&
                   candidate_score_zero->details.contains("valueAwareStackInputPlanStatus") &&
                   candidate_score_zero->details.at("valueAwareStackInputPlanStatus") ==
                       "blocked-by-stack-mutating-callee" &&

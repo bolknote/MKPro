@@ -49,7 +49,11 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   normalized `valueAwareSchedulerPlanStatus` key is copied onto both helper
   summaries and helper-register-traffic opportunities, so state-output-only,
   mixed-state, no-profitable-input, and callee-ABI-limited cases can be grouped
-  without guessing which specialized status key is present. A
+  without guessing which specialized status key is present. Stack-input
+  scheduler rows also expose `valueAwareStackInputProfitBreakdown` plus the
+  best input's net and additional recall cells needed to become profitable, so
+  `no-profitable-stack-input-materialization` reports say which materialization
+  cost is blocking the pass rather than just naming the rejected input set. A
   stack-mutating callee now exposes both the diagnostic mutation surface
   (`valueAwareCalleeAbiMutationSurface*`) and a proof-oriented lower bound
   (`valueAwareCalleeAbiOverheadLowerBound*`): if even one shared

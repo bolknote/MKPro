@@ -147,6 +147,11 @@ function analyzeFile(compiler, file) {
       profitableInputs: detail(details, 'valueAwareProfitableStackInputNames'),
       unprofitableInputs: detail(details, 'valueAwareUnprofitableStackInputNames'),
       suggestedResidentInputs: detail(details, 'valueAwareSuggestedResidentInputNames'),
+      profitBreakdown: detail(details, 'valueAwareStackInputProfitBreakdown'),
+      bestInput: detail(details, 'valueAwareBestStackInputCandidate'),
+      bestInputNet: detail(details, 'valueAwareBestStackInputNetCells'),
+      bestInputAdditionalRecallCellsToProfit:
+        detail(details, 'valueAwareBestStackInputAdditionalRecallCellsToProfit'),
       calleeAbiStatus:
         detail(details, 'valueAwareCalleeAbiCostModelStatus') ||
         detail(details, 'valueAwareCallPreservationCalleeStatus'),
@@ -252,6 +257,10 @@ function printHelper(row) {
       ` required=${row.requiredAction || '-'}` +
       ` cost=${row.costModelAction || '-'}` +
       ` inputs=${row.suggestedResidentInputs || row.profitableInputs || row.unprofitableInputs || '-'}` +
+      ` bestInput=${row.bestInput || '-'}` +
+      ` bestNet=${row.bestInputNet || '-'}` +
+      ` need=${row.bestInputAdditionalRecallCellsToProfit || '-'}` +
+      ` profit=${row.profitBreakdown || '-'}` +
       ` callee=${row.calleeAbiStatus || '-'}`,
   );
 }

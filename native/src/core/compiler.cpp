@@ -51409,13 +51409,29 @@ SizeAttributionReport build_size_attribution_report(
         std::vector<std::string> profitable_stack_input_names;
         std::vector<std::string> break_even_stack_input_names;
         std::vector<std::string> unprofitable_stack_input_names;
+        std::vector<std::string> stack_input_profit_parts;
+        std::string best_stack_input_candidate;
+        int best_stack_input_gross_cells = 0;
+        int best_stack_input_net_cells = std::numeric_limits<int>::min();
+        const auto signed_cells_text = [](int cells) {
+          return cells >= 0 ? "+" + std::to_string(cells) : std::to_string(cells);
+        };
         for (const auto& [name, cells] : ranked_stack_inputs) {
-          if (cells > materialize_cells_per_input) {
+          const int net_cells = cells - materialize_cells_per_input;
+          stack_input_profit_parts.push_back(name + ":" + std::to_string(cells) + "g/" +
+                                             std::to_string(materialize_cells_per_input) +
+                                             "m/" + signed_cells_text(net_cells) + "n");
+          if (net_cells > best_stack_input_net_cells) {
+            best_stack_input_candidate = name;
+            best_stack_input_gross_cells = cells;
+            best_stack_input_net_cells = net_cells;
+          }
+          if (net_cells > 0) {
             ranked_profitable_stack_inputs.emplace_back(name, cells);
             profitable_stack_input_names.push_back(name);
             profitable_stack_input_gross_cells += cells;
             profitable_stack_input_materialize_cells += materialize_cells_per_input;
-          } else if (cells == materialize_cells_per_input) {
+          } else if (net_cells == 0) {
             break_even_stack_input_names.push_back(name);
           } else {
             unprofitable_stack_input_names.push_back(name);
@@ -51498,6 +51514,16 @@ SizeAttributionReport build_size_attribution_report(
             direct_stack_input_gross_cells - direct_stack_input_materialize_cells;
         helper.details["valueAwareStackInputMaterializeCellsPerInput"] =
             std::to_string(materialize_cells_per_input);
+        helper.details["valueAwareStackInputProfitBreakdown"] =
+            join_strings(stack_input_profit_parts, ";");
+        helper.details["valueAwareBestStackInputCandidate"] = best_stack_input_candidate;
+        helper.details["valueAwareBestStackInputGrossCells"] =
+            std::to_string(best_stack_input_gross_cells);
+        helper.details["valueAwareBestStackInputNetCells"] =
+            std::to_string(best_stack_input_net_cells);
+        helper.details["valueAwareBestStackInputAdditionalRecallCellsToProfit"] =
+            std::to_string(
+                std::max(0, materialize_cells_per_input + 1 - best_stack_input_gross_cells));
         helper.details["valueAwareProfitableStackInputGrossCells"] =
             std::to_string(profitable_stack_input_gross_cells);
         helper.details["valueAwareProfitableStackInputMaterializeCells"] =
