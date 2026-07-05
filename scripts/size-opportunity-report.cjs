@@ -171,6 +171,14 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCalleeAbiNaturalPreserveMinRestoreCellsByCallee',
       ),
+      calleeNaturalFirstRecallCoverage: detail(
+        details,
+        'valueAwareCalleeAbiNaturalFirstRecallCoverageByCallee',
+      ),
+      calleeNaturalFirstRecallStatus: detail(
+        details,
+        'valueAwareCalleeAbiNaturalFirstRecallCoverageStatusByCallee',
+      ),
       calleeRemainingPreserveDepth: detail(
         details,
         'valueAwareCalleeAbiRemainingPreserveDepthByCallee',
@@ -290,6 +298,8 @@ function printHelper(row) {
       ` natural=${row.calleeNaturalPreservedSlots || '-'}` +
       ` restore=${row.calleeNaturalRestoreCells || '-'}` +
       ` restoreMin=${row.calleeNaturalMinRestoreCells || '-'}` +
+      ` firstRecall=${row.calleeNaturalFirstRecallCoverage || '-'}` +
+      ` firstRecallStatus=${row.calleeNaturalFirstRecallStatus || '-'}` +
       ` remaining=${row.calleeRemainingPreserveDepth || '-'}` +
       ` callee=${row.calleeAbiStatus || '-'}`,
   );

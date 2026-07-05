@@ -67,9 +67,13 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   preserved slot
   (`valueAwareCalleeAbiNaturalPreservedSlotRestoreCellsByCallee` and
   `valueAwareCalleeAbiNaturalPreserveMinRestoreCellsByCallee`), so a surviving
-  deep stack value is not mistaken for a free X argument. This is proof evidence
-  for the scheduler; cost reduction still needs a call-site layout proof that
-  maps a requested input onto the surviving slot. A
+  deep stack value is not mistaken for a free X argument. The conservative
+  first-use coverage fields
+  (`valueAwareCalleeAbiNaturalFirstRecallCoverage*`) count only the first recall
+  that a naturally preserved slot could replace at each nested call site before
+  a stronger layout proof exists. This is proof evidence for the scheduler; cost
+  reduction still needs a call-site layout proof that maps a requested input
+  onto the surviving slot. A
   stack-mutating callee now exposes both the diagnostic mutation surface
   (`valueAwareCalleeAbiMutationSurface*`) and a proof-oriented lower bound
   (`valueAwareCalleeAbiOverheadLowerBound*`): if even one shared

@@ -51647,6 +51647,8 @@ SizeAttributionReport build_size_attribution_report(
         std::set<std::string> call_preservation_input_names;
         std::map<std::string, std::set<int>> call_preservation_recall_addresses_by_name;
         std::map<std::string, std::set<int>> call_preservation_call_addresses_by_label;
+        std::map<std::string, std::map<int, std::map<std::string, int>>>
+            call_preservation_recall_counts_by_label_address_name;
         std::vector<std::string> call_preservation_site_parts;
         std::set<std::string> call_argument_input_names;
         std::vector<std::string> call_argument_site_parts;
@@ -51678,6 +51680,10 @@ SizeAttributionReport build_size_attribution_report(
               call_preservation_inputs_by_label[call_site.label].insert(name);
               call_preservation_call_addresses_by_label[call_site.label].insert(
                   call_site.address);
+              call_preservation_recall_counts_by_label_address_name[call_site.label]
+                                                                       [call_site.address]
+                                                                       [name] +=
+                  static_cast<int>(recall_addresses.size());
               call_preservation_site_parts.push_back(
                   call_site.label + "@" + safe_format_label_address(call_site.address) + ":" +
                   name + "@" + join_strings(recall_addresses, "/"));
@@ -51789,6 +51795,9 @@ SizeAttributionReport build_size_attribution_report(
           std::vector<std::string> callee_natural_preserve_parts;
           std::vector<std::string> callee_natural_restore_parts;
           std::vector<std::string> callee_natural_min_restore_parts;
+          std::vector<std::string> callee_natural_first_recall_coverage_parts;
+          std::vector<std::string> callee_natural_first_recall_site_parts;
+          std::vector<std::string> callee_natural_first_recall_status_parts;
           std::vector<std::string> callee_remaining_preserve_parts;
           std::vector<std::string> callee_mutating_cell_parts;
           std::vector<std::string> callee_mutating_opcode_parts;
@@ -51817,6 +51826,56 @@ SizeAttributionReport build_size_attribution_report(
                 label + ":" +
                 std::to_string(helper_natural_preserve_min_restore_cells(
                     effect, requested_preserve_depth)));
+            const std::map<int, int> natural_restore_costs_by_source =
+                helper_preserved_original_slot_restore_cells(effect);
+            std::vector<int> natural_restore_costs;
+            natural_restore_costs.reserve(natural_restore_costs_by_source.size());
+            for (const auto& [unused_source, cells] : natural_restore_costs_by_source) {
+              (void)unused_source;
+              natural_restore_costs.push_back(cells);
+            }
+            std::sort(natural_restore_costs.begin(), natural_restore_costs.end());
+            int natural_first_recall_gross_cells = 0;
+            int natural_first_recall_restore_cells = 0;
+            const auto coverage_it =
+                call_preservation_recall_counts_by_label_address_name.find(label);
+            if (coverage_it != call_preservation_recall_counts_by_label_address_name.end()) {
+              for (const auto& [address, counts_by_name] : coverage_it->second) {
+                int future_input_count = 0;
+                for (const auto& [name, count] : counts_by_name) {
+                  if (count > 0 && inputs.contains(name))
+                    ++future_input_count;
+                }
+                const int covered_inputs = static_cast<int>(std::min(
+                    natural_restore_costs.size(),
+                    static_cast<std::size_t>(std::max(0, future_input_count))));
+                int site_restore_cells = 0;
+                for (int index = 0; index < covered_inputs; ++index)
+                  site_restore_cells += natural_restore_costs.at(static_cast<std::size_t>(index));
+                natural_first_recall_gross_cells += covered_inputs;
+                natural_first_recall_restore_cells += site_restore_cells;
+                callee_natural_first_recall_site_parts.push_back(
+                    label + "@" + safe_format_label_address(address) + ":" +
+                    std::to_string(covered_inputs) + "g/" +
+                    std::to_string(site_restore_cells) + "r/" +
+                    signed_cells_text(covered_inputs - site_restore_cells) + "n");
+              }
+            }
+            const int natural_first_recall_net_cells =
+                natural_first_recall_gross_cells - natural_first_recall_restore_cells;
+            callee_natural_first_recall_coverage_parts.push_back(
+                label + ":" + std::to_string(natural_first_recall_gross_cells) + "g/" +
+                std::to_string(natural_first_recall_restore_cells) + "r/" +
+                signed_cells_text(natural_first_recall_net_cells) + "n");
+            callee_natural_first_recall_status_parts.push_back(
+                label + ":" +
+                (natural_restore_costs.empty()
+                     ? std::string("no-natural-survivor")
+                     : (natural_first_recall_net_cells > 0
+                            ? std::string("positive-after-natural-restore")
+                            : (natural_first_recall_net_cells == 0
+                                   ? std::string("break-even-after-natural-restore")
+                                   : std::string("negative-after-natural-restore")))));
             callee_remaining_preserve_parts.push_back(
                 label + ":" +
                 std::to_string(std::max(0, requested_preserve_depth -
@@ -51875,6 +51934,12 @@ SizeAttributionReport build_size_attribution_report(
                 join_strings(callee_natural_restore_parts, ";");
             helper.details["valueAwareCalleeAbiNaturalPreserveMinRestoreCellsByCallee"] =
                 join_strings(callee_natural_min_restore_parts, ";");
+            helper.details["valueAwareCalleeAbiNaturalFirstRecallCoverageByCallee"] =
+                join_strings(callee_natural_first_recall_coverage_parts, ";");
+            helper.details["valueAwareCalleeAbiNaturalFirstRecallCoverageSitesByCallee"] =
+                join_strings(callee_natural_first_recall_site_parts, ";");
+            helper.details["valueAwareCalleeAbiNaturalFirstRecallCoverageStatusByCallee"] =
+                join_strings(callee_natural_first_recall_status_parts, ";");
             helper.details["valueAwareCalleeAbiRemainingPreserveDepthByCallee"] =
                 join_strings(callee_remaining_preserve_parts, ";");
             if (!callee_mutating_cell_parts.empty()) {

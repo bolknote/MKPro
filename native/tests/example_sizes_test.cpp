@@ -1107,6 +1107,26 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCalleeAbiNaturalPreserveMinRestoreCellsByCallee") ==
                       "packed-line score accumulator helper:1" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiNaturalFirstRecallCoverageByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiNaturalFirstRecallCoverageByCallee") ==
+                      "packed-line score accumulator helper:2g/2r/+0n" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiNaturalFirstRecallCoverageSitesByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiNaturalFirstRecallCoverageSitesByCallee")
+                          .find("packed-line score accumulator helper@71:1g/1r/+0n") !=
+                      std::string::npos &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiNaturalFirstRecallCoverageSitesByCallee")
+                          .find("packed-line score accumulator helper@74:1g/1r/+0n") !=
+                      std::string::npos &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiNaturalFirstRecallCoverageStatusByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiNaturalFirstRecallCoverageStatusByCallee") ==
+                      "packed-line score accumulator helper:break-even-after-natural-restore" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiRemainingPreserveDepthByCallee") &&
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiRemainingPreserveDepthByCallee") ==
