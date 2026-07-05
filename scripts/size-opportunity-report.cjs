@@ -299,6 +299,7 @@ function analyzeFile(compiler, file) {
       ),
       calleeAbiNextProofTarget: detail(details, 'valueAwareCalleeAbiNextProofTarget'),
       calleeAbiBestSubset: detail(details, 'valueAwareCalleeAbiBestSubsetInputNames'),
+      calleeAbiSubsetCandidates: detail(details, 'valueAwareCalleeAbiSubsetCandidates'),
       calleeAbiBestSubsetNet: detail(
         details,
         'valueAwareCalleeAbiBestSubsetNetAfterLowerBoundCells',
@@ -573,6 +574,7 @@ function printHelper(row) {
       ` abiLevers=${row.calleeAbiPositiveLevers || '-'}` +
       ` abiGap=${row.calleeAbiPositiveGapReason || '-'}` +
       ` abiTarget=${row.calleeAbiNextProofTarget || '-'}` +
+      ` abiSubsets=${row.calleeAbiSubsetCandidates || '-'}` +
       ` abiSubset=${row.calleeAbiBestSubset || '-'}` +
       ` abiSubsetNet=${row.calleeAbiBestSubsetNet || '-'}` +
       ` abiSubsetNeed=${row.calleeAbiBestSubsetNeed || '-'}` +

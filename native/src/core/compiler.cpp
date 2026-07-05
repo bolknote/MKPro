@@ -54475,6 +54475,7 @@ SizeAttributionReport build_size_attribution_report(
           bool has_best_subset = false;
           CalleeAbiSubsetEstimate best_subset;
           std::vector<std::string> selected_subset;
+          std::vector<std::string> callee_abi_subset_candidate_parts;
           const int subset_capacity = std::min<int>(
               stack_capacity, static_cast<int>(ranked_profitable_stack_inputs.size()));
           const auto selected_names_text = [](const std::vector<std::string>& names) {
@@ -54510,6 +54511,12 @@ SizeAttributionReport build_size_attribution_report(
                                  estimate.argument_preservation_cells -
                                  estimate.overhead_lower_bound_cells;
             const std::string estimate_names = selected_names_text(estimate.names);
+            callee_abi_subset_candidate_parts.push_back(
+                estimate_names + ":" +
+                callee_abi_cost_breakdown_text(
+                    estimate.gross_cells, estimate.materialize_cells,
+                    estimate.argument_preservation_cells,
+                    estimate.overhead_lower_bound_cells, estimate.net_cells));
             const std::string best_names = selected_names_text(best_subset.names);
             if (!has_best_subset || estimate.net_cells > best_subset.net_cells ||
                 (estimate.net_cells == best_subset.net_cells &&
@@ -54533,6 +54540,10 @@ SizeAttributionReport build_size_attribution_report(
             }
           };
           visit_subsets(0U);
+          if (!callee_abi_subset_candidate_parts.empty()) {
+            helper.details["valueAwareCalleeAbiSubsetCandidates"] =
+                join_strings(callee_abi_subset_candidate_parts, ";");
+          }
           if (has_best_subset) {
             helper.details["valueAwareCalleeAbiBestSubsetInputNames"] =
                 selected_names_text(best_subset.names);

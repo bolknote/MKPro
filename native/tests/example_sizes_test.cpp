@@ -1359,6 +1359,23 @@ void example_sizes_match_typescript_baselines() {
                           .find("call-argument-preservation") != std::string::npos &&
                   candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiBestSubsetInputNames") &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiSubsetCandidates") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiSubsetCandidates")
+                          .find("y:gross:3/materialize:1/arg-preserve:1/"
+                                "entry-lower-bound:1/net:+0/need:1") !=
+                      std::string::npos &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiSubsetCandidates")
+                          .find("y,x:gross:5/materialize:2/arg-preserve:2/"
+                                "entry-lower-bound:1/net:+0/need:1") !=
+                      std::string::npos &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiSubsetCandidates")
+                          .find("x:gross:2/materialize:1/arg-preserve:1/"
+                                "entry-lower-bound:1/net:-1/need:2") !=
+                      std::string::npos &&
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiBestSubsetInputNames")
                           .find("x") != std::string::npos &&
