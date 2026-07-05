@@ -231,6 +231,14 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCallArgumentX2MutationOpcodesByCallee',
       ),
+      callArgumentX2ClobberClassesByCallee: detail(
+        details,
+        'valueAwareCallArgumentX2ClobberClassesByCallee',
+      ),
+      callArgumentX2PreloadConstantOpcodesByCallee: detail(
+        details,
+        'valueAwareCallArgumentX2PreloadConstantOpcodesByCallee',
+      ),
       callArgumentX2RequiredAction: detail(
         details,
         'valueAwareCallArgumentX2RequiredAction',
@@ -523,6 +531,14 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCallArgumentX2MutationOpcodesByCallee',
       ),
+      callArgumentX2ClobberClassesByCallee: detail(
+        details,
+        'valueAwareCallArgumentX2ClobberClassesByCallee',
+      ),
+      callArgumentX2PreloadConstantOpcodesByCallee: detail(
+        details,
+        'valueAwareCallArgumentX2PreloadConstantOpcodesByCallee',
+      ),
       callArgumentX2RequiredAction: detail(
         details,
         'valueAwareCallArgumentX2RequiredAction',
@@ -721,6 +737,8 @@ function actionDetailSuffix(row) {
     ['argX2', row.callArgumentX2RestoreStatus],
     ['argX2Action', row.callArgumentX2RequiredAction],
     ['x2Mutating', row.callArgumentX2MutationOpcodesByCallee],
+    ['x2Class', row.callArgumentX2ClobberClassesByCallee],
+    ['x2Preload', row.callArgumentX2PreloadConstantOpcodesByCallee],
     ['argInputs', row.callArgumentInputNamesByCallee],
     ['argSites', row.callArgumentSites],
     ['preserveSites', row.callPreservationSites],
@@ -798,6 +816,8 @@ function printHelper(row) {
       ` mutating=${row.callPreservationMutatingOpcodes || '-'}` +
       ` x2=${row.callPreservationCalleeX2Effects || '-'}` +
       ` x2Mutating=${row.callArgumentX2MutationOpcodesByCallee || '-'}` +
+      ` x2Class=${row.callArgumentX2ClobberClassesByCallee || '-'}` +
+      ` x2Preload=${row.callArgumentX2PreloadConstantOpcodesByCallee || '-'}` +
       ` directMat=${row.directMaterializationStatus || '-'}:${row.directMaterialization || '-'}` +
       ` survival=${row.calleeStackSurvival || '-'}` +
       ` natural=${row.calleeNaturalPreservedSlots || '-'}` +

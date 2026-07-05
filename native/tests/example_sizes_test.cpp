@@ -1632,6 +1632,17 @@ void example_sizes_match_typescript_baselines() {
                           .find("packed-line score accumulator helper:88:П->X b/x2-affects") !=
                       std::string::npos &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCallArgumentX2ClobberClassesByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCallArgumentX2ClobberClassesByCallee") ==
+                      "packed-line score accumulator helper:preloaded-constant-recall" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCallArgumentX2PreloadConstantOpcodesByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCallArgumentX2PreloadConstantOpcodesByCallee")
+                          .find("packed-line score accumulator helper:88:П->X b/"
+                                "preload-const=0.41200076") != std::string::npos &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCallArgumentX2RequiredAction") &&
                   candidate_score_zero->details.at("valueAwareCallArgumentX2RequiredAction") ==
                       "refactor-callee-to-preserve-x2-or-use-explicit-stack-copy" &&
@@ -2329,7 +2340,12 @@ void example_sizes_match_typescript_baselines() {
                   call_argument_x2_action->best_details.at(
                       "valueAwareCallArgumentX2MutationOpcodesByCallee")
                           .find("packed-line score accumulator helper:88:П->X b/x2-affects") !=
-                      std::string::npos,
+                      std::string::npos &&
+                  call_argument_x2_action->best_details.contains(
+                      "valueAwareCallArgumentX2ClobberClassesByCallee") &&
+                  call_argument_x2_action->best_details.at(
+                      "valueAwareCallArgumentX2ClobberClassesByCallee") ==
+                      "packed-line score accumulator helper:preloaded-constant-recall",
               "tic-tac-toe-4x4 size attribution should rank the X2-clobbering packed_score "
               "callee as a near-positive argument-preservation prerequisite");
       const SizeNextActionSummaryReport* stack_input_scheduler_action = find_size_next_action(

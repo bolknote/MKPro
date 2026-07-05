@@ -53398,6 +53398,7 @@ SizeAttributionReport build_size_attribution_report(
     int x2_unknown = 0;
     std::vector<std::string> mutating_opcodes;
     std::vector<std::string> x2_clobbering_opcodes;
+    std::vector<std::string> x2_preload_constant_opcodes;
   };
   const auto original_stack_slot_name = [](int slot) {
     switch (slot) {
@@ -53547,6 +53548,17 @@ SizeAttributionReport build_size_attribution_report(
         ++summary.nested_calls;
       const OpcodeInfo& info = opcode_by_code(opcode);
       apply_helper_stack_survival_effect(summary.stack_sources, opcode, info.stack_effect);
+      const auto preload_constant_value = [](const ResolvedStep& step) -> std::optional<std::string> {
+        if (!step.comment.has_value())
+          return std::nullopt;
+        constexpr std::string_view kPrefix = "preload const ";
+        if (!step.comment->starts_with(kPrefix))
+          return std::nullopt;
+        std::string value = step.comment->substr(kPrefix.size());
+        if (const std::size_t semicolon = value.find(';'); semicolon != std::string::npos)
+          value = value.substr(0, semicolon);
+        return value;
+      };
       switch (info.x2_effect) {
         case X2Effect::Preserves:
           ++summary.x2_preserves;
@@ -53555,6 +53567,13 @@ SizeAttributionReport build_size_attribution_report(
           ++summary.x2_affects;
           summary.x2_clobbering_opcodes.push_back(
               safe_format_label_address(step.address) + ":" + info.name + "/x2-affects");
+          if (direct_recall_index_for_step(step).has_value()) {
+            if (const std::optional<std::string> value = preload_constant_value(step)) {
+              summary.x2_preload_constant_opcodes.push_back(
+                  safe_format_label_address(step.address) + ":" + info.name +
+                  "/preload-const=" + *value);
+            }
+          }
           break;
         case X2Effect::Restores:
           ++summary.x2_restores;
@@ -54413,6 +54432,8 @@ SizeAttributionReport build_size_attribution_report(
           std::vector<std::string> callee_stack_survival_parts;
           std::vector<std::string> callee_x2_effect_parts;
           std::vector<std::string> call_argument_x2_clobber_parts;
+          std::vector<std::string> call_argument_x2_clobber_class_parts;
+          std::vector<std::string> call_argument_x2_preload_constant_parts;
           std::vector<std::string> callee_natural_preserve_parts;
           std::vector<std::string> callee_natural_restore_parts;
           std::vector<std::string> callee_natural_min_restore_parts;
@@ -54448,6 +54469,23 @@ SizeAttributionReport build_size_attribution_report(
               call_argument_x2_restore_blocked = true;
               call_argument_x2_clobber_parts.push_back(
                   label + ":" + join_strings(effect.x2_clobbering_opcodes, ","));
+              std::set<std::string> clobber_classes;
+              if (!effect.x2_preload_constant_opcodes.empty()) {
+                clobber_classes.insert("preloaded-constant-recall");
+                call_argument_x2_preload_constant_parts.push_back(
+                    label + ":" + join_strings(effect.x2_preload_constant_opcodes, ","));
+              }
+              if (effect.x2_preload_constant_opcodes.size() <
+                  effect.x2_clobbering_opcodes.size()) {
+                clobber_classes.insert("other-x2-clobber");
+              }
+              if (!clobber_classes.empty()) {
+                call_argument_x2_clobber_class_parts.push_back(
+                    label + ":" + join_strings(std::vector<std::string>(
+                                                   clobber_classes.begin(),
+                                                   clobber_classes.end()),
+                                               ","));
+              }
             }
             callee_natural_preserve_parts.push_back(
                 label + ":" + helper_preserved_original_slots_text(effect));
@@ -54724,6 +54762,14 @@ SizeAttributionReport build_size_attribution_report(
             if (!call_argument_x2_clobber_parts.empty()) {
               helper.details["valueAwareCallArgumentX2MutationOpcodesByCallee"] =
                   join_strings(call_argument_x2_clobber_parts, ";");
+            }
+            if (!call_argument_x2_clobber_class_parts.empty()) {
+              helper.details["valueAwareCallArgumentX2ClobberClassesByCallee"] =
+                  join_strings(call_argument_x2_clobber_class_parts, ";");
+            }
+            if (!call_argument_x2_preload_constant_parts.empty()) {
+              helper.details["valueAwareCallArgumentX2PreloadConstantOpcodesByCallee"] =
+                  join_strings(call_argument_x2_preload_constant_parts, ";");
             }
             helper.details["valueAwareCallArgumentX2RequiredAction"] =
                 call_argument_x2_restore_blocked
