@@ -1,5 +1,6 @@
 #include "mkpro/core/passes/shared_straight_line_helper.hpp"
 
+#include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/passes/outline.hpp"
 
@@ -925,7 +926,8 @@ std::optional<std::vector<bool>> assign_hole_positions(std::vector<HoleOccurrenc
 }
 
 std::vector<SelectedHoleHelper> select_hole_helpers(const std::vector<IrOp>& ops,
-                                                    const std::map<std::string, int>& labels) {
+                                                    const std::map<std::string, int>& labels,
+                                                    int official_last) {
   const std::vector<HoleCandidate> candidates = collect_hole_candidates(ops, labels);
   if (candidates.empty())
     return {};
@@ -1011,7 +1013,7 @@ std::vector<SelectedHoleHelper> select_hole_helpers(const std::vector<IrOp>& ops
     const bool leaves_stable =
         std::all_of(occurrences.begin(), occurrences.end(), [&](const HoleOccurrence& occurrence) {
           return occurrence.leaf_target < first_modified_address &&
-                 occurrence.leaf_target <= 104;
+                 occurrence.leaf_target <= official_last;
         });
     bool retargeted = false;
     if (!leaves_stable) {
@@ -1062,7 +1064,9 @@ std::vector<SelectedHoleHelper> select_hole_helpers(const std::vector<IrOp>& ops
       }
       const bool targets_valid =
           converged && std::all_of(final_targets.begin(), final_targets.end(),
-                                   [](int target) { return target >= 0 && target <= 104; });
+                                   [&](int target) {
+                                     return target >= 0 && target <= official_last;
+                                   });
       if (!targets_valid)
         continue;
       for (std::size_t index = 0; index < occurrences.size(); ++index)
@@ -1160,7 +1164,10 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
     return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
 
   const std::map<std::string, int> labels = calculate_label_addresses(ops);
-  const std::vector<SelectedHoleHelper> selected = select_hole_helpers(ops, labels);
+  const int official_last = official_program_last_address(
+      address_space_model_for_feature_profile(context.options.feature_profile));
+  const std::vector<SelectedHoleHelper> selected =
+      select_hole_helpers(ops, labels, official_last);
   if (selected.empty())
     return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
 

@@ -42,6 +42,9 @@ Output and execution model:
                                   not-normally-enterable commands. manual is the
                                   default.
   --budget N                      Set the maximum accepted compiled program size.
+  --feature mk61|mk61s-mini-expand
+                                  Override the source feature profile:
+                                  RF register and 112 real program cells A5..B1.
   --analysis                      Include optimizer analysis/report data. With
                                   --out all, also print a human-readable report.
   --strict                        Treat undeclared allocation as an error.
@@ -570,6 +573,8 @@ void print_json_report(const mkpro::CompileResult& result) {
   std::cout << "{\n";
   std::cout << "    \"steps\": " << result.steps.size();
   std::cout << ",\n    \"machine\": \"mk61\"";
+  std::cout << ",\n    \"featureProfile\": ";
+  print_json_string(std::cout, std::string(mkpro::feature_profile_id(result.feature_profile)));
   std::cout << ",\n    \"registers\": ";
   print_json_string_map(result.registers, "      ");
   std::cout << ",\n    \"labels\": ";
@@ -615,6 +620,8 @@ void print_json_report(const mkpro::CompileResult& result) {
 void print_json(const mkpro::CompileResult& result) {
   std::cout << "{\n  \"steps\": ";
   print_json_steps(result.steps, "    ");
+  std::cout << ",\n  \"featureProfile\": ";
+  print_json_string(std::cout, std::string(mkpro::feature_profile_id(result.feature_profile)));
   std::cout << ",\n  \"registers\": ";
   print_json_string_map(result.registers, "    ");
   std::cout << ",\n  \"preloads\": [\n";
@@ -670,43 +677,85 @@ void print_json(const mkpro::CompileResult& result) {
   std::cout << ",\n  \"diagnostics\": " << result.diagnostics.size() << "\n}\n";
 }
 
-std::string format_address_operand_key(int opcode) {
+std::string format_address_operand_key(int opcode, mkpro::AddressSpaceModel model) {
   const int address = mkpro::code_to_address(opcode);
-  if (address >= 0 && address <= 104)
-    return mkpro::format_address(address);
+  if (address >= 0 && address <= mkpro::official_program_last_address(model))
+    return mkpro::format_address(address, model);
   return mkpro::format_formal_address_opcode(opcode);
 }
 
-void append_step_keys(std::vector<std::string>& tokens, const std::vector<mkpro::ResolvedStep>& steps) {
+bool contains_delivery_mode(const std::vector<mkpro::DeliveryMode>& modes,
+                            mkpro::DeliveryMode mode) {
+  for (const mkpro::DeliveryMode candidate : modes) {
+    if (candidate == mode)
+      return true;
+  }
+  return false;
+}
+
+bool is_manual_address_operand_patch_opcode(int opcode) {
+  return opcode == 0x3e;
+}
+
+std::string address_operand_nibble_key(int nibble) {
+  if (nibble >= 0 && nibble <= 9)
+    return std::to_string(nibble);
+  switch (nibble) {
+    case 0x0a:
+      return ".";
+    case 0x0b:
+      return "/-/";
+    case 0x0c:
+      return "ВП";
+    case 0x0d:
+      return "Cx";
+    case 0x0e:
+      return "В↑";
+    default:
+      return "?";
+  }
+}
+
+void append_manual_address_operand_patch_keys(std::vector<std::string>& tokens, int opcode,
+                                              const std::string& previous_cell_key) {
+  tokens.push_back("ШГ←");
+  tokens.push_back("БП");
+  tokens.push_back(address_operand_nibble_key((opcode >> 4) & 0x0f));
+  tokens.push_back(address_operand_nibble_key(opcode & 0x0f));
+  tokens.push_back("ШГ←");
+  tokens.push_back("ШГ←");
+  tokens.push_back(previous_cell_key);
+  tokens.push_back("ШГ→");
+}
+
+void append_step_keys(std::vector<std::string>& tokens,
+                      const std::vector<mkpro::ResolvedStep>& steps,
+                      mkpro::AddressSpaceModel model) {
   std::optional<std::string> previous_cell_key;
   for (std::size_t index = 0; index < steps.size(); ++index) {
     const mkpro::ResolvedStep& step = steps[index];
     const mkpro::OpcodeInfo& opcode = mkpro::opcode_by_code(step.opcode);
-    if (step.opcode == 0x3e && previous_cell_key.has_value()) {
-      tokens.push_back("ШГ←");
-      tokens.push_back("БП");
-      tokens.push_back("3");
-      tokens.push_back("В↑");
-      tokens.push_back("ШГ←");
-      tokens.push_back("ШГ←");
-      tokens.push_back(*previous_cell_key);
-      tokens.push_back("ШГ→");
+    if (is_manual_address_operand_patch_opcode(step.opcode) && previous_cell_key.has_value()) {
+      append_manual_address_operand_patch_keys(tokens, step.opcode, *previous_cell_key);
       previous_cell_key.reset();
       continue;
     }
-    if (step.opcode == 0x3e) {
-      tokens.push_back("[3E:requires-previous-editable-step;use-hex-or-mk61s]");
+    if (is_manual_address_operand_patch_opcode(step.opcode)) {
+      tokens.push_back("[" + step.hex + ":requires-previous-editable-step;use-hex-or-mk61s]");
+      previous_cell_key.reset();
+      continue;
+    }
+    if (!contains_delivery_mode(opcode.enterable, mkpro::DeliveryMode::Manual)) {
+      tokens.push_back("[" + step.hex + ":not-manually-enterable;use-loader-or-hex]");
       previous_cell_key.reset();
       continue;
     }
     tokens.push_back(opcode.keys);
     if (opcode.takes_address && index + 1U < steps.size()) {
-      const std::string address_key = format_address_operand_key(steps[index + 1U].opcode);
+      const std::string address_key = format_address_operand_key(steps[index + 1U].opcode, model);
       tokens.push_back(address_key);
       ++index;
       previous_cell_key = address_key;
-    } else if (step.opcode == 0x3e) {
-      previous_cell_key.reset();
     } else {
       previous_cell_key = opcode.keys;
     }
@@ -715,9 +764,11 @@ void append_step_keys(std::vector<std::string>& tokens, const std::vector<mkpro:
 
 std::string format_keys_result(const mkpro::CompileResult& result) {
   std::vector<std::string> tokens;
+  const mkpro::AddressSpaceModel model =
+      mkpro::address_space_model_for_feature_profile(result.feature_profile);
   if (result.setup_program.has_value())
-    append_step_keys(tokens, result.setup_program->steps);
-  append_step_keys(tokens, result.steps);
+    append_step_keys(tokens, result.setup_program->steps, model);
+  append_step_keys(tokens, result.steps, model);
 
   std::ostringstream out;
   for (std::size_t index = 0; index < tokens.size(); ++index) {
@@ -1323,6 +1374,18 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
         std::cerr << "invalid --budget value: " << args[index] << "\n";
         return 64;
       }
+    } else if (arg == "--feature") {
+      if (index + 1 >= args.size()) {
+        std::cerr << "missing value for --feature\n";
+        return 64;
+      }
+      const std::string value = args[++index];
+      const std::optional<mkpro::FeatureProfile> parsed = mkpro::parse_feature_profile(value);
+      if (!parsed.has_value()) {
+        std::cerr << "unknown --feature value: " << value << "\n";
+        return 64;
+      }
+      options.feature_profile = *parsed;
     } else {
       std::cerr << "unknown argument: " << arg << "\n";
       return 64;
@@ -1332,7 +1395,7 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
   try {
     const mkpro::CompileResult result = mkpro::compile_source(read_source(source_path), options);
     if (behavior_digest) {
-      std::cout << mkpro::program_behavior_digest(result);
+      std::cout << mkpro::program_behavior_digest(result, result.feature_profile);
       return result.implemented ? 0 : 78;
     }
     print_diagnostics(result);

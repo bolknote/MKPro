@@ -1,5 +1,6 @@
 #include "mkpro/core/passes/helpers.hpp"
 
+#include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/passes/liveness_analysis.hpp"
@@ -712,7 +713,7 @@ std::optional<std::set<std::string>> known_indirect_memory_targets(const IrOp& o
   return targets;
 }
 
-std::optional<int> known_indirect_flow_target(const IrOp& op) {
+std::optional<int> known_indirect_flow_target(const IrOp& op, AddressSpaceModel model) {
   if (op.kind != IrKind::IndirectJump && op.kind != IrKind::IndirectCall &&
       op.kind != IrKind::IndirectCondJump) {
     return std::nullopt;
@@ -738,9 +739,13 @@ std::optional<int> known_indirect_flow_target(const IrOp& op) {
   }
   if (!proof_marker_boundary_after_number(comment, cursor))
     return std::nullopt;
-  if (target < 0 || target > 104)
+  if (target < 0 || target > official_program_last_address(model))
     return std::nullopt;
   return target;
+}
+
+std::optional<int> known_indirect_flow_target(const IrOp& op) {
+  return known_indirect_flow_target(op, AddressSpaceModel::Standard);
 }
 
 std::vector<std::string> computed_dispatch_target_labels(const IrOp& op) {

@@ -72,9 +72,12 @@ If a numeric constant also contains useful trailing digits, it can double as an 
 
 ## Undocumented Address Space
 
-Official program memory has 105 cells: `00`..`99`, `A0`..`A4`.
+Stock official program memory has 105 cells: `00`..`99`, `A0`..`A4`.
+Under the `mk61s-mini-expand` feature profile the compiler instead treats
+`A5`..`B1` as seven additional official cells, so the first side-branch/dark
+formal address starts at `B2`.
 
-Undocumented execution can reach aliases:
+On the stock machine, undocumented execution can reach aliases:
 
 | Formal addresses | Effective behavior |
 | --- | --- |
@@ -82,6 +85,10 @@ Undocumented execution can reach aliases:
 | `B2`..`F9` | Longer side branch mapping to `00`..`47` |
 | `C0`..`F9` | "Dark" addresses: existing code is executed but not shown normally |
 | `FA`..`FF` | "Super-dark" one-command branches, then return to an auxiliary address |
+
+With `mk61s-mini-expand`, the compiler does not treat `A5`..`B1` as dark or
+side-branch aliases. Those seven bytes are ordinary physical cells 105..111.
+The first compiler-visible side-branch/dark formal address becomes `B2`.
 
 This allows unusual control flow and lets one physical command cell be reached through several formal addresses. For double commands such as `БП aa`, crossing an alias boundary can cause the address operand to be read from a different physical cell than expected. See [14-indirect-addressing.md](./14-indirect-addressing.md) for the detailed indirect-addressing rules.
 

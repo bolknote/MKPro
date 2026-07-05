@@ -35,6 +35,20 @@ void format_primitives_match_typescript_contract() {
   require(format_program_tokens({steps.begin(), steps.begin() + 3}) == "50\n41\n50",
           "program token formatter should emit one hex byte per line");
 
+  const std::vector<ResolvedStep> non_manual_steps = {
+      {.address = 0, .opcode = 0x4f, .hex = "4F", .mnemonic = "X->П f", .comment = "setup Rf"},
+      {.address = 1, .opcode = 0x6f, .hex = "6F", .mnemonic = "П->X f"},
+  };
+  const std::string non_manual_listing = format_listing_steps(non_manual_steps);
+  require(non_manual_listing.find("X→П f") != std::string::npos &&
+              non_manual_listing.find("setup Rf; manual: not keyboard-enterable; use loader/hex") !=
+                  std::string::npos,
+          "listing formatter should mark commented non-manual opcodes");
+  require(non_manual_listing.find("П→X f") != std::string::npos &&
+              non_manual_listing.find("| manual: not keyboard-enterable; use loader/hex") !=
+                  std::string::npos,
+          "listing formatter should mark uncommented non-manual opcodes");
+
   std::vector<ResolvedStep> mk61s_steps;
   for (int index = 0; index < 25; ++index)
     mk61s_steps.push_back({.address = index, .hex = index == 24 ? "18" : "50", .mnemonic = "noop"});
@@ -116,6 +130,25 @@ void format_primitives_match_typescript_contract() {
               known_dot.find("n0 -> n0") != std::string::npos &&
               known_dot.find("[?]") == std::string::npos,
           "dot formatter should resolve proved preloaded indirect branch targets");
+
+  const std::vector<ResolvedStep> expanded_dot_steps = {
+      {.address = 0, .opcode = 0x51, .hex = "51", .mnemonic = "БП", .comment = "jump"},
+      {.address = 1, .opcode = 0xa5, .hex = "A5", .mnemonic = "A5"},
+      {.address = 105, .opcode = 0x50, .hex = "50", .mnemonic = "С/П", .comment = "halt"},
+  };
+  const std::string expanded_dot =
+      format_dot_steps(expanded_dot_steps, {}, AddressSpaceModel::Mk61SMiniExpanded);
+  require(expanded_dot.find("БП A5") != std::string::npos &&
+              expanded_dot.find("n0 -> n105") != std::string::npos &&
+              expanded_dot.find("n105 [label=\"[A5] pause") != std::string::npos,
+          "expanded dot formatter should decode A5 as physical address 105");
+
+  const std::optional<std::string> expanded_a5_setup_listing =
+      format_setup_preload_listing_steps(
+          {{.register_name = "7", .value = "A5", .counts_against_program = false}},
+          AddressSpaceModel::Mk61SMiniExpanded);
+  require(!expanded_a5_setup_listing.has_value(),
+          "expanded A5 selector should not be rendered as an executable decimal setup value");
 
   const std::vector<PreloadReport> formal_preloads = {
       {.register_name = "7", .value = "C5", .counts_against_program = false},

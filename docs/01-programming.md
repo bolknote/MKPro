@@ -80,7 +80,10 @@ some commands synchronize `X -> X2` and number-entry commands can restore
 
 Switch to program-entry mode with `F ПРГ`. On many keyboard diagrams, `ПРГ` is the shifted label on the `ВП` key. The display shows the current step address, starting from `00`.
 
-Each entered command occupies one program step. Some flow-control commands consume the next step as an address. The maximum official program size is 105 steps.
+Each entered command occupies one program step. Some flow-control commands
+consume the next step as an address. The stock maximum official program size is
+105 steps (`00`..`A4`); the `mk61s-mini-expand` compiler feature profile treats
+112 steps (`00`..`B1`) as official.
 
 Useful mode and editing keys:
 

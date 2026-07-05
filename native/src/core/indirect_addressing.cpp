@@ -217,12 +217,13 @@ int flow_target_from_transformed(std::string_view transformed) {
   return tail->hex ? tail->tens * 16 + tail->ones : tail->tens * 10 + tail->ones;
 }
 
-int formal_opcode_for_flow_target(std::string_view transformed, int flow_target) {
+int formal_opcode_for_flow_target(std::string_view transformed, int flow_target,
+                                  AddressSpaceModel model) {
   const std::string normalized = lower_ascii(trim_ascii(std::string(transformed)));
   static const std::regex integer_pattern(R"(^-?[0-9a-f]+$)", std::regex_constants::icase);
   if (std::regex_match(normalized, integer_pattern) && contains_hex_alpha(normalized))
     return flow_target;
-  return official_address_to_opcode(flow_target);
+  return official_address_to_opcode(flow_target, model);
 }
 
 IndirectAddressEvaluation r0_fractional_result(std::string selector,
@@ -263,14 +264,16 @@ bool is_stable_indirect_selector(std::string_view register_name) {
 }
 
 std::optional<IndirectAddressEvaluation> evaluate_indirect_address(
-    std::string_view selector, double value, IndirectOperationKind operation) {
+    std::string_view selector, double value, IndirectOperationKind operation,
+    AddressSpaceModel model) {
   if (selector == "0" && is_positive_fractional(value))
     return r0_fractional_result(std::string(selector), operation);
-  return evaluate_indirect_address(selector, std::to_string(value), operation);
+  return evaluate_indirect_address(selector, std::to_string(value), operation, model);
 }
 
 std::optional<IndirectAddressEvaluation> evaluate_indirect_address(
-    std::string_view selector, std::string_view value, IndirectOperationKind operation) {
+    std::string_view selector, std::string_view value, IndirectOperationKind operation,
+    AddressSpaceModel model) {
   const IndirectSelectorMutation mutation = indirect_selector_mutation(selector);
   if (selector == "0" && is_positive_fractional(value))
     return r0_fractional_result(std::string(selector), operation);
@@ -289,11 +292,11 @@ std::optional<IndirectAddressEvaluation> evaluate_indirect_address(
   if (operation == IndirectOperationKind::Flow) {
     const int flow_target = flow_target_from_transformed(*transformed);
     const FormalAddressInfo info =
-        formal_address_info(formal_opcode_for_flow_target(*transformed, flow_target));
+        formal_address_info(formal_opcode_for_flow_target(*transformed, flow_target, model), model);
     result.formal_address = info;
     result.flow_target = flow_target;
     result.actual_flow_target = info.actual;
-    result.super_dark = super_dark_target(info.opcode);
+    result.super_dark = super_dark_target(info.opcode, model);
     return result;
   }
 
@@ -312,8 +315,9 @@ std::optional<int> memory_target_from_transformed(std::string_view transformed) 
                          : k_memory_target_with_nonzero_tens.at(static_cast<std::size_t>(tail->ones));
 }
 
-std::optional<SuperDarkIndirectTarget> super_dark_target(int formal_target) {
-  const FormalAddressInfo info = formal_address_info(formal_target);
+std::optional<SuperDarkIndirectTarget> super_dark_target(int formal_target,
+                                                        AddressSpaceModel model) {
+  const FormalAddressInfo info = formal_address_info(formal_target, model);
   if (info.kind != FormalAddressKind::SuperDark || !info.extra.has_value())
     return std::nullopt;
   return SuperDarkIndirectTarget{

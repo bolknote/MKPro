@@ -134,7 +134,8 @@ bool is_setup_literal(std::string_view value) {
   return regex_matches(value, pattern);
 }
 
-std::optional<std::string> executable_setup_value(const std::string& value) {
+std::optional<std::string> executable_setup_value(const std::string& value,
+                                                  AddressSpaceModel model = AddressSpaceModel::Standard) {
   std::string trimmed = trim_copy(value);
   std::replace(trimmed.begin(), trimmed.end(), ',', '.');
   static const std::regex numeric_literal(R"(^-?\d+(?:[.]\d+)?(?:[eE]-?\d{1,2})?$)");
@@ -144,7 +145,10 @@ std::optional<std::string> executable_setup_value(const std::string& value) {
   static const std::regex formal_address_literal(R"(^[A-Fa-f][0-9A-Fa-f]$)");
   if (std::regex_match(trimmed, formal_address_literal)) {
     const int opcode = std::stoi(trimmed, nullptr, 16);
-    return std::to_string(formal_address_info(opcode).actual);
+    const int actual = formal_address_info(opcode, model).actual;
+    if (actual > 99)
+      return std::nullopt;
+    return std::to_string(actual);
   }
   return std::nullopt;
 }
@@ -204,10 +208,11 @@ struct ExecutableSetupPreloadGroup {
 };
 
 std::vector<ExecutableSetupPreloadEntry>
-executable_setup_preload_entries(const std::vector<PreloadReport>& preloads) {
+executable_setup_preload_entries(const std::vector<PreloadReport>& preloads,
+                                 AddressSpaceModel model) {
   std::vector<ExecutableSetupPreloadEntry> entries;
   for (const PreloadReport& preload : preloads) {
-    const std::optional<std::string> value = executable_setup_value(preload.value);
+    const std::optional<std::string> value = executable_setup_value(preload.value, model);
     if (value.has_value())
       entries.push_back(ExecutableSetupPreloadEntry{.preload = preload, .value = *value});
   }
@@ -241,9 +246,10 @@ group_setup_preloads_by_executable_value(const std::vector<ExecutableSetupPreloa
   return groups;
 }
 
-std::string format_step_address(int address) {
+std::string format_step_address(int address,
+                                AddressSpaceModel model = AddressSpaceModel::Standard) {
   try {
-    return format_address(address);
+    return format_address(address, model);
   } catch (const std::exception&) {
     std::ostringstream out;
     out << ">" << std::uppercase << std::hex << address;
@@ -251,10 +257,11 @@ std::string format_step_address(int address) {
   }
 }
 
-std::string format_address_operand_key(int opcode) {
+std::string format_address_operand_key(int opcode,
+                                       AddressSpaceModel model = AddressSpaceModel::Standard) {
   const int address = code_to_address(opcode);
-  if (address >= 0 && address <= 104)
-    return format_address(address);
+  if (address >= 0 && address <= official_program_last_address(model))
+    return format_address(address, model);
   return format_formal_address_opcode(opcode);
 }
 
@@ -331,6 +338,7 @@ enum class FlowArrow {
 };
 
 struct FlowContext {
+  AddressSpaceModel model = AddressSpaceModel::Standard;
   std::map<std::string, std::string> preloaded_registers;
   std::map<int, int> indirect_targets;
 };
@@ -360,8 +368,8 @@ struct FlowBlock {
   bool reachable = true;
 };
 
-std::string flow_ref(int address) {
-  return "[" + format_step_address(address) + "]";
+std::string flow_ref(int address, AddressSpaceModel model) {
+  return "[" + format_step_address(address, model) + "]";
 }
 
 std::string flow_register_name(int opcode) {
@@ -383,7 +391,7 @@ std::optional<int> parse_indirect_target_comment(const ResolvedStep& step) {
     return std::nullopt;
   try {
     const int target = std::stoi(match[1].str());
-    if (target < 0 || target > 104)
+    if (target < 0 || target > official_program_last_address(AddressSpaceModel::Mk61SMiniExpanded))
       return std::nullopt;
     return target;
   } catch (const std::exception&) {
@@ -391,16 +399,19 @@ std::optional<int> parse_indirect_target_comment(const ResolvedStep& step) {
   }
 }
 
-std::optional<int> parse_preloaded_formal_address(const std::string& value) {
+std::optional<int> parse_preloaded_formal_address(const std::string& value,
+                                                  AddressSpaceModel model) {
   const std::optional<int> opcode = parse_formal_address_opcode(value);
   if (!opcode.has_value())
     return std::nullopt;
-  return code_to_address(*opcode);
+  return formal_address_info(*opcode, model).actual;
 }
 
 FlowContext build_flow_context(const std::vector<ResolvedStep>& steps,
-                               const std::vector<PreloadReport>& preloads) {
+                               const std::vector<PreloadReport>& preloads,
+                               AddressSpaceModel model) {
   FlowContext context;
+  context.model = model;
   for (const PreloadReport& preload : preloads)
     context.preloaded_registers[preload.register_name] = preload.value;
   for (const ResolvedStep& step : steps) {
@@ -419,7 +430,7 @@ std::optional<int> known_indirect_target(const FlowInstruction& instruction,
   const auto preload = context.preloaded_registers.find(flow_register_name(instruction.opcode));
   if (preload == context.preloaded_registers.end())
     return std::nullopt;
-  return parse_preloaded_formal_address(preload->second);
+  return parse_preloaded_formal_address(preload->second, context.model);
 }
 
 std::optional<std::string> indirect_detail(const FlowInstruction& instruction,
@@ -439,7 +450,7 @@ FlowArrow target_arrow(int source, int target) {
 
 std::optional<FlowInstruction> decode_flow_instruction(
     const std::vector<ResolvedStep>& steps, const std::map<int, std::size_t>& by_address,
-    int address) {
+    int address, AddressSpaceModel model) {
   const auto it = by_address.find(address);
   if (it == by_address.end())
     return std::nullopt;
@@ -454,7 +465,7 @@ std::optional<FlowInstruction> decode_flow_instruction(
   const OpcodeInfo& info = opcode_by_code(instruction.opcode);
   if (info.takes_address && it->second + 1U < steps.size()) {
     instruction.operand_index = it->second + 1U;
-    instruction.target = code_to_address(step_opcode(steps[it->second + 1U]));
+    instruction.target = formal_address_info(step_opcode(steps[it->second + 1U]), model).actual;
   }
   return instruction;
 }
@@ -578,7 +589,7 @@ FlowBlock decode_flow_block(const std::vector<ResolvedStep>& steps,
   while (cursor.has_value() && !seen.contains(*cursor)) {
     seen.insert(*cursor);
     std::optional<FlowInstruction> instruction =
-        decode_flow_instruction(steps, by_address, *cursor);
+        decode_flow_instruction(steps, by_address, *cursor, context.model);
     if (!instruction.has_value())
       break;
 
@@ -653,7 +664,7 @@ std::vector<FlowBlock> build_flow_blocks(const std::vector<ResolvedStep>& steps,
       blocks.push_back(std::move(block));
     }
     const std::optional<FlowInstruction> instruction =
-        decode_flow_instruction(steps, by_address, address);
+        decode_flow_instruction(steps, by_address, address, context.model);
     if (instruction.has_value() && instruction->operand_index.has_value())
       index = *instruction->operand_index + 1U;
     else
@@ -692,20 +703,22 @@ std::string flow_role(const FlowBlock& block) {
   return "linear";
 }
 
-std::string flow_block_title(const FlowBlock& block) {
-  std::string range = flow_ref(block.start);
+std::string flow_block_title(const FlowBlock& block, AddressSpaceModel model) {
+  std::string range = flow_ref(block.start, model);
   if (block.end != block.start)
-    range = "[" + format_step_address(block.start) + ".." + format_step_address(block.end) + "]";
+    range = "[" + format_step_address(block.start, model) + ".." +
+            format_step_address(block.end, model) + "]";
   return range + " " + flow_role(block);
 }
 
 std::string compact_flow_token(const std::vector<ResolvedStep>& steps,
-                               const FlowInstruction& instruction) {
+                               const FlowInstruction& instruction,
+                               AddressSpaceModel model) {
   const ResolvedStep& step = steps[instruction.step_index];
   std::ostringstream out;
   out << to_keycaps(step.mnemonic);
   if (instruction.operand_index.has_value() && instruction.target.has_value())
-    out << " " << format_step_address(*instruction.target);
+    out << " " << format_step_address(*instruction.target, model);
   return out.str();
 }
 
@@ -775,26 +788,28 @@ std::string dot_fill_color(FlowTone tone) {
   return "#0f172a";
 }
 
-std::string dot_node_label(const FlowBlock& block, const std::vector<ResolvedStep>& steps) {
-  std::string label = dot_escape(flow_block_title(block)) + "\\l";
+std::string dot_node_label(const FlowBlock& block, const std::vector<ResolvedStep>& steps,
+                           AddressSpaceModel model) {
+  std::string label = dot_escape(flow_block_title(block, model)) + "\\l";
   for (const FlowInstruction& instruction : block.instructions)
-    label += dot_escape("  " + compact_flow_token(steps, instruction)) + "\\l";
+    label += dot_escape("  " + compact_flow_token(steps, instruction, model)) + "\\l";
   return label;
 }
 
-std::string dot_unknown_node_label(const FlowEdge& edge) {
+std::string dot_unknown_node_label(const FlowEdge& edge, AddressSpaceModel model) {
   std::string label = dot_escape("[?] " + edge.label);
   if (edge.detail.has_value())
     label += "\\l" + dot_escape("  " + *edge.detail);
   else if (edge.target.has_value())
-    label += "\\l" + dot_escape("  target " + flow_ref(*edge.target));
+    label += "\\l" + dot_escape("  target " + flow_ref(*edge.target, model));
   else
     label += "\\l" + dot_escape("  unknown target");
   return label + "\\l";
 }
 
 std::string render_dot_graph(const std::vector<FlowBlock>& blocks,
-                             const std::vector<ResolvedStep>& steps) {
+                             const std::vector<ResolvedStep>& steps,
+                             AddressSpaceModel model) {
   std::ostringstream out;
   out << "digraph mk61_cfg {\n"
       << "  graph [rankdir=TB, splines=polyline, nodesep=0.45, ranksep=0.65, pad=0.1, "
@@ -809,7 +824,7 @@ std::string render_dot_graph(const std::vector<FlowBlock>& blocks,
     block_by_address[block.start] = &block;
     const FlowTone tone = block.reachable ? block.tone : FlowTone::Muted;
     out << "  " << dot_id_for_address(block.start) << " [label=\""
-        << dot_node_label(block, steps) << "\", color=\"" << dot_color(tone)
+        << dot_node_label(block, steps, model) << "\", color=\"" << dot_color(tone)
         << "\", fillcolor=\"" << dot_fill_color(tone) << "\"";
     if (!block.reachable)
       out << ", style=\"rounded,filled,dashed\"";
@@ -826,7 +841,7 @@ std::string render_dot_graph(const std::vector<FlowBlock>& blocks,
         target_id = dot_id_for_address(*edge.target);
       } else {
         target_id = "unknown" + std::to_string(unknown_index++);
-        out << "  " << target_id << " [label=\"" << dot_unknown_node_label(edge)
+        out << "  " << target_id << " [label=\"" << dot_unknown_node_label(edge, model)
             << "\", color=\"" << dot_color(FlowTone::Unknown)
             << "\", fillcolor=\"" << dot_fill_color(FlowTone::Unknown) << "\"];\n";
       }
@@ -853,30 +868,78 @@ bool is_number_entry_step(const ResolvedStep& step) {
 }
 
 std::optional<std::string> manual_key_for_step(const std::vector<ResolvedStep>& steps,
-                                               std::size_t index) {
+                                               std::size_t index,
+                                               AddressSpaceModel model = AddressSpaceModel::Standard) {
   if (index >= steps.size())
     return std::nullopt;
   if (index > 0 && opcode_by_code(steps.at(index - 1U).opcode).takes_address)
-    return format_address_operand_key(steps.at(index).opcode);
+    return format_address_operand_key(steps.at(index).opcode, model);
   const OpcodeInfo& info = opcode_by_code(steps.at(index).opcode);
   if (steps.at(index).opcode == 0x3e)
     return std::nullopt;
   return info.keys;
 }
 
-std::string manual_3e_entry_comment(const std::optional<std::string>& previous_key) {
+bool is_manual_address_operand_patch_opcode(int opcode) {
+  return opcode == 0x3e;
+}
+
+bool contains_delivery_mode(const std::vector<DeliveryMode>& modes, DeliveryMode mode) {
+  return std::find(modes.begin(), modes.end(), mode) != modes.end();
+}
+
+std::optional<std::string> non_manual_delivery_comment(int opcode) {
+  const OpcodeInfo& info = opcode_by_code(opcode);
+  if (contains_delivery_mode(info.enterable, DeliveryMode::Manual))
+    return std::nullopt;
+  if (contains_delivery_mode(info.enterable, DeliveryMode::Loader) ||
+      contains_delivery_mode(info.enterable, DeliveryMode::Hex))
+    return "manual: not keyboard-enterable; use loader/hex";
+  return "manual: not keyboard-enterable";
+}
+
+void append_listing_comment(std::optional<std::string>& comment, std::string addition) {
+  if (addition.empty())
+    return;
+  comment = comment.has_value() && !comment->empty() ? *comment + "; " + addition
+                                                     : std::move(addition);
+}
+
+std::string address_operand_nibble_key(int nibble) {
+  if (nibble >= 0 && nibble <= 9)
+    return std::to_string(nibble);
+  switch (nibble) {
+    case 0x0a:
+      return ".";
+    case 0x0b:
+      return "/-/";
+    case 0x0c:
+      return "ВП";
+    case 0x0d:
+      return "Cx";
+    case 0x0e:
+      return "В↑";
+    default:
+      return "?";
+  }
+}
+
+std::string manual_address_operand_patch_comment(int opcode,
+                                                 const std::optional<std::string>& previous_key) {
+  const std::string code = format_formal_address_opcode(opcode);
   if (!previous_key.has_value() || previous_key->empty())
-    return "manual: code 3E needs an editable previous cell";
-  return "manual: ШГ← БП 3 В↑ ШГ← ШГ← " + *previous_key + " ШГ→";
+    return "manual: code " + code + " needs an editable previous cell";
+  return "manual: ШГ← БП " + address_operand_nibble_key((opcode >> 4) & 0x0f) + " " +
+         address_operand_nibble_key(opcode & 0x0f) + " ШГ← ШГ← " + *previous_key + " ШГ→";
 }
 
 ListingRow step_to_listing_row(const ResolvedStep& step,
                                std::optional<std::string> previous_key = std::nullopt) {
   std::optional<std::string> comment = step.comment;
-  if (step.opcode == 0x3e) {
-    const std::string manual = manual_3e_entry_comment(previous_key);
-    comment = comment.has_value() && !comment->empty() ? *comment + "; " + manual
-                                                        : manual;
+  if (is_manual_address_operand_patch_opcode(step.opcode)) {
+    append_listing_comment(comment, manual_address_operand_patch_comment(step.opcode, previous_key));
+  } else if (std::optional<std::string> manual = non_manual_delivery_comment(step.opcode)) {
+    append_listing_comment(comment, *manual);
   }
   return ListingRow{
       .address = step.address,
@@ -955,13 +1018,15 @@ ListingRow number_entry_group_to_listing_row(const std::vector<ResolvedStep>& gr
   };
 }
 
-std::vector<ListingRow> coalesce_number_entry_rows(const std::vector<ResolvedStep>& steps) {
+std::vector<ListingRow> coalesce_number_entry_rows(
+    const std::vector<ResolvedStep>& steps,
+    AddressSpaceModel model = AddressSpaceModel::Standard) {
   std::vector<ListingRow> rows;
   for (std::size_t index = 0; index < steps.size(); ++index) {
     const ResolvedStep& step = steps.at(index);
     if (!is_number_entry_step(step)) {
       rows.push_back(step_to_listing_row(
-          step, index > 0 ? manual_key_for_step(steps, index - 1U) : std::nullopt));
+          step, index > 0 ? manual_key_for_step(steps, index - 1U, model) : std::nullopt));
       continue;
     }
 
@@ -976,13 +1041,15 @@ std::vector<ListingRow> coalesce_number_entry_rows(const std::vector<ResolvedSte
   return rows;
 }
 
-std::string format_listing_address(int address) {
+std::string format_listing_address(int address,
+                                   AddressSpaceModel model = AddressSpaceModel::Standard) {
   if (address < 0)
     return "--";
-  return format_step_address(address);
+  return format_step_address(address, model);
 }
 
-std::string format_listing_rows(const std::vector<ListingRow>& rows) {
+std::string format_listing_rows(const std::vector<ListingRow>& rows,
+                                AddressSpaceModel model = AddressSpaceModel::Standard) {
   std::size_t code_width = 2;
   for (const ListingRow& row : rows)
     code_width = std::max(code_width, row.hex.size());
@@ -994,7 +1061,7 @@ std::string format_listing_rows(const std::vector<ListingRow>& rows) {
         << "+-------------------------+----------------";
     for (const ListingRow& row : rows) {
       out << '\n';
-      const std::string address = pad_start(format_listing_address(row.address), 4);
+      const std::string address = pad_start(format_listing_address(row.address, model), 4);
       const std::string code = pad_end(row.hex, code_width);
       const std::string command = pad_end(to_keycaps(row.mnemonic), 23);
       out << ' ' << address << " | " << code << " | " << command << " |";
@@ -1008,7 +1075,7 @@ std::string format_listing_rows(const std::vector<ListingRow>& rows) {
   out << "------+------+-------------------------+----------------";
   for (const ListingRow& row : rows) {
     out << '\n';
-    const std::string address = pad_start(format_listing_address(row.address), 4);
+    const std::string address = pad_start(format_listing_address(row.address, model), 4);
     const std::string code = pad_start(row.hex, 2);
     const std::string command = pad_end(to_keycaps(row.mnemonic), 23);
     out << ' ' << address << " |  " << code << "  | " << command << " |";
@@ -1021,11 +1088,15 @@ std::string format_listing_rows(const std::vector<ListingRow>& rows) {
 } // namespace
 
 std::string format_hex_steps(const std::vector<ResolvedStep>& steps) {
+  return format_hex_steps(steps, AddressSpaceModel::Standard);
+}
+
+std::string format_hex_steps(const std::vector<ResolvedStep>& steps, AddressSpaceModel model) {
   std::ostringstream out;
   for (std::size_t index = 0; index < steps.size(); index += kHexColumns) {
     if (index > 0)
       out << '\n';
-    out << format_step_address(static_cast<int>(index)) << ":";
+    out << format_step_address(static_cast<int>(index), model) << ":";
     const std::size_t end = std::min(index + static_cast<std::size_t>(kHexColumns), steps.size());
     for (std::size_t step = index; step < end; ++step)
       out << ' ' << steps.at(step).hex;
@@ -1069,7 +1140,12 @@ std::string format_mk61s_result(const CompileResult& result) {
 }
 
 std::string format_listing_steps(const std::vector<ResolvedStep>& steps) {
-  return format_listing_rows(coalesce_number_entry_rows(steps));
+  return format_listing_steps(steps, AddressSpaceModel::Standard);
+}
+
+std::string format_listing_steps(const std::vector<ResolvedStep>& steps,
+                                 AddressSpaceModel model) {
+  return format_listing_rows(coalesce_number_entry_rows(steps, model), model);
 }
 
 std::string format_dot_steps(const std::vector<ResolvedStep>& steps) {
@@ -1078,13 +1154,20 @@ std::string format_dot_steps(const std::vector<ResolvedStep>& steps) {
 
 std::string format_dot_steps(const std::vector<ResolvedStep>& steps,
                              const std::vector<PreloadReport>& preloads) {
-  const FlowContext context = build_flow_context(steps, preloads);
+  return format_dot_steps(steps, preloads, AddressSpaceModel::Standard);
+}
+
+std::string format_dot_steps(const std::vector<ResolvedStep>& steps,
+                             const std::vector<PreloadReport>& preloads,
+                             AddressSpaceModel model) {
+  const FlowContext context = build_flow_context(steps, preloads, model);
   const std::vector<FlowBlock> blocks = build_flow_blocks(steps, context);
-  return render_dot_graph(blocks, steps);
+  return render_dot_graph(blocks, steps, model);
 }
 
 std::string format_dot_result(const CompileResult& result) {
-  return format_dot_steps(result.steps, result.preloads);
+  return format_dot_steps(result.steps, result.preloads,
+                          address_space_model_for_feature_profile(result.feature_profile));
 }
 
 std::string format_manual_input_value(const ManualSetupInput& input) {
@@ -1096,6 +1179,12 @@ std::string format_manual_input_value(const ManualSetupInput& input) {
 
 std::string format_setup_listing_steps(const std::vector<ManualSetupInput>& manual_inputs,
                                        const std::vector<ResolvedStep>& steps) {
+  return format_setup_listing_steps(manual_inputs, steps, AddressSpaceModel::Standard);
+}
+
+std::string format_setup_listing_steps(const std::vector<ManualSetupInput>& manual_inputs,
+                                       const std::vector<ResolvedStep>& steps,
+                                       AddressSpaceModel model) {
   std::vector<ListingRow> rows;
   rows.reserve(manual_inputs.size() + steps.size());
   for (const ManualSetupInput& input : manual_inputs) {
@@ -1109,13 +1198,14 @@ std::string format_setup_listing_steps(const std::vector<ManualSetupInput>& manu
   for (std::size_t index = 0; index < steps.size(); ++index) {
     const ResolvedStep& step = steps.at(index);
     rows.push_back(step_to_listing_row(
-        step, index > 0 ? manual_key_for_step(steps, index - 1U) : std::nullopt));
+        step, index > 0 ? manual_key_for_step(steps, index - 1U, model) : std::nullopt));
   }
-  return format_listing_rows(rows);
+  return format_listing_rows(rows, model);
 }
 
 std::optional<std::string>
-format_setup_preload_listing_steps(const std::vector<PreloadReport>& preloads) {
+format_setup_preload_listing_steps(const std::vector<PreloadReport>& preloads,
+                                   AddressSpaceModel model) {
   std::vector<PreloadReport> setup_preloads;
   for (const PreloadReport& preload : preloads) {
     if (is_setup_literal(preload.value))
@@ -1125,14 +1215,14 @@ format_setup_preload_listing_steps(const std::vector<PreloadReport>& preloads) {
     return std::string{};
 
   for (const PreloadReport& preload : setup_preloads) {
-    if (!executable_setup_value(preload.value).has_value())
+    if (!executable_setup_value(preload.value, model).has_value())
       return std::nullopt;
   }
 
   std::vector<ListingRow> rows;
   int address = 0;
   const std::vector<ExecutableSetupPreloadEntry> entries =
-      executable_setup_preload_entries(setup_preloads);
+      executable_setup_preload_entries(setup_preloads, model);
   for (const ExecutableSetupPreloadGroup& group : group_setup_preloads_by_executable_value(entries)) {
     rows.push_back(ListingRow{
         .address = address,
@@ -1143,16 +1233,28 @@ format_setup_preload_listing_steps(const std::vector<PreloadReport>& preloads) {
     for (const PreloadReport& preload : group.preloads) {
       const int opcode = 0x40 + register_index(preload.register_name);
       const OpcodeInfo& info = opcode_by_code(opcode);
+      const std::string mnemonic =
+          model == AddressSpaceModel::Mk61SMiniExpanded && preload.register_name == "f"
+              ? "X->П f"
+              : info.name;
+      std::optional<std::string> comment = "setup R" + preload.register_name;
+      if (std::optional<std::string> manual = non_manual_delivery_comment(opcode))
+        append_listing_comment(comment, *manual);
       rows.push_back(ListingRow{
           .address = address,
           .hex = info.hex,
-          .mnemonic = info.name,
-          .comment = "setup R" + preload.register_name,
+          .mnemonic = mnemonic,
+          .comment = std::move(comment),
       });
       ++address;
     }
   }
-  return format_listing_rows(rows);
+  return format_listing_rows(rows, model);
+}
+
+std::optional<std::string>
+format_setup_preload_listing_steps(const std::vector<PreloadReport>& preloads) {
+  return format_setup_preload_listing_steps(preloads, AddressSpaceModel::Standard);
 }
 
 std::string format_program_tokens(const std::vector<ResolvedStep>& steps) {

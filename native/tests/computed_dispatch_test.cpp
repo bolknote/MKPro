@@ -1077,7 +1077,8 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
 
   CompileResult preloaded_with_raw_operand_result = preloaded_result;
   preloaded_with_raw_operand_result.steps.insert(preloaded_with_raw_operand_result.steps.begin(),
-                                                resolved_step(0x49, "raw address operand"));
+                                                resolved_step_with_mnemonic(
+                                                    0x49, "49", "raw address operand"));
   require(optimizer_static_proof_gate_accepts_for_testing(preloaded_options,
                                                           preloaded_with_raw_operand_result),
           "preloaded indirect-flow proof must not treat raw operand bytes as register writes");

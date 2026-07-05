@@ -58,10 +58,14 @@ void append_diagnostic(std::vector<Diagnostic>& diagnostics, DiagnosticSeverity 
   });
 }
 
+AddressSpaceModel address_space_model_for_options(const CompileOptions& options) {
+  return address_space_model_for_feature_profile(options.feature_profile);
+}
+
 int safe_address_to_opcode(int address, std::vector<Diagnostic>& diagnostics,
                            const CompileOptions& options) {
   try {
-    return official_address_to_opcode(address);
+    return official_address_to_opcode(address, address_space_model_for_options(options));
   } catch (const std::exception& error) {
     if (options.analysis && address >= 0)
       return address & 0xff;
@@ -70,9 +74,10 @@ int safe_address_to_opcode(int address, std::vector<Diagnostic>& diagnostics,
   }
 }
 
-std::string safe_format_address(int address) {
+std::string safe_format_address(int address,
+                                AddressSpaceModel model = AddressSpaceModel::Standard) {
   try {
-    return format_address(address);
+    return format_address(address, model);
   } catch (const std::exception&) {
     std::ostringstream out;
     out << ">" << std::uppercase << std::hex << address;
@@ -153,11 +158,12 @@ void MachineEmitter::emit_formal_address(int opcode, std::optional<std::string> 
                                          std::optional<int> source_line) {
   current_x_expression.reset();
   current_x_formatted_coord_report_body.reset();
-  const FormalAddressInfo info = formal_address_info(opcode);
+  const FormalAddressInfo info = formal_address_info(opcode, address_space_model);
   MachineItem item = MachineItem::address(info.ordinal);
   item.formal_opcode = opcode;
   if (comment.has_value()) {
-    item.comment = *comment + "; formal " + info.label + "->" + format_address(info.actual);
+    item.comment =
+        *comment + "; formal " + info.label + "->" + format_address(info.actual, address_space_model);
   }
   item.source_line = source_line;
   items.push_back(std::move(item));
@@ -288,7 +294,8 @@ ResolvedProgram resolve_machine_items(const std::vector<MachineItem>& items,
     }
     const std::string mnemonic = item.formal_opcode.has_value()
                                      ? format_formal_address_opcode(*item.formal_opcode)
-                                     : safe_format_address(target_address);
+                                     : safe_format_address(target_address,
+                                                           address_space_model_for_options(options));
     result.steps.push_back(build_resolved_step(address, opcode, mnemonic, item.comment));
     ++address;
   }

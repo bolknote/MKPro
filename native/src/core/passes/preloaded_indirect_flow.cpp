@@ -1,5 +1,6 @@
 #include "mkpro/core/passes/preloaded_indirect_flow.hpp"
 
+#include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/opcodes.hpp"
 
@@ -125,8 +126,13 @@ bool register_is_overwritten(const std::vector<IrOp>& ops, const std::string& re
   return false;
 }
 
+AddressSpaceModel address_space_model_for_context(const PassContext& context) {
+  return address_space_model_for_feature_profile(context.options.feature_profile);
+}
+
 std::map<int, SelectorPlan> existing_constant_selector_plans(
-    const std::vector<IrOp>& ops, const std::map<std::string, std::string>& preloaded) {
+    const std::vector<IrOp>& ops, const std::map<std::string, std::string>& preloaded,
+    AddressSpaceModel model) {
   std::map<int, SelectorPlan> plans;
   for (const std::string_view register_view : kStableRegisters) {
     const std::string register_name(register_view);
@@ -135,11 +141,11 @@ std::map<int, SelectorPlan> existing_constant_selector_plans(
       continue;
     const std::optional<mkpro::core::IndirectAddressEvaluation> evaluated =
         mkpro::core::evaluate_indirect_address(register_name, value->second,
-                                               mkpro::core::IndirectOperationKind::Flow);
+                                               mkpro::core::IndirectOperationKind::Flow, model);
     if (!evaluated.has_value() || !evaluated->actual_flow_target.has_value())
       continue;
     const int target = *evaluated->actual_flow_target;
-    if (target < 0 || target > 104 || plans.contains(target))
+    if (target < 0 || target > official_program_last_address(model) || plans.contains(target))
       continue;
     plans[target] = SelectorPlan{
         .register_name = register_name,
@@ -152,18 +158,18 @@ std::map<int, SelectorPlan> existing_constant_selector_plans(
   return plans;
 }
 
-std::optional<int> numeric_flow_target(const IrOp& op) {
+std::optional<int> numeric_flow_target(const IrOp& op, int official_last) {
   if (op.kind != IrKind::Jump && op.kind != IrKind::Call && op.kind != IrKind::CondJump &&
       op.kind != IrKind::Loop) {
     return std::nullopt;
   }
   const auto* target = std::get_if<int>(&op.target);
-  if (target == nullptr || *target < 0 || *target > 104)
+  if (target == nullptr || *target < 0 || *target > official_last)
     return std::nullopt;
   return *target;
 }
 
-std::optional<int> branch_target(const IrOp& op) {
+std::optional<int> branch_target(const IrOp& op, int official_last) {
   if (op.kind != IrKind::Jump && op.kind != IrKind::Call && op.kind != IrKind::CondJump)
     return std::nullopt;
   if (op.target_meta.formal_opcode.has_value())
@@ -172,13 +178,13 @@ std::optional<int> branch_target(const IrOp& op) {
       op.target_meta.roles.end()) {
     return std::nullopt;
   }
-  return numeric_flow_target(op);
+  return numeric_flow_target(op, official_last);
 }
 
-int max_numeric_flow_target(const std::vector<IrOp>& ops) {
+int max_numeric_flow_target(const std::vector<IrOp>& ops, int official_last) {
   int max_target = -1;
   for (const IrOp& op : ops) {
-    const std::optional<int> target = numeric_flow_target(op);
+    const std::optional<int> target = numeric_flow_target(op, official_last);
     if (target.has_value() && *target > max_target)
       max_target = *target;
   }
@@ -247,14 +253,9 @@ std::string formal_label_from_opcode(int opcode) {
   return uppercase_hex_digit(opcode / 16) + uppercase_hex_digit(opcode % 16);
 }
 
-std::string official_label(int target) {
-  if (target <= 99)
-    return std::to_string(target / 10) + std::to_string(target % 10);
-  return "A" + std::to_string(target - 100);
-}
-
 SelectorPlan selector_for_target(const std::vector<IrOp>& ops, const std::vector<int>& addresses,
-                                 const std::map<std::string, int>& labels, int target) {
+                                 const std::map<std::string, int>& labels, int target,
+                                 AddressSpaceModel model) {
   if (is_super_dark_compatible_target(ops, addresses, labels, target)) {
     return SelectorPlan{
         .selector_value = formal_label_from_opcode(0xfa + (target - 48)),
@@ -276,7 +277,7 @@ SelectorPlan selector_for_target(const std::vector<IrOp>& ops, const std::vector
     };
   }
   return SelectorPlan{
-      .selector_value = official_label(target),
+      .selector_value = format_official_address(target, model),
       .super_dark = false,
   };
 }
@@ -389,7 +390,8 @@ bool can_borrow_register_for_runtime_selector(const std::vector<IrOp>& ops,
 }
 
 std::vector<RuntimeCallPlan> runtime_indirect_call_plans(
-    const std::vector<IrOp>& ops, bool break_even, const std::set<std::string>& reserved) {
+    const std::vector<IrOp>& ops, bool break_even, const std::set<std::string>& reserved,
+    int official_last) {
   const std::vector<int> addresses = address_by_index(ops);
   const std::map<std::string, int> labels = calculate_label_addresses(ops);
   std::map<int, RuntimeCallTarget> targets;
@@ -404,8 +406,10 @@ std::vector<RuntimeCallPlan> runtime_indirect_call_plans(
     }
     const std::optional<int> target = target_address(op.target, labels);
     const int site_address = addresses.at(index);
-    if (!target.has_value() || *target < 0 || *target > 99 || *target >= site_address)
+    if (!target.has_value() || *target < 0 || *target > official_last ||
+        *target >= site_address) {
       continue;
+    }
     RuntimeCallTarget& entry = targets[*target];
     if (entry.indices.empty()) {
       entry.target = *target;
@@ -482,7 +486,8 @@ PassResult runtime_indirect_call_flow(const std::vector<IrOp>& ops, const PassCo
   // their natural shorter form.
   const std::vector<RuntimeCallPlan> plans = runtime_indirect_call_plans(
       ops, context.options.aggressive_indirect_call_threshold,
-      reserved_preloaded_registers(context.options.preloaded_constant_registers));
+      reserved_preloaded_registers(context.options.preloaded_constant_registers),
+      official_program_last_address(address_space_model_for_context(context)));
   if (plans.empty())
     return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
 
@@ -545,16 +550,19 @@ PassResult run_preloaded_indirect_flow(const std::vector<IrOp>& ops,
   const std::set<std::string> reserved =
       reserved_preloaded_registers(context.options.preloaded_constant_registers);
   std::vector<std::string> registers = spare_stable_registers(ops, reserved);
+  const AddressSpaceModel address_model = address_space_model_for_context(context);
+  const int official_last = official_program_last_address(address_model);
   const std::map<int, SelectorPlan> existing_selectors =
       context.options.dual_use_constant_indirect_flow
-          ? existing_constant_selector_plans(ops, context.options.preloaded_constant_registers)
+          ? existing_constant_selector_plans(ops, context.options.preloaded_constant_registers,
+                                             address_model)
           : std::map<int, SelectorPlan>{};
   if (registers.empty() && existing_selectors.empty())
     return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
 
   const std::vector<int> addresses = address_by_index(ops);
   const std::map<std::string, int> labels = calculate_label_addresses(ops);
-  const int max_target = max_numeric_flow_target(ops);
+  const int max_target = max_numeric_flow_target(ops, official_last);
   std::map<int, EligibleTarget> eligible_targets;
 
   for (std::size_t index = 0; index < ops.size(); ++index) {
@@ -563,7 +571,7 @@ PassResult run_preloaded_indirect_flow(const std::vector<IrOp>& ops,
         (op.kind != IrKind::Jump && op.kind != IrKind::Call && op.kind != IrKind::CondJump)) {
       continue;
     }
-    const std::optional<int> target = branch_target(op);
+    const std::optional<int> target = branch_target(op, official_last);
     const int site_address = addresses.at(index);
     if (!target.has_value() ||
         (!flow_options.allow_forward_targets && *target > site_address) ||
@@ -571,13 +579,14 @@ PassResult run_preloaded_indirect_flow(const std::vector<IrOp>& ops,
       continue;
     }
 
-    const SelectorPlan selected_target = selector_for_target(ops, addresses, labels, *target);
+    const SelectorPlan selected_target =
+        selector_for_target(ops, addresses, labels, *target, address_model);
     const auto existing_selector = existing_selectors.find(*target);
     std::optional<mkpro::core::IndirectAddressEvaluation> evaluated;
     if (!registers.empty()) {
       evaluated = mkpro::core::evaluate_indirect_address(
           registers.front(), selected_target.selector_value,
-          mkpro::core::IndirectOperationKind::Flow);
+          mkpro::core::IndirectOperationKind::Flow, address_model);
     }
     const bool selected_super_dark =
         evaluated.has_value() && evaluated->super_dark.has_value() &&
@@ -654,7 +663,7 @@ PassResult run_preloaded_indirect_flow(const std::vector<IrOp>& ops,
       result.push_back(op);
       continue;
     }
-    const std::optional<int> target = branch_target(op);
+    const std::optional<int> target = branch_target(op, official_last);
     const int site_address = addresses.at(index);
     if (!target.has_value() ||
         (!flow_options.allow_forward_targets && *target > site_address) ||

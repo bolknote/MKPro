@@ -30,6 +30,20 @@ char ascii_upper(char value) {
 
 }  // namespace
 
+AddressSpaceModel address_space_model_for_feature_profile(FeatureProfile profile) {
+  return feature_profile_has_expanded_program_space(profile)
+             ? AddressSpaceModel::Mk61SMiniExpanded
+             : AddressSpaceModel::Standard;
+}
+
+int official_program_step_limit(AddressSpaceModel model) {
+  return model == AddressSpaceModel::Mk61SMiniExpanded ? 112 : 105;
+}
+
+int official_program_last_address(AddressSpaceModel model) {
+  return official_program_step_limit(model) - 1;
+}
+
 int formal_address_ordinal(int opcode) {
   assert_byte(opcode);
   const int high = opcode >> 4;
@@ -37,17 +51,16 @@ int formal_address_ordinal(int opcode) {
   return high * 10 + low;
 }
 
-int official_address_to_opcode(int address) {
-  if (address < 0 || address > 104) {
+int official_address_to_opcode(int address, AddressSpaceModel model) {
+  const int last = official_program_last_address(model);
+  if (address < 0 || address > last) {
     throw std::runtime_error("Physical MK-61 program address " + std::to_string(address) +
-                             " is outside 00..A4");
+                             " is outside 00.." + format_formal_address_opcode(
+                                                        (last / 10) * 16 + (last % 10)));
   }
-  if (address <= 99) {
-    const int tens = address / 10;
-    const int ones = address % 10;
-    return tens * 16 + ones;
-  }
-  return 0xa0 + (address - 100);
+  const int tens = address / 10;
+  const int ones = address % 10;
+  return tens * 16 + ones;
 }
 
 std::string format_formal_address_opcode(int opcode) {
@@ -55,8 +68,8 @@ std::string format_formal_address_opcode(int opcode) {
   return hex_byte(opcode);
 }
 
-std::string format_official_address(int address) {
-  return format_formal_address_opcode(official_address_to_opcode(address));
+std::string format_official_address(int address, AddressSpaceModel model) {
+  return format_formal_address_opcode(official_address_to_opcode(address, model));
 }
 
 std::optional<int> parse_formal_address_opcode(std::string_view text) {
@@ -79,12 +92,13 @@ std::optional<int> parse_formal_address_opcode(std::string_view text) {
   return std::stoi(normalized, nullptr, 16);
 }
 
-FormalAddressInfo formal_address_info(int opcode) {
+FormalAddressInfo formal_address_info(int opcode, AddressSpaceModel model) {
   assert_byte(opcode);
   const int ordinal = formal_address_ordinal(opcode);
   const std::string label = format_formal_address_opcode(opcode);
+  const int official_last = official_program_last_address(model);
 
-  if (ordinal <= 104) {
+  if (ordinal <= official_last) {
     return FormalAddressInfo{
         .opcode = opcode,
         .label = label,
@@ -95,7 +109,7 @@ FormalAddressInfo formal_address_info(int opcode) {
     };
   }
 
-  if (ordinal <= 111) {
+  if (model == AddressSpaceModel::Standard && ordinal <= 111) {
     return FormalAddressInfo{
         .opcode = opcode,
         .label = label,

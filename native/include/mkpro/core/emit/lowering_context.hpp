@@ -153,6 +153,7 @@ struct BankSelectorCacheEntry {
 struct LoweringContext {
   MachineEmitter emitter;
   const V2Program* program = nullptr;
+  FeatureProfile feature_profile = FeatureProfile::Standard;
   std::map<std::string, std::string> registers;
   std::map<std::string, int> register_index_by_name;
   std::map<std::string, const V2Rule*> rules;

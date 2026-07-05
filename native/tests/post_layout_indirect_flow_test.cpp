@@ -180,6 +180,33 @@ void post_layout_indirect_flow_matches_typescript_contract() {
   }
 
   {
+    CompileOptions expanded_options = options;
+    expanded_options.feature_profile = FeatureProfile::Mk61SMiniExpanded;
+    std::vector<MachineItem> program = {MachineItem::label("main")};
+    const std::vector<MachineItem> branch = jump("target");
+    program.insert(program.end(), branch.begin(), branch.end());
+    for (int index = 0; index < 104; ++index)
+      program.push_back(digit());
+    program.push_back(MachineItem::label("target"));
+    program.push_back(MachineItem::op(0x50, "С/П"));
+
+    const core::PostLayoutIndirectFlowResult result =
+        core::optimize_post_layout_indirect_flow(program, expanded_options, 0);
+
+    require(result.applied == 1,
+            "expanded post-layout indirect flow should rewrite a forward target at 105");
+    require(result.preloads.size() == 1 && result.preloads.at(0).value == "A5",
+            "expanded post-layout selector for final target 105 should be A5");
+    const std::optional<core::IndirectAddressEvaluation> decoded =
+        core::evaluate_indirect_address(result.preloads.at(0).register_name,
+                                        result.preloads.at(0).value,
+                                        core::IndirectOperationKind::Flow,
+                                        AddressSpaceModel::Mk61SMiniExpanded);
+    require(decoded.has_value() && decoded->actual_flow_target == 105,
+            "expanded A5 selector should decode to official address 105");
+  }
+
+  {
     std::vector<MachineItem> program = {MachineItem::label("main")};
     const std::vector<MachineItem> first = cjump("end");
     program.insert(program.end(), first.begin(), first.end());

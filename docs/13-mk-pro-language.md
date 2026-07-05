@@ -76,9 +76,12 @@ key = read()  # A trailing comment.
 
 ## Top Level
 
-Only optional report metadata belongs outside `program`:
+Only optional report metadata and machine-profile directives belong outside
+`program`:
 
 - `reference name`
+- `feature mk61`
+- `feature mk61s-mini-expand`
 
 Game meaning belongs inside `program`. Counters, cell sets, maps, events,
 random, or packed-table facts should become ordinary declarations, `state`,
@@ -888,6 +891,12 @@ Memory commands accept canonical and compact forms. `X->П 3`, `X→П R3`, and
 `хП3` are the same direct store; `П->X 3`, `П→X R3`, and `Пх3` are the same
 recall. Indirect forms use the blue prefix, for example `К БП 7`, `К x≥0 e`,
 `К X→П R4`, or compact `КБП7`, `КхП4`, `КПх4`.
+`feature mk61` is the default machine profile and may be omitted. Symbolic
+direct raw access to `Rf` is accepted only when the source declares `feature
+mk61s-mini-expand` (or when the same profile is forced with `mkpro-native
+compile --feature mk61s-mini-expand`). Raw hex bytes such as `4F`
+and `6F` remain explicit low-level opcodes. Indirect forms such as `К БП f` and
+`К П->X f` remain invalid; the `*F` indirect raw bytes are stock R0 aliases.
 
 For undocumented aliases and not-normally-entered commands, use the hex opcode
 directly: `1F`, `2F`, `3D`, `3E`, `4F`, `5F`, `6F`, `7F`..`EF`, and

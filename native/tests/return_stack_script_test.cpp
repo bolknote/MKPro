@@ -3207,6 +3207,24 @@ void return_stack_script_matches_mk61_strategy_contract() {
   }
 
   {
+    std::vector<MachineItem> layout = repeated_stop_layout(105);
+    layout.at(10) = MachineItem::op(0x51, "БП");
+    layout.at(11) = MachineItem::address(104);
+    layout.at(78) = stop();
+    const core::DirtyReturnStackDispatchAllocationPlan allocation =
+        core::allocate_dirty_return_stack_dispatch_layout(
+            {27, 35, 43, 51, 59}, 6, layout,
+            {.feature_profile = FeatureProfile::Mk61SMiniExpanded,
+             .size_rescue = true,
+             .max_padding_cells = 2});
+    const int* remapped_target = std::get_if<int>(&allocation.items.at(11).target);
+    require(allocation.allocated && allocation.padding_cells == 1 &&
+                allocation.fixed_point_rounds == 1 && allocation.dispatch.layout_proved &&
+                remapped_target != nullptr && *remapped_target == 105,
+            "expanded dirty dispatch allocator should remap numeric target 104 to official 105");
+  }
+
+  {
     std::vector<MachineItem> layout = repeated_stop_layout(80);
     layout.at(10) = MachineItem::op(0xa0, "КП");
     layout.at(10).comment = "indirect-target=78; note; indirect-target=79";

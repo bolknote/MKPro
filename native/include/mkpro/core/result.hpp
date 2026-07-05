@@ -1,5 +1,6 @@
 #pragma once
 
+#include "mkpro/core/feature_profile.hpp"
 #include "mkpro/core/ir.hpp"
 #include "mkpro/core/machine_profile.hpp"
 
@@ -294,6 +295,7 @@ enum class OutputFormat {
 struct CompileOptions {
   DeliveryMode delivery = DeliveryMode::Manual;
   OutputFormat output = OutputFormat::Listing;
+  FeatureProfile feature_profile = FeatureProfile::Standard;
   std::optional<int> budget;
   bool analysis = false;
   bool strict = false;
@@ -407,6 +409,8 @@ struct CompileOptions {
 
 struct CompileResult {
   bool implemented = false;
+  FeatureProfile feature_profile = FeatureProfile::Standard;
+  std::optional<int> budget;
   std::vector<Diagnostic> diagnostics;
   std::vector<std::string> warnings;
   std::vector<MachineItem> items;

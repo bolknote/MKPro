@@ -17,5 +17,6 @@ namespace mkpro {
 // selection; they should expose a local proof obligation instead. Returns one
 // line per scenario.
 std::string program_behavior_digest(const CompileResult& result);
+std::string program_behavior_digest(const CompileResult& result, FeatureProfile feature_profile);
 
 }  // namespace mkpro

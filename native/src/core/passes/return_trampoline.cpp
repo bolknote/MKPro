@@ -1,5 +1,6 @@
 #include "mkpro/core/passes/return_trampoline.hpp"
 
+#include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/opcodes.hpp"
 
@@ -66,22 +67,28 @@ bool register_is_overwritten(const std::vector<IrOp>& ops, const std::string& re
   return false;
 }
 
-bool selector_targets_return_zero(const std::string& register_name, const std::string& value) {
+AddressSpaceModel address_space_model_for_context(const PassContext& context) {
+  return address_space_model_for_feature_profile(context.options.feature_profile);
+}
+
+bool selector_targets_return_zero(const std::string& register_name, const std::string& value,
+                                  AddressSpaceModel model) {
   const std::optional<mkpro::core::IndirectAddressEvaluation> evaluated =
       mkpro::core::evaluate_indirect_address(register_name, value,
-                                             mkpro::core::IndirectOperationKind::Flow);
+                                             mkpro::core::IndirectOperationKind::Flow, model);
   return evaluated.has_value() && evaluated->actual_flow_target == 0;
 }
 
 std::optional<SelectorPlan>
 existing_return_zero_selector(const std::vector<IrOp>& ops,
-                              const std::map<std::string, std::string>& preloaded) {
+                              const std::map<std::string, std::string>& preloaded,
+                              AddressSpaceModel model) {
   for (const std::string_view register_view : kStableRegisters) {
     const std::string register_name(register_view);
     const auto existing = preloaded.find(register_name);
     if (existing == preloaded.end() || register_is_overwritten(ops, register_name))
       continue;
-    if (!selector_targets_return_zero(register_name, existing->second))
+    if (!selector_targets_return_zero(register_name, existing->second, model))
       continue;
     return SelectorPlan{
         .register_name = register_name,
@@ -94,14 +101,15 @@ existing_return_zero_selector(const std::vector<IrOp>& ops,
 
 std::optional<SelectorPlan>
 new_return_zero_selector(const std::vector<IrOp>& ops,
-                         const std::map<std::string, std::string>& preloaded) {
+                         const std::map<std::string, std::string>& preloaded,
+                         AddressSpaceModel model) {
   for (const std::string_view register_view : kStableRegisters) {
     const std::string register_name(register_view);
     if (register_is_used(ops, register_name) || register_is_overwritten(ops, register_name) ||
         preloaded.contains(register_name))
       continue;
     const std::string selector_value(kReturnZeroSelector);
-    if (!selector_targets_return_zero(register_name, selector_value))
+    if (!selector_targets_return_zero(register_name, selector_value, model))
       continue;
     return SelectorPlan{
         .register_name = register_name,
@@ -114,10 +122,12 @@ new_return_zero_selector(const std::vector<IrOp>& ops,
 
 std::optional<SelectorPlan>
 select_return_zero_selector(const std::vector<IrOp>& ops,
-                            const std::map<std::string, std::string>& preloaded) {
-  if (const std::optional<SelectorPlan> existing = existing_return_zero_selector(ops, preloaded))
+                            const std::map<std::string, std::string>& preloaded,
+                            AddressSpaceModel model) {
+  if (const std::optional<SelectorPlan> existing =
+          existing_return_zero_selector(ops, preloaded, model))
     return existing;
-  return new_return_zero_selector(ops, preloaded);
+  return new_return_zero_selector(ops, preloaded, model);
 }
 
 bool first_executable_op_is_return(const std::vector<IrOp>& ops) {
@@ -140,21 +150,21 @@ std::vector<int> address_by_index(const std::vector<IrOp>& ops) {
   return addresses;
 }
 
-std::optional<int> numeric_flow_target(const IrOp& op) {
+std::optional<int> numeric_flow_target(const IrOp& op, int official_last) {
   if (op.kind != IrKind::Jump && op.kind != IrKind::Call && op.kind != IrKind::CondJump &&
       op.kind != IrKind::Loop) {
     return std::nullopt;
   }
   const auto* target = std::get_if<int>(&op.target);
-  if (target == nullptr || *target < 0 || *target > 104)
+  if (target == nullptr || *target < 0 || *target > official_last)
     return std::nullopt;
   return *target;
 }
 
-int max_numeric_flow_target(const std::vector<IrOp>& ops) {
+int max_numeric_flow_target(const std::vector<IrOp>& ops, int official_last) {
   int max_target = -1;
   for (const IrOp& op : ops) {
-    const std::optional<int> target = numeric_flow_target(op);
+    const std::optional<int> target = numeric_flow_target(op, official_last);
     if (target.has_value() && *target > max_target)
       max_target = *target;
   }
@@ -230,9 +240,12 @@ PassResult return_trampoline(const std::vector<IrOp>& ops, const PassContext& co
 
   const std::map<std::string, int> labels = calculate_label_addresses(ops);
   const std::vector<int> addresses = address_by_index(ops);
-  const int max_numeric_target = max_numeric_flow_target(ops);
+  const AddressSpaceModel address_model = address_space_model_for_context(context);
+  const int max_numeric_target =
+      max_numeric_flow_target(ops, official_program_last_address(address_model));
   const std::optional<SelectorPlan> selector =
-      select_return_zero_selector(ops, context.options.preloaded_constant_registers);
+      select_return_zero_selector(ops, context.options.preloaded_constant_registers,
+                                  address_model);
   if (!selector.has_value())
     return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
 

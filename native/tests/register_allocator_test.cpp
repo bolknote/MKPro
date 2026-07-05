@@ -14,6 +14,8 @@ void register_allocator_matches_typescript_contract() {
   require(core::register_name_for_index(0x9) == "9", "register 9 text");
   require(core::register_name_for_index(0x0a) == "a", "register a text");
   require(core::register_name_for_index(0x0e) == "e", "register e text");
+  require(core::register_name_for_index(0x0f, FeatureProfile::Mk61SMiniExpanded) == "f",
+          "expanded register f text");
 
   bool threw = false;
   try {
@@ -72,6 +74,15 @@ void register_allocator_matches_typescript_contract() {
                                                            0x0b, 0x0c, 0x0d, 0x0e})
                .has_value(),
           "allocator should report exhaustion when all registers are used");
+  require(core::pick_register_index_for_variable("full", {0x0, 0x1, 0x2, 0x3, 0x4, 0x5,
+                                                          0x6, 0x7, 0x8, 0x9, 0x0a,
+                                                          0x0b, 0x0c, 0x0d, 0x0e},
+                                                 FeatureProfile::Mk61SMiniExpanded)
+              .value() == 0x0f,
+          "expanded allocator should use RF after R0..RE");
+  require(core::pick_constant_register_index({}, FeatureProfile::Mk61SMiniExpanded).value() ==
+              0x0f,
+          "expanded constant preloads should prefer RF as the highest stable register");
 }
 
 }  // namespace mkpro::tests

@@ -1983,6 +1983,7 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
                                     const CompileOptions& options,
                                     std::optional<std::string> expected_mode) {
   MachineEmitter setup;
+  setup.address_space_model = address_space_model_for_feature_profile(options.feature_profile);
   std::vector<OptimizationReport> optimizations;
   std::set<std::size_t> consumed;
   bool setup_r0_dirty = false;

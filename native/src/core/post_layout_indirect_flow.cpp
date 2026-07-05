@@ -35,6 +35,10 @@ bool trace_post_layout_enabled() {
   return enabled;
 }
 
+AddressSpaceModel address_space_model_for_options(const CompileOptions& options) {
+  return address_space_model_for_feature_profile(options.feature_profile);
+}
+
 struct OverlayExecutable {
   int opcode = 0;
   std::string mnemonic;
@@ -258,22 +262,23 @@ std::optional<int> resolved_machine_target(const IrTarget& target,
   return it->second;
 }
 
-std::optional<int> fixed_address_actual_target(const MachineItem& address) {
+std::optional<int> fixed_address_actual_target(const MachineItem& address,
+                                               AddressSpaceModel model) {
   if (address.kind != MachineItemKind::Address)
     return std::nullopt;
   if (address.formal_opcode.has_value())
-    return formal_address_info(*address.formal_opcode).actual;
+    return formal_address_info(*address.formal_opcode, model).actual;
   if (const auto* numeric = std::get_if<int>(&address.target))
     return *numeric;
   return std::nullopt;
 }
 
 bool fixed_address_targets_survive_removal(const std::vector<MachineItem>& items,
-                                           int removed_address) {
+                                           int removed_address, AddressSpaceModel model) {
   for (const MachineItem& item : items) {
     if (item.kind != MachineItemKind::Address)
       continue;
-    const std::optional<int> fixed_target = fixed_address_actual_target(item);
+    const std::optional<int> fixed_target = fixed_address_actual_target(item, model);
     if (fixed_target.has_value() && *fixed_target >= removed_address)
       return false;
   }
@@ -281,7 +286,8 @@ bool fixed_address_targets_survive_removal(const std::vector<MachineItem>& items
 }
 
 std::optional<int> address_opcode_for_item(const std::vector<MachineItem>& items,
-                                           const MachineItem& item) {
+                                           const MachineItem& item,
+                                           AddressSpaceModel model) {
   if (item.kind != MachineItemKind::Address)
     return std::nullopt;
   if (item.formal_opcode.has_value())
@@ -292,7 +298,7 @@ std::optional<int> address_opcode_for_item(const std::vector<MachineItem>& items
   if (!target.has_value())
     return std::nullopt;
   try {
-    return official_address_to_opcode(*target);
+    return official_address_to_opcode(*target, model);
   } catch (...) {
     return std::nullopt;
   }
@@ -312,6 +318,7 @@ std::optional<IrTarget> direct_address_target(const std::vector<MachineItem>& it
 struct MachineReturnAnalyzer {
   const std::vector<MachineItem>& items;
   MachineLayout layout;
+  AddressSpaceModel model = AddressSpaceModel::Standard;
   std::set<int> visiting;
   std::map<int, bool> memo;
 
@@ -331,7 +338,7 @@ struct MachineReturnAnalyzer {
     if (item.kind == MachineItemKind::Op) {
       opcode = item.opcode;
     } else if (item.kind == MachineItemKind::Address) {
-      opcode = address_opcode_for_item(items, item);
+      opcode = address_opcode_for_item(items, item, model);
     }
     if (!opcode.has_value())
       return true;
@@ -419,7 +426,7 @@ bool labels_have_no_linear_fallthrough(const std::vector<MachineItem>& items, in
 }
 
 std::optional<OverlayExecutable> overlay_executable_at(const std::vector<MachineItem>& items,
-                                                       int index) {
+                                                       int index, AddressSpaceModel model) {
   if (index < 0 || index >= static_cast<int>(items.size()))
     return std::nullopt;
   const MachineItem& item = items.at(static_cast<std::size_t>(index));
@@ -428,14 +435,15 @@ std::optional<OverlayExecutable> overlay_executable_at(const std::vector<Machine
   }
   if (item.kind != MachineItemKind::Address)
     return std::nullopt;
-  const std::optional<int> opcode = address_opcode_for_item(items, item);
+  const std::optional<int> opcode = address_opcode_for_item(items, item, model);
   if (!opcode.has_value())
     return std::nullopt;
   return OverlayExecutable{.opcode = *opcode, .mnemonic = "address byte"};
 }
 
-bool can_overlay_executable_cell_at(const std::vector<MachineItem>& items, int index) {
-  const std::optional<OverlayExecutable> executable = overlay_executable_at(items, index);
+bool can_overlay_executable_cell_at(const std::vector<MachineItem>& items, int index,
+                                    AddressSpaceModel model) {
+  const std::optional<OverlayExecutable> executable = overlay_executable_at(items, index, model);
   if (!executable.has_value())
     return false;
   if (!is_address_taking_opcode(executable->opcode))
@@ -445,11 +453,12 @@ bool can_overlay_executable_cell_at(const std::vector<MachineItem>& items, int i
          items.at(static_cast<std::size_t>(operand_index)).kind == MachineItemKind::Address;
 }
 
-std::optional<int> next_executable_opcode(const std::vector<MachineItem>& items, int start) {
+std::optional<int> next_executable_opcode(const std::vector<MachineItem>& items, int start,
+                                          AddressSpaceModel model) {
   for (int index = start; index < static_cast<int>(items.size()); ++index) {
     if (items.at(static_cast<std::size_t>(index)).kind == MachineItemKind::Label)
       continue;
-    const std::optional<OverlayExecutable> executable = overlay_executable_at(items, index);
+    const std::optional<OverlayExecutable> executable = overlay_executable_at(items, index, model);
     if (executable.has_value())
       return executable->opcode;
     return std::nullopt;
@@ -459,11 +468,13 @@ std::optional<int> next_executable_opcode(const std::vector<MachineItem>& items,
 
 bool can_move_overlay_opcode_to(const std::vector<MachineItem>& source_items, int source_index,
                                 const std::vector<MachineItem>& target_items, int target_index,
-                                int opcode) {
+                                int opcode, AddressSpaceModel model) {
   if (!is_number_entry_opcode(opcode))
     return true;
-  const std::optional<int> source_next = next_executable_opcode(source_items, source_index + 1);
-  const std::optional<int> target_next = next_executable_opcode(target_items, target_index + 1);
+  const std::optional<int> source_next =
+      next_executable_opcode(source_items, source_index + 1, model);
+  const std::optional<int> target_next =
+      next_executable_opcode(target_items, target_index + 1, model);
   return !target_next.has_value() || !is_number_entry_opcode(*target_next) ||
          (source_next.has_value() && is_number_entry_opcode(*source_next));
 }
@@ -501,22 +512,24 @@ std::optional<int> resolved_address_target(const std::vector<MachineItem>& items
 std::optional<MachineItem> choose_overlay_address_item(const std::vector<MachineItem>& candidate,
                                                        const MachineItem& address,
                                                        int executable_opcode,
-                                                       const std::string& overlaid) {
+                                                       const std::string& overlaid,
+                                                       AddressSpaceModel model) {
   MachineItem ordinary = overlay_address_item(address, overlaid);
-  const std::optional<int> ordinary_opcode = address_opcode_for_item(candidate, ordinary);
+  const std::optional<int> ordinary_opcode = address_opcode_for_item(candidate, ordinary, model);
   if (ordinary_opcode.has_value() && *ordinary_opcode == executable_opcode)
     return ordinary;
 
   const std::optional<int> target = resolved_address_target(candidate, ordinary);
   if (!target.has_value())
     return std::nullopt;
-  const FormalAddressInfo formal = formal_address_info(executable_opcode);
+  const FormalAddressInfo formal = formal_address_info(executable_opcode, model);
   if (formal.actual != *target)
     return std::nullopt;
 
   MachineItem formal_address =
       overlay_address_item_with_formal_opcode(address, executable_opcode, overlaid);
-  const std::optional<int> formal_opcode = address_opcode_for_item(candidate, formal_address);
+  const std::optional<int> formal_opcode =
+      address_opcode_for_item(candidate, formal_address, model);
   if (!formal_opcode.has_value() || *formal_opcode != executable_opcode)
     return std::nullopt;
   return formal_address;
@@ -536,12 +549,13 @@ std::vector<MachineItem> immediate_overlay_candidate(const std::vector<MachineIt
 }
 
 std::optional<AddressCodeOverlayApplication>
-apply_address_code_overlay(const std::vector<MachineItem>& items) {
+apply_address_code_overlay(const std::vector<MachineItem>& items, AddressSpaceModel model) {
   const std::map<int, int> address_by_item = machine_address_by_item_index(items);
   const MachineLayout layout = machine_layout(items);
   MachineReturnAnalyzer target_may_return{
       .items = items,
       .layout = layout,
+      .model = model,
   };
   for (int index = 0; index < static_cast<int>(items.size()) - 2; ++index) {
     const MachineItem& branch = items.at(static_cast<std::size_t>(index));
@@ -558,17 +572,18 @@ apply_address_code_overlay(const std::vector<MachineItem>& items) {
     }
     if (labels_end == index + 2)
       continue;
-    if (!can_overlay_executable_cell_at(items, labels_end))
+    if (!can_overlay_executable_cell_at(items, labels_end, model))
       continue;
 
-    const std::optional<OverlayExecutable> executable = overlay_executable_at(items, labels_end);
+    const std::optional<OverlayExecutable> executable =
+        overlay_executable_at(items, labels_end, model);
     if (!executable.has_value())
       continue;
 
     const auto address_cell_it = address_by_item.find(index + 1);
     if (address_cell_it == address_by_item.end())
       continue;
-    const std::optional<int> fixed_target = fixed_address_actual_target(address);
+    const std::optional<int> fixed_target = fixed_address_actual_target(address, model);
     if (fixed_target.has_value() && *fixed_target > address_cell_it->second)
       continue;
 
@@ -576,19 +591,19 @@ apply_address_code_overlay(const std::vector<MachineItem>& items) {
         immediate_overlay_candidate(items, index, labels_end, address);
     const int provisional_address_index = index + 1 + (labels_end - (index + 2));
     if (!can_move_overlay_opcode_to(items, labels_end, provisional, provisional_address_index,
-                                    executable->opcode)) {
+                                    executable->opcode, model)) {
       continue;
     }
 
-    const std::optional<MachineItem> candidate_address =
-        choose_overlay_address_item(provisional, address, executable->opcode, executable->mnemonic);
+    const std::optional<MachineItem> candidate_address = choose_overlay_address_item(
+        provisional, address, executable->opcode, executable->mnemonic, model);
     if (!candidate_address.has_value())
       continue;
 
     std::vector<MachineItem> candidate =
         immediate_overlay_candidate(items, index, labels_end, *candidate_address);
     const std::optional<int> overlaid_opcode =
-        address_opcode_for_item(candidate, *candidate_address);
+        address_opcode_for_item(candidate, *candidate_address, model);
     if (!overlaid_opcode.has_value() || *overlaid_opcode != executable->opcode)
       continue;
     if (machine_cell_count(candidate) >= machine_cell_count(items))
@@ -633,10 +648,11 @@ apply_address_code_overlay(const std::vector<MachineItem>& items) {
         continue;
       if (!labels_have_no_linear_fallthrough(items, labels_start, target_may_return))
         continue;
-      if (!can_overlay_executable_cell_at(items, labels_end))
+      if (!can_overlay_executable_cell_at(items, labels_end, model))
         continue;
 
-      const std::optional<OverlayExecutable> executable = overlay_executable_at(items, labels_end);
+      const std::optional<OverlayExecutable> executable =
+          overlay_executable_at(items, labels_end, model);
       if (!executable.has_value() || is_address_taking_opcode(executable->opcode))
         continue;
       // Relocating a distant label onto the branch address byte changes the
@@ -649,7 +665,7 @@ apply_address_code_overlay(const std::vector<MachineItem>& items) {
 
       const auto removed_address_it = layout.address_by_item_index.find(labels_end);
       if (removed_address_it == layout.address_by_item_index.end() ||
-          !fixed_address_targets_survive_removal(items, removed_address_it->second)) {
+          !fixed_address_targets_survive_removal(items, removed_address_it->second, model)) {
         continue;
       }
 
@@ -672,12 +688,12 @@ apply_address_code_overlay(const std::vector<MachineItem>& items) {
 
       const int provisional_address_index = index + 1 + static_cast<int>(labels.size());
       if (!can_move_overlay_opcode_to(items, labels_end, provisional, provisional_address_index,
-                                      executable->opcode)) {
+                                      executable->opcode, model)) {
         continue;
       }
 
       const std::optional<MachineItem> candidate_address = choose_overlay_address_item(
-          provisional, address, executable->opcode, executable->mnemonic);
+          provisional, address, executable->opcode, executable->mnemonic, model);
       if (!candidate_address.has_value())
         continue;
 
@@ -690,7 +706,7 @@ apply_address_code_overlay(const std::vector<MachineItem>& items) {
       candidate.insert(candidate.end(), items.begin() + labels_end + 1, items.end());
 
       const std::optional<int> overlaid_opcode =
-          address_opcode_for_item(candidate, *candidate_address);
+          address_opcode_for_item(candidate, *candidate_address, model);
       if (!overlaid_opcode.has_value() || *overlaid_opcode != executable->opcode)
         continue;
       if (machine_cell_count(candidate) >= machine_cell_count(items))
@@ -712,7 +728,8 @@ apply_address_code_overlay(const std::vector<MachineItem>& items) {
 
 std::optional<std::string> retargeted_selector_value(const std::string& register_name,
                                                      const std::string& previous_value,
-                                                     int shifted_target);
+                                                     int shifted_target,
+                                                     AddressSpaceModel model);
 
 // Retarget preloaded indirect-flow selectors after an address-code overlay
 // deleted one cell. The overlay shifts every cell at or beyond
@@ -724,13 +741,14 @@ std::optional<std::string> retargeted_selector_value(const std::string& register
 std::optional<std::vector<PreloadReport>>
 retarget_selector_preloads_after_overlay(const std::vector<MachineItem>& after_items,
                                          const std::vector<PreloadReport>& preloads,
-                                         int removed_cell_address, int overlaid_cell_address) {
+                                         int removed_cell_address, int overlaid_cell_address,
+                                         AddressSpaceModel model) {
   const std::vector<MachineCell> after_cells = machine_cells(after_items);
   std::vector<PreloadReport> next;
   next.reserve(preloads.size());
   for (const PreloadReport& preload : preloads) {
     const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
-        preload.register_name, preload.value, IndirectOperationKind::Flow);
+        preload.register_name, preload.value, IndirectOperationKind::Flow, model);
     if (!decoded.has_value() || !decoded->actual_flow_target.has_value()) {
       next.push_back(preload);
       continue;
@@ -748,11 +766,11 @@ retarget_selector_preloads_after_overlay(const std::vector<MachineItem>& after_i
     if (!machine_cell_at(after_cells, new_target).has_value())
       return std::nullopt;
     const std::optional<std::string> selector_value =
-        retargeted_selector_value(preload.register_name, preload.value, new_target);
+        retargeted_selector_value(preload.register_name, preload.value, new_target, model);
     if (!selector_value.has_value())
       return std::nullopt;
     const std::optional<IndirectAddressEvaluation> shifted = evaluate_indirect_address(
-        preload.register_name, *selector_value, IndirectOperationKind::Flow);
+        preload.register_name, *selector_value, IndirectOperationKind::Flow, model);
     if (!shifted.has_value() || shifted->actual_flow_target != new_target)
       return std::nullopt;
     next.push_back(PreloadReport{
@@ -851,13 +869,7 @@ std::string formal_label_from_ordinal(int ordinal) {
   return uppercase_hex_digit(ordinal / 10) + uppercase_hex_digit(ordinal % 10);
 }
 
-std::string official_label(int target) {
-  if (target <= 99)
-    return std::to_string(target / 10) + std::to_string(target % 10);
-  return "A" + std::to_string(target - 100);
-}
-
-std::string selector_for_target(int target) {
+std::string selector_for_target(int target, AddressSpaceModel model) {
   // See preloaded_indirect_flow.cpp selector_for_target: dark formal aliases for
   // targets 28..47 ("E0".."F9") are not raw-load-stable (E-prefix throws as
   // exponent notation, F-prefix loses its leading nibble), so committing them as
@@ -866,13 +878,13 @@ std::string selector_for_target(int target) {
   // plain decimal address.
   if (target <= 27)
     return formal_label_from_ordinal(target + 112);
-  return official_label(target);
+  return format_official_address(target, model);
 }
 
-std::optional<std::string> selector_for_actual_target(int target) {
-  if (target < 0 || target > 104)
+std::optional<std::string> selector_for_actual_target(int target, AddressSpaceModel model) {
+  if (target < 0 || target > official_program_last_address(model))
     return std::nullopt;
-  return selector_for_target(target);
+  return selector_for_target(target, model);
 }
 
 std::string register_name_from_index(int index) {
@@ -1089,7 +1101,8 @@ std::optional<std::string> replace_indirect_target_comment(
 
 std::vector<MachineItem>
 retarget_machine_selector_comments(std::vector<MachineItem> items,
-                                   const std::map<std::string, std::string>& selector_by_register) {
+                                   const std::map<std::string, std::string>& selector_by_register,
+                                   AddressSpaceModel model) {
   for (MachineItem& item : items) {
     if (item.kind != MachineItemKind::Op)
       continue;
@@ -1100,7 +1113,7 @@ retarget_machine_selector_comments(std::vector<MachineItem> items,
     if (selector_it == selector_by_register.end())
       continue;
     const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
-        *register_name, selector_it->second, IndirectOperationKind::Flow);
+        *register_name, selector_it->second, IndirectOperationKind::Flow, model);
     if (!decoded.has_value() || !decoded->actual_flow_target.has_value())
       continue;
     item.comment = replace_indirect_target_comment(
@@ -1133,7 +1146,8 @@ bool is_dark_entry_target(const IndirectAddressEvaluation& decoded) {
 }
 
 MergeDuplicateSelectorsResult merge_duplicate_selectors(const std::vector<MachineItem>& items,
-                                                        const std::vector<PreloadReport>& preloads) {
+                                                        const std::vector<PreloadReport>& preloads,
+                                                        AddressSpaceModel model) {
   std::map<std::string, std::string> canonical_by_value;
   std::map<std::string, std::string> remap;
   std::map<std::string, std::string> value_by_kept_register;
@@ -1175,7 +1189,7 @@ MergeDuplicateSelectorsResult merge_duplicate_selectors(const std::vector<Machin
           .preloads = preloads,
       };
     const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
-        target_register, selector_it->second, IndirectOperationKind::Flow);
+        target_register, selector_it->second, IndirectOperationKind::Flow, model);
     if (!decoded.has_value() || !decoded->actual_flow_target.has_value())
       return MergeDuplicateSelectorsResult{
           .items = items,
@@ -1342,7 +1356,8 @@ std::optional<std::string> preload_value_for_register(const std::vector<PreloadR
   return std::nullopt;
 }
 
-std::optional<int> known_indirect_flow_target_comment(const std::optional<std::string>& comment) {
+std::optional<int> known_indirect_flow_target_comment(const std::optional<std::string>& comment,
+                                                      AddressSpaceModel model) {
   if (!comment.has_value())
     return std::nullopt;
   constexpr std::string_view kMarker = "indirect-target=";
@@ -1369,7 +1384,7 @@ std::optional<int> known_indirect_flow_target_comment(const std::optional<std::s
       return std::nullopt;
     }
   }
-  if (target < 0 || target > 104)
+  if (target < 0 || target > official_program_last_address(model))
     return std::nullopt;
   return target;
 }
@@ -1388,21 +1403,24 @@ std::optional<int> first_procedure_start_address(const std::vector<MachineItem>&
 }
 
 std::optional<int> known_machine_indirect_jump_target(const MachineItem& item,
-                                                      const std::vector<PreloadReport>& preloads) {
+                                                      const std::vector<PreloadReport>& preloads,
+                                                      AddressSpaceModel model) {
   if (item.kind != MachineItemKind::Op)
     return std::nullopt;
   const std::optional<std::string> register_name = register_from_indirect_opcode(item.opcode);
   if (!register_name.has_value() || item.opcode - register_index(*register_name) != 0x80)
     return std::nullopt;
 
-  if (const std::optional<int> comment_target = known_indirect_flow_target_comment(item.comment))
+  if (const std::optional<int> comment_target =
+          known_indirect_flow_target_comment(item.comment, model))
     return comment_target;
 
   const std::optional<std::string> selector_value =
       preload_value_for_register(preloads, *register_name);
   if (selector_value.has_value()) {
     const std::optional<IndirectAddressEvaluation> decoded =
-        evaluate_indirect_address(*register_name, *selector_value, IndirectOperationKind::Flow);
+        evaluate_indirect_address(*register_name, *selector_value, IndirectOperationKind::Flow,
+                                  model);
     if (decoded.has_value())
       return decoded->actual_flow_target;
   }
@@ -1433,7 +1451,8 @@ std::string empty_stack_tail_call_comment(const MachineItem& call) {
 
 std::optional<EmptyStackTailCallRewrite>
 find_empty_stack_tail_call_rewrite(const std::vector<MachineItem>& items,
-                                   const std::vector<PreloadReport>& preloads) {
+                                   const std::vector<PreloadReport>& preloads,
+                                   AddressSpaceModel model) {
   const std::vector<MachineCell> cells = machine_cells(items);
   const std::optional<int> first_proc = first_procedure_start_address(items);
   if (!first_proc.has_value())
@@ -1450,7 +1469,7 @@ find_empty_stack_tail_call_rewrite(const std::vector<MachineItem>& items,
         address.item->kind != MachineItemKind::Address) {
       continue;
     }
-    if (known_machine_indirect_jump_target(*loop_back.item, preloads) != 0)
+    if (known_machine_indirect_jump_target(*loop_back.item, preloads, model) != 0)
       continue;
 
     return EmptyStackTailCallRewrite{
@@ -1487,15 +1506,16 @@ apply_empty_stack_tail_call_rewrite(const std::vector<MachineItem>& items,
 
 std::optional<std::string> retargeted_selector_value(const std::string& register_name,
                                                      const std::string& previous_value,
-                                                     int shifted_target) {
+                                                     int shifted_target,
+                                                     AddressSpaceModel model) {
   if (const std::optional<std::string> suffix = fractional_selector_suffix(previous_value)) {
     const std::string candidate = std::to_string(shifted_target) + *suffix;
     const std::optional<IndirectAddressEvaluation> decoded =
-        evaluate_indirect_address(register_name, candidate, IndirectOperationKind::Flow);
+        evaluate_indirect_address(register_name, candidate, IndirectOperationKind::Flow, model);
     if (decoded.has_value() && decoded->actual_flow_target == shifted_target)
       return candidate;
   }
-  return selector_for_actual_target(shifted_target);
+  return selector_for_actual_target(shifted_target, model);
 }
 
 std::optional<int> first_executable_op_index_at_address(const std::vector<IrOp>& ops,
@@ -1510,7 +1530,7 @@ std::optional<int> first_executable_op_index_at_address(const std::vector<IrOp>&
 
 std::optional<RetargetedIr> retarget_existing_selectors_after_shift(
     const std::vector<IrOp>& before_ops, const std::vector<IrOp>& after_ops,
-    const std::vector<PreloadReport>& preloads) {
+    const std::vector<PreloadReport>& preloads, AddressSpaceModel model) {
   if (preloads.empty()) {
     return RetargetedIr{
         .ops = after_ops,
@@ -1526,7 +1546,7 @@ std::optional<RetargetedIr> retarget_existing_selectors_after_shift(
 
   for (const PreloadReport& preload : preloads) {
     const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
-        preload.register_name, preload.value, IndirectOperationKind::Flow);
+        preload.register_name, preload.value, IndirectOperationKind::Flow, model);
     if (!decoded.has_value() || !decoded->actual_flow_target.has_value())
       return std::nullopt;
     const std::optional<int> target_index = first_executable_op_index_at_address(
@@ -1537,11 +1557,12 @@ std::optional<RetargetedIr> retarget_existing_selectors_after_shift(
     const std::optional<std::string> selector_value =
         shifted_target == *decoded->actual_flow_target
             ? std::optional<std::string>(preload.value)
-            : retargeted_selector_value(preload.register_name, preload.value, shifted_target);
+            : retargeted_selector_value(preload.register_name, preload.value, shifted_target,
+                                        model);
     if (!selector_value.has_value())
       return std::nullopt;
     const std::optional<IndirectAddressEvaluation> shifted = evaluate_indirect_address(
-        preload.register_name, *selector_value, IndirectOperationKind::Flow);
+        preload.register_name, *selector_value, IndirectOperationKind::Flow, model);
     if (!shifted.has_value() || shifted->actual_flow_target != shifted_target)
       return std::nullopt;
     next_preloads.push_back(PreloadReport{
@@ -1560,7 +1581,7 @@ std::optional<RetargetedIr> retarget_existing_selectors_after_shift(
     if (selector_it == next_by_register.end())
       continue;
     const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
-        op.register_name, selector_it->second, IndirectOperationKind::Flow);
+        op.register_name, selector_it->second, IndirectOperationKind::Flow, model);
     if (!decoded.has_value() || !decoded->actual_flow_target.has_value())
       continue;
     op.meta.comment = replace_indirect_target_comment(
@@ -1577,7 +1598,7 @@ std::optional<RetargetedIr> retarget_existing_selectors_after_shift(
 std::optional<RetargetedMachine> retarget_selector_preloads_after_machine_deletion(
     const std::vector<MachineItem>& before_items, std::vector<MachineItem> after_items,
     const std::vector<PreloadReport>& preloads, int removed_item_index,
-    int replaced_item_index) {
+    int replaced_item_index, AddressSpaceModel model) {
   const std::vector<MachineCell> before_cells = machine_cells(before_items);
   const std::map<int, int> after_address_by_item_index =
       machine_address_by_item_index(after_items);
@@ -1586,7 +1607,7 @@ std::optional<RetargetedMachine> retarget_selector_preloads_after_machine_deleti
   std::map<std::string, std::string> next_by_register;
   for (const PreloadReport& preload : preloads) {
     const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
-        preload.register_name, preload.value, IndirectOperationKind::Flow);
+        preload.register_name, preload.value, IndirectOperationKind::Flow, model);
     if (!decoded.has_value() || !decoded->actual_flow_target.has_value())
       return std::nullopt;
     const int target = *decoded->actual_flow_target;
@@ -1607,11 +1628,12 @@ std::optional<RetargetedMachine> retarget_selector_preloads_after_machine_deleti
     const std::optional<std::string> selector_value =
         shifted_target == target
             ? std::optional<std::string>(preload.value)
-            : retargeted_selector_value(preload.register_name, preload.value, shifted_target);
+            : retargeted_selector_value(preload.register_name, preload.value, shifted_target,
+                                        model);
     if (!selector_value.has_value())
       return std::nullopt;
     const std::optional<IndirectAddressEvaluation> shifted = evaluate_indirect_address(
-        preload.register_name, *selector_value, IndirectOperationKind::Flow);
+        preload.register_name, *selector_value, IndirectOperationKind::Flow, model);
     if (!shifted.has_value() || shifted->actual_flow_target != shifted_target)
       return std::nullopt;
     next_preloads.push_back(PreloadReport{
@@ -1623,7 +1645,7 @@ std::optional<RetargetedMachine> retarget_selector_preloads_after_machine_deleti
   }
 
   return RetargetedMachine{
-      .items = retarget_machine_selector_comments(std::move(after_items), next_by_register),
+      .items = retarget_machine_selector_comments(std::move(after_items), next_by_register, model),
       .preloads = std::move(next_preloads),
   };
 }
@@ -1651,8 +1673,9 @@ std::optional<RewriteStep> validate_rewrite_at(
   if (target_it == final_labels.end())
     return std::nullopt;
 
+  const AddressSpaceModel model = address_space_model_for_options(options);
   const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
-      rewritten.register_name, selector->value, IndirectOperationKind::Flow);
+      rewritten.register_name, selector->value, IndirectOperationKind::Flow, model);
   if (!decoded.has_value() || decoded->actual_flow_target != target_it->second)
     return std::nullopt;
 
@@ -1701,8 +1724,10 @@ std::optional<RewriteStep> validate_rewrite_group(
     candidate.at(static_cast<std::size_t>(index)) = pass.ops.at(static_cast<std::size_t>(index));
 
   const std::map<std::string, int> final_labels = passes::calculate_label_addresses(candidate);
+  const AddressSpaceModel model = address_space_model_for_options(options);
   const std::optional<IndirectAddressEvaluation> decoded =
-      evaluate_indirect_address(register_name, selector->value, IndirectOperationKind::Flow);
+      evaluate_indirect_address(register_name, selector->value, IndirectOperationKind::Flow,
+                                model);
   if (!decoded.has_value())
     return std::nullopt;
 
@@ -1772,7 +1797,7 @@ std::optional<RewriteStep> better_rewrite(std::optional<RewriteStep> current,
 std::optional<RewriteStep> validate_forward_rewrite_group(
     const std::vector<int>& indices, const std::vector<IrOp>& ir,
     const std::vector<std::optional<std::string>>& target_labels, const std::string& register_name,
-    const std::vector<MachineItem>& items) {
+    const std::vector<MachineItem>& items, AddressSpaceModel model) {
   if (indices.empty())
     return std::nullopt;
 
@@ -1808,11 +1833,13 @@ std::optional<RewriteStep> validate_forward_rewrite_group(
   if (!final_target.has_value())
     return std::nullopt;
 
-  const std::optional<std::string> selector_value = selector_for_actual_target(*final_target);
+  const std::optional<std::string> selector_value = selector_for_actual_target(*final_target,
+                                                                              model);
   if (!selector_value.has_value())
     return std::nullopt;
   const std::optional<IndirectAddressEvaluation> decoded =
-      evaluate_indirect_address(register_name, *selector_value, IndirectOperationKind::Flow);
+      evaluate_indirect_address(register_name, *selector_value, IndirectOperationKind::Flow,
+                                model);
   if (!decoded.has_value() || decoded->actual_flow_target != *final_target)
     return std::nullopt;
 
@@ -1857,7 +1884,8 @@ std::optional<RewriteStep> validate_forward_rewrite_group(
 
 std::optional<RewriteStep> apply_forward_rewrite(
     const std::vector<IrOp>& ir, const std::vector<std::optional<std::string>>& target_labels,
-    const std::vector<MachineItem>& items, const std::set<std::string>& reserved) {
+    const std::vector<MachineItem>& items, const std::set<std::string>& reserved,
+    AddressSpaceModel model) {
   const bool trace = trace_post_layout_enabled();
   const std::optional<std::string> register_name = first_spare_stable_register(ir, reserved);
   if (!register_name.has_value()) {
@@ -1912,7 +1940,7 @@ std::optional<RewriteStep> apply_forward_rewrite(
   for (const auto& [label, indices] : groups) {
     (void)label;
     std::optional<RewriteStep> candidate =
-        validate_forward_rewrite_group(indices, ir, target_labels, *register_name, items);
+        validate_forward_rewrite_group(indices, ir, target_labels, *register_name, items, model);
     if (trace) {
       std::cerr << "[post-layout] forward candidate label=" << label
                 << " valid=" << (candidate.has_value() ? "yes" : "no");
@@ -1941,6 +1969,7 @@ std::optional<RewriteStep> apply_one_rewrite(const std::vector<MachineItem>& ite
                                              const std::vector<PreloadReport>& existing_preloads) {
   const bool trace = trace_post_layout_enabled();
   CompileOptions round_options = options_with_reserved_preloads(options, existing_preloads);
+  const AddressSpaceModel model = address_space_model_for_options(round_options);
 
   std::set<std::string> reserved;
   for (const auto& [register_name, value] : round_options.preloaded_constant_registers) {
@@ -2020,7 +2049,8 @@ std::optional<RewriteStep> apply_one_rewrite(const std::vector<MachineItem>& ite
     }
   }
 
-  std::optional<RewriteStep> forward = apply_forward_rewrite(ir, view.target_labels, items, reserved);
+  std::optional<RewriteStep> forward =
+      apply_forward_rewrite(ir, view.target_labels, items, reserved, model);
   if (trace) {
     std::cerr << "[post-layout] forward_valid=" << (forward.has_value() ? "yes" : "no");
     if (forward.has_value()) {
@@ -2037,12 +2067,13 @@ std::optional<RewriteStep> apply_one_rewrite(const std::vector<MachineItem>& ite
 }
 
 std::vector<StopTailReuseBase> stop_tail_reuse_bases(const std::vector<MachineItem>& items,
-                                                     const std::vector<PreloadReport>& preloads) {
+                                                     const std::vector<PreloadReport>& preloads,
+                                                     AddressSpaceModel model) {
   const std::vector<MachineCell> cells = machine_cells(items);
   std::vector<StopTailReuseBase> bases;
   for (const PreloadReport& preload : preloads) {
     const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
-        preload.register_name, preload.value, IndirectOperationKind::Flow);
+        preload.register_name, preload.value, IndirectOperationKind::Flow, model);
     if (!decoded.has_value() || !decoded->actual_flow_target.has_value())
       continue;
     const int target = *decoded->actual_flow_target;
@@ -2068,8 +2099,9 @@ std::vector<StopTailReuseBase> stop_tail_reuse_bases(const std::vector<MachineIt
 
 std::optional<StopTailReuseRewrite>
 find_stop_tail_reuse_rewrite(const std::vector<MachineItem>& items,
-                             const std::vector<PreloadReport>& preloads) {
-  const std::vector<StopTailReuseBase> bases = stop_tail_reuse_bases(items, preloads);
+                             const std::vector<PreloadReport>& preloads,
+                             AddressSpaceModel model) {
+  const std::vector<StopTailReuseBase> bases = stop_tail_reuse_bases(items, preloads, model);
   if (bases.empty())
     return std::nullopt;
   const std::vector<MachineCell> cells = machine_cells(items);
@@ -2138,7 +2170,8 @@ std::vector<MachineItem> apply_stop_tail_reuse_rewrite(const std::vector<Machine
 
 std::optional<BranchRewrite>
 find_existing_selector_flow_rewrite(const std::vector<MachineItem>& items,
-                                    const std::vector<PreloadReport>& preloads) {
+                                    const std::vector<PreloadReport>& preloads,
+                                    AddressSpaceModel model) {
   const std::vector<MachineCell> cells = machine_cells(items);
   const std::map<std::string, int> labels = machine_label_addresses(items);
   const std::map<int, std::vector<std::string>> labels_by_address =
@@ -2158,7 +2191,7 @@ find_existing_selector_flow_rewrite(const std::vector<MachineItem>& items,
       continue;
     for (const PreloadReport& preload : preloads) {
       const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
-          preload.register_name, preload.value, IndirectOperationKind::Flow);
+          preload.register_name, preload.value, IndirectOperationKind::Flow, model);
       if (!decoded.has_value() || decoded->actual_flow_target != *target)
         continue;
       const std::optional<int> opcode =
@@ -2186,7 +2219,8 @@ find_existing_selector_flow_rewrite(const std::vector<MachineItem>& items,
 
 std::optional<BranchRewrite>
 find_branch_to_stop_tail_selector_rewrite(const std::vector<MachineItem>& items,
-                                          const std::vector<PreloadReport>& preloads) {
+                                          const std::vector<PreloadReport>& preloads,
+                                          AddressSpaceModel model) {
   const std::vector<MachineCell> cells = machine_cells(items);
   const std::map<std::string, int> labels = machine_label_addresses(items);
   const std::map<int, std::vector<std::string>> labels_by_address =
@@ -2220,7 +2254,8 @@ find_branch_to_stop_tail_selector_rewrite(const std::vector<MachineItem>& items,
     if (!selector_value.has_value())
       continue;
     const std::optional<IndirectAddressEvaluation> decoded =
-        evaluate_indirect_address(*register_name, *selector_value, IndirectOperationKind::Flow);
+        evaluate_indirect_address(*register_name, *selector_value, IndirectOperationKind::Flow,
+                                  model);
     if (!decoded.has_value() || !decoded->actual_flow_target.has_value())
       continue;
     const std::optional<MachineCell> stop = machine_cell_at(cells, *decoded->actual_flow_target);
@@ -2306,6 +2341,7 @@ optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
   int dark_entry_applied = 0;
   int existing_selector_applied = 0;
   std::vector<int> immutable_targets;
+  const AddressSpaceModel model = address_space_model_for_options(options);
   for (int round = 0; round < kMaxRewrites; ++round) {
     const std::optional<RewriteStep> step = apply_one_rewrite(current, options, preloads);
     if (!step.has_value()) {
@@ -2332,7 +2368,7 @@ optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
 
     const std::vector<IrOp> before_ops = raise_machine_to_ir(current);
     const std::optional<RetargetedIr> retargeted =
-        retarget_existing_selectors_after_shift(before_ops, step->ops, preloads);
+        retarget_existing_selectors_after_shift(before_ops, step->ops, preloads, model);
     if (!retargeted.has_value()) {
       if (trace)
         std::cerr << "[post-layout] round=" << round << " retarget failed\n";
@@ -2363,7 +2399,7 @@ optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
     };
   }
 
-  MergeDuplicateSelectorsResult merge = merge_duplicate_selectors(current, preloads);
+  MergeDuplicateSelectorsResult merge = merge_duplicate_selectors(current, preloads, model);
   current = std::move(merge.items);
   preloads = std::move(merge.preloads);
 
@@ -2388,7 +2424,7 @@ optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
         .name = "dark-entry-layout",
         .detail = "Pointed " + std::to_string(dark_entry_applied) +
                   " branch(es) at an executable suffix through a proven dark-entry formal "
-                  "address (beyond the 104-cell window).",
+                  "address (beyond the official program window).",
     });
   }
   if (merge.merged > 0) {
@@ -2461,25 +2497,28 @@ optimize_post_layout_fractional_r0_flow(const std::vector<MachineItem>& items,
 
 PostLayoutIndirectFlowResult
 optimize_post_layout_address_code_overlay(const std::vector<MachineItem>& items,
-                                          const std::vector<PreloadReport>& preloads) {
+                                          const std::vector<PreloadReport>& preloads,
+                                          const CompileOptions& options) {
+  const AddressSpaceModel model = address_space_model_for_options(options);
   std::vector<MachineItem> current = items;
   std::vector<PreloadReport> current_preloads = preloads;
   int applied = 0;
   for (int round = 0; round < 16; ++round) {
-    std::optional<AddressCodeOverlayApplication> result = apply_address_code_overlay(current);
+    std::optional<AddressCodeOverlayApplication> result =
+        apply_address_code_overlay(current, model);
     if (!result.has_value())
       break;
     const std::optional<std::vector<PreloadReport>> retargeted =
         retarget_selector_preloads_after_overlay(result->items, current_preloads,
                                                  result->removed_cell_address,
-                                                 result->overlaid_cell_address);
+                                                 result->overlaid_cell_address, model);
     if (!retargeted.has_value())
       break;
     std::map<std::string, std::string> selector_by_register;
     for (const PreloadReport& preload : *retargeted)
       selector_by_register[preload.register_name] = preload.value;
-    current =
-        retarget_machine_selector_comments(std::move(result->items), selector_by_register);
+    current = retarget_machine_selector_comments(std::move(result->items), selector_by_register,
+                                                 model);
     current_preloads = *retargeted;
     ++applied;
   }
@@ -2509,7 +2548,9 @@ optimize_post_layout_address_code_overlay(const std::vector<MachineItem>& items,
 
 PostLayoutIndirectFlowResult
 optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
-                                     const std::vector<PreloadReport>& preloads) {
+                                     const std::vector<PreloadReport>& preloads,
+                                     const CompileOptions& options) {
+  const AddressSpaceModel model = address_space_model_for_options(options);
   std::vector<MachineItem> current = items;
   std::vector<PreloadReport> current_preloads = preloads;
   int stop_tail_applied = 0;
@@ -2520,7 +2561,7 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
     const std::map<int, int> address_by_item = machine_address_by_item_index(current);
 
     if (const std::optional<EmptyStackTailCallRewrite> rewrite =
-            find_empty_stack_tail_call_rewrite(current, current_preloads)) {
+            find_empty_stack_tail_call_rewrite(current, current_preloads, model)) {
       std::vector<MachineItem> candidate = apply_empty_stack_tail_call_rewrite(current, *rewrite);
       if (machine_cell_count(candidate) >= machine_cell_count(current))
         break;
@@ -2528,7 +2569,7 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
           retarget_selector_preloads_after_machine_deletion(current, std::move(candidate),
                                                             current_preloads,
                                                             rewrite->loop_back_index,
-                                                            rewrite->call_index);
+                                                            rewrite->call_index, model);
       if (!retargeted.has_value())
         break;
       current = retargeted->items;
@@ -2538,7 +2579,7 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
     }
 
     if (const std::optional<BranchRewrite> rewrite =
-            find_existing_selector_flow_rewrite(current, current_preloads)) {
+            find_existing_selector_flow_rewrite(current, current_preloads, model)) {
       std::vector<MachineItem> candidate = apply_branch_rewrite(current, *rewrite);
       if (machine_cell_count(candidate) >= machine_cell_count(current))
         break;
@@ -2546,7 +2587,7 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
           retarget_selector_preloads_after_machine_deletion(current, std::move(candidate),
                                                             current_preloads,
                                                             rewrite->address_index,
-                                                            rewrite->branch_index);
+                                                            rewrite->branch_index, model);
       if (!retargeted.has_value())
         break;
       current = retargeted->items;
@@ -2556,7 +2597,7 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
     }
 
     if (const std::optional<BranchRewrite> rewrite =
-            find_branch_to_stop_tail_selector_rewrite(current, current_preloads)) {
+            find_branch_to_stop_tail_selector_rewrite(current, current_preloads, model)) {
       std::vector<MachineItem> candidate = apply_branch_rewrite(current, *rewrite);
       if (machine_cell_count(candidate) >= machine_cell_count(current))
         break;
@@ -2564,7 +2605,7 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
           retarget_selector_preloads_after_machine_deletion(current, std::move(candidate),
                                                             current_preloads,
                                                             rewrite->address_index,
-                                                            rewrite->branch_index);
+                                                            rewrite->branch_index, model);
       if (!retargeted.has_value())
         break;
       current = retargeted->items;
@@ -2574,14 +2615,14 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
     }
 
     if (const std::optional<StopTailReuseRewrite> rewrite =
-            find_stop_tail_reuse_rewrite(current, current_preloads)) {
+            find_stop_tail_reuse_rewrite(current, current_preloads, model)) {
       std::vector<MachineItem> candidate = apply_stop_tail_reuse_rewrite(current, *rewrite);
       if (machine_cell_count(candidate) >= machine_cell_count(current))
         break;
       const std::optional<RetargetedMachine> retargeted =
           retarget_selector_preloads_after_machine_deletion(current, std::move(candidate),
                                                             current_preloads, rewrite->remove_index,
-                                                            rewrite->replace_index);
+                                                            rewrite->replace_index, model);
       if (!retargeted.has_value())
         break;
       current = retargeted->items;

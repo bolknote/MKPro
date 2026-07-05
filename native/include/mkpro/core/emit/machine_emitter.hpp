@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mkpro/core/ir.hpp"
+#include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/result.hpp"
 #include "mkpro/core/types.hpp"
 
@@ -39,6 +40,7 @@ public:
   bool coord_list_counter_known_one = false;
   std::set<std::string> zero_address_labels;
   std::map<std::string, std::optional<std::string>> label_edge_x;
+  AddressSpaceModel address_space_model = AddressSpaceModel::Standard;
   bool machine_entry_open = false;
 
   void emit_number(std::string raw);

@@ -38,7 +38,7 @@ mkpro-native explain file.mkpro
 
 Flags:
 
-- `--delivery manual|loader|hex` (default `hex`) controls opcode delivery
+- `--delivery manual|loader|hex` (default `manual`) controls opcode delivery
   metadata for listings.
 - `--out mk61s` prints MK-61s mini terminal hex rows. Without generated setup,
   rows are `hout`-compatible `0000 HEX...` chunks of up to 24 commands. With
@@ -53,7 +53,14 @@ Flags:
   `dot -Tpng`; the default graph style uses a dark background for terminal
   image previews. Terminal renderers such as `kitty` and `vt` emit terminal
   control sequences and only work in compatible terminals with direct stdout.
-- `--budget N` (default `105`). Hard error if exceeded.
+- `--budget N` overrides the selected profile's official program window
+  (105 cells for default `mk61`, 112 for `mk61s-mini-expand`). Hard error if
+  exceeded.
+- `feature mk61` is the default and may be omitted. `feature mk61s-mini-expand`
+  in the source enables the expanded MK61S_MINI
+  profile with direct `Rf` access through `4F`/`6F` and 112 official program
+  cells `00`..`B1`. `--feature mk61|mk61s-mini-expand` is also available as a
+  CLI override for experiments and tooling.
 - `--analysis`, `--strict` and various optimizer toggles (e.g.
   `--return-stack-script`/`--no-return-stack-script`) are also available; see
   `mkpro-native` with no arguments for the full usage.
@@ -66,6 +73,8 @@ whether that becomes registers, stack scheduling, address constants, dark
 entries, overlays, X2/display bytes, or other MK-61 tricks.
 
 ```rust
+feature mk61s-mini-expand
+
 program TinyGame {
   field: board(0..9, 0..9)
 

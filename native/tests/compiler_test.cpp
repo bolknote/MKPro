@@ -1,4 +1,5 @@
 #include "mkpro/compiler.hpp"
+#include "mkpro/core/compiler_behavior_digest.hpp"
 #include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
@@ -120,6 +121,269 @@ std::vector<int> step_opcodes(const CompileResult& result) {
 } // namespace
 
 #define compile_source(...) compile_probe(__LINE__, __VA_ARGS__)
+
+std::string raw_display_program(int count) {
+  std::ostringstream source;
+  source << R"mkpro(
+program ExpandedProgramSpace {
+  loop {
+    raw {
+      clobbers display
+      preserves state
+      code {
+)mkpro";
+  for (int index = 0; index < count; ++index)
+    source << "        5F\n";
+  source << R"mkpro(
+      }
+    }
+    halt(0)
+  }
+}
+)mkpro";
+  return source.str();
+}
+
+void compiler_feature_profile_raw_rf_contract() {
+  const std::string raw_rf_source = R"mkpro(
+program RawRf {
+  state {
+    value: counter 0..9 = 7
+  }
+  loop {
+    raw {
+      takes X = value
+      returns X -> value
+      clobbers X
+      preserves state
+      code {
+        X->П f
+        П->X f
+      }
+    }
+    halt(value)
+  }
+}
+)mkpro";
+  const CompileResult raw_rf_standard = compile_source(raw_rf_source);
+  require(has_error_diagnostic(raw_rf_standard),
+          "standard profile should reject symbolic raw access to RF");
+  require(raw_rf_standard.feature_profile == FeatureProfile::Standard,
+          "standard compile result should preserve the standard feature profile");
+  const std::string raw_rf_source_feature =
+      std::string("feature mk61s-mini-expand\n") + raw_rf_source;
+  const CompileResult raw_rf_from_source_feature = compile_source(raw_rf_source_feature);
+  require(raw_rf_from_source_feature.implemented,
+          "source feature directive should allow symbolic raw access to RF");
+  require(raw_rf_from_source_feature.feature_profile == FeatureProfile::Mk61SMiniExpanded,
+          "source feature directive should select the expanded feature profile");
+  require(std::any_of(raw_rf_from_source_feature.steps.begin(),
+                      raw_rf_from_source_feature.steps.end(),
+                      [](const ResolvedStep& step) { return step.opcode == 0x4f; }),
+          "source feature raw RF store should emit 4F");
+  require(std::any_of(raw_rf_from_source_feature.steps.begin(),
+                      raw_rf_from_source_feature.steps.end(),
+                      [](const ResolvedStep& step) { return step.opcode == 0x6f; }),
+          "source feature raw RF recall should emit 6F");
+  CompileOptions raw_rf_expanded_options;
+  raw_rf_expanded_options.feature_profile = FeatureProfile::Mk61SMiniExpanded;
+  raw_rf_expanded_options.budget = 112;
+  const CompileResult raw_rf_expanded = compile_source(raw_rf_source, raw_rf_expanded_options);
+  require(raw_rf_expanded.implemented,
+          "expanded profile should allow symbolic raw access to RF");
+  require(raw_rf_expanded.feature_profile == FeatureProfile::Mk61SMiniExpanded,
+          "expanded compile result should preserve the selected feature profile");
+  require(raw_rf_expanded.budget.has_value() && *raw_rf_expanded.budget == 112,
+          "expanded compile result should preserve the requested budget");
+  require(raw_rf_expanded.diagnostics.empty(),
+          "expanded raw RF compile should not report diagnostics");
+  require(std::any_of(raw_rf_expanded.steps.begin(), raw_rf_expanded.steps.end(),
+                      [](const ResolvedStep& step) { return step.opcode == 0x4f; }),
+          "expanded raw RF store should emit 4F");
+  require(std::any_of(raw_rf_expanded.steps.begin(), raw_rf_expanded.steps.end(),
+                      [](const ResolvedStep& step) { return step.opcode == 0x6f; }),
+          "expanded raw RF recall should emit 6F");
+  const std::string digest =
+      program_behavior_digest(raw_rf_expanded, raw_rf_expanded_options.feature_profile);
+  require(digest.find("feature-profile=mk61s-mini-expand") != std::string::npos,
+          "expanded behavior digest should preserve the selected feature profile");
+  require(digest.find("behavior-digest-unsupported") != std::string::npos,
+          "expanded behavior digest should not run through the stock MK-61 emulator harness");
+
+  const std::string indirect_rf_source = R"mkpro(
+program RawIndirectRf {
+  loop {
+    raw {
+      clobbers X
+      preserves state
+      code {
+        К П->X f
+      }
+    }
+    halt(0)
+  }
+}
+)mkpro";
+  const CompileResult indirect_rf_expanded =
+      compile_source(indirect_rf_source, raw_rf_expanded_options);
+  require(has_error_diagnostic(indirect_rf_expanded),
+          "expanded profile should still reject RF in raw indirect commands");
+}
+
+void compiler_feature_profile_expanded_program_space_contract() {
+  const std::string source = raw_display_program(103);
+  const CompileResult standard = compile_source(source);
+  require(standard.steps.size() > 105,
+          "probe should build a main program beyond the stock official window; got " +
+              std::to_string(standard.steps.size()));
+  require(standard.machine_features_used.end() ==
+              std::find_if(standard.machine_features_used.begin(),
+                           standard.machine_features_used.end(), [](const auto& item) {
+                             return item.id == "expanded-program-space";
+                           }),
+          "standard profile should not report expanded-program-space");
+
+  CompileOptions expanded_options;
+  expanded_options.feature_profile = FeatureProfile::Mk61SMiniExpanded;
+  const CompileResult expanded = compile_source(source, expanded_options);
+  require(expanded.implemented, "expanded profile should compile a 106-cell main program");
+  require(expanded.feature_profile == FeatureProfile::Mk61SMiniExpanded,
+          "expanded program-space result should preserve the selected feature profile");
+  require(expanded.diagnostics.empty(),
+          "expanded profile should not report diagnostics for a 106-cell main program");
+  require(expanded.steps.size() > 105 && expanded.steps.size() <= 112,
+          "expanded profile should allow the main program inside the 112-cell window");
+  require(expanded.steps.at(105).address == 105,
+          "expanded profile should expose physical cell 105 as an official cell");
+  require(expanded.machine_features_used.end() !=
+              std::find_if(expanded.machine_features_used.begin(),
+                           expanded.machine_features_used.end(), [](const auto& item) {
+                             return item.id == "expanded-program-space";
+                           }),
+          "expanded profile should report expanded-program-space as a machine feature");
+
+  const CompileResult expanded_from_source =
+      compile_source(std::string("feature mk61s-mini-expand\n") + source);
+  require(expanded_from_source.implemented,
+          "source feature directive should compile a program inside the 112-cell window");
+  require(expanded_from_source.feature_profile == FeatureProfile::Mk61SMiniExpanded,
+          "source feature program-space result should select the expanded profile");
+  require(expanded_from_source.steps.size() > 105 && expanded_from_source.steps.size() <= 112,
+          "source feature directive should allow the expanded 112-cell window");
+}
+
+void compiler_feature_profile_rf_extends_optimizer_preloads_contract() {
+  CompileOptions options;
+  options.general_constant_preloads = true;
+  options.disable_candidate_search = true;
+  const CompileResult expanded = compile_source(R"mkpro(
+feature mk61s-mini-expand
+
+program ExpandedPreloadedConstant {
+  state {
+    score: counter 0..99999 = 0
+  }
+
+  loop {
+    score = 12345
+    halt(score + 12345)
+  }
+}
+)mkpro",
+                                               options);
+  require(expanded.implemented,
+          "expanded profile should compile optimizer-owned constant preloads");
+  require(expanded.feature_profile == FeatureProfile::Mk61SMiniExpanded,
+          "source feature directive should select the expanded profile for optimizer preloads");
+  require(expanded.diagnostics.empty(),
+          "expanded constant preload compile should not report diagnostics");
+  require(has_optimization(expanded, "preloaded-constant"),
+          "expanded compile should use the optimizer constant-preload path");
+  require(std::any_of(expanded.preloads.begin(), expanded.preloads.end(),
+                      [](const PreloadReport& preload) {
+                        return preload.register_name == "f" && preload.value == "12345";
+                      }),
+          "expanded optimizer preloads should use RF as the highest free register");
+  require(std::any_of(expanded.steps.begin(), expanded.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x6f && step.mnemonic == "П->X f";
+                      }),
+          "expanded optimizer preloads should emit 6F to recall RF");
+  require(expanded.listing.find("X→П f") != std::string::npos,
+          "expanded setup listing should render RF stores as X->П f");
+  require(expanded.listing.find("setup Rf; manual: not keyboard-enterable; use loader/hex") !=
+              std::string::npos,
+          "expanded setup listing should mark RF stores as not keyboard-enterable");
+  require(expanded.listing.find("preload const 12345; manual: not keyboard-enterable; use loader/hex") !=
+              std::string::npos,
+          "expanded main listing should mark RF recalls as not keyboard-enterable");
+  require(expanded.listing.find("X→П 0 alias") == std::string::npos,
+          "expanded setup listing should not render RF stores as the stock 4F alias");
+}
+
+void compiler_feature_profile_rf_extends_state_allocator_contract() {
+  const std::string expanded_source = R"mkpro(
+feature mk61s-mini-expand
+
+program ExpandedSixteenRegisters {
+  state {
+    r00: counter 0..99999 = 0
+    r01: counter 0..99999 = 1
+    r02: counter 0..99999 = 2
+    r03: counter 0..99999 = 3
+    r04: counter 0..99999 = 4
+    r05: counter 0..99999 = 5
+    r06: counter 0..99999 = 6
+    r07: counter 0..99999 = 7
+    r08: counter 0..99999 = 8
+    r09: counter 0..99999 = 9
+    r10: counter 0..99999 = 10
+    r11: counter 0..99999 = 11
+    r12: counter 0..99999 = 12
+    r13: counter 0..99999 = 13
+    r14: counter 0..99999 = 14
+    r15: counter 0..99999 = 15
+  }
+
+  loop {
+    r15 = r00 + r01 + r02 + r03 + r04 + r05 + r06 + r07
+    r15 += r08 + r09 + r10 + r11 + r12 + r13 + r14
+    halt(r15)
+  }
+}
+)mkpro";
+  CompileOptions options;
+  options.disable_candidate_search = true;
+  const CompileResult expanded = compile_source(expanded_source, options);
+  require(expanded.implemented,
+          "expanded profile should compile a program with sixteen live state registers");
+  require(expanded.feature_profile == FeatureProfile::Mk61SMiniExpanded,
+          "source feature directive should select the expanded profile for state allocation");
+  require(expanded.diagnostics.empty(),
+          "expanded sixteen-register compile should not report diagnostics");
+  require(expanded.registers.at("r15") == "f",
+          "expanded state allocator should place the sixteenth live state field in RF");
+  require(std::any_of(expanded.preloads.begin(), expanded.preloads.end(),
+                      [](const PreloadReport& preload) {
+                        return preload.register_name == "f" && preload.value == "15";
+                      }),
+          "expanded setup should preload the sixteenth state field into RF");
+  require(std::any_of(expanded.steps.begin(), expanded.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x4f && step.mnemonic == "X->П f";
+                      }),
+          "expanded state writes should emit 4F for RF");
+
+  std::string standard_source = expanded_source;
+  const std::string feature_line = "feature mk61s-mini-expand\n";
+  const std::size_t feature_pos = standard_source.find(feature_line);
+  require(feature_pos != std::string::npos,
+          "expanded example should contain a source feature directive");
+  standard_source.erase(feature_pos, feature_line.size());
+  const CompileResult standard = compile_source(standard_source, options);
+  require(has_error_diagnostic(standard),
+          "standard profile should exhaust registers on the same sixteen-state shape");
+}
 
 void compiler_lowers_initial_v2_subset() {
   const std::filesystem::path root = std::filesystem::current_path();

@@ -38,11 +38,13 @@ On B3-34, register commands accept a `T` (arrow) pseudo-name meaning **R0**:
 **Critical B3-34 behavior:** for indirect **flow** commands through `T`, `R0`
 is **not** decremented/modified the way it is when you write `К БП 0` explicitly.
 
-On the `mk61` emulator model used by this project, the `*F`
+On the stock `mk61` emulator model used by this project, the `*F`
 undocumented aliases (`4F`, `6F`, `7F`, …) correspond to using `R0` in those
 slots, but they behave like the corresponding `*0` commands, including normal
 `R0` transformation. They are **not** a shortcut for using `R0` without changing
-it.
+it. The separate `mk61s-mini-expand` compiler feature profile deliberately
+models `4F`/`6F` as direct `Rf` store/recall for the expanded MK61S_MINI
+variant.
 
 **Compiler consequence:** use `*F` aliases only as byte/formal-address tools,
 not as R0-preserving computed jump table operations.

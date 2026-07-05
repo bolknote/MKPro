@@ -62,6 +62,11 @@ const MachineProfile& mk61_profile() {
                "-99999999 sentinel."},
               {"raw-display-5f", "machine",
                "Opcode 5F is a display/raw-state transform in this ROM, not a hang."},
+              {"rf-register", "machine",
+               "MK61S_MINI expanded-ring mode exposes direct X->П F / П->X F storage as RF."},
+              {"expanded-program-space", "machine",
+               "MK61S_MINI expanded-ring mode treats A5..B1 as seven additional real program "
+               "cells instead of short-side aliases."},
           },
       .emulator_facts =
           {

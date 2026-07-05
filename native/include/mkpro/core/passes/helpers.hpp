@@ -1,5 +1,6 @@
 #pragma once
 
+#include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/ir.hpp"
 #include "mkpro/core/result.hpp"
 #include "mkpro/core/types.hpp"
@@ -280,6 +281,7 @@ std::optional<std::set<std::string>> known_indirect_memory_targets(const IrOp& o
 // followed by a clear marker boundary. Malformed comments are not treated as
 // known control-flow facts.
 std::optional<int> known_indirect_flow_target(const IrOp& op);
+std::optional<int> known_indirect_flow_target(const IrOp& op, AddressSpaceModel model);
 // Target entry labels advertised by a computed-dispatch indirect jump (empty for
 // every other op). These edges are otherwise invisible to the CFG because the
 // jump address is computed at runtime; reachability/overlay passes consult this

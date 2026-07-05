@@ -1207,6 +1207,7 @@ public:
 
   ProgramAst parse_program() {
     std::optional<std::string> reference;
+    std::optional<FeatureProfile> feature_profile;
     std::optional<V2Program> v2;
 
     while (!done()) {
@@ -1215,6 +1216,21 @@ public:
         throw ParseError("Unexpected closing brace", line.line);
       if (starts_with(line.text, "reference ")) {
         reference = trim(line.text.substr(std::string("reference ").size()));
+        ++index_;
+        continue;
+      }
+      if (starts_with(line.text, "feature ")) {
+        const std::string value = trim(line.text.substr(std::string("feature ").size()));
+        const std::optional<FeatureProfile> parsed = parse_feature_profile(value);
+        if (!parsed.has_value()) {
+          throw ParseError("Unknown feature profile '" + value +
+                               "'; expected 'feature mk61' or 'feature mk61s-mini-expand'",
+                           line.line);
+        }
+        if (feature_profile.has_value() && *feature_profile != *parsed) {
+          throw ParseError("Conflicting feature profile declaration", line.line);
+        }
+        feature_profile = *parsed;
         ++index_;
         continue;
       }
@@ -1231,6 +1247,7 @@ public:
       throw ParseError("Program must contain one V2 program block", 1);
     ProgramAst program;
     program.reference = reference;
+    program.feature_profile = feature_profile;
     program.states = lower_v2_states(*v2);
     program.v2 = std::move(v2);
     return program;
