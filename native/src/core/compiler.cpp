@@ -54444,6 +54444,16 @@ SizeAttributionReport build_size_attribution_report(
               }
               return join_strings(proof_targets, ",");
             };
+        const auto callee_abi_cost_breakdown_text =
+            [&](int gross_cells, int materialize_cells, int argument_preservation_cells,
+                int overhead_cells, int net_cells) {
+              return std::string("gross:") + std::to_string(gross_cells) +
+                     "/materialize:" + std::to_string(materialize_cells) +
+                     "/arg-preserve:" + std::to_string(argument_preservation_cells) +
+                     "/entry-lower-bound:" + std::to_string(overhead_cells) +
+                     "/net:" + signed_cells_text(net_cells) +
+                     "/need:" + std::to_string(std::max(0, 1 - net_cells));
+            };
         if (call_preservation_has_stack_mutating_callee &&
             !ranked_profitable_stack_inputs.empty()) {
           struct CalleeAbiSubsetEstimate {
@@ -54538,6 +54548,11 @@ SizeAttributionReport build_size_attribution_report(
                 std::to_string(best_subset.net_cells);
             helper.details["valueAwareCalleeAbiBestSubsetAdditionalNetCellsToPositive"] =
                 std::to_string(std::max(0, 1 - best_subset.net_cells));
+            helper.details["valueAwareCalleeAbiBestSubsetCostBreakdown"] =
+                callee_abi_cost_breakdown_text(
+                    best_subset.gross_cells, best_subset.materialize_cells,
+                    best_subset.argument_preservation_cells,
+                    best_subset.overhead_lower_bound_cells, best_subset.net_cells);
             helper.details["valueAwareCalleeAbiBestSubsetPositiveGapCells"] =
                 helper.details["valueAwareCalleeAbiBestSubsetAdditionalNetCellsToPositive"];
             helper.details["valueAwareCalleeAbiBestSubsetPositiveLevers"] =
@@ -54592,6 +54607,11 @@ SizeAttributionReport build_size_attribution_report(
               std::to_string(net_after_callee_abi_lower_bound_cells);
           helper.details["valueAwareCalleeAbiAdditionalNetCellsToPositive"] =
               std::to_string(std::max(0, 1 - net_after_callee_abi_lower_bound_cells));
+          helper.details["valueAwareCalleeAbiCostBreakdown"] =
+              callee_abi_cost_breakdown_text(
+                  profitable_stack_input_gross_cells, profitable_stack_input_materialize_cells,
+                  call_argument_preservation_cells, callee_abi_overhead_lower_bound_cells,
+                  net_after_callee_abi_lower_bound_cells);
           helper.details["valueAwareCalleeAbiPositiveGapCells"] =
               helper.details["valueAwareCalleeAbiAdditionalNetCellsToPositive"];
           helper.details["valueAwareCalleeAbiPositiveLevers"] =

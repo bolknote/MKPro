@@ -1322,6 +1322,11 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiAdditionalNetCellsToPositive") == "1" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiCostBreakdown") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiCostBreakdown") ==
+                      "gross:5/materialize:2/arg-preserve:2/entry-lower-bound:1/net:+0/"
+                      "need:1" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiPositiveGapCells") &&
                   candidate_score_zero->details.at("valueAwareCalleeAbiPositiveGapCells") ==
                       "1" &&
@@ -1384,6 +1389,12 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCalleeAbiBestSubsetAdditionalNetCellsToPositive") &&
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiBestSubsetAdditionalNetCellsToPositive") == "1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetCostBreakdown") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetCostBreakdown") ==
+                      "gross:5/materialize:2/arg-preserve:2/entry-lower-bound:1/net:+0/"
+                      "need:1" &&
                   candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiBestSubsetPositiveGapCells") &&
                   candidate_score_zero->details.at(
@@ -1968,6 +1979,12 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCalleeAbiPositiveOverheadBudgetCells") &&
                   candidate_score_register_traffic->details.at(
                       "valueAwareCalleeAbiPositiveOverheadBudgetCells") == "0" &&
+                  candidate_score_register_traffic->details.contains(
+                      "valueAwareCalleeAbiCostBreakdown") &&
+                  candidate_score_register_traffic->details.at(
+                      "valueAwareCalleeAbiCostBreakdown") ==
+                      "gross:5/materialize:2/arg-preserve:2/entry-lower-bound:1/net:+0/"
+                      "need:1" &&
                   candidate_score_register_traffic->details.contains(
                       "valueAwareCalleeAbiMutationSurfaceCells") &&
                   candidate_score_register_traffic->details.at(

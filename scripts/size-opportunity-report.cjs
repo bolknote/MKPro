@@ -291,6 +291,7 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCalleeAbiAdditionalNetCellsToPositive',
       ),
+      calleeAbiCostBreakdown: detail(details, 'valueAwareCalleeAbiCostBreakdown'),
       calleeAbiPositiveLevers: detail(details, 'valueAwareCalleeAbiPositiveLevers'),
       calleeAbiPositiveGapReason: detail(
         details,
@@ -305,6 +306,10 @@ function analyzeFile(compiler, file) {
       calleeAbiBestSubsetNeed: detail(
         details,
         'valueAwareCalleeAbiBestSubsetAdditionalNetCellsToPositive',
+      ),
+      calleeAbiBestSubsetCostBreakdown: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetCostBreakdown',
       ),
       calleeAbiBestSubsetLevers: detail(
         details,
@@ -562,6 +567,7 @@ function printHelper(row) {
       ` firstRecall=${row.calleeNaturalFirstRecallCoverage || '-'}` +
       ` firstRecallStatus=${row.calleeNaturalFirstRecallStatus || '-'}` +
       ` remaining=${row.calleeRemainingPreserveDepth || '-'}` +
+      ` abiCost=${row.calleeAbiCostBreakdown || '-'}` +
       ` abiNet=${row.calleeAbiNetAfterLowerBound || '-'}` +
       ` abiNeed=${row.calleeAbiAdditionalNetToPositive || '-'}` +
       ` abiLevers=${row.calleeAbiPositiveLevers || '-'}` +
@@ -570,6 +576,7 @@ function printHelper(row) {
       ` abiSubset=${row.calleeAbiBestSubset || '-'}` +
       ` abiSubsetNet=${row.calleeAbiBestSubsetNet || '-'}` +
       ` abiSubsetNeed=${row.calleeAbiBestSubsetNeed || '-'}` +
+      ` abiSubsetCost=${row.calleeAbiBestSubsetCostBreakdown || '-'}` +
       ` abiSubsetLevers=${row.calleeAbiBestSubsetLevers || '-'}` +
       ` abiSubsetGap=${row.calleeAbiBestSubsetGapReason || '-'}` +
       ` abiSubsetTarget=${row.calleeAbiBestSubsetNextProofTarget || '-'}` +
