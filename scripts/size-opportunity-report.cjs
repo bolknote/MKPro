@@ -163,6 +163,14 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCalleeAbiNaturalPreservedSlotsByCallee',
       ),
+      calleeNaturalRestoreCells: detail(
+        details,
+        'valueAwareCalleeAbiNaturalPreservedSlotRestoreCellsByCallee',
+      ),
+      calleeNaturalMinRestoreCells: detail(
+        details,
+        'valueAwareCalleeAbiNaturalPreserveMinRestoreCellsByCallee',
+      ),
       calleeRemainingPreserveDepth: detail(
         details,
         'valueAwareCalleeAbiRemainingPreserveDepthByCallee',
@@ -280,6 +288,8 @@ function printHelper(row) {
       ` directMat=${row.directMaterializationStatus || '-'}:${row.directMaterialization || '-'}` +
       ` survival=${row.calleeStackSurvival || '-'}` +
       ` natural=${row.calleeNaturalPreservedSlots || '-'}` +
+      ` restore=${row.calleeNaturalRestoreCells || '-'}` +
+      ` restoreMin=${row.calleeNaturalMinRestoreCells || '-'}` +
       ` remaining=${row.calleeRemainingPreserveDepth || '-'}` +
       ` callee=${row.calleeAbiStatus || '-'}`,
   );

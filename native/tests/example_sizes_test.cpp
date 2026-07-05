@@ -1097,6 +1097,16 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCalleeAbiNaturalPreservedSlotsByCallee") ==
                       "packed-line score accumulator helper:T" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiNaturalPreservedSlotRestoreCellsByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiNaturalPreservedSlotRestoreCellsByCallee") ==
+                      "packed-line score accumulator helper:T:1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiNaturalPreserveMinRestoreCellsByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiNaturalPreserveMinRestoreCellsByCallee") ==
+                      "packed-line score accumulator helper:1" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiRemainingPreserveDepthByCallee") &&
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiRemainingPreserveDepthByCallee") ==

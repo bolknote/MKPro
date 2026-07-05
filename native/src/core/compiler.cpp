@@ -51138,6 +51138,56 @@ SizeAttributionReport build_size_attribution_report(
           names.push_back(original_stack_slot_name(source));
         return join_strings(names, ",");
       };
+  const auto stack_restore_cells_for_final_slot = [](std::size_t final_slot) {
+    return static_cast<int>(
+        core::emit::stack_resident_restore_ops(0U, final_slot + 1U).size());
+  };
+  const auto helper_preserved_original_slot_restore_cells =
+      [&](const HelperStackEffectSummary& summary) {
+        std::map<int, int> costs;
+        for (std::size_t final_slot = 0; final_slot < summary.stack_sources.size();
+             ++final_slot) {
+          const int source = summary.stack_sources.at(final_slot);
+          if (source < 0)
+            continue;
+          const int cells = stack_restore_cells_for_final_slot(final_slot);
+          const auto [it, inserted] = costs.emplace(source, cells);
+          if (!inserted)
+            it->second = std::min(it->second, cells);
+        }
+        return costs;
+      };
+  const auto helper_preserved_original_slot_restore_cells_text =
+      [&](const HelperStackEffectSummary& summary) {
+        const std::map<int, int> costs =
+            helper_preserved_original_slot_restore_cells(summary);
+        if (costs.empty())
+          return std::string("-");
+        std::vector<std::string> parts;
+        parts.reserve(costs.size());
+        for (const auto& [source, cells] : costs) {
+          parts.push_back(original_stack_slot_name(source) + ":" + std::to_string(cells));
+        }
+        return join_strings(parts, ",");
+      };
+  const auto helper_natural_preserve_min_restore_cells =
+      [&](const HelperStackEffectSummary& summary, int requested_preserve_depth) {
+        const std::map<int, int> costs_by_source =
+            helper_preserved_original_slot_restore_cells(summary);
+        std::vector<int> costs;
+        costs.reserve(costs_by_source.size());
+        for (const auto& [unused_source, cells] : costs_by_source) {
+          (void)unused_source;
+          costs.push_back(cells);
+        }
+        std::sort(costs.begin(), costs.end());
+        int total = 0;
+        const std::size_t count = std::min(
+            costs.size(), static_cast<std::size_t>(std::max(0, requested_preserve_depth)));
+        for (std::size_t index = 0; index < count; ++index)
+          total += costs.at(index);
+        return total;
+      };
   const auto apply_helper_stack_survival_effect =
       [&](std::array<int, 4>& sources, int opcode, StackEffect effect) {
         const std::array<int, 4> old = sources;
@@ -51737,6 +51787,8 @@ SizeAttributionReport build_size_attribution_report(
           std::vector<std::string> callee_effect_parts;
           std::vector<std::string> callee_stack_survival_parts;
           std::vector<std::string> callee_natural_preserve_parts;
+          std::vector<std::string> callee_natural_restore_parts;
+          std::vector<std::string> callee_natural_min_restore_parts;
           std::vector<std::string> callee_remaining_preserve_parts;
           std::vector<std::string> callee_mutating_cell_parts;
           std::vector<std::string> callee_mutating_opcode_parts;
@@ -51759,6 +51811,12 @@ SizeAttributionReport build_size_attribution_report(
             callee_natural_preserve_parts.push_back(
                 label + ":" + helper_preserved_original_slots_text(effect));
             const int requested_preserve_depth = static_cast<int>(inputs.size());
+            callee_natural_restore_parts.push_back(
+                label + ":" + helper_preserved_original_slot_restore_cells_text(effect));
+            callee_natural_min_restore_parts.push_back(
+                label + ":" +
+                std::to_string(helper_natural_preserve_min_restore_cells(
+                    effect, requested_preserve_depth)));
             callee_remaining_preserve_parts.push_back(
                 label + ":" +
                 std::to_string(std::max(0, requested_preserve_depth -
@@ -51813,6 +51871,10 @@ SizeAttributionReport build_size_attribution_report(
                 join_strings(callee_stack_survival_parts, ";");
             helper.details["valueAwareCalleeAbiNaturalPreservedSlotsByCallee"] =
                 join_strings(callee_natural_preserve_parts, ";");
+            helper.details["valueAwareCalleeAbiNaturalPreservedSlotRestoreCellsByCallee"] =
+                join_strings(callee_natural_restore_parts, ";");
+            helper.details["valueAwareCalleeAbiNaturalPreserveMinRestoreCellsByCallee"] =
+                join_strings(callee_natural_min_restore_parts, ";");
             helper.details["valueAwareCalleeAbiRemainingPreserveDepthByCallee"] =
                 join_strings(callee_remaining_preserve_parts, ";");
             if (!callee_mutating_cell_parts.empty()) {

@@ -63,9 +63,13 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   (`valueAwareCallPreservationCalleeStackSurvival` and
   `valueAwareCalleeAbiNaturalPreservedSlotsByCallee`), distinguishing helpers
   that merely consume the working top of stack from helpers that destroy every
-  caller value. This is proof evidence for the scheduler; cost reduction still
-  needs a call-site layout proof that maps a requested input onto the surviving
-  slot. A
+  caller value. It also reports the minimum restore-to-X cost for each naturally
+  preserved slot
+  (`valueAwareCalleeAbiNaturalPreservedSlotRestoreCellsByCallee` and
+  `valueAwareCalleeAbiNaturalPreserveMinRestoreCellsByCallee`), so a surviving
+  deep stack value is not mistaken for a free X argument. This is proof evidence
+  for the scheduler; cost reduction still needs a call-site layout proof that
+  maps a requested input onto the surviving slot. A
   stack-mutating callee now exposes both the diagnostic mutation surface
   (`valueAwareCalleeAbiMutationSurface*`) and a proof-oriented lower bound
   (`valueAwareCalleeAbiOverheadLowerBound*`): if even one shared
