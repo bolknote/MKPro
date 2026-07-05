@@ -37239,8 +37239,15 @@ bool lower_stack_resident_packed_score_sum_accumulator_to_x(
   const PackedScoreAccumulatorStep& stack_step = steps.at(*stack_term_index);
   const Expression stack_term =
       call_expression("packed_score", {stack_step.term.line_value, stack_step.term.index});
-  if (!lower_stack_argument_packed_score_inline(context, stack_term, temps, stack_step.line))
+  bool emitted_stack_term = false;
+  if (context.packed_score_helper.has_value() &&
+      lower_stack_argument_packed_score_helper_call(context, stack_term, temps, stack_step.line)) {
+    emitted_stack_term = true;
+  }
+  if (!emitted_stack_term &&
+      !lower_stack_argument_packed_score_inline(context, stack_term, temps, stack_step.line)) {
     return false;
+  }
 
   const std::string helper = packed_score_accumulator_helper_label(context);
   for (std::size_t index = 0; index < steps.size(); ++index) {

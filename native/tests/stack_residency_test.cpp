@@ -1689,6 +1689,12 @@ program StackPackedScoreCurrentXSumAccumulator {
             "packed_score sum should enter the existing helper with tmp in X");
     require(has_optimization(result, "packed-score-accumulator-helper"),
             "remaining packed_score terms should still use the accumulator helper");
+    require(count_steps_with_comment_prefix_and_opcode(result, "packed_score helper", 0x53) == 2,
+            "packed_score sum should reuse the existing non-accumulator helper for the "
+            "current-X stack term instead of duplicating the helper body inline");
+    require(count_steps_with_comment(result, "pow10()") == 0,
+            "current-X packed_score sum should not inline a duplicate packed_score body when "
+            "the non-accumulator helper is already available");
     require(count_steps_with_comment(result, "set tmp") == 0,
             "current-X packed_score sum should not store tmp");
     require(count_steps_with_comment(result, "recall tmp") == 0,
