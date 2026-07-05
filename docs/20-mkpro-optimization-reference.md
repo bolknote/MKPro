@@ -45,7 +45,11 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   where a shared helper is locally cheap but still reloads values that a future
   value-aware scheduler might carry through X/Y/Z/T at selected call sites.
   When helper-local stack inputs cross nested helper calls, the helper summary
-  reports the live-input preservation matrix and callee ABI cost model. A
+  reports the live-input preservation matrix and callee ABI cost model. The
+  normalized `valueAwareSchedulerPlanStatus` key is copied onto both helper
+  summaries and helper-register-traffic opportunities, so state-output-only,
+  mixed-state, no-profitable-input, and callee-ABI-limited cases can be grouped
+  without guessing which specialized status key is present. A
   stack-mutating callee now exposes both the diagnostic mutation surface
   (`valueAwareCalleeAbiMutationSurface*`) and a proof-oriented lower bound
   (`valueAwareCalleeAbiOverheadLowerBound*`): if even one shared

@@ -50392,6 +50392,43 @@ std::optional<std::string> value_aware_scheduler_traffic_shape_action(
   return std::nullopt;
 }
 
+std::optional<std::string> value_aware_scheduler_plan_status(
+    const std::map<std::string, std::string>& details) {
+  const auto stack_plan_it = details.find("valueAwareStackInputPlanStatus");
+  const auto profitable_plan_it = details.find("valueAwareProfitableStackInputPlanStatus");
+  const auto abi_status_it = details.find("valueAwareCalleeAbiCostModelStatus");
+  const auto mixed_temp_plan_it = details.find("valueAwareMixedStateTempCarrierPlanStatus");
+  const auto state_output_plan_it = details.find("valueAwareStateOutputPlanStatus");
+  const auto scheduler_shape_it = details.find("valueAwareSchedulerTrafficShape");
+
+  const std::string stack_plan =
+      stack_plan_it == details.end()
+          ? (profitable_plan_it == details.end() ? std::string{} : profitable_plan_it->second)
+          : stack_plan_it->second;
+  if (stack_plan == "blocked-by-stack-mutating-callee") {
+    if (abi_status_it != details.end()) {
+      if (abi_status_it->second == "overhead-lower-bound-not-positive")
+        return "callee-abi-lower-bound-not-positive";
+      if (abi_status_it->second == "mutation-surface-exceeds-overhead-budget")
+        return "callee-abi-mutation-surface-exceeds-budget";
+      if (abi_status_it->second == "unestimated-stack-preserving-entry-overhead")
+        return "callee-abi-overhead-unestimated";
+    }
+    return stack_plan;
+  }
+  if (!stack_plan.empty())
+    return stack_plan;
+  if (mixed_temp_plan_it != details.end())
+    return mixed_temp_plan_it->second;
+  if (state_output_plan_it != details.end())
+    return state_output_plan_it->second;
+  if (details.contains("valueAwareNestedCallInputNames"))
+    return "nested-call-inputs-not-direct-scheduler-savings";
+  if (scheduler_shape_it != details.end())
+    return "unclassified-" + scheduler_shape_it->second;
+  return std::nullopt;
+}
+
 struct PackedScoreAccumulatorHelperUsage {
   int terms = 0;
   int groups = 0;
@@ -51961,6 +51998,10 @@ SizeAttributionReport build_size_attribution_report(
           helper.details["valueAwareSchedulerTrafficShape"] =
               "stack-inputs-and-deferred-state-outputs";
         }
+        if (const std::optional<std::string> scheduler_plan_status =
+                value_aware_scheduler_plan_status(helper.details)) {
+          helper.details["valueAwareSchedulerPlanStatus"] = *scheduler_plan_status;
+        }
       }
     }
     const int selector_bound_cells = helper_selector_bound_register_traffic_cells[helper.label];
@@ -52227,6 +52268,10 @@ SizeAttributionReport build_size_attribution_report(
     if (const std::optional<std::string> traffic_shape_action =
             value_aware_scheduler_traffic_shape_action(details)) {
       details["trafficShapeAction"] = *traffic_shape_action;
+    }
+    if (const std::optional<std::string> scheduler_plan_status =
+            value_aware_scheduler_plan_status(details)) {
+      details["valueAwareSchedulerPlanStatus"] = *scheduler_plan_status;
     }
     const std::string opportunity_reason =
         details["requiredAction"] == "refactor-stack-mutating-callee-abi"

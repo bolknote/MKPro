@@ -136,6 +136,7 @@ function analyzeFile(compiler, file) {
       registerTrafficNames: detail(details, 'registerTrafficNames'),
       trafficShape: detail(details, 'valueAwareSchedulerTrafficShape'),
       planStatus:
+        detail(details, 'valueAwareSchedulerPlanStatus') ||
         detail(details, 'valueAwareStackInputPlanStatus') ||
         detail(details, 'valueAwareProfitableStackInputPlanStatus'),
       requiredAction: detail(details, 'requiredAction'),

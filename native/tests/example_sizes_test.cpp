@@ -500,7 +500,10 @@ void example_sizes_match_typescript_baselines() {
                       "0" &&
                   resolve_turn->details.contains("valueAwareEstimatedNetSavingsExcludes") &&
                   resolve_turn->details.at("valueAwareEstimatedNetSavingsExcludes") ==
-                      "persistent-state-output-stores",
+                      "persistent-state-output-stores" &&
+                  resolve_turn->details.contains("valueAwareSchedulerPlanStatus") &&
+                  resolve_turn->details.at("valueAwareSchedulerPlanStatus") ==
+                      "no-profitable-stack-input-materialization",
               "dangerous-loading should not count persistent loaded stores as direct "
               "value-aware scheduler savings");
       const SizeOpportunityReport* resolve_turn_register_traffic =
@@ -535,7 +538,10 @@ void example_sizes_match_typescript_baselines() {
                   roll_die->details.at("valueAwareStateOutputNetCells") == "0" &&
                   roll_die->details.contains("valueAwareEstimatedNetSavingsAfterMaterialization") &&
                   roll_die->details.at("valueAwareEstimatedNetSavingsAfterMaterialization") ==
-                      "0",
+                      "0" &&
+                  roll_die->details.contains("valueAwareSchedulerPlanStatus") &&
+                  roll_die->details.at("valueAwareSchedulerPlanStatus") ==
+                      "requires-persistent-state-store",
               "game-100-pig should expose roll_die's persistent die store without counting it as "
               "direct scheduler savings");
       const SizeOpportunityReport* roll_die_register_traffic =
@@ -612,6 +618,9 @@ void example_sizes_match_typescript_baselines() {
                   front_stop->details.contains("valueAwareEstimatedNetSavingsExcludes") &&
                   front_stop->details.at("valueAwareEstimatedNetSavingsExcludes") ==
                       "persistent-state-updates-and-nested-call-inputs" &&
+                  front_stop->details.contains("valueAwareSchedulerPlanStatus") &&
+                  front_stop->details.at("valueAwareSchedulerPlanStatus") ==
+                      "break-even-after-stack-preservation" &&
                   !front_stop->details.contains("valueAwareMixedStateNestedCrossingNames") &&
                   front_stop->details.contains("valueAwareNestedCallInputNames") &&
                   front_stop->details.at("valueAwareNestedCallInputNames") == "random_state",
@@ -1157,6 +1166,9 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiCostModelRequirement") ==
                       "find-additional-stack-input-savings-before-callee-abi-refactor" &&
+                  candidate_score_zero->details.contains("valueAwareSchedulerPlanStatus") &&
+                  candidate_score_zero->details.at("valueAwareSchedulerPlanStatus") ==
+                      "callee-abi-lower-bound-not-positive" &&
                   candidate_score_zero->details.contains(
                       "valueAwareSuggestedResidentInputNames") &&
                   candidate_score_zero->details.at("valueAwareSuggestedResidentInputNames")
@@ -1642,7 +1654,12 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_register_traffic->details.contains(
                       "valueAwareCalleeAbiOverheadBudgetCells") &&
                   candidate_score_register_traffic->details.at(
-                      "valueAwareCalleeAbiOverheadBudgetCells") == "1",
+                      "valueAwareCalleeAbiOverheadBudgetCells") == "1" &&
+                  candidate_score_register_traffic->details.contains(
+                      "valueAwareSchedulerPlanStatus") &&
+                  candidate_score_register_traffic->details.at(
+                      "valueAwareSchedulerPlanStatus") ==
+                      "callee-abi-lower-bound-not-positive",
               "tic-tac-toe-4x4 size attribution should keep the candidate_score scheduler "
               "opportunity visible while proving the callee ABI lower bound is "
               "nonpositive");
