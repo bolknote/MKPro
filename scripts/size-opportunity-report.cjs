@@ -10,6 +10,7 @@ function usage() {
 Options:
   --compiler PATH   mkpro-native binary to run (default: native/build/mkpro-native)
   --json            Print the raw aggregate as JSON
+  --summary-only    Print only aggregate actions and blocker groups
   --limit N         Analyze at most N input files
   --help            Show this help
 
@@ -21,6 +22,7 @@ function parseArgs(argv) {
   const options = {
     compiler: 'native/build/mkpro-native',
     json: false,
+    summaryOnly: false,
     limit: null,
     inputs: [],
   };
@@ -32,6 +34,10 @@ function parseArgs(argv) {
     }
     if (arg === '--json') {
       options.json = true;
+      continue;
+    }
+    if (arg === '--summary-only') {
+      options.summaryOnly = true;
       continue;
     }
     if (arg === '--compiler') {
@@ -895,6 +901,28 @@ function printAction(row) {
   );
 }
 
+function printActionSummary(row) {
+  const fields = [
+    ['argX2', row.callArgumentX2RestoreStatus],
+    ['x2Class', row.callArgumentX2ClobberClassesByCallee],
+    ['abiNearPrimaryNet', row.calleeAbiNearPositivePrimaryNet],
+    ['abiPlacement', row.calleeAbiNearPositiveStackPlacementStatus],
+    ['abiPlacementAction', row.calleeAbiNearPositiveStackPlacementRequiredAction],
+  ];
+  const suffix = fields
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([name, value]) => `${name}=${value}`)
+    .join(' ');
+  console.log(
+    `- ${row.status} potential=${row.potentialSavings} best=${row.bestSavings}` +
+      ` ${row.file} :: ${row.source}=${row.action}` +
+      ` variant=${row.bestVariant || '-'}` +
+      ` blocker=${row.bestBlockerKind || '-'}` +
+      ` helper=${row.helper || '-'}` +
+      (suffix ? ` ${suffix}` : ''),
+  );
+}
+
 function printText(report) {
   console.log(`Analyzed files: ${report.analyzedFiles}`);
   console.log(`Total cells: ${report.totalCells}`);
@@ -985,6 +1013,51 @@ function printText(report) {
   }
 }
 
+function printSummaryText(report) {
+  console.log(`Analyzed files: ${report.analyzedFiles}`);
+  console.log(`Total cells: ${report.totalCells}`);
+  console.log(`Selected helper costs: ${report.helperCostCount}`);
+  console.log(`Helper register-traffic opportunities: ${report.helperTrafficCount}`);
+  console.log(`Candidate/rejected opportunities: ${report.candidateOpportunityCount}`);
+
+  console.log('\nPositive next actions:');
+  if (report.positiveNextActions.length === 0) {
+    console.log('(none)');
+  } else {
+    report.positiveNextActions.slice(0, 20).forEach(printActionSummary);
+  }
+
+  console.log('\nCandidate/rejected blockers by group:');
+  if (report.candidateBlockerGroups.length === 0) {
+    console.log('(none)');
+  } else {
+    report.candidateBlockerGroups.slice(0, 20).forEach(printGroup);
+  }
+
+  console.log('\nStalled next actions by group:');
+  const stalledGroups = report.nextActionGroups.filter((group) =>
+    group.key.startsWith('stalled-'));
+  if (stalledGroups.length === 0) {
+    console.log('(none)');
+  } else {
+    stalledGroups.slice(0, 20).forEach(printGroup);
+  }
+
+  console.log('\nHelper traffic by plan/action:');
+  if (report.helperPlanGroups.length === 0) {
+    console.log('(none)');
+  } else {
+    report.helperPlanGroups.slice(0, 20).forEach(printGroup);
+  }
+
+  console.log('\nTop stalled next actions:');
+  if (report.stalledNextActions.length === 0) {
+    console.log('(none)');
+  } else {
+    report.stalledNextActions.slice(0, 20).forEach(printActionSummary);
+  }
+}
+
 function main() {
   try {
     const options = parseArgs(process.argv.slice(2));
@@ -1001,6 +1074,8 @@ function main() {
     const report = aggregate(rows);
     if (options.json) {
       console.log(JSON.stringify(report, null, 2));
+    } else if (options.summaryOnly) {
+      printSummaryText(report);
     } else {
       printText(report);
     }
