@@ -293,6 +293,14 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCalleeAbiNaturalFirstRecallCoverageStatusByCallee',
       ),
+      calleeNaturalFirstRecallChoice: detail(
+        details,
+        'valueAwareCalleeAbiNaturalFirstRecallChoiceByCallee',
+      ),
+      calleeNaturalFirstRecallChoiceStatus: detail(
+        details,
+        'valueAwareCalleeAbiNaturalFirstRecallChoiceStatusByCallee',
+      ),
       calleeRemainingPreserveDepth: detail(
         details,
         'valueAwareCalleeAbiRemainingPreserveDepthByCallee',
@@ -498,6 +506,18 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCalleeAbiPrimaryEntryArgumentRestageSitesByCallee',
       ),
+      calleeAbiPrimaryEntryPlacementSiteModel: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPlacementSiteModelByCallee',
+      ),
+      calleeAbiPrimaryEntryPlacementSiteModelStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPlacementSiteModelStatus',
+      ),
+      calleeAbiPrimaryEntryPlacementSiteModelAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPlacementSiteModelAction',
+      ),
       calleeAbiPrimaryEntryPlacementLowerBound: detail(
         details,
         'valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundCells',
@@ -635,6 +655,14 @@ function analyzeFile(compiler, file) {
         'valueAwareCallArgumentInputNamesByCallee',
       ),
       callPreservationSites: detail(details, 'valueAwareCallPreservationSites'),
+      calleeNaturalFirstRecallChoice: detail(
+        details,
+        'valueAwareCalleeAbiNaturalFirstRecallChoiceByCallee',
+      ),
+      calleeNaturalFirstRecallChoiceStatus: detail(
+        details,
+        'valueAwareCalleeAbiNaturalFirstRecallChoiceStatusByCallee',
+      ),
       calleeAbiCostBreakdown: detail(details, 'valueAwareCalleeAbiCostBreakdown'),
       calleeAbiNearPositivePrimaryNet: detail(
         details,
@@ -687,6 +715,18 @@ function analyzeFile(compiler, file) {
       calleeAbiPrimaryEntryArgumentRestageSites: detail(
         details,
         'valueAwareCalleeAbiPrimaryEntryArgumentRestageSitesByCallee',
+      ),
+      calleeAbiPrimaryEntryPlacementSiteModel: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPlacementSiteModelByCallee',
+      ),
+      calleeAbiPrimaryEntryPlacementSiteModelStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPlacementSiteModelStatus',
+      ),
+      calleeAbiPrimaryEntryPlacementSiteModelAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPlacementSiteModelAction',
       ),
     };
   });
@@ -873,6 +913,10 @@ function actionDetailSuffix(row) {
     ['abiProtocolAction', row.calleeAbiPrimaryEntryProtocolAction],
     ['abiArgRestage', row.calleeAbiPrimaryEntryArgumentRestage],
     ['abiArgRestageSites', row.calleeAbiPrimaryEntryArgumentRestageSites],
+    ['naturalChoice', row.calleeNaturalFirstRecallChoice],
+    ['naturalChoiceStatus', row.calleeNaturalFirstRecallChoiceStatus],
+    ['abiPrimarySiteModel', row.calleeAbiPrimaryEntryPlacementSiteModel],
+    ['abiPrimarySiteStatus', row.calleeAbiPrimaryEntryPlacementSiteModelStatus],
     ['abiPrimaryPlacement', row.calleeAbiPrimaryEntryPlacementLowerBoundByCallee],
     ['abiPrimaryPlacementNet', row.calleeAbiPrimaryEntryPlacementNet],
     ['abiPrimaryPlacementStatus', row.calleeAbiPrimaryEntryPlacementStatus],
@@ -953,6 +997,8 @@ function printHelper(row) {
       ` restoreMin=${row.calleeNaturalMinRestoreCells || '-'}` +
       ` firstRecall=${row.calleeNaturalFirstRecallCoverage || '-'}` +
       ` firstRecallStatus=${row.calleeNaturalFirstRecallStatus || '-'}` +
+      ` naturalChoice=${row.calleeNaturalFirstRecallChoice || '-'}` +
+      ` naturalChoiceStatus=${row.calleeNaturalFirstRecallChoiceStatus || '-'}` +
       ` remaining=${row.calleeRemainingPreserveDepth || '-'}` +
       ` abiPureStack=${row.calleeAbiPureStackPlacement || '-'}` +
       ` abiPureStackStatus=${row.calleeAbiPureStackPlacementStatus || '-'}` +
@@ -1008,6 +1054,9 @@ function printHelper(row) {
       ` abiPrimaryProtocolAction=${row.calleeAbiPrimaryEntryProtocolAction || '-'}` +
       ` abiPrimaryArgRestage=${row.calleeAbiPrimaryEntryArgumentRestage || '-'}` +
       ` abiPrimaryArgRestageSites=${row.calleeAbiPrimaryEntryArgumentRestageSites || '-'}` +
+      ` abiPrimarySiteModel=${row.calleeAbiPrimaryEntryPlacementSiteModel || '-'}` +
+      ` abiPrimarySiteStatus=${row.calleeAbiPrimaryEntryPlacementSiteModelStatus || '-'}` +
+      ` abiPrimarySiteAction=${row.calleeAbiPrimaryEntryPlacementSiteModelAction || '-'}` +
       ` abiPrimaryPlacement=${row.calleeAbiPrimaryEntryPlacementLowerBoundByCallee || '-'}` +
       ` abiPrimaryPlacementBasis=${row.calleeAbiPrimaryEntryPlacementLowerBoundBasis || '-'}` +
       ` abiPrimaryCost=${row.calleeAbiPrimaryEntryCostBreakdown || '-'}` +
@@ -1053,6 +1102,10 @@ function printActionSummary(row) {
     ['abiProofDisposition', row.calleeAbiPrimaryEntryProofDisposition],
     ['abiProtocol', row.calleeAbiPrimaryEntryProtocol],
     ['abiArgRestage', row.calleeAbiPrimaryEntryArgumentRestage],
+    ['naturalChoice', row.calleeNaturalFirstRecallChoice],
+    ['naturalChoiceStatus', row.calleeNaturalFirstRecallChoiceStatus],
+    ['abiPrimarySiteModel', row.calleeAbiPrimaryEntryPlacementSiteModel],
+    ['abiPrimarySiteStatus', row.calleeAbiPrimaryEntryPlacementSiteModelStatus],
     ['abiPrimaryPlacement', row.calleeAbiPrimaryEntryPlacementLowerBoundByCallee],
     ['abiPrimaryPlacementNet', row.calleeAbiPrimaryEntryPlacementNet],
     ['abiPrimaryPlacementStatus', row.calleeAbiPrimaryEntryPlacementStatus],

@@ -1203,6 +1203,19 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCalleeAbiNaturalFirstRecallCoverageStatusByCallee") ==
                       "packed-line score accumulator helper:break-even-after-natural-restore" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiNaturalFirstRecallChoiceByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiNaturalFirstRecallChoiceByCallee") ==
+                      "packed-line score accumulator helper:2g/2r/+0n choices=x,y sites="
+                      "71:y(3future,arg=x,restore=1,firstNet=+0),"
+                      "74:x(1future,arg=y,restore=1,firstNet=+0)" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiNaturalFirstRecallChoiceStatusByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiNaturalFirstRecallChoiceStatusByCallee") ==
+                      "packed-line score accumulator helper:"
+                      "divergent-natural-survivors-require-placement-search" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiRemainingPreserveDepthByCallee") &&
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiRemainingPreserveDepthByCallee") ==
@@ -1333,6 +1346,23 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiPrimaryEntryArgumentRestageSitesByCallee") ==
                       "packed-line score accumulator helper:71:x,74:y" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryPlacementSiteModelByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryPlacementSiteModelByCallee") ==
+                      "packed-line score accumulator helper:2sites/2covered/2restore/"
+                      "+0firstNet/2survivors/1switchLowerBound choices=x,y" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryPlacementSiteModelStatus") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryPlacementSiteModelStatus") ==
+                      "packed-line score accumulator helper:"
+                      "divergent-natural-survivors-require-placement-search" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryPlacementSiteModelAction") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryPlacementSiteModelAction") ==
+                      "run-stack-placement-search-for-divergent-natural-survivors" &&
                   candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundCells") &&
                   candidate_score_zero->details.at(

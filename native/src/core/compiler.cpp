@@ -54152,6 +54152,8 @@ SizeAttributionReport build_size_attribution_report(
         std::vector<std::string> call_preservation_site_parts;
         std::set<std::string> call_argument_input_names;
         std::map<std::string, std::set<std::string>> call_argument_inputs_by_label;
+        std::map<std::string, std::map<int, std::set<std::string>>>
+            call_argument_inputs_by_label_address;
         std::map<std::string, int> call_argument_preservation_cells_by_label;
         std::map<std::string, int> call_argument_preservation_cells_by_name;
         std::vector<std::string> call_argument_site_parts;
@@ -54202,6 +54204,8 @@ SizeAttributionReport build_size_attribution_report(
                     producer_access->name == name) {
                   call_argument_input_names.insert(name);
                   call_argument_inputs_by_label[call_site.label].insert(name);
+                  call_argument_inputs_by_label_address[call_site.label][call_site.address]
+                      .insert(name);
                   ++call_argument_preservation_cells_by_label[call_site.label];
                   ++call_argument_preservation_cells_by_name[name];
                   call_argument_site_parts.push_back(
@@ -54452,6 +54456,8 @@ SizeAttributionReport build_size_attribution_report(
           std::vector<std::string> callee_natural_first_recall_coverage_parts;
           std::vector<std::string> callee_natural_first_recall_site_parts;
           std::vector<std::string> callee_natural_first_recall_status_parts;
+          std::vector<std::string> callee_natural_first_recall_choice_parts;
+          std::vector<std::string> callee_natural_first_recall_choice_status_parts;
           std::vector<std::string> callee_remaining_preserve_parts;
           std::vector<std::string> callee_pure_stack_placement_parts;
           std::vector<std::string> callee_mutating_cell_parts;
@@ -54469,6 +54475,10 @@ SizeAttributionReport build_size_attribution_report(
           std::vector<std::string> callee_abi_primary_entry_restage_parts;
           std::vector<std::string> callee_abi_primary_entry_restage_site_parts;
           std::vector<std::string> callee_abi_primary_entry_placement_parts;
+          std::vector<std::string> callee_abi_primary_entry_site_model_parts;
+          std::vector<std::string> callee_abi_primary_entry_site_model_status_parts;
+          bool callee_abi_primary_entry_site_model_has_divergent_survivors = false;
+          bool callee_abi_primary_entry_site_model_has_no_choice = false;
           bool all_required_callees_stack_preserving = !call_preservation_inputs_by_label.empty();
           bool saw_stack_mutating_required_callee = false;
           bool call_argument_x2_restore_blocked = false;
@@ -54525,6 +54535,12 @@ SizeAttributionReport build_size_attribution_report(
             std::sort(natural_restore_costs.begin(), natural_restore_costs.end());
             int natural_first_recall_gross_cells = 0;
             int natural_first_recall_restore_cells = 0;
+            int natural_first_recall_choice_gross_cells = 0;
+            int natural_first_recall_choice_restore_cells = 0;
+            int natural_first_recall_choice_sites = 0;
+            int natural_first_recall_choice_blocked_sites = 0;
+            std::set<std::string> natural_first_recall_choice_names;
+            std::vector<std::string> natural_first_recall_choice_site_parts;
             const auto coverage_it =
                 call_preservation_recall_counts_by_label_address_name.find(label);
             if (coverage_it != call_preservation_recall_counts_by_label_address_name.end()) {
@@ -54547,10 +54563,65 @@ SizeAttributionReport build_size_attribution_report(
                     std::to_string(covered_inputs) + "g/" +
                     std::to_string(site_restore_cells) + "r/" +
                     signed_cells_text(covered_inputs - site_restore_cells) + "n");
+                std::set<std::string> argument_names;
+                if (const auto args_by_address_it =
+                        call_argument_inputs_by_label_address.find(label);
+                    args_by_address_it != call_argument_inputs_by_label_address.end()) {
+                  if (const auto args_it = args_by_address_it->second.find(address);
+                      args_it != args_by_address_it->second.end()) {
+                    argument_names = args_it->second;
+                  }
+                }
+                std::optional<std::pair<std::string, int>> best_survivor_choice;
+                int argument_conflict_count = 0;
+                for (const auto& [name, count] : counts_by_name) {
+                  if (count <= 0 || !inputs.contains(name))
+                    continue;
+                  if (argument_names.contains(name)) {
+                    ++argument_conflict_count;
+                    continue;
+                  }
+                  if (!best_survivor_choice.has_value() ||
+                      count > best_survivor_choice->second ||
+                      (count == best_survivor_choice->second &&
+                       name < best_survivor_choice->first)) {
+                    best_survivor_choice = std::make_pair(name, count);
+                  }
+                }
+                const std::string argument_text =
+                    argument_names.empty()
+                        ? "-"
+                        : join_strings(std::vector<std::string>(argument_names.begin(),
+                                                                 argument_names.end()),
+                                       ",");
+                if (best_survivor_choice.has_value() && !natural_restore_costs.empty()) {
+                  const int restore_cells = natural_restore_costs.front();
+                  const int net_cells = 1 - restore_cells;
+                  ++natural_first_recall_choice_gross_cells;
+                  natural_first_recall_choice_restore_cells += restore_cells;
+                  ++natural_first_recall_choice_sites;
+                  natural_first_recall_choice_names.insert(best_survivor_choice->first);
+                  natural_first_recall_choice_site_parts.push_back(
+                      safe_format_label_address(address) + ":" +
+                      best_survivor_choice->first + "(" +
+                      std::to_string(best_survivor_choice->second) + "future,arg=" +
+                      argument_text + ",restore=" + std::to_string(restore_cells) +
+                      ",firstNet=" + signed_cells_text(net_cells) + ")");
+                } else if (future_input_count > 0) {
+                  ++natural_first_recall_choice_blocked_sites;
+                  natural_first_recall_choice_site_parts.push_back(
+                      safe_format_label_address(address) +
+                      ":no-argument-free-natural-survivor(future=" +
+                      std::to_string(future_input_count) + ",arg=" + argument_text +
+                      ",argConflicts=" + std::to_string(argument_conflict_count) + ")");
+                }
               }
             }
             const int natural_first_recall_net_cells =
                 natural_first_recall_gross_cells - natural_first_recall_restore_cells;
+            const int natural_first_recall_choice_net_cells =
+                natural_first_recall_choice_gross_cells -
+                natural_first_recall_choice_restore_cells;
             callee_natural_first_recall_coverage_parts.push_back(
                 label + ":" + std::to_string(natural_first_recall_gross_cells) + "g/" +
                 std::to_string(natural_first_recall_restore_cells) + "r/" +
@@ -54564,6 +54635,39 @@ SizeAttributionReport build_size_attribution_report(
                             : (natural_first_recall_net_cells == 0
                                    ? std::string("break-even-after-natural-restore")
                                    : std::string("negative-after-natural-restore")))));
+            if (!natural_first_recall_choice_site_parts.empty()) {
+              const std::vector<std::string> choice_names(
+                  natural_first_recall_choice_names.begin(),
+                  natural_first_recall_choice_names.end());
+              callee_natural_first_recall_choice_parts.push_back(
+                  label + ":" + std::to_string(natural_first_recall_choice_gross_cells) +
+                  "g/" + std::to_string(natural_first_recall_choice_restore_cells) +
+                  "r/" + signed_cells_text(natural_first_recall_choice_net_cells) +
+                  "n choices=" +
+                  (choice_names.empty() ? std::string("-") : join_strings(choice_names, ",")) +
+                  " sites=" + join_strings(natural_first_recall_choice_site_parts, ","));
+              std::string choice_status;
+              if (natural_restore_costs.empty()) {
+                choice_status = "no-natural-survivor";
+              } else if (natural_first_recall_choice_sites == 0) {
+                choice_status = "no-argument-free-natural-survivor";
+              } else if (static_cast<int>(natural_first_recall_choice_names.size()) >
+                         effect.preserved_original_slot_count) {
+                choice_status = "divergent-natural-survivors-require-placement-search";
+              } else if (natural_first_recall_choice_net_cells > 0) {
+                choice_status = "positive-after-natural-choice-restore";
+              } else if (natural_first_recall_choice_net_cells == 0) {
+                choice_status = "break-even-after-natural-choice-restore";
+              } else {
+                choice_status = "negative-after-natural-choice-restore";
+              }
+              if (natural_first_recall_choice_blocked_sites > 0) {
+                choice_status += "+blocked-sites-" +
+                                 std::to_string(natural_first_recall_choice_blocked_sites);
+              }
+              callee_natural_first_recall_choice_status_parts.push_back(label + ":" +
+                                                                        choice_status);
+            }
             callee_remaining_preserve_parts.push_back(
                 label + ":" +
                 std::to_string(std::max(0, requested_preserve_depth -
@@ -54644,6 +54748,40 @@ SizeAttributionReport build_size_attribution_report(
               if (primary_entry_eligible) {
                 callee_abi_primary_entry_eligible_targets.push_back(label);
                 ++callee_abi_primary_entry_elidable_overhead_cells;
+                const int divergent_survivor_lower_bound_cells = std::max(
+                    0, static_cast<int>(natural_first_recall_choice_names.size()) -
+                           effect.preserved_original_slot_count);
+                const std::vector<std::string> choice_names(
+                    natural_first_recall_choice_names.begin(),
+                    natural_first_recall_choice_names.end());
+                callee_abi_primary_entry_site_model_parts.push_back(
+                    label + ":" + std::to_string(natural_first_recall_choice_sites) +
+                    "sites/" + std::to_string(natural_first_recall_choice_gross_cells) +
+                    "covered/" +
+                    std::to_string(natural_first_recall_choice_restore_cells) +
+                    "restore/" + signed_cells_text(natural_first_recall_choice_net_cells) +
+                    "firstNet/" + std::to_string(natural_first_recall_choice_names.size()) +
+                    "survivors/" +
+                    std::to_string(divergent_survivor_lower_bound_cells) +
+                    "switchLowerBound choices=" +
+                    (choice_names.empty() ? std::string("-")
+                                          : join_strings(choice_names, ",")));
+                std::string site_model_status;
+                if (natural_first_recall_choice_sites == 0) {
+                  site_model_status = "no-natural-survivor-choice";
+                  callee_abi_primary_entry_site_model_has_no_choice = true;
+                } else if (divergent_survivor_lower_bound_cells > 0) {
+                  site_model_status = "divergent-natural-survivors-require-placement-search";
+                  callee_abi_primary_entry_site_model_has_divergent_survivors = true;
+                } else if (natural_first_recall_choice_net_cells > 0) {
+                  site_model_status = "positive-natural-survivor-choice";
+                } else if (natural_first_recall_choice_net_cells == 0) {
+                  site_model_status = "break-even-natural-survivor-choice";
+                } else {
+                  site_model_status = "negative-natural-survivor-choice";
+                }
+                callee_abi_primary_entry_site_model_status_parts.push_back(
+                    label + ":" + site_model_status);
               } else {
                 callee_abi_primary_entry_blocked_targets.push_back(label);
                 ++callee_abi_primary_entry_remaining_overhead_lower_bound_cells;
@@ -54710,6 +54848,14 @@ SizeAttributionReport build_size_attribution_report(
                 join_strings(callee_natural_first_recall_site_parts, ";");
             helper.details["valueAwareCalleeAbiNaturalFirstRecallCoverageStatusByCallee"] =
                 join_strings(callee_natural_first_recall_status_parts, ";");
+            if (!callee_natural_first_recall_choice_parts.empty()) {
+              helper.details["valueAwareCalleeAbiNaturalFirstRecallChoiceByCallee"] =
+                  join_strings(callee_natural_first_recall_choice_parts, ";");
+            }
+            if (!callee_natural_first_recall_choice_status_parts.empty()) {
+              helper.details["valueAwareCalleeAbiNaturalFirstRecallChoiceStatusByCallee"] =
+                  join_strings(callee_natural_first_recall_choice_status_parts, ";");
+            }
             helper.details["valueAwareCalleeAbiRemainingPreserveDepthByCallee"] =
                 join_strings(callee_remaining_preserve_parts, ";");
             if (!callee_pure_stack_placement_parts.empty()) {
@@ -54797,6 +54943,25 @@ SizeAttributionReport build_size_attribution_report(
                   helper.details
                       ["valueAwareCalleeAbiPrimaryEntryArgumentRestageSitesByCallee"] =
                       join_strings(callee_abi_primary_entry_restage_site_parts, ";");
+                }
+                if (!callee_abi_primary_entry_site_model_parts.empty()) {
+                  helper.details["valueAwareCalleeAbiPrimaryEntryPlacementSiteModelByCallee"] =
+                      join_strings(callee_abi_primary_entry_site_model_parts, ";");
+                }
+                if (!callee_abi_primary_entry_site_model_status_parts.empty()) {
+                  helper.details["valueAwareCalleeAbiPrimaryEntryPlacementSiteModelStatus"] =
+                      join_strings(callee_abi_primary_entry_site_model_status_parts, ";");
+                  if (callee_abi_primary_entry_site_model_has_divergent_survivors) {
+                    helper.details["valueAwareCalleeAbiPrimaryEntryPlacementSiteModelAction"] =
+                        "run-stack-placement-search-for-divergent-natural-survivors";
+                  } else if (callee_abi_primary_entry_site_model_has_no_choice) {
+                    helper.details["valueAwareCalleeAbiPrimaryEntryPlacementSiteModelAction"] =
+                        "refactor-callee-to-preserve-natural-survivor-or-find-additional-"
+                        "savings";
+                  } else {
+                    helper.details["valueAwareCalleeAbiPrimaryEntryPlacementSiteModelAction"] =
+                        "prove-primary-entry-natural-survivor-placement";
+                  }
                 }
                 helper.details["valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundCells"] =
                     std::to_string(callee_abi_primary_entry_placement_lower_bound_cells);
