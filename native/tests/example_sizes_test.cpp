@@ -2302,6 +2302,36 @@ void example_sizes_match_typescript_baselines() {
                       "prove-score-and-live-inputs-can-be-staged-around-nested-helper-calls",
               "tic-tac-toe-4x4 size attribution should rank the primary-entry ABI proof as "
               "a near-positive scheduler target without promoting it to a positive saving");
+      const SizeNextActionSummaryReport* call_argument_x2_action = find_size_next_action(
+          result, "valueAwareCallArgumentX2RequiredAction",
+          "refactor-callee-to-preserve-x2-or-use-explicit-stack-copy");
+      require(call_argument_x2_action != nullptr &&
+                  call_argument_x2_action->status == "stalled-near-positive" &&
+                  call_argument_x2_action->potential_savings == 2 &&
+                  call_argument_x2_action->best_savings == 2 &&
+                  call_argument_x2_action->best_variant == "helper-register-traffic" &&
+                  call_argument_x2_action->best_blocker_kind ==
+                      "value-aware-stack-register-scheduler" &&
+                  call_argument_x2_action->best_details.contains("helperLabel") &&
+                  call_argument_x2_action->best_details.at("helperLabel") ==
+                      "candidate_score zero-accumulator entry" &&
+                  call_argument_x2_action->best_details.contains(
+                      "valueAwareCallArgumentX2RestoreStatus") &&
+                  call_argument_x2_action->best_details.at(
+                      "valueAwareCallArgumentX2RestoreStatus") ==
+                      "blocked-by-callee-x2-clobber" &&
+                  call_argument_x2_action->best_details.contains(
+                      "valueAwareCallArgumentPreservationLowerBoundCells") &&
+                  call_argument_x2_action->best_details.at(
+                      "valueAwareCallArgumentPreservationLowerBoundCells") == "2" &&
+                  call_argument_x2_action->best_details.contains(
+                      "valueAwareCallArgumentX2MutationOpcodesByCallee") &&
+                  call_argument_x2_action->best_details.at(
+                      "valueAwareCallArgumentX2MutationOpcodesByCallee")
+                          .find("packed-line score accumulator helper:88:П->X b/x2-affects") !=
+                      std::string::npos,
+              "tic-tac-toe-4x4 size attribution should rank the X2-clobbering packed_score "
+              "callee as a near-positive argument-preservation prerequisite");
       const SizeNextActionSummaryReport* stack_input_scheduler_action = find_size_next_action(
           result, "trafficShapeAction", "schedule-stack-input-helper-values");
       require(stack_input_scheduler_action == nullptr,
