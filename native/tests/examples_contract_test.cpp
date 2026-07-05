@@ -385,7 +385,7 @@ void compiler_examples_match_typescript_contract() {
     const std::string source = read_text(root / "examples" / "dangerous-loading.mkpro");
     const CompileResult result = compile_source(source, baseline_options);
     require(result.implemented, "dangerous-loading.mkpro should compile");
-    require(result.steps.size() == 84, "dangerous-loading step count should match TS");
+    require(result.steps.size() == 75, "dangerous-loading step count should match native baseline");
     require(result.reference.has_value(), "dangerous-loading should report reference metadata");
     require(result.reference->reference_span == 103,
             "dangerous-loading reference span should match TS contract");

@@ -199,14 +199,14 @@ void example_sizes_match_typescript_baselines() {
       {"cave-sketch", 38},
       {"cave-treasure", 104},
       {"clock", 33},
-      {"dangerous-loading", 84},
+      {"dangerous-loading", 75},
       {"dungeon", 75},
       {"e-94-digits", 64},
       {"functions-demo", 16},
       {"fox-hunt-100", 103},
       {"fox-hunt-mk61", 65},
       {"game-100-pig", 97},
-      {"giants-country", 103},
+      {"giants-country", 102},
       {"human", 23},
       {"jack-pot", 96},
       {"labyrinth777", 105},
@@ -488,39 +488,75 @@ void example_sizes_match_typescript_baselines() {
       const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
       const SizeHelperSummaryReport* resolve_turn = find_size_helper(result, "resolve_turn");
       require(resolve_turn != nullptr &&
-                  resolve_turn->details.contains("valueAwareStateOutputNames") &&
-                  resolve_turn->details.at("valueAwareStateOutputNames") == "loaded" &&
-                  resolve_turn->details.contains("valueAwareStateOutputPlanStatus") &&
-                  resolve_turn->details.at("valueAwareStateOutputPlanStatus") ==
-                      "requires-persistent-state-store" &&
-                  resolve_turn->details.contains("valueAwareStateOutputNetCells") &&
-                  resolve_turn->details.at("valueAwareStateOutputNetCells") == "0" &&
-                  resolve_turn->details.contains("valueAwareEstimatedNetSavingsAfterMaterialization") &&
-                  resolve_turn->details.at("valueAwareEstimatedNetSavingsAfterMaterialization") ==
-                      "0" &&
-                  resolve_turn->details.contains("valueAwareEstimatedNetSavingsExcludes") &&
-                  resolve_turn->details.at("valueAwareEstimatedNetSavingsExcludes") ==
-                      "persistent-state-output-stores" &&
+                  has_optimization(result, "aggressive-post-layout-branch-underflow-call-count") &&
+                  resolve_turn->body_cells == 11 && resolve_turn->call_site_cells == 1 &&
+                  resolve_turn->details.contains("valueAwareRegisterTrafficCells") &&
+                  resolve_turn->details.at("valueAwareRegisterTrafficCells") == "2" &&
+                  resolve_turn->details.contains("valueAwareSchedulerTrafficShape") &&
+                  resolve_turn->details.at("valueAwareSchedulerTrafficShape") ==
+                      "stack-inputs-only" &&
+                  resolve_turn->details.contains(
+                      "valueAwareCurrentXStackInputMaterializeCells") &&
+                  resolve_turn->details.at("valueAwareCurrentXStackInputMaterializeCells") ==
+                      "1" &&
+                  resolve_turn->details.contains(
+                      "valueAwareCurrentXStackInputMaterializeCellsByName") &&
+                  resolve_turn->details.at(
+                      "valueAwareCurrentXStackInputMaterializeCellsByName")
+                          .find("boat:1x/1m/+0n") != std::string::npos &&
+                  resolve_turn->details.contains(
+                      "valueAwareCurrentXStackInputMaterializeSites") &&
+                  resolve_turn->details.at("valueAwareCurrentXStackInputMaterializeSites")
+                          .find("boat@call22<-store21") != std::string::npos &&
+                  resolve_turn->details.contains(
+                      "valueAwareCurrentXStackInputRetainedStoreCells") &&
+                  resolve_turn->details.at(
+                      "valueAwareCurrentXStackInputRetainedStoreCells") == "1" &&
+                  resolve_turn->details.contains(
+                      "valueAwareCurrentXStackInputRetainedStoreCellsByName") &&
+                  resolve_turn->details.at(
+                      "valueAwareCurrentXStackInputRetainedStoreCellsByName")
+                          .find("boat:1r/0u") != std::string::npos &&
+                  resolve_turn->details.contains(
+                      "valueAwareCurrentXStackInputRetainedStoreSites") &&
+                  resolve_turn->details.at(
+                      "valueAwareCurrentXStackInputRetainedStoreSites")
+                          .find("boat@call22<-store21") != std::string::npos &&
+                  resolve_turn->details.contains(
+                      "valueAwareCurrentXStackInputMaterializeProofStatus") &&
+                  resolve_turn->details.at(
+                      "valueAwareCurrentXStackInputMaterializeProofStatus") ==
+                      "current-x-store-retained-by-tail-call-flow" &&
+                  resolve_turn->details.contains(
+                      "valueAwareCurrentXStackInputMaterializeRequiredAction") &&
+                  resolve_turn->details.at(
+                      "valueAwareCurrentXStackInputMaterializeRequiredAction") ==
+                      "prove-pre-call-store-dead-after-stack-input-entry-or-carry-state-through-helper" &&
                   resolve_turn->details.contains("valueAwareSchedulerPlanStatus") &&
                   resolve_turn->details.at("valueAwareSchedulerPlanStatus") ==
-                      "no-profitable-stack-input-materialization",
-              "dangerous-loading should not count persistent loaded stores as direct "
-              "value-aware scheduler savings");
+                      "no-profitable-stack-input-materialization" &&
+                  !resolve_turn->details.contains("valueAwareStateOutputNames"),
+              "dangerous-loading should select the combined post-layout/underflow/layout "
+              "candidate and keep resolve_turn stack-input traffic visible");
       const SizeOpportunityReport* resolve_turn_register_traffic =
           find_size_opportunity_detail(result, "helper-register-traffic", "helperLabel",
                                        "resolve_turn");
       require(resolve_turn_register_traffic != nullptr &&
                   resolve_turn_register_traffic->savings == 0 &&
+                  resolve_turn_register_traffic->details.contains(
+                      "valueAwareSchedulerTrafficShape") &&
+                  resolve_turn_register_traffic->details.at("valueAwareSchedulerTrafficShape") ==
+                      "stack-inputs-only" &&
                   resolve_turn_register_traffic->details.contains("sizeImpactStatus") &&
                   resolve_turn_register_traffic->details.at("sizeImpactStatus") ==
                       "estimated-nonpositive-net",
-              "dangerous-loading should keep resolve_turn traffic visible while ranking its "
-              "persistent state output as non-positive");
+              "dangerous-loading should keep resolve_turn stack-input traffic visible while "
+              "ranking it as non-positive");
       const SizeNextActionSummaryReport* state_output_action = find_size_next_action(
           result, "trafficShapeAction", "split-stack-inputs-from-deferred-state-outputs");
       require(state_output_action == nullptr,
-              "dangerous-loading should not rank persistent state-output stores as a positive "
-              "next scheduler action");
+              "dangerous-loading should no longer report the old deferred-state-output scheduler "
+              "shape after the smaller selected layout");
     }
     if (name == "functions-demo") {
       const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
@@ -1012,6 +1048,16 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareBestStackInputAdditionalRecallCellsToProfit") &&
                   cell_mask_helper->details.at(
                       "valueAwareBestStackInputAdditionalRecallCellsToProfit") == "3" &&
+                  cell_mask_helper->details.contains(
+                      "valueAwareBestStackInputPositiveGapReason") &&
+                  cell_mask_helper->details.at(
+                      "valueAwareBestStackInputPositiveGapReason") ==
+                      "current-input-negative-after-callsite-materialization" &&
+                  cell_mask_helper->details.contains(
+                      "valueAwareBestStackInputNextProofTarget") &&
+                  cell_mask_helper->details.at("valueAwareBestStackInputNextProofTarget") ==
+                      "reduce-callsite-materialization-by-3,"
+                      "or-find-additional-helper-local-recall-savings-by-3" &&
                   !cell_mask_helper->details.contains("valueAwareStateOutputNames"),
               "tic-tac-toe-4x4 helper summary should aggregate helper-local register traffic "
               "and callsite materialization costs for value-aware scheduler attribution");
@@ -1109,6 +1155,12 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.at(
                       "valueAwareCallPreservationCalleeStackSurvival") ==
                       "packed-line score accumulator helper:X:-,Y:T,Z:T,T:T" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCallPreservationCalleeX2Effects") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCallPreservationCalleeX2Effects") ==
+                      "packed-line score accumulator helper:x2-clobbering(preserves=6,affects=1,"
+                      "restores=0,unknown=0)" &&
                   candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiNaturalPreservedSlotsByCallee") &&
                   candidate_score_zero->details.at(
@@ -1274,6 +1326,18 @@ void example_sizes_match_typescript_baselines() {
                       "reduce-call-argument-preservation-by-1,"
                       "elide-callee-entry-overhead-by-1" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPositiveGapReason") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPositiveGapReason") ==
+                      "current-plan-breaks-even-after-materialization-argument-preservation-and-"
+                      "callee-entry-lower-bound" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiNextProofTarget") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiNextProofTarget") ==
+                      "remove-call-argument-preservation-by-1,"
+                      "reduce-callsite-materialization-by-1,"
+                      "prove-callee-entry-overhead-below-lower-bound-by-1" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiEntryOnlyOutcome") &&
                   candidate_score_zero->details.at("valueAwareCalleeAbiEntryOnlyOutcome") ==
                       "callee-entry-lower-bound-breaks-even-needs-extra-saving" &&
@@ -1325,6 +1389,19 @@ void example_sizes_match_typescript_baselines() {
                       "reduce-callsite-materialization-by-1,"
                       "reduce-call-argument-preservation-by-1,"
                       "elide-callee-entry-overhead-by-1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetPositiveGapReason") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetPositiveGapReason") ==
+                      "current-plan-breaks-even-after-materialization-argument-preservation-and-"
+                      "callee-entry-lower-bound" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetNextProofTarget") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetNextProofTarget") ==
+                      "remove-call-argument-preservation-by-1,"
+                      "reduce-callsite-materialization-by-1,"
+                      "prove-callee-entry-overhead-below-lower-bound-by-1" &&
                   candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiBestSubsetEntryOnlyOutcome") &&
                   candidate_score_zero->details.at(
@@ -1388,6 +1465,47 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCallArgumentPreservationCells") &&
                   candidate_score_zero->details.at("valueAwareCallArgumentPreservationCells") ==
                       "2" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCallArgumentX2RestoreStatus") &&
+                  candidate_score_zero->details.at("valueAwareCallArgumentX2RestoreStatus") ==
+                      "blocked-by-callee-x2-clobber" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCallArgumentX2MutationOpcodesByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCallArgumentX2MutationOpcodesByCallee")
+                          .find("packed-line score accumulator helper:88:П->X b/x2-affects") !=
+                      std::string::npos &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCallArgumentX2RequiredAction") &&
+                  candidate_score_zero->details.at("valueAwareCallArgumentX2RequiredAction") ==
+                      "refactor-callee-to-preserve-x2-or-use-explicit-stack-copy" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCallArgumentPreservationLowerBoundCells") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCallArgumentPreservationLowerBoundCells") == "2" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCallArgumentPreservationLowerBoundBasis") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCallArgumentPreservationLowerBoundBasis") ==
+                      "one-copy-or-restage-cell-per-live-input-nested-helper-argument" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCallArgumentPreservationLowerBoundSites") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCallArgumentPreservationLowerBoundSites")
+                          .find("packed-line score accumulator helper@71:"
+                                "x=nested-helper-argument-and-live-after-call") !=
+                      std::string::npos &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCallArgumentPreservationLowerBoundSites")
+                          .find("packed-line score accumulator helper@74:"
+                                "y=nested-helper-argument-and-live-after-call") !=
+                      std::string::npos &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCallArgumentPreservationRequiredAction") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCallArgumentPreservationRequiredAction") ==
+                      "prove-stack-copy-or-callee-entry-can-supply-nested-helper-argument-"
+                      "without-killing-resident-input" &&
                   candidate_score_zero->details.contains(
                       "valueAwareCallArgumentInputNamesByCallee") &&
                   candidate_score_zero->details.at(

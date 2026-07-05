@@ -26,19 +26,22 @@
    22 |  09  | 9                       |
    23 |  0B  | /-/                     | negative number
    24 |  4E  | X→П e                   | setup Re
-   25 |  07  | 7                       |
-   26 |  05  | 5                       |
+   25 |  03  | 3                       |
+   26 |  00  | 0                       |
    27 |  47  | X→П 7                   | setup R7
-   28 |  02  | 2                       |
-   29 |  01  | 1                       |
+   28 |  06  | 6                       |
+   29 |  06  | 6                       |
    30 |  48  | X→П 8                   | setup R8
    31 |  02  | 2                       |
-   32 |  03  | 3                       |
+   32 |  01  | 1                       |
    33 |  49  | X→П 9                   | setup R9
-   34 |  03  | 3                       |
-   35 |  00  | 0                       |
+   34 |  02  | 2                       |
+   35 |  03  | 3                       |
    36 |  4A  | X→П a                   | setup Ra
-   37 |  50  | С/П                     | setup complete
+   37 |  04  | 4                       |
+   38 |  02  | 2                       |
+   39 |  4B  | X→П b                   | setup Rb
+   40 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
@@ -60,70 +63,61 @@
    14 |  0E  | В↑                      | separate adjacent number entry
    15 |  04  | 4                       |
    16 |  11  | −                       | dispatch compare
-   17 |  E9  | К x=0 9                 | case mismatch; preloaded R9=D5 indirect-target=23 shifted-forward indirect flow
+   17 |  EA  | К x=0 a                 | case mismatch; preloaded Ra=D5 indirect-target=23 shifted-forward indirect flow
    18 |  62  | П→X 2                   | recall boat
    19 |  01  | 1                       |
    20 |  11  | −                       | expr -
    21 |  42  | X→П 2                   | set boat
-   22 |  8A  | К БП a                  | empty-stack tail call resolve_turn; preloaded Ra=30 indirect-target=30 shifted-forward indirect flow
+   22 |  87  | К БП 7                  | empty-stack tail call resolve_turn; preloaded R7=30 indirect-target=30 shifted-forward indirect flow
    23 |  02  | 2                       |
    24 |  11  | −                       | dispatch residual compare
-   25 |  EA  | К x=0 a                 | case mismatch; preloaded Ra=30 indirect-target=30 shifted-forward indirect flow
+   25 |  E7  | К x=0 7                 | case mismatch; preloaded R7=30 indirect-target=30 shifted-forward indirect flow
    26 |  01  | 1                       |
    27 |  62  | П→X 2                   | recall boat
    28 |  10  | +                       | expr +
-   29 |  88  | К БП 8                  | shared terminal tail; preloaded R8=D3 indirect-target=21 indirect flow
+   29 |  89  | К БП 9                  | shared terminal tail; preloaded R9=D3 indirect-target=21 indirect flow
    30 |  62  | П→X 2                   | recall boat
    31 |  64  | П→X 4                   | recall threat
    32 |  11  | −                       | condition compare
-   33 |  5E  | F x=0                   | false branch for ==
-   34 |  48  | 48                      | false branch for ==
-   35 |  61  | П→X 1                   | recall boats_left
-   36 |  01  | 1                       |
-   37 |  11  | −                       | expr -
-   38 |  41  | X→П 1                   | set boats_left
-   39 |  00  | 0                       | set loaded
-   40 |  40  | X→П 0                   | set loaded
-   41 |  08  | 8                       |
-   42 |  61  | П→X 1                   | recall boats_left
-   43 |  0B  | /-/                     | negate boats_left for zero test
-   44 |  97  | К x≥0 7                 | false branch for <=; preloaded R7=75 indirect-target=75 shifted-forward indirect flow
-   45 |  6E  | П→X e                   | preload const -999
-   46 |  50  | С/П                     | halt
-   47 |  87  | К БП 7                  | if end; preloaded R7=75 indirect-target=75 shifted-forward indirect flow
-   48 |  62  | П→X 2                   | recall boat
-   49 |  01  | 1                       |
-   50 |  11  | −                       | condition compare
-   51 |  5E  | F x=0                   | false branch for ==
-   52 |  55  | 55                      | false branch for ==
-   53 |  01  | 1                       |
-   54 |  40  | X→П 0                   | set loaded
-   55 |  62  | П→X 2                   | recall boat
-   56 |  08  | 8                       |
-   57 |  11  | −                       | condition compare
-   58 |  5E  | F x=0                   | false branch for ==
-   59 |  70  | 70                      | false branch for ==
-   60 |  60  | П→X 0                   | recall loaded
-   61 |  01  | 1                       |
-   62 |  11  | −                       | condition compare
-   63 |  5E  | F x=0                   | false branch for ==
-   64 |  70  | 70                      | false branch for ==
-   65 |  63  | П→X 3                   | recall cargo_left
-   66 |  01  | 1                       |
-   67 |  11  | −                       | expr -
-   68 |  43  | X→П 3                   | set cargo_left
-   69 |  00  | 0                       | set loaded
-   70 |  63  | П→X 3                   | recall cargo_left
-   71 |  0B  | /-/                     | negate cargo_left for zero test
-   72 |  97  | К x≥0 7                 | false branch for <=; reused preloaded R7=75 indirect-target=75 direct flow
-   73 |  6D  | П→X d                   | preload const 777
-   74 |  50  | С/П                     | halt
-   75 |  3B  | К СЧ                    | random()
-   76 |  08  | 8                       |
-   77 |  12  | ×                       | expr *
-   78 |  0E  | В↑                      | random int keep scaled draw
-   79 |  35  | К {x}                   | random int fractional part
-   80 |  11  | −                       | random int floor
-   81 |  01  | 1                       |
-   82 |  10  | +                       | expr +
-   83 |  52  | В/О                     | implicit return from proc
+   33 |  EB  | К x=0 b                 | false branch for ==; preloaded Rb=42 indirect-target=42 shifted-forward indirect flow
+   34 |  08  | 8                       |
+   35 |  D1  | К П→X 1                 | delayed predecrement boats_left
+   36 |  61  | П→X 1                   | recall boats_left
+   37 |  0B  | /-/                     | negate boats_left for zero test
+   38 |  98  | К x≥0 8                 | false branch for <=; preloaded R8=66 indirect-target=66 shifted-forward indirect flow
+   39 |  6E  | П→X e                   | preload const -999
+   40 |  50  | С/П                     | halt
+   41 |  88  | К БП 8                  | if end; preloaded R8=66 indirect-target=66 shifted-forward indirect flow
+   42 |  62  | П→X 2                   | recall boat
+   43 |  01  | 1                       |
+   44 |  11  | −                       | condition compare
+   45 |  5E  | F x=0                   | false branch for ==
+   46 |  49  | 49                      | false branch for ==
+   47 |  01  | 1                       |
+   48 |  40  | X→П 0                   | set loaded
+   49 |  62  | П→X 2                   | recall boat
+   50 |  08  | 8                       |
+   51 |  11  | −                       | condition compare
+   52 |  5E  | F x=0                   | false branch for ==
+   53 |  61  | 61                      | false branch for ==
+   54 |  60  | П→X 0                   | recall loaded
+   55 |  01  | 1                       |
+   56 |  11  | −                       | condition compare
+   57 |  5E  | F x=0                   | false branch for ==
+   58 |  61  | 61                      | false branch for ==
+   59 |  D3  | К П→X 3                 | decrement cargo_left
+   60 |  00  | 0                       | set loaded
+   61 |  63  | П→X 3                   | recall cargo_left
+   62 |  0B  | /-/                     | negate cargo_left for zero test
+   63 |  98  | К x≥0 8                 | false branch for <=; reused preloaded R8=66 indirect-target=66 direct flow
+   64 |  6D  | П→X d                   | preload const 777
+   65 |  50  | С/П                     | halt
+   66 |  3B  | К СЧ                    | random()
+   67 |  08  | 8                       |
+   68 |  12  | ×                       | expr *
+   69 |  0E  | В↑                      | random int keep scaled draw
+   70 |  35  | К {x}                   | random int fractional part
+   71 |  11  | −                       | random int floor
+   72 |  01  | 1                       |
+   73 |  10  | +                       | expr +
+   74 |  52  | В/О                     | implicit return from proc

@@ -120,9 +120,47 @@ function analyzeFile(compiler, file) {
   if (!report) {
     throw new Error(`compiler JSON did not include sizeAttribution for ${file}`);
   }
+  const helpers = (report.helpers ?? []).map((helper) => ({
+    file,
+    label: helper.label ?? '',
+    totalCells: Number(helper.totalCells ?? 0),
+    bodyCells: Number(helper.bodyCells ?? 0),
+    callSiteCells: Number(helper.callSiteCells ?? 0),
+    callOccurrences: Number(helper.callOccurrences ?? 0),
+    bodyOccurrences: Number(helper.bodyOccurrences ?? 0),
+    firstAddress: helper.firstAddress ?? '',
+    lastAddress: helper.lastAddress ?? '',
+    role: detail(helper.details, 'role'),
+    pipelineShape: detail(helper.details, 'pipelineShape'),
+    bodyCellsPerAccumulatorTerm: detail(helper.details, 'bodyCellsPerAccumulatorTerm'),
+    callCellsPerOccurrence: detail(helper.details, 'callCellsPerOccurrence'),
+    nextPipelineAction: detail(helper.details, 'nextPipelineAction'),
+    details: helper.details ?? {},
+  }));
+  const candidateOpportunities = [];
   const helperTraffic = [];
   for (const opportunity of report.opportunities ?? []) {
     if (opportunity.variant !== 'helper-register-traffic') {
+      const details = opportunity.details ?? {};
+      candidateOpportunities.push({
+        file,
+        variant: opportunity.variant ?? '',
+        site: opportunity.site ?? '',
+        savings: Number(opportunity.savings ?? 0),
+        currentSteps: Number(opportunity.currentSteps ?? 0),
+        candidateSteps: Number(opportunity.candidateSteps ?? 0),
+        blockerKind: opportunity.blockerKind ?? '',
+        reason: opportunity.reason ?? '',
+        requiredAction: detail(details, 'requiredAction'),
+        proofStatus: detail(details, 'proofStatus'),
+        proofDisposition: detail(details, 'proofDisposition') ||
+          detail(details, 'blockedProof'),
+        sizeImpactStatus: detail(details, 'sizeImpactStatus'),
+        netSavingsStatus: detail(details, 'netSavingsStatus'),
+        candidateStepsStatus: detail(details, 'candidateStepsStatus'),
+        estimateKind: detail(details, 'estimateKind'),
+        details,
+      });
       continue;
     }
     const details = opportunity.details ?? {};
@@ -150,6 +188,18 @@ function analyzeFile(compiler, file) {
       suggestedResidentInputs: detail(details, 'valueAwareSuggestedResidentInputNames'),
       profitBreakdown: detail(details, 'valueAwareStackInputProfitBreakdown'),
       materializeCellsByName: detail(details, 'valueAwareStackInputMaterializeCellsByName'),
+      currentXMaterializeCellsByName:
+        detail(details, 'valueAwareCurrentXStackInputMaterializeCellsByName'),
+      currentXMaterializeSites:
+        detail(details, 'valueAwareCurrentXStackInputMaterializeSites'),
+      currentXRetainedStores:
+        detail(details, 'valueAwareCurrentXStackInputRetainedStoreCellsByName'),
+      currentXRetainedSites:
+        detail(details, 'valueAwareCurrentXStackInputRetainedStoreSites'),
+      currentXMaterializeProof:
+        detail(details, 'valueAwareCurrentXStackInputMaterializeProofStatus'),
+      currentXMaterializeAction:
+        detail(details, 'valueAwareCurrentXStackInputMaterializeRequiredAction'),
       callerArgStoreCells: detail(details, 'valueAwareCallArgumentStoreCells'),
       callerArgStoreCellsByName: detail(details, 'valueAwareCallArgumentStoreCellsByName'),
       callerArgStoreAdjustedNet: detail(
@@ -162,10 +212,39 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCallArgumentPreservationCellsByCallee',
       ),
+      callArgumentPreservationLowerBound: detail(
+        details,
+        'valueAwareCallArgumentPreservationLowerBoundCells',
+      ),
+      callArgumentPreservationLowerBoundBasis: detail(
+        details,
+        'valueAwareCallArgumentPreservationLowerBoundBasis',
+      ),
+      callArgumentPreservationRequiredAction: detail(
+        details,
+        'valueAwareCallArgumentPreservationRequiredAction',
+      ),
+      callArgumentX2RestoreStatus: detail(details, 'valueAwareCallArgumentX2RestoreStatus'),
+      callArgumentX2MutationOpcodesByCallee: detail(
+        details,
+        'valueAwareCallArgumentX2MutationOpcodesByCallee',
+      ),
+      callArgumentX2RequiredAction: detail(
+        details,
+        'valueAwareCallArgumentX2RequiredAction',
+      ),
+      callArgumentSites: detail(details, 'valueAwareCallArgumentSites'),
       callArgumentInputNamesByCallee: detail(
         details,
         'valueAwareCallArgumentInputNamesByCallee',
       ),
+      callPreservationSites: detail(details, 'valueAwareCallPreservationSites'),
+      callPreservationCalleeX2Effects: detail(
+        details,
+        'valueAwareCallPreservationCalleeX2Effects',
+      ),
+      callPreservationMutatingOpcodes:
+        detail(details, 'valueAwareCallPreservationMutatingOpcodes'),
       directMaterialization: detail(details, 'valueAwareDirectStackInputMaterialization'),
       directMaterializationStatus: detail(
         details,
@@ -175,6 +254,8 @@ function analyzeFile(compiler, file) {
       bestInputNet: detail(details, 'valueAwareBestStackInputNetCells'),
       bestInputAdditionalRecallCellsToProfit:
         detail(details, 'valueAwareBestStackInputAdditionalRecallCellsToProfit'),
+      bestInputGapReason: detail(details, 'valueAwareBestStackInputPositiveGapReason'),
+      bestInputNextProofTarget: detail(details, 'valueAwareBestStackInputNextProofTarget'),
       calleeStackSurvival: detail(details, 'valueAwareCallPreservationCalleeStackSurvival'),
       calleeNaturalPreservedSlots: detail(
         details,
@@ -209,6 +290,11 @@ function analyzeFile(compiler, file) {
         'valueAwareCalleeAbiAdditionalNetCellsToPositive',
       ),
       calleeAbiPositiveLevers: detail(details, 'valueAwareCalleeAbiPositiveLevers'),
+      calleeAbiPositiveGapReason: detail(
+        details,
+        'valueAwareCalleeAbiPositiveGapReason',
+      ),
+      calleeAbiNextProofTarget: detail(details, 'valueAwareCalleeAbiNextProofTarget'),
       calleeAbiBestSubset: detail(details, 'valueAwareCalleeAbiBestSubsetInputNames'),
       calleeAbiBestSubsetNet: detail(
         details,
@@ -221,6 +307,14 @@ function analyzeFile(compiler, file) {
       calleeAbiBestSubsetLevers: detail(
         details,
         'valueAwareCalleeAbiBestSubsetPositiveLevers',
+      ),
+      calleeAbiBestSubsetGapReason: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetPositiveGapReason',
+      ),
+      calleeAbiBestSubsetNextProofTarget: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetNextProofTarget',
       ),
       calleeAbiBestSubsetStatus: detail(
         details,
@@ -246,6 +340,8 @@ function analyzeFile(compiler, file) {
   return {
     file,
     totalCells: report.totalCells,
+    helpers,
+    candidateOpportunities,
     helperTraffic,
     nextActions,
   };
@@ -254,8 +350,10 @@ function analyzeFile(compiler, file) {
 function aggregate(rows) {
   const nextActionGroups = new Map();
   const helperPlanGroups = new Map();
+  const candidateBlockerGroups = new Map();
   const seenActionGroupFiles = new Set();
   const seenHelperGroupFiles = new Set();
+  const seenCandidateGroupFiles = new Set();
   for (const row of rows) {
     for (const action of row.nextActions) {
       const key = `${action.status}\t${action.source}\t${action.action}`;
@@ -275,6 +373,15 @@ function aggregate(rows) {
       });
       seenHelperGroupFiles.add(fileKey);
     }
+    for (const candidate of row.candidateOpportunities) {
+      const key = `${candidate.blockerKind || candidate.variant || 'unknown'}\t${candidate.requiredAction || 'none'}\t${candidate.proofDisposition || candidate.proofStatus || 'none'}`;
+      const fileKey = `${key}\t${row.file}`;
+      addGrouped(candidateBlockerGroups, key, {
+        ...candidate,
+        firstInGroup: !seenCandidateGroupFiles.has(fileKey),
+      });
+      seenCandidateGroupFiles.add(fileKey);
+    }
   }
   const sortGroups = (groups) => [...groups.values()].sort((left, right) => {
     if (right.potentialSavings !== left.potentialSavings) {
@@ -288,13 +395,43 @@ function aggregate(rows) {
   return {
     analyzedFiles: rows.length,
     totalCells: rows.reduce((sum, row) => sum + row.totalCells, 0),
+    helperCostCount: rows.reduce((sum, row) => sum + row.helpers.length, 0),
+    topHelpers: rows.flatMap((row) => row.helpers)
+      .filter((row) => row.totalCells > 0)
+      .sort((left, right) =>
+        right.totalCells - left.totalCells ||
+        right.callSiteCells - left.callSiteCells ||
+        left.file.localeCompare(right.file) ||
+        left.label.localeCompare(right.label)),
     helperTrafficCount: rows.reduce((sum, row) => sum + row.helperTraffic.length, 0),
+    candidateOpportunityCount:
+      rows.reduce((sum, row) => sum + row.candidateOpportunities.length, 0),
+    positiveCandidateOpportunities: rows.flatMap((row) => row.candidateOpportunities)
+      .filter((row) => row.savings > 0)
+      .sort((left, right) =>
+        right.savings - left.savings ||
+        left.file.localeCompare(right.file) ||
+        left.variant.localeCompare(right.variant)),
+    topRejectedCandidateOpportunities: rows.flatMap((row) => row.candidateOpportunities)
+      .filter((row) => row.savings <= 0)
+      .sort((left, right) =>
+        right.savings - left.savings ||
+        left.file.localeCompare(right.file) ||
+        left.variant.localeCompare(right.variant)),
     positiveHelperTraffic: rows.flatMap((row) => row.helperTraffic)
       .filter((row) => row.savings > 0)
       .sort((left, right) => right.savings - left.savings || left.file.localeCompare(right.file)),
     stalledHelperTraffic: rows.flatMap((row) => row.helperTraffic)
       .filter((row) => row.savings <= 0)
       .sort((left, right) => right.savings - left.savings || left.file.localeCompare(right.file)),
+    nearPositiveHelperTraffic: rows.flatMap((row) => row.helperTraffic)
+      .filter((row) => row.savings <= 0)
+      .map((row) => ({ ...row, positiveGap: helperPositiveGap(row) }))
+      .filter((row) => row.positiveGap !== null && row.positiveGap <= 1)
+      .sort((left, right) =>
+        left.positiveGap - right.positiveGap ||
+        right.registerTrafficCells - left.registerTrafficCells ||
+        left.file.localeCompare(right.file)),
     positiveNextActions: rows.flatMap((row) => row.nextActions)
       .filter((row) => row.status === 'positive')
       .sort((left, right) =>
@@ -305,6 +442,7 @@ function aggregate(rows) {
         right.bestSavings - left.bestSavings || left.file.localeCompare(right.file)),
     nextActionGroups: sortGroups(nextActionGroups),
     helperPlanGroups: sortGroups(helperPlanGroups),
+    candidateBlockerGroups: sortGroups(candidateBlockerGroups),
     files: rows,
   };
 }
@@ -318,7 +456,40 @@ function printGroup(group) {
       ` best=${group.bestSavings}` +
       ` bestFile=${best.file ?? ''}` +
       ` helper=${best.helper ?? ''}` +
-      ` variant=${best.bestVariant ?? ''}`,
+      ` variant=${best.bestVariant ?? best.variant ?? ''}`,
+  );
+}
+
+function printHelperCost(row) {
+  console.log(
+    `- ${row.totalCells} ${row.file} :: ${row.label}` +
+      ` body=${row.bodyCells}` +
+      ` calls=${row.callSiteCells}` +
+      ` callOccurrences=${row.callOccurrences}` +
+      ` bodyOccurrences=${row.bodyOccurrences}` +
+      ` addr=${row.firstAddress}-${row.lastAddress}` +
+      ` role=${row.role || '-'}` +
+      ` shape=${row.pipelineShape || '-'}` +
+      ` bodyPerTerm=${row.bodyCellsPerAccumulatorTerm || '-'}` +
+      ` callPerOccurrence=${row.callCellsPerOccurrence || '-'}` +
+      ` next=${row.nextPipelineAction || '-'}`,
+  );
+}
+
+function printCandidateOpportunity(row) {
+  console.log(
+    `- ${row.savings} ${row.file} :: ${row.variant}` +
+      ` site=${row.site || '-'}` +
+      ` steps=${row.currentSteps}->${row.candidateSteps}` +
+      ` blocker=${row.blockerKind || '-'}` +
+      ` required=${row.requiredAction || '-'}` +
+      ` proof=${row.proofStatus || '-'}` +
+      ` disposition=${row.proofDisposition || '-'}` +
+      ` size=${row.sizeImpactStatus || '-'}` +
+      ` net=${row.netSavingsStatus || '-'}` +
+      ` candidate=${row.candidateStepsStatus || '-'}` +
+      ` estimate=${row.estimateKind || '-'}` +
+      ` reason=${row.reason || '-'}`,
   );
 }
 
@@ -328,6 +499,17 @@ function helperInputSummary(row) {
     row.breakEvenInputs ||
     row.unprofitableInputs ||
     '-';
+}
+
+function positiveInteger(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function helperPositiveGap(row) {
+  return positiveInteger(row.calleeAbiAdditionalNetToPositive) ??
+    positiveInteger(row.calleeAbiBestSubsetNeed) ??
+    positiveInteger(row.bestInputAdditionalRecallCellsToProfit);
 }
 
 function printHelper(row) {
@@ -343,14 +525,32 @@ function printHelper(row) {
       ` bestInput=${row.bestInput || '-'}` +
       ` bestNet=${row.bestInputNet || '-'}` +
       ` need=${row.bestInputAdditionalRecallCellsToProfit || '-'}` +
+      ` bestGap=${row.bestInputGapReason || '-'}` +
+      ` bestTarget=${row.bestInputNextProofTarget || '-'}` +
       ` profit=${row.profitBreakdown || '-'}` +
       ` materialize=${row.materializeCellsByName || '-'}` +
+      ` currentXMat=${row.currentXMaterializeCellsByName || '-'}` +
+      ` currentXSites=${row.currentXMaterializeSites || '-'}` +
+      ` currentXRetained=${row.currentXRetainedStores || '-'}` +
+      ` currentXRetainedSites=${row.currentXRetainedSites || '-'}` +
+      ` currentXProof=${row.currentXMaterializeProof || '-'}` +
+      ` currentXAction=${row.currentXMaterializeAction || '-'}` +
       ` argStores=${row.callerArgStoreCellsByName || '-'}` +
       ` argStoreNet=${row.callerArgStoreAdjustedNet || '-'}` +
       ` argStorePlan=${row.callerArgStorePlanStatus || '-'}` +
       ` argStoreAction=${row.callerArgStoreRequiredAction || '-'}` +
       ` argPreserve=${row.callArgumentPreservationCellsByCallee || '-'}` +
+      ` argPreserveLower=${row.callArgumentPreservationLowerBound || '-'}` +
+      ` argPreserveBasis=${row.callArgumentPreservationLowerBoundBasis || '-'}` +
+      ` argPreserveAction=${row.callArgumentPreservationRequiredAction || '-'}` +
+      ` argX2=${row.callArgumentX2RestoreStatus || '-'}` +
+      ` argX2Action=${row.callArgumentX2RequiredAction || '-'}` +
       ` argInputs=${row.callArgumentInputNamesByCallee || '-'}` +
+      ` argSites=${row.callArgumentSites || '-'}` +
+      ` preserveSites=${row.callPreservationSites || '-'}` +
+      ` mutating=${row.callPreservationMutatingOpcodes || '-'}` +
+      ` x2=${row.callPreservationCalleeX2Effects || '-'}` +
+      ` x2Mutating=${row.callArgumentX2MutationOpcodesByCallee || '-'}` +
       ` directMat=${row.directMaterializationStatus || '-'}:${row.directMaterialization || '-'}` +
       ` survival=${row.calleeStackSurvival || '-'}` +
       ` natural=${row.calleeNaturalPreservedSlots || '-'}` +
@@ -362,10 +562,14 @@ function printHelper(row) {
       ` abiNet=${row.calleeAbiNetAfterLowerBound || '-'}` +
       ` abiNeed=${row.calleeAbiAdditionalNetToPositive || '-'}` +
       ` abiLevers=${row.calleeAbiPositiveLevers || '-'}` +
+      ` abiGap=${row.calleeAbiPositiveGapReason || '-'}` +
+      ` abiTarget=${row.calleeAbiNextProofTarget || '-'}` +
       ` abiSubset=${row.calleeAbiBestSubset || '-'}` +
       ` abiSubsetNet=${row.calleeAbiBestSubsetNet || '-'}` +
       ` abiSubsetNeed=${row.calleeAbiBestSubsetNeed || '-'}` +
       ` abiSubsetLevers=${row.calleeAbiBestSubsetLevers || '-'}` +
+      ` abiSubsetGap=${row.calleeAbiBestSubsetGapReason || '-'}` +
+      ` abiSubsetTarget=${row.calleeAbiBestSubsetNextProofTarget || '-'}` +
       ` abiSubsetStatus=${row.calleeAbiBestSubsetStatus || '-'}` +
       ` callee=${row.calleeAbiStatus || '-'}`,
   );
@@ -384,13 +588,53 @@ function printAction(row) {
 function printText(report) {
   console.log(`Analyzed files: ${report.analyzedFiles}`);
   console.log(`Total cells: ${report.totalCells}`);
+  console.log(`Selected helper costs: ${report.helperCostCount}`);
   console.log(`Helper register-traffic opportunities: ${report.helperTrafficCount}`);
+  console.log(`Candidate/rejected opportunities: ${report.candidateOpportunityCount}`);
+
+  console.log('\nTop selected helper costs:');
+  if (report.topHelpers.length === 0) {
+    console.log('(none)');
+  } else {
+    report.topHelpers.slice(0, 20).forEach(printHelperCost);
+  }
 
   console.log('\nPositive next actions:');
   if (report.positiveNextActions.length === 0) {
     console.log('(none)');
   } else {
     report.positiveNextActions.slice(0, 20).forEach(printAction);
+  }
+
+  console.log('\nNear-positive helper register-traffic opportunities:');
+  if (report.nearPositiveHelperTraffic.length === 0) {
+    console.log('(none)');
+  } else {
+    report.nearPositiveHelperTraffic.slice(0, 20).forEach((row) => {
+      console.log(`  gap=${row.positiveGap}`);
+      printHelper(row);
+    });
+  }
+
+  console.log('\nPositive candidate/rejected opportunities:');
+  if (report.positiveCandidateOpportunities.length === 0) {
+    console.log('(none)');
+  } else {
+    report.positiveCandidateOpportunities.slice(0, 20).forEach(printCandidateOpportunity);
+  }
+
+  console.log('\nTop rejected/nonpositive candidate opportunities:');
+  if (report.topRejectedCandidateOpportunities.length === 0) {
+    console.log('(none)');
+  } else {
+    report.topRejectedCandidateOpportunities.slice(0, 20).forEach(printCandidateOpportunity);
+  }
+
+  console.log('\nCandidate/rejected blockers by group:');
+  if (report.candidateBlockerGroups.length === 0) {
+    console.log('(none)');
+  } else {
+    report.candidateBlockerGroups.slice(0, 20).forEach(printGroup);
   }
 
   console.log('\nStalled next actions by group:');

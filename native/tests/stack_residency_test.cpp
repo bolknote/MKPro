@@ -574,6 +574,66 @@ program StackResidentIndexedBitMaskUpdateConsumer {
   }
 
   {
+    const std::string source = R"mkpro(
+program RuleStackInputSecondaryEntryProbe {
+  state {
+    x: packed = 1
+    seed: packed = 2
+    score: packed = 0
+    scratch: packed = 0
+  }
+
+  fn cold() {
+    scratch = scratch + 1
+  }
+
+  fn hot() {
+    score = x + 1
+    cold()
+  }
+
+  loop {
+    x = 8
+    scratch += 1
+    hot()
+    x = seed + 1
+    hot()
+    halt(score + scratch)
+  }
+}
+)mkpro";
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.stack_resident_temps = true;
+    baseline_options.disable_candidate_search = true;
+    const CompileResult baseline = compile_source(source, baseline_options);
+    require_clean_compile(baseline, "secondary rule stack-input baseline");
+    require(count_steps_with_comment(baseline, "recall x") == 1,
+            "baseline helper should recall x inside hot");
+    require(count_steps_with_comment(baseline, "set x") == 2,
+            "baseline should materialize both x updates before regular hot calls");
+
+    CompileOptions stack_input_options = baseline_options;
+    stack_input_options.stack_argument_function_entries = true;
+    const CompileResult stack_input = compile_source(source, stack_input_options);
+    require_clean_compile(stack_input, "secondary rule stack-input entry variant");
+    require(stack_input.steps.size() + 1U == baseline.steps.size(),
+            "secondary stack-input entry should remove the current-X callsite store without "
+            "duplicating the helper body");
+    require(has_optimization(stack_input, "rule-stack-input-entry-secondary"),
+            "partial current-X callsites should compile hot with a secondary stack-input entry");
+    require(count_steps_with_comment_prefix_and_opcode(
+                stack_input, "proc call hot stack-input entry", 0x53) == 1,
+            "only the naturally staged second hot call should use the secondary entry");
+    require(count_steps_with_comment_prefix_and_opcode(stack_input, "proc call hot", 0x53) == 2,
+            "both hot calls should remain subroutine calls");
+    require(count_steps_with_comment(stack_input, "regular stack-input preload x") == 1,
+            "regular hot entry should preload x before falling into the shared stack-input body");
+    require(count_steps_with_comment(stack_input, "set x") == 1,
+            "secondary stack-input call should keep only the loop-carried x store");
+  }
+
+  {
     CompileOptions options;
     options.budget = 999999;
     options.stack_resident_temps = true;
@@ -961,6 +1021,125 @@ program StackFunctionNestedValueEntry {
     require(count_steps_with_comment_prefix_and_opcode(
                 stack_entry, "call function combine stack entry", 0x53) == 3,
             "all safe nested combine calls should use the function stack-entry label");
+  }
+
+  {
+    const std::string packed_score_function_entry_source = R"mkpro(
+program StackFunctionPackedScoreEntry {
+  state {
+    line: packed = 44444.4
+    index: counter 0..7 = 3
+    other_line: packed = 33333.3
+    other_index: counter 0..7 = 2
+    out: packed = 0
+  }
+
+  fn score(value_line, value_index) {
+    return packed_score(value_line, value_index)
+  }
+
+  loop {
+    out = score(line, index)
+    out += score(other_line, other_index)
+    out += score(line, other_index)
+    halt(out)
+  }
+}
+)mkpro";
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.disable_candidate_search = true;
+    const CompileResult baseline =
+        compile_source(packed_score_function_entry_source, baseline_options);
+    require_clean_compile(baseline, "packed_score function entry baseline");
+    require(count_steps_with_comment(baseline, "arg value_line for score") == 3 &&
+                count_steps_with_comment(baseline, "arg value_index for score") == 3,
+            "baseline packed_score value function should materialize both parameters");
+
+    CompileOptions stack_entry_options = baseline_options;
+    stack_entry_options.stack_resident_temps = true;
+    stack_entry_options.stack_argument_function_entries = true;
+    const CompileResult stack_entry =
+        compile_source(packed_score_function_entry_source, stack_entry_options);
+    require_clean_compile(stack_entry, "packed_score function argument-entry variant");
+    require(stack_entry.steps.size() < baseline.steps.size(),
+            "packed_score function stack-entry variant should reduce parameter traffic");
+    require(has_optimization(stack_entry, "function-stack-entry-primary"),
+            "packed_score function stack-entry variant should emit a callee stack entry");
+    require(has_optimization(stack_entry, "function-stack-entry-call"),
+            "packed_score function stack-entry variant should route calls through the stack entry");
+    require(has_optimization(stack_entry, "packed-score-inline-stack-argument-lowering"),
+            "packed_score function stack-entry should lower the shared entry body from stack "
+            "args");
+    require(count_steps_with_comment(stack_entry, "arg value_line for score") == 0 &&
+                count_steps_with_comment(stack_entry, "arg value_index for score") == 0,
+            "packed_score function stack-entry calls should not store caller arguments");
+    require(count_steps_with_comment_prefix_and_opcode(
+                stack_entry, "call function score stack entry", 0x53) == 3,
+            "safe packed_score value-function calls should use the stack-entry label");
+  }
+
+  {
+    const std::string packed_score_sum_entry_source = R"mkpro(
+program StackFunctionPackedScoreSumEntry {
+  state {
+    line: packed = 44444.4
+    index: counter 0..7 = 3
+    other_line: packed = 33333.3
+    other_index: counter 0..7 = 2
+    anchor_line: packed = 22222.2
+    anchor_index: counter 0..7 = 1
+    out: packed = 0
+  }
+
+  fn score(value_line, value_index) {
+    return packed_score(value_line, value_index) + packed_score(anchor_line, anchor_index) + packed_score(other_line, other_index)
+  }
+
+  loop {
+    out = score(line, index)
+    out += score(other_line, other_index)
+    out += score(line, other_index)
+    halt(out)
+  }
+}
+)mkpro";
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.disable_candidate_search = true;
+    baseline_options.packed_score_accumulator_helpers = true;
+    const CompileResult baseline =
+        compile_source(packed_score_sum_entry_source, baseline_options);
+    require_clean_compile(baseline, "packed_score sum function entry baseline");
+    require(count_steps_with_comment(baseline, "arg value_line for score") == 3 &&
+                count_steps_with_comment(baseline, "arg value_index for score") == 3,
+            "baseline packed_score sum value function should materialize both parameters");
+
+    CompileOptions stack_entry_options = baseline_options;
+    stack_entry_options.stack_resident_temps = true;
+    stack_entry_options.stack_argument_function_entries = true;
+    const CompileResult stack_entry =
+        compile_source(packed_score_sum_entry_source, stack_entry_options);
+    require_clean_compile(stack_entry, "packed_score sum function argument-entry variant");
+    require(stack_entry.steps.size() < baseline.steps.size(),
+            "packed_score sum function stack-entry variant should reduce parameter traffic");
+    require(has_optimization(stack_entry, "function-stack-entry-primary"),
+            "packed_score sum function stack-entry variant should emit a callee stack entry");
+    require(has_optimization(stack_entry, "function-stack-entry-call"),
+            "packed_score sum function stack-entry variant should route calls through the stack "
+            "entry");
+    require(has_optimization(stack_entry, "packed-score-stack-resident-sum-accumulator"),
+            "packed_score sum function stack-entry should start an accumulator pipeline from the "
+            "stack-resident term");
+    require(has_optimization(stack_entry, "packed-score-accumulator-helper"),
+            "packed_score sum function stack-entry should reuse the accumulator helper for the "
+            "remaining terms");
+    require(count_steps_with_comment(stack_entry, "arg value_line for score") == 0 &&
+                count_steps_with_comment(stack_entry, "arg value_index for score") == 0,
+            "packed_score sum stack-entry calls should not store caller arguments");
+    require(count_steps_with_comment_prefix_and_opcode(
+                stack_entry, "call function score stack entry", 0x53) == 3,
+            "safe packed_score sum value-function calls should use the stack-entry label");
   }
 
   {
@@ -1463,6 +1642,57 @@ program StackPackedScoreInlineCurrentXIndexArg {
             "inline current-X packed_score index argument should not store tmp");
     require(count_steps_with_comment(result, "recall tmp") == 0,
             "inline current-X packed_score index argument should not recall tmp");
+  }
+
+  {
+    CompileOptions options;
+    options.budget = 999999;
+    options.stack_resident_temps = true;
+    options.packed_score_accumulator_helpers = true;
+    options.disable_candidate_search = true;
+    const CompileResult result = compile_source(R"mkpro(
+program StackPackedScoreCurrentXSumAccumulator {
+  state {
+    line: packed = 44444.4
+    index: counter 0..7 = 3
+    other: counter 0..7 = 4
+    guard: flag = false
+    tmp: counter 0..7 = 0
+    warm: packed = 0
+    out: packed = 0
+  }
+
+  fn hot() {
+    tmp = index
+    if guard {
+    }
+    warm += packed_score(line, tmp)
+    tmp = index
+    if guard {
+    }
+    out = packed_score(line, tmp) + packed_score(line, index) + packed_score(line, other)
+  }
+
+  loop {
+    hot()
+    halt(out + warm)
+  }
+}
+)mkpro",
+                                                options);
+    require_clean_compile(result, "stack-resident packed_score sum current-X accumulator");
+    require(has_optimization(result, "stack-carried-assignment-delayed"),
+            "packed_score sum should delay tmp materialization until the sum consumer");
+    require(has_optimization(result, "packed-score-current-x-sum-accumulator"),
+            "packed_score sum should start the accumulator pipeline from current-X tmp");
+    require(has_optimization(result, "packed-score-helper-stack-argument-call"),
+            "packed_score sum should enter the existing helper with tmp in X");
+    require(has_optimization(result, "packed-score-accumulator-helper"),
+            "remaining packed_score terms should still use the accumulator helper");
+    require(count_steps_with_comment(result, "set tmp") == 0,
+            "current-X packed_score sum should not store tmp");
+    require(count_steps_with_comment(result, "recall tmp") == 0,
+            "current-X packed_score sum should not recall tmp");
   }
 
   {

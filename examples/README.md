@@ -26,14 +26,14 @@ Generated with `npm run examples:size`.
 | `cave-sketch.mkpro` | 38 | 105 | -67 | ok: <= reference | main+setup load ok |
 | `cave-treasure.mkpro` | 104 | 105 | -1 | ok: <= reference | main+setup load ok |
 | `clock.mkpro` | 33 | 63 | -30 | ok: <= reference | main+setup load ok |
-| `dangerous-loading.mkpro` | 84 | 103 | -19 | ok: <= reference | load ok |
+| `dangerous-loading.mkpro` | 75 | 103 | -28 | ok: <= reference | load ok |
 | `dungeon.mkpro` | 75 | 999999 | -999924 | ok: <= reference | load ok |
 | `e-94-digits.mkpro` | 64 | 64 | 0 | ok: <= reference | load ok |
 | `fox-hunt-100.mkpro` | 103 | 105 | -2 | ok: <= reference | main+setup load ok |
 | `fox-hunt-mk61.mkpro` | 60 | 92 | -32 | ok: <= reference | main+setup load ok |
 | `functions-demo.mkpro` | 16 | - | - | ok: no reference | load ok |
 | `game-100-pig.mkpro` | 97 | 103 | -6 | ok: <= reference | main+setup load ok |
-| `giants-country.mkpro` | 103 | 999999 | -999896 | ok: <= reference | main+setup load ok |
+| `giants-country.mkpro` | 102 | 999999 | -999897 | ok: <= reference | main+setup load ok |
 | `human.mkpro` | 27 | - | - | ok: no reference | load ok |
 | `jack-pot.mkpro` | 96 | 999999 | -999903 | ok: <= reference | main+setup load ok |
 | `labyrinth777.mkpro` | 105 | 105 | 0 | ok: <= reference | main+setup load ok |

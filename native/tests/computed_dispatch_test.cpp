@@ -1493,6 +1493,34 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
           "dead-integer fractional selector elision should allow proved stored selector "
           "indirect-memory stores while still requiring data recalls to be erased");
 
+  CompileResult safe_stored_same_recall_memory_recall_result = safe_stored_dead_integer_result;
+  safe_stored_same_recall_memory_recall_result.steps.back() = resolved_step_with_mnemonic(
+      0xd9, "К П->X 9", "indexed recall cells; indirect-memory-targets=3");
+  require(optimizer_static_proof_gate_accepts_for_testing(
+              safe_dead_integer_options, safe_stored_same_recall_memory_recall_result),
+          "dead-integer fractional selector elision should allow a stored selector recalled from "
+          "the same register when the following proved indirect-memory recall overwrites live X");
+
+  CompileResult mismatched_stored_same_recall_memory_recall_result =
+      safe_stored_same_recall_memory_recall_result;
+  mismatched_stored_same_recall_memory_recall_result.steps.back() =
+      resolved_step_with_mnemonic(0xd9, "К П->X 9",
+                                  "indexed recall cells; indirect-memory-targets=4");
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              safe_dead_integer_options, mismatched_stored_same_recall_memory_recall_result),
+          "dead-integer fractional selector elision must reject same-register stored selector "
+          "recalls when the following indirect-memory target proof does not match");
+  const std::optional<std::string> mismatched_stored_same_recall_memory_recall_reason =
+      optimizer_static_proof_gate_rejection_reason_for_testing(
+          safe_dead_integer_options, mismatched_stored_same_recall_memory_recall_result);
+  require(mismatched_stored_same_recall_memory_recall_reason.has_value() &&
+              mismatched_stored_same_recall_memory_recall_reason->find(
+                  "stored in R9 reaches К П->X 9 before K {x}") != std::string::npos &&
+              mismatched_stored_same_recall_memory_recall_reason->find(
+                  "(indirect memory recall use)") != std::string::npos,
+          "dead-integer rejection reason must classify mismatched same-register indirect-memory "
+          "recall uses");
+
   CompileResult safe_stored_indirect_call_result = safe_stored_dead_integer_result;
   safe_stored_indirect_call_result.steps.insert(
       safe_stored_indirect_call_result.steps.end() - 2,
@@ -1592,6 +1620,21 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
               safe_dead_integer_options, safe_stored_immediate_same_recall_result),
           "dead-integer fractional selector elision should accept a stored selector immediately "
           "recalled from the same register only when K {x} erases it");
+
+  CompileResult safe_stored_immediate_same_recall_memory_recall_result =
+      safe_stored_immediate_same_recall_result;
+  safe_stored_immediate_same_recall_memory_recall_result.steps.back() =
+      resolved_step_with_mnemonic(0xd9, "К П->X 9",
+                                  "indexed recall cells; indirect-memory-targets=3");
+  safe_stored_immediate_same_recall_memory_recall_result.steps.push_back(
+      resolved_step(0x69, "recall saved selector"));
+  safe_stored_immediate_same_recall_memory_recall_result.steps.push_back(
+      resolved_step(0x35, "frac()"));
+  require(optimizer_static_proof_gate_accepts_for_testing(
+              safe_dead_integer_options,
+              safe_stored_immediate_same_recall_memory_recall_result),
+          "dead-integer fractional selector elision should accept an immediate same-register "
+          "recall when the following proved indirect-memory recall overwrites live X");
 
   CompileResult unsafe_stored_immediate_same_recall_result =
       safe_stored_immediate_same_recall_result;

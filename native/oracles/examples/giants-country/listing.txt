@@ -27,31 +27,31 @@
    23 |  01  | 1                       |
    24 |  00  | 0                       |
    25 |  4D  | X→П d                   | setup Rd
-   26 |  4A  | X→П a                   | setup Ra
+   26 |  01  | 1                       |
    27 |  01  | 1                       |
-   28 |  01  | 1                       |
-   29 |  09  | 9                       |
-   30 |  05  | 5                       |
-   31 |  01  | 1                       |
-   32 |  02  | 2                       |
-   33 |  00  | 0                       |
-   34 |  03  | 3                       |
-   35 |  4E  | X→П e                   | setup Re
-   36 |  08  | 8                       |
-   37 |  08  | 8                       |
-   38 |  48  | X→П 8                   | setup R8
-   39 |  09  | 9                       |
-   40 |  06  | 6                       |
-   41 |  49  | X→П 9                   | setup R9
-   42 |  08  | 8                       |
-   43 |  02  | 2                       |
-   44 |  4B  | X→П b                   | setup Rb
-   45 |  02  | 2                       |
-   46 |  08  | 8                       |
-   47 |  4C  | X→П c                   | setup Rc
-   48 |  3B  | К СЧ                    | random()
-   49 |  09  | 9                       |
-   50 |  09  | 9                       |
+   28 |  09  | 9                       |
+   29 |  05  | 5                       |
+   30 |  01  | 1                       |
+   31 |  02  | 2                       |
+   32 |  00  | 0                       |
+   33 |  03  | 3                       |
+   34 |  4E  | X→П e                   | setup Re
+   35 |  09  | 9                       |
+   36 |  05  | 5                       |
+   37 |  48  | X→П 8                   | setup R8
+   38 |  05  | 5                       |
+   39 |  00  | 0                       |
+   40 |  49  | X→П 9                   | setup R9
+   41 |  08  | 8                       |
+   42 |  07  | 7                       |
+   43 |  4A  | X→П a                   | setup Ra
+   44 |  07  | 7                       |
+   45 |  06  | 6                       |
+   46 |  4B  | X→П b                   | setup Rb
+   47 |  06  | 6                       |
+   48 |  09  | 9                       |
+   49 |  4C  | X→П c                   | setup Rc
+   50 |  3B  | К СЧ                    | random()
    51 |  09  | 9                       |
    52 |  09  | 9                       |
    53 |  09  | 9                       |
@@ -59,14 +59,16 @@
    55 |  09  | 9                       |
    56 |  09  | 9                       |
    57 |  09  | 9                       |
-   58 |  12  | ×                       | expr *
-   59 |  0E  | В↑                      | random int keep scaled draw
-   60 |  35  | К {x}                   | random int fractional part
-   61 |  11  | −                       | random int floor
-   62 |  01  | 1                       |
-   63 |  10  | +                       | expr +
-   64 |  40  | X→П 0                   | setup plans
-   65 |  50  | С/П                     | setup complete
+   58 |  09  | 9                       |
+   59 |  09  | 9                       |
+   60 |  12  | ×                       | expr *
+   61 |  0E  | В↑                      | random int keep scaled draw
+   62 |  35  | К {x}                   | random int fractional part
+   63 |  11  | −                       | random int floor
+   64 |  01  | 1                       |
+   65 |  10  | +                       | expr +
+   66 |  40  | X→П 0                   | setup plans
+   67 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
@@ -74,103 +76,102 @@
    00 |  6E  | П→X e                   | preload const 11951203
    01 |  3A  | К ИНВ                   | display literal video bytes
    02 |  50  | С/П                     | show __inline_show_40_0
-   03 |  EA  | К x=0 a                 | false branch for ==; preloaded Ra=C2 indirect-target=10 shifted-forward indirect flow
-   04 |  A8  | К ПП 8                  | proc call next_floor; preloaded R8=88 indirect-target=88 shifted-forward indirect flow
-   05 |  62  | П→X 2                   | recall strength
-   06 |  65  | П→X 5                   | recall floor
-   07 |  11  | −                       | expr -
-   08 |  42  | X→П 2                   | set strength
-   09 |  8B  | К БП b                  | if end; preloaded Rb=82 indirect-target=82 shifted-forward indirect flow
-   10 |  60  | П→X 0                   | recall plans
-   11 |  64  | П→X 4                   | recall slot
-   12 |  15  | F 10ˣ                   | pow10()
-   13 |  13  | ÷                       | expr /
-   14 |  35  | К {x}                   | frac()
-   15 |  6D  | П→X d                   | preload const 10
-   16 |  12  | ×                       | expr *
-   17 |  34  | К [x]                   | int()
-   18 |  41  | X→П 1                   | set tile
-   19 |  08  | 8                       |
-   20 |  11  | −                       | condition compare
-   21 |  EC  | К x=0 c                 | false branch for ==; preloaded Rc=28 indirect-target=28 shifted-forward indirect flow
-   22 |  62  | П→X 2                   | recall strength
-   23 |  07  | 7                       |
-   24 |  11  | −                       | expr -
-   25 |  42  | X→П 2                   | set strength
-   26 |  51  | БП                      | if end
-   27 |  81  | 81                      | if end
-   28 |  61  | П→X 1                   | recall tile
+   03 |  7B  | К x≠0 b                 | false branch for !=; preloaded Rb=76 indirect-target=76 shifted-forward indirect flow
+   04 |  60  | П→X 0                   | recall plans
+   05 |  64  | П→X 4                   | recall slot
+   06 |  15  | F 10ˣ                   | pow10()
+   07 |  13  | ÷                       | expr /
+   08 |  35  | К {x}                   | frac()
+   09 |  6D  | П→X d                   | preload const 10
+   10 |  12  | ×                       | expr *
+   11 |  34  | К [x]                   | int()
+   12 |  41  | X→П 1                   | set tile
+   13 |  08  | 8                       |
+   14 |  11  | −                       | condition compare
+   15 |  7C  | К x≠0 c                 | false branch for !=; preloaded Rc=69 indirect-target=69 shifted-forward indirect flow
+   16 |  61  | П→X 1                   | recall tile
+   17 |  57  | F x≠0                   | false branch for !=
+   18 |  66  | 66                      | false branch for !=
+   19 |  63  | П→X 3                   | recall warning_pattern
+   20 |  61  | П→X 1                   | display __inline_show_92_1 source
+   21 |  50  | С/П                     | show __inline_show_92_1
+   22 |  61  | П→X 1                   | recall tile
+   23 |  11  | −                       | condition compare
+   24 |  5E  | F x=0                   | false branch for ==
+   25 |  61  | 61                      | false branch for ==
+   26 |  61  | П→X 1                   | recall tile
+   27 |  01  | 1                       |
+   28 |  11  | −                       | condition compare
    29 |  57  | F x≠0                   | false branch for !=
-   30 |  80  | 80                      | false branch for !=
-   31 |  63  | П→X 3                   | recall warning_pattern
-   32 |  61  | П→X 1                   | display __inline_show_92_1 source
-   33 |  50  | С/П                     | show __inline_show_92_1
-   34 |  61  | П→X 1                   | recall tile
-   35 |  11  | −                       | condition compare
-   36 |  5E  | F x=0                   | false branch for ==
-   37 |  75  | 75                      | false branch for ==
-   38 |  61  | П→X 1                   | recall tile
-   39 |  01  | 1                       |
-   40 |  11  | −                       | condition compare
-   41 |  5E  | F x=0                   | false branch for ==
-   42 |  50  | 50                      | false branch for ==
-   43 |  A8  | К ПП 8                  | proc call next_floor; preloaded R8=88 indirect-target=88 shifted-forward indirect flow
-   44 |  62  | П→X 2                   | recall strength
-   45 |  65  | П→X 5                   | recall floor
-   46 |  10  | +                       | expr +
-   47 |  42  | X→П 2                   | set strength
-   48 |  51  | БП                      | if end
-   49 |  64  | 64                      | if end
-   50 |  66  | П→X 6                   | recall score
+   30 |  45  | 45                      | false branch for !=
+   31 |  66  | П→X 6                   | recall score
+   32 |  61  | П→X 1                   | recall tile
+   33 |  10  | +                       | expr +
+   34 |  02  | 2                       |
+   35 |  11  | −                       | expr -
+   36 |  46  | X→П 6                   | set score
+   37 |  04  | 4                       |
+   38 |  62  | П→X 2                   | recall strength
+   39 |  10  | +                       | expr +
+   40 |  A8  | К ПП 8                  | shared straight-line helper; preloaded R8=95 indirect-target=95 shifted-forward indirect flow
+   41 |  E9  | К x=0 9                 | false branch for ==; preloaded R9=50 indirect-target=50 shifted-forward indirect flow
+   42 |  D2  | К П→X 2                 | decrement strength
+   43 |  D6  | К П→X 6                 | increment score
+   44 |  89  | К БП 9                  | if end; preloaded R9=50 indirect-target=50 shifted-forward indirect flow
+   45 |  AA  | К ПП a                  | proc call next_floor; preloaded Ra=87 indirect-target=87 shifted-forward indirect flow
+   46 |  62  | П→X 2                   | recall strength
+   47 |  65  | П→X 5                   | recall floor
+   48 |  10  | +                       | expr +
+   49 |  42  | X→П 2                   | set strength
+   50 |  60  | П→X 0                   | recall plans
    51 |  61  | П→X 1                   | recall tile
-   52 |  10  | +                       | expr +
-   53 |  02  | 2                       |
+   52 |  64  | П→X 4                   | recall slot
+   53 |  01  | 1                       |
    54 |  11  | −                       | expr -
-   55 |  46  | X→П 6                   | set score
-   56 |  04  | 4                       |
-   57 |  62  | П→X 2                   | recall strength
-   58 |  10  | +                       | expr +
-   59 |  A9  | К ПП 9                  | shared straight-line helper; preloaded R9=96 indirect-target=96 shifted-forward indirect flow
-   60 |  5E  | F x=0                   | false branch for ==
-   61 |  64  | 64                      | false branch for ==
-   62 |  D2  | К П→X 2                 | decrement strength
-   63 |  D6  | К П→X 6                 | increment score
-   64 |  60  | П→X 0                   | recall plans
-   65 |  61  | П→X 1                   | recall tile
-   66 |  64  | П→X 4                   | recall slot
-   67 |  01  | 1                       |
-   68 |  11  | −                       | expr -
-   69 |  15  | F 10ˣ                   | pow10()
-   70 |  12  | ×                       | expr *
+   55 |  15  | F 10ˣ                   | pow10()
+   56 |  12  | ×                       | expr *
+   57 |  11  | −                       | expr -
+   58 |  40  | X→П 0                   | set plans
+   59 |  51  | БП                      | if end
+   60 |  66  | 66                      | if end
+   61 |  62  | П→X 2                   | recall strength
+   62 |  A8  | К ПП 8                  | shared straight-line helper; preloaded R8=95 indirect-target=95 shifted-forward indirect flow
+   63 |  5E  | F x=0                   | false branch for ==
+   64 |  66  | 66                      | false branch for ==
+   65 |  D2  | К П→X 2                 | decrement strength
+   66 |  D4  | К П→X 4                 | increment slot
+   67 |  51  | БП                      | if end
+   68 |  73  | 73                      | if end
+   69 |  62  | П→X 2                   | recall strength
+   70 |  07  | 7                       |
    71 |  11  | −                       | expr -
-   72 |  40  | X→П 0                   | set plans
-   73 |  51  | БП                      | if end
-   74 |  80  | 80                      | if end
-   75 |  62  | П→X 2                   | recall strength
-   76 |  A9  | К ПП 9                  | shared straight-line helper; preloaded R9=96 indirect-target=96 shifted-forward indirect flow
-   77 |  5E  | F x=0                   | false branch for ==
-   78 |  80  | 80                      | false branch for ==
-   79 |  D2  | К П→X 2                 | decrement strength
-   80 |  D4  | К П→X 4                 | increment slot
-   81 |  D2  | К П→X 2                 | delayed predecrement strength
-   82 |  62  | П→X 2                   | recall strength
-   83 |  0B  | /-/                     | negate strength for zero test
-   84 |  97  | К x≥0 7                 | false branch for <=; preloaded R7=B2 indirect-target=0 indirect flow
-   85 |  66  | П→X 6                   | recall score
-   86 |  29  | К ÷                     | halt literal ЕГГ0Г
-   87 |  87  | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow
-   88 |  D5  | К П→X 5                 | increment floor
-   89 |  04  | 4                       |
-   90 |  11  | −                       | condition compare
-   91 |  5E  | F x=0                   | false branch for ==
-   92 |  95  | 95                      | false branch for ==
-   93 |  01  | 1                       |
-   94 |  45  | X→П 5                   | set floor
-   95 |  52  | В/О                     | implicit return from proc
-   96 |  61  | П→X 1                   | recall tile
-   97 |  11  | −                       | expr -
-   98 |  42  | X→П 2                   | set strength
-   99 |  61  | П→X 1                   | recall tile
-   A0 |  07  | 7                       | shared straight-line helper body
-   A1 |  11  | −                       | condition compare
-   A2 |  52  | В/О                     | shared straight-line helper return
+   72 |  42  | X→П 2                   | set strength
+   73 |  D2  | К П→X 2                 | delayed predecrement strength
+   74 |  51  | БП                      | if end
+   75 |  81  | 81                      | if end
+   76 |  AA  | К ПП a                  | proc call next_floor; preloaded Ra=87 indirect-target=87 shifted-forward indirect flow
+   77 |  62  | П→X 2                   | recall strength
+   78 |  65  | П→X 5                   | recall floor
+   79 |  11  | −                       | expr -
+   80 |  42  | X→П 2                   | set strength
+   81 |  62  | П→X 2                   | recall strength
+   82 |  0B  | /-/                     | negate strength for zero test
+   83 |  97  | К x≥0 7                 | false branch for <=; preloaded R7=B2 indirect-target=0 indirect flow
+   84 |  66  | П→X 6                   | recall score
+   85 |  29  | К ÷                     | halt literal ЕГГ0Г
+   86 |  87  | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow
+   87 |  D5  | К П→X 5                 | increment floor
+   88 |  04  | 4                       |
+   89 |  11  | −                       | condition compare
+   90 |  5E  | F x=0                   | false branch for ==
+   91 |  94  | 94                      | false branch for ==
+   92 |  01  | 1                       |
+   93 |  45  | X→П 5                   | set floor
+   94 |  52  | В/О                     | implicit return from proc
+   95 |  61  | П→X 1                   | recall tile
+   96 |  11  | −                       | expr -
+   97 |  42  | X→П 2                   | set strength
+   98 |  61  | П→X 1                   | recall tile
+   99 |  07  | 7                       | shared straight-line helper body
+   A0 |  11  | −                       | condition compare
+   A1 |  52  | В/О                     | shared straight-line helper return

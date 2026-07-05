@@ -111,6 +111,8 @@ struct FunctionStackEntryPlan {
 struct RuleStackInputEntryPlan {
   std::string input;
   int call_sites = 0;
+  int total_call_sites = 0;
+  bool primary = false;
 };
 
 struct NearAnyHelperRequest {
