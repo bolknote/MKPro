@@ -884,6 +884,27 @@ bool is_manual_address_operand_patch_opcode(int opcode) {
   return opcode == 0x3e;
 }
 
+bool contains_delivery_mode(const std::vector<DeliveryMode>& modes, DeliveryMode mode) {
+  return std::find(modes.begin(), modes.end(), mode) != modes.end();
+}
+
+std::optional<std::string> non_manual_delivery_comment(int opcode) {
+  const OpcodeInfo& info = opcode_by_code(opcode);
+  if (contains_delivery_mode(info.enterable, DeliveryMode::Manual))
+    return std::nullopt;
+  if (contains_delivery_mode(info.enterable, DeliveryMode::Loader) ||
+      contains_delivery_mode(info.enterable, DeliveryMode::Hex))
+    return "manual: not keyboard-enterable; use loader/hex";
+  return "manual: not keyboard-enterable";
+}
+
+void append_listing_comment(std::optional<std::string>& comment, std::string addition) {
+  if (addition.empty())
+    return;
+  comment = comment.has_value() && !comment->empty() ? *comment + "; " + addition
+                                                     : std::move(addition);
+}
+
 std::string address_operand_nibble_key(int nibble) {
   if (nibble >= 0 && nibble <= 9)
     return std::to_string(nibble);
@@ -916,9 +937,9 @@ ListingRow step_to_listing_row(const ResolvedStep& step,
                                std::optional<std::string> previous_key = std::nullopt) {
   std::optional<std::string> comment = step.comment;
   if (is_manual_address_operand_patch_opcode(step.opcode)) {
-    const std::string manual = manual_address_operand_patch_comment(step.opcode, previous_key);
-    comment = comment.has_value() && !comment->empty() ? *comment + "; " + manual
-                                                        : manual;
+    append_listing_comment(comment, manual_address_operand_patch_comment(step.opcode, previous_key));
+  } else if (std::optional<std::string> manual = non_manual_delivery_comment(step.opcode)) {
+    append_listing_comment(comment, *manual);
   }
   return ListingRow{
       .address = step.address,
@@ -1216,11 +1237,14 @@ format_setup_preload_listing_steps(const std::vector<PreloadReport>& preloads,
           model == AddressSpaceModel::Mk61SMiniExpanded && preload.register_name == "f"
               ? "X->П f"
               : info.name;
+      std::optional<std::string> comment = "setup R" + preload.register_name;
+      if (std::optional<std::string> manual = non_manual_delivery_comment(opcode))
+        append_listing_comment(comment, *manual);
       rows.push_back(ListingRow{
           .address = address,
           .hex = info.hex,
           .mnemonic = mnemonic,
-          .comment = "setup R" + preload.register_name,
+          .comment = std::move(comment),
       });
       ++address;
     }

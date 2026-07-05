@@ -35,6 +35,20 @@ void format_primitives_match_typescript_contract() {
   require(format_program_tokens({steps.begin(), steps.begin() + 3}) == "50\n41\n50",
           "program token formatter should emit one hex byte per line");
 
+  const std::vector<ResolvedStep> non_manual_steps = {
+      {.address = 0, .opcode = 0x4f, .hex = "4F", .mnemonic = "X->П f", .comment = "setup Rf"},
+      {.address = 1, .opcode = 0x6f, .hex = "6F", .mnemonic = "П->X f"},
+  };
+  const std::string non_manual_listing = format_listing_steps(non_manual_steps);
+  require(non_manual_listing.find("X→П f") != std::string::npos &&
+              non_manual_listing.find("setup Rf; manual: not keyboard-enterable; use loader/hex") !=
+                  std::string::npos,
+          "listing formatter should mark commented non-manual opcodes");
+  require(non_manual_listing.find("П→X f") != std::string::npos &&
+              non_manual_listing.find("| manual: not keyboard-enterable; use loader/hex") !=
+                  std::string::npos,
+          "listing formatter should mark uncommented non-manual opcodes");
+
   std::vector<ResolvedStep> mk61s_steps;
   for (int index = 0; index < 25; ++index)
     mk61s_steps.push_back({.address = index, .hex = index == 24 ? "18" : "50", .mnemonic = "noop"});

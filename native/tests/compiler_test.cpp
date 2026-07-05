@@ -311,6 +311,12 @@ program ExpandedPreloadedConstant {
           "expanded optimizer preloads should emit 6F to recall RF");
   require(expanded.listing.find("X→П f") != std::string::npos,
           "expanded setup listing should render RF stores as X->П f");
+  require(expanded.listing.find("setup Rf; manual: not keyboard-enterable; use loader/hex") !=
+              std::string::npos,
+          "expanded setup listing should mark RF stores as not keyboard-enterable");
+  require(expanded.listing.find("preload const 12345; manual: not keyboard-enterable; use loader/hex") !=
+              std::string::npos,
+          "expanded main listing should mark RF recalls as not keyboard-enterable");
   require(expanded.listing.find("X→П 0 alias") == std::string::npos,
           "expanded setup listing should not render RF stores as the stock 4F alias");
 }
