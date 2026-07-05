@@ -49234,6 +49234,18 @@ std::optional<int> direct_recall_index_for_step(const ResolvedStep& step) {
   return std::nullopt;
 }
 
+std::optional<int> direct_register_store_index(int opcode) {
+  if (opcode < 0x40 || opcode > 0x4e)
+    return std::nullopt;
+  return opcode - 0x40;
+}
+
+std::optional<int> direct_register_recall_index(int opcode) {
+  if (opcode < 0x60 || opcode > 0x6e)
+    return std::nullopt;
+  return opcode - 0x60;
+}
+
 std::optional<int> mnemonic_direct_store_index_for_step(const ResolvedStep& step) {
   if (step.opcode >= 0x40 && step.opcode <= 0x4e && step_mnemonic_starts_with(step, "X->П "))
     return step.opcode - 0x40;
