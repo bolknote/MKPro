@@ -55877,9 +55877,23 @@ SizeAttributionReport build_size_attribution_report(
 
   std::map<std::string, SizeNextActionSummaryReport> next_action_summaries;
   std::map<std::string, std::map<std::string, int>> next_action_group_savings;
+  const auto positive_detail_int = [](const std::map<std::string, std::string>& details,
+                                      const std::string& key) -> std::optional<int> {
+    const auto it = details.find(key);
+    if (it == details.end())
+      return std::nullopt;
+    try {
+      const int value = std::stoi(it->second);
+      if (value > 0)
+        return value;
+    } catch (const std::exception&) {
+    }
+    return std::nullopt;
+  };
   auto add_next_action = [&](const SizeOpportunityReport& opportunity, const std::string& source,
                              const std::string& action, std::size_t opportunity_index,
-                             const std::string& status) {
+                             const std::string& status,
+                             std::optional<int> savings_override = std::nullopt) {
     if (action.empty())
       return;
     const std::string summary_key = status + "\x1f" + source + "\x1f" + action;
@@ -55893,9 +55907,10 @@ SizeAttributionReport build_size_attribution_report(
     const std::string group =
         size_opportunity_potential_group(opportunity, summary_key, opportunity_index);
     int& group_savings = next_action_group_savings[summary_key][group];
-    group_savings = std::max(group_savings, opportunity.savings);
-    if (summary.best_site.empty() || opportunity.savings > summary.best_savings) {
-      summary.best_savings = opportunity.savings;
+    const int ranked_savings = savings_override.value_or(opportunity.savings);
+    group_savings = std::max(group_savings, ranked_savings);
+    if (summary.best_site.empty() || ranked_savings > summary.best_savings) {
+      summary.best_savings = ranked_savings;
       summary.best_site = opportunity.site;
       summary.best_variant = opportunity.variant;
       summary.best_blocker_kind = opportunity.blocker_kind;
@@ -55996,6 +56011,15 @@ SizeAttributionReport build_size_attribution_report(
         cost_it != opportunity.details.end()) {
       add_next_action(opportunity, "costModelAction", cost_it->second, index,
                       "stalled-nonpositive");
+    }
+    if (const auto near_action_it = opportunity.details.find("valueAwareCalleeAbiNearPositiveAction");
+        near_action_it != opportunity.details.end()) {
+      const std::optional<int> primary_net = positive_detail_int(
+          opportunity.details, "valueAwareCalleeAbiNearPositivePrimaryNetCells");
+      if (primary_net.has_value()) {
+        add_next_action(opportunity, "valueAwareCalleeAbiNearPositiveAction",
+                        near_action_it->second, index, "stalled-near-positive", primary_net);
+      }
     }
   }
   report.next_actions.reserve(next_action_summaries.size());

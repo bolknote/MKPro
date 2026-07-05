@@ -2203,6 +2203,28 @@ void example_sizes_match_typescript_baselines() {
                       "overhead-lower-bound-not-positive",
               "tic-tac-toe-4x4 size attribution should rank the callee ABI lower-bound cost "
               "model as stalled nonpositive until more scheduler savings exist");
+      const SizeNextActionSummaryReport* callee_abi_primary_entry_action =
+          find_size_next_action(result, "valueAwareCalleeAbiNearPositiveAction",
+                                "implement-primary-stack-preserving-callee-entry-and-argument-"
+                                "preservation-proof");
+      require(callee_abi_primary_entry_action != nullptr &&
+                  callee_abi_primary_entry_action->status == "stalled-near-positive" &&
+                  callee_abi_primary_entry_action->potential_savings == 1 &&
+                  callee_abi_primary_entry_action->best_savings == 1 &&
+                  callee_abi_primary_entry_action->best_variant == "helper-register-traffic" &&
+                  callee_abi_primary_entry_action->best_blocker_kind ==
+                      "value-aware-stack-register-scheduler" &&
+                  callee_abi_primary_entry_action->best_details.contains(
+                      "valueAwareCalleeAbiNearPositiveStatus") &&
+                  callee_abi_primary_entry_action->best_details.at(
+                      "valueAwareCalleeAbiNearPositiveStatus") ==
+                      "primary-entry-positive-current-lower-bound-nonpositive" &&
+                  callee_abi_primary_entry_action->best_details.contains(
+                      "valueAwareCalleeAbiNearPositivePrimaryNetCells") &&
+                  callee_abi_primary_entry_action->best_details.at(
+                      "valueAwareCalleeAbiNearPositivePrimaryNetCells") == "1",
+              "tic-tac-toe-4x4 size attribution should rank the primary-entry ABI proof as "
+              "a near-positive scheduler target without promoting it to a positive saving");
       const SizeNextActionSummaryReport* stack_input_scheduler_action = find_size_next_action(
           result, "trafficShapeAction", "schedule-stack-input-helper-values");
       require(stack_input_scheduler_action == nullptr,
