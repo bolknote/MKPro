@@ -32498,7 +32498,8 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
 }
 
 void report_function_tail_call(LoweringContext& context, const std::string& source,
-                               const std::string& target, int line) {
+                               const std::string& target, int line,
+                               const std::string& lowering = "as a direct jump") {
   const bool recursive = source == target;
   context.optimizations.push_back(OptimizationReport{
       .name = recursive ? "function-tail-recursion" : "function-tail-call",
@@ -32506,8 +32507,21 @@ void report_function_tail_call(LoweringContext& context, const std::string& sour
                     ? "Compiled tail-recursive call in " + source +
                           " as a direct jump at line " + std::to_string(line) + "."
                     : "Compiled tail call from " + source + " to " + target +
-                          " as a direct jump at line " + std::to_string(line) + ".",
+                          " " + lowering + " at line " + std::to_string(line) + ".",
   });
+}
+
+void report_stack_entry_tail_call_if_needed(LoweringContext& context, const V2Rule& source,
+                                            const Expression& returned, int line) {
+  if (returned.kind != "call" || returned.callee == source.name)
+    return;
+  const auto target_it = context.rules.find(returned.callee);
+  if (target_it == context.rules.end() || target_it->second == nullptr ||
+      !statements_contain_return(target_it->second->body)) {
+    return;
+  }
+  report_function_tail_call(context, source.name, returned.callee, line,
+                            "through stack-entry value lowering");
 }
 
 std::optional<bool> lower_tail_function_return(LoweringContext& context,
@@ -32583,6 +32597,7 @@ bool emit_stack_argument_function_entry_prefix(LoweringContext& context, const V
       return false;
     context.emitter.emit_op(0x52, "В/О", "return value", line);
     clear_current_x_facts(context);
+    report_stack_entry_tail_call_if_needed(context, rule, *returned, line);
     context.optimizations.push_back(OptimizationReport{
         .name = "function-stack-entry-primary",
         .detail = "Compiled value function " + rule.name +
@@ -32599,6 +32614,7 @@ bool emit_stack_argument_function_entry_prefix(LoweringContext& context, const V
   context.emitter.emit_op(0x52, "В/О", "return value", line);
   context.emitter.emit_label(regular_label, {.hidden = true});
   clear_current_x_facts(context);
+  report_stack_entry_tail_call_if_needed(context, rule, *returned, line);
   context.optimizations.push_back(OptimizationReport{
       .name = "function-stack-entry-primary",
       .detail = "Emitted stack-argument entry for value function " + rule.name + " after " +
@@ -54977,6 +54993,18 @@ SizeAttributionReport build_size_attribution_report(
               helper.details["valueAwareCalleeAbiBestSubsetNearPositiveAction"] =
                   "implement-primary-stack-preserving-callee-entry-and-argument-preservation-"
                   "proof";
+              helper.details["valueAwareCalleeAbiBestSubsetNearPositiveProofStatus"] =
+                  "requires-stack-placement-proof";
+              helper.details["valueAwareCalleeAbiBestSubsetNearPositiveStackPlacementStatus"] =
+                  "unproved-live-input-and-helper-argument-placement";
+              helper.details["valueAwareCalleeAbiBestSubsetNearPositiveStackPlacementBasis"] =
+                  "callee-inputs:X=index,Y=line,Z=accumulator;selected-inputs-must-remain-live-"
+                  "after-nested-call";
+              helper.details
+                  ["valueAwareCalleeAbiBestSubsetNearPositiveStackPlacementRequiredAction"] =
+                  "prove-score-and-live-inputs-can-be-staged-around-nested-helper-calls";
+              helper.details["valueAwareCalleeAbiBestSubsetNearPositiveNaturalSurvivorLimit"] =
+                  "natural-callee-survival-only-preserves-T-slot";
               helper.details["valueAwareCalleeAbiBestSubsetNearPositiveCurrentCostBreakdown"] =
                   helper.details["valueAwareCalleeAbiBestSubsetCostBreakdown"];
               helper.details["valueAwareCalleeAbiBestSubsetNearPositivePrimaryCostBreakdown"] =
@@ -55083,6 +55111,17 @@ SizeAttributionReport build_size_attribution_report(
             helper.details["valueAwareCalleeAbiNearPositiveAction"] =
                 "implement-primary-stack-preserving-callee-entry-and-argument-preservation-"
                 "proof";
+            helper.details["valueAwareCalleeAbiNearPositiveProofStatus"] =
+                "requires-stack-placement-proof";
+            helper.details["valueAwareCalleeAbiNearPositiveStackPlacementStatus"] =
+                "unproved-live-input-and-helper-argument-placement";
+            helper.details["valueAwareCalleeAbiNearPositiveStackPlacementBasis"] =
+                "callee-inputs:X=index,Y=line,Z=accumulator;selected-inputs-must-remain-live-"
+                "after-nested-call";
+            helper.details["valueAwareCalleeAbiNearPositiveStackPlacementRequiredAction"] =
+                "prove-score-and-live-inputs-can-be-staged-around-nested-helper-calls";
+            helper.details["valueAwareCalleeAbiNearPositiveNaturalSurvivorLimit"] =
+                "natural-callee-survival-only-preserves-T-slot";
             helper.details["valueAwareCalleeAbiNearPositiveCurrentCostBreakdown"] =
                 helper.details["valueAwareCalleeAbiCostBreakdown"];
             helper.details["valueAwareCalleeAbiNearPositivePrimaryCostBreakdown"] =

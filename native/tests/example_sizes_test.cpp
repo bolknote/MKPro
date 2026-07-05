@@ -1371,6 +1371,32 @@ void example_sizes_match_typescript_baselines() {
                       "implement-primary-stack-preserving-callee-entry-and-argument-"
                       "preservation-proof" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiNearPositiveProofStatus") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiNearPositiveProofStatus") ==
+                      "requires-stack-placement-proof" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiNearPositiveStackPlacementStatus") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiNearPositiveStackPlacementStatus") ==
+                      "unproved-live-input-and-helper-argument-placement" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiNearPositiveStackPlacementBasis") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiNearPositiveStackPlacementBasis") ==
+                      "callee-inputs:X=index,Y=line,Z=accumulator;selected-inputs-must-remain-"
+                      "live-after-nested-call" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiNearPositiveStackPlacementRequiredAction") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiNearPositiveStackPlacementRequiredAction") ==
+                      "prove-score-and-live-inputs-can-be-staged-around-nested-helper-calls" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiNearPositiveNaturalSurvivorLimit") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiNearPositiveNaturalSurvivorLimit") ==
+                      "natural-callee-survival-only-preserves-T-slot" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiPositiveGapCells") &&
                   candidate_score_zero->details.at("valueAwareCalleeAbiPositiveGapCells") ==
                       "1" &&
@@ -1482,6 +1508,32 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiBestSubsetPrimaryEntryStatus") ==
                       "positive-after-primary-entry-lower-bound" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetNearPositiveProofStatus") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetNearPositiveProofStatus") ==
+                      "requires-stack-placement-proof" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetNearPositiveStackPlacementStatus") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetNearPositiveStackPlacementStatus") ==
+                      "unproved-live-input-and-helper-argument-placement" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetNearPositiveStackPlacementBasis") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetNearPositiveStackPlacementBasis") ==
+                      "callee-inputs:X=index,Y=line,Z=accumulator;selected-inputs-must-remain-"
+                      "live-after-nested-call" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetNearPositiveStackPlacementRequiredAction") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetNearPositiveStackPlacementRequiredAction") ==
+                      "prove-score-and-live-inputs-can-be-staged-around-nested-helper-calls" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetNearPositiveNaturalSurvivorLimit") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetNearPositiveNaturalSurvivorLimit") ==
+                      "natural-callee-survival-only-preserves-T-slot" &&
                   candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiBestSubsetPositiveGapCells") &&
                   candidate_score_zero->details.at(
@@ -2113,6 +2165,21 @@ void example_sizes_match_typescript_baselines() {
                       "implement-primary-stack-preserving-callee-entry-and-argument-"
                       "preservation-proof" &&
                   candidate_score_register_traffic->details.contains(
+                      "valueAwareCalleeAbiNearPositiveProofStatus") &&
+                  candidate_score_register_traffic->details.at(
+                      "valueAwareCalleeAbiNearPositiveProofStatus") ==
+                      "requires-stack-placement-proof" &&
+                  candidate_score_register_traffic->details.contains(
+                      "valueAwareCalleeAbiNearPositiveStackPlacementStatus") &&
+                  candidate_score_register_traffic->details.at(
+                      "valueAwareCalleeAbiNearPositiveStackPlacementStatus") ==
+                      "unproved-live-input-and-helper-argument-placement" &&
+                  candidate_score_register_traffic->details.contains(
+                      "valueAwareCalleeAbiNearPositiveStackPlacementRequiredAction") &&
+                  candidate_score_register_traffic->details.at(
+                      "valueAwareCalleeAbiNearPositiveStackPlacementRequiredAction") ==
+                      "prove-score-and-live-inputs-can-be-staged-around-nested-helper-calls" &&
+                  candidate_score_register_traffic->details.contains(
                       "valueAwareCalleeAbiMutationSurfaceCells") &&
                   candidate_score_register_traffic->details.at(
                       "valueAwareCalleeAbiMutationSurfaceCells") == "4" &&
@@ -2222,7 +2289,17 @@ void example_sizes_match_typescript_baselines() {
                   callee_abi_primary_entry_action->best_details.contains(
                       "valueAwareCalleeAbiNearPositivePrimaryNetCells") &&
                   callee_abi_primary_entry_action->best_details.at(
-                      "valueAwareCalleeAbiNearPositivePrimaryNetCells") == "1",
+                      "valueAwareCalleeAbiNearPositivePrimaryNetCells") == "1" &&
+                  callee_abi_primary_entry_action->best_details.contains(
+                      "valueAwareCalleeAbiNearPositiveProofStatus") &&
+                  callee_abi_primary_entry_action->best_details.at(
+                      "valueAwareCalleeAbiNearPositiveProofStatus") ==
+                      "requires-stack-placement-proof" &&
+                  callee_abi_primary_entry_action->best_details.contains(
+                      "valueAwareCalleeAbiNearPositiveStackPlacementRequiredAction") &&
+                  callee_abi_primary_entry_action->best_details.at(
+                      "valueAwareCalleeAbiNearPositiveStackPlacementRequiredAction") ==
+                      "prove-score-and-live-inputs-can-be-staged-around-nested-helper-calls",
               "tic-tac-toe-4x4 size attribution should rank the primary-entry ABI proof as "
               "a near-positive scheduler target without promoting it to a positive saving");
       const SizeNextActionSummaryReport* stack_input_scheduler_action = find_size_next_action(

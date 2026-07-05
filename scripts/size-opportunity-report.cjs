@@ -326,6 +326,26 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCalleeAbiNearPositiveAction',
       ),
+      calleeAbiNearPositiveProofStatus: detail(
+        details,
+        'valueAwareCalleeAbiNearPositiveProofStatus',
+      ),
+      calleeAbiNearPositiveStackPlacementStatus: detail(
+        details,
+        'valueAwareCalleeAbiNearPositiveStackPlacementStatus',
+      ),
+      calleeAbiNearPositiveStackPlacementBasis: detail(
+        details,
+        'valueAwareCalleeAbiNearPositiveStackPlacementBasis',
+      ),
+      calleeAbiNearPositiveStackPlacementRequiredAction: detail(
+        details,
+        'valueAwareCalleeAbiNearPositiveStackPlacementRequiredAction',
+      ),
+      calleeAbiNearPositiveNaturalSurvivorLimit: detail(
+        details,
+        'valueAwareCalleeAbiNearPositiveNaturalSurvivorLimit',
+      ),
       calleeAbiNearPositiveCurrentCost: detail(
         details,
         'valueAwareCalleeAbiNearPositiveCurrentCostBreakdown',
@@ -391,6 +411,26 @@ function analyzeFile(compiler, file) {
       calleeAbiBestSubsetNearPositiveAction: detail(
         details,
         'valueAwareCalleeAbiBestSubsetNearPositiveAction',
+      ),
+      calleeAbiBestSubsetNearPositiveProofStatus: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetNearPositiveProofStatus',
+      ),
+      calleeAbiBestSubsetNearPositiveStackPlacementStatus: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetNearPositiveStackPlacementStatus',
+      ),
+      calleeAbiBestSubsetNearPositiveStackPlacementBasis: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetNearPositiveStackPlacementBasis',
+      ),
+      calleeAbiBestSubsetNearPositiveStackPlacementRequiredAction: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetNearPositiveStackPlacementRequiredAction',
+      ),
+      calleeAbiBestSubsetNearPositiveNaturalSurvivorLimit: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetNearPositiveNaturalSurvivorLimit',
       ),
       calleeAbiBestSubsetNearPositiveCurrentCost: detail(
         details,
@@ -699,6 +739,11 @@ function printHelper(row) {
       ` abiNearPrimaryStatus=${row.calleeAbiNearPositivePrimaryStatus || '-'}` +
       ` abiNearReason=${row.calleeAbiNearPositiveReason || '-'}` +
       ` abiNearAction=${row.calleeAbiNearPositiveAction || '-'}` +
+      ` abiNearProof=${row.calleeAbiNearPositiveProofStatus || '-'}` +
+      ` abiNearPlacement=${row.calleeAbiNearPositiveStackPlacementStatus || '-'}` +
+      ` abiNearPlacementBasis=${row.calleeAbiNearPositiveStackPlacementBasis || '-'}` +
+      ` abiNearPlacementAction=${row.calleeAbiNearPositiveStackPlacementRequiredAction || '-'}` +
+      ` abiNearSurvivorLimit=${row.calleeAbiNearPositiveNaturalSurvivorLimit || '-'}` +
       ` abiNearCost=${row.calleeAbiNearPositiveCurrentCost || '-'}` +
       ` abiNearPrimaryCost=${row.calleeAbiNearPositivePrimaryCost || '-'}` +
       ` abiSubsets=${row.calleeAbiSubsetCandidates || '-'}` +
@@ -717,6 +762,11 @@ function printHelper(row) {
       ` abiSubsetNearPrimaryStatus=${row.calleeAbiBestSubsetNearPositivePrimaryStatus || '-'}` +
       ` abiSubsetNearReason=${row.calleeAbiBestSubsetNearPositiveReason || '-'}` +
       ` abiSubsetNearAction=${row.calleeAbiBestSubsetNearPositiveAction || '-'}` +
+      ` abiSubsetNearProof=${row.calleeAbiBestSubsetNearPositiveProofStatus || '-'}` +
+      ` abiSubsetNearPlacement=${row.calleeAbiBestSubsetNearPositiveStackPlacementStatus || '-'}` +
+      ` abiSubsetNearPlacementBasis=${row.calleeAbiBestSubsetNearPositiveStackPlacementBasis || '-'}` +
+      ` abiSubsetNearPlacementAction=${row.calleeAbiBestSubsetNearPositiveStackPlacementRequiredAction || '-'}` +
+      ` abiSubsetNearSurvivorLimit=${row.calleeAbiBestSubsetNearPositiveNaturalSurvivorLimit || '-'}` +
       ` abiSubsetNearCost=${row.calleeAbiBestSubsetNearPositiveCurrentCost || '-'}` +
       ` abiSubsetNearPrimaryCost=${row.calleeAbiBestSubsetNearPositivePrimaryCost || '-'}` +
       ` abiPrimaryCoverage=${row.calleeAbiPrimaryEntryCoverage || '-'}` +
