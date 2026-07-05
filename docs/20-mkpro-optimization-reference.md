@@ -58,7 +58,14 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   inserted call-site recalls minus immediate pre-call recalls that already
   materialize the same value, and direct-stack-fit rows summarize the remaining
   inserted/existing materialization cells before a stack-entry helper rewrite is
-  attempted. A
+  attempted. For stack-inputs that cross nested helper calls, the report also
+  records depth-aware callee stack survival
+  (`valueAwareCallPreservationCalleeStackSurvival` and
+  `valueAwareCalleeAbiNaturalPreservedSlotsByCallee`), distinguishing helpers
+  that merely consume the working top of stack from helpers that destroy every
+  caller value. This is proof evidence for the scheduler; cost reduction still
+  needs a call-site layout proof that maps a requested input onto the surviving
+  slot. A
   stack-mutating callee now exposes both the diagnostic mutation surface
   (`valueAwareCalleeAbiMutationSurface*`) and a proof-oriented lower bound
   (`valueAwareCalleeAbiOverheadLowerBound*`): if even one shared

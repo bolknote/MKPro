@@ -1084,6 +1084,23 @@ void example_sizes_match_typescript_baselines() {
                       std::string::npos &&
                   candidate_score_zero->details.at("valueAwareCallPreservationCalleeEffects")
                           .find("consumeYDrop=3") != std::string::npos &&
+                  candidate_score_zero->details.at("valueAwareCallPreservationCalleeEffects")
+                          .find("preservedOriginalSlots=1") != std::string::npos &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCallPreservationCalleeStackSurvival") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCallPreservationCalleeStackSurvival") ==
+                      "packed-line score accumulator helper:X:-,Y:T,Z:T,T:T" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiNaturalPreservedSlotsByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiNaturalPreservedSlotsByCallee") ==
+                      "packed-line score accumulator helper:T" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiRemainingPreserveDepthByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiRemainingPreserveDepthByCallee") ==
+                      "packed-line score accumulator helper:1" &&
                   candidate_score_zero->details.contains(
                       "valueAwareCallPreservationMutatingCells") &&
                   candidate_score_zero->details.at("valueAwareCallPreservationMutatingCells") ==

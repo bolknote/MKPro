@@ -158,6 +158,15 @@ function analyzeFile(compiler, file) {
       bestInputNet: detail(details, 'valueAwareBestStackInputNetCells'),
       bestInputAdditionalRecallCellsToProfit:
         detail(details, 'valueAwareBestStackInputAdditionalRecallCellsToProfit'),
+      calleeStackSurvival: detail(details, 'valueAwareCallPreservationCalleeStackSurvival'),
+      calleeNaturalPreservedSlots: detail(
+        details,
+        'valueAwareCalleeAbiNaturalPreservedSlotsByCallee',
+      ),
+      calleeRemainingPreserveDepth: detail(
+        details,
+        'valueAwareCalleeAbiRemainingPreserveDepthByCallee',
+      ),
       calleeAbiStatus:
         detail(details, 'valueAwareCalleeAbiCostModelStatus') ||
         detail(details, 'valueAwareCallPreservationCalleeStatus'),
@@ -269,6 +278,9 @@ function printHelper(row) {
       ` profit=${row.profitBreakdown || '-'}` +
       ` materialize=${row.materializeCellsByName || '-'}` +
       ` directMat=${row.directMaterializationStatus || '-'}:${row.directMaterialization || '-'}` +
+      ` survival=${row.calleeStackSurvival || '-'}` +
+      ` natural=${row.calleeNaturalPreservedSlots || '-'}` +
+      ` remaining=${row.calleeRemainingPreserveDepth || '-'}` +
       ` callee=${row.calleeAbiStatus || '-'}`,
   );
 }

@@ -51086,6 +51086,8 @@ SizeAttributionReport build_size_attribution_report(
   }
   struct HelperStackEffectSummary {
     std::string status = "missing-helper-region";
+    std::array<int, 4> stack_sources = {-1, -1, -1, -1};
+    int preserved_original_slot_count = 0;
     int preserves = 0;
     int shifts = 0;
     int consume_y_drop = 0;
@@ -51097,11 +51099,90 @@ SizeAttributionReport build_size_attribution_report(
     int mutating_cells = 0;
     std::vector<std::string> mutating_opcodes;
   };
+  const auto original_stack_slot_name = [](int slot) {
+    switch (slot) {
+      case 0:
+        return std::string("X");
+      case 1:
+        return std::string("Y");
+      case 2:
+        return std::string("Z");
+      case 3:
+        return std::string("T");
+      default:
+        return std::string("-");
+    }
+  };
+  const auto helper_stack_sources_text = [&](const HelperStackEffectSummary& summary) {
+    std::vector<std::string> parts;
+    parts.reserve(summary.stack_sources.size());
+    static constexpr std::array<const char*, 4> kSlots = {"X", "Y", "Z", "T"};
+    for (std::size_t index = 0; index < summary.stack_sources.size(); ++index) {
+      parts.push_back(std::string(kSlots.at(index)) + ":" +
+                      original_stack_slot_name(summary.stack_sources.at(index)));
+    }
+    return join_strings(parts, ",");
+  };
+  const auto helper_preserved_original_slots_text =
+      [&](const HelperStackEffectSummary& summary) {
+        std::set<int> slots;
+        for (const int source : summary.stack_sources) {
+          if (source >= 0)
+            slots.insert(source);
+        }
+        if (slots.empty())
+          return std::string("-");
+        std::vector<std::string> names;
+        names.reserve(slots.size());
+        for (const int source : slots)
+          names.push_back(original_stack_slot_name(source));
+        return join_strings(names, ",");
+      };
+  const auto apply_helper_stack_survival_effect =
+      [&](std::array<int, 4>& sources, int opcode, StackEffect effect) {
+        const std::array<int, 4> old = sources;
+        auto unknown_all = [&]() { sources = {-1, -1, -1, -1}; };
+        if (opcode == 0x53 || (opcode >= 0xa0 && opcode <= 0xae)) {
+          unknown_all();
+          return;
+        }
+        switch (effect) {
+          case StackEffect::Preserves:
+            if (direct_register_store_index(opcode).has_value() ||
+                opcode_by_code(opcode).takes_address) {
+              sources = old;
+            } else {
+              sources = {-1, old.at(1), old.at(2), old.at(3)};
+            }
+            break;
+          case StackEffect::Shifts:
+            sources = {-1, old.at(0), old.at(1), old.at(2)};
+            break;
+          case StackEffect::ConsumeYDrop:
+            sources = {-1, old.at(2), old.at(3), old.at(3)};
+            break;
+          case StackEffect::ConsumeYKeep:
+            if (opcode == 0x14) {
+              sources = {old.at(1), old.at(0), old.at(2), old.at(3)};
+            } else {
+              sources = {-1, old.at(1), old.at(2), old.at(3)};
+            }
+            break;
+          case StackEffect::Exposes:
+            sources = {old.at(1), old.at(2), old.at(3), old.at(3)};
+            break;
+          case StackEffect::Barrier:
+          case StackEffect::Unknown:
+            unknown_all();
+            break;
+        }
+      };
   const auto helper_stack_effect_summary = [&](const std::string& label) {
     HelperStackEffectSummary summary;
     const auto region_it = helper_region_by_label.find(label);
     if (region_it == helper_region_by_label.end())
       return summary;
+    summary.stack_sources = {0, 1, 2, 3};
     const HelperRegionRange& region = region_it->second;
     for (std::size_t index = region.start; index < region.end && index < steps.size(); ++index) {
       if (index > region.start && steps.at(index - 1U).address + 1 == steps.at(index).address &&
@@ -51115,6 +51196,7 @@ SizeAttributionReport build_size_attribution_report(
       if (opcode == 0x53 || (opcode >= 0xa0 && opcode <= 0xae))
         ++summary.nested_calls;
       const OpcodeInfo& info = opcode_by_code(opcode);
+      apply_helper_stack_survival_effect(summary.stack_sources, opcode, info.stack_effect);
       switch (info.stack_effect) {
         case StackEffect::Preserves:
           ++summary.preserves;
@@ -51155,6 +51237,12 @@ SizeAttributionReport build_size_attribution_report(
     } else {
       summary.status = "stack-preserving";
     }
+    std::set<int> preserved_sources;
+    for (const int source : summary.stack_sources) {
+      if (source >= 0)
+        preserved_sources.insert(source);
+    }
+    summary.preserved_original_slot_count = static_cast<int>(preserved_sources.size());
     return summary;
   };
   const auto helper_stack_effect_summary_text = [](const std::string& label,
@@ -51165,7 +51253,8 @@ SizeAttributionReport build_size_attribution_report(
         << ",consumeYKeep=" << summary.consume_y_keep << ",exposes=" << summary.exposes
         << ",barriers=" << summary.barriers << ",unknown=" << summary.unknown
         << ",nestedCalls=" << summary.nested_calls
-        << ",mutatingCells=" << summary.mutating_cells << ")";
+        << ",mutatingCells=" << summary.mutating_cells
+        << ",preservedOriginalSlots=" << summary.preserved_original_slot_count << ")";
     return out.str();
   };
   const auto immediate_pre_call_stack_recalls =
@@ -51646,6 +51735,9 @@ SizeAttributionReport build_size_attribution_report(
           helper.details["valueAwareCallPreservationMatrix"] =
               join_strings(matrix_parts, ";");
           std::vector<std::string> callee_effect_parts;
+          std::vector<std::string> callee_stack_survival_parts;
+          std::vector<std::string> callee_natural_preserve_parts;
+          std::vector<std::string> callee_remaining_preserve_parts;
           std::vector<std::string> callee_mutating_cell_parts;
           std::vector<std::string> callee_mutating_opcode_parts;
           std::vector<std::string> callee_abi_preservation_parts;
@@ -51662,6 +51754,15 @@ SizeAttributionReport build_size_attribution_report(
           for (const auto& [label, inputs] : call_preservation_inputs_by_label) {
             const HelperStackEffectSummary effect = helper_stack_effect_summary(label);
             callee_effect_parts.push_back(helper_stack_effect_summary_text(label, effect));
+            callee_stack_survival_parts.push_back(label + ":" +
+                                                  helper_stack_sources_text(effect));
+            callee_natural_preserve_parts.push_back(
+                label + ":" + helper_preserved_original_slots_text(effect));
+            const int requested_preserve_depth = static_cast<int>(inputs.size());
+            callee_remaining_preserve_parts.push_back(
+                label + ":" +
+                std::to_string(std::max(0, requested_preserve_depth -
+                                               effect.preserved_original_slot_count)));
             if (effect.mutating_cells > 0) {
               callee_mutating_cell_parts.push_back(label + ":" +
                                                    std::to_string(effect.mutating_cells));
@@ -51708,6 +51809,12 @@ SizeAttributionReport build_size_attribution_report(
           if (!callee_effect_parts.empty()) {
             helper.details["valueAwareCallPreservationCalleeEffects"] =
                 join_strings(callee_effect_parts, ";");
+            helper.details["valueAwareCallPreservationCalleeStackSurvival"] =
+                join_strings(callee_stack_survival_parts, ";");
+            helper.details["valueAwareCalleeAbiNaturalPreservedSlotsByCallee"] =
+                join_strings(callee_natural_preserve_parts, ";");
+            helper.details["valueAwareCalleeAbiRemainingPreserveDepthByCallee"] =
+                join_strings(callee_remaining_preserve_parts, ";");
             if (!callee_mutating_cell_parts.empty()) {
               helper.details["valueAwareCallPreservationMutatingCells"] =
                   join_strings(callee_mutating_cell_parts, ";");
