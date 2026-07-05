@@ -2073,6 +2073,46 @@ void example_sizes_match_typescript_baselines() {
                       "gross:5/materialize:2/arg-preserve:2/entry-lower-bound:1/net:+0/"
                       "need:1" &&
                   candidate_score_register_traffic->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryCostBreakdown") &&
+                  candidate_score_register_traffic->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryCostBreakdown") ==
+                      "gross:5/materialize:2/arg-preserve:2/entry-lower-bound:0/net:+1/"
+                      "need:0" &&
+                  candidate_score_register_traffic->details.contains(
+                      "valueAwareCalleeAbiNearPositiveStatus") &&
+                  candidate_score_register_traffic->details.at(
+                      "valueAwareCalleeAbiNearPositiveStatus") ==
+                      "primary-entry-positive-current-lower-bound-nonpositive" &&
+                  candidate_score_register_traffic->details.contains(
+                      "valueAwareCalleeAbiNearPositiveGapCells") &&
+                  candidate_score_register_traffic->details.at(
+                      "valueAwareCalleeAbiNearPositiveGapCells") == "1" &&
+                  candidate_score_register_traffic->details.contains(
+                      "valueAwareCalleeAbiNearPositiveCurrentNetCells") &&
+                  candidate_score_register_traffic->details.at(
+                      "valueAwareCalleeAbiNearPositiveCurrentNetCells") == "0" &&
+                  candidate_score_register_traffic->details.contains(
+                      "valueAwareCalleeAbiNearPositivePrimaryNetCells") &&
+                  candidate_score_register_traffic->details.at(
+                      "valueAwareCalleeAbiNearPositivePrimaryNetCells") == "1" &&
+                  candidate_score_register_traffic->details.contains(
+                      "valueAwareCalleeAbiNearPositivePrimaryStatus") &&
+                  candidate_score_register_traffic->details.at(
+                      "valueAwareCalleeAbiNearPositivePrimaryStatus") ==
+                      "positive-after-primary-entry-lower-bound" &&
+                  candidate_score_register_traffic->details.contains(
+                      "valueAwareCalleeAbiNearPositiveReason") &&
+                  candidate_score_register_traffic->details.at(
+                      "valueAwareCalleeAbiNearPositiveReason") ==
+                      "primary-entry-elides-callee-entry-lower-bound-but-general-entry-"
+                      "breaks-even" &&
+                  candidate_score_register_traffic->details.contains(
+                      "valueAwareCalleeAbiNearPositiveAction") &&
+                  candidate_score_register_traffic->details.at(
+                      "valueAwareCalleeAbiNearPositiveAction") ==
+                      "implement-primary-stack-preserving-callee-entry-and-argument-"
+                      "preservation-proof" &&
+                  candidate_score_register_traffic->details.contains(
                       "valueAwareCalleeAbiMutationSurfaceCells") &&
                   candidate_score_register_traffic->details.at(
                       "valueAwareCalleeAbiMutationSurfaceCells") == "4" &&

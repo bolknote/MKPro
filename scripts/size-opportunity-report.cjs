@@ -298,6 +298,42 @@ function analyzeFile(compiler, file) {
         'valueAwareCalleeAbiPositiveGapReason',
       ),
       calleeAbiNextProofTarget: detail(details, 'valueAwareCalleeAbiNextProofTarget'),
+      calleeAbiNearPositiveStatus: detail(
+        details,
+        'valueAwareCalleeAbiNearPositiveStatus',
+      ),
+      calleeAbiNearPositiveGap: detail(
+        details,
+        'valueAwareCalleeAbiNearPositiveGapCells',
+      ),
+      calleeAbiNearPositiveCurrentNet: detail(
+        details,
+        'valueAwareCalleeAbiNearPositiveCurrentNetCells',
+      ),
+      calleeAbiNearPositivePrimaryNet: detail(
+        details,
+        'valueAwareCalleeAbiNearPositivePrimaryNetCells',
+      ),
+      calleeAbiNearPositivePrimaryStatus: detail(
+        details,
+        'valueAwareCalleeAbiNearPositivePrimaryStatus',
+      ),
+      calleeAbiNearPositiveReason: detail(
+        details,
+        'valueAwareCalleeAbiNearPositiveReason',
+      ),
+      calleeAbiNearPositiveAction: detail(
+        details,
+        'valueAwareCalleeAbiNearPositiveAction',
+      ),
+      calleeAbiNearPositiveCurrentCost: detail(
+        details,
+        'valueAwareCalleeAbiNearPositiveCurrentCostBreakdown',
+      ),
+      calleeAbiNearPositivePrimaryCost: detail(
+        details,
+        'valueAwareCalleeAbiNearPositivePrimaryCostBreakdown',
+      ),
       calleeAbiBestSubset: detail(details, 'valueAwareCalleeAbiBestSubsetInputNames'),
       calleeAbiSubsetCandidates: detail(details, 'valueAwareCalleeAbiSubsetCandidates'),
       calleeAbiBestSubsetNet: detail(
@@ -327,6 +363,42 @@ function analyzeFile(compiler, file) {
       calleeAbiBestSubsetStatus: detail(
         details,
         'valueAwareCalleeAbiBestSubsetPlanStatus',
+      ),
+      calleeAbiBestSubsetNearPositiveStatus: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetNearPositiveStatus',
+      ),
+      calleeAbiBestSubsetNearPositiveGap: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetNearPositiveGapCells',
+      ),
+      calleeAbiBestSubsetNearPositiveCurrentNet: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetNearPositiveCurrentNetCells',
+      ),
+      calleeAbiBestSubsetNearPositivePrimaryNet: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetNearPositivePrimaryNetCells',
+      ),
+      calleeAbiBestSubsetNearPositivePrimaryStatus: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetNearPositivePrimaryStatus',
+      ),
+      calleeAbiBestSubsetNearPositiveReason: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetNearPositiveReason',
+      ),
+      calleeAbiBestSubsetNearPositiveAction: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetNearPositiveAction',
+      ),
+      calleeAbiBestSubsetNearPositiveCurrentCost: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetNearPositiveCurrentCostBreakdown',
+      ),
+      calleeAbiBestSubsetNearPositivePrimaryCost: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetNearPositivePrimaryCostBreakdown',
       ),
       calleeAbiPrimaryEntryCoverage: detail(
         details,
@@ -559,7 +631,9 @@ function positiveInteger(value) {
 }
 
 function helperPositiveGap(row) {
-  return positiveInteger(row.calleeAbiAdditionalNetToPositive) ??
+  return positiveInteger(row.calleeAbiNearPositiveGap) ??
+    positiveInteger(row.calleeAbiBestSubsetNearPositiveGap) ??
+    positiveInteger(row.calleeAbiAdditionalNetToPositive) ??
     positiveInteger(row.calleeAbiBestSubsetNeed) ??
     positiveInteger(row.bestInputAdditionalRecallCellsToProfit);
 }
@@ -618,6 +692,15 @@ function printHelper(row) {
       ` abiLevers=${row.calleeAbiPositiveLevers || '-'}` +
       ` abiGap=${row.calleeAbiPositiveGapReason || '-'}` +
       ` abiTarget=${row.calleeAbiNextProofTarget || '-'}` +
+      ` abiNear=${row.calleeAbiNearPositiveStatus || '-'}` +
+      ` abiNearGap=${row.calleeAbiNearPositiveGap || '-'}` +
+      ` abiNearNet=${row.calleeAbiNearPositiveCurrentNet || '-'}` +
+      ` abiNearPrimaryNet=${row.calleeAbiNearPositivePrimaryNet || '-'}` +
+      ` abiNearPrimaryStatus=${row.calleeAbiNearPositivePrimaryStatus || '-'}` +
+      ` abiNearReason=${row.calleeAbiNearPositiveReason || '-'}` +
+      ` abiNearAction=${row.calleeAbiNearPositiveAction || '-'}` +
+      ` abiNearCost=${row.calleeAbiNearPositiveCurrentCost || '-'}` +
+      ` abiNearPrimaryCost=${row.calleeAbiNearPositivePrimaryCost || '-'}` +
       ` abiSubsets=${row.calleeAbiSubsetCandidates || '-'}` +
       ` abiSubset=${row.calleeAbiBestSubset || '-'}` +
       ` abiSubsetNet=${row.calleeAbiBestSubsetNet || '-'}` +
@@ -627,6 +710,15 @@ function printHelper(row) {
       ` abiSubsetGap=${row.calleeAbiBestSubsetGapReason || '-'}` +
       ` abiSubsetTarget=${row.calleeAbiBestSubsetNextProofTarget || '-'}` +
       ` abiSubsetStatus=${row.calleeAbiBestSubsetStatus || '-'}` +
+      ` abiSubsetNear=${row.calleeAbiBestSubsetNearPositiveStatus || '-'}` +
+      ` abiSubsetNearGap=${row.calleeAbiBestSubsetNearPositiveGap || '-'}` +
+      ` abiSubsetNearNet=${row.calleeAbiBestSubsetNearPositiveCurrentNet || '-'}` +
+      ` abiSubsetNearPrimaryNet=${row.calleeAbiBestSubsetNearPositivePrimaryNet || '-'}` +
+      ` abiSubsetNearPrimaryStatus=${row.calleeAbiBestSubsetNearPositivePrimaryStatus || '-'}` +
+      ` abiSubsetNearReason=${row.calleeAbiBestSubsetNearPositiveReason || '-'}` +
+      ` abiSubsetNearAction=${row.calleeAbiBestSubsetNearPositiveAction || '-'}` +
+      ` abiSubsetNearCost=${row.calleeAbiBestSubsetNearPositiveCurrentCost || '-'}` +
+      ` abiSubsetNearPrimaryCost=${row.calleeAbiBestSubsetNearPositivePrimaryCost || '-'}` +
       ` abiPrimaryCoverage=${row.calleeAbiPrimaryEntryCoverage || '-'}` +
       ` abiPrimaryEligible=${row.calleeAbiPrimaryEntryEligibleTargets || '-'}` +
       ` abiPrimaryBlocked=${row.calleeAbiPrimaryEntryBlockedTargets || '-'}` +

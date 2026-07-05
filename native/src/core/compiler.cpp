@@ -54961,6 +54961,27 @@ SizeAttributionReport build_size_attribution_report(
                     best_subset.primary_entry_net_cells);
             helper.details["valueAwareCalleeAbiBestSubsetPrimaryEntryStatus"] =
                 callee_abi_primary_entry_status_text(best_subset.primary_entry_net_cells);
+            if (best_subset.net_cells <= 0 && best_subset.primary_entry_net_cells > 0) {
+              helper.details["valueAwareCalleeAbiBestSubsetNearPositiveStatus"] =
+                  "primary-entry-positive-current-lower-bound-nonpositive";
+              helper.details["valueAwareCalleeAbiBestSubsetNearPositiveGapCells"] =
+                  std::to_string(std::max(0, 1 - best_subset.net_cells));
+              helper.details["valueAwareCalleeAbiBestSubsetNearPositiveCurrentNetCells"] =
+                  std::to_string(best_subset.net_cells);
+              helper.details["valueAwareCalleeAbiBestSubsetNearPositivePrimaryNetCells"] =
+                  std::to_string(best_subset.primary_entry_net_cells);
+              helper.details["valueAwareCalleeAbiBestSubsetNearPositivePrimaryStatus"] =
+                  callee_abi_primary_entry_status_text(best_subset.primary_entry_net_cells);
+              helper.details["valueAwareCalleeAbiBestSubsetNearPositiveReason"] =
+                  "primary-entry-elides-callee-entry-lower-bound-but-general-entry-breaks-even";
+              helper.details["valueAwareCalleeAbiBestSubsetNearPositiveAction"] =
+                  "implement-primary-stack-preserving-callee-entry-and-argument-preservation-"
+                  "proof";
+              helper.details["valueAwareCalleeAbiBestSubsetNearPositiveCurrentCostBreakdown"] =
+                  helper.details["valueAwareCalleeAbiBestSubsetCostBreakdown"];
+              helper.details["valueAwareCalleeAbiBestSubsetNearPositivePrimaryCostBreakdown"] =
+                  helper.details["valueAwareCalleeAbiBestSubsetPrimaryEntryCostBreakdown"];
+            }
             helper.details["valueAwareCalleeAbiBestSubsetPositiveGapCells"] =
                 helper.details["valueAwareCalleeAbiBestSubsetAdditionalNetCellsToPositive"];
             helper.details["valueAwareCalleeAbiBestSubsetPositiveLevers"] =
@@ -55044,6 +55065,29 @@ SizeAttributionReport build_size_attribution_report(
                   ? "implement-primary-stack-preserving-callee-entry-and-argument-preservation-"
                     "proof"
                   : "find-additional-stack-input-savings-or-nonprimary-entry-proof";
+          if (net_after_callee_abi_lower_bound_cells <= 0 &&
+              net_after_primary_entry_lower_bound_cells > 0) {
+            helper.details["valueAwareCalleeAbiNearPositiveStatus"] =
+                "primary-entry-positive-current-lower-bound-nonpositive";
+            helper.details["valueAwareCalleeAbiNearPositiveGapCells"] =
+                std::to_string(std::max(0, 1 - net_after_callee_abi_lower_bound_cells));
+            helper.details["valueAwareCalleeAbiNearPositiveCurrentNetCells"] =
+                std::to_string(net_after_callee_abi_lower_bound_cells);
+            helper.details["valueAwareCalleeAbiNearPositivePrimaryNetCells"] =
+                std::to_string(net_after_primary_entry_lower_bound_cells);
+            helper.details["valueAwareCalleeAbiNearPositivePrimaryStatus"] =
+                callee_abi_primary_entry_status_text(
+                    net_after_primary_entry_lower_bound_cells);
+            helper.details["valueAwareCalleeAbiNearPositiveReason"] =
+                "primary-entry-elides-callee-entry-lower-bound-but-general-entry-breaks-even";
+            helper.details["valueAwareCalleeAbiNearPositiveAction"] =
+                "implement-primary-stack-preserving-callee-entry-and-argument-preservation-"
+                "proof";
+            helper.details["valueAwareCalleeAbiNearPositiveCurrentCostBreakdown"] =
+                helper.details["valueAwareCalleeAbiCostBreakdown"];
+            helper.details["valueAwareCalleeAbiNearPositivePrimaryCostBreakdown"] =
+                helper.details["valueAwareCalleeAbiPrimaryEntryCostBreakdown"];
+          }
           helper.details["valueAwareCalleeAbiPositiveGapCells"] =
               helper.details["valueAwareCalleeAbiAdditionalNetCellsToPositive"];
           helper.details["valueAwareCalleeAbiPositiveLevers"] =
