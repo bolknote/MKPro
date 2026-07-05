@@ -10565,11 +10565,18 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   context.dungeon_shape = is_dungeon_shape(program);
   context.uses_formatted_coord_report = core::emit::program_uses_formatted_coord_report(program);
   const int packed_score_calls = count_expression_calls_in_program(program, "packed_score");
+  const int regular_accumulator_packed_score_calls =
+      packed_score_accumulator_regular_eligible_call_count_in_program(program);
+  const int x_param_accumulator_packed_score_calls =
+      x_param_packed_score_accumulator_eligible_call_count_in_program(program);
   const int accumulator_packed_score_calls =
       packed_score_accumulator_eligible_call_count_in_program(program);
   context.use_packed_score_accumulator_helper =
       context.packed_score_accumulator_helpers &&
       packed_score_accumulator_helper_has_cost_effective_family(program);
+  context.share_packed_line_score_accumulator_with_generic_helper =
+      context.use_packed_score_accumulator_helper &&
+      (regular_accumulator_packed_score_calls >= 3 || x_param_accumulator_packed_score_calls >= 3);
   const int non_accumulator_group_packed_score_calls =
       std::max(0, packed_score_calls - accumulator_packed_score_calls);
   context.use_packed_score_accumulator_for_singletons =
@@ -21164,14 +21171,21 @@ bool lower_packed_line_family_score_rule(LoweringContext& context, const V2Rule&
       !diagonal_line_value_single_lift(match->diagonal_sub.line_value))
     return false;
 
-  const std::string helper = context.emitter.fresh_label("packed_line_family_score_accumulator");
+  const bool share_generic_helper =
+      context.share_packed_line_score_accumulator_with_generic_helper ||
+      context.packed_score_accumulator_helper.has_value();
+  const std::string helper =
+      share_generic_helper ? packed_score_accumulator_helper_label(context)
+                           : context.emitter.fresh_label("packed_line_family_score_accumulator");
+  const std::string helper_call_comment =
+      share_generic_helper ? "packed_score accumulator helper"
+                           : "packed-line score accumulator helper";
   auto emit_score = [&](const PackedScoreTerm& term) -> bool {
     if (!lower_expression_to_x(context, term.line_value))
       return false;
     if (!lower_expression_to_x(context, term.index))
       return false;
-    context.emitter.emit_jump(0x53, "ПП", helper, "packed-line score accumulator helper",
-                              term.line);
+    context.emitter.emit_jump(0x53, "ПП", helper, helper_call_comment, term.line);
     mark_current_x(context, match->score);
     context.emitter.current_x_known_zero = false;
     return true;
@@ -21211,7 +21225,7 @@ bool lower_packed_line_family_score_rule(LoweringContext& context, const V2Rule&
   context.emitter.emit_jump(0x53, "ПП", function_label(match->normalizer),
                             "proc call " + match->normalizer, match->diagonal_add_raw_line);
   mark_current_x(context, match->normalizer_return);
-  context.emitter.emit_jump(0x53, "ПП", helper, "packed-line score accumulator helper",
+  context.emitter.emit_jump(0x53, "ПП", helper, helper_call_comment,
                             match->diagonal_add_score_line);
   if (context.stack_only_state_fields.contains(match->score)) {
     mark_current_x(context, match->score);
@@ -21222,22 +21236,26 @@ bool lower_packed_line_family_score_rule(LoweringContext& context, const V2Rule&
   context.emitter.emit_op(0x52, "В/О", "packed-line family score return",
                           match->diagonal_sub_score_line);
 
-  context.emitter.emit_label(helper);
-  context.emitter.emit_op(0x15, "F 10^x", "packed-line score helper pow10", match->line);
-  context.emitter.emit_op(0x13, "/", "packed-line score helper divide", match->line);
-  context.emitter.emit_op(0x35, "К {x}", "packed-line score helper frac", match->line);
-  emit_number_or_preload(context, "0.41200076");
-  context.emitter.emit_op(0x11, "-", "packed-line score helper center", match->line);
-  context.emitter.emit_op(0x22, "F x^2", "packed-line score helper square", match->line);
-  context.emitter.emit_op(0x10, "+", "packed-line score helper accumulate", match->line);
-  context.emitter.emit_op(0x52, "В/О", "packed-line score helper return", match->line);
+  if (!share_generic_helper) {
+    context.emitter.emit_label(helper);
+    context.emitter.emit_op(0x15, "F 10^x", "packed-line score helper pow10", match->line);
+    context.emitter.emit_op(0x13, "/", "packed-line score helper divide", match->line);
+    context.emitter.emit_op(0x35, "К {x}", "packed-line score helper frac", match->line);
+    emit_number_or_preload(context, "0.41200076");
+    context.emitter.emit_op(0x11, "-", "packed-line score helper center", match->line);
+    context.emitter.emit_op(0x22, "F x^2", "packed-line score helper square", match->line);
+    context.emitter.emit_op(0x10, "+", "packed-line score helper accumulate", match->line);
+    context.emitter.emit_op(0x52, "В/О", "packed-line score helper return", match->line);
+  }
   context.optimizations.push_back(OptimizationReport{
       .name = "packed-line-family-score-accumulator",
       .detail = "Accumulated four packed_score() terms through one helper while sharing diagonal "
                 "scoring for " +
                 expression_to_source(add_expression(match->shared, match->partial)) + " and " +
                 expression_to_source(subtract_expression(match->shared, match->partial)) + " in " +
-                rule.name + ".",
+                rule.name +
+                (share_generic_helper ? " Shared the generic packed_score accumulator helper."
+                                      : "."),
   });
   return true;
 }
@@ -52342,8 +52360,13 @@ packed_score_accumulator_helper_usage_by_label(
     const bool packed_line = optimization.name == "packed-line-family-score-accumulator";
     const bool x_param = optimization.name == "x-param-packed-score-line-stack-accumulate";
     if (packed_line) {
-      add_usage("packed-line score accumulator helper", terms.positive_terms,
-                terms.signed_expression, /*negative_terms=*/false, x_param, packed_line);
+      const bool shared_generic_helper =
+          optimization.detail.find("Shared the generic packed_score accumulator helper") !=
+          std::string::npos;
+      add_usage(shared_generic_helper ? "packed_score accumulator helper"
+                                      : "packed-line score accumulator helper",
+                terms.positive_terms, terms.signed_expression,
+                /*negative_terms=*/false, x_param, packed_line);
       continue;
     }
     add_usage("packed_score accumulator helper", terms.positive_terms,
@@ -53556,21 +53579,22 @@ SizeAttributionReport build_size_attribution_report(
             [](int needed_cells, int materialize_cells) {
               if (needed_cells <= 0)
                 return std::string("none");
-              std::vector<std::string> targets;
+              std::vector<std::string> proof_targets;
               if (materialize_cells > 0) {
-                targets.push_back("reduce-callsite-materialization-by-" +
-                                  std::to_string(std::min(needed_cells, materialize_cells)));
+                proof_targets.push_back(
+                    "reduce-callsite-materialization-by-" +
+                    std::to_string(std::min(needed_cells, materialize_cells)));
               }
               const int remaining_after_materialization =
                   needed_cells - std::min(needed_cells, std::max(0, materialize_cells));
               if (remaining_after_materialization > 0) {
-                targets.push_back("find-additional-helper-local-recall-savings-by-" +
-                                  std::to_string(remaining_after_materialization));
+                proof_targets.push_back("find-additional-helper-local-recall-savings-by-" +
+                                        std::to_string(remaining_after_materialization));
               } else {
-                targets.push_back("or-find-additional-helper-local-recall-savings-by-" +
-                                  std::to_string(needed_cells));
+                proof_targets.push_back("or-find-additional-helper-local-recall-savings-by-" +
+                                        std::to_string(needed_cells));
               }
-              return join_strings(targets, ",");
+              return join_strings(proof_targets, ",");
             };
         std::vector<std::string> materialize_cost_parts;
         materialize_cost_parts.reserve(ranked_stack_inputs.size());
@@ -54247,20 +54271,21 @@ SizeAttributionReport build_size_attribution_report(
                int overhead_cells) {
               if (needed_cells <= 0)
                 return std::string("none");
-              std::vector<std::string> targets;
+              std::vector<std::string> proof_targets;
               if (argument_preservation_cells > 0) {
-                targets.push_back("remove-call-argument-preservation-by-" +
-                                  std::to_string(needed_cells));
+                proof_targets.push_back("remove-call-argument-preservation-by-" +
+                                        std::to_string(needed_cells));
               }
               if (materialize_cells > 0) {
-                targets.push_back("reduce-callsite-materialization-by-" +
-                                  std::to_string(needed_cells));
+                proof_targets.push_back("reduce-callsite-materialization-by-" +
+                                        std::to_string(needed_cells));
               }
               if (overhead_cells > 0) {
-                targets.push_back("prove-callee-entry-overhead-below-lower-bound-by-" +
-                                  std::to_string(std::min(needed_cells, overhead_cells)));
+                proof_targets.push_back(
+                    "prove-callee-entry-overhead-below-lower-bound-by-" +
+                    std::to_string(std::min(needed_cells, overhead_cells)));
               }
-              return join_strings(targets, ",");
+              return join_strings(proof_targets, ",");
             };
         if (call_preservation_has_stack_mutating_callee &&
             !ranked_profitable_stack_inputs.empty()) {

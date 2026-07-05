@@ -110,6 +110,16 @@ std::size_t count_steps_with_comment(const CompileResult& result, const std::str
       }));
 }
 
+const SizeHelperSummaryReport* find_size_helper(const CompileResult& result,
+                                                const std::string& label) {
+  const auto it = std::find_if(result.size_attribution.helpers.begin(),
+                               result.size_attribution.helpers.end(),
+                               [&](const SizeHelperSummaryReport& helper) {
+                                 return helper.label == label;
+                               });
+  return it == result.size_attribution.helpers.end() ? nullptr : &*it;
+}
+
 std::vector<int> step_opcodes(const CompileResult& result) {
   std::vector<int> opcodes;
   opcodes.reserve(result.steps.size());
@@ -2160,6 +2170,77 @@ program GenericPackedScoreSharedReturnedIndexTail {
   require(generic_packed_score_tail.listing.find(
               "x-param packed_score shared returned-index tail") != std::string::npos,
           "generic packed_score shared tail should emit a shared returned-index helper call");
+
+  CompileOptions mixed_packed_score_options;
+  mixed_packed_score_options.analysis = true;
+  mixed_packed_score_options.packed_score_accumulator_helpers = true;
+  const CompileResult mixed_packed_score_helpers = compile_source(R"mkpro(
+program MixedPackedScoreHelperSharing {
+  state {
+    lines: packed[4..7] = [44444.4, 44444.4, 44444.4, 44444.4]
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    x: counter 0..5 = 4
+    y: counter 0..5 = 4
+    slot: counter 0..7 = 3
+    line: packed = 0
+    score: packed = 0
+  }
+
+  fn score_move() {
+    score = packed_score(lines[7], x) + packed_score(lines[6], y)
+    normalize(x + y)
+    score += packed_score(lines[5], line)
+    normalize(x - y)
+    score += packed_score(lines[4], line)
+  }
+
+  fn normalize(raw_line) {
+    line = frac((raw_line + 3) / 4) * 4 + 1
+  }
+
+  loop {
+    score_move()
+    halt(sum(score, packed_score(a, x), packed_score(b, y), packed_score(c, slot)))
+  }
+}
+)mkpro",
+                                                               mixed_packed_score_options);
+  require(mixed_packed_score_helpers.implemented,
+          "mixed generic/packed-line packed_score accumulator program should compile");
+  require(mixed_packed_score_helpers.diagnostics.empty(),
+          "mixed packed_score helper sharing compile should not report diagnostics");
+  require(has_optimization(mixed_packed_score_helpers,
+                           "packed-score-sum-accumulator"),
+          "mixed program should still lower the generic packed_score expression as an "
+          "accumulator");
+  require(has_optimization_detail(mixed_packed_score_helpers,
+                                  "packed-line-family-score-accumulator",
+                                  "Shared the generic packed_score accumulator helper"),
+          "packed-line score lowering should share the generic accumulator helper when it is "
+          "already needed for a separate packed_score pipeline");
+  require(count_steps_with_comment(mixed_packed_score_helpers,
+                                   "packed_score accumulator helper add") == 1,
+          "mixed helper sharing should emit one generic accumulator helper body");
+  require(count_steps_with_comment(mixed_packed_score_helpers,
+                                   "packed-line score helper accumulate") == 0,
+          "mixed helper sharing should not emit a duplicate packed-line accumulator body");
+  require(count_steps_with_comment(mixed_packed_score_helpers,
+                                   "packed_score accumulator helper") >= 7,
+          "mixed helper sharing should route generic and packed-line score terms through the "
+          "same accumulator helper");
+  const SizeHelperSummaryReport* mixed_accumulator_helper =
+      find_size_helper(mixed_packed_score_helpers, "packed_score accumulator helper");
+  require(mixed_accumulator_helper != nullptr &&
+              mixed_accumulator_helper->details.contains("sharedTailTerms") &&
+              mixed_accumulator_helper->details.at("sharedTailTerms") == "4",
+          "size attribution should attach packed-line shared-tail terms to the shared generic "
+          "accumulator helper");
+  require(find_size_helper(mixed_packed_score_helpers,
+                           "packed-line score accumulator helper") == nullptr,
+          "size attribution should not report a separate packed-line helper when its body is "
+          "shared with the generic accumulator helper");
 
   const CompileResult packed_line_score_proc_sum = compile_source(R"mkpro(
 program PackedLineScoreProcSumSyntax {
