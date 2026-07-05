@@ -56108,13 +56108,8 @@ SizeAttributionReport build_size_attribution_report(
     }
     if (const auto x2_action_it = opportunity.details.find("valueAwareCallArgumentX2RequiredAction");
         x2_action_it != opportunity.details.end()) {
-      const std::optional<int> argument_preservation_cells = positive_detail_int(
-          opportunity.details, "valueAwareCallArgumentPreservationLowerBoundCells");
-      if (argument_preservation_cells.has_value()) {
-        add_next_action(opportunity, "valueAwareCallArgumentX2RequiredAction",
-                        x2_action_it->second, index, "stalled-near-positive",
-                        argument_preservation_cells);
-      }
+      add_next_action(opportunity, "valueAwareCallArgumentX2RequiredAction",
+                      x2_action_it->second, index, "stalled-nonpositive");
     }
   }
   report.next_actions.reserve(next_action_summaries.size());

@@ -2317,9 +2317,9 @@ void example_sizes_match_typescript_baselines() {
           result, "valueAwareCallArgumentX2RequiredAction",
           "refactor-callee-to-preserve-x2-or-use-explicit-stack-copy");
       require(call_argument_x2_action != nullptr &&
-                  call_argument_x2_action->status == "stalled-near-positive" &&
-                  call_argument_x2_action->potential_savings == 2 &&
-                  call_argument_x2_action->best_savings == 2 &&
+                  call_argument_x2_action->status == "stalled-nonpositive" &&
+                  call_argument_x2_action->potential_savings == 0 &&
+                  call_argument_x2_action->best_savings == 0 &&
                   call_argument_x2_action->best_variant == "helper-register-traffic" &&
                   call_argument_x2_action->best_blocker_kind ==
                       "value-aware-stack-register-scheduler" &&
@@ -2346,8 +2346,9 @@ void example_sizes_match_typescript_baselines() {
                   call_argument_x2_action->best_details.at(
                       "valueAwareCallArgumentX2ClobberClassesByCallee") ==
                       "packed-line score accumulator helper:preloaded-constant-recall",
-              "tic-tac-toe-4x4 size attribution should rank the X2-clobbering packed_score "
-              "callee as a near-positive argument-preservation prerequisite");
+              "tic-tac-toe-4x4 size attribution should keep the X2-clobbering packed_score "
+              "callee visible as a prerequisite without ranking its argument-preservation lower "
+              "bound as a separate near-positive size saving");
       const SizeNextActionSummaryReport* stack_input_scheduler_action = find_size_next_action(
           result, "trafficShapeAction", "schedule-stack-input-helper-values");
       require(stack_input_scheduler_action == nullptr,
