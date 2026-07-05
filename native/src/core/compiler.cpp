@@ -54156,6 +54156,8 @@ SizeAttributionReport build_size_attribution_report(
         std::map<std::string, int> call_argument_preservation_cells_by_name;
         std::vector<std::string> call_argument_site_parts;
         std::vector<std::string> call_argument_lower_bound_site_parts;
+        std::map<std::string, std::vector<std::string>>
+            call_argument_lower_bound_sites_by_label;
         int call_argument_preservation_cells = 0;
         const auto nested_call_sites_it = helper_nested_call_sites.find(helper.label);
         const auto recall_indices_it = helper_recall_indices_by_name.find(helper.label);
@@ -54209,6 +54211,8 @@ SizeAttributionReport build_size_attribution_report(
                   call_argument_lower_bound_site_parts.push_back(
                       call_site.label + "@" + safe_format_label_address(call_site.address) +
                       ":" + name + "=nested-helper-argument-and-live-after-call");
+                  call_argument_lower_bound_sites_by_label[call_site.label].push_back(
+                      safe_format_label_address(call_site.address) + ":" + name);
                   ++call_argument_preservation_cells;
                 }
               }
@@ -54258,6 +54262,13 @@ SizeAttributionReport build_size_attribution_report(
               return selected_preservation_call_addresses_for_label(label, selected_names) ==
                      all_addresses;
             };
+        const auto formatted_addresses_text = [&](const std::set<int>& addresses) {
+          std::vector<std::string> formatted;
+          formatted.reserve(addresses.size());
+          for (const int address : addresses)
+            formatted.push_back(safe_format_label_address(address));
+          return join_strings(formatted, ",");
+        };
         std::vector<std::string> direct_stack_input_names;
         int direct_stack_input_gross_cells = 0;
         int direct_stack_input_materialize_cells = 0;
@@ -54452,6 +54463,9 @@ SizeAttributionReport build_size_attribution_report(
           std::vector<std::string> callee_abi_primary_entry_parts;
           std::vector<std::string> callee_abi_primary_entry_eligible_targets;
           std::vector<std::string> callee_abi_primary_entry_blocked_targets;
+          std::vector<std::string> callee_abi_primary_entry_protocol_parts;
+          std::vector<std::string> callee_abi_primary_entry_restage_parts;
+          std::vector<std::string> callee_abi_primary_entry_restage_site_parts;
           bool all_required_callees_stack_preserving = !call_preservation_inputs_by_label.empty();
           bool saw_stack_mutating_required_callee = false;
           bool call_argument_x2_restore_blocked = false;
@@ -54610,6 +54624,37 @@ SizeAttributionReport build_size_attribution_report(
                 callee_abi_primary_entry_blocked_targets.push_back(label);
                 ++callee_abi_primary_entry_remaining_overhead_lower_bound_cells;
               }
+              callee_abi_primary_entry_protocol_parts.push_back(
+                  label + ":" +
+                  (primary_entry_eligible ? "primary-entry-covers-all-calls"
+                                          : "requires-secondary-preserving-entry") +
+                  "(inputs=" + input_list + ";calls=" +
+                  formatted_addresses_text(preserving_call_addresses) + ";allCalls=" +
+                  formatted_addresses_text(all_call_addresses) +
+                  ";calleeAbi=X:index,Y:line,Z:accumulator;naturalSurvivor=T)");
+              if (const auto restage_it = call_argument_preservation_cells_by_label.find(label);
+                  restage_it != call_argument_preservation_cells_by_label.end() &&
+                  restage_it->second > 0) {
+                std::string argument_inputs;
+                if (const auto inputs_it = call_argument_inputs_by_label.find(label);
+                    inputs_it != call_argument_inputs_by_label.end()) {
+                  argument_inputs = join_strings(
+                      std::vector<std::string>(inputs_it->second.begin(),
+                                               inputs_it->second.end()),
+                      ",");
+                }
+                callee_abi_primary_entry_restage_parts.push_back(
+                    label + ":" + std::to_string(restage_it->second) + "cells(inputs=" +
+                    argument_inputs + ")");
+                if (const auto sites_it =
+                        call_argument_lower_bound_sites_by_label.find(label);
+                    sites_it != call_argument_lower_bound_sites_by_label.end()) {
+                  std::vector<std::string> sorted_sites = sites_it->second;
+                  std::sort(sorted_sites.begin(), sorted_sites.end());
+                  callee_abi_primary_entry_restage_site_parts.push_back(
+                      label + ":" + join_strings(sorted_sites, ","));
+                }
+              }
             }
           }
           if (!callee_effect_parts.empty()) {
@@ -54688,6 +54733,25 @@ SizeAttributionReport build_size_attribution_report(
                 if (!callee_abi_primary_entry_blocked_targets.empty()) {
                   helper.details["valueAwareCalleeAbiPrimaryEntryBlockedTargets"] =
                       join_strings(callee_abi_primary_entry_blocked_targets, ",");
+                }
+                if (!callee_abi_primary_entry_protocol_parts.empty()) {
+                  helper.details["valueAwareCalleeAbiPrimaryEntryProtocolByCallee"] =
+                      join_strings(callee_abi_primary_entry_protocol_parts, ";");
+                  helper.details["valueAwareCalleeAbiPrimaryEntryProtocolStatus"] =
+                      callee_abi_primary_entry_blocked_targets.empty()
+                          ? "all-preserving-call-sites-can-use-primary-entry"
+                          : "some-preserving-call-sites-need-secondary-entry";
+                  helper.details["valueAwareCalleeAbiPrimaryEntryProtocolLoweringAction"] =
+                      "implement-multi-input-state-stack-entry-for-primary-callee-abi";
+                }
+                if (!callee_abi_primary_entry_restage_parts.empty()) {
+                  helper.details["valueAwareCalleeAbiPrimaryEntryArgumentRestageByCallee"] =
+                      join_strings(callee_abi_primary_entry_restage_parts, ";");
+                }
+                if (!callee_abi_primary_entry_restage_site_parts.empty()) {
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntryArgumentRestageSitesByCallee"] =
+                      join_strings(callee_abi_primary_entry_restage_site_parts, ";");
                 }
               }
               helper.details["valueAwareCalleeAbiSafetyProof"] =

@@ -1291,6 +1291,33 @@ void example_sizes_match_typescript_baselines() {
                   !candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiPrimaryEntryBlockedTargets") &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryProtocolByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryProtocolByCallee") ==
+                      "packed-line score accumulator helper:primary-entry-covers-all-calls("
+                      "inputs=x,y;calls=71,74;allCalls=71,74;"
+                      "calleeAbi=X:index,Y:line,Z:accumulator;naturalSurvivor=T)" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryProtocolStatus") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryProtocolStatus") ==
+                      "all-preserving-call-sites-can-use-primary-entry" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryProtocolLoweringAction") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryProtocolLoweringAction") ==
+                      "implement-multi-input-state-stack-entry-for-primary-callee-abi" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryArgumentRestageByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryArgumentRestageByCallee") ==
+                      "packed-line score accumulator helper:2cells(inputs=x,y)" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryArgumentRestageSitesByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryArgumentRestageSitesByCallee") ==
+                      "packed-line score accumulator helper:71:x,74:y" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiPrimaryEntryElidableOverheadCells") &&
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiPrimaryEntryElidableOverheadCells") == "1" &&

@@ -466,6 +466,26 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCalleeAbiPrimaryEntryBlockedTargets',
       ),
+      calleeAbiPrimaryEntryProtocol: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryProtocolByCallee',
+      ),
+      calleeAbiPrimaryEntryProtocolStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryProtocolStatus',
+      ),
+      calleeAbiPrimaryEntryProtocolAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryProtocolLoweringAction',
+      ),
+      calleeAbiPrimaryEntryArgumentRestage: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryArgumentRestageByCallee',
+      ),
+      calleeAbiPrimaryEntryArgumentRestageSites: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryArgumentRestageSitesByCallee',
+      ),
       calleeAbiPrimaryEntryCostBreakdown: detail(
         details,
         'valueAwareCalleeAbiPrimaryEntryCostBreakdown',
@@ -575,6 +595,26 @@ function analyzeFile(compiler, file) {
       calleeAbiNearPositiveStackPlacementRequiredAction: detail(
         details,
         'valueAwareCalleeAbiNearPositiveStackPlacementRequiredAction',
+      ),
+      calleeAbiPrimaryEntryProtocol: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryProtocolByCallee',
+      ),
+      calleeAbiPrimaryEntryProtocolStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryProtocolStatus',
+      ),
+      calleeAbiPrimaryEntryProtocolAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryProtocolLoweringAction',
+      ),
+      calleeAbiPrimaryEntryArgumentRestage: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryArgumentRestageByCallee',
+      ),
+      calleeAbiPrimaryEntryArgumentRestageSites: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryArgumentRestageSitesByCallee',
       ),
     };
   });
@@ -754,6 +794,11 @@ function actionDetailSuffix(row) {
     ['abiPlacement', row.calleeAbiNearPositiveStackPlacementStatus],
     ['abiPlacementBasis', row.calleeAbiNearPositiveStackPlacementBasis],
     ['abiPlacementAction', row.calleeAbiNearPositiveStackPlacementRequiredAction],
+    ['abiProtocol', row.calleeAbiPrimaryEntryProtocol],
+    ['abiProtocolStatus', row.calleeAbiPrimaryEntryProtocolStatus],
+    ['abiProtocolAction', row.calleeAbiPrimaryEntryProtocolAction],
+    ['abiArgRestage', row.calleeAbiPrimaryEntryArgumentRestage],
+    ['abiArgRestageSites', row.calleeAbiPrimaryEntryArgumentRestageSites],
   ];
   const details = fields
     .filter(([, value]) => value !== undefined && value !== null && value !== '')
@@ -878,6 +923,11 @@ function printHelper(row) {
       ` abiPrimaryCoverage=${row.calleeAbiPrimaryEntryCoverage || '-'}` +
       ` abiPrimaryEligible=${row.calleeAbiPrimaryEntryEligibleTargets || '-'}` +
       ` abiPrimaryBlocked=${row.calleeAbiPrimaryEntryBlockedTargets || '-'}` +
+      ` abiPrimaryProtocol=${row.calleeAbiPrimaryEntryProtocol || '-'}` +
+      ` abiPrimaryProtocolStatus=${row.calleeAbiPrimaryEntryProtocolStatus || '-'}` +
+      ` abiPrimaryProtocolAction=${row.calleeAbiPrimaryEntryProtocolAction || '-'}` +
+      ` abiPrimaryArgRestage=${row.calleeAbiPrimaryEntryArgumentRestage || '-'}` +
+      ` abiPrimaryArgRestageSites=${row.calleeAbiPrimaryEntryArgumentRestageSites || '-'}` +
       ` abiPrimaryCost=${row.calleeAbiPrimaryEntryCostBreakdown || '-'}` +
       ` abiPrimaryNet=${row.calleeAbiPrimaryEntryNet || '-'}` +
       ` abiPrimaryNeed=${row.calleeAbiPrimaryEntryNeed || '-'}` +
@@ -908,6 +958,8 @@ function printActionSummary(row) {
     ['abiNearPrimaryNet', row.calleeAbiNearPositivePrimaryNet],
     ['abiPlacement', row.calleeAbiNearPositiveStackPlacementStatus],
     ['abiPlacementAction', row.calleeAbiNearPositiveStackPlacementRequiredAction],
+    ['abiProtocol', row.calleeAbiPrimaryEntryProtocol],
+    ['abiArgRestage', row.calleeAbiPrimaryEntryArgumentRestage],
   ];
   const suffix = fields
     .filter(([, value]) => value !== undefined && value !== null && value !== '')
