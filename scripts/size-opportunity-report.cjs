@@ -489,18 +489,73 @@ function analyzeFile(compiler, file) {
         detail(details, 'valueAwareCallPreservationCalleeStatus'),
     });
   }
-  const nextActions = (report.nextActions ?? []).map((action) => ({
-    file,
-    source: action.source,
-    action: action.action,
-    status: action.status || 'positive',
-    opportunities: action.opportunities,
-    potentialSavings: action.potentialSavings,
-    bestSavings: action.bestSavings,
-    bestVariant: action.bestVariant ?? '',
-    bestBlockerKind: action.bestBlockerKind ?? '',
-    helper: action.bestDetails?.helperLabel ?? '',
-  }));
+  const nextActions = (report.nextActions ?? []).map((action) => {
+    const details = action.bestDetails ?? {};
+    return {
+      file,
+      source: action.source,
+      action: action.action,
+      status: action.status || 'positive',
+      opportunities: action.opportunities,
+      potentialSavings: action.potentialSavings,
+      bestSavings: action.bestSavings,
+      bestVariant: action.bestVariant ?? '',
+      bestBlockerKind: action.bestBlockerKind ?? '',
+      helper: action.bestDetails?.helperLabel ?? '',
+      callArgumentPreservationCellsByCallee: detail(
+        details,
+        'valueAwareCallArgumentPreservationCellsByCallee',
+      ),
+      callArgumentPreservationLowerBound: detail(
+        details,
+        'valueAwareCallArgumentPreservationLowerBoundCells',
+      ),
+      callArgumentPreservationLowerBoundBasis: detail(
+        details,
+        'valueAwareCallArgumentPreservationLowerBoundBasis',
+      ),
+      callArgumentPreservationRequiredAction: detail(
+        details,
+        'valueAwareCallArgumentPreservationRequiredAction',
+      ),
+      callArgumentX2RestoreStatus: detail(details, 'valueAwareCallArgumentX2RestoreStatus'),
+      callArgumentX2MutationOpcodesByCallee: detail(
+        details,
+        'valueAwareCallArgumentX2MutationOpcodesByCallee',
+      ),
+      callArgumentX2RequiredAction: detail(
+        details,
+        'valueAwareCallArgumentX2RequiredAction',
+      ),
+      callArgumentSites: detail(details, 'valueAwareCallArgumentSites'),
+      callArgumentInputNamesByCallee: detail(
+        details,
+        'valueAwareCallArgumentInputNamesByCallee',
+      ),
+      callPreservationSites: detail(details, 'valueAwareCallPreservationSites'),
+      calleeAbiCostBreakdown: detail(details, 'valueAwareCalleeAbiCostBreakdown'),
+      calleeAbiNearPositivePrimaryNet: detail(
+        details,
+        'valueAwareCalleeAbiNearPositivePrimaryNetCells',
+      ),
+      calleeAbiNearPositivePrimaryStatus: detail(
+        details,
+        'valueAwareCalleeAbiNearPositivePrimaryStatus',
+      ),
+      calleeAbiNearPositiveStackPlacementStatus: detail(
+        details,
+        'valueAwareCalleeAbiNearPositiveStackPlacementStatus',
+      ),
+      calleeAbiNearPositiveStackPlacementBasis: detail(
+        details,
+        'valueAwareCalleeAbiNearPositiveStackPlacementBasis',
+      ),
+      calleeAbiNearPositiveStackPlacementRequiredAction: detail(
+        details,
+        'valueAwareCalleeAbiNearPositiveStackPlacementRequiredAction',
+      ),
+    };
+  });
   return {
     file,
     totalCells: report.totalCells,
@@ -657,6 +712,31 @@ function printCandidateOpportunity(row) {
   );
 }
 
+function actionDetailSuffix(row) {
+  const fields = [
+    ['argPreserve', row.callArgumentPreservationCellsByCallee],
+    ['argPreserveLower', row.callArgumentPreservationLowerBound],
+    ['argPreserveBasis', row.callArgumentPreservationLowerBoundBasis],
+    ['argPreserveAction', row.callArgumentPreservationRequiredAction],
+    ['argX2', row.callArgumentX2RestoreStatus],
+    ['argX2Action', row.callArgumentX2RequiredAction],
+    ['x2Mutating', row.callArgumentX2MutationOpcodesByCallee],
+    ['argInputs', row.callArgumentInputNamesByCallee],
+    ['argSites', row.callArgumentSites],
+    ['preserveSites', row.callPreservationSites],
+    ['abiCost', row.calleeAbiCostBreakdown],
+    ['abiNearPrimaryNet', row.calleeAbiNearPositivePrimaryNet],
+    ['abiNearPrimaryStatus', row.calleeAbiNearPositivePrimaryStatus],
+    ['abiPlacement', row.calleeAbiNearPositiveStackPlacementStatus],
+    ['abiPlacementBasis', row.calleeAbiNearPositiveStackPlacementBasis],
+    ['abiPlacementAction', row.calleeAbiNearPositiveStackPlacementRequiredAction],
+  ];
+  const details = fields
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([name, value]) => `${name}=${value}`);
+  return details.length === 0 ? '' : ` ${details.join(' ')}`;
+}
+
 function helperInputSummary(row) {
   return row.suggestedResidentInputs ||
     row.profitableInputs ||
@@ -790,7 +870,8 @@ function printAction(row) {
       ` ${row.file} :: ${row.source}=${row.action}` +
       ` variant=${row.bestVariant || '-'}` +
       ` blocker=${row.bestBlockerKind || '-'}` +
-      ` helper=${row.helper || '-'}`,
+      ` helper=${row.helper || '-'}` +
+      actionDetailSuffix(row),
   );
 }
 
