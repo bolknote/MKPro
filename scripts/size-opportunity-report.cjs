@@ -328,6 +328,50 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCalleeAbiBestSubsetPlanStatus',
       ),
+      calleeAbiPrimaryEntryCoverage: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryCoverageByCallee',
+      ),
+      calleeAbiPrimaryEntryEligibleTargets: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryEligibleTargets',
+      ),
+      calleeAbiPrimaryEntryBlockedTargets: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryBlockedTargets',
+      ),
+      calleeAbiPrimaryEntryCostBreakdown: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryCostBreakdown',
+      ),
+      calleeAbiPrimaryEntryNet: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryNetAfterLowerBoundCells',
+      ),
+      calleeAbiPrimaryEntryNeed: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryAdditionalNetCellsToPositive',
+      ),
+      calleeAbiPrimaryEntryStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryStatus',
+      ),
+      calleeAbiBestSubsetPrimaryEntryCostBreakdown: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetPrimaryEntryCostBreakdown',
+      ),
+      calleeAbiBestSubsetPrimaryEntryNet: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetPrimaryEntryNetAfterLowerBoundCells',
+      ),
+      calleeAbiBestSubsetPrimaryEntryNeed: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetPrimaryEntryAdditionalNetCellsToPositive',
+      ),
+      calleeAbiBestSubsetPrimaryEntryStatus: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetPrimaryEntryStatus',
+      ),
       calleeAbiStatus:
         detail(details, 'valueAwareCalleeAbiCostModelStatus') ||
         detail(details, 'valueAwareCallPreservationCalleeStatus'),
@@ -583,6 +627,17 @@ function printHelper(row) {
       ` abiSubsetGap=${row.calleeAbiBestSubsetGapReason || '-'}` +
       ` abiSubsetTarget=${row.calleeAbiBestSubsetNextProofTarget || '-'}` +
       ` abiSubsetStatus=${row.calleeAbiBestSubsetStatus || '-'}` +
+      ` abiPrimaryCoverage=${row.calleeAbiPrimaryEntryCoverage || '-'}` +
+      ` abiPrimaryEligible=${row.calleeAbiPrimaryEntryEligibleTargets || '-'}` +
+      ` abiPrimaryBlocked=${row.calleeAbiPrimaryEntryBlockedTargets || '-'}` +
+      ` abiPrimaryCost=${row.calleeAbiPrimaryEntryCostBreakdown || '-'}` +
+      ` abiPrimaryNet=${row.calleeAbiPrimaryEntryNet || '-'}` +
+      ` abiPrimaryNeed=${row.calleeAbiPrimaryEntryNeed || '-'}` +
+      ` abiPrimaryStatus=${row.calleeAbiPrimaryEntryStatus || '-'}` +
+      ` abiSubsetPrimaryCost=${row.calleeAbiBestSubsetPrimaryEntryCostBreakdown || '-'}` +
+      ` abiSubsetPrimaryNet=${row.calleeAbiBestSubsetPrimaryEntryNet || '-'}` +
+      ` abiSubsetPrimaryNeed=${row.calleeAbiBestSubsetPrimaryEntryNeed || '-'}` +
+      ` abiSubsetPrimaryStatus=${row.calleeAbiBestSubsetPrimaryEntryStatus || '-'}` +
       ` callee=${row.calleeAbiStatus || '-'}`,
   );
 }

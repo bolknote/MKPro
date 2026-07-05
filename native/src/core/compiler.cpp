@@ -53928,6 +53928,44 @@ SizeAttributionReport build_size_attribution_report(
         bool call_preservation_has_stack_mutating_callee = false;
         int callee_abi_mutation_surface_cells = 0;
         int callee_abi_refactor_target_count = 0;
+        int callee_abi_primary_entry_elidable_overhead_cells = 0;
+        int callee_abi_primary_entry_remaining_overhead_lower_bound_cells = 0;
+        const auto all_call_addresses_for_label =
+            [&](const std::string& label) {
+              std::set<int> addresses;
+              const auto all_call_sites_it = call_sites_by_label.find(label);
+              if (all_call_sites_it == call_sites_by_label.end())
+                return addresses;
+              for (const CallSite& call_site : all_call_sites_it->second)
+                addresses.insert(call_site.address);
+              return addresses;
+            };
+        const auto selected_preservation_call_addresses_for_label =
+            [&](const std::string& label, const std::set<std::string>& selected_names) {
+              std::set<int> addresses;
+              const auto coverage_it =
+                  call_preservation_recall_counts_by_label_address_name.find(label);
+              if (coverage_it == call_preservation_recall_counts_by_label_address_name.end())
+                return addresses;
+              for (const auto& [address, counts_by_name] : coverage_it->second) {
+                const bool touches_selected_input =
+                    std::any_of(counts_by_name.begin(), counts_by_name.end(),
+                                [&](const auto& entry) {
+                                  return entry.second > 0 && selected_names.contains(entry.first);
+                                });
+                if (touches_selected_input)
+                  addresses.insert(address);
+              }
+              return addresses;
+            };
+        const auto primary_entry_eligible_for_callee =
+            [&](const std::string& label, const std::set<std::string>& selected_names) {
+              const std::set<int> all_addresses = all_call_addresses_for_label(label);
+              if (all_addresses.empty())
+                return false;
+              return selected_preservation_call_addresses_for_label(label, selected_names) ==
+                     all_addresses;
+            };
         std::vector<std::string> direct_stack_input_names;
         int direct_stack_input_gross_cells = 0;
         int direct_stack_input_materialize_cells = 0;
@@ -54117,6 +54155,9 @@ SizeAttributionReport build_size_attribution_report(
           std::vector<std::string> callee_abi_preservation_call_address_parts;
           std::vector<std::string> callee_abi_preservation_slot_crossing_parts;
           std::vector<std::string> callee_abi_refactor_targets;
+          std::vector<std::string> callee_abi_primary_entry_parts;
+          std::vector<std::string> callee_abi_primary_entry_eligible_targets;
+          std::vector<std::string> callee_abi_primary_entry_blocked_targets;
           bool all_required_callees_stack_preserving = !call_preservation_inputs_by_label.empty();
           bool saw_stack_mutating_required_callee = false;
           bool call_argument_x2_restore_blocked = false;
@@ -54239,6 +54280,25 @@ SizeAttributionReport build_size_attribution_report(
               callee_abi_preservation_slot_crossing_parts.push_back(
                   label + ":" + std::to_string(slot_crossings));
               callee_abi_refactor_targets.push_back(label);
+              const std::set<int> all_call_addresses = all_call_addresses_for_label(label);
+              const std::set<int> preserving_call_addresses =
+                  selected_preservation_call_addresses_for_label(label, inputs);
+              const int all_call_site_count = static_cast<int>(all_call_addresses.size());
+              const int preserving_call_site_count =
+                  static_cast<int>(preserving_call_addresses.size());
+              const bool primary_entry_eligible =
+                  !all_call_addresses.empty() && preserving_call_addresses == all_call_addresses;
+              callee_abi_primary_entry_parts.push_back(
+                  label + ":" + (primary_entry_eligible ? "eligible" : "blocked") + "(" +
+                  std::to_string(preserving_call_site_count) + "/" +
+                  std::to_string(all_call_site_count) + ")");
+              if (primary_entry_eligible) {
+                callee_abi_primary_entry_eligible_targets.push_back(label);
+                ++callee_abi_primary_entry_elidable_overhead_cells;
+              } else {
+                callee_abi_primary_entry_blocked_targets.push_back(label);
+                ++callee_abi_primary_entry_remaining_overhead_lower_bound_cells;
+              }
             }
           }
           if (!callee_effect_parts.empty()) {
@@ -54299,6 +54359,26 @@ SizeAttributionReport build_size_attribution_report(
                   join_strings(callee_abi_preservation_slot_crossing_parts, ";");
               helper.details["valueAwareCalleeAbiPreservationSlotCrossings"] =
                   std::to_string(callee_abi_preservation_slot_crossings);
+              if (!callee_abi_primary_entry_parts.empty()) {
+                helper.details["valueAwareCalleeAbiPrimaryEntryCoverageByCallee"] =
+                    join_strings(callee_abi_primary_entry_parts, ";");
+                helper.details["valueAwareCalleeAbiPrimaryEntryElidableOverheadCells"] =
+                    std::to_string(callee_abi_primary_entry_elidable_overhead_cells);
+                helper.details["valueAwareCalleeAbiPrimaryEntryRemainingOverheadLowerBoundCells"] =
+                    std::to_string(
+                        callee_abi_primary_entry_remaining_overhead_lower_bound_cells);
+                helper.details["valueAwareCalleeAbiPrimaryEntryOverheadModel"] =
+                    "secondary-entry-overhead-only-when-preserving-call-sites-do-not-cover-all-"
+                    "callee-calls";
+                if (!callee_abi_primary_entry_eligible_targets.empty()) {
+                  helper.details["valueAwareCalleeAbiPrimaryEntryEligibleTargets"] =
+                      join_strings(callee_abi_primary_entry_eligible_targets, ",");
+                }
+                if (!callee_abi_primary_entry_blocked_targets.empty()) {
+                  helper.details["valueAwareCalleeAbiPrimaryEntryBlockedTargets"] =
+                      join_strings(callee_abi_primary_entry_blocked_targets, ",");
+                }
+              }
               helper.details["valueAwareCalleeAbiSafetyProof"] =
                   "prove-live-stack-inputs-survive-nested-callee-entry";
               helper.details["valueAwareCalleeAbiImplementationStatus"] =
@@ -54482,6 +54562,13 @@ SizeAttributionReport build_size_attribution_report(
                      "/net:" + signed_cells_text(net_cells) +
                      "/need:" + std::to_string(std::max(0, 1 - net_cells));
             };
+        const auto callee_abi_primary_entry_status_text = [](int net_cells) {
+          if (net_cells > 0)
+            return std::string("positive-after-primary-entry-lower-bound");
+          if (net_cells == 0)
+            return std::string("break-even-after-primary-entry-lower-bound");
+          return std::string("negative-after-primary-entry-lower-bound");
+        };
         if (call_preservation_has_stack_mutating_callee &&
             !ranked_profitable_stack_inputs.empty()) {
           struct CalleeAbiSubsetEstimate {
@@ -54490,7 +54577,9 @@ SizeAttributionReport build_size_attribution_report(
             int materialize_cells = 0;
             int argument_preservation_cells = 0;
             int overhead_lower_bound_cells = 0;
+            int primary_entry_overhead_lower_bound_cells = 0;
             int net_cells = std::numeric_limits<int>::min();
+            int primary_entry_net_cells = std::numeric_limits<int>::min();
           };
 
           std::map<std::string, int> gross_cells_by_name;
@@ -54535,9 +54624,17 @@ SizeAttributionReport build_size_attribution_report(
             }
             estimate.overhead_lower_bound_cells =
                 static_cast<int>(stack_mutating_callee_labels.size());
+            for (const std::string& label : stack_mutating_callee_labels) {
+              if (!primary_entry_eligible_for_callee(label, selected_names))
+                ++estimate.primary_entry_overhead_lower_bound_cells;
+            }
             estimate.net_cells = estimate.gross_cells - estimate.materialize_cells -
                                  estimate.argument_preservation_cells -
                                  estimate.overhead_lower_bound_cells;
+            estimate.primary_entry_net_cells =
+                estimate.gross_cells - estimate.materialize_cells -
+                estimate.argument_preservation_cells -
+                estimate.primary_entry_overhead_lower_bound_cells;
             const std::string estimate_names = selected_names_text(estimate.names);
             callee_abi_subset_candidate_parts.push_back(
                 estimate_names + ":" +
@@ -54583,8 +54680,15 @@ SizeAttributionReport build_size_attribution_report(
                 std::to_string(best_subset.argument_preservation_cells);
             helper.details["valueAwareCalleeAbiBestSubsetOverheadLowerBoundCells"] =
                 std::to_string(best_subset.overhead_lower_bound_cells);
+            helper.details["valueAwareCalleeAbiBestSubsetPrimaryEntryOverheadLowerBoundCells"] =
+                std::to_string(best_subset.primary_entry_overhead_lower_bound_cells);
             helper.details["valueAwareCalleeAbiBestSubsetNetAfterLowerBoundCells"] =
                 std::to_string(best_subset.net_cells);
+            helper.details["valueAwareCalleeAbiBestSubsetPrimaryEntryNetAfterLowerBoundCells"] =
+                std::to_string(best_subset.primary_entry_net_cells);
+            helper.details
+                ["valueAwareCalleeAbiBestSubsetPrimaryEntryAdditionalNetCellsToPositive"] =
+                std::to_string(std::max(0, 1 - best_subset.primary_entry_net_cells));
             helper.details["valueAwareCalleeAbiBestSubsetAdditionalNetCellsToPositive"] =
                 std::to_string(std::max(0, 1 - best_subset.net_cells));
             helper.details["valueAwareCalleeAbiBestSubsetCostBreakdown"] =
@@ -54592,6 +54696,14 @@ SizeAttributionReport build_size_attribution_report(
                     best_subset.gross_cells, best_subset.materialize_cells,
                     best_subset.argument_preservation_cells,
                     best_subset.overhead_lower_bound_cells, best_subset.net_cells);
+            helper.details["valueAwareCalleeAbiBestSubsetPrimaryEntryCostBreakdown"] =
+                callee_abi_cost_breakdown_text(
+                    best_subset.gross_cells, best_subset.materialize_cells,
+                    best_subset.argument_preservation_cells,
+                    best_subset.primary_entry_overhead_lower_bound_cells,
+                    best_subset.primary_entry_net_cells);
+            helper.details["valueAwareCalleeAbiBestSubsetPrimaryEntryStatus"] =
+                callee_abi_primary_entry_status_text(best_subset.primary_entry_net_cells);
             helper.details["valueAwareCalleeAbiBestSubsetPositiveGapCells"] =
                 helper.details["valueAwareCalleeAbiBestSubsetAdditionalNetCellsToPositive"];
             helper.details["valueAwareCalleeAbiBestSubsetPositiveLevers"] =
@@ -54640,10 +54752,21 @@ SizeAttributionReport build_size_attribution_report(
               callee_abi_overhead_lower_bound_cells >= adjusted_estimated_net_cells
                   ? "reaches-or-exceeds-break-even-budget"
                   : "below-break-even-budget";
+          helper.details["valueAwareCalleeAbiPrimaryEntryOverheadLowerBoundCells"] =
+              std::to_string(callee_abi_primary_entry_remaining_overhead_lower_bound_cells);
+          helper.details["valueAwareCalleeAbiPrimaryEntryElidedOverheadCells"] =
+              std::to_string(callee_abi_primary_entry_elidable_overhead_cells);
           const int net_after_callee_abi_lower_bound_cells =
               adjusted_estimated_net_cells - callee_abi_overhead_lower_bound_cells;
+          const int net_after_primary_entry_lower_bound_cells =
+              adjusted_estimated_net_cells -
+              callee_abi_primary_entry_remaining_overhead_lower_bound_cells;
           helper.details["valueAwareCalleeAbiNetAfterLowerBoundCells"] =
               std::to_string(net_after_callee_abi_lower_bound_cells);
+          helper.details["valueAwareCalleeAbiPrimaryEntryNetAfterLowerBoundCells"] =
+              std::to_string(net_after_primary_entry_lower_bound_cells);
+          helper.details["valueAwareCalleeAbiPrimaryEntryAdditionalNetCellsToPositive"] =
+              std::to_string(std::max(0, 1 - net_after_primary_entry_lower_bound_cells));
           helper.details["valueAwareCalleeAbiAdditionalNetCellsToPositive"] =
               std::to_string(std::max(0, 1 - net_after_callee_abi_lower_bound_cells));
           helper.details["valueAwareCalleeAbiCostBreakdown"] =
@@ -54651,6 +54774,19 @@ SizeAttributionReport build_size_attribution_report(
                   profitable_stack_input_gross_cells, profitable_stack_input_materialize_cells,
                   call_argument_preservation_cells, callee_abi_overhead_lower_bound_cells,
                   net_after_callee_abi_lower_bound_cells);
+          helper.details["valueAwareCalleeAbiPrimaryEntryCostBreakdown"] =
+              callee_abi_cost_breakdown_text(
+                  profitable_stack_input_gross_cells, profitable_stack_input_materialize_cells,
+                  call_argument_preservation_cells,
+                  callee_abi_primary_entry_remaining_overhead_lower_bound_cells,
+                  net_after_primary_entry_lower_bound_cells);
+          helper.details["valueAwareCalleeAbiPrimaryEntryStatus"] =
+              callee_abi_primary_entry_status_text(net_after_primary_entry_lower_bound_cells);
+          helper.details["valueAwareCalleeAbiPrimaryEntryRequiredAction"] =
+              net_after_primary_entry_lower_bound_cells > 0
+                  ? "implement-primary-stack-preserving-callee-entry-and-argument-preservation-"
+                    "proof"
+                  : "find-additional-stack-input-savings-or-nonprimary-entry-proof";
           helper.details["valueAwareCalleeAbiPositiveGapCells"] =
               helper.details["valueAwareCalleeAbiAdditionalNetCellsToPositive"];
           helper.details["valueAwareCalleeAbiPositiveLevers"] =

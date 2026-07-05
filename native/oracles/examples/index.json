@@ -204,7 +204,7 @@
       "id": "functions-demo",
       "sourcePath": "examples/functions-demo.mkpro",
       "sourceSha256": "b7eaeed18c35f230c1709d47a527ddf5928c1a5fd42420fdca21513c5c01148a",
-      "steps": 25,
+      "steps": 16,
       "artifacts": {
         "bytes": "functions-demo/bytes.txt",
         "hex": "functions-demo/hex.txt",

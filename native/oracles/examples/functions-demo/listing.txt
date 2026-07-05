@@ -13,10 +13,10 @@
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
    00 |  50  | С/П                     | read x
-   01 |  40  | X→П 0                   | read x
+   01 |  45  | X→П 5                   | read x
    02 |  50  | С/П                     | read y
    03 |  46  | X→П 6                   | read y
-   04 |  60  | П→X 0                   | recall x
+   04 |  65  | П→X 5                   | recall x
    05 |  66  | П→X 6                   | recall y
    06 |  53  | ПП                      | call function sum_of_squares stack entry
    07 |  11  | 11                      | call function sum_of_squares stack entry

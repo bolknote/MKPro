@@ -1279,6 +1279,26 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiPreservationSlotCrossings") == "4" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryCoverageByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryCoverageByCallee") ==
+                      "packed-line score accumulator helper:eligible(2/2)" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryEligibleTargets") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryEligibleTargets") ==
+                      "packed-line score accumulator helper" &&
+                  !candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryBlockedTargets") &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryElidableOverheadCells") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryElidableOverheadCells") == "1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryRemainingOverheadLowerBoundCells") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryRemainingOverheadLowerBoundCells") == "0" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiSafetyProof") &&
                   candidate_score_zero->details.at("valueAwareCalleeAbiSafetyProof") ==
                       "prove-live-stack-inputs-survive-nested-callee-entry" &&
@@ -1326,6 +1346,30 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.at("valueAwareCalleeAbiCostBreakdown") ==
                       "gross:5/materialize:2/arg-preserve:2/entry-lower-bound:1/net:+0/"
                       "need:1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryCostBreakdown") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryCostBreakdown") ==
+                      "gross:5/materialize:2/arg-preserve:2/entry-lower-bound:0/net:+1/"
+                      "need:0" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryNetAfterLowerBoundCells") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryNetAfterLowerBoundCells") == "1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryAdditionalNetCellsToPositive") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryAdditionalNetCellsToPositive") == "0" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryStatus") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiPrimaryEntryStatus") ==
+                      "positive-after-primary-entry-lower-bound" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPrimaryEntryRequiredAction") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiPrimaryEntryRequiredAction") ==
+                      "implement-primary-stack-preserving-callee-entry-and-argument-"
+                      "preservation-proof" &&
                   candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiPositiveGapCells") &&
                   candidate_score_zero->details.at("valueAwareCalleeAbiPositiveGapCells") ==
@@ -1399,9 +1443,24 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiBestSubsetOverheadLowerBoundCells") == "1" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetPrimaryEntryOverheadLowerBoundCells") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetPrimaryEntryOverheadLowerBoundCells") ==
+                      "0" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiBestSubsetNetAfterLowerBoundCells") &&
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiBestSubsetNetAfterLowerBoundCells") == "0" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetPrimaryEntryNetAfterLowerBoundCells") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetPrimaryEntryNetAfterLowerBoundCells") ==
+                      "1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetPrimaryEntryAdditionalNetCellsToPositive") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetPrimaryEntryAdditionalNetCellsToPositive") ==
+                      "0" &&
                   candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiBestSubsetAdditionalNetCellsToPositive") &&
                   candidate_score_zero->details.at(
@@ -1412,6 +1471,17 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCalleeAbiBestSubsetCostBreakdown") ==
                       "gross:5/materialize:2/arg-preserve:2/entry-lower-bound:1/net:+0/"
                       "need:1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetPrimaryEntryCostBreakdown") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetPrimaryEntryCostBreakdown") ==
+                      "gross:5/materialize:2/arg-preserve:2/entry-lower-bound:0/net:+1/"
+                      "need:0" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetPrimaryEntryStatus") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetPrimaryEntryStatus") ==
+                      "positive-after-primary-entry-lower-bound" &&
                   candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiBestSubsetPositiveGapCells") &&
                   candidate_score_zero->details.at(
