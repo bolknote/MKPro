@@ -333,6 +333,65 @@ program MultiGroupUnaryEq {
             "multi-group canonicalization register value should match");
   }
 
+  const std::string packed_score_pair_sum_source = R"mkpro(
+program StackFunctionPackedScorePairSumEq {
+  state {
+    line_a: packed = 44444.4
+    index_a: counter 0..7 = 3
+    line_b: packed = 33333.3
+    index_b: counter 0..7 = 2
+    line_c: packed = 22222.2
+    index_c: counter 0..7 = 1
+    anchor_line: packed = 11111.1
+    anchor_index: counter 0..7 = 4
+    out: packed = 0
+  }
+
+  fn score(value_line_a, value_index_a, value_line_b, value_index_b) {
+    return packed_score(value_line_a, value_index_a) + packed_score(value_line_b, value_index_b) + packed_score(anchor_line, anchor_index)
+  }
+
+  loop {
+    out = score(line_a, index_a, line_b, index_b)
+    out += score(line_c, index_c, line_a, index_a)
+    halt(out)
+  }
+}
+)mkpro";
+
+  {
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.disable_candidate_search = true;
+    baseline_options.packed_score_accumulator_helpers = true;
+    const CompileResult baseline = compile_source(packed_score_pair_sum_source, baseline_options);
+
+    CompileOptions optimized_options = baseline_options;
+    optimized_options.stack_resident_temps = true;
+    optimized_options.stack_argument_function_entries = true;
+    const CompileResult optimized = compile_source(packed_score_pair_sum_source, optimized_options);
+
+    require(baseline.implemented, "packed_score pair-sum baseline should compile");
+    require(optimized.implemented, "packed_score pair-sum stack-entry variant should compile");
+    require(has_optimization(optimized, "packed-score-stack-resident-pair-accumulator"),
+            "packed_score pair-sum stack-entry variant should use the two-pair scheduler");
+    require(optimized.steps.size() < baseline.steps.size(),
+            "packed_score pair-sum stack-entry variant should shrink the program");
+
+    const std::string baseline_out = baseline.registers.at("out");
+    const std::string optimized_out = optimized.registers.at("out");
+    const Observation before =
+        observe(step_opcodes(baseline.steps), {"В/О", "С/П"}, baseline.preloads, {baseline_out});
+    const Observation after = observe(step_opcodes(optimized.steps), {"В/О", "С/П"},
+                                      optimized.preloads, {optimized_out});
+    require(after.display == before.display,
+            "packed_score pair-sum stack-entry display should match baseline");
+    require(after.stopped == before.stopped,
+            "packed_score pair-sum stack-entry stop state should match baseline");
+    require(after.registers.at(optimized_out) == before.registers.at(baseline_out),
+            "packed_score pair-sum stack-entry out register should match baseline");
+  }
+
   const std::filesystem::path root = std::filesystem::current_path();
   const std::array<const char*, 4> pending_programs = {
       "examples/tic-tac-toe.mkpro",

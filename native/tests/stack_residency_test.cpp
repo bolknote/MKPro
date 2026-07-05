@@ -1151,6 +1151,71 @@ program StackFunctionPackedScoreSumEntry {
   }
 
   {
+    const std::string packed_score_pair_sum_entry_source = R"mkpro(
+program StackFunctionPackedScorePairSumEntry {
+  state {
+    line_a: packed = 44444.4
+    index_a: counter 0..7 = 3
+    line_b: packed = 33333.3
+    index_b: counter 0..7 = 2
+    line_c: packed = 22222.2
+    index_c: counter 0..7 = 1
+    anchor_line: packed = 11111.1
+    anchor_index: counter 0..7 = 4
+    out: packed = 0
+  }
+
+  fn score(value_line_a, value_index_a, value_line_b, value_index_b) {
+    return packed_score(value_line_a, value_index_a) + packed_score(value_line_b, value_index_b) + packed_score(anchor_line, anchor_index)
+  }
+
+  loop {
+    out = score(line_a, index_a, line_b, index_b)
+    out += score(line_c, index_c, line_a, index_a)
+    halt(out)
+  }
+}
+)mkpro";
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.disable_candidate_search = true;
+    baseline_options.packed_score_accumulator_helpers = true;
+    const CompileResult baseline =
+        compile_source(packed_score_pair_sum_entry_source, baseline_options);
+    require_clean_compile(baseline, "packed_score pair-sum function entry baseline");
+    require(count_steps_with_comment(baseline, "arg value_line_a for score") == 2 &&
+                count_steps_with_comment(baseline, "arg value_index_a for score") == 2 &&
+                count_steps_with_comment(baseline, "arg value_line_b for score") == 2 &&
+                count_steps_with_comment(baseline, "arg value_index_b for score") == 2,
+            "baseline packed_score pair-sum value function should materialize all parameters");
+
+    CompileOptions stack_entry_options = baseline_options;
+    stack_entry_options.stack_resident_temps = true;
+    stack_entry_options.stack_argument_function_entries = true;
+    const CompileResult stack_entry =
+        compile_source(packed_score_pair_sum_entry_source, stack_entry_options);
+    require_clean_compile(stack_entry, "packed_score pair-sum function argument-entry variant");
+    require(stack_entry.steps.size() < baseline.steps.size(),
+            "packed_score pair-sum stack-entry variant should reduce parameter traffic");
+    require(has_optimization(stack_entry, "function-stack-entry-primary"),
+            "packed_score pair-sum stack-entry variant should emit a callee stack entry");
+    require(has_optimization(stack_entry, "function-stack-entry-call"),
+            "packed_score pair-sum stack-entry variant should route calls through the stack "
+            "entry");
+    require(has_optimization(stack_entry, "packed-score-stack-resident-pair-accumulator"),
+            "packed_score pair-sum stack-entry should schedule two stack-resident argument "
+            "pairs");
+    require(count_steps_with_comment(stack_entry, "arg value_line_a for score") == 0 &&
+                count_steps_with_comment(stack_entry, "arg value_index_a for score") == 0 &&
+                count_steps_with_comment(stack_entry, "arg value_line_b for score") == 0 &&
+                count_steps_with_comment(stack_entry, "arg value_index_b for score") == 0,
+            "packed_score pair-sum stack-entry calls should not store caller arguments");
+    require(count_steps_with_comment_prefix_and_opcode(
+                stack_entry, "call function score stack entry", 0x53) == 2,
+            "safe packed_score pair-sum calls should use the function stack-entry label");
+  }
+
+  {
     const CompileResult result = compile_stack_analysis(R"mkpro(
 program ValueAwareDirectStackInputNestedCall {
   state {

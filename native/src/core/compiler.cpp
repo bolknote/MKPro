@@ -18134,6 +18134,26 @@ std::optional<std::size_t> stack_entry_temp_identifier_position(
   return static_cast<std::size_t>(found - temps.begin());
 }
 
+struct PackedScoreStackTempPair {
+  std::size_t line_temp = 0;
+  std::size_t index_temp = 0;
+};
+
+std::optional<PackedScoreStackTempPair> packed_score_direct_stack_temp_pair(
+    const Expression& expression, const std::vector<std::string>& temps) {
+  if (expression.kind != "call" || lower_ascii(expression.callee) != "packed_score" ||
+      expression.args.size() != 2U) {
+    return std::nullopt;
+  }
+  const std::optional<std::size_t> line_temp =
+      stack_entry_temp_identifier_position(expression.args.at(0), temps);
+  const std::optional<std::size_t> index_temp =
+      stack_entry_temp_identifier_position(expression.args.at(1), temps);
+  if (!line_temp.has_value() || !index_temp.has_value() || *line_temp == *index_temp)
+    return std::nullopt;
+  return PackedScoreStackTempPair{.line_temp = *line_temp, .index_temp = *index_temp};
+}
+
 bool stack_entry_expression_references_any_temp_name(const Expression& expression,
                                                      const std::vector<std::string>& temps) {
   return std::any_of(temps.begin(), temps.end(), [&](const std::string& temp) {
@@ -18179,19 +18199,32 @@ bool stack_entry_packed_score_non_stack_term_shape_safe(const Expression& expres
 
 bool collect_stack_entry_packed_score_accumulator_shape(const Expression& expression,
                                                        const std::vector<std::string>& temps,
-                                                       int& term_count, int& stack_term_count) {
+                                                       int& term_count, int& stack_term_count,
+                                                       std::vector<PackedScoreStackTempPair>&
+                                                           stack_temp_pairs) {
   if (expression.kind == "call" && lower_ascii(expression.callee) == "sum") {
     return std::all_of(expression.args.begin(), expression.args.end(), [&](const Expression& arg) {
       return collect_stack_entry_packed_score_accumulator_shape(arg, temps, term_count,
-                                                               stack_term_count);
+                                                               stack_term_count,
+                                                               stack_temp_pairs);
     });
   }
   if (expression.kind == "binary" && expression.op == "+" && expression.left != nullptr &&
       expression.right != nullptr) {
     return collect_stack_entry_packed_score_accumulator_shape(*expression.left, temps, term_count,
-                                                             stack_term_count) &&
+                                                             stack_term_count,
+                                                             stack_temp_pairs) &&
            collect_stack_entry_packed_score_accumulator_shape(*expression.right, temps, term_count,
-                                                             stack_term_count);
+                                                             stack_term_count,
+                                                             stack_temp_pairs);
+  }
+  if (const std::optional<PackedScoreStackTempPair> pair =
+          packed_score_direct_stack_temp_pair(expression, temps);
+      pair.has_value()) {
+    ++term_count;
+    ++stack_term_count;
+    stack_temp_pairs.push_back(*pair);
+    return stack_term_count <= 2;
   }
   if (stack_entry_packed_score_stack_term_shape_safe(expression, temps)) {
     ++term_count;
@@ -18205,6 +18238,24 @@ bool collect_stack_entry_packed_score_accumulator_shape(const Expression& expres
   return false;
 }
 
+bool packed_score_stack_temp_pair_uses_slots(const PackedScoreStackTempPair& pair,
+                                             std::size_t first, std::size_t second) {
+  return ((pair.line_temp == first && pair.index_temp == second) ||
+          (pair.line_temp == second && pair.index_temp == first));
+}
+
+bool stack_entry_two_pair_packed_score_shape_supported(
+    const std::vector<std::string>& params,
+    const std::vector<PackedScoreStackTempPair>& stack_temp_pairs) {
+  if (params.size() != 4U || stack_temp_pairs.size() != 2U)
+    return false;
+  const bool first_lower = packed_score_stack_temp_pair_uses_slots(stack_temp_pairs.at(0), 0U, 1U);
+  const bool first_top = packed_score_stack_temp_pair_uses_slots(stack_temp_pairs.at(0), 2U, 3U);
+  const bool second_lower = packed_score_stack_temp_pair_uses_slots(stack_temp_pairs.at(1), 0U, 1U);
+  const bool second_top = packed_score_stack_temp_pair_uses_slots(stack_temp_pairs.at(1), 2U, 3U);
+  return (first_lower && second_top) || (first_top && second_lower);
+}
+
 bool stack_entry_packed_score_accumulator_expression_supported(
     const LoweringContext& context, const Expression& expression,
     const std::vector<std::string>& params) {
@@ -18212,11 +18263,17 @@ bool stack_entry_packed_score_accumulator_expression_supported(
     return false;
   int term_count = 0;
   int stack_term_count = 0;
+  std::vector<PackedScoreStackTempPair> stack_temp_pairs;
   if (!collect_stack_entry_packed_score_accumulator_shape(expression, params, term_count,
-                                                         stack_term_count)) {
+                                                         stack_term_count, stack_temp_pairs)) {
     return false;
   }
-  return term_count >= 3 && stack_term_count == 1;
+  if (term_count < 3)
+    return false;
+  if (stack_term_count == 1)
+    return true;
+  return stack_term_count == 2 &&
+         stack_entry_two_pair_packed_score_shape_supported(params, stack_temp_pairs);
 }
 
 bool can_lower_stack_entry_value_expression(const LoweringContext& context,
@@ -37258,6 +37315,15 @@ bool lower_stack_argument_packed_score_helper_call(LoweringContext& context,
   return true;
 }
 
+void emit_packed_score_inline_body(LoweringContext& context, int line) {
+  context.emitter.emit_op(0x15, "F 10^x", "pow10()", line);
+  context.emitter.emit_op(0x13, "/", "expr /", line);
+  context.emitter.emit_op(0x35, "К {x}", "frac()", line);
+  emit_number_or_preload(context, "0.41200076", std::nullopt, line);
+  context.emitter.emit_op(0x11, "-", "expr -", line);
+  context.emitter.emit_op(0x22, "F x^2", "sqr()", line);
+}
+
 bool lower_stack_argument_packed_score_inline(LoweringContext& context,
                                               const Expression& expression,
                                               const std::vector<std::string>& temps, int line) {
@@ -37284,12 +37350,7 @@ bool lower_stack_argument_packed_score_inline(LoweringContext& context,
     return false;
   }
 
-  context.emitter.emit_op(0x15, "F 10^x", "pow10()", line);
-  context.emitter.emit_op(0x13, "/", "expr /", line);
-  context.emitter.emit_op(0x35, "К {x}", "frac()", line);
-  emit_number_or_preload(context, "0.41200076", std::nullopt, line);
-  context.emitter.emit_op(0x11, "-", "expr -", line);
-  context.emitter.emit_op(0x22, "F x^2", "sqr()", line);
+  emit_packed_score_inline_body(context, line);
   clear_current_x_facts(context);
   context.optimizations.push_back(OptimizationReport{
       .name = "packed-score-inline-stack-argument-lowering",
@@ -37313,6 +37374,128 @@ bool packed_score_accumulator_step_references_any_temp(
   return stack_expression_references_any_temp(step.expression, temps);
 }
 
+struct StackPackedScoreTermPlacement {
+  std::size_t step_index = 0;
+  PackedScoreStackTempPair pair;
+};
+
+std::optional<StackPackedScoreTermPlacement> find_stack_pair_for_slots(
+    const std::vector<StackPackedScoreTermPlacement>& placements, std::size_t first,
+    std::size_t second) {
+  const auto found = std::find_if(
+      placements.begin(), placements.end(), [&](const StackPackedScoreTermPlacement& placement) {
+        return packed_score_stack_temp_pair_uses_slots(placement.pair, first, second);
+      });
+  if (found == placements.end())
+    return std::nullopt;
+  return *found;
+}
+
+bool emit_top_pair_packed_score_to_x(LoweringContext& context, const PackedScoreTerm& term,
+                                     const PackedScoreStackTempPair& pair,
+                                     std::size_t temp_count, int line) {
+  if (temp_count < 2U || !packed_score_stack_temp_pair_uses_slots(pair, temp_count - 2U,
+                                                                  temp_count - 1U)) {
+    return false;
+  }
+  const std::size_t top_temp = temp_count - 1U;
+  if (pair.index_temp != top_temp)
+    context.emitter.emit_op(0x14, "X↔Y", "packed_score top-pair argument order", line);
+  if (context.packed_score_helper.has_value()) {
+    context.emitter.emit_jump(0x53, "ПП", *context.packed_score_helper,
+                              "packed_score helper", line);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "packed-score-helper-stack-argument-call",
+        .detail = "Entered shared packed_score helper with top stack-resident arguments for " +
+                  expression_to_source(
+                      call_expression("packed_score", {term.line_value, term.index})) +
+                  " at line " + std::to_string(line) + ".",
+    });
+    context.optimizations.push_back(OptimizationReport{
+        .name = "packed-score-stack-helper-call",
+        .detail = "Reused shared packed_score stack helper with a top stack-resident pair.",
+    });
+  } else {
+    emit_packed_score_inline_body(context, line);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "packed-score-inline-stack-argument-lowering",
+        .detail = "Lowered " +
+                  expression_to_source(
+                      call_expression("packed_score", {term.line_value, term.index})) +
+                  " inline with top stack-resident arguments at line " + std::to_string(line) +
+                  ".",
+    });
+  }
+  clear_current_x_facts(context);
+  return true;
+}
+
+bool emit_rotated_lower_pair_packed_score_accumulator(
+    LoweringContext& context, const PackedScoreStackTempPair& pair, const std::string& helper,
+    int line) {
+  if (!packed_score_stack_temp_pair_uses_slots(pair, 0U, 1U))
+    return false;
+  context.emitter.emit_op(0x25, "F reverse", "packed_score pair accumulator rotate", line);
+  context.emitter.emit_op(0x14, "X↔Y", "packed_score pair accumulator rotate", line);
+  context.emitter.emit_op(0x25, "F reverse", "packed_score pair accumulator rotate", line);
+  if (pair.index_temp != 1U)
+    context.emitter.emit_op(0x14, "X↔Y", "packed_score lower-pair argument order", line);
+  context.emitter.emit_jump(0x53, "ПП", helper, "packed_score accumulator helper", line);
+  clear_current_x_facts(context);
+  return true;
+}
+
+bool lower_two_stack_pair_packed_score_sum_accumulator_to_x(
+    LoweringContext& context, const std::vector<PackedScoreAccumulatorStep>& steps,
+    const std::optional<Expression>& initial, const std::vector<std::string>& temps,
+    const std::vector<StackPackedScoreTermPlacement>& placements, std::size_t term_count,
+    int line) {
+  if (temps.size() != 4U || placements.size() != 2U)
+    return false;
+  const std::optional<StackPackedScoreTermPlacement> lower =
+      find_stack_pair_for_slots(placements, 0U, 1U);
+  const std::optional<StackPackedScoreTermPlacement> top =
+      find_stack_pair_for_slots(placements, 2U, 3U);
+  if (!lower.has_value() || !top.has_value() || lower->step_index == top->step_index)
+    return false;
+
+  const std::string helper = packed_score_accumulator_helper_label(context);
+  const PackedScoreAccumulatorStep& top_step = steps.at(top->step_index);
+  if (top_step.kind != PackedScoreAccumulatorStep::Kind::Term ||
+      !emit_top_pair_packed_score_to_x(context, top_step.term, top->pair, temps.size(),
+                                       top_step.line)) {
+    return false;
+  }
+  if (!emit_rotated_lower_pair_packed_score_accumulator(context, lower->pair, helper,
+                                                       steps.at(lower->step_index).line)) {
+    return false;
+  }
+
+  for (std::size_t index = 0; index < steps.size(); ++index) {
+    if (index == top->step_index || index == lower->step_index)
+      continue;
+    if (!emit_packed_score_accumulator_step(context, helper, steps.at(index)))
+      return false;
+  }
+  if (initial.has_value()) {
+    PackedScoreAccumulatorStep addend = packed_score_accumulator_addend_step(*initial, line);
+    if (!emit_packed_score_accumulator_addend(context, addend))
+      return false;
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-score-stack-resident-pair-accumulator",
+      .detail = "Started a " + std::to_string(term_count) +
+                "-term packed_score() accumulator pipeline from two stack-resident argument "
+                "pairs.",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-score-stack-resident-sum-accumulator",
+      .detail = "Started a " + std::to_string(term_count) +
+                "-term packed_score() accumulator pipeline from stack-resident arguments.",
+  });
+  return true;
+}
+
 bool lower_stack_resident_packed_score_sum_accumulator_to_x(
     LoweringContext& context, const Expression& expression, const std::vector<std::string>& temps,
     int line) {
@@ -37326,7 +37509,8 @@ bool lower_stack_resident_packed_score_sum_accumulator_to_x(
   if (initial.has_value() && stack_expression_references_any_temp(*initial, temps))
     return false;
 
-  std::optional<std::size_t> stack_term_index;
+  std::vector<std::size_t> stack_term_indexes;
+  std::vector<StackPackedScoreTermPlacement> stack_pair_placements;
   std::size_t term_count = 0;
   for (std::size_t index = 0; index < steps.size(); ++index) {
     const PackedScoreAccumulatorStep& step = steps.at(index);
@@ -37336,23 +37520,35 @@ bool lower_stack_resident_packed_score_sum_accumulator_to_x(
       ++term_count;
       const bool refs_stack_temp = packed_score_accumulator_step_references_any_temp(step, temps);
       if (refs_stack_temp) {
-        if (stack_term_index.has_value())
+        if (stack_term_indexes.size() >= 2U)
           return false;
         const Expression packed_score =
             call_expression("packed_score", {step.term.line_value, step.term.index});
-        if (!packed_score_stack_argument_shape_safe(packed_score, temps))
+        stack_term_indexes.push_back(index);
+        if (const std::optional<PackedScoreStackTempPair> pair =
+                packed_score_direct_stack_temp_pair(packed_score, temps);
+            pair.has_value()) {
+          stack_pair_placements.push_back(
+              StackPackedScoreTermPlacement{.step_index = index, .pair = *pair});
+        } else if (!packed_score_stack_argument_shape_safe(packed_score, temps)) {
           return false;
-        stack_term_index = index;
+        }
       }
       continue;
     }
     if (packed_score_accumulator_step_references_any_temp(step, temps))
       return false;
   }
-  if (!stack_term_index.has_value() || term_count < 2U)
+  if (stack_term_indexes.empty() || term_count < 2U)
     return false;
 
-  const PackedScoreAccumulatorStep& stack_step = steps.at(*stack_term_index);
+  if (stack_term_indexes.size() == 2U) {
+    return lower_two_stack_pair_packed_score_sum_accumulator_to_x(
+        context, steps, initial, temps, stack_pair_placements, term_count, line);
+  }
+
+  const std::size_t stack_term_index = stack_term_indexes.front();
+  const PackedScoreAccumulatorStep& stack_step = steps.at(stack_term_index);
   const Expression stack_term =
       call_expression("packed_score", {stack_step.term.line_value, stack_step.term.index});
   bool emitted_stack_term = false;
@@ -37367,7 +37563,7 @@ bool lower_stack_resident_packed_score_sum_accumulator_to_x(
 
   const std::string helper = packed_score_accumulator_helper_label(context);
   for (std::size_t index = 0; index < steps.size(); ++index) {
-    if (index == *stack_term_index)
+    if (index == stack_term_index)
       continue;
     if (!emit_packed_score_accumulator_step(context, helper, steps.at(index)))
       return false;
