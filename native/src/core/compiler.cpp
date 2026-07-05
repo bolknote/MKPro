@@ -18314,42 +18314,101 @@ bool statement_writes_scalar_name(const V2Statement& statement, const std::strin
 }
 
 int collect_natural_current_x_rule_call_sites_in_statements(
-    const std::vector<V2Statement>& statements, const std::string& rule_name,
-    const std::string& input);
+    LoweringContext& context, const std::vector<V2Statement>& statements,
+    const std::string& rule_name, const std::string& input);
+bool can_delay_stack_carried_assignment_past(LoweringContext& context,
+                                             const V2Statement& statement,
+                                             const std::string& target,
+                                             const std::set<std::string>& dependencies);
 
-int collect_natural_current_x_rule_call_sites_in_statement(const V2Statement& statement,
+int collect_natural_current_x_rule_call_sites_in_statement(LoweringContext& context,
+                                                           const V2Statement& statement,
                                                            const std::string& rule_name,
                                                            const std::string& input) {
   int count = 0;
-  count += collect_natural_current_x_rule_call_sites_in_statements(statement.body, rule_name,
-                                                                  input);
-  count += collect_natural_current_x_rule_call_sites_in_statements(statement.then_body, rule_name,
-                                                                  input);
-  count += collect_natural_current_x_rule_call_sites_in_statements(statement.else_body, rule_name,
-                                                                  input);
+  count += collect_natural_current_x_rule_call_sites_in_statements(context, statement.body,
+                                                                  rule_name, input);
+  count += collect_natural_current_x_rule_call_sites_in_statements(context, statement.then_body,
+                                                                  rule_name, input);
+  count += collect_natural_current_x_rule_call_sites_in_statements(context, statement.else_body,
+                                                                  rule_name, input);
   for (const V2MatchCase& match_case : statement.cases) {
     if (match_case.action != nullptr)
-      count += collect_natural_current_x_rule_call_sites_in_statement(*match_case.action,
+      count += collect_natural_current_x_rule_call_sites_in_statement(context, *match_case.action,
                                                                      rule_name, input);
   }
   if (statement.otherwise != nullptr) {
-    count += collect_natural_current_x_rule_call_sites_in_statement(*statement.otherwise,
+    count += collect_natural_current_x_rule_call_sites_in_statement(context, *statement.otherwise,
                                                                    rule_name, input);
   }
   return count;
 }
 
+std::optional<std::set<std::string>> delayed_natural_current_x_assignment_dependencies(
+    LoweringContext& context, const V2Statement& statement, const std::string& input) {
+  if (statement.kind != "v2_assign" || !statement.target.has_value() ||
+      !statement.expr.has_value() || context.constants.contains(*statement.target)) {
+    return std::nullopt;
+  }
+  try {
+    const Expression target = parse_expression(*statement.target, statement.line);
+    const Expression expression = parse_expression(*statement.expr, statement.line);
+    if (target.kind != "identifier" || target.name != input ||
+        expression_contains_identifier(expression, input) ||
+        !expression_pure_for_substitution(expression) ||
+        expression_has_target_aware_assignment_lowering(context, expression)) {
+      return std::nullopt;
+    }
+    const std::set<std::string> dependencies = expression_identifier_deps(expression);
+    if (dependencies.contains(input))
+      return std::nullopt;
+    return dependencies;
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+bool natural_current_x_rule_call_site_at(LoweringContext& context,
+                                         const std::vector<V2Statement>& statements,
+                                         std::size_t call_index, const std::string& rule_name,
+                                         const std::string& input) {
+  const V2Statement& statement = statements.at(call_index);
+  if (statement.kind != "v2_invoke" || statement.name != rule_name || !statement.args.empty() ||
+      call_index == 0U) {
+    return false;
+  }
+  if (statement_writes_scalar_name(statements.at(call_index - 1U), input))
+    return true;
+
+  for (std::size_t producer_index = call_index; producer_index-- > 0U;) {
+    const V2Statement& producer = statements.at(producer_index);
+    if (!statement_writes_scalar_name(producer, input))
+      continue;
+    const std::optional<std::set<std::string>> dependencies =
+        delayed_natural_current_x_assignment_dependencies(context, producer, input);
+    if (!dependencies.has_value())
+      return false;
+    for (std::size_t index = producer_index + 1U; index < call_index; ++index) {
+      if (!can_delay_stack_carried_assignment_past(context, statements.at(index), input,
+                                                   *dependencies)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
 int collect_natural_current_x_rule_call_sites_in_statements(
-    const std::vector<V2Statement>& statements, const std::string& rule_name,
-    const std::string& input) {
+    LoweringContext& context, const std::vector<V2Statement>& statements,
+    const std::string& rule_name, const std::string& input) {
   int count = 0;
   for (std::size_t index = 0; index < statements.size(); ++index) {
     const V2Statement& statement = statements.at(index);
-    if (statement.kind == "v2_invoke" && statement.name == rule_name && statement.args.empty() &&
-        index > 0U && statement_writes_scalar_name(statements.at(index - 1U), input)) {
+    if (natural_current_x_rule_call_site_at(context, statements, index, rule_name, input))
       ++count;
-    }
-    count += collect_natural_current_x_rule_call_sites_in_statement(statement, rule_name, input);
+    count +=
+        collect_natural_current_x_rule_call_sites_in_statement(context, statement, rule_name, input);
   }
   return count;
 }
@@ -18363,8 +18422,48 @@ std::set<std::string> explicit_scalar_state_names(const V2Program& program) {
   return names;
 }
 
+bool expression_derives_current_x_identifier(const Expression& expression,
+                                             const std::string& target);
+
+bool stack_input_entry_if_predicate_supported(const V2Statement& statement,
+                                              const std::string& input) {
+  if (statement.kind != "v2_if" || !statement.predicate.has_value() || statement.negated)
+    return false;
+  const V2Predicate& predicate = *statement.predicate;
+  if (predicate.kind != "v2_compare" || (predicate.op != "==" && predicate.op != "!="))
+    return false;
+  if (count_identifier_reads_in_predicate(predicate, input, statement.line) != 1)
+    return false;
+  const Expression left = parse_expression(predicate.left, statement.line);
+  const Expression right = parse_expression(predicate.right, statement.line);
+  const bool left_current = expression_derives_current_x_identifier(left, input);
+  const bool right_current = expression_derives_current_x_identifier(right, input);
+  if (left_current == right_current)
+    return false;
+  const Expression& other = left_current ? right : left;
+  return expression_preserves_previous_x_as_y_for_stack_analysis(other) &&
+         !expression_contains_identifier(other, input);
+}
+
+std::optional<std::string> stack_input_entry_update_target_name(
+    const LoweringContext& context, const V2Statement& statement) {
+  if (statement.kind != "v2_update" || !statement.target.has_value() ||
+      !statement.expr.has_value() || !statement.op.has_value() ||
+      (*statement.op != "+=" && *statement.op != "-=")) {
+    return std::nullopt;
+  }
+  const Expression target = parse_expression(*statement.target, statement.line);
+  if (target.kind != "identifier" || context.constants.contains(target.name) ||
+      is_coord_list_state_name(context, target.name) ||
+      is_segmented_cells_name(context, target.name) ||
+      is_cells_state_name(context, target.name)) {
+    return std::nullopt;
+  }
+  return target.name;
+}
+
 std::optional<std::string> stack_input_rule_entry_candidate(
-    const LoweringContext& context, const V2Rule& rule, const V2Program& program,
+    LoweringContext& context, const V2Rule& rule, const V2Program& program,
     const std::set<std::string>& state_names) {
   if (rule.params.size() != 0U || rule.body.empty() ||
       context.inline_statement_rules.contains(rule.name))
@@ -18378,14 +18477,23 @@ std::optional<std::string> stack_input_rule_entry_candidate(
   }
 
   const V2Statement& first = rule.body.front();
-  if (first.kind != "v2_assign" || !first.target.has_value() || !first.expr.has_value())
-    return std::nullopt;
   const std::optional<Expression> expression = stack_input_entry_statement_expression(first);
-  if (!expression.has_value())
+  if (expression.has_value()) {
+    if (first.kind == "v2_assign") {
+      if (!first.target.has_value())
+        return std::nullopt;
+      const Expression target = parse_expression(*first.target, first.line);
+      if (target.kind != "identifier")
+        return std::nullopt;
+    } else if (first.kind == "v2_update") {
+      if (!stack_input_entry_update_target_name(context, first).has_value())
+        return std::nullopt;
+    } else {
+      return std::nullopt;
+    }
+  } else if (first.kind != "v2_if" || !first.predicate.has_value()) {
     return std::nullopt;
-  const Expression target = parse_expression(*first.target, first.line);
-  if (target.kind != "identifier")
-    return std::nullopt;
+  }
 
   const int total_calls =
       context.proc_call_counts.contains(rule.name) ? context.proc_call_counts.at(rule.name) : 0;
@@ -18401,21 +18509,29 @@ std::optional<std::string> stack_input_rule_entry_candidate(
         expression_contains_identifier(parse_expression(*first.target, first.line), input)) {
       continue;
     }
-    const int first_reads = count_identifier_reads(*expression, input);
+    const int first_reads = expression.has_value()
+                                ? count_identifier_reads(*expression, input)
+                                : count_identifier_reads_in_predicate(*first.predicate, input,
+                                                                      first.line);
     if (first_reads < 1)
       continue;
     if (count_identifier_reads_in_statements(rule.body, input) != first_reads)
       continue;
-    if (!core::emit::can_lower_stack_resident_expression(*expression, {input}) ||
-        !stack_entry_expression_has_supported_shape(context, *expression, {input})) {
+    if (expression.has_value()) {
+      if (!core::emit::can_lower_stack_resident_expression(*expression, {input}) ||
+          !stack_entry_expression_has_supported_shape(context, *expression, {input})) {
+        continue;
+      }
+    } else if (!stack_input_entry_if_predicate_supported(first, input)) {
       continue;
     }
     const int natural_calls =
-        collect_natural_current_x_rule_call_sites_in_statements(program.body, rule.name, input) +
+        collect_natural_current_x_rule_call_sites_in_statements(context, program.body, rule.name,
+                                                                input) +
         std::accumulate(program.rules.begin(), program.rules.end(), 0,
                         [&](int total, const V2Rule& candidate) {
                           return total + collect_natural_current_x_rule_call_sites_in_statements(
-                                             candidate.body, rule.name, input);
+                                             context, candidate.body, rule.name, input);
                         });
     if (natural_calls != total_calls)
       continue;
@@ -19706,6 +19822,17 @@ bool statement_directly_consumes_current_x_identifier(LoweringContext& context,
                                                       const V2Statement& statement,
                                                       const std::string& target) {
   try {
+    auto planned_stack_input_rule_call_consumes_current_x =
+        [&](const V2Statement& candidate) -> bool {
+      if (candidate.kind != "v2_invoke" || !candidate.name.has_value() ||
+          !candidate.args.empty()) {
+        return false;
+      }
+      const auto plan_it = context.stack_input_rule_entries.find(*candidate.name);
+      return plan_it != context.stack_input_rule_entries.end() &&
+             plan_it->second.input == target;
+    };
+
     auto branch_predicate_consumes_current_x = [&](const V2Predicate& predicate,
                                                    bool negated,
                                                    int line) -> bool {
@@ -19784,6 +19911,8 @@ bool statement_directly_consumes_current_x_identifier(LoweringContext& context,
       return !statements_read_identifier_before_write(context, statement.then_body, target) &&
              !statements_read_identifier_before_write(context, statement.else_body, target);
     }
+    if (planned_stack_input_rule_call_consumes_current_x(statement))
+      return true;
     if (statement.kind == "v2_invoke" && statement.name.has_value() &&
         statement.args.size() == 1U) {
       const auto rule_it = context.rules.find(*statement.name);
@@ -20128,6 +20257,17 @@ bool lower_stack_carried_assignment_run(LoweringContext& context,
   return true;
 }
 
+bool stack_carried_consumer_read_count_supported(LoweringContext& context,
+                                                 const V2Statement& consumer,
+                                                 const std::string& target) {
+  if (consumer.kind == "v2_invoke" && consumer.name.has_value() && consumer.args.empty()) {
+    const auto plan_it = context.stack_input_rule_entries.find(*consumer.name);
+    if (plan_it != context.stack_input_rule_entries.end() && plan_it->second.input == target)
+      return true;
+  }
+  return count_identifier_reads_in_statement(consumer, target) == 1;
+}
+
 bool lower_delayed_stack_carried_assignment_run(LoweringContext& context,
                                                 const std::vector<V2Statement>& statements,
                                                 std::size_t start, std::size_t& consumed) {
@@ -20174,7 +20314,7 @@ bool lower_delayed_stack_carried_assignment_run(LoweringContext& context,
   const V2Statement& consumer = statements.at(consumer_index);
   if (consumer.kind == "v2_if" && statements_are_domain_error_trap(context, consumer.then_body))
     return false;
-  if (count_identifier_reads_in_statement(consumer, target.name) != 1)
+  if (!stack_carried_consumer_read_count_supported(context, consumer, target.name))
     return false;
   if (!stack_carried_assignment_future_safe(context, statements, start, consumer_index,
                                             target.name)) {
@@ -20331,7 +20471,7 @@ bool lower_delayed_stack_carried_update_run(LoweringContext& context,
   const V2Statement& consumer = statements.at(consumer_index);
   if (consumer.kind == "v2_if" && statements_are_domain_error_trap(context, consumer.then_body))
     return false;
-  if (count_identifier_reads_in_statement(consumer, target.name) != 1)
+  if (!stack_carried_consumer_read_count_supported(context, consumer, target.name))
     return false;
   if (!stack_carried_assignment_future_safe(context, statements, start, consumer_index,
                                             target.name)) {
@@ -31851,6 +31991,37 @@ bool emit_stack_argument_function_entry_prefix(LoweringContext& context, const V
   return true;
 }
 
+bool lower_stack_input_rule_update_prefix(LoweringContext& context, const V2Statement& statement,
+                                          const std::string& input) {
+  const std::optional<std::string> target_name =
+      stack_input_entry_update_target_name(context, statement);
+  if (!target_name.has_value() || !statement.target.has_value() || !statement.expr.has_value() ||
+      !statement.op.has_value()) {
+    return false;
+  }
+  const Expression target = parse_expression(*statement.target, statement.line);
+  if (expression_contains_identifier(target, input))
+    return false;
+  const Expression expression = parse_expression(*statement.expr, statement.line);
+  if (!core::emit::can_lower_stack_resident_expression(expression, {input}) ||
+      !stack_entry_expression_has_supported_shape(context, expression, {input})) {
+    return false;
+  }
+
+  mark_current_x(context, input);
+  if (!lower_stack_resident_expression_to_x(context, expression, {input}, statement.line))
+    return false;
+  emit_recall(context, *target_name);
+  if (*statement.op == "-=")
+    context.emitter.emit_op(0x14, "X↔Y", "stack-input update operand order", statement.line);
+  context.emitter.emit_op(*statement.op == "+=" ? 0x10 : 0x11,
+                          *statement.op == "+=" ? "+" : "-",
+                          "stack-input update " + *statement.op, statement.line);
+  clear_current_x_facts(context);
+  emit_store(context, *target_name, "set " + *target_name);
+  return true;
+}
+
 bool lower_stack_input_rule_primary_body(LoweringContext& context, const V2Rule& rule) {
   const auto plan_it = context.stack_input_rule_entries.find(rule.name);
   if (plan_it == context.stack_input_rule_entries.end())
@@ -31858,23 +32029,37 @@ bool lower_stack_input_rule_primary_body(LoweringContext& context, const V2Rule&
   if (rule.body.empty())
     return false;
   const V2Statement& first = rule.body.front();
-  if (first.kind != "v2_assign" || !first.target.has_value() || !first.expr.has_value())
-    return false;
-  const Expression target = parse_expression(*first.target, first.line);
-  if (target.kind != "identifier" || expression_contains_identifier(target, plan_it->second.input))
-    return false;
-  const Expression expression = parse_expression(*first.expr, first.line);
-  mark_current_x(context, plan_it->second.input);
-  if (!lower_stack_resident_expression_to_x(context, expression, {plan_it->second.input},
-                                            first.line)) {
-    return false;
-  }
-  if (context.stack_only_state_fields.contains(target.name)) {
-    report_stack_only_state_field(context, target.name, first.line);
-    mark_current_x(context, target.name);
-    context.emitter.current_x_known_zero = false;
+  if (first.kind == "v2_assign") {
+    if (!first.target.has_value() || !first.expr.has_value())
+      return false;
+    const Expression target = parse_expression(*first.target, first.line);
+    if (target.kind != "identifier" ||
+        expression_contains_identifier(target, plan_it->second.input))
+      return false;
+    const Expression expression = parse_expression(*first.expr, first.line);
+    mark_current_x(context, plan_it->second.input);
+    if (!lower_stack_resident_expression_to_x(context, expression, {plan_it->second.input},
+                                              first.line)) {
+      return false;
+    }
+    if (context.stack_only_state_fields.contains(target.name)) {
+      report_stack_only_state_field(context, target.name, first.line);
+      mark_current_x(context, target.name);
+      context.emitter.current_x_known_zero = false;
+    } else {
+      emit_store(context, target.name, "set " + target.name);
+    }
+  } else if (first.kind == "v2_update") {
+    if (!lower_stack_input_rule_update_prefix(context, first, plan_it->second.input))
+      return false;
+  } else if (first.kind == "v2_if") {
+    if (!stack_input_entry_if_predicate_supported(first, plan_it->second.input))
+      return false;
+    mark_current_x(context, plan_it->second.input);
+    if (!lower_if_statement(context, first))
+      return false;
   } else {
-    emit_store(context, target.name, "set " + target.name);
+    return false;
   }
 
   std::vector<V2Statement> rest;
@@ -50769,6 +50954,31 @@ size_opportunity_details(const CandidateReport& candidate,
   }
   for (const auto& [key, value] : semicolon_key_value_details(reason))
     details[key] = value;
+  if (candidate.variant == "indirect-register-flow" &&
+      reason.find("key-valued") != std::string::npos) {
+    details.emplace("proofFamily", "indirect-flow");
+    details.emplace("proofFailure", "selector-key-valued-not-address-valued");
+    details.emplace("selectorValueKind", "key-valued");
+    details.emplace("requiredAction",
+                    "prove-address-valued-selector-or-keep-residual-compare-chain");
+  } else if (candidate.variant == "dark-indirect-table" &&
+             reason.find("conflict-free address/data table") != std::string::npos) {
+    details.emplace("proofFamily", "code-data-overlay");
+    details.emplace("proofFailure", "conflict-free-address-data-table-not-proved");
+    details.emplace("layoutProofRequirement", "address-data-table-conflict-check");
+    details.emplace("requiredAction", "prove-conflict-free-address-data-table-layout");
+  } else if (candidate.variant == "super-dark-dispatch") {
+    details.emplace("proofFamily", "super-dark-dispatch");
+    if (reason.find("48..53") != std::string::npos ||
+        reason.find("01..06") != std::string::npos) {
+      details.emplace("proofFailure", "fa-ff-one-command-case-layout-not-proved");
+      details.emplace("layoutProofRequirement", "cases-at-48-53-and-tails-at-01-06");
+    } else {
+      details.emplace("proofFailure", "proved-fa-ff-case-not-available");
+      details.emplace("layoutProofRequirement", "proved-fa-ff-dispatch-case");
+    }
+    details.emplace("requiredAction", "prove-super-dark-fa-ff-case-layout");
+  }
   const bool dead_integer_recovery_order_reason =
       reason.find("before K {x}") != std::string::npos ||
       reason.find("instead of immediate K {x}") != std::string::npos;
@@ -51030,6 +51240,12 @@ std::string rejected_candidate_required_action(const CandidateReport& candidate,
     return "add-or-tighten-proof";
   if (blocker_kind == "dead-integer-unknown-consumer")
     return "refine-dead-integer-consumer-proof";
+  if (candidate.variant == "indirect-register-flow")
+    return "prove-address-valued-selector-or-keep-residual-compare-chain";
+  if (candidate.variant == "dark-indirect-table")
+    return "prove-conflict-free-address-data-table-layout";
+  if (candidate.variant == "super-dark-dispatch")
+    return "prove-super-dark-fa-ff-case-layout";
   if (candidate.site == "layout")
     return "improve-layout-proof-or-cost-model";
   if (candidate.site == "candidate-search")
@@ -52702,6 +52918,9 @@ SizeAttributionReport build_size_attribution_report(
             call_preservation_recall_counts_by_label_address_name;
         std::vector<std::string> call_preservation_site_parts;
         std::set<std::string> call_argument_input_names;
+        std::map<std::string, std::set<std::string>> call_argument_inputs_by_label;
+        std::map<std::string, int> call_argument_preservation_cells_by_label;
+        std::map<std::string, int> call_argument_preservation_cells_by_name;
         std::vector<std::string> call_argument_site_parts;
         int call_argument_preservation_cells = 0;
         const auto nested_call_sites_it = helper_nested_call_sites.find(helper.label);
@@ -52746,6 +52965,9 @@ SizeAttributionReport build_size_attribution_report(
                     producer_access->kind == SizeSpillAccessKind::Recall &&
                     producer_access->name == name) {
                   call_argument_input_names.insert(name);
+                  call_argument_inputs_by_label[call_site.label].insert(name);
+                  ++call_argument_preservation_cells_by_label[call_site.label];
+                  ++call_argument_preservation_cells_by_name[name];
                   call_argument_site_parts.push_back(
                       call_site.label + "@" + safe_format_label_address(call_site.address) +
                       ":" + name + "<-recall@" +
@@ -53025,6 +53247,10 @@ SizeAttributionReport build_size_attribution_report(
                   join_strings(callee_mutating_cell_parts, ";");
               helper.details["valueAwareCallPreservationMutatingOpcodes"] =
                   join_strings(callee_mutating_opcode_parts, ";");
+              helper.details["valueAwareCalleeAbiMutationSurfaceByCallee"] =
+                  join_strings(callee_mutating_cell_parts, ";");
+              helper.details["valueAwareCalleeAbiMutationSurfaceOpcodesByCallee"] =
+                  join_strings(callee_mutating_opcode_parts, ";");
             }
             helper.details["valueAwareCallPreservationCalleeStatus"] =
                 all_required_callees_stack_preserving
@@ -53093,6 +53319,28 @@ SizeAttributionReport build_size_attribution_report(
                 join_strings(call_argument_site_parts, ";");
             helper.details["valueAwareCallArgumentPreservationCells"] =
                 std::to_string(call_argument_preservation_cells);
+            std::vector<std::string> call_argument_input_by_label_parts;
+            call_argument_input_by_label_parts.reserve(call_argument_inputs_by_label.size());
+            for (const auto& [label, inputs] : call_argument_inputs_by_label) {
+              call_argument_input_by_label_parts.push_back(
+                  label + ":" + join_strings(std::vector<std::string>(inputs.begin(),
+                                                                       inputs.end()),
+                                             ","));
+            }
+            if (!call_argument_input_by_label_parts.empty()) {
+              helper.details["valueAwareCallArgumentInputNamesByCallee"] =
+                  join_strings(call_argument_input_by_label_parts, ";");
+            }
+            std::vector<std::string> call_argument_cells_by_label_parts;
+            call_argument_cells_by_label_parts.reserve(
+                call_argument_preservation_cells_by_label.size());
+            for (const auto& [label, cells] : call_argument_preservation_cells_by_label) {
+              call_argument_cells_by_label_parts.push_back(label + ":" + std::to_string(cells));
+            }
+            if (!call_argument_cells_by_label_parts.empty()) {
+              helper.details["valueAwareCallArgumentPreservationCellsByCallee"] =
+                  join_strings(call_argument_cells_by_label_parts, ";");
+            }
             helper.details["valueAwareCallArgumentPreservationReason"] =
                 "live stack input is also consumed as a nested helper X argument before later "
                 "helper-local recalls";
@@ -53128,6 +53376,144 @@ SizeAttributionReport build_size_attribution_report(
             helper.details["valueAwareEstimatedNetSavingsExcludes"] =
                 "persistent-state-output-stores";
         }
+        const auto callee_abi_positive_levers_text =
+            [](int needed_cells, int materialize_cells, int argument_preservation_cells,
+               int overhead_cells) {
+              if (needed_cells <= 0)
+                return std::string("none");
+              std::vector<std::string> levers;
+              if (materialize_cells > 0) {
+                levers.push_back("reduce-callsite-materialization-by-" +
+                                 std::to_string(needed_cells));
+              }
+              if (argument_preservation_cells > 0) {
+                levers.push_back("reduce-call-argument-preservation-by-" +
+                                 std::to_string(needed_cells));
+              }
+              if (overhead_cells > 0) {
+                levers.push_back("elide-callee-entry-overhead-by-" +
+                                 std::to_string(std::min(needed_cells, overhead_cells)));
+              }
+              return join_strings(levers, ",");
+            };
+        if (call_preservation_has_stack_mutating_callee &&
+            !ranked_profitable_stack_inputs.empty()) {
+          struct CalleeAbiSubsetEstimate {
+            std::vector<std::string> names;
+            int gross_cells = 0;
+            int materialize_cells = 0;
+            int argument_preservation_cells = 0;
+            int overhead_lower_bound_cells = 0;
+            int net_cells = std::numeric_limits<int>::min();
+          };
+
+          std::map<std::string, int> gross_cells_by_name;
+          std::map<std::string, int> materialize_cells_by_name;
+          for (const auto& [name, cells] : ranked_profitable_stack_inputs) {
+            gross_cells_by_name[name] = cells;
+            materialize_cells_by_name[name] = materialize_cells_for_input(name);
+          }
+
+          bool has_best_subset = false;
+          CalleeAbiSubsetEstimate best_subset;
+          std::vector<std::string> selected_subset;
+          const int subset_capacity = std::min<int>(
+              stack_capacity, static_cast<int>(ranked_profitable_stack_inputs.size()));
+          const auto selected_names_text = [](const std::vector<std::string>& names) {
+            return join_strings(names, ",");
+          };
+          const auto evaluate_subset = [&]() {
+            if (selected_subset.empty())
+              return;
+            std::set<std::string> selected_names(selected_subset.begin(), selected_subset.end());
+            CalleeAbiSubsetEstimate estimate;
+            estimate.names = selected_subset;
+            for (const std::string& name : selected_subset) {
+              estimate.gross_cells += gross_cells_by_name[name];
+              estimate.materialize_cells += materialize_cells_by_name[name];
+              estimate.argument_preservation_cells +=
+                  call_argument_preservation_cells_by_name[name];
+            }
+            std::set<std::string> stack_mutating_callee_labels;
+            for (const auto& [label, inputs] : call_preservation_inputs_by_label) {
+              const bool touches_selected_input =
+                  std::any_of(inputs.begin(), inputs.end(), [&](const std::string& input) {
+                    return selected_names.contains(input);
+                  });
+              if (!touches_selected_input)
+                continue;
+              const HelperStackEffectSummary effect = helper_stack_effect_summary(label);
+              if (effect.status == "stack-mutating")
+                stack_mutating_callee_labels.insert(label);
+            }
+            estimate.overhead_lower_bound_cells =
+                static_cast<int>(stack_mutating_callee_labels.size());
+            estimate.net_cells = estimate.gross_cells - estimate.materialize_cells -
+                                 estimate.argument_preservation_cells -
+                                 estimate.overhead_lower_bound_cells;
+            const std::string estimate_names = selected_names_text(estimate.names);
+            const std::string best_names = selected_names_text(best_subset.names);
+            if (!has_best_subset || estimate.net_cells > best_subset.net_cells ||
+                (estimate.net_cells == best_subset.net_cells &&
+                 estimate.gross_cells > best_subset.gross_cells) ||
+                (estimate.net_cells == best_subset.net_cells &&
+                 estimate.gross_cells == best_subset.gross_cells &&
+                 estimate_names < best_names)) {
+              best_subset = std::move(estimate);
+              has_best_subset = true;
+            }
+          };
+          const std::function<void(std::size_t)> visit_subsets = [&](std::size_t start) {
+            evaluate_subset();
+            if (static_cast<int>(selected_subset.size()) >= subset_capacity)
+              return;
+            for (std::size_t index = start; index < ranked_profitable_stack_inputs.size();
+                 ++index) {
+              selected_subset.push_back(ranked_profitable_stack_inputs.at(index).first);
+              visit_subsets(index + 1U);
+              selected_subset.pop_back();
+            }
+          };
+          visit_subsets(0U);
+          if (has_best_subset) {
+            helper.details["valueAwareCalleeAbiBestSubsetInputNames"] =
+                selected_names_text(best_subset.names);
+            helper.details["valueAwareCalleeAbiBestSubsetGrossCells"] =
+                std::to_string(best_subset.gross_cells);
+            helper.details["valueAwareCalleeAbiBestSubsetMaterializeCells"] =
+                std::to_string(best_subset.materialize_cells);
+            helper.details["valueAwareCalleeAbiBestSubsetArgumentPreservationCells"] =
+                std::to_string(best_subset.argument_preservation_cells);
+            helper.details["valueAwareCalleeAbiBestSubsetOverheadLowerBoundCells"] =
+                std::to_string(best_subset.overhead_lower_bound_cells);
+            helper.details["valueAwareCalleeAbiBestSubsetNetAfterLowerBoundCells"] =
+                std::to_string(best_subset.net_cells);
+            helper.details["valueAwareCalleeAbiBestSubsetAdditionalNetCellsToPositive"] =
+                std::to_string(std::max(0, 1 - best_subset.net_cells));
+            helper.details["valueAwareCalleeAbiBestSubsetPositiveGapCells"] =
+                helper.details["valueAwareCalleeAbiBestSubsetAdditionalNetCellsToPositive"];
+            helper.details["valueAwareCalleeAbiBestSubsetPositiveLevers"] =
+                callee_abi_positive_levers_text(
+                    std::max(0, 1 - best_subset.net_cells), best_subset.materialize_cells,
+                    best_subset.argument_preservation_cells,
+                    best_subset.overhead_lower_bound_cells);
+            helper.details["valueAwareCalleeAbiBestSubsetEntryOnlyOutcome"] =
+                best_subset.net_cells > 0
+                    ? "callee-entry-lower-bound-still-positive"
+                    : (best_subset.net_cells == 0
+                           ? "callee-entry-lower-bound-breaks-even-needs-extra-saving"
+                           : "callee-entry-lower-bound-negative");
+            helper.details["valueAwareCalleeAbiBestSubsetPlanStatus"] =
+                best_subset.net_cells > 0
+                    ? "positive-after-callee-abi-lower-bound"
+                    : (best_subset.net_cells == 0
+                           ? "break-even-after-callee-abi-lower-bound"
+                           : "negative-after-callee-abi-lower-bound");
+            helper.details["valueAwareCalleeAbiBestSubsetSavingsModel"] =
+                "stack-input-recalls-minus-materialization-minus-argument-preservation-minus-"
+                "callee-abi-lower-bound";
+          }
+        }
         if (call_preservation_has_stack_mutating_callee && adjusted_estimated_net_cells > 0) {
           const int callee_abi_overhead_lower_bound_cells =
               callee_abi_refactor_target_count;
@@ -53145,6 +53531,27 @@ SizeAttributionReport build_size_attribution_report(
               callee_abi_overhead_lower_bound_cells >= adjusted_estimated_net_cells
                   ? "reaches-or-exceeds-break-even-budget"
                   : "below-break-even-budget";
+          const int net_after_callee_abi_lower_bound_cells =
+              adjusted_estimated_net_cells - callee_abi_overhead_lower_bound_cells;
+          helper.details["valueAwareCalleeAbiNetAfterLowerBoundCells"] =
+              std::to_string(net_after_callee_abi_lower_bound_cells);
+          helper.details["valueAwareCalleeAbiAdditionalNetCellsToPositive"] =
+              std::to_string(std::max(0, 1 - net_after_callee_abi_lower_bound_cells));
+          helper.details["valueAwareCalleeAbiPositiveGapCells"] =
+              helper.details["valueAwareCalleeAbiAdditionalNetCellsToPositive"];
+          helper.details["valueAwareCalleeAbiPositiveLevers"] =
+              callee_abi_positive_levers_text(
+                  std::max(0, 1 - net_after_callee_abi_lower_bound_cells),
+                  profitable_stack_input_materialize_cells, call_argument_preservation_cells,
+                  callee_abi_overhead_lower_bound_cells);
+          helper.details["valueAwareCalleeAbiEntryOnlyOutcome"] =
+              net_after_callee_abi_lower_bound_cells > 0
+                  ? "callee-entry-lower-bound-still-positive"
+                  : (net_after_callee_abi_lower_bound_cells == 0
+                         ? "callee-entry-lower-bound-breaks-even-needs-extra-saving"
+                         : "callee-entry-lower-bound-negative");
+          helper.details["valueAwareCalleeAbiAdditionalSavingsTargets"] =
+              "stack-input-recalls,call-argument-preservation,callee-entry-overhead";
           if (callee_abi_mutation_surface_cells > 0) {
             helper.details["valueAwareCalleeAbiMutationSurfaceCells"] =
                 std::to_string(callee_abi_mutation_surface_cells);

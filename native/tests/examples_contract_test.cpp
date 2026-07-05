@@ -85,6 +85,17 @@ const SizeSelectedOptimizationReport* find_size_selected_optimization(
   return it == result.size_attribution.selected_optimizations.end() ? nullptr : &*it;
 }
 
+const SizeOpportunityReport* find_size_opportunity(const CompileResult& result,
+                                                   const std::string& variant) {
+  const auto it =
+      std::find_if(result.size_attribution.opportunities.begin(),
+                   result.size_attribution.opportunities.end(),
+                   [&](const SizeOpportunityReport& opportunity) {
+                     return opportunity.variant == variant;
+                   });
+  return it == result.size_attribution.opportunities.end() ? nullptr : &*it;
+}
+
 bool warnings_contain(const CompileResult& result, const std::string& text) {
   return std::any_of(result.warnings.begin(), result.warnings.end(),
                      [&](const std::string& warning) {
@@ -268,6 +279,22 @@ void compiler_examples_match_typescript_contract() {
                 "layout proof did not establish a conflict-free address/data table") !=
                 std::string::npos,
             "human.mkpro dark-indirect-table rejection should report the TS layout-proof reason");
+    const SizeOpportunityReport* dark_table_opportunity =
+        find_size_opportunity(result, "dark-indirect-table");
+    require(dark_table_opportunity != nullptr &&
+                dark_table_opportunity->details.contains("proofFamily") &&
+                dark_table_opportunity->details.at("proofFamily") == "code-data-overlay" &&
+                dark_table_opportunity->details.contains("proofFailure") &&
+                dark_table_opportunity->details.at("proofFailure") ==
+                    "conflict-free-address-data-table-not-proved" &&
+                dark_table_opportunity->details.contains("layoutProofRequirement") &&
+                dark_table_opportunity->details.at("layoutProofRequirement") ==
+                    "address-data-table-conflict-check" &&
+                dark_table_opportunity->details.contains("requiredAction") &&
+                dark_table_opportunity->details.at("requiredAction") ==
+                    "prove-conflict-free-address-data-table-layout",
+            "human.mkpro dark-indirect-table size opportunity should point at the missing "
+            "code/data overlay proof instead of a generic inspection action");
     const CandidateReport* rejected_super_dark =
         find_candidate(result.rejected_candidates, "super-dark-dispatch");
     require(rejected_super_dark != nullptr,
@@ -276,6 +303,22 @@ void compiler_examples_match_typescript_contract() {
                 "did not place one-command cases at 48..53 with tails at 01..06") !=
                 std::string::npos,
             "human.mkpro super-dark-dispatch rejection should report the TS layout-proof reason");
+    const SizeOpportunityReport* super_dark_opportunity =
+        find_size_opportunity(result, "super-dark-dispatch");
+    require(super_dark_opportunity != nullptr &&
+                super_dark_opportunity->details.contains("proofFamily") &&
+                super_dark_opportunity->details.at("proofFamily") == "super-dark-dispatch" &&
+                super_dark_opportunity->details.contains("proofFailure") &&
+                super_dark_opportunity->details.at("proofFailure") ==
+                    "fa-ff-one-command-case-layout-not-proved" &&
+                super_dark_opportunity->details.contains("layoutProofRequirement") &&
+                super_dark_opportunity->details.at("layoutProofRequirement") ==
+                    "cases-at-48-53-and-tails-at-01-06" &&
+                super_dark_opportunity->details.contains("requiredAction") &&
+                super_dark_opportunity->details.at("requiredAction") ==
+                    "prove-super-dark-fa-ff-case-layout",
+            "human.mkpro super-dark-dispatch size opportunity should point at the missing "
+            "FA..FF layout proof instead of a generic inspection action");
   }
 
   {

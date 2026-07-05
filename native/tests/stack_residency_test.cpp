@@ -1022,6 +1022,262 @@ program ValueAwareDirectStackInputNestedCall {
 
   {
     const std::string source = R"mkpro(
+program RuleStackInputPredicateEntryProbe {
+  state {
+    x: packed = 0
+    out: packed = 0
+    scratch: packed = 0
+  }
+
+  fn cold() {
+    scratch = scratch + 1
+  }
+
+  fn hot() {
+    if 3 == x {
+      out = 1
+    }
+    else {
+      out = 2
+    }
+    cold()
+    cold()
+    cold()
+  }
+
+  loop {
+    x = 3
+    hot()
+    x = 4
+    hot()
+    halt(out)
+  }
+}
+)mkpro";
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.stack_resident_temps = true;
+    baseline_options.disable_candidate_search = true;
+    const CompileResult baseline = compile_source(source, baseline_options);
+    require_clean_compile(baseline, "rule stack-input predicate baseline");
+    require(count_steps_with_comment(baseline, "recall x") == 1,
+            "baseline helper should recall x for the first predicate");
+    require(count_steps_with_comment(baseline, "set x") == 2,
+            "baseline should materialize x before regular helper calls");
+
+    CompileOptions stack_input_options = baseline_options;
+    stack_input_options.stack_argument_function_entries = true;
+    const CompileResult stack_input = compile_source(source, stack_input_options);
+    require_clean_compile(stack_input, "rule stack-input predicate entry variant");
+    require(stack_input.steps.size() + 3U == baseline.steps.size(),
+            "predicate stack-input entry should remove the helper recall and now-dead x stores");
+    require(has_optimization(stack_input, "rule-stack-input-entry-primary"),
+            "predicate stack-input entry variant should compile hot as a primary stack-input entry");
+    require(count_steps_with_comment_prefix_and_opcode(
+                stack_input, "proc call hot stack-input entry", 0x53) == 2,
+            "both natural current-X hot calls should use the stack-input entry");
+    require(count_steps_with_comment(stack_input, "recall x") == 0 &&
+                count_steps_with_comment(stack_input, "set x") == 0,
+            "predicate stack-input entry should consume x directly from X without helper "
+            "recalls or dead stores");
+  }
+
+  {
+    const std::string source = R"mkpro(
+program RuleStackInputUpdateEntryProbe {
+  state {
+    x: packed = 0
+    score: packed = 10
+    scratch: packed = 0
+  }
+
+  fn cold() {
+    scratch = scratch + 1
+  }
+
+  fn hot() {
+    score += x + 1
+    cold()
+    cold()
+    cold()
+  }
+
+  loop {
+    x = 3
+    hot()
+    x = 4
+    hot()
+    halt(score)
+  }
+}
+)mkpro";
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.stack_resident_temps = true;
+    baseline_options.disable_candidate_search = true;
+    const CompileResult baseline = compile_source(source, baseline_options);
+    require_clean_compile(baseline, "rule stack-input update baseline");
+    require(count_steps_with_comment(baseline, "recall x") == 1,
+            "baseline helper should recall x for the first update");
+    require(count_steps_with_comment(baseline, "set x") == 2,
+            "baseline should materialize x before regular helper calls");
+
+    CompileOptions stack_input_options = baseline_options;
+    stack_input_options.stack_argument_function_entries = true;
+    const CompileResult stack_input = compile_source(source, stack_input_options);
+    require_clean_compile(stack_input, "rule stack-input update entry variant");
+    require(stack_input.steps.size() + 3U == baseline.steps.size(),
+            "update stack-input entry should remove the helper recall and now-dead x stores");
+    require(has_optimization(stack_input, "rule-stack-input-entry-primary"),
+            "update stack-input entry variant should compile hot as a primary stack-input entry");
+    require(count_steps_with_comment_prefix_and_opcode(
+                stack_input, "proc call hot stack-input entry", 0x53) == 2,
+            "both natural current-X hot calls should use the stack-input entry");
+    require(count_steps_with_comment(stack_input, "recall x") == 0 &&
+                count_steps_with_comment(stack_input, "set x") == 0,
+            "update stack-input entry should consume x directly from X without helper recalls "
+            "or dead stores");
+    require(count_steps_with_comment(stack_input, "stack-input update +=") == 1,
+            "update stack-input entry should use the direct update pipeline");
+  }
+
+  {
+    const std::string source = R"mkpro(
+program RuleStackInputSubUpdateEntryProbe {
+  state {
+    x: packed = 0
+    score: packed = 20
+    scratch: packed = 0
+  }
+
+  fn cold() {
+    scratch = scratch + 1
+  }
+
+  fn hot() {
+    score -= x
+    cold()
+    cold()
+    cold()
+  }
+
+  loop {
+    x = 3
+    hot()
+    x = 4
+    hot()
+    halt(score)
+  }
+}
+)mkpro";
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.stack_resident_temps = true;
+    baseline_options.disable_candidate_search = true;
+    const CompileResult baseline = compile_source(source, baseline_options);
+    require_clean_compile(baseline, "rule stack-input subtract update baseline");
+    require(count_steps_with_comment(baseline, "recall x") == 1,
+            "baseline helper should recall x for the subtract update");
+    require(count_steps_with_comment(baseline, "set x") == 2,
+            "baseline should materialize x before regular helper calls");
+
+    CompileOptions stack_input_options = baseline_options;
+    stack_input_options.stack_argument_function_entries = true;
+    const CompileResult stack_input = compile_source(source, stack_input_options);
+    require_clean_compile(stack_input, "rule stack-input subtract update entry variant");
+    require(stack_input.steps.size() + 2U == baseline.steps.size(),
+            "subtract update stack-input entry should account for the needed operand-order swap");
+    require(has_optimization(stack_input, "rule-stack-input-entry-primary"),
+            "subtract update stack-input entry variant should compile hot as a primary "
+            "stack-input entry");
+    require(count_steps_with_comment_prefix_and_opcode(
+                stack_input, "proc call hot stack-input entry", 0x53) == 2,
+            "both natural current-X hot calls should use the subtract stack-input entry");
+    require(count_steps_with_comment(stack_input, "recall x") == 0 &&
+                count_steps_with_comment(stack_input, "set x") == 0,
+            "subtract update stack-input entry should consume x directly from X without helper "
+            "recalls or dead stores");
+    require(count_steps_with_comment(stack_input, "stack-input update operand order") == 1,
+            "subtract update stack-input entry should preserve target-minus-delta order");
+    require(count_steps_with_comment(stack_input, "stack-input update -=") == 1,
+            "subtract update stack-input entry should use the direct subtract pipeline");
+  }
+
+  {
+    const std::string source = R"mkpro(
+program RuleStackInputDelayedAssignmentEntryProbe {
+  state {
+    x: packed = 0
+    seed: packed = 2
+    guard: flag = false
+    score: packed = 0
+    scratch: packed = 0
+  }
+
+  fn cold() {
+    scratch = scratch + 1
+  }
+
+  fn hot() {
+    score = x + 1
+    cold()
+    cold()
+    cold()
+  }
+
+  fn use_x() {
+    scratch = x + 1
+    scratch += x
+  }
+
+  loop {
+    x = seed + 1
+    if guard {
+    }
+    hot()
+    x = seed + 2
+    if guard {
+    }
+    hot()
+    x = seed + 3
+    use_x()
+    halt(score + scratch)
+  }
+}
+)mkpro";
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.stack_resident_temps = true;
+    baseline_options.disable_candidate_search = true;
+    const CompileResult baseline = compile_source(source, baseline_options);
+    require_clean_compile(baseline, "rule delayed stack-input assignment baseline");
+    require(count_steps_with_comment(baseline, "set x") == 3,
+            "baseline should materialize all x assignments");
+    require(count_steps_with_comment(baseline, "recall x") >= 2,
+            "baseline should recall x from helpers");
+
+    CompileOptions stack_input_options = baseline_options;
+    stack_input_options.stack_argument_function_entries = true;
+    const CompileResult stack_input = compile_source(source, stack_input_options);
+    require_clean_compile(stack_input, "rule delayed stack-input assignment variant");
+    require(stack_input.steps.size() + 3U == baseline.steps.size(),
+            "delayed stack-input entry should remove the hot recall and two delayed x stores");
+    require(has_optimization(stack_input, "rule-stack-input-entry-primary"),
+            "delayed stack-input entry should compile hot as a primary stack-input entry");
+    require(has_optimization(stack_input, "stack-carried-assignment-delayed"),
+            "delayed stack-input callsites should reuse the delayed stack-carried assignment");
+    require(count_steps_with_comment_prefix_and_opcode(
+                stack_input, "proc call hot stack-input entry", 0x53) == 2,
+            "both delayed hot calls should use the stack-input entry");
+    require(count_steps_with_comment(stack_input, "set x") == 1,
+            "delayed stack-input calls should leave only the persistent x store for use_x()");
+    require(count_steps_with_comment(stack_input, "recall x") + 1 ==
+                count_steps_with_comment(baseline, "recall x"),
+            "hot should no longer recall x inside its helper body");
+  }
+
+  {
+    const std::string source = R"mkpro(
 program RuleStackInputEntryProbe {
   state {
     x: packed = 0

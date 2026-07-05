@@ -1160,6 +1160,19 @@ void example_sizes_match_typescript_baselines() {
                   candidate_score_zero->details.at("valueAwareCallPreservationMutatingOpcodes")
                           .find("91:+/consume-y-drop") != std::string::npos &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiMutationSurfaceByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiMutationSurfaceByCallee") ==
+                      "packed-line score accumulator helper:4" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiMutationSurfaceOpcodesByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiMutationSurfaceOpcodesByCallee")
+                          .find("86://consume-y-drop") != std::string::npos &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiMutationSurfaceOpcodesByCallee")
+                          .find("91:+/consume-y-drop") != std::string::npos &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCallPreservationCalleeStatus") &&
                   candidate_score_zero->details.at("valueAwareCallPreservationCalleeStatus") ==
                       "blocked-by-callee-stack-mutation" &&
@@ -1243,6 +1256,86 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCalleeAbiOverheadLowerBoundStatus") ==
                       "reaches-or-exceeds-break-even-budget" &&
                   candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiNetAfterLowerBoundCells") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiNetAfterLowerBoundCells") == "0" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiAdditionalNetCellsToPositive") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiAdditionalNetCellsToPositive") == "1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPositiveGapCells") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiPositiveGapCells") ==
+                      "1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiPositiveLevers") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiPositiveLevers") ==
+                      "reduce-callsite-materialization-by-1,"
+                      "reduce-call-argument-preservation-by-1,"
+                      "elide-callee-entry-overhead-by-1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiEntryOnlyOutcome") &&
+                  candidate_score_zero->details.at("valueAwareCalleeAbiEntryOnlyOutcome") ==
+                      "callee-entry-lower-bound-breaks-even-needs-extra-saving" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiAdditionalSavingsTargets") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiAdditionalSavingsTargets")
+                          .find("call-argument-preservation") != std::string::npos &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetInputNames") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetInputNames")
+                          .find("x") != std::string::npos &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetInputNames")
+                          .find("y") != std::string::npos &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetGrossCells") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetGrossCells") == "5" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetMaterializeCells") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetMaterializeCells") == "2" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetArgumentPreservationCells") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetArgumentPreservationCells") == "2" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetOverheadLowerBoundCells") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetOverheadLowerBoundCells") == "1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetNetAfterLowerBoundCells") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetNetAfterLowerBoundCells") == "0" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetAdditionalNetCellsToPositive") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetAdditionalNetCellsToPositive") == "1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetPositiveGapCells") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetPositiveGapCells") == "1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetPositiveLevers") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetPositiveLevers") ==
+                      "reduce-callsite-materialization-by-1,"
+                      "reduce-call-argument-preservation-by-1,"
+                      "elide-callee-entry-overhead-by-1" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetEntryOnlyOutcome") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetEntryOnlyOutcome") ==
+                      "callee-entry-lower-bound-breaks-even-needs-extra-saving" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCalleeAbiBestSubsetPlanStatus") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCalleeAbiBestSubsetPlanStatus") ==
+                      "break-even-after-callee-abi-lower-bound" &&
+                  candidate_score_zero->details.contains(
                       "valueAwareCalleeAbiMutationSurfaceCells") &&
                   candidate_score_zero->details.at(
                       "valueAwareCalleeAbiMutationSurfaceCells") == "4" &&
@@ -1295,6 +1388,16 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCallArgumentPreservationCells") &&
                   candidate_score_zero->details.at("valueAwareCallArgumentPreservationCells") ==
                       "2" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCallArgumentInputNamesByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCallArgumentInputNamesByCallee") ==
+                      "packed-line score accumulator helper:x,y" &&
+                  candidate_score_zero->details.contains(
+                      "valueAwareCallArgumentPreservationCellsByCallee") &&
+                  candidate_score_zero->details.at(
+                      "valueAwareCallArgumentPreservationCellsByCallee") ==
+                      "packed-line score accumulator helper:2" &&
                   candidate_score_zero->details.contains(
                       "valueAwareEstimatedNetSavingsAfterArgumentPreservation") &&
                   candidate_score_zero->details.at(

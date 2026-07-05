@@ -158,6 +158,14 @@ function analyzeFile(compiler, file) {
       ),
       callerArgStorePlanStatus: detail(details, 'valueAwareCallerArgStorePlanStatus'),
       callerArgStoreRequiredAction: detail(details, 'valueAwareCallerArgStoreRequiredAction'),
+      callArgumentPreservationCellsByCallee: detail(
+        details,
+        'valueAwareCallArgumentPreservationCellsByCallee',
+      ),
+      callArgumentInputNamesByCallee: detail(
+        details,
+        'valueAwareCallArgumentInputNamesByCallee',
+      ),
       directMaterialization: detail(details, 'valueAwareDirectStackInputMaterialization'),
       directMaterializationStatus: detail(
         details,
@@ -191,6 +199,32 @@ function analyzeFile(compiler, file) {
       calleeRemainingPreserveDepth: detail(
         details,
         'valueAwareCalleeAbiRemainingPreserveDepthByCallee',
+      ),
+      calleeAbiNetAfterLowerBound: detail(
+        details,
+        'valueAwareCalleeAbiNetAfterLowerBoundCells',
+      ),
+      calleeAbiAdditionalNetToPositive: detail(
+        details,
+        'valueAwareCalleeAbiAdditionalNetCellsToPositive',
+      ),
+      calleeAbiPositiveLevers: detail(details, 'valueAwareCalleeAbiPositiveLevers'),
+      calleeAbiBestSubset: detail(details, 'valueAwareCalleeAbiBestSubsetInputNames'),
+      calleeAbiBestSubsetNet: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetNetAfterLowerBoundCells',
+      ),
+      calleeAbiBestSubsetNeed: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetAdditionalNetCellsToPositive',
+      ),
+      calleeAbiBestSubsetLevers: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetPositiveLevers',
+      ),
+      calleeAbiBestSubsetStatus: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetPlanStatus',
       ),
       calleeAbiStatus:
         detail(details, 'valueAwareCalleeAbiCostModelStatus') ||
@@ -315,6 +349,8 @@ function printHelper(row) {
       ` argStoreNet=${row.callerArgStoreAdjustedNet || '-'}` +
       ` argStorePlan=${row.callerArgStorePlanStatus || '-'}` +
       ` argStoreAction=${row.callerArgStoreRequiredAction || '-'}` +
+      ` argPreserve=${row.callArgumentPreservationCellsByCallee || '-'}` +
+      ` argInputs=${row.callArgumentInputNamesByCallee || '-'}` +
       ` directMat=${row.directMaterializationStatus || '-'}:${row.directMaterialization || '-'}` +
       ` survival=${row.calleeStackSurvival || '-'}` +
       ` natural=${row.calleeNaturalPreservedSlots || '-'}` +
@@ -323,6 +359,14 @@ function printHelper(row) {
       ` firstRecall=${row.calleeNaturalFirstRecallCoverage || '-'}` +
       ` firstRecallStatus=${row.calleeNaturalFirstRecallStatus || '-'}` +
       ` remaining=${row.calleeRemainingPreserveDepth || '-'}` +
+      ` abiNet=${row.calleeAbiNetAfterLowerBound || '-'}` +
+      ` abiNeed=${row.calleeAbiAdditionalNetToPositive || '-'}` +
+      ` abiLevers=${row.calleeAbiPositiveLevers || '-'}` +
+      ` abiSubset=${row.calleeAbiBestSubset || '-'}` +
+      ` abiSubsetNet=${row.calleeAbiBestSubsetNet || '-'}` +
+      ` abiSubsetNeed=${row.calleeAbiBestSubsetNeed || '-'}` +
+      ` abiSubsetLevers=${row.calleeAbiBestSubsetLevers || '-'}` +
+      ` abiSubsetStatus=${row.calleeAbiBestSubsetStatus || '-'}` +
       ` callee=${row.calleeAbiStatus || '-'}`,
   );
 }
