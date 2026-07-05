@@ -17776,6 +17776,10 @@ std::string function_label(const std::string& name) {
   return "__fn_" + name;
 }
 
+std::string function_stack_entry_label(const std::string& name) {
+  return "__fn_" + name + "_stack_entry";
+}
+
 void mark_last_emitted_call_role(LoweringContext& context, std::string role) {
   if (context.emitter.items.size() < 2U)
     return;
@@ -17816,6 +17820,253 @@ bool lower_rule_arguments(LoweringContext& context, const V2Rule& rule,
                              : "arg " + rule.params.at(index) + " for " + rule.name);
   }
   return true;
+}
+
+std::optional<Expression> stack_entry_value_function_return_expression(const V2Rule& rule) {
+  if (rule.body.size() != 1U || rule.params.empty() || rule.params.size() > 4U)
+    return std::nullopt;
+  const V2Statement& statement = rule.body.front();
+  if (statement.kind != "v2_return" || !statement.expr.has_value())
+    return std::nullopt;
+  return parse_expression(*statement.expr, statement.line);
+}
+
+bool stack_entry_return_expression_has_supported_calls(const Expression& expression) {
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression)) {
+    return transform->arg != nullptr &&
+           stack_entry_return_expression_has_supported_calls(*transform->arg);
+  }
+  if (expression.kind == "call") {
+    if (lower_ascii(expression.callee) != "sum")
+      return false;
+    return std::all_of(expression.args.begin(), expression.args.end(),
+                       stack_entry_return_expression_has_supported_calls);
+  }
+  if (expression.index != nullptr &&
+      !stack_entry_return_expression_has_supported_calls(*expression.index)) {
+    return false;
+  }
+  if (expression.expr != nullptr &&
+      !stack_entry_return_expression_has_supported_calls(*expression.expr)) {
+    return false;
+  }
+  if (expression.left != nullptr &&
+      !stack_entry_return_expression_has_supported_calls(*expression.left)) {
+    return false;
+  }
+  if (expression.right != nullptr &&
+      !stack_entry_return_expression_has_supported_calls(*expression.right)) {
+    return false;
+  }
+  return std::all_of(expression.args.begin(), expression.args.end(),
+                     stack_entry_return_expression_has_supported_calls);
+}
+
+bool stack_entry_value_function_rule_eligible(const LoweringContext& context,
+                                              const V2Rule& rule) {
+  if (!context.stack_argument_function_entries)
+    return false;
+  const std::optional<Expression> returned = stack_entry_value_function_return_expression(rule);
+  if (!returned.has_value())
+    return false;
+  if (rule.name == "square" || match_trig_near_rule(rule).has_value() ||
+      match_x_param_return_decay(rule).has_value() ||
+      match_x_param_stack_stop_risk_rule(rule).has_value() ||
+      match_x_param_value_function(rule).has_value()) {
+    return false;
+  }
+  if (!stack_entry_return_expression_has_supported_calls(*returned))
+    return false;
+  return core::emit::can_lower_stack_resident_expression(*returned, rule.params);
+}
+
+bool stack_entry_function_call_arguments_safe(const V2Rule& rule,
+                                              const std::vector<Expression>& args) {
+  if (args.size() != rule.params.size())
+    return false;
+  std::set<std::string> seen_identifier_args;
+  for (const Expression& arg : args) {
+    if (!analysis_simple_stack_load(arg))
+      return false;
+    if (arg.kind == "identifier" && !seen_identifier_args.insert(arg.name).second)
+      return false;
+  }
+  return true;
+}
+
+void mark_function_call_result_x(LoweringContext& context, const V2Rule& rule) {
+  if (const std::optional<std::string> return_x = proc_return_x_variable(context, rule)) {
+    mark_current_x(context, *return_x);
+    context.emitter.current_x_known_zero = false;
+  } else {
+    clear_current_x_facts(context);
+  }
+}
+
+bool lower_stack_argument_function_call(LoweringContext& context, const V2Rule& rule,
+                                        const std::vector<Expression>& args, int line,
+                                        std::string_view comment_prefix) {
+  const auto plan_it = context.stack_entry_functions.find(rule.name);
+  if (plan_it == context.stack_entry_functions.end() ||
+      !stack_entry_function_call_arguments_safe(rule, args)) {
+    return false;
+  }
+  for (const Expression& arg : args) {
+    if (!lower_expression_to_x(context, arg))
+      return false;
+  }
+  context.emitter.emit_jump(0x53, "ПП", function_stack_entry_label(rule.name),
+                            std::string(comment_prefix) + rule.name + " stack entry", line);
+  mark_last_emitted_call_role(context, "stack-argument-function-call");
+  mark_function_call_result_x(context, rule);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "function-call",
+      .detail = "Called function " + rule.name + " through its stack-argument entry.",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = "function-stack-entry-call",
+      .detail = "Entered value function " + rule.name +
+                " with its arguments already staged on the X/Y/Z/T stack.",
+  });
+  return true;
+}
+
+void collect_stack_entry_function_call_sites_in_expression(
+    LoweringContext& context, const Expression& expression, std::map<std::string, int>& safe_calls);
+
+void collect_stack_entry_function_call_sites_in_expression_text(
+    LoweringContext& context, const std::optional<std::string>& text, int line,
+    std::map<std::string, int>& safe_calls) {
+  if (!text.has_value() || trim_ascii(*text).empty())
+    return;
+  try {
+    collect_stack_entry_function_call_sites_in_expression(
+        context, parse_expression(*text, line), safe_calls);
+  } catch (const std::exception&) {
+  }
+}
+
+void collect_stack_entry_function_call_sites_in_predicate(
+    LoweringContext& context, const V2Predicate& predicate, int line,
+    std::map<std::string, int>& safe_calls) {
+  collect_stack_entry_function_call_sites_in_expression_text(context, predicate.left, line,
+                                                            safe_calls);
+  collect_stack_entry_function_call_sites_in_expression_text(context, predicate.right, line,
+                                                            safe_calls);
+  collect_stack_entry_function_call_sites_in_expression_text(context, predicate.collection, line,
+                                                            safe_calls);
+  collect_stack_entry_function_call_sites_in_expression_text(context, predicate.item, line,
+                                                            safe_calls);
+}
+
+void collect_stack_entry_function_call_sites_in_statement(
+    LoweringContext& context, const V2Statement& statement, std::map<std::string, int>& safe_calls);
+
+void collect_stack_entry_function_call_sites_in_statements(
+    LoweringContext& context, const std::vector<V2Statement>& statements,
+    std::map<std::string, int>& safe_calls) {
+  for (const V2Statement& statement : statements)
+    collect_stack_entry_function_call_sites_in_statement(context, statement, safe_calls);
+}
+
+void collect_stack_entry_function_call_sites_in_expression(
+    LoweringContext& context, const Expression& expression, std::map<std::string, int>& safe_calls) {
+  if (expression.kind == "call") {
+    const auto rule_it = context.rules.find(expression.callee);
+    if (rule_it != context.rules.end() && rule_it->second != nullptr &&
+        stack_entry_value_function_rule_eligible(context, *rule_it->second) &&
+        stack_entry_function_call_arguments_safe(*rule_it->second, expression.args)) {
+      ++safe_calls[rule_it->second->name];
+    }
+  }
+  if (expression.index != nullptr)
+    collect_stack_entry_function_call_sites_in_expression(context, *expression.index, safe_calls);
+  if (expression.expr != nullptr)
+    collect_stack_entry_function_call_sites_in_expression(context, *expression.expr, safe_calls);
+  if (expression.left != nullptr)
+    collect_stack_entry_function_call_sites_in_expression(context, *expression.left, safe_calls);
+  if (expression.right != nullptr)
+    collect_stack_entry_function_call_sites_in_expression(context, *expression.right, safe_calls);
+  for (const Expression& arg : expression.args)
+    collect_stack_entry_function_call_sites_in_expression(context, arg, safe_calls);
+}
+
+void collect_stack_entry_function_call_sites_in_statement(
+    LoweringContext& context, const V2Statement& statement, std::map<std::string, int>& safe_calls) {
+  collect_stack_entry_function_call_sites_in_expression_text(context, statement.target,
+                                                            statement.line, safe_calls);
+  collect_stack_entry_function_call_sites_in_expression_text(context, statement.expr,
+                                                            statement.line, safe_calls);
+  if (statement.predicate.has_value()) {
+    collect_stack_entry_function_call_sites_in_predicate(context, *statement.predicate,
+                                                        statement.line, safe_calls);
+  }
+  if (statement.kind == "v2_invoke" && statement.name.has_value()) {
+    std::vector<Expression> args;
+    args.reserve(statement.args.size());
+    bool parsed = true;
+    for (const std::string& arg_text : statement.args) {
+      try {
+        args.push_back(parse_expression(arg_text, statement.line));
+      } catch (const std::exception&) {
+        parsed = false;
+        break;
+      }
+    }
+    const auto rule_it = context.rules.find(*statement.name);
+    if (parsed && rule_it != context.rules.end() && rule_it->second != nullptr &&
+        stack_entry_value_function_rule_eligible(context, *rule_it->second) &&
+        stack_entry_function_call_arguments_safe(*rule_it->second, args)) {
+      ++safe_calls[rule_it->second->name];
+    }
+    for (const Expression& arg : args)
+      collect_stack_entry_function_call_sites_in_expression(context, arg, safe_calls);
+  } else {
+    for (const std::string& arg_text : statement.args) {
+      collect_stack_entry_function_call_sites_in_expression_text(
+          context, std::optional<std::string>{arg_text}, statement.line, safe_calls);
+    }
+  }
+  if (statement.items.has_value()) {
+    for (const DisplayItem& item : *statement.items) {
+      if (item.expr.has_value())
+        collect_stack_entry_function_call_sites_in_expression(context, *item.expr, safe_calls);
+    }
+  }
+  for (const V2MatchCase& match_case : statement.cases) {
+    for (const std::string& value : match_case.values) {
+      collect_stack_entry_function_call_sites_in_expression_text(
+          context, std::optional<std::string>{value}, match_case.line, safe_calls);
+    }
+    if (match_case.action != nullptr)
+      collect_stack_entry_function_call_sites_in_statement(context, *match_case.action, safe_calls);
+  }
+  if (statement.otherwise != nullptr)
+    collect_stack_entry_function_call_sites_in_statement(context, *statement.otherwise, safe_calls);
+  collect_stack_entry_function_call_sites_in_statements(context, statement.body, safe_calls);
+  collect_stack_entry_function_call_sites_in_statements(context, statement.then_body, safe_calls);
+  collect_stack_entry_function_call_sites_in_statements(context, statement.else_body, safe_calls);
+}
+
+void plan_stack_argument_function_entries(LoweringContext& context, const V2Program& program) {
+  if (!context.stack_argument_function_entries)
+    return;
+  std::map<std::string, int> safe_calls;
+  collect_stack_entry_function_call_sites_in_statements(context, program.body, safe_calls);
+  for (const V2Rule& rule : program.rules)
+    collect_stack_entry_function_call_sites_in_statements(context, rule.body, safe_calls);
+  for (const V2Rule& rule : program.rules) {
+    const auto safe_it = safe_calls.find(rule.name);
+    if (safe_it == safe_calls.end() || safe_it->second <= 0 ||
+        !stack_entry_value_function_rule_eligible(context, rule)) {
+      continue;
+    }
+    context.stack_entry_functions[rule.name] = FunctionStackEntryPlan{
+        .params = rule.params,
+        .call_sites = safe_it->second,
+    };
+  }
 }
 
 bool compile_x_param_first_expression(LoweringContext& context, const Expression& expression,
@@ -21962,6 +22213,8 @@ bool lower_call_to_x(LoweringContext& context, const Expression& expression) {
     return true;
   if (context.x_param_procs.contains(rule.name))
     return lower_x_param_rule_call(context, rule, expression.args, 0);
+  if (lower_stack_argument_function_call(context, rule, expression.args, 0, "call function "))
+    return true;
   if (expression.args.empty() && context.emitter.current_x_known_zero &&
       !context.disable_packed_line_family_score_accumulator) {
     const std::optional<PackedLineFamilyScoreRule> score_rule =
@@ -28712,6 +28965,8 @@ bool lower_invoke_statement(LoweringContext& context, const V2Statement& stateme
     return true;
   if (context.x_param_procs.contains(rule.name))
     return lower_x_param_rule_call(context, rule, args, statement.line);
+  if (lower_stack_argument_function_call(context, rule, args, statement.line, "proc call "))
+    return true;
   if (args.empty() && context.emitter.current_x_known_zero &&
       !context.disable_packed_line_family_score_accumulator) {
     const std::optional<PackedLineFamilyScoreRule> score_rule =
@@ -31143,6 +31398,30 @@ bool lower_return_statement(LoweringContext& context, const V2Statement& stateme
   return true;
 }
 
+bool emit_stack_argument_function_entry_prefix(LoweringContext& context, const V2Rule& rule) {
+  const auto plan_it = context.stack_entry_functions.find(rule.name);
+  if (plan_it == context.stack_entry_functions.end())
+    return true;
+  const std::optional<Expression> returned = stack_entry_value_function_return_expression(rule);
+  if (!returned.has_value())
+    return false;
+  const int line = rule.body.empty() ? rule.line : rule.body.front().line;
+  const std::string regular_label = function_label(rule.name) + "_regular_entry";
+  context.emitter.emit_jump(0x51, "БП", regular_label, "function regular entry", line);
+  context.emitter.emit_label(function_stack_entry_label(rule.name), {.hidden = true});
+  if (!lower_stack_resident_expression_to_x(context, *returned, plan_it->second.params, line))
+    return false;
+  context.emitter.emit_op(0x52, "В/О", "return value", line);
+  context.emitter.emit_label(regular_label, {.hidden = true});
+  clear_current_x_facts(context);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "function-stack-entry-primary",
+      .detail = "Emitted stack-argument entry for value function " + rule.name + " after " +
+                std::to_string(plan_it->second.call_sites) + " safe call site(s).",
+  });
+  return true;
+}
+
 // Recognise a no-argument procedure whose entire body is
 //   selector--; lines[selector] = packed_add(lines[selector], ...);
 //   report = bit_and(lines[selector], MASK); if frac(report) != 0 { halt(report) }
@@ -31288,6 +31567,8 @@ bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
 
   clear_current_x_facts(context);
   ProcedureBoundaryScope procedure_scope{context, function_label(rule.name)};
+  if (!emit_stack_argument_function_entry_prefix(context, rule))
+    return false;
   if (rule.name == "square") {
     context.emitter.emit_op(0x22, "F x^2", "square repeated operand", rule.line);
     context.emitter.emit_op(0x52, "В/О", "return value", rule.line);
@@ -45151,6 +45432,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   context.segmented_line_count_scan = options.segmented_line_count_scan;
   context.stack_resident_temps = options.stack_resident_temps;
   context.stack_argument_helper_entries = options.stack_argument_helper_entries;
+  context.stack_argument_function_entries = options.stack_argument_function_entries;
   context.setup_only_counted_loop_init = options.setup_only_counted_loop_init;
   context.x_param_value_functions = options.x_param_value_functions;
   context.x_param_y_stack_stored_entry = options.x_param_y_stack_stored_entry;
@@ -45380,6 +45662,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         collect_expression_use_counts(context, *ast.v2);
         trace_stage("metadata-index-rules");
         index_rules(context, *ast.v2);
+        trace_stage("metadata-plan-stack-function-entries");
+        plan_stack_argument_function_entries(context, *ast.v2);
         if (context.indirect_underflow_decrement) {
           context.terminal_underflow_unit_decrements =
               collect_terminal_underflow_unit_decrements(context, *ast.v2);
@@ -46123,7 +46407,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.preloaded_indirect_flow || options.forward_indirect_flow ||
          options.runtime_indirect_call_flow ||
          options.general_constant_preloads || options.stack_resident_temps ||
-         options.stack_argument_helper_entries ||
+         options.stack_argument_helper_entries || options.stack_argument_function_entries ||
          options.share_random_cell || options.startup_aware_constant_preloads ||
          options.guarded_prologue_gadgets || options.shared_bit_mask_helper_calls ||
          options.compact_bit_mask_helper_body || options.signed_abs_match_pairs ||
@@ -46824,6 +47108,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";startup_aware_constant_preloads=" << options.startup_aware_constant_preloads
       << ";stack_resident_temps=" << options.stack_resident_temps
       << ";stack_argument_helper_entries=" << options.stack_argument_helper_entries
+      << ";stack_argument_function_entries=" << options.stack_argument_function_entries
       << ";share_random_cell=" << options.share_random_cell
       << ";startup_aware_constant_preloads=" << options.startup_aware_constant_preloads
       << ";guarded_prologue_gadgets=" << options.guarded_prologue_gadgets
@@ -47270,7 +47555,8 @@ bool should_report_nonwinning_candidate(std::string_view name) {
          name == "packed-line-family-update-check-tail" ||
          name == "packed-line-family-mutating-selector-update-check-tail" ||
          name == "packed-line-family-borrowed-mutating-selector-update-check-tail" ||
-         name == "stack-resident-helper-entries";
+         name == "stack-resident-helper-entries" ||
+         name == "stack-resident-function-entries";
 }
 
 OptimizerReport build_optimizer_report(const std::vector<OptimizationReport>& optimizations,
@@ -55577,6 +55863,14 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       "stack-resident-helper-entries",
       "Kept temporaries stack-resident and entered eligible shared helpers through their "
       "stack-argument ABI");
+  add_candidate(
+      [](CompileOptions& candidate_options) {
+        candidate_options.stack_resident_temps = true;
+        candidate_options.stack_argument_function_entries = true;
+      },
+      "stack-resident-function-entries",
+      "Entered eligible value functions through a stack-argument ABI instead of storing caller "
+      "arguments in registers");
   if (may_use_packed_score_accumulator) {
     add_candidate(
         [](CompileOptions& candidate_options) {
@@ -57079,6 +57373,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
           [](CompileOptions& o) { o.runtime_indirect_call_flow = true; },
           [](CompileOptions& o) { o.general_constant_preloads = true; },
           [](CompileOptions& o) { o.stack_resident_temps = true; },
+          [](CompileOptions& o) { o.stack_argument_function_entries = true; },
           [](CompileOptions& o) { o.share_random_cell = true; },
           [](CompileOptions& o) { o.startup_aware_constant_preloads = true; },
           [](CompileOptions& o) { o.guarded_prologue_gadgets = true; },

@@ -103,6 +103,11 @@ struct ExpressionHelperStackEntryRequest {
   int call_sites = 0;
 };
 
+struct FunctionStackEntryPlan {
+  std::vector<std::string> params;
+  int call_sites = 0;
+};
+
 struct NearAnyHelperRequest {
   std::string key;
   std::string label;
@@ -211,6 +216,7 @@ struct LoweringContext {
   std::map<std::string, int> expression_helper_regular_call_sites;
   std::vector<ExpressionHelperRequest> expression_helpers;
   std::map<std::string, ExpressionHelperStackEntryRequest> expression_helper_stack_entries;
+  std::map<std::string, FunctionStackEntryPlan> stack_entry_functions;
   std::map<std::string, NearAnyHelperStats> near_any_helper_stats;
   std::map<std::string, std::string> near_any_helper_labels;
   std::vector<NearAnyHelperRequest> near_any_helpers;
@@ -250,6 +256,7 @@ struct LoweringContext {
   bool setup_only_counted_loop_init = false;
   bool x_param_value_functions = false;
   bool x_param_y_stack_stored_entry = false;
+  bool stack_argument_function_entries = false;
   bool canonicalize_packed_line_bank_walks = false;
   bool packed_line_family_update_check_tail = false;
   bool packed_line_family_mutating_selector_update_check_tail = false;

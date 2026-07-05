@@ -647,6 +647,10 @@ committed example oracles under `native/oracles/`.
 - `startup-aware-constant-preloads` — candidate balancing main/ setup constant trade-offs.
 - `counted-loop-unroll-free-scratch` — combines counted-loop unrolling with residual-dispatch scratch freeing.
 - `stack-resident-temps` — recompiles with stack-temporary fusion enabled (`<=4` temps lifted with `В↑`) to avoid `X->П`/`П->X` spills.
+- `stack-resident-function-entries` — combines stack-temporary analysis with
+  stack-argument entries for eligible value functions, so simple function
+  parameters can arrive in X/Y/Z/T instead of being stored in parameter
+  registers at every call site.
 - `stack-resident-temps-hoisted` — same stack-temp fusion candidate with shared helper hoisting enabled.
 - `stack-resident-temps-hoisted-proc` — same stack-temp fusion candidate with helper and procedure hoisting enabled.
 - `stack-resident-temps-setup-counted-loop` — combined stack-temp fusion with setup-only counted-loop initializers.
@@ -717,6 +721,13 @@ committed example oracles under `native/oracles/`.
 
 - `function-call` — lowers a normal call into a short machine form with shared helper and return handling, removing unnecessary call/return steps.
 - `function-call-lifting` — lifts direct call sites when safe, simplifying straightforward calls.
+- `function-stack-entry-primary` / `function-stack-entry-call` — add a
+  secondary stack-argument entry for simple value functions whose single
+  `return` expression can be lowered by the generic stack-resident expression
+  emitter. The first implementation accepts up to four parameters, simple
+  identifier/number call arguments, and return expressions without nested user
+  function calls; unsafe or mixed call sites keep the ordinary register-entry
+  ABI.
 - `x-param-proc-entry` — alternative procedure entry through X when cheaper. The
   first assignment may be a direct copy, `param + other`, or a pure expression
   that consumes the single-use parameter from the X register through a

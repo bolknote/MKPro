@@ -2335,6 +2335,8 @@ program DecrementTest {
   require(decrement_test.listing.find("set remaining") != std::string::npos,
           "current TS path stores the decremented counter before the <= 0 branch");
 
+  CompileOptions expression_call_options;
+  expression_call_options.disable_candidate_search = true;
   const CompileResult expression_call = compile_source(R"mkpro(
 program ExpressionCall {
   state {
@@ -2350,7 +2352,8 @@ program ExpressionCall {
     halt(result)
   }
 }
-)mkpro");
+)mkpro",
+                                                       expression_call_options);
   require(expression_call.implemented, "native compiler should lower expression function call");
   require(expression_call.diagnostics.empty(),
           "expression function call should not report diagnostics");

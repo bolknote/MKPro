@@ -854,6 +854,57 @@ program StackHelperAbiReversed {
   }
 
   {
+    const std::string stack_function_entry_source = R"mkpro(
+program StackFunctionEntry {
+  state {
+    x: packed = 2
+    y: packed = 3
+    out: packed = 0
+  }
+
+  fn combine(a, b) {
+    return a + b
+  }
+
+  loop {
+    out = combine(x, y)
+    out += combine(y, x)
+    out += combine(x, 4)
+    halt(out)
+  }
+}
+)mkpro";
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.disable_candidate_search = true;
+    const CompileResult baseline = compile_source(stack_function_entry_source, baseline_options);
+    require_clean_compile(baseline, "stack function entry baseline");
+    require(count_steps_with_comment(baseline, "arg a for combine") == 3 &&
+                count_steps_with_comment(baseline, "arg b for combine") == 3,
+            "baseline should materialize combine arguments in registers at each call site");
+
+    CompileOptions stack_entry_options = baseline_options;
+    stack_entry_options.stack_resident_temps = true;
+    stack_entry_options.stack_argument_function_entries = true;
+    const CompileResult stack_entry =
+        compile_source(stack_function_entry_source, stack_entry_options);
+    require_clean_compile(stack_entry, "stack function argument-entry variant");
+    require(stack_entry.steps.size() < baseline.steps.size(),
+            "stack function argument-entry variant should reduce caller argument stores");
+    require(has_optimization(stack_entry, "function-stack-entry-primary"),
+            "stack function argument-entry variant should emit a callee stack entry");
+    require(has_optimization(stack_entry, "function-stack-entry-call"),
+            "stack function argument-entry variant should route safe calls through the stack "
+            "entry");
+    require(count_steps_with_comment(stack_entry, "arg a for combine") == 0 &&
+                count_steps_with_comment(stack_entry, "arg b for combine") == 0,
+            "stack-entry combine calls should not store caller arguments");
+    require(count_steps_with_comment_prefix_and_opcode(
+                stack_entry, "call function combine stack entry", 0x53) == 3,
+            "all safe combine calls should use the function stack-entry label");
+  }
+
+  {
     const CompileResult result = compile_stack_analysis(R"mkpro(
 program ValueAwareDirectStackInputNestedCall {
   state {

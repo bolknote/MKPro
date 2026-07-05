@@ -91,6 +91,8 @@ IR and lowering optimizer switches:
   --show-read-guarded-transfer    Guard read-driven transfers for display safety.
   --stack-resident-temps          Keep eligible temporaries on the stack.
   --stack-argument-helper-entries Add stack-argument entries for eligible shared helpers.
+  --stack-argument-function-entries
+                                  Add stack-argument entries for eligible value functions.
   --inline-floor-packed-row-expressions
                                   Inline floor-packed row expressions.
   --order-procs-by-call-count     Layout procedures by call frequency.
@@ -1212,6 +1214,8 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       options.stack_resident_temps = true;
     } else if (arg == "--stack-argument-helper-entries") {
       options.stack_argument_helper_entries = true;
+    } else if (arg == "--stack-argument-function-entries") {
+      options.stack_argument_function_entries = true;
     } else if (arg == "--inline-floor-packed-row-expressions") {
       options.inline_floor_packed_row_expressions = true;
     } else if (arg == "--order-procs-by-call-count") {
