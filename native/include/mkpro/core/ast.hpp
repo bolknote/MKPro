@@ -1,5 +1,7 @@
 #pragma once
 
+#include "mkpro/core/feature_profile.hpp"
+
 #include <memory>
 #include <optional>
 #include <string>
@@ -197,6 +199,7 @@ struct StateAst {
 
 struct ProgramAst {
   std::optional<std::string> reference;
+  std::optional<FeatureProfile> feature_profile;
   std::optional<V2Program> v2;
   std::vector<StateAst> states;
 };

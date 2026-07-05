@@ -73,6 +73,19 @@ void emitter_matches_initial_typescript_contract() {
 
   {
     MachineEmitter emitter;
+    emitter.address_space_model = AddressSpaceModel::Mk61SMiniExpanded;
+    emitter.emit_formal_address(0xa5, "expanded cell", 10);
+    require(emitter.items.size() == 1, "expanded formal address should emit one item");
+    require(std::get<int>(emitter.items.at(0).target) == 105,
+            "expanded formal address target should keep ordinal 105");
+    require(emitter.items.at(0).formal_opcode == 0xa5,
+            "expanded formal address should preserve formal opcode");
+    require(emitter.items.at(0).comment == "expanded cell; formal A5->A5",
+            "expanded formal address comment should treat A5 as official");
+  }
+
+  {
+    MachineEmitter emitter;
     emitter.emit_op(0x53, "ПП", "formal call");
     emitter.emit_formal_address(0xe1, "formal target");
     const ResolvedProgram resolved = resolve_machine_items(emitter.items);
@@ -81,6 +94,26 @@ void emitter_matches_initial_typescript_contract() {
     require(resolved.steps.size() == 2, "formal call should resolve to two steps");
     require(resolved.steps.at(1).opcode == 0xe1, "formal address should preserve opcode E1");
     require(resolved.steps.at(1).mnemonic == "E1", "formal address mnemonic should be formal");
+  }
+
+  {
+    MachineEmitter emitter;
+    emitter.emit_jump(0x51, "БП", 105, "jump added cell");
+
+    const ResolvedProgram stock = resolve_machine_items(emitter.items);
+    require(stock.diagnostics.size() == 1,
+            "stock resolver should reject a direct branch to physical address 105");
+
+    CompileOptions expanded_options;
+    expanded_options.feature_profile = FeatureProfile::Mk61SMiniExpanded;
+    const ResolvedProgram expanded = resolve_machine_items(emitter.items, expanded_options);
+    require(expanded.diagnostics.empty(),
+            "expanded resolver should accept direct branch to physical address 105");
+    require(expanded.steps.size() == 2, "expanded direct branch should resolve to two cells");
+    require(expanded.steps.at(1).opcode == 0xa5,
+            "expanded direct branch target 105 should encode as A5");
+    require(expanded.steps.at(1).mnemonic == "A5",
+            "expanded direct branch target 105 should render as A5");
   }
 
   {

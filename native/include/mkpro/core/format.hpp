@@ -1,5 +1,6 @@
 #pragma once
 
+#include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/types.hpp"
 
 #include <optional>
@@ -9,17 +10,28 @@
 namespace mkpro {
 
 std::string format_hex_steps(const std::vector<ResolvedStep>& steps);
+std::string format_hex_steps(const std::vector<ResolvedStep>& steps, AddressSpaceModel model);
 std::string format_mk61s_steps(const std::vector<ResolvedStep>& steps);
 std::string format_mk61s_result(const CompileResult& result);
 std::string format_listing_steps(const std::vector<ResolvedStep>& steps);
+std::string format_listing_steps(const std::vector<ResolvedStep>& steps, AddressSpaceModel model);
 std::string format_dot_steps(const std::vector<ResolvedStep>& steps);
 std::string format_dot_steps(const std::vector<ResolvedStep>& steps,
                              const std::vector<PreloadReport>& preloads);
+std::string format_dot_steps(const std::vector<ResolvedStep>& steps,
+                             const std::vector<PreloadReport>& preloads,
+                             AddressSpaceModel model);
 std::string format_dot_result(const CompileResult& result);
 std::string format_setup_listing_steps(const std::vector<ManualSetupInput>& manual_inputs,
                                        const std::vector<ResolvedStep>& steps);
+std::string format_setup_listing_steps(const std::vector<ManualSetupInput>& manual_inputs,
+                                       const std::vector<ResolvedStep>& steps,
+                                       AddressSpaceModel model);
 std::optional<std::string>
 format_setup_preload_listing_steps(const std::vector<PreloadReport>& preloads);
+std::optional<std::string>
+format_setup_preload_listing_steps(const std::vector<PreloadReport>& preloads,
+                                   AddressSpaceModel model);
 std::string format_program_tokens(const std::vector<ResolvedStep>& steps);
 std::optional<std::string> format_setup_block(const std::vector<PreloadReport>& preloads);
 std::string to_keycaps(std::string mnemonic);

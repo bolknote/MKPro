@@ -27,6 +27,8 @@ void require_throws_contains(const std::string& source, const std::string& expec
 void parser_matches_initial_v2_source_contract() {
   require_throws_contains("", "one V2 program block");
   require_throws_contains("target mk61\n", "Unexpected top-level line");
+  require_throws_contains("feature turnip\nprogram Bad { loop { halt(0) } }\n",
+                          "feature mk61s-mini-expand");
 
   const ProgramAst const_program = parse_program(R"mkpro(
 program WithConst {
@@ -111,6 +113,7 @@ program BadAngleRequirement {
 
   const ProgramAst rich_program = parse_program(R"mkpro(
 reference demo_reference
+feature mk61s-mini-expand
 
 program Demo {
   ocean: board(0..9, 0..9)
@@ -140,6 +143,8 @@ program Demo {
 }
 )mkpro");
   require(rich_program.reference == "demo_reference", "reference should parse");
+  require(rich_program.feature_profile == FeatureProfile::Mk61SMiniExpanded,
+          "feature profile should parse");
   require(rich_program.v2->boards.at(0).width == 10, "board width should parse");
   require(rich_program.v2->worlds.at(0).position->encoding == "decimal_player",
           "compact board encoding should parse");

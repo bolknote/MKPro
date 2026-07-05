@@ -47,6 +47,11 @@ addressing and loop-style compact code:
 
 Program memory contains 105 steps. Official addresses are `00`..`99` and `A0`..`A4`; the calculator also has undocumented alias and dark-address behavior described in [02-undocumented-tricks.md](./02-undocumented-tricks.md).
 
+The `mk61s-mini-expand` compiler feature profile models an expanded
+MK61S_MINI variant rather than the stock machine: it enables direct `Rf`
+access through `4F`/`6F` and treats 112 cells, `00`..`B1`, as official program
+memory.
+
 The display is a 12-position luminescent indicator. A normal number uses 8 mantissa digits, 2 exponent digits, and sign positions for the mantissa and exponent. Internally, digits are stored in 4-bit BCD-like nibbles, which is why hexadecimal-looking values can appear in undocumented modes.
 
 ## Official Operating Characteristics

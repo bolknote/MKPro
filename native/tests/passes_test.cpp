@@ -241,6 +241,14 @@ core::passes::PassResult run_preloaded_indirect_flow(const std::vector<IrOp>& op
   return core::passes::preloaded_indirect_flow(ops, core::passes::PassContext{.options = options});
 }
 
+core::passes::PassResult run_preloaded_indirect_flow(const std::vector<IrOp>& ops,
+                                                     FeatureProfile feature_profile) {
+  CompileOptions options;
+  options.preloaded_indirect_flow = true;
+  options.feature_profile = feature_profile;
+  return core::passes::preloaded_indirect_flow(ops, core::passes::PassContext{.options = options});
+}
+
 core::passes::PassResult run_runtime_indirect_call_flow(const std::vector<IrOp>& ops) {
   CompileOptions options;
   options.runtime_indirect_call_flow = true;
@@ -349,6 +357,9 @@ void indirect_flow_target_marker_requires_strict_boundary() {
   op.meta.comment = "preloaded R7=42 indirect-target=105";
   require(!core::passes::known_indirect_flow_target(op).has_value(),
           "indirect-target marker should reject targets outside official cells");
+  target = core::passes::known_indirect_flow_target(op, AddressSpaceModel::Mk61SMiniExpanded);
+  require(target.has_value() && *target == 105,
+          "expanded indirect-target marker should accept added official cells");
 }
 
 void pass_pipeline_matches_initial_typescript_contract() {
@@ -1420,6 +1431,23 @@ void pass_pipeline_matches_initial_typescript_contract() {
         run_preloaded_indirect_flow({numeric_jump(48), stop("halt")});
     require(result.applied == 0,
             "preloaded-indirect-flow rewrote forward branch that can shift target addresses");
+  }
+
+  {
+    std::vector<IrOp> program;
+    for (int i = 0; i < 106; ++i)
+      program.push_back(plain(0x00));
+    program.push_back(numeric_jump(105));
+    const core::passes::PassResult result =
+        run_preloaded_indirect_flow(program, FeatureProfile::Mk61SMiniExpanded);
+    require(result.applied == 1,
+            "expanded preloaded-indirect-flow did not rewrite added-cell numeric branch");
+    require(result.ops.back().kind == IrKind::IndirectJump &&
+                result.ops.back().register_name == "7" && result.ops.back().opcode == 0x87,
+            "expanded preloaded-indirect-flow emitted wrong indirect branch");
+    require(result.preloads.size() == 1 && result.preloads.at(0).register_name == "7" &&
+                result.preloads.at(0).value == "A5",
+            "expanded preloaded-indirect-flow should preload A5 for physical cell 105");
   }
 
   {

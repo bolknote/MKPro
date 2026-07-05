@@ -6909,7 +6909,8 @@ void compile_stack_stop_risk_tail(LoweringContext& context, const StackStopRiskM
 
 void bind_register(LoweringContext& context, const std::string& name, int index) {
   context.register_index_by_name[name] = index;
-  context.registers[name] = register_from_text(core::register_name_for_index(index));
+  context.registers[name] =
+      register_from_text(core::register_name_for_index(index, context.feature_profile));
 }
 
 std::optional<int> available_constant_register_index(const LoweringContext& context) {
@@ -6918,7 +6919,7 @@ std::optional<int> available_constant_register_index(const LoweringContext& cont
     (void)unused_name;
     used.insert(index);
   }
-  return core::pick_constant_register_index(used);
+  return core::pick_constant_register_index(used, context.feature_profile);
 }
 
 bool can_reserve_negative_zero_degree_register(const LoweringContext& context) {
@@ -6946,14 +6947,16 @@ void assign_register(LoweringContext& context, const std::string& name) {
     (void)unused_name;
     used.insert(index);
   }
-  const std::optional<int> index = core::pick_register_index_for_variable(name, used);
+  const std::optional<int> index =
+      core::pick_register_index_for_variable(name, used, context.feature_profile);
   if (!index.has_value()) {
     context.diagnostics.push_back(
         diagnostic(DiagnosticSeverity::Error, "native-unsupported",
                    "Out of MK-61 registers while allocating '" + name + "'."));
     return;
   }
-  const std::string reg = register_from_text(core::register_name_for_index(*index));
+  const std::string reg =
+      register_from_text(core::register_name_for_index(*index, context.feature_profile));
   context.register_index_by_name[name] = *index;
   context.registers[name] = reg;
 }
@@ -7195,15 +7198,19 @@ void bind_fixed_registers(LoweringContext& context, const std::set<std::string>&
       if (existing->second != index) {
         context.diagnostics.push_back(
             diagnostic(DiagnosticSeverity::Error, "native-unsupported",
-                       "Register R" + core::register_name_for_index(index) + " is fixed for '" +
-                           variable + "' but it is already allocated to R" +
-                           core::register_name_for_index(existing->second)));
+                       "Register R" + core::register_name_for_index(index,
+                                                                     context.feature_profile) +
+                           " is fixed for '" + variable + "' but it is already allocated to R" +
+                           core::register_name_for_index(existing->second,
+                                                         context.feature_profile)));
       }
       continue;
     }
     if (physical_register_in_use(context, index)) {
       context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
-                                               "Register R" + core::register_name_for_index(index) +
+                                               "Register R" +
+                                                   core::register_name_for_index(
+                                                       index, context.feature_profile) +
                                                    " is fixed for more than one variable."));
       continue;
     }
@@ -7275,7 +7282,7 @@ void apply_forced_register_shares(LoweringContext& context,
       if (index != free_index)
         continue;
       index = keep_index;
-      context.registers[name] = core::register_name_for_index(keep_index);
+      context.registers[name] = core::register_name_for_index(keep_index, context.feature_profile);
       moved_any = true;
     }
     (void)moved_any;
@@ -10708,7 +10715,8 @@ int register_index_for(LoweringContext& context, const std::string& name) {
 
 std::string register_text_for(LoweringContext& context, const std::string& name) {
   return context.registers[name].empty()
-             ? core::register_name_for_index(register_index_for(context, name))
+             ? core::register_name_for_index(register_index_for(context, name),
+                                             context.feature_profile)
              : context.registers[name];
 }
 
@@ -11685,7 +11693,7 @@ std::string indexed_memory_comment(const LoweringContext& context, const std::st
     for (std::size_t index = 0; index < targets.size(); ++index) {
       if (index > 0)
         out << ",";
-      out << core::register_name_for_index(targets.at(index));
+      out << core::register_name_for_index(targets.at(index), context.feature_profile);
     }
     suffixes.push_back("indirect-memory-targets=" + out.str());
   }
@@ -13764,7 +13772,8 @@ std::optional<int> standalone_synthesized_constant_cost(const std::string& value
   return cost < guarded_estimate_number_cost(value) ? std::optional<int>{cost} : std::nullopt;
 }
 
-std::optional<std::string> executable_setup_value(const std::string& value) {
+std::optional<std::string> executable_setup_value(
+    const std::string& value, AddressSpaceModel model = AddressSpaceModel::Standard) {
   std::string trimmed = trim_ascii(value);
   std::replace(trimmed.begin(), trimmed.end(), ',', '.');
   static const std::regex numeric_literal(R"(^-?\d+(?:[.]\d+)?(?:[eE]-?\d{1,2})?$)");
@@ -13774,28 +13783,35 @@ std::optional<std::string> executable_setup_value(const std::string& value) {
   static const std::regex formal_address_literal(R"(^[A-Fa-f][0-9A-Fa-f]$)");
   if (std::regex_match(trimmed, formal_address_literal)) {
     const int opcode = std::stoi(trimmed, nullptr, 16);
-    return std::to_string(formal_address_info(opcode).actual);
+    const int actual = formal_address_info(opcode, model).actual;
+    if (actual > 99)
+      return std::nullopt;
+    return std::to_string(actual);
   }
   return std::nullopt;
 }
 
-bool constant_is_cheaper_inline_for_startup(const std::string& value, int use_count) {
+bool constant_is_cheaper_inline_for_startup(const std::string& value, int use_count,
+                                            FeatureProfile feature_profile) {
   const std::optional<int> inline_cost = standalone_synthesized_constant_cost(value);
   if (!inline_cost.has_value())
     return false;
-  const std::optional<std::string> setup_value = executable_setup_value(value);
+  const std::optional<std::string> setup_value =
+      executable_setup_value(value, address_space_model_for_feature_profile(feature_profile));
   if (!setup_value.has_value())
     return false;
   const int preload_cost = guarded_estimate_number_cost(*setup_value) + 1 + use_count;
   return *inline_cost * use_count <= preload_cost;
 }
 
-int dual_use_address_constant_preload_bonus(const std::string& value) {
+int dual_use_address_constant_preload_bonus(const std::string& value,
+                                            FeatureProfile feature_profile) {
   const std::optional<std::pair<std::string, int>> natural =
       natural_fractional_selector_preload_value(value);
   if (!natural.has_value())
     return 0;
-  return natural->second > 0 && natural->second <= 104 ? 4 : 0;
+  const AddressSpaceModel model = address_space_model_for_feature_profile(feature_profile);
+  return natural->second > 0 && natural->second <= official_program_last_address(model) ? 4 : 0;
 }
 
 bool packed_counter_decimal_extract_preload_value(const std::string& value) {
@@ -13898,8 +13914,10 @@ std::vector<std::string> collect_preload_constant_values(const LoweringContext& 
                                     weights.contains(value) ? weights.at(value) : 1,
                                     occurrences.contains(value) ? occurrences.at(value) : 1);
                                 return startup_aware &&
-                                       dual_use_address_constant_preload_bonus(value) == 0 &&
-                                       constant_is_cheaper_inline_for_startup(value, use_count);
+                                       dual_use_address_constant_preload_bonus(
+                                           value, context.feature_profile) == 0 &&
+                                       constant_is_cheaper_inline_for_startup(
+                                           value, use_count, context.feature_profile);
                               }),
                ranked.end());
 
@@ -13907,7 +13925,7 @@ std::vector<std::string> collect_preload_constant_values(const LoweringContext& 
     const int weight = weights.contains(value) ? weights.at(value) : 1;
     const int bonus = bonuses.contains(value) ? bonuses.at(value) : 0;
     return weight * (guarded_estimate_number_cost(value) - 1) + bonus +
-           dual_use_address_constant_preload_bonus(value);
+           dual_use_address_constant_preload_bonus(value, context.feature_profile);
   };
   std::stable_sort(
       ranked.begin(), ranked.end(), [&](const std::string& left, const std::string& right) {
@@ -16361,7 +16379,7 @@ sign_digit_literal_scratch_registers(const LoweringContext& context) {
   if (!indirect.has_value())
     return std::nullopt;
 
-  const std::vector<int>& order = core::register_order_indices();
+  const std::vector<int>& order = core::register_order_indices(context.feature_profile);
   for (auto it = order.rbegin(); it != order.rend(); ++it) {
     if (*it != *indirect && !used.contains(*it))
       return std::pair<int, int>{*indirect, *it};
@@ -16369,9 +16387,10 @@ sign_digit_literal_scratch_registers(const LoweringContext& context) {
   return std::nullopt;
 }
 
-void emit_register_op(MachineEmitter& emitter, int base, int reg, std::string_view mnemonic,
-                      std::string comment, int line, bool raw = false) {
-  const std::string reg_text = core::register_name_for_index(reg);
+void emit_register_op(MachineEmitter& emitter, FeatureProfile profile, int base, int reg,
+                      std::string_view mnemonic, std::string comment, int line,
+                      bool raw = false) {
+  const std::string reg_text = core::register_name_for_index(reg, profile);
   emitter.emit_op(base + reg, std::string(mnemonic) + " " + reg_text, std::move(comment), line,
                   raw);
 }
@@ -16383,9 +16402,12 @@ void emit_sign_digit_first_cell_splice(MachineEmitter& emitter, int line) {
 }
 
 void emit_sign_digit_indirect_step(MachineEmitter& emitter, int reg, int line) {
-  emit_register_op(emitter, 0x40, reg, "X->П", "display sign-digit indirect scratch", line, true);
-  emit_register_op(emitter, 0xd0, reg, "К П->X", "display sign-digit indirect normalize", line);
-  emit_register_op(emitter, 0x60, reg, "П->X", "display sign-digit indirect body", line);
+  emit_register_op(emitter, FeatureProfile::Standard, 0x40, reg, "X->П",
+                   "display sign-digit indirect scratch", line, true);
+  emit_register_op(emitter, FeatureProfile::Standard, 0xd0, reg, "К П->X",
+                   "display sign-digit indirect normalize", line);
+  emit_register_op(emitter, FeatureProfile::Standard, 0x60, reg, "П->X",
+                   "display sign-digit indirect body", line);
 }
 
 bool lower_sign_digit_literal_display(LoweringContext& context, const std::string& display_name,
@@ -16403,29 +16425,33 @@ bool lower_sign_digit_literal_display(LoweringContext& context, const std::strin
   context.emitter.emit_number("11");
   context.emitter.emit_op(0x3a, "К ИНВ", "display sign-digit E source", line);
   context.emitter.emit_op(0x35, "К {x}", "display sign-digit E source", line);
-  emit_register_op(context.emitter, 0x40, source, "X->П", "display sign-digit E source", line,
-                   true);
+  emit_register_op(context.emitter, context.feature_profile, 0x40, source, "X->П",
+                   "display sign-digit E source", line, true);
 
-  emit_register_op(context.emitter, 0x60, source, "П->X", "display sign-digit source", line);
+  emit_register_op(context.emitter, context.feature_profile, 0x60, source, "П->X",
+                   "display sign-digit source", line);
   context.emitter.emit_number(program->start);
   emit_sign_digit_first_cell_splice(context.emitter, line);
 
   for (int index = 0; index < program->indirect_steps; ++index) {
     emit_sign_digit_indirect_step(context.emitter, indirect, line);
     if (index < program->indirect_steps - 1) {
-      emit_register_op(context.emitter, 0x60, source, "П->X", "display sign-digit source", line);
-      emit_register_op(context.emitter, 0x60, indirect, "П->X", "display sign-digit body", line);
+      emit_register_op(context.emitter, context.feature_profile, 0x60, source, "П->X",
+                       "display sign-digit source", line);
+      emit_register_op(context.emitter, FeatureProfile::Standard, 0x60, indirect, "П->X",
+                       "display sign-digit body", line);
       emit_sign_digit_first_cell_splice(context.emitter, line);
     }
   }
 
   if (program->first == "E") {
-    emit_register_op(context.emitter, 0x60, source, "П->X", "display sign-digit final source",
-                     line);
+    emit_register_op(context.emitter, context.feature_profile, 0x60, source, "П->X",
+                     "display sign-digit final source", line);
   } else {
     context.emitter.emit_number(program->first);
   }
-  emit_register_op(context.emitter, 0x60, indirect, "П->X", "display sign-digit final body", line);
+  emit_register_op(context.emitter, FeatureProfile::Standard, 0x60, indirect, "П->X",
+                   "display sign-digit final body", line);
   emit_sign_digit_first_cell_splice(context.emitter, line);
   context.emitter.emit_op(0x50, "С/П", "show " + display_name, line);
   report_screen_literal_lowering(context, "screen-sign-digit-literal-lowering",
@@ -16976,6 +17002,18 @@ RawTarget parse_raw_target(const std::string& text) {
   return RawTarget{.target = text};
 }
 
+std::string raw_register_from_text(std::string_view text, FeatureProfile profile) {
+  const std::string reg = register_from_text(text);
+  (void)core::register_name_for_index(register_index(reg), profile);
+  return reg;
+}
+
+std::string raw_indirect_register_from_text(std::string_view text) {
+  const std::string reg = register_from_text(text);
+  (void)core::register_name_for_index(register_index(reg));
+  return reg;
+}
+
 int raw_direct_opcode(std::string text) {
   text = normalize_raw_opcode_text(std::move(text));
   text = std::regex_replace(text, std::regex("≠"), "!=");
@@ -17028,7 +17066,8 @@ int raw_indirect_base(std::string text) {
   throw std::runtime_error("Unknown indirect raw opcode " + text);
 }
 
-std::optional<RawInstruction> parse_raw_instruction(const std::string& raw_text) {
+std::optional<RawInstruction> parse_raw_instruction(const std::string& raw_text,
+                                                    FeatureProfile profile) {
   const std::string text = trim_ascii(raw_text);
   if (const std::optional<int> opcode = parse_hex_byte_text(text)) {
     const OpcodeInfo& info = opcode_by_code(*opcode);
@@ -17051,7 +17090,7 @@ std::optional<RawInstruction> parse_raw_instruction(const std::string& raw_text)
 
   static const std::regex compact_store_regex(R"(^хП(.+)$)", std::regex_constants::icase);
   if (std::regex_match(text, match, compact_store_regex)) {
-    const std::string reg = register_from_text(match[1].str());
+    const std::string reg = raw_register_from_text(match[1].str(), profile);
     return RawInstruction{
         .opcode = 0x40 + register_index(reg),
         .mnemonic = "X->П " + reg,
@@ -17060,7 +17099,7 @@ std::optional<RawInstruction> parse_raw_instruction(const std::string& raw_text)
 
   static const std::regex compact_recall_regex(R"(^Пх(.+)$)", std::regex_constants::icase);
   if (std::regex_match(text, match, compact_recall_regex)) {
-    const std::string reg = register_from_text(match[1].str());
+    const std::string reg = raw_register_from_text(match[1].str(), profile);
     return RawInstruction{
         .opcode = 0x60 + register_index(reg),
         .mnemonic = "П->X " + reg,
@@ -17071,7 +17110,7 @@ std::optional<RawInstruction> parse_raw_instruction(const std::string& raw_text)
                                               std::regex_constants::icase);
   if (std::regex_match(text, match, direct_memory_regex)) {
     const std::string op = std::regex_replace(match[1].str(), std::regex("→"), "->");
-    const std::string reg = register_from_text(match[2].str());
+    const std::string reg = raw_register_from_text(match[2].str(), profile);
     const int base = op.starts_with("X") ? 0x40 : 0x60;
     return RawInstruction{
         .opcode = base + register_index(reg),
@@ -17084,7 +17123,7 @@ std::optional<RawInstruction> parse_raw_instruction(const std::string& raw_text)
       std::regex_constants::icase);
   if (std::regex_match(text, match, indirect_regex)) {
     const std::string op = std::regex_replace(match[1].str(), std::regex("→"), "->");
-    const std::string reg = register_from_text(match[2].str());
+    const std::string reg = raw_indirect_register_from_text(match[2].str());
     return RawInstruction{
         .opcode = raw_indirect_base(op) + register_index(reg),
         .mnemonic = "К " + op + " " + reg,
@@ -17096,7 +17135,7 @@ std::optional<RawInstruction> parse_raw_instruction(const std::string& raw_text)
   if (std::regex_match(text, match, compact_indirect_regex)) {
     const std::string compact_op = match[1].str();
     const std::string op = compact_op == "Пх" ? "П->X" : compact_op == "хП" ? "X->П" : compact_op;
-    const std::string reg = register_from_text(match[2].str());
+    const std::string reg = raw_indirect_register_from_text(match[2].str());
     return RawInstruction{
         .opcode = raw_indirect_base(op) + register_index(reg),
         .mnemonic = "К " + op + " " + reg,
@@ -17163,7 +17202,15 @@ bool lower_raw_statement(LoweringContext& context, const V2Statement& statement)
       context.emitter.emit_label(line.text.substr(0, line.text.size() - 1U));
       continue;
     }
-    const std::optional<RawInstruction> parsed = parse_raw_instruction(line.text);
+    std::optional<RawInstruction> parsed;
+    try {
+      parsed = parse_raw_instruction(line.text, context.feature_profile);
+    } catch (const std::exception& error) {
+      context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                                               "Unknown raw instruction '" + line.text +
+                                                   "': " + error.what()));
+      return false;
+    }
     if (!parsed.has_value()) {
       context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
                                                "Unknown raw instruction '" + line.text + "'"));
@@ -38766,14 +38813,14 @@ collect_manual_setup_inputs(const V2Program& program,
   return inputs;
 }
 
-std::string combine_listing(const CompileResult& result) {
+std::string combine_listing(const CompileResult& result, AddressSpaceModel model) {
   const std::optional<std::string> setup_block =
       !result.setup_program.has_value() && result.manual_setup_inputs.empty()
           ? format_setup_block(result.preloads)
           : std::nullopt;
   std::optional<std::string> setup_preload_listing;
   if (setup_block.has_value())
-    setup_preload_listing = format_setup_preload_listing_steps(result.preloads);
+    setup_preload_listing = format_setup_preload_listing_steps(result.preloads, model);
 
   const bool has_setup_rows =
       !result.manual_setup_inputs.empty() || result.setup_program.has_value() ||
@@ -38785,26 +38832,28 @@ std::string combine_listing(const CompileResult& result) {
     listing += "# Setup Listing\n";
     if (result.setup_program.has_value()) {
       listing +=
-          format_setup_listing_steps(result.manual_setup_inputs, result.setup_program->steps);
+          format_setup_listing_steps(result.manual_setup_inputs, result.setup_program->steps,
+                                     model);
     } else if (setup_preload_listing.has_value()) {
       listing += *setup_preload_listing;
     } else {
       listing += format_setup_listing_steps(result.manual_setup_inputs, {});
     }
-    listing += "\n\n# Main Listing\n" + format_listing_steps(result.steps);
+    listing += "\n\n# Main Listing\n" + format_listing_steps(result.steps, model);
     return listing;
   }
 
   if (setup_block.has_value())
-    return "Setup Block:\n  " + *setup_block + "\n\n" + format_listing_steps(result.steps);
+    return "Setup Block:\n  " + *setup_block + "\n\n" + format_listing_steps(result.steps, model);
 
-  return format_listing_steps(result.steps);
+  return format_listing_steps(result.steps, model);
 }
 
-std::optional<std::string> executable_setup_value(const std::string& value);
+std::optional<std::string> executable_setup_value(const std::string& value,
+                                                  AddressSpaceModel model);
 
-bool preload_is_display_literal_setup(const PreloadReport& preload) {
-  if (executable_setup_value(preload.value).has_value())
+bool preload_is_display_literal_setup(const PreloadReport& preload, AddressSpaceModel model) {
+  if (executable_setup_value(preload.value, model).has_value())
     return false;
   if (const std::optional<DisplayLiteralProgram> literal = display_literal_program(preload.value)) {
     if (literal->kind != "error")
@@ -38813,14 +38862,15 @@ bool preload_is_display_literal_setup(const PreloadReport& preload) {
   return preferred_first_splice_display_literal_program(preload.value).has_value();
 }
 
-bool preload_requires_generated_setup_program(const PreloadReport& preload) {
+bool preload_requires_generated_setup_program(const PreloadReport& preload,
+                                              AddressSpaceModel model) {
   if (preload.setup_expression || preload.setup_target_name.has_value())
     return true;
   if (stack_preload_source(preload.value).has_value())
     return true;
-  if (executable_setup_value(preload.value).has_value())
+  if (executable_setup_value(preload.value, model).has_value())
     return false;
-  if (preload_is_display_literal_setup(preload))
+  if (preload_is_display_literal_setup(preload, model))
     return true;
   return preload.value == "random()" || preload.value.starts_with("random(") ||
          preload.value.starts_with("random_unique(") ||
@@ -38846,7 +38896,10 @@ bool needs_generated_setup_program(const LoweringContext& context,
                                    const std::vector<PreloadReport>& preloads) {
   if (context.uses_formatted_coord_report)
     return true;
-  return std::any_of(preloads.begin(), preloads.end(), preload_requires_generated_setup_program);
+  const AddressSpaceModel model = address_space_model_for_feature_profile(context.feature_profile);
+  return std::any_of(preloads.begin(), preloads.end(), [&](const PreloadReport& preload) {
+    return preload_requires_generated_setup_program(preload, model);
+  });
 }
 
 bool expression_is_deterministic_for_if_chain(const Expression& expression) {
@@ -44707,12 +44760,28 @@ void run_interprocedural_ast_passes(const CompileOptions& options, V2Program& pr
 } // namespace
 
 std::vector<PreloadReport>
-preloaded_indirect_flow_comment_preloads(const std::vector<MachineItem>& items);
+preloaded_indirect_flow_comment_preloads(const std::vector<MachineItem>& items,
+                                         const CompileOptions& options);
 
 void append_missing_preloaded_indirect_flow_comments(std::vector<MachineItem>& items,
-                                                     const std::vector<PreloadReport>& preloads);
+                                                     const std::vector<PreloadReport>& preloads,
+                                                     const CompileOptions& options);
 
-constexpr int kPostLayoutOfficialProgramLimit = 105;
+AddressSpaceModel address_space_model_for_options(const CompileOptions& options) {
+  return address_space_model_for_feature_profile(options.feature_profile);
+}
+
+int program_step_limit_for_options(const CompileOptions& options) {
+  return official_program_step_limit(address_space_model_for_options(options));
+}
+
+std::size_t program_step_limit_size_for_options(const CompileOptions& options) {
+  return static_cast<std::size_t>(program_step_limit_for_options(options));
+}
+
+int official_last_program_address_for_options(const CompileOptions& options) {
+  return official_program_last_address(address_space_model_for_options(options));
+}
 
 int reference_indirect_flow_rescue_above(const ProgramAst& ast, const CompileOptions& options);
 void populate_public_report(CompileResult& result, const ProgramAst& ast,
@@ -44721,9 +44790,12 @@ std::vector<CandidateReport> build_analysis_opportunity_reports(const ProgramAst
                                                                 const CompileResult& result,
                                                                 const CompileOptions& options);
 
-CompileResult compile_source_once(std::string source, const CompileOptions& options) {
+CompileResult compile_source_once(std::string source, const CompileOptions& requested_options) {
+  CompileOptions options = requested_options;
   CompileResult result;
   result.implemented = true;
+  result.feature_profile = options.feature_profile;
+  result.budget = options.budget;
   auto trace_stage = [](std::string_view) {};
 
   ProgramAst ast;
@@ -44740,6 +44812,21 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
     result.diagnostics.push_back(
         diagnostic(DiagnosticSeverity::Error, "parse-error", error.what()));
     return result;
+  }
+
+  if (ast.feature_profile.has_value()) {
+    if (requested_options.feature_profile != FeatureProfile::Standard &&
+        requested_options.feature_profile != *ast.feature_profile) {
+      result.implemented = false;
+      result.diagnostics.push_back(diagnostic(
+          DiagnosticSeverity::Error, "feature-profile-conflict",
+          "Source feature profile '" + std::string(feature_profile_id(*ast.feature_profile)) +
+              "' conflicts with requested feature profile '" +
+              std::string(feature_profile_id(requested_options.feature_profile)) + "'"));
+      return result;
+    }
+    options.feature_profile = *ast.feature_profile;
+    result.feature_profile = options.feature_profile;
   }
 
   if (!ast.v2.has_value()) {
@@ -44763,6 +44850,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
 
   LoweringContext context;
   context.program = &*ast.v2;
+  context.feature_profile = options.feature_profile;
+  context.emitter.address_space_model = address_space_model_for_options(options);
   context.cave_sketch_shape = false;
   context.segmented_bitplanes = options.segmented_bitplanes;
   context.segmented_line_count_scan = options.segmented_line_count_scan;
@@ -45121,16 +45210,17 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       const std::size_t return_stack_budget =
           options.budget.has_value() && *options.budget > 0
               ? static_cast<std::size_t>(*options.budget)
-              : static_cast<std::size_t>(105);
+              : program_step_limit_size_for_options(options);
       const bool return_stack_needs_size_rescue =
           core::machine_cell_count(post_layout_items) > static_cast<int>(return_stack_budget);
       const core::ReturnStackScriptOpportunityScan return_stack_script_scan =
-          core::scan_return_stack_script_opportunity(post_layout_items);
+          core::scan_return_stack_script_opportunity(post_layout_items, pass_options);
       const core::ReturnStackIrTailLayoutSearch return_stack_tail_layout_scan =
           core::analyze_return_stack_ir_tail_layout(
               raise_machine_to_ir(post_layout_items),
               core::ReturnStackStartupLayoutOptions{
                   .size_rescue = return_stack_needs_size_rescue,
+                  .feature_profile = options.feature_profile,
               });
       const bool profitable_tail_layout_signal =
           return_stack_tail_layout_scan.materialized &&
@@ -45145,6 +45235,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               raise_machine_to_ir(post_layout_items), post_layout_items, pass_options,
               core::ReturnStackStartupLayoutOptions{
                   .size_rescue = return_stack_needs_size_rescue,
+                  .feature_profile = options.feature_profile,
               },
               indirect_flow_rescue_above);
       if (tail_layout.materialized) {
@@ -45352,7 +45443,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       }
 
       const core::PostLayoutIndirectFlowResult return_stack_script =
-          core::optimize_post_layout_return_stack_script(post_layout_items);
+          core::optimize_post_layout_return_stack_script(post_layout_items, pass_options);
       post_layout_items = return_stack_script.items;
       post_layout_optimizations.insert(post_layout_optimizations.end(),
                                        return_stack_script.optimizations.begin(),
@@ -45361,7 +45452,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         return_stack_post_layout_changed = true;
       if (return_stack_script.applied == 0) {
         const std::string rejection =
-            core::explain_return_stack_script_rejection(post_layout_items);
+            core::explain_return_stack_script_rejection(post_layout_items, pass_options);
         if (options.return_stack_script && options.analysis && !rejection.empty()) {
           result.diagnostics.push_back(diagnostic(
               DiagnosticSeverity::Note, "return-stack-script-not-applied", rejection));
@@ -45379,7 +45470,11 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         if (return_stack_needs_size_rescue) {
           const std::vector<core::DirtyReturnStackDispatchAllocationPlan> dirty_allocations =
               core::allocate_dirty_return_stack_dispatch_layouts(
-                  post_layout_items, core::DirtyReturnStackDispatchOptions{.size_rescue = true});
+                  post_layout_items,
+                  core::DirtyReturnStackDispatchOptions{
+                      .feature_profile = options.feature_profile,
+                      .size_rescue = true,
+                  });
           auto overlay_flow_cell_count = [&](const std::vector<MachineItem>& items) {
             return core::measure_return_stack_downstream_post_layout_pipeline(
                        items, pass_options, indirect_flow_rescue_above)
@@ -45488,7 +45583,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
 
     if (return_stack_post_layout_changed) {
       const core::PostLayoutIndirectFlowResult post_layout_overlay =
-          core::optimize_post_layout_address_code_overlay(post_layout_items);
+          core::optimize_post_layout_address_code_overlay(post_layout_items, {}, pass_options);
       post_layout_items = post_layout_overlay.items;
       post_layout_optimizations.insert(post_layout_optimizations.end(),
                                        post_layout_overlay.optimizations.begin(),
@@ -45521,7 +45616,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
     stop_tail_input.insert(stop_tail_input.end(), retargetable_setup_preloads.begin(),
                            retargetable_setup_preloads.end());
     const core::PostLayoutIndirectFlowResult post_layout_stop_tail =
-        core::optimize_post_layout_stop_tail_reuse(post_layout_items, stop_tail_input);
+        core::optimize_post_layout_stop_tail_reuse(post_layout_items, stop_tail_input,
+                                                   pass_options);
     post_layout_items = post_layout_stop_tail.items;
     stop_tail_preloads = post_layout_stop_tail.preloads;
     post_layout_optimizations.insert(post_layout_optimizations.end(),
@@ -45539,7 +45635,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         overlay_preloads.push_back(preload);
     }
     const core::PostLayoutIndirectFlowResult post_layout_overlay =
-        core::optimize_post_layout_address_code_overlay(post_layout_items, overlay_preloads);
+        core::optimize_post_layout_address_code_overlay(post_layout_items, overlay_preloads,
+                                                        pass_options);
     post_layout_items = post_layout_overlay.items;
     if (post_layout_overlay.applied > 0) {
       // The overlay deletes cells and shifts helper addresses; it returns the
@@ -45574,7 +45671,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   }
 
   const std::vector<PreloadReport> comment_flow_preloads =
-      preloaded_indirect_flow_comment_preloads(post_layout_items);
+      preloaded_indirect_flow_comment_preloads(post_layout_items, options);
   for (const PreloadReport& preload : comment_flow_preloads) {
     const bool duplicate =
         std::any_of(post_layout_flow_preloads.begin(), post_layout_flow_preloads.end(),
@@ -45584,7 +45681,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
     if (!duplicate)
       post_layout_flow_preloads.push_back(preload);
   }
-  append_missing_preloaded_indirect_flow_comments(post_layout_items, post_layout_flow_preloads);
+  append_missing_preloaded_indirect_flow_comments(post_layout_items, post_layout_flow_preloads,
+                                                 options);
 
   trace_stage("resolve");
   result.items = post_layout_items;
@@ -45712,14 +45810,16 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
           .detail = optimization.detail,
       });
     }
-    result.setup_hex = format_hex_steps(result.setup_program->steps);
-    result.setup_listing = format_listing_steps(result.setup_program->steps);
+    result.setup_hex = format_hex_steps(result.setup_program->steps,
+                                        address_space_model_for_options(options));
+    result.setup_listing = format_listing_steps(result.setup_program->steps,
+                                                address_space_model_for_options(options));
   }
   result.diagnostics.insert(result.diagnostics.end(), resolved.diagnostics.begin(),
                             resolved.diagnostics.end());
   result.implemented = !has_errors(result.diagnostics);
-  result.hex = format_hex_steps(result.steps);
-  result.listing = combine_listing(result);
+  result.hex = format_hex_steps(result.steps, address_space_model_for_options(options));
+  result.listing = combine_listing(result, address_space_model_for_options(options));
   if (result.implemented)
     populate_public_report(result, ast, options);
   return result;
@@ -45776,15 +45876,16 @@ int estimated_startup_program_cost(const CompileResult& result) {
   return static_cast<int>(result.preloads.size()) * 2;
 }
 
-bool candidate_beats_best(const CompileResult& candidate, const CompileResult& best) {
-  constexpr std::size_t kOfficialProgramLimit = 105;
+bool candidate_beats_best(const CompileResult& candidate, const CompileResult& best,
+                          const CompileOptions& options) {
+  const std::size_t official_program_limit = program_step_limit_size_for_options(options);
   if (!candidate.implemented)
     return false;
   if (!best.implemented)
     return true;
   if (candidate.steps.size() < best.steps.size())
     return true;
-  return candidate.steps.size() == best.steps.size() && best.steps.size() > kOfficialProgramLimit &&
+  return candidate.steps.size() == best.steps.size() && best.steps.size() > official_program_limit &&
          estimated_startup_program_cost(candidate) < estimated_startup_program_cost(best);
 }
 
@@ -45827,16 +45928,20 @@ bool preloaded_constant_registers_proved(const CompileOptions& options,
 bool indirect_flow_targets_proved(const std::vector<OptimizationReport>& optimizations,
                                   const std::vector<PreloadReport>& preloads,
                                   const std::vector<ResolvedStep>& steps,
-                                  const std::map<std::string, std::string>& allocated_registers);
+                                  const std::map<std::string, std::string>& allocated_registers,
+                                  AddressSpaceModel model);
 std::optional<std::string> indirect_flow_targets_rejection_reason(
     const std::vector<OptimizationReport>& optimizations,
     const std::vector<PreloadReport>& preloads,
     const std::vector<ResolvedStep>& steps,
-    const std::map<std::string, std::string>& allocated_registers);
+    const std::map<std::string, std::string>& allocated_registers,
+    AddressSpaceModel model);
 bool runtime_indirect_call_targets_proved(const std::vector<OptimizationReport>& optimizations,
-                                          const std::vector<ResolvedStep>& steps);
+                                          const std::vector<ResolvedStep>& steps,
+                                          const CompileOptions& options);
 bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationReport>& optimizations,
-                                              const std::vector<ResolvedStep>& steps);
+                                              const std::vector<ResolvedStep>& steps,
+                                              const CompileOptions& options);
 bool fractional_selector_data_values_proved(const std::vector<OptimizationReport>& optimizations,
                                             const CompileOptions& options,
                                             const std::vector<PreloadReport>& preloads,
@@ -45937,7 +46042,7 @@ std::vector<std::string> computed_dispatch_target_labels_from_comment(
 }
 
 std::optional<std::vector<int>> computed_dispatch_proof_targets_from_comment(
-    const std::optional<std::string>& comment) {
+    const std::optional<std::string>& comment, const CompileOptions& options) {
   if (!comment.has_value())
     return std::nullopt;
   constexpr std::string_view kMarker = "computed-dispatch-proof-targets=";
@@ -45963,7 +46068,7 @@ std::optional<std::vector<int>> computed_dispatch_proof_targets_from_comment(
       target = target * 10 + (comment->at(cursor) - '0');
       ++cursor;
     }
-    if (target < 0 || target > 104)
+    if (target < 0 || target > official_last_program_address_for_options(options))
       return std::nullopt;
     targets.push_back(target);
     expect_target = false;
@@ -46014,7 +46119,7 @@ bool computed_dispatch_artifacts_proved(const CompileOptions& options,
     if (labels.empty())
       return false;
     const std::optional<std::vector<int>> proof_targets =
-        computed_dispatch_proof_targets_from_comment(step.comment);
+        computed_dispatch_proof_targets_from_comment(step.comment, options);
     if (!proof_targets.has_value())
       return false;
     available_steps.push_back(index);
@@ -46032,7 +46137,7 @@ bool computed_dispatch_artifacts_proved(const CompileOptions& options,
       const std::vector<std::string> labels =
           computed_dispatch_target_labels_from_comment(step.comment);
       const std::optional<std::vector<int>> proof_targets =
-          computed_dispatch_proof_targets_from_comment(step.comment);
+          computed_dispatch_proof_targets_from_comment(step.comment, options);
       if (!proof_targets.has_value())
         return false;
       if (proof_targets->size() != plan.proof_constraints.size())
@@ -46132,7 +46237,8 @@ bool preloaded_indirect_flow_static_gate_accepts(const CompileOptions& candidate
     return false;
   const bool has_indirect_flow_proof =
       indirect_flow_targets_proved(result.optimizations, result.preloads, result.steps,
-                                   result.registers);
+                                   result.registers,
+                                   address_space_model_for_options(candidate_options));
   return has_indirect_flow_proof;
 }
 
@@ -46153,7 +46259,8 @@ bool aggressive_post_layout_indirect_flow_static_gate_accepts(
     return false;
   const bool has_indirect_flow_proof =
       indirect_flow_targets_proved(result.optimizations, result.preloads, result.steps,
-                                   result.registers);
+                                   result.registers,
+                                   address_space_model_for_options(candidate_options));
   return has_indirect_flow_proof;
 }
 
@@ -46176,7 +46283,7 @@ bool runtime_indirect_call_flow_static_gate_accepts(const CompileOptions& candid
   if (!suppressed_preload_static_gate_accepts(candidate_options, result))
     return false;
   const bool has_runtime_call_proof =
-      runtime_indirect_call_targets_proved(result.optimizations, result.steps);
+      runtime_indirect_call_targets_proved(result.optimizations, result.steps, candidate_options);
   const bool has_runtime_call_optimization =
       std::any_of(result.optimizations.begin(), result.optimizations.end(),
                   [](const OptimizationReport& item) {
@@ -46209,7 +46316,8 @@ bool dual_use_constant_indirect_flow_static_gate_accepts(const CompileOptions& c
                   });
   const bool has_indirect_flow_proof =
       indirect_flow_targets_proved(result.optimizations, result.preloads, result.steps,
-                                   result.registers);
+                                   result.registers,
+                                   address_space_model_for_options(candidate_options));
   if (!has_indirect_flow_optimization || !has_indirect_flow_proof)
     return false;
 
@@ -46270,7 +46378,8 @@ bool forward_indirect_flow_static_gate_accepts(const CompileOptions& candidate_o
                   });
   const bool has_indirect_flow_proof =
       indirect_flow_targets_proved(result.optimizations, result.preloads, result.steps,
-                                   result.registers);
+                                   result.registers,
+                                   address_space_model_for_options(candidate_options));
   if (!has_indirect_flow_optimization || !has_indirect_flow_proof)
     return false;
 
@@ -46322,7 +46431,8 @@ bool callee_hole_straight_line_helper_static_gate_accepts(const CompileOptions& 
   }
   if (!suppressed_preload_static_gate_accepts(candidate_options, result))
     return false;
-  return callee_hole_indirect_call_targets_proved(result.optimizations, result.steps);
+  return callee_hole_indirect_call_targets_proved(result.optimizations, result.steps,
+                                                  candidate_options);
 }
 
 bool optimizer_static_gate_accepts(const CompileOptions& candidate_options,
@@ -46356,7 +46466,9 @@ std::optional<std::string> optimizer_static_gate_rejection_reason(
   if (needs_indirect_flow_target_proof) {
     if (const std::optional<std::string> reason =
             indirect_flow_targets_rejection_reason(result.optimizations, result.preloads,
-                                                   result.steps, result.registers)) {
+                                                   result.steps, result.registers,
+                                                   address_space_model_for_options(
+                                                       candidate_options))) {
       return reason;
     }
   }
@@ -46390,7 +46502,7 @@ bool can_retry_after_primary_failure(const CompileResult& result) {
     return d.severity == DiagnosticSeverity::Error &&
            (d.message.find("Out of MK-61 registers while allocating") != std::string::npos ||
             d.code == "BUDGET_EXCEEDED" ||
-            d.message.find("is outside 00..A4") != std::string::npos ||
+            d.message.find("is outside 00..") != std::string::npos ||
             d.message.find("exceeds formal MK-61 address range") != std::string::npos);
   });
 }
@@ -46401,11 +46513,11 @@ bool can_retry_lowering_attempt_in_analysis(const CompileResult& result,
     return false;
   if (is_only_budget_exceeded(result))
     return true;
-  constexpr std::size_t kDefaultBudget = 105;
+  const std::size_t default_budget = program_step_limit_size_for_options(options);
   const std::size_t requested_budget = options.budget.has_value() && *options.budget > 0
                                            ? static_cast<std::size_t>(*options.budget)
-                                           : kDefaultBudget;
-  if (requested_budget > kDefaultBudget)
+                                           : default_budget;
+  if (requested_budget > default_budget)
     return false;
   return can_retry_after_primary_failure(result);
 }
@@ -46494,6 +46606,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
 std::string implemented_candidate_key(const CompileOptions& options) {
   std::ostringstream out;
   out << reclaim_base_key(options)
+      << ";feature_profile=" << feature_profile_id(options.feature_profile)
       << ";collect_coalesce_shares=" << options.collect_coalesce_shares;
   for (const auto& [value, reg] : options.preloaded_constant_registers)
     out << ";preloaded_constant=" << value << ":" << reg;
@@ -46682,13 +46795,13 @@ std::optional<int> resolve_reference_span(const std::string& reference_name) {
 
 int reference_indirect_flow_rescue_above(const ProgramAst& ast, const CompileOptions& options) {
   if (!ast.reference.has_value())
-    return kPostLayoutOfficialProgramLimit;
+    return program_step_limit_for_options(options);
   const std::optional<int> span = resolve_reference_span(*ast.reference);
   if (!span.has_value())
-    return kPostLayoutOfficialProgramLimit;
+    return program_step_limit_for_options(options);
   const int budget = options.budget.has_value() && *options.budget > 0
                          ? *options.budget
-                         : kPostLayoutOfficialProgramLimit;
+                         : program_step_limit_for_options(options);
   return std::min(*span, budget);
 }
 
@@ -46712,7 +46825,7 @@ ReferenceReport build_reference_report(const std::string& reference_name, int co
                                        std::vector<std::string>& warnings) {
   const int fallback_budget = options.budget.has_value() && *options.budget > 0
                                   ? *options.budget
-                                  : kPostLayoutOfficialProgramLimit;
+                                  : program_step_limit_for_options(options);
   const std::optional<int> span = resolve_reference_span(reference_name);
   const int reference_steps = span.value_or(fallback_budget);
   if (!span.has_value()) {
@@ -46987,7 +47100,8 @@ OptimizerReport build_optimizer_report(const std::vector<OptimizationReport>& op
 
 std::vector<MachineFeatureUseReport>
 build_machine_features_used(const std::vector<OptimizationReport>& optimizations,
-                            const std::vector<CandidateReport>& candidates) {
+                            const std::vector<CandidateReport>& candidates,
+                            const CompileOptions& options) {
   std::vector<MachineFeatureUseReport> features;
   auto add = [&](std::string id, std::string source, std::string detail) {
     if (std::none_of(features.begin(), features.end(),
@@ -47031,6 +47145,12 @@ build_machine_features_used(const std::vector<OptimizationReport>& optimizations
   if (has_optimization_named(optimizations, "raw-display-5f"))
     add("raw-display-5f", "optimizer",
         "Raw block emitted opcode 5F as a display-state transform.");
+  if (options.feature_profile == FeatureProfile::Mk61SMiniExpanded) {
+    add("rf-register", "feature-profile",
+        "Feature profile enabled the RF memory register at direct opcodes 4F/6F.");
+    add("expanded-program-space", "feature-profile",
+        "Feature profile enabled 112 real program cells, with A5..B1 as physical cells 105..111.");
+  }
   return features;
 }
 
@@ -47074,7 +47194,8 @@ std::optional<std::string> indirect_flow_register_for_opcode(int opcode) {
   }
 }
 
-std::optional<int> indirect_target_from_comment(const std::optional<std::string>& comment) {
+std::optional<int> indirect_target_from_comment(const std::optional<std::string>& comment,
+                                                const CompileOptions& options) {
   if (!comment.has_value())
     return std::nullopt;
   const std::string marker = "indirect-target=";
@@ -47091,7 +47212,7 @@ std::optional<int> indirect_target_from_comment(const std::optional<std::string>
   }
   if (pos < comment->size() && !std::isspace(static_cast<unsigned char>((*comment)[pos])))
     return std::nullopt;
-  if (value < 0 || value > 104)
+  if (value < 0 || value > official_last_program_address_for_options(options))
     return std::nullopt;
   return value;
 }
@@ -47109,7 +47230,8 @@ struct PreloadedSelectorAnnotation {
 // comment, so the verifier cannot accidentally combine unrelated fields. This
 // is deliberately local and does not execute the program.
 std::optional<PreloadedSelectorAnnotation> preloaded_selector_annotation_from_comment(
-    const std::optional<std::string>& comment, const std::string& register_name) {
+    const std::optional<std::string>& comment, const std::string& register_name,
+    AddressSpaceModel model) {
   if (!comment.has_value())
     return std::nullopt;
   const std::string marker = "preloaded R" + register_name + "=";
@@ -47140,7 +47262,7 @@ std::optional<PreloadedSelectorAnnotation> preloaded_selector_annotation_from_co
   }
   if (pos < comment->size() && !std::isspace(static_cast<unsigned char>((*comment)[pos])))
     return std::nullopt;
-  if (target < 0 || target > 104)
+  if (target < 0 || target > official_program_last_address(model))
     return std::nullopt;
   return PreloadedSelectorAnnotation{
       .value = value,
@@ -47153,7 +47275,7 @@ std::optional<PreloadedSelectorAnnotation> preloaded_selector_annotation_from_co
 // The helper only parses the shared "runtime indirect call selector N" marker;
 // ordering/register-overwrite checks live in runtime_indirect_call_targets_proved.
 std::optional<int> runtime_selector_target_from_comment(
-    const std::optional<std::string>& comment) {
+    const std::optional<std::string>& comment, const CompileOptions& options) {
   if (!comment.has_value())
     return std::nullopt;
   const std::string marker = "runtime indirect call selector ";
@@ -47169,7 +47291,7 @@ std::optional<int> runtime_selector_target_from_comment(
   }
   if (pos != comment->size())
     return std::nullopt;
-  if (value < 0 || value > 104)
+  if (value < 0 || value > official_last_program_address_for_options(options))
     return std::nullopt;
   return value;
 }
@@ -47185,14 +47307,16 @@ std::optional<std::string> store_register_for_opcode(int opcode) {
 }
 
 bool runtime_selector_literal_precedes_store(const std::vector<ResolvedStep>& steps,
-                                             std::size_t store_index, int target) {
+                                             std::size_t store_index, int target,
+                                             const CompileOptions& options) {
   std::string reversed_digits;
   std::size_t index = store_index;
   while (index > 0) {
     const ResolvedStep& step = steps.at(index - 1);
     if (step.opcode < 0 || step.opcode > 9)
       break;
-    const std::optional<int> digit_target = runtime_selector_target_from_comment(step.comment);
+    const std::optional<int> digit_target =
+        runtime_selector_target_from_comment(step.comment, options);
     if (!digit_target.has_value() || *digit_target != target)
       break;
     reversed_digits.push_back(static_cast<char>('0' + step.opcode));
@@ -47204,9 +47328,11 @@ bool runtime_selector_literal_precedes_store(const std::vector<ResolvedStep>& st
 }
 
 bool selector_value_resolves_to_flow_target(const std::string& register_name,
-                                            const std::string& value, int target) {
+                                            const std::string& value, int target,
+                                            AddressSpaceModel model) {
   const std::optional<core::IndirectAddressEvaluation> resolved =
-      core::evaluate_indirect_address(register_name, value, core::IndirectOperationKind::Flow);
+      core::evaluate_indirect_address(register_name, value, core::IndirectOperationKind::Flow,
+                                      model);
   return resolved.has_value() && resolved->actual_flow_target == target;
 }
 
@@ -47277,13 +47403,15 @@ bool selector_values_match(const std::string& left, const std::string& right) {
 
 bool final_preload_resolves_to_flow_target(const std::vector<PreloadReport>& preloads,
                                            const std::string& register_name, int target,
-                                           const std::string& expected_value) {
+                                           const std::string& expected_value,
+                                           AddressSpaceModel model) {
   for (const PreloadReport& preload : preloads) {
     if (preload.register_name != register_name)
       continue;
     if (!selector_values_match(preload.value, expected_value))
       continue;
-    if (selector_value_resolves_to_flow_target(preload.register_name, preload.value, target))
+    if (selector_value_resolves_to_flow_target(preload.register_name, preload.value, target,
+                                               model))
       return true;
   }
   return false;
@@ -47327,7 +47455,8 @@ bool preloaded_constant_registers_proved(const CompileOptions& options,
 }
 
 bool runtime_indirect_call_targets_proved(const std::vector<OptimizationReport>& optimizations,
-                                          const std::vector<ResolvedStep>& steps) {
+                                          const std::vector<ResolvedStep>& steps,
+                                          const CompileOptions& options) {
   if (!has_optimization_named(optimizations, "runtime-indirect-call-flow"))
     return false;
 
@@ -47336,14 +47465,15 @@ bool runtime_indirect_call_targets_proved(const std::vector<OptimizationReport>&
   for (std::size_t index = 0; index < steps.size(); ++index) {
     const ResolvedStep& step = steps.at(index);
     if (step.comment.has_value() && step.comment->starts_with("runtime indirect call selector ") &&
-        !runtime_selector_target_from_comment(step.comment).has_value()) {
+        !runtime_selector_target_from_comment(step.comment, options).has_value()) {
       return false;
     }
     const std::optional<std::string> store_register = store_register_for_opcode(step.opcode);
     if (store_register.has_value() && core::is_stable_indirect_selector(*store_register)) {
-      const std::optional<int> stored_target = runtime_selector_target_from_comment(step.comment);
+      const std::optional<int> stored_target =
+          runtime_selector_target_from_comment(step.comment, options);
       if (stored_target.has_value() &&
-          runtime_selector_literal_precedes_store(steps, index, *stored_target)) {
+          runtime_selector_literal_precedes_store(steps, index, *stored_target, options)) {
         current_selector_targets[*store_register] = *stored_target;
       } else {
         current_selector_targets.erase(*store_register);
@@ -47357,7 +47487,7 @@ bool runtime_indirect_call_targets_proved(const std::vector<OptimizationReport>&
     const std::string register_name = core::register_name_for_index(step.opcode - 0xa0);
     if (!core::is_stable_indirect_selector(register_name))
       return false;
-    const std::optional<int> target = indirect_target_from_comment(step.comment);
+    const std::optional<int> target = indirect_target_from_comment(step.comment, options);
     if (!target.has_value())
       return false;
     const auto current = current_selector_targets.find(register_name);
@@ -47376,7 +47506,7 @@ std::optional<std::set<std::string>> indirect_memory_targets_from_comment(
     const std::optional<std::string>& comment);
 
 std::optional<std::map<int, std::string>> callee_hole_leaf_targets_from_comment(
-    const std::optional<std::string>& comment) {
+    const std::optional<std::string>& comment, const CompileOptions& options) {
   if (!comment.has_value() || !comment->starts_with(kCalleeHoleCallMarker))
     return std::nullopt;
   constexpr std::string_view kMarker = "leaf-targets=";
@@ -47391,7 +47521,7 @@ std::optional<std::map<int, std::string>> callee_hole_leaf_targets_from_comment(
       value = value * 10 + ((*comment)[pos] - '0');
       ++pos;
     }
-    if (value < 0 || value > 104)
+    if (value < 0 || value > official_last_program_address_for_options(options))
       return std::nullopt;
     if (pos >= comment->size() || (*comment)[pos] != ':')
       return std::nullopt;
@@ -47424,7 +47554,8 @@ std::optional<std::map<int, std::string>> callee_hole_leaf_targets_from_comment(
 // carrying that leaf's entry marker must sit at exactly that address. The last
 // check catches layout shifts after the rewrite froze the charge digits.
 bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationReport>& optimizations,
-                                              const std::vector<ResolvedStep>& steps) {
+                                              const std::vector<ResolvedStep>& steps,
+                                              const CompileOptions& options) {
   if (!has_optimization_named(optimizations, "callee-hole-straight-line-helper"))
     return false;
 
@@ -47435,9 +47566,10 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
     const ResolvedStep& step = steps.at(index);
     const std::optional<std::string> store_register = store_register_for_opcode(step.opcode);
     if (store_register.has_value()) {
-      const std::optional<int> stored_target = runtime_selector_target_from_comment(step.comment);
+      const std::optional<int> stored_target =
+          runtime_selector_target_from_comment(step.comment, options);
       if (stored_target.has_value() &&
-          runtime_selector_literal_precedes_store(steps, index, *stored_target)) {
+          runtime_selector_literal_precedes_store(steps, index, *stored_target, options)) {
         // Charges bound for the skeleton must transfer control to it right
         // away, otherwise the register value at the hole is unconstrained.
         const bool followed_by_skeleton_call =
@@ -47480,7 +47612,7 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
   bool saw_proved_hole = false;
   for (const ResolvedStep& step : steps) {
     const std::optional<std::map<int, std::string>> leaf_targets =
-        callee_hole_leaf_targets_from_comment(step.comment);
+        callee_hole_leaf_targets_from_comment(step.comment, options);
     if (!leaf_targets.has_value())
       continue;
     if (all_poisoned || step.opcode < 0xa0 || step.opcode > 0xae)
@@ -47552,14 +47684,50 @@ bool step_mnemonic_starts_with(const ResolvedStep& step, std::string_view prefix
   return step.mnemonic.rfind(std::string(prefix), 0) == 0;
 }
 
+std::string register_name_for_step_index(int index) {
+  return core::register_name_for_index(index, FeatureProfile::Mk61SMiniExpanded);
+}
+
+std::optional<int> direct_store_index_for_step(const ResolvedStep& step) {
+  if (step.opcode >= 0x40 && step.opcode <= 0x4e &&
+      (step.mnemonic.empty() || step_mnemonic_starts_with(step, "X->П ")))
+    return step.opcode - 0x40;
+  if (step.opcode == 0x4f && step.mnemonic == "X->П f")
+    return 0x0f;
+  return std::nullopt;
+}
+
+std::optional<int> direct_recall_index_for_step(const ResolvedStep& step) {
+  if (step.opcode >= 0x60 && step.opcode <= 0x6e &&
+      (step.mnemonic.empty() || step_mnemonic_starts_with(step, "П->X ")))
+    return step.opcode - 0x60;
+  if (step.opcode == 0x6f && step.mnemonic == "П->X f")
+    return 0x0f;
+  return std::nullopt;
+}
+
+std::optional<int> mnemonic_direct_store_index_for_step(const ResolvedStep& step) {
+  if (step.opcode >= 0x40 && step.opcode <= 0x4e && step_mnemonic_starts_with(step, "X->П "))
+    return step.opcode - 0x40;
+  if (step.opcode == 0x4f && step.mnemonic == "X->П f")
+    return 0x0f;
+  return std::nullopt;
+}
+
+std::optional<int> mnemonic_direct_recall_index_for_step(const ResolvedStep& step) {
+  if (step.opcode >= 0x60 && step.opcode <= 0x6e && step_mnemonic_starts_with(step, "П->X "))
+    return step.opcode - 0x60;
+  if (step.opcode == 0x6f && step.mnemonic == "П->X f")
+    return 0x0f;
+  return std::nullopt;
+}
+
 bool step_is_direct_store(const ResolvedStep& step) {
-  return step.opcode >= 0x40 && step.opcode <= 0x4e &&
-         step_mnemonic_starts_with(step, "X->П ");
+  return direct_store_index_for_step(step).has_value();
 }
 
 bool step_is_direct_recall(const ResolvedStep& step) {
-  return step.opcode >= 0x60 && step.opcode <= 0x6e &&
-         step_mnemonic_starts_with(step, "П->X ");
+  return direct_recall_index_for_step(step).has_value();
 }
 
 bool step_is_indirect_memory_store(const ResolvedStep& step) {
@@ -47585,8 +47753,8 @@ bool indirect_memory_access_may_touch_selector(const ResolvedStep& step,
 
 bool step_writes_indirect_flow_selector(const ResolvedStep& step,
                                         const std::set<std::string>& selector_registers) {
-  if (step_is_direct_store(step)) {
-    const std::string register_name = core::register_name_for_index(step.opcode - 0x40);
+  if (const std::optional<int> index = mnemonic_direct_store_index_for_step(step)) {
+    const std::string register_name = register_name_for_step_index(*index);
     return selector_registers.contains(register_name);
   }
   if (step_is_indirect_memory_store(step))
@@ -47598,8 +47766,8 @@ bool step_accesses_selector_as_data(const ResolvedStep& step,
                                     const std::set<std::string>& selector_registers) {
   if (step_writes_indirect_flow_selector(step, selector_registers))
     return true;
-  if (step_is_direct_recall(step)) {
-    const std::string register_name = core::register_name_for_index(step.opcode - 0x60);
+  if (const std::optional<int> index = mnemonic_direct_recall_index_for_step(step)) {
+    const std::string register_name = register_name_for_step_index(*index);
     return selector_registers.contains(register_name);
   }
   if (step_is_indirect_memory_recall(step))
@@ -47920,8 +48088,8 @@ std::optional<std::string> indirect_flow_selector_preservation_rejection_reason(
     if (!step_writes_indirect_flow_selector(step, selector_registers))
       continue;
     std::string selector = "unknown";
-    if (step_is_direct_store(step))
-      selector = core::register_name_for_index(step.opcode - 0x40);
+    if (const std::optional<int> index = mnemonic_direct_store_index_for_step(step))
+      selector = register_name_for_step_index(*index);
     return "static proof gate rejected candidate; " +
            static_proof_gate_key_values({
                {"proofFamily", "indirect-flow-targets"},
@@ -48052,7 +48220,8 @@ std::optional<std::string> indirect_flow_targets_rejection_reason(
     const std::vector<OptimizationReport>& optimizations,
     const std::vector<PreloadReport>& preloads,
     const std::vector<ResolvedStep>& steps,
-    const std::map<std::string, std::string>& allocated_registers) {
+    const std::map<std::string, std::string>& allocated_registers,
+    AddressSpaceModel model) {
   (void)optimizations;
   bool saw_candidate_step = false;
   std::set<std::string> selector_registers;
@@ -48078,7 +48247,7 @@ std::optional<std::string> indirect_flow_targets_rejection_reason(
              });
     }
     const std::optional<PreloadedSelectorAnnotation> annotation =
-        preloaded_selector_annotation_from_comment(step.comment, *register_name);
+        preloaded_selector_annotation_from_comment(step.comment, *register_name, model);
     if (!annotation.has_value()) {
       return "static proof gate rejected candidate; " +
              static_proof_gate_key_values({
@@ -48093,7 +48262,7 @@ std::optional<std::string> indirect_flow_targets_rejection_reason(
              });
     }
     if (!final_preload_resolves_to_flow_target(preloads, *register_name, annotation->target,
-                                               annotation->value)) {
+                                               annotation->value, model)) {
       return "static proof gate rejected candidate; " +
              static_proof_gate_key_values({
                  {"proofFamily", "indirect-flow-targets"},
@@ -48132,15 +48301,13 @@ std::optional<std::string> indirect_flow_targets_rejection_reason(
 bool indirect_flow_targets_proved(const std::vector<OptimizationReport>& optimizations,
                                   const std::vector<PreloadReport>& preloads,
                                   const std::vector<ResolvedStep>& steps,
-                                  const std::map<std::string, std::string>& allocated_registers) {
-  // Deliberately no CompileOptions parameter here: selector preload intent is
-  // not a proof artifact.  The proof is discharged only by final delivered
-  // preload reports paired with final proof-carrying step annotations.  Some
-  // shape-specific lowerers emit the same artifacts before optimizer reporting
-  // attaches a generic preloaded-indirect-flow name, so the verifier must not
-  // depend on OptimizationReport labels.
+                                  const std::map<std::string, std::string>& allocated_registers,
+                                  AddressSpaceModel model) {
+  // Selector preload intent is not a proof artifact. The proof is discharged by
+  // final delivered preload reports paired with final proof-carrying step
+  // annotations under the active machine profile's official target range.
   return !indirect_flow_targets_rejection_reason(optimizations, preloads, steps,
-                                                 allocated_registers)
+                                                 allocated_registers, model)
               .has_value();
 }
 
@@ -48229,22 +48396,6 @@ dead_integer_fractional_selector_carrier_from_comment(const std::optional<std::s
   return trim_ascii(comment->substr(prefix + kPrefix.size(), marker - prefix - kPrefix.size()));
 }
 
-bool is_register_recall_opcode(int opcode) {
-  return opcode >= 0x60 && opcode <= 0x6e;
-}
-
-std::optional<int> direct_register_recall_index(int opcode) {
-  if (opcode < 0x60 || opcode > 0x6e)
-    return std::nullopt;
-  return opcode - 0x60;
-}
-
-std::optional<int> direct_register_store_index(int opcode) {
-  if (opcode < 0x40 || opcode > 0x4e)
-    return std::nullopt;
-  return opcode - 0x40;
-}
-
 bool opcode_uses_register_as_indirect_selector(int opcode, int register_index) {
   if (register_index < 0 || register_index > 0x0e || (opcode & 0x0f) != register_index)
     return false;
@@ -48253,13 +48404,16 @@ bool opcode_uses_register_as_indirect_selector(int opcode, int register_index) {
 }
 
 bool dead_integer_fractional_selector_indirect_use_proved(const ResolvedStep& step,
-                                                          int register_index) {
+                                                          int register_index,
+                                                          const CompileOptions& options) {
   const std::optional<std::string> register_name = indirect_flow_register_for_opcode(step.opcode);
   if (!register_name.has_value() ||
-      *register_name != core::register_name_for_index(register_index)) {
+      *register_name != register_name_for_step_index(register_index)) {
     return false;
   }
-  return preloaded_selector_annotation_from_comment(step.comment, *register_name).has_value();
+  return preloaded_selector_annotation_from_comment(
+             step.comment, *register_name, address_space_model_for_options(options))
+      .has_value();
 }
 
 bool dead_integer_fractional_selector_memory_recall_use_proved(
@@ -48270,7 +48424,7 @@ bool dead_integer_fractional_selector_memory_recall_use_proved(
       indirect_memory_targets_from_comment(step.comment);
   if (!targets.has_value())
     return false;
-  const std::string register_name = core::register_name_for_index(register_index);
+  const std::string register_name = register_name_for_step_index(register_index);
   if (!core::is_stable_indirect_selector(register_name))
     return false;
   const std::optional<core::IndirectAddressEvaluation> evaluated =
@@ -48290,7 +48444,7 @@ bool dead_integer_fractional_selector_memory_store_use_proved(
       indirect_memory_targets_from_comment(step.comment);
   if (!targets.has_value())
     return false;
-  const std::string register_name = core::register_name_for_index(register_index);
+  const std::string register_name = register_name_for_step_index(register_index);
   if (!core::is_stable_indirect_selector(register_name))
     return false;
   const std::optional<core::IndirectAddressEvaluation> evaluated =
@@ -48303,10 +48457,11 @@ bool dead_integer_fractional_selector_memory_store_use_proved(
 }
 
 bool dead_integer_fractional_selector_direct_jump_use_proved(const ResolvedStep& step,
-                                                             int register_index) {
+                                                             int register_index,
+                                                             const CompileOptions& options) {
   if (step.opcode < 0x80 || step.opcode > 0x8e)
     return false;
-  return dead_integer_fractional_selector_indirect_use_proved(step, register_index);
+  return dead_integer_fractional_selector_indirect_use_proved(step, register_index, options);
 }
 
 constexpr int kDeadIntegerFractionalEraseOpcode = 0x35;  // К {x}
@@ -48350,7 +48505,7 @@ bool resolved_step_erases_dead_integer_fractional_selector(
 
 bool dead_integer_fractional_selector_conditional_flow_use_proved(
     const std::vector<ResolvedStep>& steps, std::size_t conditional_index, int register_index,
-    std::optional<int> selector_target) {
+    std::optional<int> selector_target, const CompileOptions& options) {
   if (conditional_index >= steps.size())
     return false;
   const ResolvedStep& step = steps.at(conditional_index);
@@ -48358,11 +48513,12 @@ bool dead_integer_fractional_selector_conditional_flow_use_proved(
     return false;
   const std::optional<std::string> register_name = indirect_flow_register_for_opcode(step.opcode);
   if (!register_name.has_value() ||
-      *register_name != core::register_name_for_index(register_index)) {
+      *register_name != register_name_for_step_index(register_index)) {
     return false;
   }
   const std::optional<PreloadedSelectorAnnotation> annotation =
-      preloaded_selector_annotation_from_comment(step.comment, *register_name);
+      preloaded_selector_annotation_from_comment(step.comment, *register_name,
+                                                 address_space_model_for_options(options));
   if (!annotation.has_value())
     return false;
   if (selector_target.has_value() && annotation->target != *selector_target)
@@ -48378,7 +48534,7 @@ bool dead_integer_fractional_selector_conditional_flow_use_proved(
 
 bool dead_integer_fractional_selector_indirect_call_use_proved(
     const std::vector<ResolvedStep>& steps, std::size_t call_index, int register_index,
-    std::optional<int> selector_target) {
+    std::optional<int> selector_target, const CompileOptions& options) {
   if (call_index >= steps.size())
     return false;
   const ResolvedStep& step = steps.at(call_index);
@@ -48386,11 +48542,12 @@ bool dead_integer_fractional_selector_indirect_call_use_proved(
     return false;
   const std::optional<std::string> register_name = indirect_flow_register_for_opcode(step.opcode);
   if (!register_name.has_value() ||
-      *register_name != core::register_name_for_index(register_index)) {
+      *register_name != register_name_for_step_index(register_index)) {
     return false;
   }
   const std::optional<PreloadedSelectorAnnotation> annotation =
-      preloaded_selector_annotation_from_comment(step.comment, *register_name);
+      preloaded_selector_annotation_from_comment(step.comment, *register_name,
+                                                 address_space_model_for_options(options));
   if (!annotation.has_value())
     return false;
   if (selector_target.has_value() && annotation->target != *selector_target)
@@ -48413,7 +48570,8 @@ enum class DeadIntegerStoredLiveXProof {
 std::optional<DeadIntegerStoredLiveXProof>
 dead_integer_fractional_selector_stored_live_x_use_proved(
     const std::vector<ResolvedStep>& steps, std::size_t consumer_index, int register_index,
-    const std::optional<std::string>& carrier_value, std::optional<int> selector_target) {
+    const std::optional<std::string>& carrier_value, std::optional<int> selector_target,
+    const CompileOptions& options) {
   if (consumer_index >= steps.size())
     return std::nullopt;
   const ResolvedStep& step = steps.at(consumer_index);
@@ -48422,11 +48580,11 @@ dead_integer_fractional_selector_stored_live_x_use_proved(
     return DeadIntegerStoredLiveXProof::OverwrittenByMemoryRecall;
   }
   if (dead_integer_fractional_selector_conditional_flow_use_proved(
-          steps, consumer_index, register_index, selector_target)) {
+          steps, consumer_index, register_index, selector_target, options)) {
     return DeadIntegerStoredLiveXProof::ErasedByConditionalSuccessors;
   }
   if (dead_integer_fractional_selector_indirect_call_use_proved(
-          steps, consumer_index, register_index, selector_target)) {
+          steps, consumer_index, register_index, selector_target, options)) {
     return DeadIntegerStoredLiveXProof::ErasedByIndirectCallCallee;
   }
   return std::nullopt;
@@ -48523,14 +48681,14 @@ std::string dead_integer_fractional_selector_rejection_context(
 std::optional<std::string> stored_dead_integer_fractional_selector_later_rejection_reason(
     const std::vector<ResolvedStep>& steps, std::size_t start_index, int register_index,
     const std::string& source, const std::optional<std::string>& carrier_value,
-    std::optional<int> selector_target) {
+    std::optional<int> selector_target, const CompileOptions& options) {
   for (std::size_t index = start_index; index < steps.size(); ++index) {
     const ResolvedStep& step = steps.at(index);
-    if (const std::optional<int> store = direct_register_store_index(step.opcode);
+    if (const std::optional<int> store = direct_store_index_for_step(step);
         store.has_value() && *store == register_index) {
       return std::nullopt;
     }
-    if (const std::optional<int> recall = direct_register_recall_index(step.opcode);
+    if (const std::optional<int> recall = direct_recall_index_for_step(step);
         recall.has_value() && *recall == register_index) {
       if (index + 1U < steps.size() &&
           steps.at(index + 1U).opcode == kDeadIntegerFractionalEraseOpcode) {
@@ -48542,7 +48700,7 @@ std::optional<std::string> stored_dead_integer_fractional_selector_later_rejecti
           next_step != nullptr ? dead_integer_fractional_selector_next_step_name(*next_step)
                                : "end of listing";
       return "dead-integer fractional selector source " + source + " stored in R" +
-             core::register_name_for_index(register_index) + " reaches " + next +
+             register_name_for_step_index(register_index) + " reaches " + next +
              " before K {x}" +
              dead_integer_fractional_selector_rejection_context(source, selector_target,
                                                                 next_step);
@@ -48552,14 +48710,14 @@ std::optional<std::string> stored_dead_integer_fractional_selector_later_rejecti
       // address, not as the fractional data value. Accept it only when the same
       // final step carries an indirect-flow artifact; the indirect-flow proof
       // then checks that the target re-resolves from the delivered selector.
-      if (dead_integer_fractional_selector_direct_jump_use_proved(step, register_index))
+      if (dead_integer_fractional_selector_direct_jump_use_proved(step, register_index, options))
         continue;
       if (dead_integer_fractional_selector_conditional_flow_use_proved(
-              steps, index, register_index, selector_target)) {
+              steps, index, register_index, selector_target, options)) {
         continue;
       }
       if (dead_integer_fractional_selector_indirect_call_use_proved(
-              steps, index, register_index, selector_target)) {
+              steps, index, register_index, selector_target, options)) {
         continue;
       }
       if (dead_integer_fractional_selector_memory_recall_use_proved(step, register_index,
@@ -48571,7 +48729,7 @@ std::optional<std::string> stored_dead_integer_fractional_selector_later_rejecti
         continue;
       }
       return "dead-integer fractional selector source " + source + " stored in R" +
-             core::register_name_for_index(register_index) + " reaches " +
+             register_name_for_step_index(register_index) + " reaches " +
              dead_integer_fractional_selector_next_step_name(step) + " before K {x} (" +
              dead_integer_fractional_selector_consumer_kind(step) + ")" +
              dead_integer_fractional_selector_rejection_context(source, selector_target, &step);
@@ -48583,17 +48741,18 @@ std::optional<std::string> stored_dead_integer_fractional_selector_later_rejecti
 std::optional<std::string> stored_dead_integer_fractional_selector_rejection_reason(
     const std::vector<ResolvedStep>& steps, std::size_t store_index, int register_index,
     const std::string& source, const std::optional<std::string>& carrier_value,
-    std::optional<int> selector_target) {
+    std::optional<int> selector_target, const CompileOptions& options) {
   if (store_index + 1U >= steps.size() ||
       steps.at(store_index + 1U).opcode != kDeadIntegerFractionalEraseOpcode) {
     const ResolvedStep* next_step =
         store_index + 1U < steps.size() ? &steps.at(store_index + 1U) : nullptr;
     if (next_step != nullptr && dead_integer_fractional_selector_stored_live_x_use_proved(
                                   steps, store_index + 1U, register_index, carrier_value,
-                                  selector_target)
+                                  selector_target, options)
                                   .has_value()) {
       return stored_dead_integer_fractional_selector_later_rejection_reason(
-          steps, store_index + 2U, register_index, source, carrier_value, selector_target);
+          steps, store_index + 2U, register_index, source, carrier_value, selector_target,
+          options);
     }
     const std::string next =
         next_step != nullptr ? dead_integer_fractional_selector_next_step_name(*next_step)
@@ -48607,7 +48766,7 @@ std::optional<std::string> stored_dead_integer_fractional_selector_rejection_rea
   }
 
   return stored_dead_integer_fractional_selector_later_rejection_reason(
-      steps, store_index + 2U, register_index, source, carrier_value, selector_target);
+      steps, store_index + 2U, register_index, source, carrier_value, selector_target, options);
 }
 
 std::optional<std::string> dead_integer_fractional_selector_uses_rejection_reason(
@@ -48647,7 +48806,8 @@ std::optional<std::string> dead_integer_fractional_selector_uses_rejection_reaso
     if (!required_values.contains(normalized_source))
       return std::string("dead-integer fractional selector source ") + *source +
              " is not required by the candidate";
-    if (!is_register_recall_opcode(steps.at(index).opcode))
+    const std::optional<int> source_register_index = direct_recall_index_for_step(steps.at(index));
+    if (!source_register_index.has_value())
       return std::string("dead-integer fractional selector source ") + *source +
              " is not attached to a register recall";
     if (index + 1U >= steps.size())
@@ -48657,7 +48817,7 @@ std::optional<std::string> dead_integer_fractional_selector_uses_rejection_reaso
       proved_values.insert(normalized_source);
       continue;
     }
-    const int source_register = steps.at(index).opcode - 0x60;
+    const int source_register = *source_register_index;
     const std::optional<std::string> carrier_value =
         dead_integer_fractional_selector_carrier_from_comment(steps.at(index).comment);
     const auto target_it = selector_targets.find(normalized_source);
@@ -48665,17 +48825,17 @@ std::optional<std::string> dead_integer_fractional_selector_uses_rejection_reaso
         target_it == selector_targets.end() ? std::nullopt
                                             : std::optional<int>(target_it->second);
     if (dead_integer_fractional_selector_direct_jump_use_proved(steps.at(index + 1U),
-                                                                source_register)) {
+                                                                source_register, options)) {
       proved_values.insert(normalized_source);
       continue;
     }
     if (dead_integer_fractional_selector_conditional_flow_use_proved(
-            steps, index + 1U, source_register, selector_target)) {
+            steps, index + 1U, source_register, selector_target, options)) {
       proved_values.insert(normalized_source);
       continue;
     }
     if (dead_integer_fractional_selector_indirect_call_use_proved(
-            steps, index + 1U, source_register, selector_target)) {
+            steps, index + 1U, source_register, selector_target, options)) {
       proved_values.insert(normalized_source);
       continue;
     }
@@ -48685,12 +48845,12 @@ std::optional<std::string> dead_integer_fractional_selector_uses_rejection_reaso
       proved_values.insert(normalized_source);
       continue;
     }
-    if (const std::optional<int> store = direct_register_store_index(steps.at(index + 1U).opcode);
+    if (const std::optional<int> store = direct_store_index_for_step(steps.at(index + 1U));
         store.has_value()) {
       if (const std::optional<std::string> reason =
               stored_dead_integer_fractional_selector_rejection_reason(steps, index + 1U, *store,
                                                                        *source, carrier_value,
-                                                                       selector_target)) {
+                                                                       selector_target, options)) {
         return reason;
       }
       proved_values.insert(normalized_source);
@@ -48804,7 +48964,8 @@ std::vector<ProofReport> build_proof_report(const ProgramAst& ast,
         .detail = "V2 state domains and expression ranges were tracked during lowering.",
     });
   }
-  if (indirect_flow_targets_proved(optimizations, preloads, steps, registers)) {
+  if (indirect_flow_targets_proved(optimizations, preloads, steps, registers,
+                                   address_space_model_for_options(options))) {
     proofs.push_back(ProofReport{
         .id = "indirect-flow-targets",
         .status = "proved",
@@ -48823,7 +48984,7 @@ std::vector<ProofReport> build_proof_report(const ProgramAst& ast,
             "matched final indirect-jump target/proof-target markers.",
     });
   }
-  if (runtime_indirect_call_targets_proved(optimizations, steps)) {
+  if (runtime_indirect_call_targets_proved(optimizations, steps, options)) {
     proofs.push_back(ProofReport{
         .id = "runtime-indirect-call-targets",
         .status = "proved",
@@ -48832,7 +48993,7 @@ std::vector<ProofReport> build_proof_report(const ProgramAst& ast,
             "register, and use that register before any overwrite.",
     });
   }
-  if (callee_hole_indirect_call_targets_proved(optimizations, steps)) {
+  if (callee_hole_indirect_call_targets_proved(optimizations, steps, options)) {
     proofs.push_back(ProofReport{
         .id = "callee-hole-indirect-call-targets",
         .status = "proved",
@@ -49024,7 +49185,7 @@ std::optional<SizeSpillAccess> size_report_spill_access(const ResolvedStep& step
   if (!step.comment.has_value())
     return std::nullopt;
   const std::string comment = strip_size_report_metadata(*step.comment);
-  if (direct_register_recall_index(step.opcode).has_value()) {
+  if (direct_recall_index_for_step(step).has_value()) {
     if (const std::optional<std::string> name =
             size_report_spill_name_after_prefix(comment, "recall ");
         name.has_value()) {
@@ -49034,7 +49195,7 @@ std::optional<SizeSpillAccess> size_report_spill_access(const ResolvedStep& step
       };
     }
   }
-  if (direct_register_store_index(step.opcode).has_value()) {
+  if (direct_store_index_for_step(step).has_value()) {
     for (std::string_view prefix : {"set ", "read "}) {
       if (const std::optional<std::string> name =
               size_report_spill_name_after_prefix(comment, prefix);
@@ -49143,13 +49304,20 @@ struct SizeReportFlowTargetStats {
 };
 
 std::map<int, SizeReportFlowTargetStats>
-size_report_flow_target_stats(const std::vector<ResolvedStep>& steps) {
+size_report_flow_target_stats(const std::vector<ResolvedStep>& steps,
+                              const CompileOptions& options) {
   std::map<int, SizeReportFlowTargetStats> stats;
   for (std::size_t index = 0; index + 1U < steps.size(); ++index) {
     if (!opcode_by_code(steps.at(index).opcode).takes_address)
       continue;
-    const int target = formal_address_info(steps.at(index + 1U).opcode).actual;
-    if (target < 0 || target > 104) {
+    const FormalAddressInfo info =
+        formal_address_info(steps.at(index + 1U).opcode, address_space_model_for_options(options));
+    if (info.kind != FormalAddressKind::Official) {
+      ++index;
+      continue;
+    }
+    const int target = info.actual;
+    if (target < 0 || target > official_last_program_address_for_options(options)) {
       ++index;
       continue;
     }
@@ -50149,7 +50317,8 @@ void attach_generic_packed_score_fallback_details(
 SizeAttributionReport build_size_attribution_report(
     const std::vector<ResolvedStep>& steps,
     const std::vector<CandidateReport>& rejected_candidates,
-    const std::vector<OptimizationReport>& optimizations) {
+    const std::vector<OptimizationReport>& optimizations,
+    const CompileOptions& options) {
   SizeAttributionReport report;
   report.total_cells = static_cast<int>(steps.size());
 
@@ -50553,9 +50722,9 @@ SizeAttributionReport build_size_attribution_report(
       const std::optional<SizeSpillAccess> access = size_report_spill_access(step);
       if (!access.has_value())
         continue;
-      std::optional<int> register_index = direct_register_recall_index(step.opcode);
+      std::optional<int> register_index = direct_recall_index_for_step(step);
       if (!register_index.has_value())
-        register_index = direct_register_store_index(step.opcode);
+        register_index = direct_store_index_for_step(step);
       if (!register_index.has_value())
         continue;
       helper_spill_registers[region.label + "\x1f" + access->name].insert(*register_index);
@@ -51657,7 +51826,7 @@ SizeAttributionReport build_size_attribution_report(
     });
   }
   const std::map<int, SizeReportFlowTargetStats> flow_stats =
-      size_report_flow_target_stats(steps);
+      size_report_flow_target_stats(steps, options);
   std::map<int, std::string> occupant_by_address;
   std::map<int, std::string> occupant_kind_by_address;
   std::map<int, std::string> operand_executable_by_address;
@@ -51900,9 +52069,9 @@ SizeAttributionReport build_size_attribution_report(
   return report;
 }
 
-void refresh_rejection_dependent_reports(CompileResult& result) {
+void refresh_rejection_dependent_reports(CompileResult& result, const CompileOptions& options) {
   result.size_attribution = build_size_attribution_report(
-      result.steps, result.rejected_candidates, result.optimizations);
+      result.steps, result.rejected_candidates, result.optimizations, options);
   result.optimizer =
       build_optimizer_report(result.optimizations, result.candidates, result.rejected_candidates);
 }
@@ -51936,8 +52105,9 @@ void populate_public_report(CompileResult& result, const ProgramAst& ast,
     append_candidate_report_once(rejected_candidates, std::move(rejected));
   }
   result.rejected_candidates = std::move(rejected_candidates);
-  refresh_rejection_dependent_reports(result);
-  result.machine_features_used = build_machine_features_used(result.optimizations, result.candidates);
+  refresh_rejection_dependent_reports(result, options);
+  result.machine_features_used =
+      build_machine_features_used(result.optimizations, result.candidates, options);
   result.proofs = build_proof_report(ast, result.optimizations, options, result.preloads,
                                      result.steps, result.registers);
   result.emulator_facts = mk61_profile().emulator_facts;
@@ -52135,14 +52305,13 @@ std::string indirect_flow_formal_selector(int ordinal) {
   return indirect_flow_selector_digit(ordinal / 10) + indirect_flow_selector_digit(ordinal % 10);
 }
 
-std::optional<std::string> indirect_flow_selector_for_actual_target(int target) {
-  if (target < 0 || target > 104)
+std::optional<std::string> indirect_flow_selector_for_actual_target(int target,
+                                                                    const CompileOptions& options) {
+  if (target < 0 || target > official_last_program_address_for_options(options))
     return std::nullopt;
   if (target <= 47)
     return indirect_flow_formal_selector(target + 112);
-  if (target <= 99)
-    return std::to_string(target / 10) + std::to_string(target % 10);
-  return "A" + std::to_string(target - 100);
+  return format_official_address(target, address_space_model_for_options(options));
 }
 
 std::optional<std::string> indirect_register_from_opcode(int opcode) {
@@ -52167,7 +52336,8 @@ std::optional<std::string> store_register_from_opcode(int opcode) {
 }
 
 std::vector<PreloadReport>
-preloaded_indirect_flow_comment_preloads(const std::vector<MachineItem>& items) {
+preloaded_indirect_flow_comment_preloads(const std::vector<MachineItem>& items,
+                                         const CompileOptions& options) {
   static const std::regex preload_pattern(
       R"(preloaded R([0-9a-e])=[^\s;]+ indirect-target=(\d+)(?:$|[\s;,]))",
       std::regex_constants::icase);
@@ -52201,7 +52371,8 @@ preloaded_indirect_flow_comment_preloads(const std::vector<MachineItem>& items) 
     if (ec != std::errc{} || ptr != target_text.data() + target_text.size())
       continue;
 
-    const std::optional<std::string> selector = indirect_flow_selector_for_actual_target(target);
+    const std::optional<std::string> selector =
+        indirect_flow_selector_for_actual_target(target, options);
     if (!selector.has_value())
       continue;
     const bool duplicate =
@@ -52224,7 +52395,8 @@ preloaded_indirect_flow_comment_preloads(const std::vector<MachineItem>& items) 
 }
 
 void append_missing_preloaded_indirect_flow_comments(std::vector<MachineItem>& items,
-                                                     const std::vector<PreloadReport>& preloads) {
+                                                     const std::vector<PreloadReport>& preloads,
+                                                     const CompileOptions& options) {
   std::map<std::string, std::string> selector_by_register;
   for (const PreloadReport& preload : preloads)
     selector_by_register[preload.register_name] = preload.value;
@@ -52264,7 +52436,8 @@ void append_missing_preloaded_indirect_flow_comments(std::vector<MachineItem>& i
       continue;
     }
     const std::optional<core::IndirectAddressEvaluation> decoded = core::evaluate_indirect_address(
-        *register_name, selector_it->second, core::IndirectOperationKind::Flow);
+        *register_name, selector_it->second, core::IndirectOperationKind::Flow,
+        address_space_model_for_options(options));
     if (!decoded.has_value() || !decoded->actual_flow_target.has_value()) {
       ++address;
       continue;
@@ -52297,13 +52470,19 @@ struct DirectFlowTargetStats {
 };
 
 std::map<int, DirectFlowTargetStats>
-direct_flow_target_stats(const std::vector<ResolvedStep>& steps) {
+direct_flow_target_stats(const std::vector<ResolvedStep>& steps, const CompileOptions& options) {
   std::map<int, DirectFlowTargetStats> stats;
   for (std::size_t index = 0; index + 1U < steps.size(); ++index) {
     if (!opcode_by_code(steps.at(index).opcode).takes_address)
       continue;
-    const int target = formal_address_info(steps.at(index + 1U).opcode).actual;
-    if (target < 0 || target > 104) {
+    const FormalAddressInfo info =
+        formal_address_info(steps.at(index + 1U).opcode, address_space_model_for_options(options));
+    if (info.kind != FormalAddressKind::Official) {
+      ++index;
+      continue;
+    }
+    const int target = info.actual;
+    if (target < 0 || target > official_last_program_address_for_options(options)) {
       ++index;
       continue;
     }
@@ -52316,12 +52495,15 @@ direct_flow_target_stats(const std::vector<ResolvedStep>& steps) {
   return stats;
 }
 
-int direct_flow_target_rank(const std::vector<ResolvedStep>& steps, int target) {
+int direct_flow_target_rank(const std::vector<ResolvedStep>& steps, int target,
+                            const CompileOptions& options) {
   int rank = 0;
   for (std::size_t index = 0; index + 1U < steps.size(); ++index) {
     if (!opcode_by_code(steps.at(index).opcode).takes_address)
       continue;
-    if (formal_address_info(steps.at(index + 1U).opcode).actual == target)
+    const FormalAddressInfo info =
+        formal_address_info(steps.at(index + 1U).opcode, address_space_model_for_options(options));
+    if (info.kind == FormalAddressKind::Official && info.actual == target)
       rank += static_cast<int>(steps.size() - index);
     ++index;
   }
@@ -52399,9 +52581,11 @@ fractional_constant_selector_sources(const CompileResult& result,
 
 std::vector<FractionalConstantSelectorPlan>
 discover_fractional_constant_selector_plans(const CompileResult& result,
+                                            const CompileOptions& options,
                                             const V2Program* program = nullptr,
                                             bool include_dead_integer_plans = false) {
-  const std::map<int, DirectFlowTargetStats> target_stats = direct_flow_target_stats(result.steps);
+  const std::map<int, DirectFlowTargetStats> target_stats =
+      direct_flow_target_stats(result.steps, options);
   if (target_stats.empty())
     return {};
 
@@ -52434,7 +52618,8 @@ discover_fractional_constant_selector_plans(const CompileResult& result,
           source.registers.begin(), source.registers.end(), [&](const std::string& reg) {
             const std::optional<core::IndirectAddressEvaluation> evaluated =
                 core::evaluate_indirect_address(reg, *selector_value,
-                                                core::IndirectOperationKind::Flow);
+                                                core::IndirectOperationKind::Flow,
+                                                address_space_model_for_options(options));
             return evaluated.has_value() && evaluated->actual_flow_target.has_value() &&
                    *evaluated->actual_flow_target == target;
           });
@@ -52452,8 +52637,9 @@ discover_fractional_constant_selector_plans(const CompileResult& result,
                 const FractionalConstantSelectorPlanWithBenefit& right) {
               if (left.benefit != right.benefit)
                 return left.benefit > right.benefit;
-              const int left_rank = direct_flow_target_rank(result.steps, left.plan.target);
-              const int right_rank = direct_flow_target_rank(result.steps, right.plan.target);
+              const int left_rank = direct_flow_target_rank(result.steps, left.plan.target, options);
+              const int right_rank =
+                  direct_flow_target_rank(result.steps, right.plan.target, options);
               if (left_rank != right_rank)
                 return left_rank > right_rank;
               return left.plan.value < right.plan.value;
@@ -53170,6 +53356,60 @@ namespace {
 
 constexpr std::size_t kMaxCompileResultCacheEntries = 4096;
 
+std::string strip_source_directive_comment(const std::string& text) {
+  bool quoted = false;
+  bool escaped = false;
+  for (std::size_t index = 0; index < text.size(); ++index) {
+    const char ch = text.at(index);
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quoted && ch == '\\') {
+      escaped = true;
+      continue;
+    }
+    if (ch == '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (!quoted && ch == '#')
+      return text.substr(0, index);
+    if (!quoted && ch == '/' && index + 1 < text.size() && text.at(index + 1) == '/')
+      return text.substr(0, index);
+  }
+  return text;
+}
+
+std::optional<FeatureProfile> source_feature_profile_hint(const std::string& source) {
+  std::istringstream input(source);
+  std::string line;
+  while (std::getline(input, line)) {
+    const std::string trimmed = trim_ascii(strip_source_directive_comment(line));
+    constexpr std::string_view kFeaturePrefix = "feature ";
+    if (trimmed.rfind(kFeaturePrefix, 0) != 0)
+      continue;
+    const std::string value = trim_ascii(trimmed.substr(kFeaturePrefix.size()));
+    const std::optional<FeatureProfile> parsed = parse_feature_profile(value);
+    if (parsed.has_value() && *parsed != FeatureProfile::Standard)
+      return parsed;
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+CompileOptions apply_source_feature_profile_hint(const std::string& source,
+                                                 const CompileOptions& requested_options) {
+  CompileOptions options = requested_options;
+  if (options.feature_profile == FeatureProfile::Standard) {
+    if (const std::optional<FeatureProfile> feature_profile =
+            source_feature_profile_hint(source)) {
+      options.feature_profile = *feature_profile;
+    }
+  }
+  return options;
+}
+
 bool compile_result_cache_enabled() {
   const char* value = std::getenv("MKPRO_NATIVE_COMPILE_CACHE");
   return value == nullptr || std::string(value) != "0";
@@ -53223,7 +53463,8 @@ void write_compile_result_cache(const std::string& source, const CompileOptions&
 
 } // namespace
 
-CompileResult compile_source(std::string source, const CompileOptions& options) {
+CompileResult compile_source(std::string source, const CompileOptions& requested_options) {
+  const CompileOptions options = apply_source_feature_profile_hint(source, requested_options);
   if (const std::optional<CompileResult> cached = read_compile_result_cache(source, options))
     return *cached;
 
@@ -53281,7 +53522,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
     fallback_options.disable_return_stack_script = true;
     try {
       CompileResult fallback = compile_source(source, fallback_options);
-      if (candidate_beats_best(fallback, best)) {
+      if (candidate_beats_best(fallback, best, options)) {
         const std::string comparison = best.implemented
                                            ? std::to_string(fallback.steps.size()) + " vs " +
                                                  std::to_string(best.steps.size()) + " cells"
@@ -53297,11 +53538,11 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
     } catch (const std::exception&) {
     }
   }
-  constexpr std::size_t kOfficialProgramLimit = 105;
+  const std::size_t official_program_limit = program_step_limit_size_for_options(options);
   const std::size_t requested_budget = options.budget.has_value() && *options.budget > 0
                                            ? static_cast<std::size_t>(*options.budget)
-                                           : kOfficialProgramLimit;
-  const std::size_t rescue_threshold = std::min(requested_budget, kOfficialProgramLimit);
+                                           : official_program_limit;
+  const std::size_t rescue_threshold = std::min(requested_budget, official_program_limit);
   const bool needs_size_rescue = !best.implemented || best.steps.size() > rescue_threshold;
   // The aggressive post-layout indirect-flow rescue is now enabled for EVERY
   // program. Min-cell best-fit guarantees nothing grows, and two correctness
@@ -53416,7 +53657,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         // parity-locked under-budget examples are unchanged.
         if (emit_plain) {
           std::vector<FractionalConstantSelectorPlan> plain_plans =
-              discover_fractional_constant_selector_plans(probe, selector_program,
+              discover_fractional_constant_selector_plans(probe, base_options, selector_program,
                                                           /*include_dead_integer_plans=*/false);
           if (plain_plans.size() > limit)
             plain_plans.resize(limit);
@@ -53477,7 +53718,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         // it; unsafe arithmetic consumers stay rejected and are reported.
         if (emit_rescue_twins) {
           std::vector<FractionalConstantSelectorPlan> rescue_plans =
-              discover_fractional_constant_selector_plans(probe, selector_program,
+              discover_fractional_constant_selector_plans(probe, base_options, selector_program,
                                                           /*include_dead_integer_plans=*/true);
           if (rescue_plans.size() > limit)
             rescue_plans.resize(limit);
@@ -53551,7 +53792,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
                     "not selected because it did not improve the final candidate-search result",
             });
       }
-      if (!candidate_beats_best(result, best)) {
+      if (!candidate_beats_best(result, best, options)) {
         continue;
       }
       const std::optional<std::string> rejection_reason =
@@ -53594,7 +53835,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
     }
   };
   auto selected_still_overflows_now = [&]() {
-    return best.implemented && best.steps.size() > kOfficialProgramLimit;
+    return best.implemented && best.steps.size() > official_program_limit;
   };
   auto fast_search_target_met = [&]() {
     return best.implemented && best.steps.size() <= rescue_threshold;
@@ -53605,7 +53846,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         .detail = std::move(detail),
     });
     attach_search_rejections_to_best();
-    refresh_rejection_dependent_reports(best);
+    refresh_rejection_dependent_reports(best, options);
     write_compile_result_cache(source, options, best);
   };
 
@@ -55764,7 +56005,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
           .gate = CandidateGate::Always,
       });
       evaluate_queued_candidates();
-      if (best.implemented && best.steps.size() < kOfficialProgramLimit)
+      if (best.implemented && best.steps.size() < official_program_limit)
         stop_demote_search = true;
     };
     auto compile_demote_probe =
@@ -55977,7 +56218,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
           if (!result.implemented || !beam_gate_ok(candidate_options, result))
             continue;
           const std::size_t result_size = result.steps.size();
-          if (candidate_beats_best(result, best)) {
+          if (candidate_beats_best(result, best, options)) {
             result.optimizations.push_back(OptimizationReport{
                 .name = "beam-search-multi-step",
                 .detail = "Non-greedy beam search reached " + std::to_string(result_size) +
@@ -56000,7 +56241,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   }
 
   attach_search_rejections_to_best();
-  refresh_rejection_dependent_reports(best);
+  refresh_rejection_dependent_reports(best, options);
   write_compile_result_cache(source, options, best);
   return best;
 }

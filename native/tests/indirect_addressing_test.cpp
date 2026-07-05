@@ -77,6 +77,21 @@ void indirect_addressing_matches_typescript_contract() {
               super_dark_flow->super_dark->entry_address == 48 &&
               super_dark_flow->super_dark->continuation_address == 1,
           "FA should expose the super-dark entry and continuation");
+
+  const auto stock_a5 =
+      core::evaluate_indirect_address("7", "A5", core::IndirectOperationKind::Flow);
+  require(stock_a5.has_value() && stock_a5->actual_flow_target == 0,
+          "stock A5 indirect flow should remain a dark alias to 00");
+
+  const auto expanded_a5 = core::evaluate_indirect_address(
+      "7", "A5", core::IndirectOperationKind::Flow, AddressSpaceModel::Mk61SMiniExpanded);
+  require(expanded_a5.has_value() && expanded_a5->actual_flow_target == 105,
+          "expanded A5 indirect flow should target physical cell 105");
+
+  const auto expanded_b2 = core::evaluate_indirect_address(
+      "7", "B2", core::IndirectOperationKind::Flow, AddressSpaceModel::Mk61SMiniExpanded);
+  require(expanded_b2.has_value() && expanded_b2->actual_flow_target == 0,
+          "expanded B2 indirect flow should be the first dark alias to 00");
 }
 
 }  // namespace mkpro::tests

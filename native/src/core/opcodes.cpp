@@ -18,6 +18,10 @@ namespace {
 const std::array<std::string, 15> kRegisters = {
     "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e",
 };
+const std::array<std::string, 16> kRegistersWithRf = {
+    "0", "1", "2", "3", "4", "5", "6", "7",
+    "8", "9", "a", "b", "c", "d", "e", "f",
+};
 
 std::string hex_byte(int value) {
   std::ostringstream out;
@@ -426,11 +430,11 @@ const OpcodeInfo* find_opcode_name(std::string_view name) {
 }
 
 int register_index(std::string_view reg) {
-  const auto it = std::find(kRegisters.begin(), kRegisters.end(), std::string(reg));
-  if (it == kRegisters.end()) {
+  const auto it = std::find(kRegistersWithRf.begin(), kRegistersWithRf.end(), std::string(reg));
+  if (it == kRegistersWithRf.end()) {
     throw std::runtime_error("Unknown register " + std::string(reg));
   }
-  return static_cast<int>(std::distance(kRegisters.begin(), it));
+  return static_cast<int>(std::distance(kRegistersWithRf.begin(), it));
 }
 
 std::string register_from_text(std::string_view text) {
@@ -465,12 +469,20 @@ int address_to_opcode(int address) {
   return official_address_to_opcode(address);
 }
 
+int address_to_opcode(int address, AddressSpaceModel model) {
+  return official_address_to_opcode(address, model);
+}
+
 int code_to_address(int code) {
   return formal_address_ordinal(code);
 }
 
 std::string format_address(int address) {
   return format_official_address(address);
+}
+
+std::string format_address(int address, AddressSpaceModel model) {
+  return format_official_address(address, model);
 }
 
 std::string x2_effect_name(X2Effect effect) {

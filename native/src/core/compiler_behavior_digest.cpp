@@ -183,8 +183,17 @@ std::string equivalence_observations_digest(const std::vector<EquivalenceObserva
 
 }  // namespace
 
-std::string program_behavior_digest(const CompileResult& result) {
+std::string program_behavior_digest(const CompileResult& result, FeatureProfile feature_profile) {
+  if (feature_profile != FeatureProfile::Standard) {
+    return "feature-profile=" + std::string(feature_profile_id(feature_profile)) +
+           "\n<behavior-digest-unsupported: stock MK-61 emulator harness does not model this "
+           "feature profile>\n";
+  }
   return equivalence_observations_digest(equivalence_observations(result));
+}
+
+std::string program_behavior_digest(const CompileResult& result) {
+  return program_behavior_digest(result, FeatureProfile::Standard);
 }
 
 }  // namespace mkpro

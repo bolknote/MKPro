@@ -59,6 +59,28 @@ void formal_address_matches_typescript_contract() {
   require(formal_address_info(0xac).ordinal == 112, "AC ordinal should be 112");
   require(formal_address_info(0xac).actual == 0, "AC actual should be 0");
 
+  const auto expanded = AddressSpaceModel::Mk61SMiniExpanded;
+  require(official_address_to_opcode(105, expanded) == 0xa5,
+          "expanded address 105 should encode as A5");
+  require(official_address_to_opcode(111, expanded) == 0xb1,
+          "expanded address 111 should encode as B1");
+  require(format_official_address(111, expanded) == "B1",
+          "expanded address 111 should format as B1");
+  const auto expanded_a5 = formal_address_info(0xa5, expanded);
+  require(expanded_a5.ordinal == 105 && expanded_a5.actual == 105 &&
+              expanded_a5.kind == FormalAddressKind::Official,
+          "expanded A5 should be a real physical address 105");
+  const auto expanded_b1 = formal_address_info(0xb1, expanded);
+  require(expanded_b1.ordinal == 111 && expanded_b1.actual == 111 &&
+              expanded_b1.kind == FormalAddressKind::Official,
+          "expanded B1 should be a real physical address 111");
+  const auto expanded_b2 = formal_address_info(0xb2, expanded);
+  require(expanded_b2.ordinal == 112 && expanded_b2.actual == 0 &&
+              expanded_b2.kind == FormalAddressKind::LongSide,
+          "expanded B2 should be the first long-side alias");
+  require(formal_address_info(0x9f, expanded).actual == 105,
+          "expanded 9F should target the added physical cell 105");
+
   require(parse_formal_address_opcode("C5") == 0xc5, "C5 should parse");
   require(parse_formal_address_opcode(".5") == 0xa5, ".5 should parse as A5");
   require(format_formal_address_opcode(0xfb) == "FB", "FB should format as uppercase hex");

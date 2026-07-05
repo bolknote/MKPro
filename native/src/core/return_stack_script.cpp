@@ -23,6 +23,18 @@ constexpr int kReturnStackDepth = 5;
 constexpr int kMaxScriptReturns = 5;
 constexpr int kMaxRewriteRounds = 8;
 
+AddressSpaceModel address_space_model_for_options(const CompileOptions& options) {
+  return address_space_model_for_feature_profile(options.feature_profile);
+}
+
+AddressSpaceModel address_space_model_for_options(const DirtyReturnStackDispatchOptions& options) {
+  return address_space_model_for_feature_profile(options.feature_profile);
+}
+
+std::string official_program_range_label(AddressSpaceModel model) {
+  return "00.." + format_official_address(official_program_last_address(model), model);
+}
+
 bool proof_marker_boundary_after_number(const std::string& comment, std::size_t cursor) {
   if (cursor >= comment.size())
     return true;
@@ -93,7 +105,8 @@ bool is_proven_indirect_call_opcode(int opcode) {
   return (opcode & 0xf0) == 0xa0;
 }
 
-std::optional<int> proven_indirect_target_from_comment(const MachineItem& item) {
+std::optional<int> proven_indirect_target_from_comment(const MachineItem& item,
+                                                       AddressSpaceModel model) {
   if (!item.comment.has_value())
     return std::nullopt;
 
@@ -111,7 +124,8 @@ std::optional<int> proven_indirect_target_from_comment(const MachineItem& item) 
     value = value * 10 + (comment.at(cursor) - '0');
     ++cursor;
   }
-  if (!saw_digit || !proof_marker_boundary_after_number(comment, cursor) || value > 104)
+  if (!saw_digit || !proof_marker_boundary_after_number(comment, cursor) ||
+      value > official_program_last_address(model))
     return std::nullopt;
   return value;
 }
@@ -178,7 +192,8 @@ std::optional<FlowReference> direct_flow_reference_at(
 }
 
 std::optional<FlowReference> proven_indirect_call_reference_at(
-    const std::vector<MachineItem>& items, const MachineLayout& layout, int op_index) {
+    const std::vector<MachineItem>& items, const MachineLayout& layout, int op_index,
+    AddressSpaceModel model) {
   if (op_index < 0 || op_index >= static_cast<int>(items.size()))
     return std::nullopt;
   const MachineItem& op = items.at(static_cast<std::size_t>(op_index));
@@ -187,7 +202,7 @@ std::optional<FlowReference> proven_indirect_call_reference_at(
   const auto source_it = layout.address_by_item_index.find(op_index);
   if (source_it == layout.address_by_item_index.end())
     return std::nullopt;
-  const std::optional<int> target = proven_indirect_target_from_comment(op);
+  const std::optional<int> target = proven_indirect_target_from_comment(op, model);
   if (!target.has_value())
     return std::nullopt;
   return FlowReference{
@@ -200,7 +215,8 @@ std::optional<FlowReference> proven_indirect_call_reference_at(
 }
 
 std::vector<FlowReference> direct_flow_references(const std::vector<MachineItem>& items,
-                                                  const MachineLayout& layout) {
+                                                  const MachineLayout& layout,
+                                                  AddressSpaceModel model) {
   std::vector<FlowReference> result;
   for (int index = 0; index + 1 < static_cast<int>(items.size()); ++index) {
     if (const std::optional<FlowReference> ref =
@@ -209,7 +225,7 @@ std::vector<FlowReference> direct_flow_references(const std::vector<MachineItem>
       continue;
     }
     if (const std::optional<FlowReference> ref =
-            proven_indirect_call_reference_at(items, layout, index)) {
+            proven_indirect_call_reference_at(items, layout, index, model)) {
       result.push_back(*ref);
     }
   }
@@ -225,7 +241,8 @@ std::map<int, std::vector<FlowReference>> incoming_by_target(
 }
 
 std::optional<CallSite> call_site_at_address(const std::vector<MachineItem>& items,
-                                             const MachineLayout& layout, int address) {
+                                             const MachineLayout& layout, int address,
+                                             AddressSpaceModel model) {
   const auto item_it = layout.item_index_by_address.find(address);
   if (item_it == layout.item_index_by_address.end())
     return std::nullopt;
@@ -254,7 +271,7 @@ std::optional<CallSite> call_site_at_address(const std::vector<MachineItem>& ite
 
   if (!is_proven_indirect_call_opcode(op.opcode))
     return std::nullopt;
-  const std::optional<int> target_address = proven_indirect_target_from_comment(op);
+  const std::optional<int> target_address = proven_indirect_target_from_comment(op, model);
   if (!target_address.has_value()) {
     return std::nullopt;
   }
@@ -335,7 +352,7 @@ bool terminal_return_from(const std::vector<MachineItem>& items, const MachineLa
 }
 
 bool terminal_stop_from(const std::vector<MachineItem>& items, const MachineLayout& layout,
-                        int start_address) {
+                        int start_address, AddressSpaceModel model) {
   std::set<int> seen;
   int address = start_address;
   for (int steps = 0; steps < machine_cell_count(items) + 1; ++steps) {
@@ -351,7 +368,7 @@ bool terminal_stop_from(const std::vector<MachineItem>& items, const MachineLayo
     if (item.opcode == 0x50)
       return true;
     if (item.opcode == 0x53) {
-      const std::optional<CallSite> call = call_site_at_address(items, layout, address);
+      const std::optional<CallSite> call = call_site_at_address(items, layout, address, model);
       if (!call.has_value() || !terminal_return_from(items, layout, call->target_address))
         return false;
       address = call->continuation_address;
@@ -410,20 +427,21 @@ bool script_plan_has_unique_incoming(const ScriptPlan& plan,
 
 std::optional<ScriptPlan> script_plan_from_call_chain(
     const std::vector<MachineItem>& items, const MachineLayout& layout,
-    const std::map<int, std::vector<FlowReference>>& incoming, int start_address) {
+    const std::map<int, std::vector<FlowReference>>& incoming, int start_address,
+    AddressSpaceModel model) {
   std::vector<CallSite> calls;
   std::set<int> seen_call_addresses;
   int address = start_address;
   for (int depth = 0; depth < kMaxScriptReturns; ++depth) {
     if (seen_call_addresses.contains(address))
       return std::nullopt;
-    const std::optional<CallSite> call = call_site_at_address(items, layout, address);
+    const std::optional<CallSite> call = call_site_at_address(items, layout, address, model);
     if (!call.has_value())
       return std::nullopt;
     seen_call_addresses.insert(address);
     calls.push_back(*call);
     address = call->target_address;
-    if (!call_site_at_address(items, layout, address).has_value())
+    if (!call_site_at_address(items, layout, address, model).has_value())
       break;
   }
 
@@ -443,7 +461,7 @@ std::optional<ScriptPlan> script_plan_from_call_chain(
   }
 
   std::optional<TerminalJump> dirty_jump;
-  if (!terminal_stop_from(items, layout, cursor)) {
+  if (!terminal_stop_from(items, layout, cursor, model)) {
     if (calls.size() != static_cast<std::size_t>(kMaxScriptReturns))
       return std::nullopt;
     dirty_jump = terminal_jump_from(items, layout, cursor);
@@ -461,9 +479,10 @@ std::optional<ScriptPlan> script_plan_from_call_chain(
   return plan;
 }
 
-std::optional<ScriptPlan> find_best_script_plan(const std::vector<MachineItem>& items) {
+std::optional<ScriptPlan> find_best_script_plan(const std::vector<MachineItem>& items,
+                                                AddressSpaceModel model) {
   const MachineLayout layout = machine_layout(items);
-  const std::vector<FlowReference> refs = direct_flow_references(items, layout);
+  const std::vector<FlowReference> refs = direct_flow_references(items, layout, model);
   const std::map<int, std::vector<FlowReference>> incoming = incoming_by_target(refs);
 
   std::optional<ScriptPlan> best;
@@ -474,7 +493,7 @@ std::optional<ScriptPlan> find_best_script_plan(const std::vector<MachineItem>& 
       continue;
     }
     const std::optional<ScriptPlan> plan =
-        script_plan_from_call_chain(items, layout, incoming, address);
+        script_plan_from_call_chain(items, layout, incoming, address, model);
     if (!plan.has_value())
       continue;
     if (!best.has_value() || plan->jumps.size() > best->jumps.size())
@@ -557,7 +576,7 @@ std::vector<int> adjusted_return_stack_from_calls(const MachineLayout& layout,
 
 std::optional<DirtyReturnStackDispatchPlan> proved_dirty_overflow_script_dispatch(
     const MachineLayout& original_layout, const std::vector<MachineItem>& candidate,
-    const ScriptPlan& plan) {
+    const ScriptPlan& plan, const CompileOptions& options) {
   if (!plan.dirty_jump.has_value())
     return std::nullopt;
 
@@ -567,7 +586,10 @@ std::optional<DirtyReturnStackDispatchPlan> proved_dirty_overflow_script_dispatc
   DirtyReturnStackDispatchPlan dirty = plan_dirty_return_stack_dispatch(
       adjusted_return_stack_from_calls(original_layout, plan),
       static_cast<int>(plan.calls.size()) + 1, candidate,
-      DirtyReturnStackDispatchOptions{.size_rescue = true});
+      DirtyReturnStackDispatchOptions{
+          .feature_profile = options.feature_profile,
+          .size_rescue = true,
+      });
   if (!dirty.enabled || !dirty.layout_proved || dirty.dirty_targets.empty())
     return std::nullopt;
   const bool targets_match =
@@ -580,7 +602,7 @@ std::optional<DirtyReturnStackDispatchPlan> proved_dirty_overflow_script_dispatc
 
 std::optional<DirtyReturnStackDispatchAllocationPlan> repair_dirty_overflow_script_candidate(
     const MachineLayout& original_layout, const std::vector<MachineItem>& candidate,
-    const ScriptPlan& plan) {
+    const ScriptPlan& plan, const CompileOptions& options) {
   if (!plan.dirty_jump.has_value())
     return std::nullopt;
 
@@ -591,7 +613,10 @@ std::optional<DirtyReturnStackDispatchAllocationPlan> repair_dirty_overflow_scri
       allocate_dirty_return_stack_dispatch_layout(
           adjusted_return_stack_from_calls(original_layout, plan),
           static_cast<int>(plan.calls.size()) + 1, candidate,
-          DirtyReturnStackDispatchOptions{.size_rescue = true});
+          DirtyReturnStackDispatchOptions{
+              .feature_profile = options.feature_profile,
+              .size_rescue = true,
+          });
   if (!allocation.allocated || !allocation.dispatch.layout_proved)
     return std::nullopt;
   if (allocation.dispatch.dirty_targets.empty())
@@ -605,20 +630,30 @@ std::optional<DirtyReturnStackDispatchAllocationPlan> repair_dirty_overflow_scri
   return allocation;
 }
 
-int best_cell_count_with_address_overlay(const std::vector<MachineItem>& items) {
-  const PostLayoutIndirectFlowResult overlay = optimize_post_layout_address_code_overlay(items);
+CompileOptions compile_options_for_feature_profile(FeatureProfile feature_profile) {
+  CompileOptions options;
+  options.feature_profile = feature_profile;
+  return options;
+}
+
+int best_cell_count_with_address_overlay(const std::vector<MachineItem>& items,
+                                         const CompileOptions& options) {
+  const PostLayoutIndirectFlowResult overlay =
+      optimize_post_layout_address_code_overlay(items, {}, options);
   return machine_cell_count(overlay.items);
 }
 
 int best_cell_count_after_downstream_post_layout_pipeline(
-    const std::vector<MachineItem>& items) {
-  return measure_return_stack_downstream_post_layout_pipeline(items, CompileOptions{}).final_cells;
+    const std::vector<MachineItem>& items, const CompileOptions& options) {
+  return measure_return_stack_downstream_post_layout_pipeline(items, options).final_cells;
 }
 
 bool return_stack_candidate_beats_downstream_post_layout_pipeline(
-    const std::vector<MachineItem>& current, const std::vector<MachineItem>& candidate) {
-  const int current_best = best_cell_count_after_downstream_post_layout_pipeline(current);
-  const int candidate_best = best_cell_count_after_downstream_post_layout_pipeline(candidate);
+    const std::vector<MachineItem>& current, const std::vector<MachineItem>& candidate,
+    const CompileOptions& options) {
+  const int current_best = best_cell_count_after_downstream_post_layout_pipeline(current, options);
+  const int candidate_best =
+      best_cell_count_after_downstream_post_layout_pipeline(candidate, options);
   return candidate_best < current_best;
 }
 
@@ -2665,7 +2700,8 @@ std::optional<int> item_index_for_address(const MachineLayout& layout, int addre
 
 std::optional<int> executable_opcode_at_item(const std::vector<MachineItem>& items,
                                              const MachineLayout& layout, int item_index,
-                                             std::string& rejection_reason) {
+                                             std::string& rejection_reason,
+                                             AddressSpaceModel model) {
   if (item_index < 0 || item_index >= static_cast<int>(items.size())) {
     rejection_reason = "target item is out of range";
     return std::nullopt;
@@ -2687,7 +2723,7 @@ std::optional<int> executable_opcode_at_item(const std::vector<MachineItem>& ite
     return std::nullopt;
   }
   try {
-    return official_address_to_opcode(*target);
+    return official_address_to_opcode(*target, model);
   } catch (const std::exception&) {
     rejection_reason = "address cell target is not an official executable address opcode";
     return std::nullopt;
@@ -2716,7 +2752,7 @@ bool is_trap_opcode(int opcode) {
 }
 
 bool adjacent_number_entry(const std::vector<MachineItem>& items, const MachineLayout& layout,
-                           int item_index) {
+                           int item_index, AddressSpaceModel model) {
   const auto address_it = layout.address_by_item_index.find(item_index);
   if (address_it == layout.address_by_item_index.end())
     return false;
@@ -2726,7 +2762,7 @@ bool adjacent_number_entry(const std::vector<MachineItem>& items, const MachineL
       continue;
     std::string reason;
     const std::optional<int> opcode =
-        executable_opcode_at_item(items, layout, *neighbor_index, reason);
+        executable_opcode_at_item(items, layout, *neighbor_index, reason, model);
     if (opcode.has_value() && is_number_entry_opcode(*opcode))
       return true;
   }
@@ -2747,8 +2783,9 @@ DirtyReturnStackDispatchCellProof prove_dirty_dispatch_cell(
   }
 
   std::string rejection;
+  const AddressSpaceModel model = address_space_model_for_options(options);
   const std::optional<int> opcode =
-      executable_opcode_at_item(items, layout, *item_index, rejection);
+      executable_opcode_at_item(items, layout, *item_index, rejection, model);
   if (!opcode.has_value()) {
     proof.rejection_reason = rejection;
     return proof;
@@ -2766,7 +2803,7 @@ DirtyReturnStackDispatchCellProof prove_dirty_dispatch_cell(
       return proof;
     }
   }
-  if (is_number_entry_opcode(*opcode) && adjacent_number_entry(items, layout, *item_index)) {
+  if (is_number_entry_opcode(*opcode) && adjacent_number_entry(items, layout, *item_index, model)) {
     proof.rejection_reason = "dirty target number-entry opcode would glue to adjacent number "
                              "entry";
     return proof;
@@ -2789,7 +2826,8 @@ MachineItem dirty_dispatch_safe_padding_cell() {
 
 bool remap_proven_indirect_target_comment_after_insertion(MachineItem& item,
                                                            int insertion_address,
-                                                           std::string& rejection_reason) {
+                                                           std::string& rejection_reason,
+                                                           AddressSpaceModel model) {
   if (!item.comment.has_value())
     return true;
 
@@ -2817,16 +2855,18 @@ bool remap_proven_indirect_target_comment_after_insertion(MachineItem& item,
           "dirty return-stack dispatch allocator found malformed proven indirect target comment";
       return false;
     }
-    if (value > 104) {
+    const int official_last = official_program_last_address(model);
+    if (value > official_last) {
       rejection_reason =
           "dirty return-stack dispatch allocator found proven indirect target outside official "
-          "00..A4 cells";
+          + official_program_range_label(model) + " cells";
       return false;
     }
     if (value >= insertion_address) {
-      if (value >= 104) {
+      if (value >= official_last) {
         rejection_reason = "dirty return-stack dispatch allocator cannot shift proven indirect "
-                           "target comments outside official 00..A4 cells";
+                           "target comments outside official " +
+                           official_program_range_label(model) + " cells";
         return false;
       }
       const std::string replacement = std::to_string(value + 1);
@@ -2840,10 +2880,11 @@ bool remap_proven_indirect_target_comment_after_insertion(MachineItem& item,
 
 bool remap_shifted_absolute_targets_after_insertion(std::vector<MachineItem>& items,
                                                      int insertion_address,
-                                                     std::string& rejection_reason) {
+                                                     std::string& rejection_reason,
+                                                     AddressSpaceModel model) {
   for (MachineItem& item : items) {
     if (!remap_proven_indirect_target_comment_after_insertion(item, insertion_address,
-                                                              rejection_reason))
+                                                              rejection_reason, model))
       return false;
 
     if (item.kind != MachineItemKind::Address)
@@ -2851,9 +2892,10 @@ bool remap_shifted_absolute_targets_after_insertion(std::vector<MachineItem>& it
     int* target = std::get_if<int>(&item.target);
     if (target == nullptr || *target < insertion_address)
       continue;
-    if (*target >= 104) {
+    if (*target >= official_program_last_address(model)) {
       rejection_reason = "dirty return-stack dispatch allocator cannot shift numeric address "
-                         "operands outside official 00..A4 cells";
+                         "operands outside official " + official_program_range_label(model) +
+                         " cells";
       return false;
     }
     *target += 1;
@@ -2968,11 +3010,15 @@ ReturnStackLayoutOpportunityAnalysis analyze_return_stack_layout_opportunity(
   plan.transition_savings = plan.transitions;
   plan.charge_cost = plan.paid_call_sites * 2;
   const int materialized_cells = machine_cell_count(plan.items);
+  const CompileOptions compile_options =
+      compile_options_for_feature_profile(options.feature_profile);
+  const AddressSpaceModel model = address_space_model_for_options(compile_options);
   plan.address_overlay_savings =
-      std::max(0, materialized_cells - best_cell_count_with_address_overlay(plan.items));
+      std::max(0, materialized_cells -
+                       best_cell_count_with_address_overlay(plan.items, compile_options));
   plan.post_layout_pipeline_savings = std::max(
       0, materialized_cells -
-             measure_return_stack_post_layout_pipeline(plan.items, CompileOptions{}).final_cells);
+             measure_return_stack_post_layout_pipeline(plan.items, compile_options).final_cells);
   plan.address_shift_risk_count = plan.paid_call_sites;
   plan.address_shift_cell_count = plan.paid_call_sites * 2;
   if (plan.address_shift_risk_count > 0) {
@@ -2988,7 +3034,7 @@ ReturnStackLayoutOpportunityAnalysis analyze_return_stack_layout_opportunity(
   }
 
   const MachineLayout layout = machine_layout(plan.items);
-  const std::vector<FlowReference> refs = direct_flow_references(plan.items, layout);
+  const std::vector<FlowReference> refs = direct_flow_references(plan.items, layout, model);
   const std::map<int, std::vector<FlowReference>> incoming = incoming_by_target(refs);
   const std::map<std::string, ReturnStackExistingCallSite> physical_existing_by_continuation =
       existing_callsite_by_continuation(input);
@@ -3011,7 +3057,8 @@ ReturnStackLayoutOpportunityAnalysis analyze_return_stack_layout_opportunity(
       plan.no_backward_charge_jumps = false;
       break;
     }
-    const std::optional<CallSite> call = call_site_at_address(plan.items, layout, label_it->second);
+    const std::optional<CallSite> call =
+        call_site_at_address(plan.items, layout, label_it->second, model);
     if (!call.has_value() || call->target_address <= call->source_address) {
       plan.no_backward_charge_jumps = false;
       break;
@@ -3033,7 +3080,7 @@ ReturnStackLayoutOpportunityAnalysis analyze_return_stack_layout_opportunity(
       break;
     }
     const std::optional<CallSite> previous =
-        call_site_at_address(plan.items, layout, previous_label_it->second);
+        call_site_at_address(plan.items, layout, previous_label_it->second, model);
     if (!previous.has_value() ||
         incoming_op_indexes_for_target(incoming, label_it->second) !=
             std::set<int>{previous->op_index}) {
@@ -3050,7 +3097,7 @@ ReturnStackLayoutOpportunityAnalysis analyze_return_stack_layout_opportunity(
     const auto final_charge_it = layout.labels.find(physical_charge_label(plan.transitions - 1));
     if (final_charge_it != layout.labels.end()) {
       const std::optional<CallSite> final_call =
-          call_site_at_address(plan.items, layout, final_charge_it->second);
+          call_site_at_address(plan.items, layout, final_charge_it->second, model);
       plan.unique_entry_after_charge =
           final_call.has_value() && final_call->target_address == entry_it->second &&
           incoming_op_indexes_for_target(incoming, entry_it->second) ==
@@ -3398,7 +3445,7 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout_with_pipeline(
 }
 
 ReturnStackScriptOpportunityScan scan_return_stack_script_opportunity(
-    const std::vector<MachineItem>& items) {
+    const std::vector<MachineItem>& items, const CompileOptions& options) {
   ReturnStackScriptOpportunityScan scan;
   if (items.empty()) {
     scan.rejection_reason = "return-stack script requires a non-empty machine layout";
@@ -3406,6 +3453,7 @@ ReturnStackScriptOpportunityScan scan_return_stack_script_opportunity(
   }
 
   const MachineLayout layout = machine_layout(items);
+  const AddressSpaceModel model = address_space_model_for_options(options);
   std::set<int> call_addresses;
   std::vector<CallSite> calls;
   for (const auto& [address, item_index] : layout.item_index_by_address) {
@@ -3413,7 +3461,8 @@ ReturnStackScriptOpportunityScan scan_return_stack_script_opportunity(
     if (item.kind != MachineItemKind::Op || item.raw)
       continue;
     if (item.opcode == 0x53 || is_proven_indirect_call_opcode(item.opcode)) {
-      if (const std::optional<CallSite> call = call_site_at_address(items, layout, address)) {
+      if (const std::optional<CallSite> call =
+              call_site_at_address(items, layout, address, model)) {
         calls.push_back(*call);
         call_addresses.insert(call->source_address);
       }
@@ -3447,19 +3496,22 @@ ReturnStackScriptOpportunityScan scan_return_stack_script_opportunity(
   return scan;
 }
 
-std::string explain_return_stack_script_rejection(const std::vector<MachineItem>& items) {
-  const ReturnStackScriptOpportunityScan scan = scan_return_stack_script_opportunity(items);
+std::string explain_return_stack_script_rejection(const std::vector<MachineItem>& items,
+                                                  const CompileOptions& options) {
+  const AddressSpaceModel model = address_space_model_for_options(options);
+  const ReturnStackScriptOpportunityScan scan =
+      scan_return_stack_script_opportunity(items, options);
   if (!scan.possible)
     return scan.rejection_reason;
 
-  const std::optional<ScriptPlan> plan = find_best_script_plan(items);
+  const std::optional<ScriptPlan> plan = find_best_script_plan(items, model);
   if (!plan.has_value()) {
     return "return-stack script found a possible charge shape, but no fully proven 2..5 ПП chain "
            "followed by reverse БП continuations and terminal С/П";
   }
 
   const std::vector<MachineItem> candidate = apply_script_plan(items, *plan);
-  if (!return_stack_candidate_beats_downstream_post_layout_pipeline(items, candidate)) {
+  if (!return_stack_candidate_beats_downstream_post_layout_pipeline(items, candidate, options)) {
     return "return-stack script proof exists, but the downstream address-code-overlay/indirect-flow "
            "pipeline is at least as small as the return-stack rewrite";
   }
@@ -3562,12 +3614,15 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
     return allocation;
   }
 
+  const AddressSpaceModel model = address_space_model_for_options(options);
+  const int official_last = official_program_last_address(model);
   const int max_target = *std::max_element(target_plan.dirty_targets.begin(),
                                            target_plan.dirty_targets.end());
-  if (max_target < 0 || max_target > 104) {
+  if (max_target < 0 || max_target > official_last) {
     allocation.dispatch = std::move(target_plan);
     allocation.rejection_reason =
-        "dirty return-stack dispatch allocator target is outside official 00..A4 cells";
+        "dirty return-stack dispatch allocator target is outside official " +
+        official_program_range_label(model) + " cells";
     return allocation;
   }
 
@@ -3611,10 +3666,11 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
 
     const int candidate_cells = machine_cell_count(candidate);
     const int target = unsafe->actual_pc;
-    if (target < 0 || target > 104) {
+    if (target < 0 || target > official_last) {
       allocation.dispatch = std::move(current);
       allocation.rejection_reason =
-          "dirty return-stack dispatch allocator target is outside official 00..A4 cells";
+          "dirty return-stack dispatch allocator target is outside official " +
+          official_program_range_label(model) + " cells";
       return allocation;
     }
 
@@ -3671,7 +3727,7 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
 
     std::string absolute_target_remap_rejection;
     if (!remap_shifted_absolute_targets_after_insertion(candidate, target,
-                                                        absolute_target_remap_rejection)) {
+                                                        absolute_target_remap_rejection, model)) {
       allocation.dispatch = std::move(current);
       allocation.rejection_reason = absolute_target_remap_rejection;
       return allocation;
@@ -3709,12 +3765,14 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
   return allocation;
 }
 
-std::vector<std::vector<int>> dirty_return_stack_dispatch_candidate_stacks() {
+std::vector<std::vector<int>> dirty_return_stack_dispatch_candidate_stacks(
+    AddressSpaceModel model) {
   std::vector<std::vector<int>> stacks;
   constexpr int first_family_start = 19;
   constexpr int family_stride = 8;
   std::set<int> seen_dirty_targets;
-  for (int start = first_family_start; start <= 104; start += family_stride) {
+  for (int start = first_family_start; start <= official_program_last_address(model);
+       start += family_stride) {
     const int dirty_target = (start % 10) * 11 + 1;
     if (!seen_dirty_targets.insert(dirty_target).second)
       break;
@@ -3752,8 +3810,9 @@ std::vector<DirtyReturnStackDispatchAllocationPlan>
 allocate_dirty_return_stack_dispatch_layouts(const std::vector<MachineItem>& layout,
                                              const DirtyReturnStackDispatchOptions& options) {
   std::vector<DirtyReturnStackDispatchAllocationPlan> allocations;
+  const AddressSpaceModel model = address_space_model_for_options(options);
   const std::vector<std::vector<int>> stacks =
-      dirty_return_stack_dispatch_candidate_stacks();
+      dirty_return_stack_dispatch_candidate_stacks(model);
   const int return_count = kReturnStackDepth + std::max(1, options.min_dirty_targets);
   allocations.reserve(stacks.size());
   for (const std::vector<int>& stack : stacks) {
@@ -3766,8 +3825,10 @@ allocate_dirty_return_stack_dispatch_layouts(const std::vector<MachineItem>& lay
 }
 
 PostLayoutIndirectFlowResult
-optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) {
-  if (!scan_return_stack_script_opportunity(items).possible) {
+optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items,
+                                         const CompileOptions& options) {
+  const AddressSpaceModel model = address_space_model_for_options(options);
+  if (!scan_return_stack_script_opportunity(items, options).possible) {
     return PostLayoutIndirectFlowResult{
         .items = items,
     };
@@ -3785,7 +3846,7 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
   std::set<int> dirty_dispatch_targets;
 
   for (int round = 0; round < kMaxRewriteRounds; ++round) {
-    const std::optional<ScriptPlan> plan = find_best_script_plan(current);
+    const std::optional<ScriptPlan> plan = find_best_script_plan(current, model);
     if (!plan.has_value())
       break;
     const MachineLayout current_layout = machine_layout(current);
@@ -3798,10 +3859,10 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
     std::set<int> candidate_dirty_dispatch_return_addresses;
     std::set<int> candidate_dirty_dispatch_targets;
     std::optional<DirtyReturnStackDispatchPlan> candidate_dirty_proof =
-        proved_dirty_overflow_script_dispatch(current_layout, candidate, *plan);
+        proved_dirty_overflow_script_dispatch(current_layout, candidate, *plan, options);
     if (plan->dirty_jump.has_value() && !candidate_dirty_proof.has_value()) {
       const std::optional<DirtyReturnStackDispatchAllocationPlan> allocation =
-          repair_dirty_overflow_script_candidate(current_layout, candidate, *plan);
+          repair_dirty_overflow_script_candidate(current_layout, candidate, *plan, options);
       if (!allocation.has_value())
         break;
       candidate = allocation->items;
@@ -3816,7 +3877,7 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
       for (const int target : allocation->dispatch.dirty_targets)
         candidate_dirty_dispatch_targets.insert(target);
       candidate_dirty_proof =
-          proved_dirty_overflow_script_dispatch(current_layout, candidate, *plan);
+          proved_dirty_overflow_script_dispatch(current_layout, candidate, *plan, options);
       if (!candidate_dirty_proof.has_value())
         break;
     }
@@ -3828,7 +3889,7 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
       for (const int target : candidate_dirty_proof->dirty_targets)
         candidate_dirty_dispatch_targets.insert(target);
     }
-    if (!return_stack_candidate_beats_downstream_post_layout_pipeline(current, candidate))
+    if (!return_stack_candidate_beats_downstream_post_layout_pipeline(current, candidate, options))
       break;
     dirty_dispatch_padding += candidate_dirty_dispatch_padding;
     dirty_dispatch_append_padding += candidate_dirty_dispatch_append_padding;
@@ -3924,7 +3985,7 @@ ReturnStackPostLayoutPipelineReport measure_return_stack_downstream_post_layout_
   };
 
   const PostLayoutIndirectFlowResult overlay =
-      optimize_post_layout_address_code_overlay(items);
+      optimize_post_layout_address_code_overlay(items, {}, options);
   report.address_overlay_applied = overlay.applied;
 
   const PostLayoutIndirectFlowResult flow =
@@ -3942,7 +4003,7 @@ ReturnStackPostLayoutPipelineReport measure_return_stack_post_layout_pipeline(
   };
 
   const PostLayoutIndirectFlowResult script =
-      optimize_post_layout_return_stack_script(items);
+      optimize_post_layout_return_stack_script(items, options);
   report.return_stack_script_applied = script.applied;
 
   const ReturnStackPostLayoutPipelineReport downstream =

@@ -21,7 +21,10 @@ The optimizer works in multiple passes, not in a single “on/off” mode.
 7. Run a set of IR-level optimization passes iteratively.
 8. Run layout and apply layout-sensitive indirect/dark-entry candidates.
 9. Optionally compile and optimize setup program (for initializers requiring work).
-10. Select the best lowering variant by cell count under the 105-cell window, using estimated startup+program cost as a tie-break for over-budget variants.
+10. Select the best lowering variant by cell count under the selected feature
+    profile's official window (105 cells for `standard`, 112 cells for
+    `mk61s-mini-expand`), using estimated startup+program cost as a tie-break
+    for over-budget variants.
 
 For over-budget programs, compile retries include candidate demotions (constant demotion, helper-shape changes) that can free a selector register and enable stronger indirect flow lowering.
 
@@ -535,7 +538,8 @@ This axis model is realized by a declarative candidate composition engine in
   (currently `stack-resident-temps`, `shared-bit-mask-helper`, and the dual-use
   constant indirect-flow selector bundle, with/without tail-branch inversion)
   with the proc-layout modifiers. It runs only in the rescue regime — when the
-  standard search still leaves the program over the 105-cell window — so
+  standard search still leaves the program over the selected profile's official
+  cell window — so
   in-budget programs never pay for the broader search and stay byte-identical.
 - In strict mode, candidate probes that fail solely because the intermediate
   layout is over the official window may be recompiled internally as analysis
@@ -694,7 +698,7 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 
 - `stable-indirect-flow` — after register-liveness analysis, routes branches/calls through one indirect pointer.
 - `indirect-register-flow` — the same for regions where address is in a register and already safe for indirect jump.
-- `preloaded-indirect-flow` — preloads selector/address once so multiple indirect jumps become shorter. The post-layout pass is not started for already in-budget programs, but if a program needed indirect-flow rescue it keeps applying all further proved shrinking rewrites instead of stopping at the first <=105 result.
+- `preloaded-indirect-flow` — preloads selector/address once so multiple indirect jumps become shorter. The post-layout pass is not started for already in-budget programs, but if a program needed indirect-flow rescue it keeps applying all further proved shrinking rewrites instead of stopping at the first result that fits the selected profile's official cell window.
 - `post-layout-empty-stack-tail-call` — after post-layout indirect flow has proven a one-cell loop-back selector, replaces a terminal main-loop `ПП proc; К БП r` with `БП proc` when the deleted jump targets cell 0. The final `В/О` then returns through the empty stack to the same loop head, and generated selector preloads are retargeted if the deletion shifts later entries.
 - `post-layout-stop-tail-reuse` — after preloaded indirect-flow has proved a reusable stop tail, replaces repeated `С/П; loop` tails and direct branches to those shims with one-cell indirect jumps/conditionals to the existing stop tail, retargeting generated selector preloads when deleted cells shift later targets.
 - `runtime-indirect-call-flow` — for repeated backward helper calls with legal numeric targets, initializes a dead stable register once at runtime and replaces direct `ПП addr` pairs with one-cell `К ПП r` calls.
@@ -2587,13 +2591,42 @@ Feature flags are added only after successful candidate/optimization evidence:
 - `error-stops` — added for domain-error stop/trap lowering (`error-stop`, `screen-error-literal-lowering`, `domain-error-guard`). Explicit error opcodes resume at `addr + 2`, so nonterminal uses must account for the skipped cell.
 - `code-data-overlay` — added when layout marks address cells as overlayable with code/data reuse.
 - `super-dark-dispatch` — added when `super-dark-dispatch` or `preloaded-super-dark-flow` candidate is selected and FA..FF routing is proven.
+- `rf-register` — added when the selected feature profile enables direct `Rf` access through `4F`/`6F`.
+- `expanded-program-space` — added when the selected feature profile uses 112 official program cells, with `A5`..`B1` as physical cells 105..111.
 
 These are not independent optimizations; they gate whether the lowering strategy can legally use the corresponding opcode/behavior.
 
 ## 15a) Exact-machine profile and emulator facts
 
 - `report.machine` — fixed to `mk61` for this toolchain.
+- `featureProfile` / `report.featureProfile` — the selected machine feature
+  profile id (`standard` or `mk61s-mini-expand`) in JSON output.
 - `report.machineFeaturesUsed` — feature names set from successful candidate/evidence, as listed above.
+- Feature-profile entries such as `rf-register` and `expanded-program-space`
+  are added when the source declares `feature mk61s-mini-expand` or when the
+  same profile is forced with `--feature mk61s-mini-expand`.
+- Under `mk61s-mini-expand`, compiler-owned scratch and constant-preload
+  register allocation may use `Rf`; for example, optimizer constant preloads
+  can select `Rf` and recall them through `6F`.
+- The profile changes only the modeled machine resources below:
+
+| Resource | `standard` | `mk61s-mini-expand` |
+| --- | --- | --- |
+| Direct data registers | `R0`..`Re` | `R0`..`Rf` |
+| Official program cells | 105, `00`..`A4` | 112, `00`..`B1` |
+| First compiler-visible dark/side formal address | `A5` | `B2` |
+| Visible stack | `X/Y/Z/T` | unchanged |
+| Subroutine return stack | 5 levels | unchanged |
+| X2/display-side register | present but not addressable | unchanged |
+
+- `4F` and `6F` are interpreted as direct `Rf` store/recall only under
+  `mk61s-mini-expand`. In the standard profile, symbolic direct `Rf` raw access
+  is rejected and raw `4F`/`6F` stay stock low-level bytes/R0-alias behavior.
+  Symbolic indirect `К ... f` forms remain invalid; indirect `*F` raw bytes stay
+  stock R0 aliases.
+- The debug `program_behavior_digest` harness uses the stock `mkpro::emulator::MK61`
+  model. It reports `mk61s-mini-expand` as unsupported instead of running an
+  expanded-profile program through the stock 105-cell/R0-alias emulator.
 - `report.emulatorFacts` — static probe-backed machine truths used by lowering and verified
   rewrites. They are report/profile facts, not a runtime emulator oracle and not an
   optimizer candidate-acceptance gate; risky candidates still need local proof obligations.
@@ -2937,14 +2970,16 @@ Current local proof obligations:
 - `indirect-flow-targets`: every annotated preloaded indirect branch/call must
   use a stable selector register, have a matching final selector value for that
   register, and that value must statically resolve to the annotated target.
-  Annotated targets outside the MK-61 program address range `0..104` are not
-  proof artifacts.
+  Annotated targets outside the selected profile's official MK-61 program
+  address range (`0..104` for `standard`, `0..111` for
+  `mk61s-mini-expand`) are not proof artifacts.
 - `runtime-indirect-call-targets`: runtime indirect-call rewrites, including
   aggressive threshold variants, must enter the target literal digits immediately
   before the selector store, store into the same stable register used by the
   annotated indirect call, and avoid any later store that overwrites that
-  register first. The annotated target must be in the MK-61 program address range
-  `0..104`.
+  register first. The annotated target must be in the selected profile's
+  official MK-61 program address range (`0..104` for `standard`, `0..111` for
+  `mk61s-mini-expand`).
 - `fractional-selector-data-values`: selector reuse and forced fractional selector
   preloads must prove every required selector value individually. Each value must
   either be recovered with a proof marker attached to the `К {x}` recovery opcode

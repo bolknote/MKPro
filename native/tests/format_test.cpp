@@ -117,6 +117,25 @@ void format_primitives_match_typescript_contract() {
               known_dot.find("[?]") == std::string::npos,
           "dot formatter should resolve proved preloaded indirect branch targets");
 
+  const std::vector<ResolvedStep> expanded_dot_steps = {
+      {.address = 0, .opcode = 0x51, .hex = "51", .mnemonic = "БП", .comment = "jump"},
+      {.address = 1, .opcode = 0xa5, .hex = "A5", .mnemonic = "A5"},
+      {.address = 105, .opcode = 0x50, .hex = "50", .mnemonic = "С/П", .comment = "halt"},
+  };
+  const std::string expanded_dot =
+      format_dot_steps(expanded_dot_steps, {}, AddressSpaceModel::Mk61SMiniExpanded);
+  require(expanded_dot.find("БП A5") != std::string::npos &&
+              expanded_dot.find("n0 -> n105") != std::string::npos &&
+              expanded_dot.find("n105 [label=\"[A5] pause") != std::string::npos,
+          "expanded dot formatter should decode A5 as physical address 105");
+
+  const std::optional<std::string> expanded_a5_setup_listing =
+      format_setup_preload_listing_steps(
+          {{.register_name = "7", .value = "A5", .counts_against_program = false}},
+          AddressSpaceModel::Mk61SMiniExpanded);
+  require(!expanded_a5_setup_listing.has_value(),
+          "expanded A5 selector should not be rendered as an executable decimal setup value");
+
   const std::vector<PreloadReport> formal_preloads = {
       {.register_name = "7", .value = "C5", .counts_against_program = false},
       {.register_name = "8", .value = "FF", .counts_against_program = false},

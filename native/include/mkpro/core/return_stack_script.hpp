@@ -66,6 +66,7 @@ struct ReturnStackStartupLayoutOptions {
   int existing_call_sites = 0;
   int min_net_savings = 1;
   bool size_rescue = false;
+  FeatureProfile feature_profile = FeatureProfile::Standard;
 };
 
 struct ReturnStackLayoutOpportunityAnalysis {
@@ -168,6 +169,7 @@ struct DirtyReturnStackDispatchAllocationPlan {
 };
 
 struct DirtyReturnStackDispatchOptions {
+  FeatureProfile feature_profile = FeatureProfile::Standard;
   bool size_rescue = false;
   int min_dirty_targets = 1;
   bool expect_fallthrough = true;
@@ -204,8 +206,9 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout_with_pipeline(
     const ReturnStackStartupLayoutOptions& options = {},
     int indirect_flow_rescue_above = 105);
 ReturnStackScriptOpportunityScan scan_return_stack_script_opportunity(
-    const std::vector<MachineItem>& items);
-std::string explain_return_stack_script_rejection(const std::vector<MachineItem>& items);
+    const std::vector<MachineItem>& items, const CompileOptions& options = {});
+std::string explain_return_stack_script_rejection(const std::vector<MachineItem>& items,
+                                                  const CompileOptions& options = {});
 DirtyReturnStackDispatchPlan plan_dirty_return_stack_dispatch(std::vector<int> stack,
                                                               int return_count,
                                                               const DirtyReturnStackDispatchOptions&
@@ -221,7 +224,8 @@ allocate_dirty_return_stack_dispatch_layouts(const std::vector<MachineItem>& lay
                                              const DirtyReturnStackDispatchOptions& options = {});
 
 PostLayoutIndirectFlowResult
-optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items);
+optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items,
+                                         const CompileOptions& options = {});
 ReturnStackPostLayoutPipelineReport measure_return_stack_downstream_post_layout_pipeline(
     const std::vector<MachineItem>& items, const CompileOptions& options,
     int indirect_flow_rescue_above = 105);
