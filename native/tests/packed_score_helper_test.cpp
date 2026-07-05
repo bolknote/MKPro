@@ -1314,6 +1314,78 @@ program PackedScoreXParamAccumulatorHelper {
   require(count_steps_with_comment(x_param_sequence, "packed_score stack accumulator") == 0,
           "x-param packed_score sequence should not need separate accumulator add cells");
 
+  const std::string signed_x_param_source = R"mkpro(
+program PackedScoreXParamSignedAccumulatorHelper {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    x: counter 0..7 = 2
+    y: counter 0..7 = 3
+    line: packed = 0
+    score: packed = 0
+  }
+  loop {
+    score = 0
+    normalize(x + y)
+    score -= packed_score(a, line)
+    normalize(x - y)
+    score -= packed_score(b, line)
+    normalize(y + 1)
+    score -= packed_score(c, line)
+    halt(score)
+  }
+
+  fn normalize(raw_line) {
+    line = frac((raw_line + 3) / 4) * 4 + 1
+  }
+}
+)mkpro";
+
+  CompileOptions signed_x_param_fallback_options;
+  signed_x_param_fallback_options.disable_aggressive_post_layout = true;
+  signed_x_param_fallback_options.stack_resident_temps = true;
+  const CompileResult signed_x_param_fallback =
+      compile_source(signed_x_param_source, signed_x_param_fallback_options);
+  require(signed_x_param_fallback.implemented,
+          "signed x-param packed_score fallback program should compile");
+  require(signed_x_param_fallback.diagnostics.empty(),
+          "signed x-param packed_score fallback should not report diagnostics");
+  require(count_optimization(signed_x_param_fallback,
+                             "x-param-packed-score-line-stack-accumulate") == 0,
+          "signed x-param packed_score fallback should not use unavailable accumulator lowering");
+  require(count_steps_with_comment(signed_x_param_fallback, "recall line") == 3,
+          "signed x-param packed_score fallback should keep line register-backed");
+
+  CompileOptions signed_x_param_options = pinned_options();
+  signed_x_param_options.stack_resident_temps = true;
+  const CompileResult signed_x_param_sequence =
+      compile_source(signed_x_param_source, signed_x_param_options);
+  require(signed_x_param_sequence.implemented,
+          "signed x-param packed_score accumulator-helper program should compile");
+  require(signed_x_param_sequence.diagnostics.empty(),
+          "signed x-param packed_score accumulator-helper program should not report diagnostics");
+  require(has_optimization(signed_x_param_sequence,
+                           "packed-score-subtractor-accumulator-helper"),
+          "signed x-param packed_score sequence should emit the subtractor helper body");
+  require(count_optimization(signed_x_param_sequence,
+                             "x-param-packed-score-line-stack-accumulate") == 3,
+          "signed x-param packed_score sequence should keep all returned-index updates "
+          "stack-carried");
+  require(count_packed_score_subtractor_helper_jumps(signed_x_param_sequence) == 3,
+          "signed x-param packed_score sequence should call the subtractor helper for each term");
+  require(count_packed_score_accumulator_helper_jumps(signed_x_param_sequence) == 0,
+          "negative-only signed x-param packed_score sequence should not emit positive helper "
+          "calls");
+  require(count_packed_score_helper_jumps(signed_x_param_sequence) == 0,
+          "signed x-param packed_score sequence should not use the standalone helper fallback");
+  require(count_steps_with_comment(signed_x_param_sequence, "packed_score stack accumulator") == 0,
+          "signed x-param packed_score sequence should not need separate accumulator subtract "
+          "cells");
+  require(count_steps_with_comment(signed_x_param_sequence, "set line") == 0 &&
+              count_steps_with_comment(signed_x_param_sequence, "recall line") == 0,
+          "signed x-param packed_score sequence should keep returned indexes stack-only");
+
   const CompileResult x_param_mixed_prefix_sequence = compile_source(R"mkpro(
 program PackedScoreXParamMixedPrefixAccumulatorHelper {
   state {
