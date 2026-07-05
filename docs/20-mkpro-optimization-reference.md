@@ -64,8 +64,13 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   inserted call-site recalls minus immediate pre-call recalls that already
   materialize the same value, and direct-stack-fit rows summarize the remaining
   inserted/existing materialization cells before a stack-entry helper rewrite is
-  attempted. For stack-inputs that cross nested helper calls, the report also
-  records depth-aware callee stack survival
+  attempted. Ordinary function-argument stores are tracked separately as
+  `valueAwareCallArgumentStore*`: those cells are already paid by the current
+  register-entry ABI and may become removable only after a stack-entry function
+  ABI proves that the argument expressions can stay in X/Y/Z/T through the call.
+  The adjusted `argStoreNet` in the corpus script is therefore a pre-entry-cost
+  proof target, not an enabled size win. For stack-inputs that cross nested
+  helper calls, the report also records depth-aware callee stack survival
   (`valueAwareCallPreservationCalleeStackSurvival` and
   `valueAwareCalleeAbiNaturalPreservedSlotsByCallee`), distinguishing helpers
   that merely consume the working top of stack from helpers that destroy every

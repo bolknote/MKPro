@@ -49443,6 +49443,29 @@ std::optional<SizeSpillAccess> size_report_spill_access(const ResolvedStep& step
   return std::nullopt;
 }
 
+std::optional<std::pair<std::string, std::string>>
+size_report_call_argument_store(const ResolvedStep& step) {
+  if (!step.comment.has_value() || !direct_register_store_index(step.opcode).has_value())
+    return std::nullopt;
+  const std::string comment = strip_size_report_metadata(*step.comment);
+  constexpr std::string_view prefix = "arg ";
+  if (!comment.starts_with(prefix))
+    return std::nullopt;
+  const std::size_t name_start = prefix.size();
+  const std::size_t name_end = comment.find(' ', name_start);
+  if (name_end == std::string::npos || name_end == name_start)
+    return std::nullopt;
+  constexpr std::string_view separator = " for ";
+  const std::size_t separator_start = comment.find(separator, name_end);
+  if (separator_start == std::string::npos)
+    return std::nullopt;
+  const std::size_t helper_start = separator_start + separator.size();
+  if (helper_start >= comment.size())
+    return std::nullopt;
+  return std::make_pair(comment.substr(name_start, name_end - name_start),
+                        comment.substr(helper_start));
+}
+
 void add_size_report_entry(std::vector<SizeReportAccumulator>& entries,
                            std::map<std::string, std::size_t>& by_key, std::string kind,
                            std::string label, int address, int cells, std::string detail = {}) {
@@ -51059,6 +51082,49 @@ SizeAttributionReport build_size_attribution_report(
     if (!call_site.label.empty())
       call_sites_by_label[call_site.label].push_back(call_site);
   }
+  std::map<std::string, std::map<std::string, int>> call_argument_store_cells_by_label_name;
+  std::map<std::string, std::vector<std::string>> call_argument_store_parts_by_label;
+  const auto callsite_argument_store_prelude =
+      [&](const CallSite& call_site) {
+        std::vector<std::pair<std::string, int>> stores;
+        std::set<std::string> counted_names;
+        std::size_t index = call_site.start_index;
+        bool saw_argument_store = false;
+        while (index > 0U) {
+          --index;
+          const ResolvedStep& producer = steps.at(index);
+          if (producer.opcode == 0x50 || producer.opcode == 0x52 ||
+              opcode_by_code(producer.opcode).takes_address) {
+            break;
+          }
+          const std::optional<std::pair<std::string, std::string>> argument_store =
+              size_report_call_argument_store(producer);
+          if (argument_store.has_value() && argument_store->second == call_site.label) {
+            saw_argument_store = true;
+            if (!counted_names.contains(argument_store->first)) {
+              counted_names.insert(argument_store->first);
+              stores.emplace_back(argument_store->first, producer.address);
+            }
+            continue;
+          }
+          if (direct_register_store_index(producer.opcode).has_value()) {
+            break;
+          }
+          if (saw_argument_store && producer.opcode == 0x53)
+            break;
+        }
+        return stores;
+      };
+  for (const CallSite& call_site : call_sites) {
+    if (call_site.label.empty())
+      continue;
+    for (const auto& [name, address] : callsite_argument_store_prelude(call_site)) {
+      ++call_argument_store_cells_by_label_name[call_site.label][name];
+      call_argument_store_parts_by_label[call_site.label].push_back(
+          name + "@call" + safe_format_label_address(call_site.address) + "<-arg-store" +
+          safe_format_label_address(address));
+    }
+  }
   std::map<std::string, std::map<std::string, std::vector<std::size_t>>>
       helper_recall_indices_by_name;
   for (const HelperRegionRange& region : helper_regions) {
@@ -51591,6 +51657,9 @@ SizeAttributionReport build_size_attribution_report(
             return default_materialize_cells_per_input;
           return inserted_it->second;
         };
+        const auto signed_cells_text = [](int cells) {
+          return cells >= 0 ? "+" + std::to_string(cells) : std::to_string(cells);
+        };
         std::vector<std::string> materialize_cost_parts;
         materialize_cost_parts.reserve(ranked_stack_inputs.size());
         int existing_stack_materialize_cells = 0;
@@ -51604,6 +51673,31 @@ SizeAttributionReport build_size_attribution_report(
                                            std::to_string(default_materialize_cells_per_input) +
                                            "c");
         }
+        std::vector<std::string> caller_arg_store_cost_parts;
+        std::vector<std::string> caller_arg_store_adjusted_profit_parts;
+        int caller_arg_store_cells = 0;
+        int caller_arg_store_adjusted_net_cells = 0;
+        const auto caller_arg_store_it =
+            call_argument_store_cells_by_label_name.find(helper.label);
+        for (const auto& [name, gross_cells] : ranked_stack_inputs) {
+          int arg_store_cells = 0;
+          if (caller_arg_store_it != call_argument_store_cells_by_label_name.end()) {
+            const auto by_name_it = caller_arg_store_it->second.find(name);
+            if (by_name_it != caller_arg_store_it->second.end())
+              arg_store_cells = by_name_it->second;
+          }
+          if (arg_store_cells <= 0)
+            continue;
+          caller_arg_store_cells += arg_store_cells;
+          const int materialize_cells = materialize_cells_for_input(name);
+          const int adjusted_net_cells = gross_cells + arg_store_cells - materialize_cells;
+          caller_arg_store_adjusted_net_cells += adjusted_net_cells;
+          caller_arg_store_cost_parts.push_back(name + ":" + std::to_string(arg_store_cells));
+          caller_arg_store_adjusted_profit_parts.push_back(
+              name + ":" + std::to_string(gross_cells) + "g/" +
+              std::to_string(materialize_cells) + "m/" + std::to_string(arg_store_cells) +
+              "a/" + signed_cells_text(adjusted_net_cells) + "n");
+        }
         int profitable_stack_input_gross_cells = 0;
         int profitable_stack_input_materialize_cells = 0;
         std::vector<std::pair<std::string, int>> ranked_profitable_stack_inputs;
@@ -51615,9 +51709,6 @@ SizeAttributionReport build_size_attribution_report(
         int best_stack_input_gross_cells = 0;
         int best_stack_input_materialize_cells = default_materialize_cells_per_input;
         int best_stack_input_net_cells = std::numeric_limits<int>::min();
-        const auto signed_cells_text = [](int cells) {
-          return cells >= 0 ? "+" + std::to_string(cells) : std::to_string(cells);
-        };
         for (const auto& [name, cells] : ranked_stack_inputs) {
           const int materialize_cells = materialize_cells_for_input(name);
           const int net_cells = cells - materialize_cells;
@@ -51730,6 +51821,33 @@ SizeAttributionReport build_size_attribution_report(
                 : "one-callsite-recall-per-input";
         helper.details["valueAwareStackInputMaterializeCellsByName"] =
             join_strings(materialize_cost_parts, ";");
+        if (caller_arg_store_cells > 0) {
+          helper.details["valueAwareCallArgumentStoreCells"] =
+              std::to_string(caller_arg_store_cells);
+          helper.details["valueAwareCallArgumentStoreCellsByName"] =
+              join_strings(caller_arg_store_cost_parts, ";");
+          const auto site_parts_it = call_argument_store_parts_by_label.find(helper.label);
+          if (site_parts_it != call_argument_store_parts_by_label.end()) {
+            helper.details["valueAwareCallArgumentStoreSites"] =
+                join_strings(site_parts_it->second, ";");
+          }
+          helper.details["valueAwareCallerArgStoreAdjustedStackInputNetCells"] =
+              std::to_string(caller_arg_store_adjusted_net_cells);
+          helper.details["valueAwareCallerArgStoreAdjustedStackInputProfitBreakdown"] =
+              join_strings(caller_arg_store_adjusted_profit_parts, ";");
+          helper.details["valueAwareCallerArgStoreProofStatus"] =
+              "requires-stack-entry-function-abi-and-arg-expression-stack-preservation";
+          helper.details["valueAwareCallerArgStoreRequiredAction"] =
+              caller_arg_store_adjusted_net_cells > 0
+                  ? "model-stack-entry-function-abi-cost"
+                  : "find-more-removable-call-argument-stores";
+          helper.details["valueAwareCallerArgStorePlanStatus"] =
+              caller_arg_store_adjusted_net_cells > 0
+                  ? "positive-before-function-stack-entry-cost"
+                  : (caller_arg_store_adjusted_net_cells == 0
+                         ? "break-even-before-function-stack-entry-cost"
+                         : "negative-before-function-stack-entry-cost");
+        }
         if (existing_stack_materialize_cells > 0) {
           helper.details["valueAwareExistingStackInputMaterializeCells"] =
               std::to_string(existing_stack_materialize_cells);

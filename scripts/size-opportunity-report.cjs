@@ -150,6 +150,14 @@ function analyzeFile(compiler, file) {
       suggestedResidentInputs: detail(details, 'valueAwareSuggestedResidentInputNames'),
       profitBreakdown: detail(details, 'valueAwareStackInputProfitBreakdown'),
       materializeCellsByName: detail(details, 'valueAwareStackInputMaterializeCellsByName'),
+      callerArgStoreCells: detail(details, 'valueAwareCallArgumentStoreCells'),
+      callerArgStoreCellsByName: detail(details, 'valueAwareCallArgumentStoreCellsByName'),
+      callerArgStoreAdjustedNet: detail(
+        details,
+        'valueAwareCallerArgStoreAdjustedStackInputNetCells',
+      ),
+      callerArgStorePlanStatus: detail(details, 'valueAwareCallerArgStorePlanStatus'),
+      callerArgStoreRequiredAction: detail(details, 'valueAwareCallerArgStoreRequiredAction'),
       directMaterialization: detail(details, 'valueAwareDirectStackInputMaterialization'),
       directMaterializationStatus: detail(
         details,
@@ -303,6 +311,10 @@ function printHelper(row) {
       ` need=${row.bestInputAdditionalRecallCellsToProfit || '-'}` +
       ` profit=${row.profitBreakdown || '-'}` +
       ` materialize=${row.materializeCellsByName || '-'}` +
+      ` argStores=${row.callerArgStoreCellsByName || '-'}` +
+      ` argStoreNet=${row.callerArgStoreAdjustedNet || '-'}` +
+      ` argStorePlan=${row.callerArgStorePlanStatus || '-'}` +
+      ` argStoreAction=${row.callerArgStoreRequiredAction || '-'}` +
       ` directMat=${row.directMaterializationStatus || '-'}:${row.directMaterialization || '-'}` +
       ` survival=${row.calleeStackSurvival || '-'}` +
       ` natural=${row.calleeNaturalPreservedSlots || '-'}` +
