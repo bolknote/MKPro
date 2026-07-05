@@ -196,6 +196,8 @@ function analyzeFile(compiler, file) {
         detail(details, 'valueAwareCurrentXStackInputRetainedStoreCellsByName'),
       currentXRetainedSites:
         detail(details, 'valueAwareCurrentXStackInputRetainedStoreSites'),
+      currentXRetainedReasons:
+        detail(details, 'valueAwareCurrentXStackInputRetainedStoreReasons'),
       currentXMaterializeProof:
         detail(details, 'valueAwareCurrentXStackInputMaterializeProofStatus'),
       currentXMaterializeAction:
@@ -533,6 +535,7 @@ function printHelper(row) {
       ` currentXSites=${row.currentXMaterializeSites || '-'}` +
       ` currentXRetained=${row.currentXRetainedStores || '-'}` +
       ` currentXRetainedSites=${row.currentXRetainedSites || '-'}` +
+      ` currentXRetainedReasons=${row.currentXRetainedReasons || '-'}` +
       ` currentXProof=${row.currentXMaterializeProof || '-'}` +
       ` currentXAction=${row.currentXMaterializeAction || '-'}` +
       ` argStores=${row.callerArgStoreCellsByName || '-'}` +

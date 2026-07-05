@@ -523,6 +523,12 @@ void example_sizes_match_typescript_baselines() {
                       "valueAwareCurrentXStackInputRetainedStoreSites")
                           .find("boat@call22<-store21") != std::string::npos &&
                   resolve_turn->details.contains(
+                      "valueAwareCurrentXStackInputRetainedStoreReasons") &&
+                  resolve_turn->details.at(
+                      "valueAwareCurrentXStackInputRetainedStoreReasons")
+                          .find("boat@call22<-store21:callee-state-read-after-entry@42/49") !=
+                      std::string::npos &&
+                  resolve_turn->details.contains(
                       "valueAwareCurrentXStackInputMaterializeProofStatus") &&
                   resolve_turn->details.at(
                       "valueAwareCurrentXStackInputMaterializeProofStatus") ==

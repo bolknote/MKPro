@@ -53617,6 +53617,60 @@ SizeAttributionReport build_size_attribution_report(
         std::vector<std::string> existing_stack_materialize_parts;
         std::vector<std::string> current_x_stack_materialize_parts;
         std::vector<std::string> retained_current_x_store_parts;
+        std::vector<std::string> retained_current_x_store_reason_parts;
+        const auto retained_current_x_store_reason =
+            [&](const CallSite& call_site, const std::string& name) {
+              std::vector<std::string> later_recalls;
+              bool skipped_entry_recall = false;
+              bool reached_return = false;
+
+              if (const auto start_it = index_by_address.find(call_site.target);
+                  start_it != index_by_address.end()) {
+                for (std::size_t index = start_it->second; index < steps.size(); ++index) {
+                  const ResolvedStep& step = steps.at(index);
+                  const std::optional<SizeSpillAccess> access = size_report_spill_access(step);
+                  if (access.has_value() && access->kind == SizeSpillAccessKind::Recall &&
+                      access->name == name) {
+                    if (!skipped_entry_recall) {
+                      skipped_entry_recall = true;
+                    } else {
+                      later_recalls.push_back(safe_format_label_address(step.address));
+                    }
+                  }
+                  if (step.opcode == 0x52) {
+                    reached_return = true;
+                    break;
+                  }
+                }
+              }
+              if (!reached_return)
+                later_recalls.clear();
+
+              if (later_recalls.empty()) {
+                const auto helper_recalls_it =
+                    helper_recall_indices_by_name.find(call_site.label);
+                if (helper_recalls_it == helper_recall_indices_by_name.end())
+                  return std::string("tail-call-flow");
+                const auto recall_indices_it = helper_recalls_it->second.find(name);
+                if (recall_indices_it == helper_recalls_it->second.end())
+                  return std::string("tail-call-flow");
+                skipped_entry_recall = false;
+                for (const std::size_t recall_index : recall_indices_it->second) {
+                  if (recall_index >= steps.size())
+                    continue;
+                  if (!skipped_entry_recall) {
+                    skipped_entry_recall = true;
+                    continue;
+                  }
+                  later_recalls.push_back(
+                      safe_format_label_address(steps.at(recall_index).address));
+                }
+              }
+              if (later_recalls.empty())
+                return std::string("tail-call-flow");
+              return std::string("callee-state-read-after-entry@") +
+                     join_strings(later_recalls, "/");
+            };
         if (const auto helper_call_sites = call_sites_by_label.find(helper.label);
             helper_call_sites != call_sites_by_label.end()) {
           for (const CallSite& call_site : helper_call_sites->second) {
@@ -53644,6 +53698,10 @@ SizeAttributionReport build_size_attribution_report(
                 retained_current_x_store_parts.push_back(
                     name + "@call" + safe_format_label_address(call_site.address) +
                     "<-store" + safe_format_label_address(address));
+                retained_current_x_store_reason_parts.push_back(
+                    name + "@call" + safe_format_label_address(call_site.address) +
+                    "<-store" + safe_format_label_address(address) + ":" +
+                    retained_current_x_store_reason(call_site, name));
               }
             }
           }
@@ -53936,6 +53994,10 @@ SizeAttributionReport build_size_attribution_report(
                 join_strings(retained_current_x_store_cost_parts, ";");
             helper.details["valueAwareCurrentXStackInputRetainedStoreSites"] =
                 join_strings(retained_current_x_store_parts, ";");
+            if (!retained_current_x_store_reason_parts.empty()) {
+              helper.details["valueAwareCurrentXStackInputRetainedStoreReasons"] =
+                  join_strings(retained_current_x_store_reason_parts, ";");
+            }
           }
           helper.details["valueAwareCurrentXStackInputMaterializeProofStatus"] =
               retained_current_x_store_cells == current_x_stack_materialize_cells
