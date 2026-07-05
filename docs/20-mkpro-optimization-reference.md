@@ -57,6 +57,9 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   Break-even inputs are kept separate as `valueAwareBreakEvenStackInputNames`
   and the corpus script prints them as `breakEven=...`, so a zero-net helper is
   not confused with either a missing proof or a negative materialization case.
+  The same script prints both grouped stalled actions and the top individual
+  stalled rows, including `blocker=...`, so layout and scheduler blockers can be
+  traced back to concrete files and candidate variants before changing codegen.
   `valueAwareStackInputMaterializeCellsByName` refines that cost per input as
   inserted call-site recalls minus immediate pre-call recalls that already
   materialize the same value, and direct-stack-fit rows summarize the remaining

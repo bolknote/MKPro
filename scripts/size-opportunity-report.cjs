@@ -320,6 +320,7 @@ function printAction(row) {
     `- ${row.status} potential=${row.potentialSavings} best=${row.bestSavings}` +
       ` ${row.file} :: ${row.source}=${row.action}` +
       ` variant=${row.bestVariant || '-'}` +
+      ` blocker=${row.bestBlockerKind || '-'}` +
       ` helper=${row.helper || '-'}`,
   );
 }
@@ -343,6 +344,13 @@ function printText(report) {
     console.log('(none)');
   } else {
     stalledGroups.slice(0, 20).forEach(printGroup);
+  }
+
+  console.log('\nTop stalled next actions:');
+  if (report.stalledNextActions.length === 0) {
+    console.log('(none)');
+  } else {
+    report.stalledNextActions.slice(0, 20).forEach(printAction);
   }
 
   console.log('\nHelper traffic by plan/action:');
