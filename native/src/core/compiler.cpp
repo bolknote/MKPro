@@ -21754,6 +21754,20 @@ bool emit_indexed_packed_pow10_delta_from_stack_index(LoweringContext& context,
   return true;
 }
 
+void report_selected_stack_carried_pow10_index(
+    LoweringContext& context, const std::string& rule_name, const std::string& input_name,
+    const std::string& selector_name, const Expression& target, int line,
+    const std::string& stack_slot, const std::string& mode,
+    const std::string& selected_action) {
+  context.optimizations.push_back(OptimizationReport{
+      .name = "selected-stack-carried-pow10-index",
+      .detail = "rule=" + rule_name + ";input=" + input_name + ";selector=" +
+                selector_name + ";target=" + bank_member_key(target.base, target.field) +
+                ";line=" + std::to_string(line) + ";slot=" + stack_slot + ";mode=" +
+                mode + ";selectedAction=" + selected_action,
+  });
+}
+
 bool lower_indexed_packed_pow10_delta_statement(LoweringContext& context,
                                                 const V2Statement& statement) {
   if (statement.kind != "v2_assign" || !statement.target.has_value() || !statement.expr.has_value())
@@ -22518,6 +22532,13 @@ bool lower_x_param_indexed_fractional_report_tail_rule(LoweringContext& context,
                 bank_member_key(match->target.base, match->target.field) + " at line " +
                 std::to_string(match->update_line) + ".",
   });
+  report_selected_stack_carried_pow10_index(
+      context, rule.name, match->y_name, match->selector, match->target, match->update_line,
+      context.x_param_y_stack_stored_entry ? "X" : "Y",
+      context.x_param_y_stack_stored_entry ? "x-param-y-stack-secondary-entry-update-check-tail"
+                                           : "x-param-y-stack-update-check-tail",
+      context.x_param_y_stack_stored_entry ? "stack-carried-pow10-index-from-secondary-x-entry"
+                                           : "stack-carried-pow10-index-from-y");
   context.optimizations.push_back(OptimizationReport{
       .name = "indexed-packed-fractional-report-branch",
       .detail = "Reused an indexed packed update left in X for fractional report branch at line " +
@@ -32782,6 +32803,12 @@ bool lower_self_decrement_indexed_fractional_report_tail_rule(LoweringContext& c
   }
   const bool lowered = lower_indexed_packed_pow10_delta_report_branch(context, assign, branch,
                                                                       /*proc_tail_x2=*/true);
+  if (lowered && stack_carried_index) {
+    report_selected_stack_carried_pow10_index(
+        context, rule.name, index_name, selector, target, assign.line, "Y",
+        "self-decrement-indexed-fractional-report-tail",
+        "stack-carried-pow10-index-through-self-decrement");
+  }
   if (stack_carried_index)
     context.current_y_variable.reset();
   return lowered;
@@ -32833,6 +32860,13 @@ bool lower_stack_carried_packed_digit_index_rule(LoweringContext& context, const
     return false;
   }
   context.emitter.emit_op(0x52, "В/О", "implicit return from proc", rule.line);
+  report_selected_stack_carried_pow10_index(
+      context, rule.name, *index_name, *direct_selector, target, assign.line,
+      rule.body.size() == 2U ? "Y" : "X",
+      rule.body.size() == 2U ? "self-decrement-indexed-packed-digit-update"
+                             : "direct-indexed-packed-digit-update",
+      rule.body.size() == 2U ? "stack-carried-pow10-index-through-self-decrement"
+                             : "stack-carried-pow10-index-from-x");
   return true;
 }
 
@@ -51037,11 +51071,17 @@ std::string dead_integer_fractional_selector_address_text(int address) {
 
 std::string dead_integer_fractional_selector_rejection_context(
     const std::string& source, std::optional<int> selector_target,
-    const ResolvedStep* consumer_step) {
+    const ResolvedStep* consumer_step, std::optional<int> source_register_index = std::nullopt,
+    std::optional<int> selector_carrier_register_index = std::nullopt) {
   std::vector<std::string> parts;
   if (consumer_step != nullptr)
     parts.push_back("consumerAddress=" +
                     dead_integer_fractional_selector_address_text(consumer_step->address));
+  if (source_register_index.has_value())
+    parts.push_back("sourceRegister=" + register_name_for_step_index(*source_register_index));
+  if (selector_carrier_register_index.has_value())
+    parts.push_back("selectorCarrierRegister=" +
+                    register_name_for_step_index(*selector_carrier_register_index));
   if (selector_target.has_value())
     parts.push_back("selectorTarget=" +
                     dead_integer_fractional_selector_address_text(*selector_target));
@@ -51085,7 +51125,8 @@ std::string dead_integer_fractional_selector_rejection_context(
 std::optional<std::string> stored_dead_integer_fractional_selector_later_rejection_reason(
     const std::vector<ResolvedStep>& steps, std::size_t start_index, int register_index,
     const std::string& source, const std::optional<std::string>& carrier_value,
-    std::optional<int> selector_target, const CompileOptions& options) {
+    std::optional<int> selector_target, std::optional<int> source_register_index,
+    const CompileOptions& options) {
   for (std::size_t index = start_index; index < steps.size(); ++index) {
     const ResolvedStep& step = steps.at(index);
     if (const std::optional<int> store = direct_store_index_for_step(step);
@@ -51109,8 +51150,8 @@ std::optional<std::string> stored_dead_integer_fractional_selector_later_rejecti
              (next_step != nullptr
                   ? " (" + dead_integer_fractional_selector_consumer_kind(*next_step) + ")"
                   : "") +
-             dead_integer_fractional_selector_rejection_context(source, selector_target,
-                                                                next_step);
+             dead_integer_fractional_selector_rejection_context(
+                 source, selector_target, next_step, source_register_index, register_index);
     }
     if (opcode_uses_register_as_indirect_selector(step.opcode, register_index)) {
       // Address/control use observes the selector's integer component as an
@@ -51139,7 +51180,8 @@ std::optional<std::string> stored_dead_integer_fractional_selector_later_rejecti
              register_name_for_step_index(register_index) + " reaches " +
              dead_integer_fractional_selector_next_step_name(step) + " before K {x} (" +
              dead_integer_fractional_selector_consumer_kind(step) + ")" +
-             dead_integer_fractional_selector_rejection_context(source, selector_target, &step);
+             dead_integer_fractional_selector_rejection_context(
+                 source, selector_target, &step, source_register_index, register_index);
     }
   }
   return std::nullopt;
@@ -51148,7 +51190,8 @@ std::optional<std::string> stored_dead_integer_fractional_selector_later_rejecti
 std::optional<std::string> stored_dead_integer_fractional_selector_rejection_reason(
     const std::vector<ResolvedStep>& steps, std::size_t store_index, int register_index,
     const std::string& source, const std::optional<std::string>& carrier_value,
-    std::optional<int> selector_target, const CompileOptions& options) {
+    std::optional<int> selector_target, std::optional<int> source_register_index,
+    const CompileOptions& options) {
   if (store_index + 1U >= steps.size() ||
       steps.at(store_index + 1U).opcode != kDeadIntegerFractionalEraseOpcode) {
     const ResolvedStep* next_step =
@@ -51159,7 +51202,7 @@ std::optional<std::string> stored_dead_integer_fractional_selector_rejection_rea
                                   .has_value()) {
       return stored_dead_integer_fractional_selector_later_rejection_reason(
           steps, store_index + 2U, register_index, source, carrier_value, selector_target,
-          options);
+          source_register_index, options);
     }
     const std::string next =
         next_step != nullptr ? dead_integer_fractional_selector_next_step_name(*next_step)
@@ -51169,11 +51212,13 @@ std::optional<std::string> stored_dead_integer_fractional_selector_rejection_rea
            (next_step != nullptr ? " (" + dead_integer_fractional_selector_consumer_kind(*next_step) +
                                        ")"
                                  : "") +
-           dead_integer_fractional_selector_rejection_context(source, selector_target, next_step);
+           dead_integer_fractional_selector_rejection_context(
+               source, selector_target, next_step, source_register_index, register_index);
   }
 
   return stored_dead_integer_fractional_selector_later_rejection_reason(
-      steps, store_index + 2U, register_index, source, carrier_value, selector_target, options);
+      steps, store_index + 2U, register_index, source, carrier_value, selector_target,
+      source_register_index, options);
 }
 
 std::optional<std::string> dead_integer_fractional_selector_uses_rejection_reason(
@@ -51257,7 +51302,9 @@ std::optional<std::string> dead_integer_fractional_selector_uses_rejection_reaso
       if (const std::optional<std::string> reason =
               stored_dead_integer_fractional_selector_rejection_reason(steps, index + 1U, *store,
                                                                        *source, carrier_value,
-                                                                       selector_target, options)) {
+                                                                       selector_target,
+                                                                       source_register,
+                                                                       options)) {
         return reason;
       }
       proved_values.insert(normalized_source);
@@ -51268,8 +51315,9 @@ std::optional<std::string> dead_integer_fractional_selector_uses_rejection_reaso
              dead_integer_fractional_selector_next_step_name(steps.at(index + 1U)) +
              " before K {x} (" +
              dead_integer_fractional_selector_consumer_kind(steps.at(index + 1U)) + ")" +
-             dead_integer_fractional_selector_rejection_context(*source, selector_target,
-                                                                &steps.at(index + 1U));
+             dead_integer_fractional_selector_rejection_context(
+                 *source, selector_target, &steps.at(index + 1U), source_register,
+                 source_register);
     }
   }
 
@@ -52001,7 +52049,13 @@ size_opportunity_details(const CandidateReport& candidate,
              reason.find("conflict-free address/data table") != std::string::npos) {
     details.emplace("proofFamily", "code-data-overlay");
     details.emplace("proofFailure", "conflict-free-address-data-table-not-proved");
+    details.emplace("proofDisposition", "needs-code-data-overlay-conflict-proof");
+    details.emplace("layoutProofScope", "numeric-dispatch-address-data-table");
+    details.emplace("layoutProofStatus", "missing-conflict-free-table-artifact");
     details.emplace("layoutProofRequirement", "address-data-table-conflict-check");
+    details.emplace("layoutProofRequiredArtifact", "post-layout-address-data-conflict-map");
+    details.emplace("layoutProofConflictModel", "flow-address-cells-vs-case-data-cells");
+    details.emplace("layoutProofNextAction", "emit-address-data-table-candidate-and-conflict-map");
     details.emplace("requiredAction", "prove-conflict-free-address-data-table-layout");
   } else if (candidate.variant == "super-dark-dispatch") {
     details.emplace("proofFamily", "super-dark-dispatch");
@@ -52110,12 +52164,75 @@ size_opportunity_details(const CandidateReport& candidate,
           details.contains("fractionalSelectorConsumer")
               ? details["fractionalSelectorConsumer"]
               : std::string{};
-      const bool live_x_carrier =
-          details.contains("fractionalSelectorStorage") &&
-          details["fractionalSelectorStorage"] == "live-x-carrier";
+      auto trailing_register_name = [](const std::string& text) {
+        std::size_t end = text.size();
+        while (end > 0 &&
+               std::isspace(static_cast<unsigned char>(text.at(end - 1U))) != 0) {
+          --end;
+        }
+        std::size_t begin = end;
+        while (begin > 0 &&
+               std::isspace(static_cast<unsigned char>(text.at(begin - 1U))) == 0) {
+          --begin;
+        }
+        return begin < end ? text.substr(begin, end - begin) : std::string();
+      };
+      details.emplace("fractionalPartUseRole", "constant-data");
+      details.emplace("integerPartDataSafetyStatus", "not-data-arithmetic-consumer");
+      const std::string consumer_register = trailing_register_name(consumer);
+      if (!consumer_register.empty())
+        details.emplace("deadIntegerConsumerRegister", consumer_register);
+      if (details.contains("sourceRegister"))
+        details.emplace("fractionalSelectorSourceRegister", details["sourceRegister"]);
+      const std::string carrier_register =
+          details.contains("selectorCarrierRegister")
+              ? details["selectorCarrierRegister"]
+              : (details.contains("fractionalSelectorStorageRegister")
+                     ? details["fractionalSelectorStorageRegister"]
+                     : std::string{});
+      if (!carrier_register.empty())
+        details.emplace("deadIntegerSelectorCarrierRegister", carrier_register);
+      const bool has_register_correlation =
+          !consumer_register.empty() && !carrier_register.empty();
+      const bool same_register_selector_consumer =
+          has_register_correlation && consumer_register == carrier_register;
+      const bool unrelated_control_with_live_x =
+          has_register_correlation && !same_register_selector_consumer;
+      auto set_address_selector_gap = [&]() {
+        details["integerPartUseRole"] = "address-selector";
+        details["deadIntegerProofGap"] =
+            "missing-final-indirect-target-artifact-on-address-consumer";
+        details["deadIntegerProofRequiredArtifact"] =
+            "preloaded-selector-annotation-on-consuming-indirect-opcode";
+        details["deadIntegerProofNextAction"] =
+            "emit-final-selector-target-artifact-or-erase-before-consumer";
+      };
+      auto set_live_x_control_gap = [&]() {
+        details["integerPartUseRole"] = "live-x-carrier-crosses-control-flow";
+        details["deadIntegerProofGap"] = "live-x-liveness-through-unrelated-indirect-control";
+        details["deadIntegerProofRequiredArtifact"] =
+            "control-successor-x-liveness-or-erase-before-consumer";
+        details["deadIntegerProofNextAction"] =
+            "prove-control-successor-erases-live-x-or-erase-before-consumer";
+      };
+      auto set_unknown_indirect_gap = [&]() {
+        details["integerPartUseRole"] = "unclassified-indirect-control-use";
+        details["deadIntegerProofGap"] = "missing-source-consumer-register-correlation";
+        details["deadIntegerProofRequiredArtifact"] =
+            "source-and-consumer-register-correlation";
+        details["deadIntegerProofNextAction"] =
+            "emit-register-correlation-or-erase-before-consumer";
+      };
+      if (same_register_selector_consumer) {
+        set_address_selector_gap();
+      } else if (unrelated_control_with_live_x) {
+        set_live_x_control_gap();
+      } else {
+        set_unknown_indirect_gap();
+      }
       if (consumer.rfind("К x", 0) == 0 || consumer.rfind("K x", 0) == 0) {
         details.emplace("consumerControlKind", "conditional-indirect-flow");
-        if (live_x_carrier) {
+        if (unrelated_control_with_live_x) {
           details.emplace("proofDisposition", "needs-cfg-x-liveness-proof");
           details.emplace("requiredAction",
                           "prove-conditional-indirect-flow-x-liveness-or-erase-before-use");
@@ -52131,7 +52248,7 @@ size_opportunity_details(const CandidateReport& candidate,
         }
       } else if (consumer.rfind("К ПП", 0) == 0 || consumer.rfind("K PP", 0) == 0) {
         details.emplace("consumerControlKind", "indirect-call");
-        if (live_x_carrier) {
+        if (unrelated_control_with_live_x) {
           details.emplace("proofDisposition", "needs-return-x-liveness-proof");
           details.emplace("requiredAction",
                           "prove-indirect-call-return-x-liveness-or-erase-before-use");
@@ -52143,11 +52260,37 @@ size_opportunity_details(const CandidateReport& candidate,
           details.emplace("requiredAction", "prove-indirect-target-or-erase-before-use");
           details.emplace("integerPartHazard", "stored-selector-indirect-call-before-erase");
         }
+      } else if (consumer.rfind("К БП", 0) == 0 || consumer.rfind("K BP", 0) == 0) {
+        details.emplace("consumerControlKind", "direct-indirect-jump");
+        if (unrelated_control_with_live_x) {
+          details.emplace("proofDisposition", "needs-control-successor-x-liveness-proof");
+          details.emplace("requiredAction",
+                          "prove-control-successor-erases-live-x-or-erase-before-use");
+          details.emplace("integerPartHazard",
+                          "indirect-jump-can-transfer-with-live-x-carrier");
+          details.emplace("xLivenessAction", "build-control-flow-x-liveness-proof");
+        } else {
+          details.emplace("proofDisposition", "needs-final-indirect-target-artifact");
+          details.emplace("requiredAction",
+                          "emit-final-selector-target-artifact-or-erase-before-consumer");
+          details.emplace("integerPartHazard",
+                          "indirect-jump-address-use-before-fractional-erase");
+        }
       } else {
         details.emplace("consumerControlKind", "indirect-jump-or-address-use");
-        details.emplace("proofDisposition", "needs-final-indirect-target-artifact");
-        details.emplace("requiredAction", "prove-indirect-target-or-erase-before-use");
-        details.emplace("integerPartHazard", "indirect-control-before-fractional-erase");
+        if (unrelated_control_with_live_x) {
+          details.emplace("proofDisposition", "needs-control-successor-x-liveness-proof");
+          details.emplace("requiredAction",
+                          "prove-control-successor-erases-live-x-or-erase-before-use");
+          details.emplace("integerPartHazard",
+                          "indirect-control-can-transfer-with-live-x-carrier");
+          details.emplace("xLivenessAction", "build-control-flow-x-liveness-proof");
+        } else {
+          details.emplace("proofDisposition", "needs-final-indirect-target-artifact");
+          details.emplace("requiredAction",
+                          "emit-final-selector-target-artifact-or-erase-before-consumer");
+          details.emplace("integerPartHazard", "indirect-control-before-fractional-erase");
+        }
       }
     } else {
       details.emplace("proofDisposition", "needs-local-dead-integer-proof");
@@ -52176,12 +52319,45 @@ std::map<std::string, std::string> semicolon_key_value_details(const std::string
     const std::string part =
         trim_ascii(text.substr(cursor, next == std::string::npos ? std::string::npos
                                                                  : next - cursor));
-    const std::size_t equals = part.find('=');
-    if (equals != std::string::npos) {
-      const std::string key = trim_ascii(part.substr(0, equals));
-      const std::string value = trim_ascii(part.substr(equals + 1U));
+    std::size_t part_cursor = 0;
+    while (part_cursor < part.size()) {
+      while (part_cursor < part.size() &&
+             (std::isspace(static_cast<unsigned char>(part.at(part_cursor))) != 0 ||
+              part.at(part_cursor) == ',')) {
+        ++part_cursor;
+      }
+      const std::size_t equals = part.find('=', part_cursor);
+      if (equals == std::string::npos)
+        break;
+      const std::string key = trim_ascii(part.substr(part_cursor, equals - part_cursor));
+      std::size_t value_end = equals + 1U;
+      while (value_end < part.size()) {
+        if (part.at(value_end) == ',') {
+          std::size_t lookahead = value_end + 1U;
+          while (lookahead < part.size() &&
+                 std::isspace(static_cast<unsigned char>(part.at(lookahead))) != 0) {
+            ++lookahead;
+          }
+          std::size_t key_end = lookahead;
+          while (key_end < part.size() &&
+                 (std::isalnum(static_cast<unsigned char>(part.at(key_end))) != 0 ||
+                  part.at(key_end) == '_')) {
+            ++key_end;
+          }
+          std::size_t after_key = key_end;
+          while (after_key < part.size() &&
+                 std::isspace(static_cast<unsigned char>(part.at(after_key))) != 0) {
+            ++after_key;
+          }
+          if (key_end > lookahead && after_key < part.size() && part.at(after_key) == '=')
+            break;
+        }
+        ++value_end;
+      }
+      const std::string value = trim_ascii(part.substr(equals + 1U, value_end - equals - 1U));
       if (!key.empty() && !value.empty())
         details[key] = value;
+      part_cursor = value_end < part.size() ? value_end + 1U : part.size();
     }
     if (next == std::string::npos)
       break;
@@ -52344,6 +52520,18 @@ void attach_rejected_candidate_size_details(std::map<std::string, std::string>& 
       savings > 0 ? "measured-positive-vs-current"
                   : (savings == 0 ? "measured-break-even-vs-current"
                                   : "measured-negative-vs-current");
+  if (savings <= 0 &&
+      (details.contains("requiredAction") || details.contains("blockedProofAction") ||
+       details.contains("proofDisposition") || details.contains("blockedProof"))) {
+    details["proofEffortPriority"] = "defer-until-size-positive";
+    details["proofEffortReason"] =
+        savings == 0 ? "candidate-breaks-even-before-proof"
+                     : "candidate-larger-than-current-before-proof";
+    details["proofEffortSizeGate"] =
+        "find-size-positive-candidate-shape-before-spending-proof-effort";
+    details["sizeFirstAction"] =
+        "find-size-positive-candidate-shape-before-proof";
+  }
   if (savings > 0 && details.contains("selectorDataPayloadPackingRequirement")) {
     details["selectorDataPayloadPackingOverheadBudgetCells"] = std::to_string(savings);
     details["selectorDataPayloadPackingBreakEvenCells"] = std::to_string(savings);
@@ -52437,6 +52625,63 @@ std::string size_report_helper_spill_breakdown(
                     safe_format_label_address(spill.last_address));
   }
   return join_strings(parts, ";");
+}
+
+std::string size_report_helper_recall_site_breakdown(
+    const std::vector<SizeHelperSpillSummaryReport>& spills,
+    const std::map<std::string, std::vector<std::pair<int, SizeSpillAccessKind>>>& accesses,
+    bool repeated_only) {
+  std::vector<std::string> parts;
+  parts.reserve(spills.size());
+  for (const SizeHelperSpillSummaryReport& spill : spills) {
+    if (spill.recall_occurrences <= 0)
+      continue;
+    if (repeated_only && spill.recall_occurrences <= 1)
+      continue;
+    const std::string key = spill.helper_label + "\x1f" + spill.name;
+    const auto access_it = accesses.find(key);
+    std::vector<std::string> recall_addresses;
+    if (access_it != accesses.end()) {
+      for (const auto& [address, kind] : access_it->second) {
+        if (kind == SizeSpillAccessKind::Recall)
+          recall_addresses.push_back(safe_format_label_address(address));
+      }
+    }
+    if (recall_addresses.empty()) {
+      recall_addresses.push_back(safe_format_label_address(spill.first_address) + ".." +
+                                 safe_format_label_address(spill.last_address));
+    }
+    parts.push_back(spill.name + ":" + std::to_string(spill.recall_occurrences) + "@" +
+                    join_strings(recall_addresses, ","));
+  }
+  return join_strings(parts, ";");
+}
+
+std::optional<SizeHelperSpillSummaryReport> size_report_top_repeated_recall_spill(
+    const std::vector<SizeHelperSpillSummaryReport>& spills) {
+  std::optional<SizeHelperSpillSummaryReport> best;
+  for (const SizeHelperSpillSummaryReport& spill : spills) {
+    if (spill.recall_occurrences <= 1)
+      continue;
+    if (!best.has_value() || spill.recall_occurrences > best->recall_occurrences ||
+        (spill.recall_occurrences == best->recall_occurrences &&
+         spill.recall_cells > best->recall_cells) ||
+        (spill.recall_occurrences == best->recall_occurrences &&
+         spill.recall_cells == best->recall_cells && spill.name < best->name)) {
+      best = spill;
+    }
+  }
+  return best;
+}
+
+std::optional<std::string> size_report_top_repeated_recall_target(
+    const std::vector<SizeHelperSpillSummaryReport>& spills,
+    const std::map<std::string, std::vector<std::pair<int, SizeSpillAccessKind>>>& accesses) {
+  const std::optional<SizeHelperSpillSummaryReport> best =
+      size_report_top_repeated_recall_spill(spills);
+  if (!best.has_value())
+    return std::nullopt;
+  return size_report_helper_recall_site_breakdown({*best}, accesses, false);
 }
 
 bool size_report_indirect_memory_selector_opcode(int opcode) {
@@ -52819,10 +53064,19 @@ void attach_packed_score_accumulator_helper_details(
     if (usage.shared_tail_terms > 0) {
       helper.details["sharedTailTerms"] = std::to_string(usage.shared_tail_terms);
       helper.details["pipelineShape"] = "packed-line-family-score";
+      helper.details["accumulatorStatePolicy"] = "stack-accumulator-no-score-state-store";
+      helper.details["interleavedPipelineShape"] = "shared-returned-index-tail";
+      helper.details["interleavedPipelineTerms"] = std::to_string(usage.shared_tail_terms);
+      helper.details["interleavedPipelineState"] = "score-carried-in-accumulator-stack";
+      helper.details["interleavedPipelineBlocker"] =
+          "live-inputs-cross-stack-mutating-normalizer-and-score-helper";
       helper.details["pow10ScaleLineValuePolicy"] = "line-value-carried-under-index";
       helper.details["pow10ScaleCorrectnessAction"] =
           "keep-line-value-under-index-before-helper";
-      helper.details["nextPipelineAction"] = "value-aware-stack-register-scheduling";
+      helper.details["nextPipelineAction"] =
+          "prove-stack-preserving-helper-abi-for-live-inputs";
+      helper.details["nextPipelineProofTarget"] =
+          "x-y-residency-through-normalizer-and-accumulator-helper";
     }
   }
 }
@@ -52897,9 +53151,16 @@ void attach_packed_line_update_check_tail_details(
       std::to_string(selected->call_site_cells);
   details["selectedPackedLineScoreHelperCallOccurrences"] =
       std::to_string(selected->call_occurrences);
-  for (const std::string key : {"pipelineShape", "accumulatorTerms", "sharedTailTerms",
+  for (const std::string key : {"pipelineShape",
+                                "accumulatorTerms",
+                                "sharedTailTerms",
                                 "bodyCellsPerAccumulatorTerm",
-                                "pow10ScaleLineValuePolicy", "nextPipelineAction"}) {
+                                "accumulatorStatePolicy",
+                                "interleavedPipelineShape",
+                                "interleavedPipelineBlocker",
+                                "pow10ScaleLineValuePolicy",
+                                "nextPipelineAction",
+                                "nextPipelineProofTarget"}) {
     const auto detail_it = selected->details.find(key);
     if (detail_it != selected->details.end())
       details["selectedPackedLineScoreHelper." + key] = detail_it->second;
@@ -52947,13 +53208,81 @@ void attach_generic_packed_score_fallback_details(
       std::to_string(selected->call_site_cells);
   details["selectedPackedScoreHelperCallOccurrences"] =
       std::to_string(selected->call_occurrences);
-  for (const std::string key : {"pipelineShape", "accumulatorTerms", "sharedTailTerms",
+  for (const std::string key : {"pipelineShape",
+                                "accumulatorTerms",
+                                "sharedTailTerms",
                                 "bodyCellsPerAccumulatorTerm",
-                                "pow10ScaleLineValuePolicy"}) {
+                                "accumulatorStatePolicy",
+                                "interleavedPipelineShape",
+                                "interleavedPipelineBlocker",
+                                "pow10ScaleLineValuePolicy",
+                                "nextPipelineAction",
+                                "nextPipelineProofTarget"}) {
     const auto detail_it = selected->details.find(key);
     if (detail_it != selected->details.end())
       details["selectedPackedScoreHelper." + key] = detail_it->second;
   }
+}
+
+void attach_stack_resident_entry_candidate_details(
+    std::map<std::string, std::string>& details, const CandidateReport& candidate,
+    int current_steps, const SizeAttributionReport& report) {
+  if (candidate.variant != "stack-resident-function-entries" &&
+      candidate.variant != "stack-resident-helper-entries" &&
+      candidate.variant != "packed-score-accumulator-stack-helper-entries") {
+    return;
+  }
+  const int delta_cells = candidate.steps - current_steps;
+  details["stackResidentEntryFamily"] =
+      candidate.variant == "stack-resident-function-entries"
+          ? "value-function-stack-entry"
+          : "shared-helper-stack-entry";
+  details["stackResidentEntryDeltaCells"] = std::to_string(delta_cells);
+  details["stackResidentEntryMeasuredStatus"] =
+      delta_cells > 0 ? "larger-than-current-selected-layout"
+                      : (delta_cells == 0 ? "same-size-as-current-selected-layout"
+                                          : "smaller-than-current-selected-layout");
+  details["stackResidentEntryLossModel"] =
+      "measured-stack-entry-candidate-vs-current-selected-layout";
+
+  const auto detail_or = [](const std::map<std::string, std::string>& source,
+                            const std::string& key, const std::string& fallback) {
+    const auto it = source.find(key);
+    return it == source.end() || it->second.empty() ? fallback : it->second;
+  };
+  std::vector<std::string> abi_parts;
+  std::vector<std::string> traffic_parts;
+  for (const SizeOpportunityReport& opportunity : report.opportunities) {
+    if (opportunity.variant == "stack-helper-abi") {
+      abi_parts.push_back(
+          "expr=" + detail_or(opportunity.details, "expression", "-") +
+          "/net=" + detail_or(opportunity.details, "estimatedNetSavings", "-") +
+          "/entryOverhead=" +
+          detail_or(opportunity.details, "estimatedStackEntryOverheadCells", "-") +
+          "/calls=" + detail_or(opportunity.details, "stackEntryCandidateCallSites", "-") +
+          "/breakEvenCalls=" +
+          detail_or(opportunity.details, "estimatedBreakEvenCallSites", "-") +
+          "/action=" + detail_or(opportunity.details, "requiredAction", "-"));
+    } else if (opportunity.variant == "helper-register-traffic") {
+      const std::string plan =
+          detail_or(opportunity.details, "valueAwareSchedulerPlanStatus",
+                    detail_or(opportunity.details, "valueAwareStackInputPlanStatus", "-"));
+      traffic_parts.push_back(
+          detail_or(opportunity.details, "helperLabel", "-") + ":" + plan +
+          "/net=" +
+          detail_or(opportunity.details, "valueAwareEstimatedNetSavingsAfterMaterialization",
+                    "-") +
+          "/action=" + detail_or(opportunity.details, "requiredAction", "-"));
+    }
+  }
+  if (!abi_parts.empty())
+    details["stackResidentEntryAbiContext"] = join_strings(abi_parts, ";");
+  if (!traffic_parts.empty())
+    details["stackResidentEntryValueAwareContext"] = join_strings(traffic_parts, ";");
+  details["stackResidentEntryRequiredAction"] =
+      delta_cells <= 0 ? "inspect-stack-entry-candidate-ranking"
+                       : "keep-current-layout-until-stack-entry-overhead-or-callsite-count-"
+                         "improves";
 }
 
 void add_signed_packed_score_accumulator_cost_opportunities(
@@ -53291,6 +53620,38 @@ SizeAttributionReport build_size_attribution_report(
   std::map<std::string, std::size_t> helper_summary_by_label;
   for (std::size_t index = 0; index < report.helpers.size(); ++index)
     helper_summary_by_label.emplace(report.helpers.at(index).label, index);
+  struct SelectedStackCarriedPow10Path {
+    std::string input;
+    std::string selector;
+    std::string target;
+    std::string line;
+    std::string slot;
+    std::string mode;
+    std::string action;
+  };
+  std::map<std::string, std::vector<SelectedStackCarriedPow10Path>>
+      helper_selected_stack_carried_pow10_paths;
+  for (const OptimizationReport& optimization : optimizations) {
+    if (optimization.name != "selected-stack-carried-pow10-index")
+      continue;
+    const std::map<std::string, std::string> details =
+        semicolon_key_value_details(optimization.detail);
+    const auto rule_it = details.find("rule");
+    if (rule_it == details.end() || !helper_summary_by_label.contains(rule_it->second))
+      continue;
+    helper_selected_stack_carried_pow10_paths[rule_it->second].push_back(
+        SelectedStackCarriedPow10Path{
+            .input = details.contains("input") ? details.at("input") : std::string(),
+            .selector = details.contains("selector") ? details.at("selector") : std::string(),
+            .target = details.contains("target") ? details.at("target") : std::string(),
+            .line = details.contains("line") ? details.at("line") : std::string(),
+            .slot = details.contains("slot") ? details.at("slot") : std::string(),
+            .mode = details.contains("mode") ? details.at("mode") : std::string(),
+            .action =
+                details.contains("selectedAction") ? details.at("selectedAction")
+                                                   : std::string("selected-stack-carried-path"),
+        });
+  }
   std::map<std::string, std::set<int>> helper_indirect_memory_selector_registers;
   std::map<std::string, HelperRegionRange> helper_region_by_label;
   for (const HelperRegionRange& region : helper_regions) {
@@ -53311,6 +53672,9 @@ SizeAttributionReport build_size_attribution_report(
     if (!call_site.label.empty())
       call_sites_by_label[call_site.label].push_back(call_site);
   }
+  std::map<std::size_t, const CallSite*> call_site_by_start_index;
+  for (const CallSite& call_site : call_sites)
+    call_site_by_start_index.emplace(call_site.start_index, &call_site);
   std::map<std::string, std::map<std::string, int>> call_argument_store_cells_by_label_name;
   std::map<std::string, std::vector<std::string>> call_argument_store_parts_by_label;
   const auto callsite_argument_store_prelude =
@@ -53399,6 +53763,9 @@ SizeAttributionReport build_size_attribution_report(
     std::vector<std::string> mutating_opcodes;
     std::vector<std::string> x2_clobbering_opcodes;
     std::vector<std::string> x2_preload_constant_opcodes;
+    std::vector<std::string> x2_preload_literal_replacement_parts;
+    int x2_preload_literal_replacement_delta_cells = 0;
+    bool x2_preload_literal_replacement_unknown = false;
   };
   const auto original_stack_slot_name = [](int slot) {
     switch (slot) {
@@ -53413,6 +53780,55 @@ SizeAttributionReport build_size_attribution_report(
       default:
         return std::string("-");
     }
+  };
+  const auto signed_cell_delta_text = [](int cells) {
+    return cells >= 0 ? "+" + std::to_string(cells) : std::to_string(cells);
+  };
+  const auto machine_number_entry_cell_count =
+      [](const std::string& raw) -> std::optional<int> {
+    const std::string normalized = lower_ascii(trim_ascii(raw));
+    if (normalized.empty())
+      return std::nullopt;
+    const bool negative = normalized.starts_with("-");
+    const std::string unsigned_value = negative ? normalized.substr(1) : normalized;
+    const std::size_t exponent_pos = unsigned_value.find('e');
+    const std::string mantissa =
+        exponent_pos == std::string::npos ? unsigned_value
+                                          : unsigned_value.substr(0, exponent_pos);
+    const std::optional<std::string> exponent =
+        exponent_pos == std::string::npos
+            ? std::nullopt
+            : std::optional<std::string>(unsigned_value.substr(exponent_pos + 1U));
+
+    int cells = 0;
+    const std::string emitted_mantissa = mantissa.empty() ? std::string("0") : mantissa;
+    for (const char raw_ch : emitted_mantissa) {
+      const unsigned char ch = static_cast<unsigned char>(raw_ch);
+      if (raw_ch == '.' || std::isdigit(ch) != 0) {
+        ++cells;
+      } else {
+        return std::nullopt;
+      }
+    }
+    if (exponent.has_value()) {
+      ++cells;  // ВП
+      const bool exponent_negative = exponent->starts_with("-");
+      const bool exponent_positive = exponent->starts_with("+");
+      const std::string exponent_digits =
+          (exponent_negative || exponent_positive) ? exponent->substr(1) : *exponent;
+      if (exponent_digits.empty())
+        return std::nullopt;
+      for (const char raw_ch : exponent_digits) {
+        if (std::isdigit(static_cast<unsigned char>(raw_ch)) == 0)
+          return std::nullopt;
+        ++cells;
+      }
+      if (exponent_negative)
+        ++cells;  // /-/ for exponent
+    }
+    if (negative)
+      ++cells;  // /-/ for number
+    return cells;
   };
   const auto pre_call_stack_source_for_helper_entry_slot =
       [](int helper_entry_slot, int recall_count) {
@@ -53449,6 +53865,27 @@ SizeAttributionReport build_size_attribution_report(
         for (const int source : slots)
           names.push_back(original_stack_slot_name(source));
         return join_strings(names, ",");
+      };
+  const auto helper_preserved_original_slot_final_slots_text =
+      [&](const HelperStackEffectSummary& summary) {
+        std::map<int, std::vector<std::string>> final_slots_by_source;
+        for (std::size_t final_slot = 0; final_slot < summary.stack_sources.size();
+             ++final_slot) {
+          const int source = summary.stack_sources.at(final_slot);
+          if (source < 0)
+            continue;
+          final_slots_by_source[source].push_back(
+              original_stack_slot_name(static_cast<int>(final_slot)));
+        }
+        if (final_slots_by_source.empty())
+          return std::string("-");
+        std::vector<std::string> parts;
+        parts.reserve(final_slots_by_source.size());
+        for (const auto& [source, final_slots] : final_slots_by_source) {
+          parts.push_back(original_stack_slot_name(source) + ":" +
+                          join_strings(final_slots, ","));
+        }
+        return join_strings(parts, ";");
       };
   const auto stack_restore_cells_for_final_slot = [](std::size_t final_slot) {
     return static_cast<int>(
@@ -53559,13 +53996,14 @@ SizeAttributionReport build_size_attribution_report(
         ++summary.nested_calls;
       const OpcodeInfo& info = opcode_by_code(opcode);
       apply_helper_stack_survival_effect(summary.stack_sources, opcode, info.stack_effect);
-      const auto preload_constant_value = [](const ResolvedStep& step) -> std::optional<std::string> {
-        if (!step.comment.has_value())
+      const auto preload_constant_value = [](const ResolvedStep& candidate_step)
+          -> std::optional<std::string> {
+        if (!candidate_step.comment.has_value())
           return std::nullopt;
         constexpr std::string_view kPrefix = "preload const ";
-        if (!step.comment->starts_with(kPrefix))
+        if (!candidate_step.comment->starts_with(kPrefix))
           return std::nullopt;
-        std::string value = step.comment->substr(kPrefix.size());
+        std::string value = candidate_step.comment->substr(kPrefix.size());
         if (const std::size_t semicolon = value.find(';'); semicolon != std::string::npos)
           value = value.substr(0, semicolon);
         return value;
@@ -53580,9 +54018,26 @@ SizeAttributionReport build_size_attribution_report(
               safe_format_label_address(step.address) + ":" + info.name + "/x2-affects");
           if (direct_recall_index_for_step(step).has_value()) {
             if (const std::optional<std::string> value = preload_constant_value(step)) {
+              const std::string address = safe_format_label_address(step.address);
               summary.x2_preload_constant_opcodes.push_back(
-                  safe_format_label_address(step.address) + ":" + info.name +
-                  "/preload-const=" + *value);
+                  address + ":" + info.name + "/preload-const=" + *value);
+              constexpr int kPreloadRecallCells = 1;
+              if (const std::optional<int> literal_cells =
+                      machine_number_entry_cell_count(*value)) {
+                const int delta_cells = *literal_cells - kPreloadRecallCells;
+                summary.x2_preload_literal_replacement_delta_cells += delta_cells;
+                summary.x2_preload_literal_replacement_parts.push_back(
+                    address + ":" + *value + "/recall=" +
+                    std::to_string(kPreloadRecallCells) + "/literal=" +
+                    std::to_string(*literal_cells) + "/delta=" +
+                    signed_cell_delta_text(delta_cells) + "/x2=literal-restores");
+              } else {
+                summary.x2_preload_literal_replacement_unknown = true;
+                summary.x2_preload_literal_replacement_parts.push_back(
+                    address + ":" + *value + "/recall=" +
+                    std::to_string(kPreloadRecallCells) +
+                    "/literal=unknown/delta=unknown/x2=unknown");
+              }
             }
           }
           break;
@@ -53705,12 +54160,223 @@ SizeAttributionReport build_size_attribution_report(
   const auto unknown_symbolic_stack = []() {
     return SymbolicStackSnapshot{"?", "?", "?", "?"};
   };
+  struct PreCallStackRewritePlan {
+    int cells = 0;
+    std::string operation_text;
+  };
+  const auto pre_call_stack_rewrite_plan =
+      [&](const SymbolicStackSnapshot& actual_stack, int target_slot,
+          const std::string& target_value,
+          const std::set<std::string>& recallable_values)
+      -> std::optional<PreCallStackRewritePlan> {
+    if (target_slot < 0 || target_slot >= 4 || target_value.empty() ||
+        target_value == "?")
+      return std::nullopt;
+
+    SymbolicStackSnapshot start = actual_stack;
+    for (std::size_t slot = 0; slot < start.size(); ++slot) {
+      if (start.at(slot) == "?")
+        start.at(slot) = "?" + original_stack_slot_name(static_cast<int>(slot));
+    }
+
+    const auto satisfies = [&](const SymbolicStackSnapshot& stack) {
+      if (stack.at(static_cast<std::size_t>(target_slot)) != target_value)
+        return false;
+      for (int slot = 0; slot < target_slot; ++slot) {
+        if (stack.at(static_cast<std::size_t>(slot)) !=
+            start.at(static_cast<std::size_t>(slot))) {
+          return false;
+        }
+      }
+      return true;
+    };
+    const auto state_key = [](const SymbolicStackSnapshot& stack) {
+      return stack.at(0) + "\x1f" + stack.at(1) + "\x1f" + stack.at(2) + "\x1f" +
+             stack.at(3);
+    };
+    const auto render_ops = [&](const std::vector<std::string>& ops) {
+      if (ops.empty())
+        return std::string("already-placed");
+      if (ops.size() == 1U && ops.at(0) == "recall:" + target_value)
+        return std::string("recall");
+      if (target_slot == 1 && ops.size() == 2U &&
+          ops.at(0) == "recall:" + target_value && ops.at(1) == "swap") {
+        return std::string("recall+swap-preserve-X");
+      }
+      std::vector<std::string> rendered;
+      rendered.reserve(ops.size());
+      for (const std::string& op : ops) {
+        if (op.starts_with("recall:")) {
+          rendered.push_back("recall-" + op.substr(std::string("recall:").size()));
+        } else if (op == "swap") {
+          rendered.push_back("swap-X-Y");
+        } else {
+          rendered.push_back(op);
+        }
+      }
+      return std::string("search(") + join_strings(rendered, "+") + ")";
+    };
+
+    std::set<std::string> recalls = recallable_values;
+    recalls.insert(target_value);
+    for (auto it = recalls.begin(); it != recalls.end();) {
+      if (it->empty() || *it == "?" || it->starts_with("?"))
+        it = recalls.erase(it);
+      else
+        ++it;
+    }
+
+    struct SearchNode {
+      SymbolicStackSnapshot stack;
+      std::vector<std::string> ops;
+    };
+    std::vector<SearchNode> queue;
+    std::set<std::string> visited;
+    queue.push_back(SearchNode{.stack = start, .ops = {}});
+    visited.insert(state_key(start));
+    constexpr std::size_t kMaxRewriteCells = 6U;
+    for (std::size_t head = 0; head < queue.size(); ++head) {
+      const SearchNode node = queue.at(head);
+      if (satisfies(node.stack)) {
+        return PreCallStackRewritePlan{
+            .cells = static_cast<int>(node.ops.size()),
+            .operation_text = render_ops(node.ops),
+        };
+      }
+      if (node.ops.size() >= kMaxRewriteCells)
+        continue;
+      const auto push = [&](SymbolicStackSnapshot stack, std::string op) {
+        std::vector<std::string> ops = node.ops;
+        ops.push_back(std::move(op));
+        const std::string key = state_key(stack);
+        if (!visited.insert(key).second)
+          return;
+        queue.push_back(SearchNode{.stack = std::move(stack), .ops = std::move(ops)});
+      };
+      for (const std::string& value : recalls) {
+        const SymbolicStackSnapshot& old = node.stack;
+        push(SymbolicStackSnapshot{value, old.at(0), old.at(1), old.at(2)},
+             "recall:" + value);
+      }
+      if (node.stack.at(0) != node.stack.at(1)) {
+        const SymbolicStackSnapshot& old = node.stack;
+        push(SymbolicStackSnapshot{old.at(1), old.at(0), old.at(2), old.at(3)},
+             "swap");
+      }
+    }
+    return std::nullopt;
+  };
+  using RoleStackSnapshot = std::array<std::string, 4>;
+  struct RoleStackRewritePlan {
+    int cells = 0;
+    std::string operation_text;
+    RoleStackSnapshot final_stack;
+    std::optional<std::string> temp_role;
+  };
+  struct RoleStackSearchNode {
+    RoleStackSnapshot stack;
+    std::optional<std::string> temp_role;
+    std::vector<std::string> ops;
+  };
+  const auto role_stack_snapshot_text =
+      [&](const RoleStackSnapshot& stack) {
+        std::vector<std::string> parts;
+        parts.reserve(stack.size());
+        for (std::size_t slot = 0; slot < stack.size(); ++slot) {
+          parts.push_back(original_stack_slot_name(static_cast<int>(slot)) + "=" +
+                          stack.at(slot));
+        }
+        return join_strings(parts, ",");
+      };
+  const auto role_stack_rewrite_plan =
+      [&](const RoleStackSnapshot& start, std::size_t max_cells,
+          bool allow_temp_copy,
+          const auto& satisfies) -> std::optional<RoleStackRewritePlan> {
+    const auto state_key = [](const RoleStackSearchNode& node) {
+      return node.stack.at(0) + "\x1f" + node.stack.at(1) + "\x1f" +
+             node.stack.at(2) + "\x1f" + node.stack.at(3) + "\x1f" +
+             (node.temp_role.has_value() ? *node.temp_role : std::string("-"));
+    };
+    const auto render_ops = [](const std::vector<std::string>& ops) {
+      return ops.empty() ? std::string("already-placed") : join_strings(ops, "+");
+    };
+    std::vector<RoleStackSearchNode> queue;
+    std::set<std::string> visited;
+    queue.push_back(RoleStackSearchNode{
+        .stack = start,
+        .temp_role = std::nullopt,
+        .ops = {},
+    });
+    visited.insert(state_key(queue.front()));
+    for (std::size_t head = 0; head < queue.size(); ++head) {
+      const RoleStackSearchNode node = queue.at(head);
+      if (satisfies(node)) {
+        return RoleStackRewritePlan{
+            .cells = static_cast<int>(node.ops.size()),
+            .operation_text = render_ops(node.ops),
+            .final_stack = node.stack,
+            .temp_role = node.temp_role,
+        };
+      }
+      if (node.ops.size() >= max_cells)
+        continue;
+      const auto push = [&](RoleStackSnapshot stack, std::optional<std::string> temp_role,
+                            std::string op) {
+        RoleStackSearchNode next{
+            .stack = std::move(stack),
+            .temp_role = std::move(temp_role),
+            .ops = node.ops,
+        };
+        next.ops.push_back(std::move(op));
+        const std::string key = state_key(next);
+        if (!visited.insert(key).second)
+          return;
+        queue.push_back(std::move(next));
+      };
+      const RoleStackSnapshot& old = node.stack;
+      if (allow_temp_copy)
+        push(old, old.at(0), "store-temp");
+      push(RoleStackSnapshot{old.at(1), old.at(2), old.at(3), old.at(3)},
+           node.temp_role, "reverse");
+      push(RoleStackSnapshot{old.at(1), old.at(0), old.at(2), old.at(3)},
+           node.temp_role, "swap");
+      if (allow_temp_copy && node.temp_role.has_value()) {
+        push(RoleStackSnapshot{*node.temp_role, old.at(0), old.at(1), old.at(2)},
+             node.temp_role, "recall-temp");
+      }
+      push(RoleStackSnapshot{old.at(0), old.at(0), old.at(1), old.at(2)},
+           node.temp_role, "lift");
+    }
+    return std::nullopt;
+  };
+  const auto packed_score_accumulator_t_relocation_plan =
+      [&]() -> std::optional<RoleStackRewritePlan> {
+    const RoleStackSnapshot start = {"term", "selected", "accumulator", "accumulator"};
+    return role_stack_rewrite_plan(
+        start, 6U, false, [](const RoleStackSearchNode& node) {
+          return node.stack.at(0) == "term" && node.stack.at(1) == "accumulator" &&
+                 (node.stack.at(2) == "selected" || node.stack.at(3) == "selected");
+        });
+  };
+  const auto packed_score_accumulator_t_explicit_temp_copy_plan =
+      [&]() -> std::optional<RoleStackRewritePlan> {
+    const RoleStackSnapshot start = {"term", "selected", "accumulator", "accumulator"};
+    return role_stack_rewrite_plan(
+        start, 8U, true, [](const RoleStackSearchNode& node) {
+          return node.stack.at(0) == "term" && node.stack.at(1) == "accumulator" &&
+                 (node.stack.at(2) == "selected" || node.stack.at(3) == "selected");
+        });
+  };
   const auto apply_symbolic_stack_effect =
       [&](SymbolicStackSnapshot& stack, const ResolvedStep& step) {
         const SymbolicStackSnapshot old = stack;
         const std::optional<SizeSpillAccess> access = size_report_spill_access(step);
         if (access.has_value() && access->kind == SizeSpillAccessKind::Recall) {
           stack = {access->name, old.at(0), old.at(1), old.at(2)};
+          return;
+        }
+        if (access.has_value() && access->kind == SizeSpillAccessKind::Store) {
+          stack = {access->name, old.at(1), old.at(2), old.at(3)};
           return;
         }
         const int opcode = step.opcode;
@@ -53750,22 +54416,516 @@ SizeAttributionReport build_size_attribution_report(
             break;
         }
       };
+  const auto symbolic_stack_snapshot_text =
+      [&](const SymbolicStackSnapshot& stack) {
+        std::vector<std::string> parts;
+        parts.reserve(stack.size());
+        for (std::size_t slot = 0; slot < stack.size(); ++slot) {
+          parts.push_back(original_stack_slot_name(static_cast<int>(slot)) + "=" +
+                          stack.at(slot));
+        }
+        return join_strings(parts, ",");
+      };
+  const auto symbolic_stack_has_known_value =
+      [](const SymbolicStackSnapshot& stack) {
+        return std::any_of(stack.begin(), stack.end(),
+                           [](const std::string& value) { return value != "?"; });
+      };
+  const auto symbolic_stack_is_fully_known =
+      [](const SymbolicStackSnapshot& stack) {
+        return std::all_of(stack.begin(), stack.end(),
+                           [](const std::string& value) { return value != "?"; });
+      };
+  const auto merge_symbolic_stack =
+      [](SymbolicStackSnapshot& current, const SymbolicStackSnapshot& incoming) {
+        bool changed = false;
+        for (std::size_t slot = 0; slot < current.size(); ++slot) {
+          const std::string& incoming_value = incoming.at(slot);
+          std::string& current_value = current.at(slot);
+          if (current_value == incoming_value)
+            continue;
+          if (current_value != "?") {
+            current_value = "?";
+            changed = true;
+          }
+        }
+        return changed;
+      };
+  std::map<std::string, std::set<std::string>> helper_symbolic_known_callee_effect_parts;
+  const auto known_callee_symbolic_stack_after_call =
+      [&](std::size_t call_index, const SymbolicStackSnapshot& stack,
+          const std::optional<std::string>& owner_label)
+      -> std::optional<SymbolicStackSnapshot> {
+    const auto call_site_it = call_site_by_start_index.find(call_index);
+    if (call_site_it == call_site_by_start_index.end() ||
+        call_site_it->second == nullptr || call_site_it->second->label.empty()) {
+      return std::nullopt;
+    }
+    const CallSite& call_site = *call_site_it->second;
+    if (!helper_region_by_label.contains(call_site.label))
+      return std::nullopt;
+    const HelperStackEffectSummary effect = helper_stack_effect_summary(call_site.label);
+    if (effect.status == "missing-helper-region")
+      return std::nullopt;
+
+    SymbolicStackSnapshot after = unknown_symbolic_stack();
+    for (std::size_t slot = 0; slot < after.size(); ++slot) {
+      const int source = effect.stack_sources.at(slot);
+      if (source >= 0)
+        after.at(slot) = stack.at(static_cast<std::size_t>(source));
+    }
+    if (owner_label.has_value()) {
+      helper_symbolic_known_callee_effect_parts[*owner_label].insert(
+          safe_format_label_address(call_site.address) + ":" + call_site.label +
+          "/effect=" + helper_stack_sources_text(effect) + "/before=" +
+          symbolic_stack_snapshot_text(stack) + "/after=" +
+          symbolic_stack_snapshot_text(after));
+    }
+    return after;
+  };
+  const auto compute_symbolic_stack_before_index =
+      [&](std::size_t start, std::size_t end, const SymbolicStackSnapshot& seed,
+          const std::optional<std::string>& owner_label) {
+        std::map<std::size_t, SymbolicStackSnapshot> before_index;
+        std::vector<std::size_t> worklist;
+        const auto enqueue = [&](std::size_t index, const SymbolicStackSnapshot& stack) {
+          if (index < start || index >= end || index >= steps.size())
+            return;
+          if (index > start && steps.at(index - 1U).address + 1 == steps.at(index).address &&
+              opcode_by_code(steps.at(index - 1U).opcode).takes_address) {
+            return;
+          }
+          const auto [it, inserted] = before_index.emplace(index, stack);
+          if (inserted) {
+            worklist.push_back(index);
+            return;
+          }
+          if (merge_symbolic_stack(it->second, stack))
+            worklist.push_back(index);
+        };
+        const auto direct_target_index =
+            [&](std::size_t index) -> std::optional<std::size_t> {
+          if (index + 1U >= end || index + 1U >= steps.size())
+            return std::nullopt;
+          const std::optional<int> target =
+              size_report_direct_target(steps.at(index + 1U), index_by_address);
+          if (!target.has_value())
+            return std::nullopt;
+          const auto target_it = index_by_address.find(*target);
+          if (target_it == index_by_address.end())
+            return std::nullopt;
+          return target_it->second;
+        };
+        const auto indirect_target_index =
+            [&](const ResolvedStep& step) -> std::optional<std::size_t> {
+          const std::optional<int> target = indirect_target_from_comment(step.comment, options);
+          if (!target.has_value())
+            return std::nullopt;
+          const auto target_it = index_by_address.find(*target);
+          if (target_it == index_by_address.end())
+            return std::nullopt;
+          return target_it->second;
+        };
+        enqueue(start, seed);
+        while (!worklist.empty()) {
+          const std::size_t index = worklist.back();
+          worklist.pop_back();
+          const auto stack_it = before_index.find(index);
+          if (stack_it == before_index.end())
+            continue;
+          const SymbolicStackSnapshot stack = stack_it->second;
+          const ResolvedStep& step = steps.at(index);
+          const int opcode = step.opcode;
+          if (const std::optional<std::size_t> target_index = indirect_target_index(step);
+              target_index.has_value()) {
+            const int base_opcode = opcode & 0xf0;
+            if (base_opcode == 0x80) {
+              enqueue(*target_index, stack);
+              continue;
+            }
+            if (base_opcode == 0xa0) {
+              if (const std::optional<SymbolicStackSnapshot> after =
+                      known_callee_symbolic_stack_after_call(index, stack, owner_label)) {
+                enqueue(index + 1U, *after);
+              } else {
+                enqueue(index + 1U, unknown_symbolic_stack());
+              }
+              continue;
+            }
+            if (base_opcode == 0x70 || base_opcode == 0x90 || base_opcode == 0xc0 ||
+                base_opcode == 0xe0) {
+              SymbolicStackSnapshot fallthrough_stack = stack;
+              SymbolicStackSnapshot jump_stack = stack;
+              if (base_opcode == 0xe0) {
+                fallthrough_stack.at(0) = "0";
+                jump_stack.at(0) = "?";
+              } else if (base_opcode == 0x70) {
+                fallthrough_stack.at(0) = "?";
+                jump_stack.at(0) = "0";
+              } else {
+                fallthrough_stack.at(0) = "?";
+                jump_stack.at(0) = "?";
+              }
+              enqueue(index + 1U, fallthrough_stack);
+              enqueue(*target_index, jump_stack);
+              continue;
+            }
+          }
+          const bool takes_address = opcode_by_code(opcode).takes_address;
+          if (takes_address) {
+            const std::size_t fallthrough = index + 2U;
+            const std::optional<std::size_t> target_index = direct_target_index(index);
+            if (opcode == 0x51) {
+              if (target_index.has_value())
+                enqueue(*target_index, stack);
+              continue;
+            }
+            if (opcode == 0x53) {
+              if (const std::optional<SymbolicStackSnapshot> after =
+                      known_callee_symbolic_stack_after_call(index, stack, owner_label)) {
+                enqueue(fallthrough, *after);
+              } else {
+                enqueue(fallthrough, unknown_symbolic_stack());
+              }
+              continue;
+            }
+            if (opcode >= 0x57 && opcode <= 0x5e) {
+              SymbolicStackSnapshot fallthrough_stack = stack;
+              SymbolicStackSnapshot jump_stack = stack;
+              if (opcode == 0x5e) {
+                fallthrough_stack.at(0) = "0";
+                jump_stack.at(0) = "?";
+              } else if (opcode == 0x57) {
+                fallthrough_stack.at(0) = "?";
+                jump_stack.at(0) = "0";
+              }
+              enqueue(fallthrough, fallthrough_stack);
+              if (target_index.has_value())
+                enqueue(*target_index, jump_stack);
+              continue;
+            }
+            SymbolicStackSnapshot after = stack;
+            apply_symbolic_stack_effect(after, step);
+            enqueue(fallthrough, after);
+            if (target_index.has_value())
+              enqueue(*target_index, after);
+            continue;
+          }
+          if (opcode == 0x50) {
+            enqueue(index + 1U, unknown_symbolic_stack());
+            continue;
+          }
+          if (opcode == 0x52)
+            continue;
+          if (opcode >= 0x80 && opcode <= 0x8e)
+            continue;
+          if (opcode >= 0xa0 && opcode <= 0xae) {
+            if (const std::optional<SymbolicStackSnapshot> after =
+                    known_callee_symbolic_stack_after_call(index, stack, owner_label)) {
+              enqueue(index + 1U, *after);
+            } else {
+              enqueue(index + 1U, unknown_symbolic_stack());
+            }
+            continue;
+          }
+          SymbolicStackSnapshot after = stack;
+          apply_symbolic_stack_effect(after, step);
+          enqueue(index + 1U, after);
+        }
+        return before_index;
+      };
+  const std::map<std::size_t, SymbolicStackSnapshot> global_symbolic_stack_before_index =
+      compute_symbolic_stack_before_index(0U, steps.size(), unknown_symbolic_stack(),
+                                          std::nullopt);
+  std::map<std::string, std::vector<std::string>> helper_symbolic_entry_stack_site_parts;
+  std::map<std::string, std::vector<std::string>> helper_symbolic_flow_entry_stack_parts;
+  std::map<std::string, std::map<int, std::vector<std::string>>>
+      helper_symbolic_callsite_known_entry_facts_by_slot;
+  std::map<std::string, std::map<int, std::vector<std::string>>>
+      helper_symbolic_flow_unknown_entry_slots_by_slot;
+  std::map<std::string, SymbolicStackSnapshot> helper_symbolic_entry_stack_seed_by_label;
+  std::map<std::string, std::string> helper_symbolic_entry_stack_seed_status_by_label;
+  std::set<std::string> helper_symbolic_entry_stack_divergent_labels;
+  const auto merge_helper_symbolic_entry_seed =
+      [&](const std::string& label, const SymbolicStackSnapshot& snapshot) {
+        const auto [seed_it, inserted] =
+            helper_symbolic_entry_stack_seed_by_label.emplace(label, snapshot);
+        if (inserted)
+          return;
+        if (merge_symbolic_stack(seed_it->second, snapshot))
+          helper_symbolic_entry_stack_divergent_labels.insert(label);
+      };
+  const auto enclosing_helper_label_for_index =
+      [&](std::size_t index) -> std::optional<std::string> {
+    for (const HelperRegionRange& region : helper_regions) {
+      if (index >= region.start && index < region.end)
+        return region.label;
+    }
+    return std::nullopt;
+  };
+  const auto symbolic_stack_value_is_known = [](const std::string& value) {
+    return !value.empty() && value != "?" && !value.starts_with("?");
+  };
+  const auto symbolic_stack_value_is_unknown = [](const std::string& value) {
+    return value.empty() || value == "?" || value.starts_with("?");
+  };
+  const auto record_helper_symbolic_callsite_known_entry_facts =
+      [&](const std::string& label, const SymbolicStackSnapshot& snapshot,
+          const std::string& site) {
+        auto& facts_by_slot = helper_symbolic_callsite_known_entry_facts_by_slot[label];
+        for (std::size_t slot = 0; slot < snapshot.size(); ++slot) {
+          const std::string& value = snapshot.at(slot);
+          if (!symbolic_stack_value_is_known(value))
+            continue;
+          facts_by_slot[static_cast<int>(slot)].push_back(
+              value + "@" + site + "<-entry-" +
+              original_stack_slot_name(static_cast<int>(slot)));
+        }
+      };
+  const auto record_helper_symbolic_flow_unknown_entry_slots =
+      [&](const std::string& label, const SymbolicStackSnapshot& snapshot,
+          const std::string& address) {
+        for (std::size_t slot = 0; slot < snapshot.size(); ++slot) {
+          const std::string& value = snapshot.at(slot);
+          if (!symbolic_stack_value_is_unknown(value))
+            continue;
+          helper_symbolic_flow_unknown_entry_slots_by_slot[label][static_cast<int>(slot)]
+              .push_back(original_stack_slot_name(static_cast<int>(slot)) + "=" + value +
+                         "@" + address);
+        }
+      };
+  for (const CallSite& call_site : call_sites) {
+    if (call_site.label.empty())
+      continue;
+    if (enclosing_helper_label_for_index(call_site.start_index).has_value())
+      continue;
+    SymbolicStackSnapshot snapshot = unknown_symbolic_stack();
+    if (const auto snapshot_it = global_symbolic_stack_before_index.find(call_site.start_index);
+        snapshot_it != global_symbolic_stack_before_index.end()) {
+      snapshot = snapshot_it->second;
+    }
+    helper_symbolic_entry_stack_site_parts[call_site.label].push_back(
+        safe_format_label_address(call_site.address) + ":" +
+        symbolic_stack_snapshot_text(snapshot));
+    record_helper_symbolic_callsite_known_entry_facts(
+        call_site.label, snapshot,
+        "call" + safe_format_label_address(call_site.address));
+    merge_helper_symbolic_entry_seed(call_site.label, snapshot);
+  }
+  for (const HelperRegionRange& region : helper_regions) {
+    if (const auto snapshot_it = global_symbolic_stack_before_index.find(region.start);
+        snapshot_it != global_symbolic_stack_before_index.end()) {
+      helper_symbolic_flow_entry_stack_parts[region.label].push_back(
+          safe_format_label_address(steps.at(region.start).address) + ":" +
+          symbolic_stack_snapshot_text(snapshot_it->second));
+      record_helper_symbolic_flow_unknown_entry_slots(
+          region.label, snapshot_it->second,
+          safe_format_label_address(steps.at(region.start).address));
+      merge_helper_symbolic_entry_seed(region.label, snapshot_it->second);
+    }
+  }
   std::map<std::string, std::map<std::size_t, SymbolicStackSnapshot>>
       helper_symbolic_stack_before_index;
   for (const HelperRegionRange& region : helper_regions) {
-    SymbolicStackSnapshot stack = unknown_symbolic_stack();
-    std::map<std::size_t, SymbolicStackSnapshot>& snapshots =
-        helper_symbolic_stack_before_index[region.label];
-    for (std::size_t index = region.start; index < region.end && index < steps.size();
-         ++index) {
-      snapshots[index] = stack;
-      if (index > region.start && steps.at(index - 1U).address + 1 == steps.at(index).address &&
-          opcode_by_code(steps.at(index - 1U).opcode).takes_address) {
-        continue;
+    const SymbolicStackSnapshot stack =
+        helper_symbolic_entry_stack_seed_by_label.contains(region.label)
+            ? helper_symbolic_entry_stack_seed_by_label.at(region.label)
+            : unknown_symbolic_stack();
+    helper_symbolic_stack_before_index[region.label] =
+        compute_symbolic_stack_before_index(region.start, region.end, stack,
+                                            std::optional<std::string>(region.label));
+  }
+  const auto symbolic_stack_before_call_site =
+      [&](const CallSite& call_site) {
+    if (const std::optional<std::string> enclosing_label =
+            enclosing_helper_label_for_index(call_site.start_index);
+        enclosing_label.has_value()) {
+      if (const auto by_helper_it =
+              helper_symbolic_stack_before_index.find(*enclosing_label);
+          by_helper_it != helper_symbolic_stack_before_index.end()) {
+        if (const auto snapshot_it = by_helper_it->second.find(call_site.start_index);
+            snapshot_it != by_helper_it->second.end()) {
+          return snapshot_it->second;
+        }
       }
-      apply_symbolic_stack_effect(stack, steps.at(index));
+    }
+    if (const auto snapshot_it = global_symbolic_stack_before_index.find(call_site.start_index);
+        snapshot_it != global_symbolic_stack_before_index.end()) {
+      return snapshot_it->second;
+    }
+    return unknown_symbolic_stack();
+  };
+  for (const CallSite& call_site : call_sites) {
+    if (call_site.label.empty())
+      continue;
+    const std::optional<std::string> enclosing_label =
+        enclosing_helper_label_for_index(call_site.start_index);
+    if (!enclosing_label.has_value())
+      continue;
+    const SymbolicStackSnapshot snapshot = symbolic_stack_before_call_site(call_site);
+    helper_symbolic_entry_stack_site_parts[call_site.label].push_back(
+        safe_format_label_address(call_site.address) + ":" +
+        symbolic_stack_snapshot_text(snapshot) + "/via=" + *enclosing_label);
+    record_helper_symbolic_callsite_known_entry_facts(
+        call_site.label, snapshot,
+        "call" + safe_format_label_address(call_site.address) + "/via=" +
+            *enclosing_label);
+    merge_helper_symbolic_entry_seed(call_site.label, snapshot);
+  }
+  for (const auto& [label, seed] : helper_symbolic_entry_stack_seed_by_label) {
+    if (!symbolic_stack_has_known_value(seed)) {
+      helper_symbolic_entry_stack_seed_status_by_label[label] =
+          "unknown-callsite-stack";
+    } else if (helper_symbolic_entry_stack_divergent_labels.contains(label)) {
+      helper_symbolic_entry_stack_seed_status_by_label[label] =
+          "partial-divergent-callsite-stack";
+    } else if (!symbolic_stack_is_fully_known(seed)) {
+      helper_symbolic_entry_stack_seed_status_by_label[label] =
+          "partial-uniform-callsite-stack";
+    } else {
+      helper_symbolic_entry_stack_seed_status_by_label[label] =
+          "proved-uniform-callsite-stack";
     }
   }
+  std::map<std::string, std::set<std::string>>
+      helper_symbolic_lost_known_entry_stack_fact_parts;
+  std::map<std::string, std::set<std::string>>
+      helper_symbolic_lost_known_entry_stack_fact_slots;
+  for (const auto& [label, facts_by_slot] :
+       helper_symbolic_callsite_known_entry_facts_by_slot) {
+    const auto unknown_by_slot_it =
+        helper_symbolic_flow_unknown_entry_slots_by_slot.find(label);
+    if (unknown_by_slot_it == helper_symbolic_flow_unknown_entry_slots_by_slot.end())
+      continue;
+    for (const auto& [slot, facts] : facts_by_slot) {
+      const auto unknown_slot_it = unknown_by_slot_it->second.find(slot);
+      if (unknown_slot_it == unknown_by_slot_it->second.end() ||
+          unknown_slot_it->second.empty()) {
+        continue;
+      }
+      const std::string blockers = join_strings(unknown_slot_it->second, ",");
+      for (const std::string& fact : facts) {
+        helper_symbolic_lost_known_entry_stack_fact_parts[label].insert(
+            fact + "/blockedBy=" + blockers);
+      }
+      helper_symbolic_lost_known_entry_stack_fact_slots[label].insert(
+          original_stack_slot_name(slot));
+    }
+  }
+  struct RepeatedArgumentSchedulerFeasibilityReport {
+    std::string sites;
+    std::string status;
+    std::string action;
+    int profitable_net_cells = 0;
+    int model_net_cells = 0;
+  };
+  const auto repeated_argument_scheduler_feasibility_report =
+      [&](const std::string& helper_label,
+          const SizeHelperSpillSummaryReport& spill)
+      -> std::optional<RepeatedArgumentSchedulerFeasibilityReport> {
+    const std::string key = helper_label + "\x1f" + spill.name;
+    const auto access_it = helper_spill_accesses_by_key.find(key);
+    if (access_it == helper_spill_accesses_by_key.end())
+      return std::nullopt;
+    const auto stack_by_index_it = helper_symbolic_stack_before_index.find(helper_label);
+    const bool has_helper_stack = stack_by_index_it != helper_symbolic_stack_before_index.end();
+    std::vector<std::string> site_parts;
+    int recall_sites = 0;
+    int positive_sites = 0;
+    int break_even_sites = 0;
+    int negative_sites = 0;
+    int absent_sites = 0;
+    int unknown_sites = 0;
+    int profitable_net_cells = 0;
+    int model_net_cells = 0;
+    for (const auto& [address, kind] : access_it->second) {
+      if (kind != SizeSpillAccessKind::Recall)
+        continue;
+      ++recall_sites;
+      const std::string address_text = safe_format_label_address(address);
+      const auto index_it = index_by_address.find(address);
+      if (index_it == index_by_address.end() || !has_helper_stack) {
+        ++unknown_sites;
+        site_parts.push_back(address_text + ":missing-symbolic-stack");
+        continue;
+      }
+      const auto snapshot_it = stack_by_index_it->second.find(index_it->second);
+      if (snapshot_it == stack_by_index_it->second.end()) {
+        ++unknown_sites;
+        site_parts.push_back(address_text + ":missing-symbolic-stack");
+        continue;
+      }
+      const SymbolicStackSnapshot& stack = snapshot_it->second;
+      std::optional<std::size_t> resident_slot;
+      for (std::size_t slot = 0; slot < stack.size(); ++slot) {
+        if (stack.at(slot) == spill.name) {
+          resident_slot = slot;
+          break;
+        }
+      }
+      if (!resident_slot.has_value()) {
+        const bool has_unknown_slot =
+            std::any_of(stack.begin(), stack.end(), [](const std::string& value) {
+              return value == "?" || value.starts_with("?");
+            });
+        if (has_unknown_slot) {
+          ++unknown_sites;
+          site_parts.push_back(address_text + ":not-proved-resident");
+        } else {
+          ++absent_sites;
+          site_parts.push_back(address_text + ":not-resident");
+        }
+        continue;
+      }
+      const int restore_cells = stack_restore_cells_for_final_slot(*resident_slot);
+      const int net_cells = 1 - restore_cells;
+      model_net_cells += net_cells;
+      if (net_cells > 0) {
+        ++positive_sites;
+        profitable_net_cells += net_cells;
+      } else if (net_cells == 0) {
+        ++break_even_sites;
+      } else {
+        ++negative_sites;
+      }
+      site_parts.push_back(
+          address_text + ":" + original_stack_slot_name(static_cast<int>(*resident_slot)) +
+          "(restore=" + std::to_string(restore_cells) +
+          ",net=" + signed_cell_delta_text(net_cells) + ")");
+    }
+    if (recall_sites <= 1 || site_parts.empty())
+      return std::nullopt;
+    std::string status;
+    std::string action;
+    if (positive_sites > 0) {
+      status = "has-profitable-x-resident-recall-sites";
+      action = "lower-proved-x-resident-recall-deletions-after-safety-proof";
+    } else if (break_even_sites > 0 || negative_sites > 0) {
+      status = "no-positive-stack-restore-sites";
+      action = "skip-break-even-or-larger-stack-restores-unless-they-enable-a-larger-pipeline";
+    } else if (unknown_sites > 0) {
+      status = "missing-stack-residency-proof";
+      action = "prove-stack-survival-through-intervening-ops-or-keep-direct-recalls";
+    } else {
+      status = "no-proved-resident-recall-sites";
+      action = "change-producer-order-or-callee-abi-before-rewriting-recalls";
+    }
+    return RepeatedArgumentSchedulerFeasibilityReport{
+        .sites = spill.name + ":" + std::to_string(recall_sites) + "recalls" +
+                 "/profitableNet=" + signed_cell_delta_text(profitable_net_cells) +
+                 "/modelNet=" + signed_cell_delta_text(model_net_cells) + "/" +
+                 "positive=" + std::to_string(positive_sites) + ",breakEven=" +
+                 std::to_string(break_even_sites) + ",negative=" +
+                 std::to_string(negative_sites) + ",absent=" +
+                 std::to_string(absent_sites) + ",unknown=" +
+                 std::to_string(unknown_sites) + "/" +
+                 join_strings(site_parts, ","),
+        .status = std::move(status),
+        .action = std::move(action),
+        .profitable_net_cells = profitable_net_cells,
+        .model_net_cells = model_net_cells,
+    };
+  };
   std::map<std::string, std::set<int>> helper_spill_registers;
   for (const HelperRegionRange& region : helper_regions) {
     for (std::size_t index = region.start; index < region.end && index < steps.size(); ++index) {
@@ -53841,6 +55001,122 @@ SizeAttributionReport build_size_attribution_report(
     }
   }
   for (SizeHelperSummaryReport& helper : report.helpers) {
+    if (const auto site_parts_it = helper_symbolic_entry_stack_site_parts.find(helper.label);
+        site_parts_it != helper_symbolic_entry_stack_site_parts.end()) {
+      helper.details["valueAwareSymbolicEntryStackByCallSite"] =
+          join_strings(site_parts_it->second, ";");
+    }
+    if (const auto flow_parts_it = helper_symbolic_flow_entry_stack_parts.find(helper.label);
+        flow_parts_it != helper_symbolic_flow_entry_stack_parts.end()) {
+      helper.details["valueAwareSymbolicFlowEntryStack"] =
+          join_strings(flow_parts_it->second, ";");
+    }
+    if (const auto seed_it = helper_symbolic_entry_stack_seed_by_label.find(helper.label);
+        seed_it != helper_symbolic_entry_stack_seed_by_label.end()) {
+      helper.details["valueAwareSymbolicEntryStackSeed"] =
+          symbolic_stack_snapshot_text(seed_it->second);
+    }
+    if (const auto status_it =
+            helper_symbolic_entry_stack_seed_status_by_label.find(helper.label);
+        status_it != helper_symbolic_entry_stack_seed_status_by_label.end()) {
+      helper.details["valueAwareSymbolicEntryStackSeedStatus"] = status_it->second;
+    }
+    if (const auto lost_it =
+            helper_symbolic_lost_known_entry_stack_fact_parts.find(helper.label);
+        lost_it != helper_symbolic_lost_known_entry_stack_fact_parts.end() &&
+        !lost_it->second.empty()) {
+      helper.details["valueAwareEntryStackLostKnownFacts"] =
+          join_strings(std::vector<std::string>(lost_it->second.begin(),
+                                                lost_it->second.end()),
+                       ";");
+      helper.details["valueAwareEntryStackLostKnownFactCount"] =
+          std::to_string(lost_it->second.size());
+      if (const auto slot_it =
+              helper_symbolic_lost_known_entry_stack_fact_slots.find(helper.label);
+          slot_it != helper_symbolic_lost_known_entry_stack_fact_slots.end() &&
+          !slot_it->second.empty()) {
+        helper.details["valueAwareEntryStackLostKnownFactSlots"] =
+            join_strings(std::vector<std::string>(slot_it->second.begin(),
+                                                  slot_it->second.end()),
+                         ",");
+        helper.details["valueAwareEntryStackLostKnownFactNextProofTarget"] =
+            "prove-flow-entry-" +
+            join_strings(std::vector<std::string>(slot_it->second.begin(),
+                                                  slot_it->second.end()),
+                         "-") +
+            "-values-or-split-entry-seeds";
+      }
+      helper.details["valueAwareEntryStackLostKnownFactStatus"] =
+          "known-callsite-facts-killed-by-unknown-flow-entry";
+      helper.details["valueAwareEntryStackLostKnownFactProofRequirement"] =
+          "flow-entry-stack-value-proof";
+      helper.details["valueAwareEntryStackLostKnownFactRequiredAction"] =
+          "prove-flow-entry-stack-or-split-helper-entry-seeds-before-stack-input-rewrite";
+    }
+    if (const auto known_callee_it =
+            helper_symbolic_known_callee_effect_parts.find(helper.label);
+        known_callee_it != helper_symbolic_known_callee_effect_parts.end()) {
+      helper.details["valueAwareSymbolicKnownCalleeStackEffects"] =
+          join_strings(std::vector<std::string>(known_callee_it->second.begin(),
+                                                known_callee_it->second.end()),
+                       ";");
+    }
+    if (const auto selected_it =
+            helper_selected_stack_carried_pow10_paths.find(helper.label);
+        selected_it != helper_selected_stack_carried_pow10_paths.end()) {
+      std::set<std::string> inputs;
+      std::set<std::string> selectors;
+      std::set<std::string> selected_targets;
+      std::set<std::string> modes;
+      std::vector<std::string> sites;
+      for (const SelectedStackCarriedPow10Path& path : selected_it->second) {
+        if (!path.input.empty())
+          inputs.insert(path.input);
+        if (!path.selector.empty())
+          selectors.insert(path.selector);
+        if (!path.target.empty())
+          selected_targets.insert(path.target);
+        if (!path.mode.empty())
+          modes.insert(path.mode);
+        std::vector<std::string> site_parts;
+        if (!path.input.empty())
+          site_parts.push_back("input=" + path.input);
+        if (!path.selector.empty())
+          site_parts.push_back("selector=" + path.selector);
+        if (!path.target.empty())
+          site_parts.push_back("target=" + path.target);
+        if (!path.slot.empty())
+          site_parts.push_back("slot=" + path.slot);
+        if (!path.mode.empty())
+          site_parts.push_back("mode=" + path.mode);
+        if (!path.action.empty())
+          site_parts.push_back("action=" + path.action);
+        const std::string line_prefix =
+            path.line.empty() ? std::string("line=?") : "line=" + path.line;
+        sites.push_back(line_prefix + "(" + join_strings(site_parts, ",") + ")");
+      }
+      helper.details["valueAwareSelectedStackCarriedPlan"] = "stack-carried-pow10-index";
+      helper.details["valueAwareSelectedStackCarriedStatus"] =
+          "selected-stack-carried-helper-input";
+      helper.details["valueAwareSelectedStackCarriedInputNames"] =
+          join_strings(std::vector<std::string>(inputs.begin(), inputs.end()), ",");
+      if (!selectors.empty()) {
+        helper.details["valueAwareSelectedStackCarriedSelectorNames"] =
+            join_strings(std::vector<std::string>(selectors.begin(), selectors.end()), ",");
+      }
+      if (!selected_targets.empty()) {
+        helper.details["valueAwareSelectedStackCarriedTargets"] =
+            join_strings(std::vector<std::string>(selected_targets.begin(),
+                                                  selected_targets.end()),
+                         ",");
+      }
+      if (!modes.empty()) {
+        helper.details["valueAwareSelectedStackCarriedModes"] =
+            join_strings(std::vector<std::string>(modes.begin(), modes.end()), ",");
+      }
+      helper.details["valueAwareSelectedStackCarriedSites"] =
+          join_strings(sites, ";");
+    }
     if (helper.register_traffic_cells <= 0)
       continue;
     helper.details["registerTrafficCells"] = std::to_string(helper.register_traffic_cells);
@@ -53857,9 +55133,40 @@ SizeAttributionReport build_size_attribution_report(
                        ",");
     }
     const auto spills_it = helper_register_traffic_spills.find(helper.label);
-    if (spills_it != helper_register_traffic_spills.end())
+    if (spills_it != helper_register_traffic_spills.end()) {
       helper.details["registerTrafficBreakdown"] =
           size_report_helper_spill_breakdown(spills_it->second);
+      const std::string recall_sites =
+          size_report_helper_recall_site_breakdown(
+              spills_it->second, helper_spill_accesses_by_key, /*repeated_only=*/false);
+      if (!recall_sites.empty())
+        helper.details["argumentRecallSitesByName"] = recall_sites;
+      const std::string repeated_recall_sites =
+          size_report_helper_recall_site_breakdown(
+              spills_it->second, helper_spill_accesses_by_key, /*repeated_only=*/true);
+      if (!repeated_recall_sites.empty())
+        helper.details["repeatedArgumentRecallSites"] = repeated_recall_sites;
+      if (const std::optional<SizeHelperSpillSummaryReport> top_repeated_spill =
+              size_report_top_repeated_recall_spill(spills_it->second)) {
+        helper.details["topRepeatedArgumentRecall"] =
+            size_report_helper_recall_site_breakdown(
+                {*top_repeated_spill}, helper_spill_accesses_by_key,
+                /*repeated_only=*/false);
+        helper.details["schedulerNextMaterializationTarget"] =
+            "keep-repeated-helper-argument-resident-across-related-operations";
+        if (const std::optional<RepeatedArgumentSchedulerFeasibilityReport> feasibility =
+                repeated_argument_scheduler_feasibility_report(helper.label,
+                                                               *top_repeated_spill)) {
+          helper.details["repeatedArgumentSchedulerFeasibility"] = feasibility->sites;
+          helper.details["repeatedArgumentSchedulerStatus"] = feasibility->status;
+          helper.details["repeatedArgumentSchedulerAction"] = feasibility->action;
+          helper.details["repeatedArgumentSchedulerProfitableNetCells"] =
+              std::to_string(feasibility->profitable_net_cells);
+          helper.details["repeatedArgumentSchedulerModelNetCells"] =
+              std::to_string(feasibility->model_net_cells);
+        }
+      }
+    }
     const int value_aware_cells = helper_value_aware_register_traffic_cells[helper.label];
     helper.details["valueAwareRegisterTrafficCells"] = std::to_string(value_aware_cells);
     helper.details["valueAwareRegisterRecallCells"] =
@@ -53877,6 +55184,41 @@ SizeAttributionReport build_size_attribution_report(
         spills != helper_value_aware_register_traffic_spills.end()) {
       helper.details["valueAwareRegisterTrafficBreakdown"] =
           size_report_helper_spill_breakdown(spills->second);
+      const std::string recall_sites =
+          size_report_helper_recall_site_breakdown(
+              spills->second, helper_spill_accesses_by_key, /*repeated_only=*/false);
+      if (!recall_sites.empty()) {
+        helper.details["valueAwareArgumentRecallSitesByName"] = recall_sites;
+      }
+      const std::string repeated_recall_sites =
+          size_report_helper_recall_site_breakdown(
+              spills->second, helper_spill_accesses_by_key, /*repeated_only=*/true);
+      if (!repeated_recall_sites.empty()) {
+        helper.details["valueAwareRepeatedArgumentRecallSites"] = repeated_recall_sites;
+      }
+      if (const std::optional<SizeHelperSpillSummaryReport> top_repeated_spill =
+              size_report_top_repeated_recall_spill(spills->second)) {
+        helper.details["valueAwareTopRepeatedArgumentRecall"] =
+            size_report_helper_recall_site_breakdown(
+                {*top_repeated_spill}, helper_spill_accesses_by_key,
+                /*repeated_only=*/false);
+        helper.details["valueAwareSchedulerNextMaterializationTarget"] =
+            "keep-repeated-helper-argument-resident-across-related-operations";
+        if (const std::optional<RepeatedArgumentSchedulerFeasibilityReport> feasibility =
+                repeated_argument_scheduler_feasibility_report(helper.label,
+                                                               *top_repeated_spill)) {
+          helper.details["valueAwareRepeatedArgumentSchedulerFeasibility"] =
+              feasibility->sites;
+          helper.details["valueAwareRepeatedArgumentSchedulerStatus"] =
+              feasibility->status;
+          helper.details["valueAwareRepeatedArgumentSchedulerAction"] =
+              feasibility->action;
+          helper.details["valueAwareRepeatedArgumentSchedulerProfitableNetCells"] =
+              std::to_string(feasibility->profitable_net_cells);
+          helper.details["valueAwareRepeatedArgumentSchedulerModelNetCells"] =
+              std::to_string(feasibility->model_net_cells);
+        }
+      }
       std::set<std::string> stack_input_names;
       std::set<std::string> state_output_names;
       std::set<std::string> nested_call_input_names;
@@ -54007,13 +55349,24 @@ SizeAttributionReport build_size_attribution_report(
         }
         const int default_materialize_cells_per_input = std::max(1, helper.call_occurrences);
         std::map<std::string, int> existing_stack_materialize_cells_by_name;
+        std::map<std::string, std::set<int>> existing_stack_input_covered_call_addresses_by_name;
+        std::map<std::string, int> existing_entry_stack_input_sites_by_name;
         std::map<std::string, int> current_x_stack_materialize_cells_by_name;
         std::map<std::string, int> retained_current_x_store_cells_by_name;
         std::map<std::string, int> inserted_stack_materialize_cells_by_name;
         std::vector<std::string> existing_stack_materialize_parts;
+        std::vector<std::string> existing_entry_stack_input_parts;
         std::vector<std::string> current_x_stack_materialize_parts;
         std::vector<std::string> retained_current_x_store_parts;
         std::vector<std::string> retained_current_x_store_reason_parts;
+        const auto helper_entry_stack_slot_uniform_for_input =
+            [&](const std::string& name, int slot) {
+          if (slot < 0 || slot >= 4)
+            return false;
+          const auto seed_it = helper_symbolic_entry_stack_seed_by_label.find(helper.label);
+          return seed_it != helper_symbolic_entry_stack_seed_by_label.end() &&
+                 seed_it->second.at(static_cast<std::size_t>(slot)) == name;
+        };
         const auto retained_current_x_store_reason =
             [&](const CallSite& call_site, const std::string& name) {
               std::vector<std::string> later_recalls;
@@ -54076,9 +55429,36 @@ SizeAttributionReport build_size_attribution_report(
                 continue;
               counted_names_at_site.insert(name);
               ++existing_stack_materialize_cells_by_name[name];
+              existing_stack_input_covered_call_addresses_by_name[name].insert(
+                  call_site.address);
               existing_stack_materialize_parts.push_back(
                   name + "@call" + safe_format_label_address(call_site.address) +
                   "<-recall" + safe_format_label_address(address));
+            }
+            {
+              const SymbolicStackSnapshot snapshot =
+                  symbolic_stack_before_call_site(call_site);
+              counted_names_at_site.clear();
+              for (int slot = 0; slot < 4; ++slot) {
+                const std::string& entry_value =
+                    snapshot.at(static_cast<std::size_t>(slot));
+                if (!stack_input_names.contains(entry_value) ||
+                    counted_names_at_site.contains(entry_value)) {
+                  continue;
+                }
+                counted_names_at_site.insert(entry_value);
+                ++existing_entry_stack_input_sites_by_name[entry_value];
+                const bool uniform =
+                    helper_entry_stack_slot_uniform_for_input(entry_value, slot);
+                if (uniform) {
+                  existing_stack_input_covered_call_addresses_by_name[entry_value].insert(
+                      call_site.address);
+                }
+                existing_entry_stack_input_parts.push_back(
+                    entry_value + "@call" + safe_format_label_address(call_site.address) +
+                    "<-entry-" + original_stack_slot_name(slot) +
+                    (uniform ? "" : "(partial)"));
+              }
             }
             counted_names_at_site.clear();
             for (const auto& [name, address] : immediate_pre_call_current_x_stores(call_site)) {
@@ -54104,9 +55484,10 @@ SizeAttributionReport build_size_attribution_report(
         }
         for (const auto& [name, unused_cells] : ranked_stack_inputs) {
           (void)unused_cells;
-          const int existing_cells = existing_stack_materialize_cells_by_name[name];
+          const int covered_call_sites = static_cast<int>(
+              existing_stack_input_covered_call_addresses_by_name[name].size());
           inserted_stack_materialize_cells_by_name[name] =
-              std::max(0, default_materialize_cells_per_input - existing_cells);
+              std::max(0, default_materialize_cells_per_input - covered_call_sites);
         }
         const auto materialize_cells_for_input = [&](const std::string& name) {
           const auto inserted_it = inserted_stack_materialize_cells_by_name.find(name);
@@ -54185,6 +55566,8 @@ SizeAttributionReport build_size_attribution_report(
         }
         int profitable_stack_input_gross_cells = 0;
         int profitable_stack_input_materialize_cells = 0;
+        int break_even_stack_input_gross_cells = 0;
+        int break_even_stack_input_materialize_cells = 0;
         std::vector<std::pair<std::string, int>> ranked_profitable_stack_inputs;
         std::vector<std::string> profitable_stack_input_names;
         std::vector<std::string> break_even_stack_input_names;
@@ -54213,6 +55596,8 @@ SizeAttributionReport build_size_attribution_report(
             profitable_stack_input_materialize_cells += materialize_cells;
           } else if (net_cells == 0) {
             break_even_stack_input_names.push_back(name);
+            break_even_stack_input_gross_cells += cells;
+            break_even_stack_input_materialize_cells += materialize_cells;
           } else {
             unprofitable_stack_input_names.push_back(name);
           }
@@ -54242,6 +55627,10 @@ SizeAttributionReport build_size_attribution_report(
         std::vector<std::string> call_argument_lower_bound_site_parts;
         std::map<std::string, std::vector<std::string>>
             call_argument_lower_bound_sites_by_label;
+        std::map<std::string, int> call_argument_zero_copy_cells_by_label;
+        std::map<std::string, int> call_argument_zero_copy_cells_by_name;
+        std::vector<std::string> call_argument_zero_copy_site_parts;
+        std::vector<std::string> call_argument_zero_copy_blocker_parts;
         int call_argument_preservation_cells = 0;
         const auto nested_call_sites_it = helper_nested_call_sites.find(helper.label);
         const auto recall_indices_it = helper_recall_indices_by_name.find(helper.label);
@@ -54335,12 +55724,46 @@ SizeAttributionReport build_size_attribution_report(
         }
         const bool requires_call_preserving_stack_proof =
             !call_preservation_input_names.empty();
+        int call_argument_zero_copy_cells = 0;
+        int call_argument_preservation_effective_cells = call_argument_preservation_cells;
         bool call_preservation_has_stack_mutating_callee = false;
         int callee_abi_mutation_surface_cells = 0;
         int callee_abi_refactor_target_count = 0;
         int callee_abi_primary_entry_elidable_overhead_cells = 0;
         int callee_abi_primary_entry_remaining_overhead_lower_bound_cells = 0;
         int callee_abi_primary_entry_placement_lower_bound_cells = 0;
+        int callee_abi_primary_entry_modeled_placement_cells = 0;
+        int callee_abi_primary_entry_slot_shape_modeled_placement_cells = 0;
+        int callee_abi_primary_entry_slot_shape_pre_call_rewrite_cells = 0;
+        int callee_abi_primary_entry_slot_shape_callee_lower_bound_cells = 0;
+        int callee_abi_primary_entry_slot_shape_explicit_temp_copy_cells = 0;
+        bool callee_abi_primary_entry_slot_shape_has_role_conflict = false;
+        bool callee_abi_primary_entry_slot_shape_has_body_relocation_blocker = false;
+        bool callee_abi_primary_entry_slot_shape_has_explicit_temp_copy_plan = false;
+        const auto effective_call_argument_preservation_cells_for_label =
+            [&](const std::string& label) {
+              const int raw =
+                  call_argument_preservation_cells_by_label.contains(label)
+                      ? call_argument_preservation_cells_by_label.at(label)
+                      : 0;
+              const int zero_copy =
+                  call_argument_zero_copy_cells_by_label.contains(label)
+                      ? call_argument_zero_copy_cells_by_label.at(label)
+                      : 0;
+              return std::max(0, raw - zero_copy);
+            };
+        const auto effective_call_argument_preservation_cells_for_name =
+            [&](const std::string& name) {
+              const int raw =
+                  call_argument_preservation_cells_by_name.contains(name)
+                      ? call_argument_preservation_cells_by_name.at(name)
+                      : 0;
+              const int zero_copy =
+                  call_argument_zero_copy_cells_by_name.contains(name)
+                      ? call_argument_zero_copy_cells_by_name.at(name)
+                      : 0;
+              return std::max(0, raw - zero_copy);
+            };
         const auto all_call_addresses_for_label =
             [&](const std::string& label) {
               std::set<int> addresses;
@@ -54437,6 +55860,16 @@ SizeAttributionReport build_size_attribution_report(
           helper.details["valueAwareExistingStackInputMaterializeSites"] =
               join_strings(existing_stack_materialize_parts, ";");
         }
+        if (!existing_entry_stack_input_parts.empty()) {
+          helper.details["valueAwareExistingEntryStackInputSites"] =
+              join_strings(existing_entry_stack_input_parts, ";");
+          std::vector<std::string> entry_stack_input_count_parts;
+          entry_stack_input_count_parts.reserve(existing_entry_stack_input_sites_by_name.size());
+          for (const auto& [name, sites] : existing_entry_stack_input_sites_by_name)
+            entry_stack_input_count_parts.push_back(name + ":" + std::to_string(sites));
+          helper.details["valueAwareExistingEntryStackInputSitesByName"] =
+              join_strings(entry_stack_input_count_parts, ";");
+        }
         int current_x_stack_materialize_cells = 0;
         int retained_current_x_store_cells = 0;
         std::vector<std::string> current_x_materialize_cost_parts;
@@ -54532,8 +55965,29 @@ SizeAttributionReport build_size_attribution_report(
               join_strings(profitable_stack_input_names, ",");
         }
         if (!break_even_stack_input_names.empty()) {
+          const int break_even_stack_input_net_cells =
+              break_even_stack_input_gross_cells - break_even_stack_input_materialize_cells;
           helper.details["valueAwareBreakEvenStackInputNames"] =
               join_strings(break_even_stack_input_names, ",");
+          helper.details["valueAwareBreakEvenStackInputCount"] =
+              std::to_string(break_even_stack_input_names.size());
+          helper.details["valueAwareBreakEvenStackInputGrossCells"] =
+              std::to_string(break_even_stack_input_gross_cells);
+          helper.details["valueAwareBreakEvenStackInputMaterializeCells"] =
+              std::to_string(break_even_stack_input_materialize_cells);
+          helper.details["valueAwareBreakEvenStackInputNetCells"] =
+              std::to_string(break_even_stack_input_net_cells);
+          helper.details["valueAwareBreakEvenStackInputPlanStatus"] =
+              "break-even-after-callsite-materialization";
+          helper.details["valueAwareBreakEvenStackInputAdditionalNetCellsToPositive"] = "1";
+          helper.details["valueAwareBreakEvenStackInputPositiveGapReason"] =
+              stack_input_positive_gap_reason_text(break_even_stack_input_net_cells);
+          helper.details["valueAwareBreakEvenStackInputNextProofTarget"] =
+              stack_input_next_proof_target_text(
+                  std::max(0, 1 - break_even_stack_input_net_cells),
+                  break_even_stack_input_materialize_cells);
+          helper.details["valueAwareBreakEvenStackInputRequiredAction"] =
+              "use-break-even-inputs-only-as-enabling-carriers-or-reduce-materialization-cost";
         }
         if (!unprofitable_stack_input_names.empty()) {
           helper.details["valueAwareUnprofitableStackInputNames"] =
@@ -54560,7 +56014,10 @@ SizeAttributionReport build_size_attribution_report(
           std::vector<std::string> call_argument_x2_clobber_parts;
           std::vector<std::string> call_argument_x2_clobber_class_parts;
           std::vector<std::string> call_argument_x2_preload_constant_parts;
+          std::vector<std::string> call_argument_x2_preload_literal_replacement_parts;
+          std::vector<std::string> call_argument_x2_preload_literal_replacement_status_parts;
           std::vector<std::string> callee_natural_preserve_parts;
+          std::vector<std::string> callee_natural_preserve_final_slot_parts;
           std::vector<std::string> callee_natural_restore_parts;
           std::vector<std::string> callee_natural_min_restore_parts;
           std::vector<std::string> callee_natural_first_recall_coverage_parts;
@@ -54568,6 +56025,11 @@ SizeAttributionReport build_size_attribution_report(
           std::vector<std::string> callee_natural_first_recall_status_parts;
           std::vector<std::string> callee_natural_first_recall_choice_parts;
           std::vector<std::string> callee_natural_first_recall_choice_status_parts;
+          std::vector<std::string> callee_natural_first_recall_use_shape_parts;
+          std::vector<std::string> callee_natural_first_recall_use_shape_status_parts;
+          std::vector<std::string> callee_natural_first_recall_use_shape_action_parts;
+          std::vector<std::string> callee_natural_first_recall_choice_search_parts;
+          std::vector<std::string> callee_natural_first_recall_choice_search_status_parts;
           std::vector<std::string> callee_remaining_preserve_parts;
           std::vector<std::string> callee_pure_stack_placement_parts;
           std::vector<std::string> callee_mutating_cell_parts;
@@ -54585,6 +56047,7 @@ SizeAttributionReport build_size_attribution_report(
           std::vector<std::string> callee_abi_primary_entry_restage_parts;
           std::vector<std::string> callee_abi_primary_entry_restage_site_parts;
           std::vector<std::string> callee_abi_primary_entry_placement_parts;
+          std::vector<std::string> callee_abi_primary_entry_modeled_placement_parts;
           std::vector<std::string> callee_abi_primary_entry_site_model_parts;
           std::vector<std::string> callee_abi_primary_entry_site_model_status_parts;
           std::vector<std::string> callee_abi_primary_entry_pre_call_placement_parts;
@@ -54592,19 +56055,62 @@ SizeAttributionReport build_size_attribution_report(
           std::vector<std::string> callee_abi_primary_entry_pre_call_placement_proof_parts;
           std::vector<std::string>
               callee_abi_primary_entry_pre_call_placement_proof_status_parts;
+          std::vector<std::string>
+              callee_abi_primary_entry_pre_call_placement_rewrite_parts;
+          std::vector<std::string>
+              callee_abi_primary_entry_pre_call_placement_rewrite_status_parts;
+          std::vector<std::string> callee_abi_primary_entry_slot_search_parts;
+          std::vector<std::string> callee_abi_primary_entry_slot_search_status_parts;
+          std::vector<std::string> callee_abi_primary_entry_slot_search_action_parts;
+          std::vector<std::string>
+              callee_abi_primary_entry_slot_shape_candidate_parts;
+          std::vector<std::string>
+              callee_abi_primary_entry_slot_shape_candidate_status_parts;
+          std::vector<std::string>
+              callee_abi_primary_entry_slot_shape_candidate_action_parts;
+          std::vector<std::string>
+              callee_abi_primary_entry_slot_shape_safe_fallback_parts;
+          std::vector<std::string>
+              callee_abi_primary_entry_slot_shape_safe_fallback_status_parts;
+          std::vector<std::string>
+              callee_abi_primary_entry_slot_shape_safe_fallback_action_parts;
+          std::vector<std::string>
+              callee_abi_primary_entry_slot_shape_role_requirement_parts;
+          std::vector<std::string>
+              callee_abi_primary_entry_slot_shape_role_requirement_status_parts;
+          std::vector<std::string>
+              callee_abi_primary_entry_slot_shape_role_requirement_action_parts;
+          std::vector<std::string>
+              callee_abi_primary_entry_slot_shape_body_relocation_parts;
+          std::vector<std::string>
+              callee_abi_primary_entry_slot_shape_body_relocation_status_parts;
+          std::vector<std::string>
+              callee_abi_primary_entry_slot_shape_body_relocation_action_parts;
+          std::vector<std::string>
+              callee_abi_primary_entry_slot_shape_explicit_temp_copy_parts;
+          std::vector<std::string>
+              callee_abi_primary_entry_slot_shape_explicit_temp_copy_status_parts;
+          std::vector<std::string>
+              callee_abi_primary_entry_slot_shape_explicit_temp_copy_action_parts;
           bool callee_abi_primary_entry_pre_call_placement_has_divergent_slot_values =
               false;
           bool callee_abi_primary_entry_pre_call_placement_has_overwritten_slot = false;
           bool callee_abi_primary_entry_pre_call_placement_has_unknown_actual = false;
           bool callee_abi_primary_entry_pre_call_placement_has_conflicting_actual = false;
+          bool callee_abi_primary_entry_pre_call_placement_has_modelled_rewrite = false;
+          bool callee_abi_primary_entry_pre_call_placement_has_unmodelled_rewrite = false;
+          bool callee_abi_primary_entry_slot_search_has_cheaper_refactor_slot = false;
           bool callee_abi_primary_entry_site_model_has_divergent_survivors = false;
           bool callee_abi_primary_entry_site_model_has_no_choice = false;
           bool all_required_callees_stack_preserving = !call_preservation_inputs_by_label.empty();
           bool saw_stack_mutating_required_callee = false;
           bool call_argument_x2_restore_blocked = false;
+          bool call_argument_x2_preload_literal_replacement_unknown = false;
           bool callee_abi_requires_register_restage = false;
           int callee_abi_max_preserve_depth = 0;
           int callee_abi_preservation_slot_crossings = 0;
+          int call_argument_x2_preload_literal_replacement_delta_cells = 0;
+          int call_argument_x2_preload_literal_replacement_hypothetical_net_cells = 0;
           callee_effect_parts.reserve(call_preservation_inputs_by_label.size());
           for (const auto& [label, inputs] : call_preservation_inputs_by_label) {
             const HelperStackEffectSummary effect = helper_stack_effect_summary(label);
@@ -54622,6 +56128,39 @@ SizeAttributionReport build_size_attribution_report(
                 clobber_classes.insert("preloaded-constant-recall");
                 call_argument_x2_preload_constant_parts.push_back(
                     label + ":" + join_strings(effect.x2_preload_constant_opcodes, ","));
+                if (!effect.x2_preload_literal_replacement_parts.empty()) {
+                  const int argument_savings =
+                      effective_call_argument_preservation_cells_for_label(label);
+                  const int net_cells =
+                      argument_savings -
+                      effect.x2_preload_literal_replacement_delta_cells;
+                  call_argument_x2_preload_literal_replacement_delta_cells +=
+                      effect.x2_preload_literal_replacement_delta_cells;
+                  call_argument_x2_preload_literal_replacement_hypothetical_net_cells +=
+                      net_cells;
+                  call_argument_x2_preload_literal_replacement_unknown =
+                      call_argument_x2_preload_literal_replacement_unknown ||
+                      effect.x2_preload_literal_replacement_unknown;
+                  call_argument_x2_preload_literal_replacement_parts.push_back(
+                      label + ":" +
+                      join_strings(effect.x2_preload_literal_replacement_parts, ",") +
+                      "/argSavings=" + std::to_string(argument_savings) +
+                      "/net=" + signed_cell_delta_text(net_cells));
+                  call_argument_x2_preload_literal_replacement_status_parts.push_back(
+                      label + ":" +
+                      (effect.x2_preload_literal_replacement_unknown
+                           ? std::string("literal-replacement-cost-unknown")
+                           : (net_cells > 0
+                                  ? std::string(
+                                        "literal-replacement-size-positive-if-x2-safe")
+                                  : (net_cells == 0
+                                         ? std::string(
+                                               "literal-replacement-break-even-before-x2-proof")
+                                         : std::string(
+                                               "literal-replacement-negative-even-before-x2-"
+                                               "proof")))) +
+                      "+literal-x2-restores");
+                }
               }
               if (effect.x2_preload_constant_opcodes.size() <
                   effect.x2_clobbering_opcodes.size()) {
@@ -54637,6 +56176,8 @@ SizeAttributionReport build_size_attribution_report(
             }
             callee_natural_preserve_parts.push_back(
                 label + ":" + helper_preserved_original_slots_text(effect));
+            callee_natural_preserve_final_slot_parts.push_back(
+                label + ":" + helper_preserved_original_slot_final_slots_text(effect));
             const int requested_preserve_depth = static_cast<int>(inputs.size());
             callee_natural_restore_parts.push_back(
                 label + ":" + helper_preserved_original_slot_restore_cells_text(effect));
@@ -54646,6 +56187,73 @@ SizeAttributionReport build_size_attribution_report(
                     effect, requested_preserve_depth)));
             const std::map<int, int> natural_restore_costs_by_source =
                 helper_preserved_original_slot_restore_cells(effect);
+            if (const auto args_by_address_it =
+                    call_argument_inputs_by_label_address.find(label);
+                args_by_address_it != call_argument_inputs_by_label_address.end()) {
+              for (const auto& [address, argument_names] : args_by_address_it->second) {
+                std::vector<std::pair<std::string, int>> immediate_recalls;
+                if (const auto recalls_by_address_it =
+                        immediate_pre_call_recalls_by_label_address.find(label);
+                    recalls_by_address_it !=
+                    immediate_pre_call_recalls_by_label_address.end()) {
+                  if (const auto recalls_it = recalls_by_address_it->second.find(address);
+                      recalls_it != recalls_by_address_it->second.end()) {
+                    immediate_recalls = recalls_it->second;
+                  }
+                }
+                SymbolicStackSnapshot actual_pre_call_stack = unknown_symbolic_stack();
+                if (const auto stack_by_address_it =
+                        pre_call_stack_before_recalls_by_label_address.find(label);
+                    stack_by_address_it !=
+                    pre_call_stack_before_recalls_by_label_address.end()) {
+                  if (const auto stack_it = stack_by_address_it->second.find(address);
+                      stack_it != stack_by_address_it->second.end()) {
+                    actual_pre_call_stack = stack_it->second;
+                  }
+                }
+                for (const std::string& argument_name : argument_names) {
+                  bool proved_zero_copy = false;
+                  std::vector<std::string> candidate_parts;
+                  for (const auto& [source, restore_cells] :
+                       natural_restore_costs_by_source) {
+                    const int pre_call_slot =
+                        pre_call_stack_source_for_helper_entry_slot(
+                            source, static_cast<int>(immediate_recalls.size()));
+                    if (pre_call_slot < 0) {
+                      candidate_parts.push_back(
+                          original_stack_slot_name(source) +
+                          "<-overwritten(restore=" + std::to_string(restore_cells) + ")");
+                      continue;
+                    }
+                    const std::string& actual_value =
+                        actual_pre_call_stack.at(static_cast<std::size_t>(pre_call_slot));
+                    const std::string candidate =
+                        original_stack_slot_name(source) + "<-precall-" +
+                        original_stack_slot_name(pre_call_slot) + "=" + actual_value +
+                        "(restore=" + std::to_string(restore_cells) + ")";
+                    candidate_parts.push_back(candidate);
+                    if (actual_value == argument_name) {
+                      proved_zero_copy = true;
+                      call_argument_zero_copy_site_parts.push_back(
+                          label + "@" + safe_format_label_address(address) + ":" +
+                          argument_name + "=" + candidate + "/stack=" +
+                          symbolic_stack_snapshot_text(actual_pre_call_stack));
+                    }
+                  }
+                  if (proved_zero_copy) {
+                    ++call_argument_zero_copy_cells_by_label[label];
+                    ++call_argument_zero_copy_cells_by_name[argument_name];
+                  } else {
+                    call_argument_zero_copy_blocker_parts.push_back(
+                        label + "@" + safe_format_label_address(address) + ":" +
+                        argument_name + "=no-existing-resident-copy(candidates=" +
+                        (candidate_parts.empty() ? std::string("-")
+                                                 : join_strings(candidate_parts, ",")) +
+                        "/stack=" + symbolic_stack_snapshot_text(actual_pre_call_stack) + ")");
+                  }
+                }
+              }
+            }
             std::optional<int> cheapest_natural_survivor_source;
             std::optional<int> cheapest_natural_survivor_restore_cells;
             for (const auto& [source, cells] : natural_restore_costs_by_source) {
@@ -54670,8 +56278,30 @@ SizeAttributionReport build_size_attribution_report(
             int natural_first_recall_choice_restore_cells = 0;
             int natural_first_recall_choice_sites = 0;
             int natural_first_recall_choice_blocked_sites = 0;
+            int natural_first_recall_choice_search_sites = 0;
+            int natural_first_recall_choice_search_candidate_count = 0;
+            int natural_first_recall_choice_search_gross_cells = 0;
+            int natural_first_recall_choice_search_restore_cells = 0;
+            int natural_first_recall_choice_search_rewrite_cells = 0;
+            int natural_first_recall_choice_search_unmodelled_candidates = 0;
+            struct SlotSearchAggregate {
+              int sites = 0;
+              int candidates = 0;
+              int rewrite_cells = 0;
+              int unmodelled_candidates = 0;
+              std::optional<int> restore_cells;
+              std::vector<std::string> selected_parts;
+            };
+            std::array<SlotSearchAggregate, 4> natural_first_recall_choice_slot_search;
+            for (const auto& [source, cells] : natural_restore_costs_by_source) {
+              if (source >= 0 && source < 4) {
+                natural_first_recall_choice_slot_search.at(
+                    static_cast<std::size_t>(source)).restore_cells = cells;
+              }
+            }
             std::set<std::string> natural_first_recall_choice_names;
             std::vector<std::string> natural_first_recall_choice_site_parts;
+            std::vector<std::string> natural_first_recall_choice_search_site_parts;
             std::vector<std::string> natural_first_recall_choice_pre_call_placement_parts;
             std::vector<std::string>
                 natural_first_recall_choice_pre_call_placement_proof_parts;
@@ -54682,6 +56312,10 @@ SizeAttributionReport build_size_attribution_report(
             int natural_first_recall_choice_pre_call_unknown_sites = 0;
             int natural_first_recall_choice_pre_call_conflict_sites = 0;
             int natural_first_recall_choice_pre_call_overwritten_sites = 0;
+            int natural_first_recall_choice_pre_call_rewrite_cells = 0;
+            int natural_first_recall_choice_pre_call_rewrite_sites = 0;
+            int natural_first_recall_choice_pre_call_unmodelled_rewrite_sites = 0;
+            std::vector<std::string> natural_first_recall_choice_pre_call_rewrite_parts;
             const auto coverage_it =
                 call_preservation_recall_counts_by_label_address_name.find(label);
             if (coverage_it != call_preservation_recall_counts_by_label_address_name.end()) {
@@ -54735,6 +56369,255 @@ SizeAttributionReport build_size_attribution_report(
                         : join_strings(std::vector<std::string>(argument_names.begin(),
                                                                  argument_names.end()),
                                        ",");
+                if (cheapest_natural_survivor_source.has_value() &&
+                    !natural_restore_costs.empty()) {
+                  std::vector<std::pair<std::string, int>> immediate_recalls;
+                  if (const auto recalls_by_address_it =
+                          immediate_pre_call_recalls_by_label_address.find(label);
+                      recalls_by_address_it !=
+                      immediate_pre_call_recalls_by_label_address.end()) {
+                    if (const auto recalls_it = recalls_by_address_it->second.find(address);
+                        recalls_it != recalls_by_address_it->second.end()) {
+                      immediate_recalls = recalls_it->second;
+                    }
+                  }
+                  const int pre_call_slot =
+                      pre_call_stack_source_for_helper_entry_slot(
+                          *cheapest_natural_survivor_source,
+                          static_cast<int>(immediate_recalls.size()));
+                  SymbolicStackSnapshot actual_pre_call_stack = unknown_symbolic_stack();
+                  std::string actual_pre_call_value = "?";
+                  if (pre_call_slot >= 0) {
+                    if (const auto stack_by_address_it =
+                            pre_call_stack_before_recalls_by_label_address.find(label);
+                        stack_by_address_it !=
+                        pre_call_stack_before_recalls_by_label_address.end()) {
+                      if (const auto stack_it = stack_by_address_it->second.find(address);
+                          stack_it != stack_by_address_it->second.end()) {
+                        actual_pre_call_stack = stack_it->second;
+                        actual_pre_call_value =
+                            stack_it->second.at(static_cast<std::size_t>(pre_call_slot));
+                      }
+                    }
+                  }
+                  struct SurvivorChoiceSearchCandidate {
+                    std::string name;
+                    int future_count = 0;
+                    int rewrite_cells = 0;
+                    int net_cells = std::numeric_limits<int>::min();
+                    std::string operation_text;
+                    bool modelled = false;
+                  };
+                  std::vector<SurvivorChoiceSearchCandidate> search_candidates;
+                  for (const auto& [name, count] : counts_by_name) {
+                    if (count <= 0 || !inputs.contains(name) ||
+                        argument_names.contains(name)) {
+                      continue;
+                    }
+                    ++natural_first_recall_choice_search_candidate_count;
+                    SurvivorChoiceSearchCandidate candidate;
+                    candidate.name = name;
+                    candidate.future_count = count;
+                    if (pre_call_slot < 0) {
+                      candidate.operation_text = "overwritten";
+                    } else if (actual_pre_call_value == name) {
+                      candidate.modelled = true;
+                      candidate.rewrite_cells = 0;
+                      candidate.operation_text = "already-placed";
+                    } else {
+                      std::set<std::string> recallable_pre_call_values{name};
+                      for (int slot = 0; slot < pre_call_slot; ++slot) {
+                        const std::string& protected_value =
+                            actual_pre_call_stack.at(static_cast<std::size_t>(slot));
+                        if (inputs.contains(protected_value) ||
+                            argument_names.contains(protected_value)) {
+                          recallable_pre_call_values.insert(protected_value);
+                        }
+                      }
+                      if (const std::optional<PreCallStackRewritePlan> rewrite_plan =
+                              pre_call_stack_rewrite_plan(actual_pre_call_stack,
+                                                          pre_call_slot, name,
+                                                          recallable_pre_call_values)) {
+                        candidate.modelled = true;
+                        candidate.rewrite_cells = rewrite_plan->cells;
+                        candidate.operation_text = rewrite_plan->operation_text;
+                      } else {
+                        candidate.operation_text = "unmodelled";
+                      }
+                    }
+                    if (candidate.modelled) {
+                      candidate.net_cells = 1 - natural_restore_costs.front() -
+                                            candidate.rewrite_cells;
+                    } else {
+                      ++natural_first_recall_choice_search_unmodelled_candidates;
+                    }
+                    search_candidates.push_back(candidate);
+                  }
+                  if (!search_candidates.empty()) {
+                    const auto best_search_it = std::max_element(
+                        search_candidates.begin(), search_candidates.end(),
+                        [](const SurvivorChoiceSearchCandidate& left,
+                           const SurvivorChoiceSearchCandidate& right) {
+                          if (left.modelled != right.modelled)
+                            return !left.modelled && right.modelled;
+                          if (left.net_cells != right.net_cells)
+                            return left.net_cells < right.net_cells;
+                          if (left.future_count != right.future_count)
+                            return left.future_count < right.future_count;
+                          if (left.rewrite_cells != right.rewrite_cells)
+                            return left.rewrite_cells > right.rewrite_cells;
+                          return left.name > right.name;
+                        });
+                    std::vector<std::string> candidate_parts;
+                    candidate_parts.reserve(search_candidates.size());
+                    for (const SurvivorChoiceSearchCandidate& candidate :
+                         search_candidates) {
+                      candidate_parts.push_back(
+                          candidate.name + "(" +
+                          std::to_string(candidate.future_count) + "future," +
+                          (candidate.modelled
+                               ? std::string("rewrite=") +
+                                     std::to_string(candidate.rewrite_cells) +
+                                     ",net=" + signed_cells_text(candidate.net_cells)
+                               : std::string("rewrite=unmodelled")) +
+                          ",ops=" + candidate.operation_text + ")");
+                    }
+                    const SurvivorChoiceSearchCandidate& selected = *best_search_it;
+                    ++natural_first_recall_choice_search_sites;
+                    if (selected.modelled) {
+                      ++natural_first_recall_choice_search_gross_cells;
+                      natural_first_recall_choice_search_restore_cells +=
+                          natural_restore_costs.front();
+                      natural_first_recall_choice_search_rewrite_cells +=
+                          selected.rewrite_cells;
+                    }
+                    natural_first_recall_choice_search_site_parts.push_back(
+                        safe_format_label_address(address) + ":selected=" +
+                        selected.name + "(" +
+                        (selected.modelled
+                             ? std::string("net=") +
+                                   signed_cells_text(selected.net_cells) +
+                                   ",rewrite=" +
+                                   std::to_string(selected.rewrite_cells)
+                             : std::string("unmodelled")) +
+                        ",ops=" + selected.operation_text + ");candidates=" +
+                        join_strings(candidate_parts, "|"));
+                  }
+                }
+                if (!natural_restore_costs.empty()) {
+                  std::vector<std::pair<std::string, int>> immediate_recalls;
+                  if (const auto recalls_by_address_it =
+                          immediate_pre_call_recalls_by_label_address.find(label);
+                      recalls_by_address_it !=
+                      immediate_pre_call_recalls_by_label_address.end()) {
+                    if (const auto recalls_it = recalls_by_address_it->second.find(address);
+                        recalls_it != recalls_by_address_it->second.end()) {
+                      immediate_recalls = recalls_it->second;
+                    }
+                  }
+                  SymbolicStackSnapshot actual_pre_call_stack = unknown_symbolic_stack();
+                  if (const auto stack_by_address_it =
+                          pre_call_stack_before_recalls_by_label_address.find(label);
+                      stack_by_address_it !=
+                      pre_call_stack_before_recalls_by_label_address.end()) {
+                    if (const auto stack_it = stack_by_address_it->second.find(address);
+                        stack_it != stack_by_address_it->second.end()) {
+                      actual_pre_call_stack = stack_it->second;
+                    }
+                  }
+                  struct SlotSearchCandidate {
+                    std::string name;
+                    int future_count = 0;
+                    int rewrite_cells = 0;
+                    std::string operation_text;
+                    bool modelled = false;
+                  };
+                  for (int source_slot = 0; source_slot < 4; ++source_slot) {
+                    SlotSearchAggregate& aggregate =
+                        natural_first_recall_choice_slot_search.at(
+                            static_cast<std::size_t>(source_slot));
+                    const int pre_call_slot =
+                        pre_call_stack_source_for_helper_entry_slot(
+                            source_slot, static_cast<int>(immediate_recalls.size()));
+                    const std::string pre_call_slot_text =
+                        pre_call_slot >= 0 ? original_stack_slot_name(pre_call_slot)
+                                           : std::string("overwritten");
+                    const std::string actual_pre_call_value =
+                        pre_call_slot >= 0
+                            ? actual_pre_call_stack.at(
+                                  static_cast<std::size_t>(pre_call_slot))
+                            : std::string("?");
+                    std::vector<SlotSearchCandidate> search_candidates;
+                    for (const auto& [name, count] : counts_by_name) {
+                      if (count <= 0 || !inputs.contains(name) ||
+                          argument_names.contains(name)) {
+                        continue;
+                      }
+                      ++aggregate.candidates;
+                      SlotSearchCandidate candidate;
+                      candidate.name = name;
+                      candidate.future_count = count;
+                      if (pre_call_slot < 0) {
+                        candidate.operation_text = "overwritten-by-immediate-recalls";
+                      } else if (actual_pre_call_value == name) {
+                        candidate.modelled = true;
+                        candidate.rewrite_cells = 0;
+                        candidate.operation_text = "already-placed";
+                      } else {
+                        std::set<std::string> recallable_pre_call_values{name};
+                        for (int slot = 0; slot < pre_call_slot; ++slot) {
+                          const std::string& protected_value =
+                              actual_pre_call_stack.at(static_cast<std::size_t>(slot));
+                          if (inputs.contains(protected_value) ||
+                              argument_names.contains(protected_value)) {
+                            recallable_pre_call_values.insert(protected_value);
+                          }
+                        }
+                        if (const std::optional<PreCallStackRewritePlan> rewrite_plan =
+                                pre_call_stack_rewrite_plan(actual_pre_call_stack,
+                                                            pre_call_slot, name,
+                                                            recallable_pre_call_values)) {
+                          candidate.modelled = true;
+                          candidate.rewrite_cells = rewrite_plan->cells;
+                          candidate.operation_text = rewrite_plan->operation_text;
+                        } else {
+                          candidate.operation_text = "unmodelled";
+                        }
+                      }
+                      if (!candidate.modelled)
+                        ++aggregate.unmodelled_candidates;
+                      search_candidates.push_back(std::move(candidate));
+                    }
+                    if (search_candidates.empty())
+                      continue;
+                    const auto best_search_it = std::max_element(
+                        search_candidates.begin(), search_candidates.end(),
+                        [](const SlotSearchCandidate& left,
+                           const SlotSearchCandidate& right) {
+                          if (left.modelled != right.modelled)
+                            return !left.modelled && right.modelled;
+                          if (left.rewrite_cells != right.rewrite_cells)
+                            return left.rewrite_cells > right.rewrite_cells;
+                          if (left.future_count != right.future_count)
+                            return left.future_count < right.future_count;
+                          return left.name > right.name;
+                        });
+                    const SlotSearchCandidate& selected = *best_search_it;
+                    if (selected.modelled) {
+                      ++aggregate.sites;
+                      aggregate.rewrite_cells += selected.rewrite_cells;
+                    }
+                    aggregate.selected_parts.push_back(
+                        safe_format_label_address(address) + ":" + selected.name + "(" +
+                        (selected.modelled
+                             ? std::string("rewrite=") +
+                                   std::to_string(selected.rewrite_cells)
+                             : std::string("unmodelled")) +
+                        ",ops=" + selected.operation_text +
+                        ",helper=" + original_stack_slot_name(source_slot) +
+                        ",precall=" + pre_call_slot_text + ")");
+                  }
+                }
                 if (best_survivor_choice.has_value() && !natural_restore_costs.empty()) {
                   const int restore_cells = natural_restore_costs.front();
                   const int net_cells = 1 - restore_cells;
@@ -54779,6 +56662,7 @@ SizeAttributionReport build_size_attribution_report(
                         pre_call_slot >= 0 ? original_stack_slot_name(pre_call_slot)
                                            : std::string("overwritten");
                     std::string actual_pre_call_value = "?";
+                    SymbolicStackSnapshot actual_pre_call_stack = unknown_symbolic_stack();
                     std::optional<int> pre_call_chain_start_address;
                     if (pre_call_slot >= 0) {
                       if (const auto stack_by_address_it =
@@ -54788,6 +56672,7 @@ SizeAttributionReport build_size_attribution_report(
                         if (const auto stack_it =
                                 stack_by_address_it->second.find(address);
                             stack_it != stack_by_address_it->second.end()) {
+                          actual_pre_call_stack = stack_it->second;
                           actual_pre_call_value =
                               stack_it->second.at(static_cast<std::size_t>(pre_call_slot));
                         }
@@ -54837,6 +56722,49 @@ SizeAttributionReport build_size_attribution_report(
                              ? safe_format_label_address(*pre_call_chain_start_address)
                              : std::string("?")) +
                         ")");
+                    if (pre_call_slot >= 0 &&
+                        actual_pre_call_value != best_survivor_choice->first) {
+                      std::set<std::string> recallable_pre_call_values{
+                          best_survivor_choice->first};
+                      for (int slot = 0; slot < pre_call_slot; ++slot) {
+                        const std::string& protected_value =
+                            actual_pre_call_stack.at(static_cast<std::size_t>(slot));
+                        if (inputs.contains(protected_value) ||
+                            argument_names.contains(protected_value)) {
+                          recallable_pre_call_values.insert(protected_value);
+                        }
+                      }
+                      if (const std::optional<PreCallStackRewritePlan> rewrite_plan =
+                              pre_call_stack_rewrite_plan(
+                                  actual_pre_call_stack, pre_call_slot,
+                                  best_survivor_choice->first,
+                                  recallable_pre_call_values)) {
+                        ++natural_first_recall_choice_pre_call_rewrite_sites;
+                        natural_first_recall_choice_pre_call_rewrite_cells +=
+                            rewrite_plan->cells;
+                        natural_first_recall_choice_pre_call_rewrite_parts.push_back(
+                            safe_format_label_address(address) + ":" + pre_call_slot_text +
+                            "=" + actual_pre_call_value + "->" +
+                            best_survivor_choice->first + ":" +
+                            std::to_string(rewrite_plan->cells) + "cells(" +
+                            rewrite_plan->operation_text +
+                            ",before=" +
+                            (pre_call_chain_start_address.has_value()
+                                 ? safe_format_label_address(*pre_call_chain_start_address)
+                                 : std::string("?")) +
+                            ")");
+                      } else {
+                        ++natural_first_recall_choice_pre_call_unmodelled_rewrite_sites;
+                        natural_first_recall_choice_pre_call_rewrite_parts.push_back(
+                            safe_format_label_address(address) + ":" + pre_call_slot_text +
+                            "=" + actual_pre_call_value + "->" +
+                            best_survivor_choice->first + ":unmodelled(before=" +
+                            (pre_call_chain_start_address.has_value()
+                                 ? safe_format_label_address(*pre_call_chain_start_address)
+                                 : std::string("?")) +
+                            ")");
+                      }
+                    }
                   }
                 } else if (future_input_count > 0) {
                   ++natural_first_recall_choice_blocked_sites;
@@ -54898,6 +56826,352 @@ SizeAttributionReport build_size_attribution_report(
               }
               callee_natural_first_recall_choice_status_parts.push_back(label + ":" +
                                                                         choice_status);
+              if ((label == "packed-line score accumulator helper" ||
+                   label == "packed_score accumulator helper") &&
+                  cheapest_natural_survivor_source.has_value()) {
+                callee_natural_first_recall_use_shape_parts.push_back(
+                    label + ":survivor=" +
+                    original_stack_slot_name(*cheapest_natural_survivor_source) +
+                    "/finalSlots=" +
+                    helper_preserved_original_slot_final_slots_text(effect) +
+                    "/return=X:accumulator/nextUse=packed_score-call-argument");
+                callee_natural_first_recall_use_shape_status_parts.push_back(
+                    label +
+                    ":survivor-restores-through-stack-while-accumulator-returns-in-X");
+                callee_natural_first_recall_use_shape_action_parts.push_back(
+                    label +
+                    ":model-next-call-argument-use-with-accumulator-preservation-before-"
+                    "lowering");
+              }
+            }
+            if (!natural_first_recall_choice_search_site_parts.empty()) {
+              const int natural_first_recall_choice_search_net_cells =
+                  natural_first_recall_choice_search_gross_cells -
+                  natural_first_recall_choice_search_restore_cells -
+                  natural_first_recall_choice_search_rewrite_cells;
+              callee_natural_first_recall_choice_search_parts.push_back(
+                  label + ":" +
+                  std::to_string(natural_first_recall_choice_search_sites) + "sites/" +
+                  std::to_string(natural_first_recall_choice_search_candidate_count) +
+                  "candidates/" +
+                  std::to_string(natural_first_recall_choice_search_gross_cells) + "g/" +
+                  std::to_string(natural_first_recall_choice_search_restore_cells) +
+                  "r/" +
+                  std::to_string(natural_first_recall_choice_search_rewrite_cells) +
+                  "rewrite/" +
+                  signed_cells_text(natural_first_recall_choice_search_net_cells) +
+                  "n selected=" +
+                  join_strings(natural_first_recall_choice_search_site_parts, ","));
+              std::string search_status;
+              if (natural_first_recall_choice_search_unmodelled_candidates > 0) {
+                search_status = "has-unmodelled-survivor-choice-candidates";
+              } else if (natural_first_recall_choice_search_net_cells > 0) {
+                search_status = "positive-after-survivor-choice-search";
+              } else if (natural_first_recall_choice_search_net_cells == 0) {
+                search_status = "break-even-after-survivor-choice-search";
+              } else {
+                search_status = "negative-after-survivor-choice-search";
+              }
+              search_status +=
+                  "(sites=" +
+                  std::to_string(natural_first_recall_choice_search_sites) +
+                  ",candidates=" +
+                  std::to_string(natural_first_recall_choice_search_candidate_count) +
+                  ",unmodelled=" +
+                  std::to_string(
+                      natural_first_recall_choice_search_unmodelled_candidates) +
+                  ")";
+              callee_natural_first_recall_choice_search_status_parts.push_back(
+                  label + ":" + search_status);
+            }
+            bool has_slot_search_candidates = false;
+            for (const SlotSearchAggregate& aggregate :
+                 natural_first_recall_choice_slot_search) {
+              if (aggregate.candidates > 0) {
+                has_slot_search_candidates = true;
+                break;
+              }
+            }
+            if (has_slot_search_candidates) {
+              std::vector<std::string> slot_search_parts;
+              std::optional<int> best_natural_rewrite_cells;
+              std::optional<int> best_refactor_rewrite_cells;
+              std::string best_natural_slot;
+              std::string best_refactor_slot;
+              int unmodelled_slot_candidates = 0;
+              bool slot_search_has_cheaper_refactor_slot = false;
+              for (int source_slot = 0; source_slot < 4; ++source_slot) {
+                const SlotSearchAggregate& aggregate =
+                    natural_first_recall_choice_slot_search.at(
+                        static_cast<std::size_t>(source_slot));
+                if (aggregate.candidates == 0)
+                  continue;
+                unmodelled_slot_candidates += aggregate.unmodelled_candidates;
+                const std::string slot_name = original_stack_slot_name(source_slot);
+                const bool natural_preserved = aggregate.restore_cells.has_value();
+                std::string part =
+                    slot_name + ":" +
+                    (natural_preserved ? std::string("natural-preserved")
+                                       : std::string("requires-callee-preserve-refactor")) +
+                    "/" + std::to_string(aggregate.sites) + "sites/" +
+                    std::to_string(aggregate.candidates) + "candidates/" +
+                    std::to_string(aggregate.rewrite_cells) + "rewrite";
+                if (natural_preserved) {
+                  const int restore_cells =
+                      *aggregate.restore_cells * aggregate.sites;
+                  const int net_cells =
+                      aggregate.sites - restore_cells - aggregate.rewrite_cells;
+                  part += "/" + std::to_string(restore_cells) + "restore/" +
+                          signed_cells_text(net_cells) + "n";
+                  if (aggregate.sites > 0 &&
+                      (!best_natural_rewrite_cells.has_value() ||
+                       aggregate.rewrite_cells < *best_natural_rewrite_cells)) {
+                    best_natural_rewrite_cells = aggregate.rewrite_cells;
+                    best_natural_slot = slot_name;
+                  }
+                } else if (
+                    aggregate.sites > 0 &&
+                    (!best_refactor_rewrite_cells.has_value() ||
+                     aggregate.rewrite_cells < *best_refactor_rewrite_cells)) {
+                  best_refactor_rewrite_cells = aggregate.rewrite_cells;
+                  best_refactor_slot = slot_name;
+                }
+                if (aggregate.unmodelled_candidates > 0) {
+                  part += "/" + std::to_string(aggregate.unmodelled_candidates) +
+                          "unmodelled";
+                }
+                if (!aggregate.selected_parts.empty())
+                  part += " selected=" + join_strings(aggregate.selected_parts, ",");
+                slot_search_parts.push_back(std::move(part));
+              }
+              callee_abi_primary_entry_slot_search_parts.push_back(
+                  label + ":" + join_strings(slot_search_parts, ";"));
+              std::string slot_search_status;
+              if (best_refactor_rewrite_cells.has_value() &&
+                  (!best_natural_rewrite_cells.has_value() ||
+                   *best_refactor_rewrite_cells < *best_natural_rewrite_cells)) {
+                slot_search_status =
+                    "lower-placement-slot-requires-callee-preserve-refactor(best=" +
+                    best_refactor_slot + ":" +
+                    std::to_string(*best_refactor_rewrite_cells) + ",currentNatural=" +
+                    (best_natural_rewrite_cells.has_value()
+                         ? best_natural_slot + ":" +
+                               std::to_string(*best_natural_rewrite_cells)
+                         : std::string("none")) +
+                    ")";
+                slot_search_has_cheaper_refactor_slot = true;
+                callee_abi_primary_entry_slot_search_has_cheaper_refactor_slot = true;
+              } else if (best_natural_rewrite_cells.has_value()) {
+                slot_search_status =
+                    "no-cheaper-entry-slot-placement-found(currentNatural=" +
+                    best_natural_slot + ":" +
+                    std::to_string(*best_natural_rewrite_cells) + ")";
+              } else {
+                slot_search_status = "no-modelled-entry-slot-placement";
+              }
+              if (unmodelled_slot_candidates > 0) {
+                slot_search_status += "+unmodelled-candidates-" +
+                                      std::to_string(unmodelled_slot_candidates);
+              }
+              callee_abi_primary_entry_slot_search_status_parts.push_back(
+                  label + ":" + slot_search_status);
+              callee_abi_primary_entry_slot_search_action_parts.push_back(
+                  label + ":" +
+                  (slot_search_has_cheaper_refactor_slot
+                       ? std::string(
+                             "evaluate-callee-abi-shape-that-preserves-cheaper-entry-slot")
+                       : std::string(
+                             "keep-current-natural-entry-slot-placement-model")));
+              if (slot_search_has_cheaper_refactor_slot &&
+                  best_refactor_rewrite_cells.has_value()) {
+                constexpr int kCalleeShapePreserveLowerBoundCells = 1;
+                const int total_shape_cells =
+                    *best_refactor_rewrite_cells +
+                    kCalleeShapePreserveLowerBoundCells;
+                callee_abi_primary_entry_slot_shape_pre_call_rewrite_cells +=
+                    *best_refactor_rewrite_cells;
+                callee_abi_primary_entry_slot_shape_callee_lower_bound_cells +=
+                    kCalleeShapePreserveLowerBoundCells;
+                callee_abi_primary_entry_slot_shape_modeled_placement_cells +=
+                    total_shape_cells;
+                const std::string natural_text =
+                    best_natural_rewrite_cells.has_value()
+                        ? best_natural_slot + ":" +
+                              std::to_string(*best_natural_rewrite_cells)
+                        : std::string("none");
+                callee_abi_primary_entry_slot_shape_candidate_parts.push_back(
+                    label + ":slot=" + best_refactor_slot +
+                    "/preCallRewrite=" +
+                    std::to_string(*best_refactor_rewrite_cells) +
+                    "/calleeShapeLowerBound=" +
+                    std::to_string(kCalleeShapePreserveLowerBoundCells) +
+                    "/total=" + std::to_string(total_shape_cells) +
+                    "/currentNatural=" + natural_text +
+                    "/callsiteRewriteDelta=" +
+                    (best_natural_rewrite_cells.has_value()
+                         ? signed_cells_text(*best_refactor_rewrite_cells -
+                                             *best_natural_rewrite_cells)
+                         : std::string("?")) +
+                    (best_refactor_slot == "Z"
+                         ? std::string(
+                               "/roleConflict=selected-slot-overlaps-current-accumulator-role/"
+                               "displacedRole=accumulator/displacedRoleTarget=T")
+                         : std::string()) +
+                    "/basis=selected-slot-not-naturally-preserved-by-current-callee-"
+                    "stack-effect");
+                if (best_natural_rewrite_cells.has_value()) {
+                  callee_abi_primary_entry_slot_shape_safe_fallback_parts.push_back(
+                      label + ":slot=" + best_natural_slot +
+                      "/preCallRewrite=" +
+                      std::to_string(*best_natural_rewrite_cells) +
+                      "/calleeShapeLowerBound=0/total=" +
+                      std::to_string(*best_natural_rewrite_cells) +
+                      "/bodyRelocation=none/currentNatural=" + best_natural_slot +
+                      ":" + std::to_string(*best_natural_rewrite_cells) +
+                      "/basis=non-conflicting-natural-preserved-slot");
+                  callee_abi_primary_entry_slot_shape_safe_fallback_status_parts
+                      .push_back(
+                          label +
+                          ":current-natural-slot-is-nonconflicting-but-still-"
+                          "negative(total=" +
+                          std::to_string(*best_natural_rewrite_cells) + ")");
+                  callee_abi_primary_entry_slot_shape_safe_fallback_action_parts
+                      .push_back(
+                          label +
+                          ":find-additional-stack-input-savings-before-helper-body-"
+                          "variant");
+                }
+                std::string shape_status;
+                if (best_natural_rewrite_cells.has_value() &&
+                    total_shape_cells < *best_natural_rewrite_cells) {
+                  shape_status =
+                      "cheaper-than-current-natural-slot-after-shape-lower-bound(total=" +
+                      std::to_string(total_shape_cells) + ",currentNatural=" +
+                      std::to_string(*best_natural_rewrite_cells) + ")";
+                } else if (best_natural_rewrite_cells.has_value() &&
+                           total_shape_cells == *best_natural_rewrite_cells) {
+                  shape_status =
+                      "break-even-with-current-natural-slot-after-shape-lower-bound(total=" +
+                      std::to_string(total_shape_cells) + ",currentNatural=" +
+                      std::to_string(*best_natural_rewrite_cells) + ")";
+                } else {
+                  shape_status =
+                      "callsite-cheaper-but-shape-lower-bound-not-cheaper(total=" +
+                      std::to_string(total_shape_cells) + ",currentNatural=" +
+                      natural_text + ")";
+                }
+                if (best_refactor_slot == "Z") {
+                  callee_abi_primary_entry_slot_shape_has_role_conflict = true;
+                  shape_status +=
+                      "+role-conflict-unproved(selected=Z,currentRole=accumulator,"
+                      "displacedRoleTarget=T)";
+                  if (label == "packed-line score accumulator helper" ||
+                      label == "packed_score accumulator helper") {
+                    callee_abi_primary_entry_slot_shape_role_requirement_parts.push_back(
+                        label +
+                        ":currentBodyRequires=entry-Z-accumulator/"
+                        "entryProtocol=X:index,Y:line,Z:accumulator/"
+                        "afterDivide=Y:accumulator/finalAddConsumes=Y/"
+                        "selectedCandidate=entry-Z/"
+                        "conflict=selected-and-accumulator-share-entry-slot");
+                    callee_abi_primary_entry_slot_shape_role_requirement_status_parts
+                        .push_back(
+                            label +
+                            ":current-helper-body-requires-accumulator-in-entry-Z");
+                    callee_abi_primary_entry_slot_shape_role_requirement_action_parts
+                        .push_back(
+                            label +
+                            ":prove-cheaper-accumulator-relocation-or-use-non-Z-"
+                            "preserved-slot");
+                  }
+                }
+                callee_abi_primary_entry_slot_shape_candidate_status_parts.push_back(
+                    label + ":" + shape_status);
+                callee_abi_primary_entry_slot_shape_candidate_action_parts.push_back(
+                    label +
+                    (best_refactor_slot == "Z"
+                         ? std::string(
+                               ":prove-accumulator-relocation-preserves-selected-slot-Z-or-"
+                               "find-additional-stack-input-savings")
+                         : ":prove-callee-entry-shape-preserves-" + best_refactor_slot +
+                               "-or-find-additional-stack-input-savings"));
+                if (best_refactor_slot == "Z") {
+                  const RoleStackSnapshot relocation_start =
+                      {"term", "selected", "accumulator", "accumulator"};
+                  const std::optional<RoleStackRewritePlan> relocation_plan =
+                      packed_score_accumulator_t_relocation_plan();
+                  if (relocation_plan.has_value()) {
+                    callee_abi_primary_entry_slot_shape_body_relocation_parts.push_back(
+                        label + ":slot=Z/start=" +
+                        role_stack_snapshot_text(relocation_start) +
+                        "/target=X=term,Y=accumulator,Z|T=selected/maxCells=6/result=" +
+                        std::to_string(relocation_plan->cells) + "cells(" +
+                        relocation_plan->operation_text + ")/final=" +
+                        role_stack_snapshot_text(relocation_plan->final_stack));
+                    callee_abi_primary_entry_slot_shape_body_relocation_status_parts
+                        .push_back(label + ":stack-only-relocation-plan-found");
+                    callee_abi_primary_entry_slot_shape_body_relocation_action_parts
+                        .push_back(label + ":price-found-helper-body-relocation-plan");
+                  } else {
+                    callee_abi_primary_entry_slot_shape_has_body_relocation_blocker = true;
+                    callee_abi_primary_entry_slot_shape_body_relocation_parts.push_back(
+                        label + ":slot=Z/start=" +
+                        role_stack_snapshot_text(relocation_start) +
+                        "/target=X=term,Y=accumulator,Z|T=selected/maxCells=6/"
+                        "result=blocked(ops=swap,reverse,lift)");
+                    callee_abi_primary_entry_slot_shape_body_relocation_status_parts
+                        .push_back(
+                            label +
+                            ":no-stack-only-accumulator-relocation-plan(maxCells=6,"
+                            "ops=swap,reverse,lift)");
+                    callee_abi_primary_entry_slot_shape_body_relocation_action_parts
+                        .push_back(
+                            label +
+                            ":introduce-verified-helper-body-variant-or-explicit-temp-copy");
+                    const std::optional<RoleStackRewritePlan> explicit_temp_copy_plan =
+                        packed_score_accumulator_t_explicit_temp_copy_plan();
+                    if (explicit_temp_copy_plan.has_value()) {
+                      callee_abi_primary_entry_slot_shape_has_explicit_temp_copy_plan =
+                          true;
+                      callee_abi_primary_entry_slot_shape_explicit_temp_copy_cells +=
+                          explicit_temp_copy_plan->cells;
+                      callee_abi_primary_entry_slot_shape_explicit_temp_copy_parts
+                          .push_back(
+                              label + ":slot=Z/start=" +
+                              role_stack_snapshot_text(relocation_start) +
+                              "/target=X=term,Y=accumulator,Z|T=selected/maxCells=8/"
+                              "result=" +
+                              std::to_string(explicit_temp_copy_plan->cells) +
+                              "cells(" +
+                              explicit_temp_copy_plan->operation_text +
+                              ")/final=" +
+                              role_stack_snapshot_text(
+                                  explicit_temp_copy_plan->final_stack) +
+                              "/temp=" +
+                              explicit_temp_copy_plan->temp_role.value_or("-"));
+                      callee_abi_primary_entry_slot_shape_explicit_temp_copy_status_parts
+                          .push_back(
+                              label + ":explicit-temp-copy-plan-found(cost=" +
+                              std::to_string(explicit_temp_copy_plan->cells) +
+                              ",ops=" + explicit_temp_copy_plan->operation_text +
+                              ")");
+                      callee_abi_primary_entry_slot_shape_explicit_temp_copy_action_parts
+                          .push_back(
+                              label +
+                              ":price-explicit-temp-copy-helper-body-variant-before-"
+                              "lowering");
+                    } else {
+                      callee_abi_primary_entry_slot_shape_explicit_temp_copy_status_parts
+                          .push_back(label + ":no-explicit-temp-copy-plan(maxCells=8)");
+                      callee_abi_primary_entry_slot_shape_explicit_temp_copy_action_parts
+                          .push_back(
+                              label +
+                              ":search-wider-helper-body-variant-or-find-additional-"
+                              "stack-input-savings");
+                    }
+                  }
+                }
+              }
             }
             callee_remaining_preserve_parts.push_back(
                 label + ":" +
@@ -54906,9 +57180,7 @@ SizeAttributionReport build_size_attribution_report(
             const int natural_survivor_shortfall =
                 std::max(0, requested_preserve_depth - effect.preserved_original_slot_count);
             const int argument_restages =
-                call_argument_preservation_cells_by_label.contains(label)
-                    ? call_argument_preservation_cells_by_label.at(label)
-                    : 0;
+                effective_call_argument_preservation_cells_for_label(label);
             if (natural_survivor_shortfall > 0 || argument_restages > 0) {
               callee_abi_requires_register_restage = true;
               callee_pure_stack_placement_parts.push_back(
@@ -55061,10 +57333,27 @@ SizeAttributionReport build_size_attribution_report(
                           natural_first_recall_choice_pre_call_placement_proof_parts,
                           ","));
                   std::string proof_status;
+                  const int unproved_rewritable_sites =
+                      natural_first_recall_choice_pre_call_unknown_sites +
+                      natural_first_recall_choice_pre_call_conflict_sites;
+                  const bool bounded_rewrite_covers_unproved_sites =
+                      unproved_rewritable_sites > 0 &&
+                      natural_first_recall_choice_pre_call_rewrite_sites >=
+                          unproved_rewritable_sites &&
+                      natural_first_recall_choice_pre_call_unmodelled_rewrite_sites == 0;
                   if (natural_first_recall_choice_pre_call_overwritten_sites > 0) {
                     proof_status =
                         "overwritten-precall-slot-values-require-recall-chain-refactor";
                     callee_abi_primary_entry_pre_call_placement_has_overwritten_slot =
+                        true;
+                  } else if (bounded_rewrite_covers_unproved_sites) {
+                    proof_status =
+                        natural_first_recall_choice_pre_call_conflict_sites > 0
+                            ? "conflicting-precall-slot-values-covered-by-bounded-stack-"
+                              "rewrite"
+                            : "unknown-precall-slot-values-covered-by-bounded-stack-"
+                              "rewrite";
+                    callee_abi_primary_entry_pre_call_placement_has_modelled_rewrite =
                         true;
                   } else if (natural_first_recall_choice_pre_call_conflict_sites > 0) {
                     proof_status =
@@ -55088,9 +57377,67 @@ SizeAttributionReport build_size_attribution_report(
                       ",overwritten=" +
                       std::to_string(
                           natural_first_recall_choice_pre_call_overwritten_sites) +
+                      ",rewrite=" +
+                      std::to_string(natural_first_recall_choice_pre_call_rewrite_sites) +
+                      ",unmodelledRewrite=" +
+                      std::to_string(
+                          natural_first_recall_choice_pre_call_unmodelled_rewrite_sites) +
                       ")";
                   callee_abi_primary_entry_pre_call_placement_proof_status_parts.push_back(
                       label + ":" + proof_status);
+                }
+                if (!natural_first_recall_choice_pre_call_rewrite_parts.empty()) {
+                  callee_abi_primary_entry_pre_call_placement_rewrite_parts.push_back(
+                      label + ":" +
+                      std::to_string(natural_first_recall_choice_pre_call_rewrite_cells) +
+                      "cells/" +
+                      std::to_string(natural_first_recall_choice_pre_call_rewrite_sites) +
+                      "sites(" +
+                      join_strings(natural_first_recall_choice_pre_call_rewrite_parts, ",") +
+                      ")");
+                  std::string rewrite_status =
+                      natural_first_recall_choice_pre_call_unmodelled_rewrite_sites > 0
+                          ? "has-unmodelled-precall-slot-rewrites"
+                          : "estimated-precall-slot-rewrites";
+                  if (natural_first_recall_choice_pre_call_rewrite_cells >
+                      divergent_survivor_lower_bound_cells) {
+                    rewrite_status += "-exceeds-placement-lower-bound";
+                  } else if (
+                      natural_first_recall_choice_pre_call_rewrite_cells ==
+                      divergent_survivor_lower_bound_cells) {
+                    rewrite_status += "-matches-placement-lower-bound";
+                  } else {
+                    rewrite_status += "-below-placement-lower-bound";
+                  }
+                  rewrite_status +=
+                      "(estimated=" +
+                      std::to_string(natural_first_recall_choice_pre_call_rewrite_cells) +
+                      ",lowerBound=" + std::to_string(divergent_survivor_lower_bound_cells) +
+                      ",unmodelled=" +
+                      std::to_string(
+                          natural_first_recall_choice_pre_call_unmodelled_rewrite_sites) +
+                      ")";
+                  if (natural_first_recall_choice_pre_call_unmodelled_rewrite_sites > 0)
+                    callee_abi_primary_entry_pre_call_placement_has_unmodelled_rewrite = true;
+                  callee_abi_primary_entry_pre_call_placement_rewrite_status_parts.push_back(
+                      label + ":" + rewrite_status);
+                }
+                const int modeled_placement_cells =
+                    std::max(natural_survivor_shortfall,
+                             natural_first_recall_choice_pre_call_rewrite_cells);
+                callee_abi_primary_entry_modeled_placement_cells +=
+                    modeled_placement_cells;
+                if (modeled_placement_cells > 0) {
+                  callee_abi_primary_entry_modeled_placement_parts.push_back(
+                      label + ":" + std::to_string(modeled_placement_cells) +
+                      "cells(lowerBound=" +
+                      std::to_string(natural_survivor_shortfall) +
+                      ",preCallRewrite=" +
+                      std::to_string(natural_first_recall_choice_pre_call_rewrite_cells) +
+                      ",unmodelled=" +
+                      std::to_string(
+                          natural_first_recall_choice_pre_call_unmodelled_rewrite_sites) +
+                      ")");
                 }
               } else {
                 callee_abi_primary_entry_blocked_targets.push_back(label);
@@ -55104,9 +57451,9 @@ SizeAttributionReport build_size_attribution_report(
                   formatted_addresses_text(preserving_call_addresses) + ";allCalls=" +
                   formatted_addresses_text(all_call_addresses) +
                   ";calleeAbi=X:index,Y:line,Z:accumulator;naturalSurvivor=T)");
-              if (const auto restage_it = call_argument_preservation_cells_by_label.find(label);
-                  restage_it != call_argument_preservation_cells_by_label.end() &&
-                  restage_it->second > 0) {
+              const int effective_restage_cells =
+                  effective_call_argument_preservation_cells_for_label(label);
+              if (effective_restage_cells > 0) {
                 std::string argument_inputs;
                 if (const auto inputs_it = call_argument_inputs_by_label.find(label);
                     inputs_it != call_argument_inputs_by_label.end()) {
@@ -55116,7 +57463,7 @@ SizeAttributionReport build_size_attribution_report(
                       ",");
                 }
                 callee_abi_primary_entry_restage_parts.push_back(
-                    label + ":" + std::to_string(restage_it->second) + "cells(inputs=" +
+                    label + ":" + std::to_string(effective_restage_cells) + "cells(inputs=" +
                     argument_inputs + ")");
                 if (const auto sites_it =
                         call_argument_lower_bound_sites_by_label.find(label);
@@ -55148,6 +57495,8 @@ SizeAttributionReport build_size_attribution_report(
                 join_strings(callee_x2_effect_parts, ";");
             helper.details["valueAwareCalleeAbiNaturalPreservedSlotsByCallee"] =
                 join_strings(callee_natural_preserve_parts, ";");
+            helper.details["valueAwareCalleeAbiNaturalPreservedSlotFinalSlotsByCallee"] =
+                join_strings(callee_natural_preserve_final_slot_parts, ";");
             helper.details["valueAwareCalleeAbiNaturalPreservedSlotRestoreCellsByCallee"] =
                 join_strings(callee_natural_restore_parts, ";");
             helper.details["valueAwareCalleeAbiNaturalPreserveMinRestoreCellsByCallee"] =
@@ -55165,6 +57514,28 @@ SizeAttributionReport build_size_attribution_report(
             if (!callee_natural_first_recall_choice_status_parts.empty()) {
               helper.details["valueAwareCalleeAbiNaturalFirstRecallChoiceStatusByCallee"] =
                   join_strings(callee_natural_first_recall_choice_status_parts, ";");
+            }
+            if (!callee_natural_first_recall_use_shape_parts.empty()) {
+              helper.details["valueAwareCalleeAbiNaturalFirstRecallUseShapeByCallee"] =
+                  join_strings(callee_natural_first_recall_use_shape_parts, ";");
+            }
+            if (!callee_natural_first_recall_use_shape_status_parts.empty()) {
+              helper.details["valueAwareCalleeAbiNaturalFirstRecallUseShapeStatus"] =
+                  join_strings(callee_natural_first_recall_use_shape_status_parts, ";");
+            }
+            if (!callee_natural_first_recall_use_shape_action_parts.empty()) {
+              helper.details["valueAwareCalleeAbiNaturalFirstRecallUseShapeAction"] =
+                  join_strings(callee_natural_first_recall_use_shape_action_parts, ";");
+            }
+            if (!callee_natural_first_recall_choice_search_parts.empty()) {
+              helper.details["valueAwareCalleeAbiNaturalFirstRecallChoiceSearchByCallee"] =
+                  join_strings(callee_natural_first_recall_choice_search_parts, ";");
+            }
+            if (!callee_natural_first_recall_choice_search_status_parts.empty()) {
+              helper.details
+                  ["valueAwareCalleeAbiNaturalFirstRecallChoiceSearchStatusByCallee"] =
+                  join_strings(callee_natural_first_recall_choice_search_status_parts,
+                               ";");
             }
             helper.details["valueAwareCalleeAbiRemainingPreserveDepthByCallee"] =
                 join_strings(callee_remaining_preserve_parts, ";");
@@ -55324,11 +57695,197 @@ SizeAttributionReport build_size_attribution_report(
                     helper.details
                         ["valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofAction"] =
                         "extend-symbolic-stack-search-through-precall-region";
+                  } else if (
+                      callee_abi_primary_entry_pre_call_placement_has_modelled_rewrite) {
+                    helper.details
+                        ["valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofAction"] =
+                        "use-modelled-precall-stack-rewrite-cost";
                   } else {
                     helper.details
                         ["valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofAction"] =
                         "lower-primary-entry-with-proved-precall-stack-placement";
                   }
+                }
+                if (!callee_abi_primary_entry_pre_call_placement_rewrite_parts.empty()) {
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntryPreCallPlacementRewriteEstimateByCallee"] =
+                      join_strings(
+                          callee_abi_primary_entry_pre_call_placement_rewrite_parts, ";");
+                }
+                if (!callee_abi_primary_entry_pre_call_placement_rewrite_status_parts.empty()) {
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntryPreCallPlacementRewriteStatus"] =
+                      join_strings(
+                          callee_abi_primary_entry_pre_call_placement_rewrite_status_parts,
+                          ";");
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntryPreCallPlacementRewriteModel"] =
+                      "bounded-stack-search(recall-known-stack-inputs,X<->Y,preserve-lower-"
+                      "slots,maxCells=6)";
+                  if (callee_abi_primary_entry_pre_call_placement_has_unmodelled_rewrite) {
+                    helper.details
+                        ["valueAwareCalleeAbiPrimaryEntryPreCallPlacementRewriteAction"] =
+                        "model-remaining-precall-stack-slot-rewrites";
+                  } else {
+                    helper.details
+                        ["valueAwareCalleeAbiPrimaryEntryPreCallPlacementRewriteAction"] =
+                        "feed-precall-rewrite-estimate-into-callee-abi-cost-model";
+                  }
+                }
+                if (!callee_abi_primary_entry_slot_search_parts.empty()) {
+                  helper.details["valueAwareCalleeAbiPrimaryEntrySlotSearchByCallee"] =
+                      join_strings(callee_abi_primary_entry_slot_search_parts, ";");
+                }
+                if (!callee_abi_primary_entry_slot_search_status_parts.empty()) {
+                  helper.details["valueAwareCalleeAbiPrimaryEntrySlotSearchStatus"] =
+                      join_strings(callee_abi_primary_entry_slot_search_status_parts, ";");
+                  helper.details["valueAwareCalleeAbiPrimaryEntrySlotSearchAction"] =
+                      callee_abi_primary_entry_slot_search_has_cheaper_refactor_slot
+                          ? "evaluate-callee-abi-shape-that-preserves-cheaper-entry-slot"
+                          : "keep-current-natural-entry-slot-placement-model";
+                }
+                if (!callee_abi_primary_entry_slot_search_action_parts.empty()) {
+                  helper.details["valueAwareCalleeAbiPrimaryEntrySlotSearchActionByCallee"] =
+                      join_strings(callee_abi_primary_entry_slot_search_action_parts, ";");
+                }
+                if (!callee_abi_primary_entry_slot_shape_candidate_parts.empty()) {
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntrySlotShapeCandidateByCallee"] =
+                      join_strings(callee_abi_primary_entry_slot_shape_candidate_parts,
+                                   ";");
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntrySlotShapePreCallRewriteCells"] =
+                      std::to_string(
+                          callee_abi_primary_entry_slot_shape_pre_call_rewrite_cells);
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntrySlotShapeCalleeLowerBoundCells"] =
+                      std::to_string(
+                          callee_abi_primary_entry_slot_shape_callee_lower_bound_cells);
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntrySlotShapeModeledPlacementCells"] =
+                      std::to_string(
+                          callee_abi_primary_entry_slot_shape_modeled_placement_cells);
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntrySlotShapeBasis"] =
+                      "pre-call-slot-rewrite-plus-callee-preserve-refactor-lower-bound";
+                }
+                if (!callee_abi_primary_entry_slot_shape_candidate_status_parts.empty()) {
+                  helper.details["valueAwareCalleeAbiPrimaryEntrySlotShapeStatus"] =
+                      join_strings(callee_abi_primary_entry_slot_shape_candidate_status_parts,
+                                   ";");
+                }
+                if (!callee_abi_primary_entry_slot_shape_candidate_action_parts.empty()) {
+                  helper.details["valueAwareCalleeAbiPrimaryEntrySlotShapeActionByCallee"] =
+                      join_strings(callee_abi_primary_entry_slot_shape_candidate_action_parts,
+                                   ";");
+                  helper.details["valueAwareCalleeAbiPrimaryEntrySlotShapeAction"] =
+                      "prove-cheaper-callee-entry-slot-shape-before-lowering";
+                }
+                if (!callee_abi_primary_entry_slot_shape_safe_fallback_parts.empty()) {
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntrySlotShapeSafeFallbackByCallee"] =
+                      join_strings(callee_abi_primary_entry_slot_shape_safe_fallback_parts,
+                                   ";");
+                }
+                if (!callee_abi_primary_entry_slot_shape_safe_fallback_status_parts.empty()) {
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntrySlotShapeSafeFallbackStatus"] =
+                      join_strings(
+                          callee_abi_primary_entry_slot_shape_safe_fallback_status_parts,
+                          ";");
+                }
+                if (!callee_abi_primary_entry_slot_shape_safe_fallback_action_parts.empty()) {
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntrySlotShapeSafeFallbackAction"] =
+                      join_strings(
+                          callee_abi_primary_entry_slot_shape_safe_fallback_action_parts,
+                          ";");
+                }
+                if (!callee_abi_primary_entry_slot_shape_role_requirement_parts.empty()) {
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntrySlotShapeRoleRequirementByCallee"] =
+                      join_strings(
+                          callee_abi_primary_entry_slot_shape_role_requirement_parts, ";");
+                }
+                if (!callee_abi_primary_entry_slot_shape_role_requirement_status_parts.empty()) {
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntrySlotShapeRoleRequirementStatus"] =
+                      join_strings(
+                          callee_abi_primary_entry_slot_shape_role_requirement_status_parts,
+                          ";");
+                }
+                if (!callee_abi_primary_entry_slot_shape_role_requirement_action_parts.empty()) {
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntrySlotShapeRoleRequirementAction"] =
+                      "prove-cheaper-accumulator-relocation-or-use-non-Z-preserved-slot";
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntrySlotShapeRoleRequirementActionByCallee"] =
+                      join_strings(
+                          callee_abi_primary_entry_slot_shape_role_requirement_action_parts,
+                          ";");
+                }
+                if (!callee_abi_primary_entry_slot_shape_body_relocation_parts.empty()) {
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntrySlotShapeBodyRelocationByCallee"] =
+                      join_strings(
+                          callee_abi_primary_entry_slot_shape_body_relocation_parts, ";");
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntrySlotShapeBodyRelocationModel"] =
+                      "role-stack-search(ops=swap,reverse,lift,maxCells=6,scratch=none)";
+                }
+                if (!callee_abi_primary_entry_slot_shape_body_relocation_status_parts.empty()) {
+                  helper.details["valueAwareCalleeAbiPrimaryEntrySlotShapeBodyRelocationStatus"] =
+                      join_strings(
+                          callee_abi_primary_entry_slot_shape_body_relocation_status_parts,
+                          ";");
+                }
+                if (!callee_abi_primary_entry_slot_shape_body_relocation_action_parts.empty()) {
+                  helper.details["valueAwareCalleeAbiPrimaryEntrySlotShapeBodyRelocationAction"] =
+                      callee_abi_primary_entry_slot_shape_has_body_relocation_blocker
+                          ? "introduce-verified-helper-body-variant-or-explicit-temp-copy"
+                          : "price-found-helper-body-relocation-plan";
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntrySlotShapeBodyRelocationActionByCallee"] =
+                      join_strings(
+                          callee_abi_primary_entry_slot_shape_body_relocation_action_parts,
+                          ";");
+                }
+                if (!callee_abi_primary_entry_slot_shape_explicit_temp_copy_parts.empty()) {
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyByCallee"] =
+                      join_strings(
+                          callee_abi_primary_entry_slot_shape_explicit_temp_copy_parts,
+                          ";");
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyCells"] =
+                      std::to_string(
+                          callee_abi_primary_entry_slot_shape_explicit_temp_copy_cells);
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyModel"] =
+                      "role-stack-search(ops=store-temp,reverse,swap,recall-temp,lift,"
+                      "maxCells=8,scratch=one-x-copy)";
+                }
+                if (!callee_abi_primary_entry_slot_shape_explicit_temp_copy_status_parts
+                         .empty()) {
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyStatus"] =
+                      join_strings(
+                          callee_abi_primary_entry_slot_shape_explicit_temp_copy_status_parts,
+                          ";");
+                }
+                if (!callee_abi_primary_entry_slot_shape_explicit_temp_copy_action_parts
+                         .empty()) {
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyAction"] =
+                      callee_abi_primary_entry_slot_shape_has_explicit_temp_copy_plan
+                          ? "price-explicit-temp-copy-helper-body-variant-before-lowering"
+                          : "search-wider-helper-body-variant-or-find-additional-stack-input-"
+                            "savings";
+                  helper.details
+                      ["valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyActionByCallee"] =
+                      join_strings(
+                          callee_abi_primary_entry_slot_shape_explicit_temp_copy_action_parts,
+                          ";");
                 }
                 helper.details["valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundCells"] =
                     std::to_string(callee_abi_primary_entry_placement_lower_bound_cells);
@@ -55337,6 +57894,14 @@ SizeAttributionReport build_size_attribution_report(
                 if (!callee_abi_primary_entry_placement_parts.empty()) {
                   helper.details["valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundByCallee"] =
                       join_strings(callee_abi_primary_entry_placement_parts, ";");
+                }
+                helper.details["valueAwareCalleeAbiPrimaryEntryModeledPlacementCells"] =
+                    std::to_string(callee_abi_primary_entry_modeled_placement_cells);
+                helper.details["valueAwareCalleeAbiPrimaryEntryModeledPlacementBasis"] =
+                    "max-live-input-shortfall-and-estimated-precall-stack-rewrite-cells";
+                if (!callee_abi_primary_entry_modeled_placement_parts.empty()) {
+                  helper.details["valueAwareCalleeAbiPrimaryEntryModeledPlacementByCallee"] =
+                      join_strings(callee_abi_primary_entry_modeled_placement_parts, ";");
                 }
               }
               helper.details["valueAwareCalleeAbiSafetyProof"] =
@@ -55347,6 +57912,12 @@ SizeAttributionReport build_size_attribution_report(
                   static_cast<int>(callee_abi_refactor_targets.size());
             }
           }
+          for (const auto& [unused_label, cells] : call_argument_zero_copy_cells_by_label) {
+            (void)unused_label;
+            call_argument_zero_copy_cells += cells;
+          }
+          call_argument_preservation_effective_cells =
+              std::max(0, call_argument_preservation_cells - call_argument_zero_copy_cells);
           if (!call_preservation_site_parts.empty()) {
             helper.details["valueAwareCallPreservationSites"] =
                 join_strings(call_preservation_site_parts, ";");
@@ -55378,7 +57949,23 @@ SizeAttributionReport build_size_attribution_report(
             helper.details["valueAwareCallArgumentSites"] =
                 join_strings(call_argument_site_parts, ";");
             helper.details["valueAwareCallArgumentPreservationCells"] =
+                std::to_string(call_argument_preservation_effective_cells);
+            helper.details["valueAwareCallArgumentPreservationRawCells"] =
                 std::to_string(call_argument_preservation_cells);
+            helper.details["valueAwareCallArgumentPreservationZeroCopyCells"] =
+                std::to_string(call_argument_zero_copy_cells);
+            helper.details["valueAwareCallArgumentPreservationZeroCopyStatus"] =
+                call_argument_zero_copy_cells > 0
+                    ? "proved-existing-resident-argument-copy"
+                    : "no-existing-resident-argument-copy";
+            if (!call_argument_zero_copy_site_parts.empty()) {
+              helper.details["valueAwareCallArgumentPreservationZeroCopySites"] =
+                  join_strings(call_argument_zero_copy_site_parts, ";");
+            }
+            if (!call_argument_zero_copy_blocker_parts.empty()) {
+              helper.details["valueAwareCallArgumentPreservationZeroCopyBlockers"] =
+                  join_strings(call_argument_zero_copy_blocker_parts, ";");
+            }
             std::vector<std::string> call_argument_input_by_label_parts;
             call_argument_input_by_label_parts.reserve(call_argument_inputs_by_label.size());
             for (const auto& [label, inputs] : call_argument_inputs_by_label) {
@@ -55394,8 +57981,11 @@ SizeAttributionReport build_size_attribution_report(
             std::vector<std::string> call_argument_cells_by_label_parts;
             call_argument_cells_by_label_parts.reserve(
                 call_argument_preservation_cells_by_label.size());
-            for (const auto& [label, cells] : call_argument_preservation_cells_by_label) {
-              call_argument_cells_by_label_parts.push_back(label + ":" + std::to_string(cells));
+            for (const auto& [label, unused_cells] : call_argument_preservation_cells_by_label) {
+              (void)unused_cells;
+              call_argument_cells_by_label_parts.push_back(
+                  label + ":" +
+                  std::to_string(effective_call_argument_preservation_cells_for_label(label)));
             }
             if (!call_argument_cells_by_label_parts.empty()) {
               helper.details["valueAwareCallArgumentPreservationCellsByCallee"] =
@@ -55420,14 +58010,34 @@ SizeAttributionReport build_size_attribution_report(
               helper.details["valueAwareCallArgumentX2PreloadConstantOpcodesByCallee"] =
                   join_strings(call_argument_x2_preload_constant_parts, ";");
             }
+            if (!call_argument_x2_preload_literal_replacement_parts.empty()) {
+              helper.details["valueAwareCallArgumentX2PreloadLiteralReplacementByCallee"] =
+                  join_strings(call_argument_x2_preload_literal_replacement_parts, ";");
+              helper.details["valueAwareCallArgumentX2PreloadLiteralReplacementStatus"] =
+                  join_strings(call_argument_x2_preload_literal_replacement_status_parts, ";");
+              helper.details["valueAwareCallArgumentX2PreloadLiteralReplacementDeltaCells"] =
+                  std::to_string(call_argument_x2_preload_literal_replacement_delta_cells);
+              helper.details
+                  ["valueAwareCallArgumentX2PreloadLiteralReplacementHypotheticalNetCells"] =
+                  std::to_string(
+                      call_argument_x2_preload_literal_replacement_hypothetical_net_cells);
+              helper.details["valueAwareCallArgumentX2PreloadRefactorRequiredAction"] =
+                  call_argument_x2_preload_literal_replacement_unknown
+                      ? "model-constant-materialization-x2-effects-or-use-explicit-stack-copy"
+                      : "find-x2-preserving-constant-materialization-cheaper-than-argument-"
+                        "copy-or-use-explicit-stack-copy";
+            }
             helper.details["valueAwareCallArgumentX2RequiredAction"] =
                 call_argument_x2_restore_blocked
                     ? "refactor-callee-to-preserve-x2-or-use-explicit-stack-copy"
                     : "prove-hidden-x2-restore-at-live-argument-recall-sites";
             helper.details["valueAwareCallArgumentPreservationLowerBoundCells"] =
-                std::to_string(call_argument_preservation_cells);
+                std::to_string(call_argument_preservation_effective_cells);
             helper.details["valueAwareCallArgumentPreservationLowerBoundBasis"] =
-                "one-copy-or-restage-cell-per-live-input-nested-helper-argument";
+                call_argument_zero_copy_cells > 0
+                    ? "one-copy-or-restage-cell-per-live-input-nested-helper-argument-minus-"
+                      "proved-existing-resident-argument-copies"
+                    : "one-copy-or-restage-cell-per-live-input-nested-helper-argument";
             if (!call_argument_lower_bound_site_parts.empty()) {
               helper.details["valueAwareCallArgumentPreservationLowerBoundSites"] =
                   join_strings(call_argument_lower_bound_site_parts, ";");
@@ -55443,10 +58053,10 @@ SizeAttributionReport build_size_attribution_report(
         }
         const int base_estimated_net_cells = profitable_stack_input_net_cells;
         const int adjusted_estimated_net_cells =
-            base_estimated_net_cells - call_argument_preservation_cells;
+            base_estimated_net_cells - call_argument_preservation_effective_cells;
         if (base_estimated_net_cells > 0 || state_output_cells > 0 ||
-            call_argument_preservation_cells > 0) {
-          if (call_argument_preservation_cells > 0) {
+            call_argument_preservation_effective_cells > 0) {
+          if (call_argument_preservation_effective_cells > 0) {
             helper.details["valueAwareEstimatedNetSavingsBeforeArgumentPreservation"] =
                 std::to_string(base_estimated_net_cells);
             helper.details["valueAwareEstimatedNetSavingsAfterArgumentPreservation"] =
@@ -55542,6 +58152,41 @@ SizeAttributionReport build_size_attribution_report(
                      "/net:" + signed_cells_text(net_cells) +
                      "/need:" + std::to_string(std::max(0, 1 - net_cells));
             };
+        const auto callee_abi_primary_entry_modeled_placement_cost_breakdown_text =
+            [&](int gross_cells, int materialize_cells, int argument_preservation_cells,
+                int entry_lower_bound_cells, int modeled_placement_cells, int net_cells) {
+              return std::string("gross:") + std::to_string(gross_cells) +
+                     "/materialize:" + std::to_string(materialize_cells) +
+                     "/arg-preserve:" + std::to_string(argument_preservation_cells) +
+                     "/entry-lower-bound:" + std::to_string(entry_lower_bound_cells) +
+                     "/modeled-placement:" + std::to_string(modeled_placement_cells) +
+                     "/net:" + signed_cells_text(net_cells) +
+                     "/need:" + std::to_string(std::max(0, 1 - net_cells));
+            };
+        const auto callee_abi_primary_entry_slot_shape_cost_breakdown_text =
+            [&](int gross_cells, int materialize_cells, int argument_preservation_cells,
+                int entry_lower_bound_cells, int slot_shape_cells, int net_cells) {
+              return std::string("gross:") + std::to_string(gross_cells) +
+                     "/materialize:" + std::to_string(materialize_cells) +
+                     "/arg-preserve:" + std::to_string(argument_preservation_cells) +
+                     "/entry-lower-bound:" + std::to_string(entry_lower_bound_cells) +
+                     "/slot-shape:" + std::to_string(slot_shape_cells) +
+                     "/net:" + signed_cells_text(net_cells) +
+                     "/need:" + std::to_string(std::max(0, 1 - net_cells));
+            };
+        const auto callee_abi_primary_entry_slot_shape_explicit_temp_copy_cost_text =
+            [&](int gross_cells, int materialize_cells, int argument_preservation_cells,
+                int entry_lower_bound_cells, int pre_call_cells,
+                int helper_body_copy_cells, int net_cells) {
+              return std::string("gross:") + std::to_string(gross_cells) +
+                     "/materialize:" + std::to_string(materialize_cells) +
+                     "/arg-preserve:" + std::to_string(argument_preservation_cells) +
+                     "/entry-lower-bound:" + std::to_string(entry_lower_bound_cells) +
+                     "/slot-shape-precall:" + std::to_string(pre_call_cells) +
+                     "/helper-body-copy:" + std::to_string(helper_body_copy_cells) +
+                     "/net:" + signed_cells_text(net_cells) +
+                     "/need:" + std::to_string(std::max(0, 1 - net_cells));
+            };
         const auto callee_abi_primary_entry_status_text = [](int net_cells) {
           if (net_cells > 0)
             return std::string("positive-after-primary-entry-lower-bound");
@@ -55556,6 +58201,14 @@ SizeAttributionReport build_size_attribution_report(
             return std::string("break-even-after-primary-entry-placement-lower-bound");
           return std::string("negative-after-primary-entry-placement-lower-bound");
         };
+        const auto callee_abi_primary_entry_modeled_placement_status_text =
+            [](int net_cells) {
+              if (net_cells > 0)
+                return std::string("positive-after-primary-entry-modeled-placement");
+              if (net_cells == 0)
+                return std::string("break-even-after-primary-entry-modeled-placement");
+              return std::string("negative-after-primary-entry-modeled-placement");
+            };
         if (call_preservation_has_stack_mutating_callee &&
             !ranked_profitable_stack_inputs.empty()) {
           struct CalleeAbiSubsetEstimate {
@@ -55598,7 +58251,7 @@ SizeAttributionReport build_size_attribution_report(
               estimate.gross_cells += gross_cells_by_name[name];
               estimate.materialize_cells += materialize_cells_by_name[name];
               estimate.argument_preservation_cells +=
-                  call_argument_preservation_cells_by_name[name];
+                  effective_call_argument_preservation_cells_for_name(name);
             }
             std::set<std::string> stack_mutating_callee_labels;
             for (const auto& [label, inputs] : call_preservation_inputs_by_label) {
@@ -55831,6 +58484,16 @@ SizeAttributionReport build_size_attribution_report(
           const int net_after_primary_entry_placement_lower_bound_cells =
               net_after_primary_entry_lower_bound_cells -
               callee_abi_primary_entry_placement_lower_bound_cells;
+          const int net_after_primary_entry_modeled_placement_cells =
+              net_after_primary_entry_lower_bound_cells -
+              callee_abi_primary_entry_modeled_placement_cells;
+          const int net_after_primary_entry_slot_shape_cells =
+              net_after_primary_entry_lower_bound_cells -
+              callee_abi_primary_entry_slot_shape_modeled_placement_cells;
+          const int net_after_primary_entry_slot_shape_explicit_temp_copy_cells =
+              net_after_primary_entry_lower_bound_cells -
+              callee_abi_primary_entry_slot_shape_pre_call_rewrite_cells -
+              callee_abi_primary_entry_slot_shape_explicit_temp_copy_cells;
           helper.details["valueAwareCalleeAbiNetAfterLowerBoundCells"] =
               std::to_string(net_after_callee_abi_lower_bound_cells);
           helper.details["valueAwareCalleeAbiPrimaryEntryNetAfterLowerBoundCells"] =
@@ -55838,9 +58501,19 @@ SizeAttributionReport build_size_attribution_report(
           helper.details
               ["valueAwareCalleeAbiPrimaryEntryNetAfterPlacementLowerBoundCells"] =
               std::to_string(net_after_primary_entry_placement_lower_bound_cells);
+          helper.details["valueAwareCalleeAbiPrimaryEntryNetAfterModeledPlacementCells"] =
+              std::to_string(net_after_primary_entry_modeled_placement_cells);
+          if (callee_abi_primary_entry_slot_shape_modeled_placement_cells > 0) {
+            helper.details["valueAwareCalleeAbiPrimaryEntryNetAfterSlotShapeCells"] =
+                std::to_string(net_after_primary_entry_slot_shape_cells);
+          }
           helper.details["valueAwareCalleeAbiPrimaryEntryPlacementAdditionalNetCellsToPositive"] =
               std::to_string(
                   std::max(0, 1 - net_after_primary_entry_placement_lower_bound_cells));
+          helper.details
+              ["valueAwareCalleeAbiPrimaryEntryModeledPlacementAdditionalNetCellsToPositive"] =
+              std::to_string(
+                  std::max(0, 1 - net_after_primary_entry_modeled_placement_cells));
           helper.details["valueAwareCalleeAbiPrimaryEntryAdditionalNetCellsToPositive"] =
               std::to_string(std::max(0, 1 - net_after_primary_entry_lower_bound_cells));
           helper.details["valueAwareCalleeAbiAdditionalNetCellsToPositive"] =
@@ -55848,26 +58521,155 @@ SizeAttributionReport build_size_attribution_report(
           helper.details["valueAwareCalleeAbiCostBreakdown"] =
               callee_abi_cost_breakdown_text(
                   profitable_stack_input_gross_cells, profitable_stack_input_materialize_cells,
-                  call_argument_preservation_cells, callee_abi_overhead_lower_bound_cells,
-                  net_after_callee_abi_lower_bound_cells);
+                  call_argument_preservation_effective_cells,
+                  callee_abi_overhead_lower_bound_cells, net_after_callee_abi_lower_bound_cells);
           helper.details["valueAwareCalleeAbiPrimaryEntryCostBreakdown"] =
               callee_abi_cost_breakdown_text(
                   profitable_stack_input_gross_cells, profitable_stack_input_materialize_cells,
-                  call_argument_preservation_cells,
+                  call_argument_preservation_effective_cells,
                   callee_abi_primary_entry_remaining_overhead_lower_bound_cells,
                   net_after_primary_entry_lower_bound_cells);
           helper.details["valueAwareCalleeAbiPrimaryEntryPlacementCostBreakdown"] =
               callee_abi_primary_entry_placement_cost_breakdown_text(
                   profitable_stack_input_gross_cells, profitable_stack_input_materialize_cells,
-                  call_argument_preservation_cells,
+                  call_argument_preservation_effective_cells,
                   callee_abi_primary_entry_remaining_overhead_lower_bound_cells,
                   callee_abi_primary_entry_placement_lower_bound_cells,
                   net_after_primary_entry_placement_lower_bound_cells);
+          helper.details["valueAwareCalleeAbiPrimaryEntryModeledPlacementCostBreakdown"] =
+              callee_abi_primary_entry_modeled_placement_cost_breakdown_text(
+                  profitable_stack_input_gross_cells, profitable_stack_input_materialize_cells,
+                  call_argument_preservation_effective_cells,
+                  callee_abi_primary_entry_remaining_overhead_lower_bound_cells,
+                  callee_abi_primary_entry_modeled_placement_cells,
+                  net_after_primary_entry_modeled_placement_cells);
+          if (callee_abi_primary_entry_slot_shape_modeled_placement_cells > 0) {
+            helper.details["valueAwareCalleeAbiPrimaryEntrySlotShapeCostBreakdown"] =
+                callee_abi_primary_entry_slot_shape_cost_breakdown_text(
+                    profitable_stack_input_gross_cells,
+                    profitable_stack_input_materialize_cells,
+                    call_argument_preservation_effective_cells,
+                    callee_abi_primary_entry_remaining_overhead_lower_bound_cells,
+                    callee_abi_primary_entry_slot_shape_modeled_placement_cells,
+                    net_after_primary_entry_slot_shape_cells);
+            helper.details
+                ["valueAwareCalleeAbiPrimaryEntrySlotShapeAdditionalNetCellsToPositive"] =
+                std::to_string(
+                    std::max(0, 1 - net_after_primary_entry_slot_shape_cells));
+          }
+          if (callee_abi_primary_entry_slot_shape_explicit_temp_copy_cells > 0) {
+            helper.details
+                ["valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyCostBreakdown"] =
+                callee_abi_primary_entry_slot_shape_explicit_temp_copy_cost_text(
+                    profitable_stack_input_gross_cells,
+                    profitable_stack_input_materialize_cells,
+                    call_argument_preservation_effective_cells,
+                    callee_abi_primary_entry_remaining_overhead_lower_bound_cells,
+                    callee_abi_primary_entry_slot_shape_pre_call_rewrite_cells,
+                    callee_abi_primary_entry_slot_shape_explicit_temp_copy_cells,
+                    net_after_primary_entry_slot_shape_explicit_temp_copy_cells);
+            helper.details
+                ["valueAwareCalleeAbiPrimaryEntryNetAfterSlotShapeExplicitTempCopyCells"] =
+                std::to_string(
+                    net_after_primary_entry_slot_shape_explicit_temp_copy_cells);
+            helper.details
+                ["valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyAdditionalNetCellsToPositive"] =
+                std::to_string(std::max(
+                    0, 1 - net_after_primary_entry_slot_shape_explicit_temp_copy_cells));
+          }
           helper.details["valueAwareCalleeAbiPrimaryEntryStatus"] =
               callee_abi_primary_entry_status_text(net_after_primary_entry_lower_bound_cells);
           helper.details["valueAwareCalleeAbiPrimaryEntryPlacementStatus"] =
               callee_abi_primary_entry_placement_status_text(
                   net_after_primary_entry_placement_lower_bound_cells);
+          helper.details["valueAwareCalleeAbiPrimaryEntryModeledPlacementStatus"] =
+              callee_abi_primary_entry_modeled_placement_status_text(
+                  net_after_primary_entry_modeled_placement_cells);
+          if (callee_abi_primary_entry_slot_shape_modeled_placement_cells > 0) {
+            std::string slot_shape_model_status =
+                callee_abi_primary_entry_modeled_placement_status_text(
+                    net_after_primary_entry_slot_shape_cells);
+            if (net_after_primary_entry_slot_shape_cells >
+                net_after_primary_entry_modeled_placement_cells) {
+              slot_shape_model_status += "+improves-current-modeled-placement";
+            }
+            if (callee_abi_primary_entry_slot_shape_has_role_conflict) {
+              slot_shape_model_status += "+role-conflict-unproved";
+            }
+            if (callee_abi_primary_entry_slot_shape_has_body_relocation_blocker) {
+              slot_shape_model_status += "+body-relocation-blocked";
+            }
+            helper.details["valueAwareCalleeAbiPrimaryEntrySlotShapeModelStatus"] =
+                slot_shape_model_status;
+          }
+          if (callee_abi_primary_entry_slot_shape_explicit_temp_copy_cells > 0) {
+            std::string explicit_temp_copy_status =
+                net_after_primary_entry_slot_shape_explicit_temp_copy_cells > 0
+                    ? "positive-after-explicit-temp-copy-helper-body-variant"
+                    : (net_after_primary_entry_slot_shape_explicit_temp_copy_cells == 0
+                           ? "break-even-after-explicit-temp-copy-helper-body-variant"
+                           : "negative-after-explicit-temp-copy-helper-body-variant");
+            if (net_after_primary_entry_slot_shape_explicit_temp_copy_cells >
+                net_after_primary_entry_modeled_placement_cells) {
+              explicit_temp_copy_status += "+improves-current-modeled-placement";
+            } else if (net_after_primary_entry_slot_shape_explicit_temp_copy_cells <
+                       net_after_primary_entry_modeled_placement_cells) {
+              explicit_temp_copy_status += "+worse-than-current-modeled-placement";
+            } else {
+              explicit_temp_copy_status += "+matches-current-modeled-placement";
+            }
+            helper.details
+                ["valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyModelStatus"] =
+                explicit_temp_copy_status;
+            helper.details
+                ["valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyRequiredAction"] =
+                net_after_primary_entry_slot_shape_explicit_temp_copy_cells >
+                        net_after_primary_entry_modeled_placement_cells
+                    ? "prove-explicit-temp-copy-helper-body-variant-before-lowering"
+                    : "keep-current-natural-slot-or-find-additional-stack-input-savings-"
+                      "before-helper-body-copy";
+          }
+          if (net_after_primary_entry_modeled_placement_cells > 0) {
+            helper.details["valueAwareCalleeAbiPrimaryEntryModeledPlacementRequiredAction"] =
+                "implement-primary-stack-preserving-callee-entry-and-argument-preservation-"
+                "proof";
+          } else if (
+              net_after_primary_entry_lower_bound_cells > 0 &&
+              callee_abi_primary_entry_modeled_placement_cells >
+                  callee_abi_primary_entry_placement_lower_bound_cells) {
+            helper.details["valueAwareCalleeAbiPrimaryEntryModeledPlacementRequiredAction"] =
+                "reduce-primary-entry-precall-rewrite-cost-or-find-additional-stack-input-"
+                "savings";
+          } else if (net_after_primary_entry_lower_bound_cells > 0 &&
+                     callee_abi_primary_entry_modeled_placement_cells > 0) {
+            helper.details["valueAwareCalleeAbiPrimaryEntryModeledPlacementRequiredAction"] =
+                "reduce-primary-entry-stack-placement-cost-or-find-additional-stack-input-"
+                "savings";
+          } else {
+            helper.details["valueAwareCalleeAbiPrimaryEntryModeledPlacementRequiredAction"] =
+                "find-additional-stack-input-savings-or-nonprimary-entry-proof";
+          }
+          if (callee_abi_primary_entry_slot_shape_modeled_placement_cells > 0) {
+            if (net_after_primary_entry_slot_shape_cells > 0) {
+              helper.details["valueAwareCalleeAbiPrimaryEntrySlotShapeRequiredAction"] =
+                  callee_abi_primary_entry_slot_shape_has_body_relocation_blocker
+                      ? "introduce-verified-helper-body-variant-before-lowering"
+                      : callee_abi_primary_entry_slot_shape_has_role_conflict
+                      ? "prove-accumulator-relocation-preserves-selected-slot-before-lowering"
+                      : "implement-cheaper-callee-entry-slot-shape-and-argument-preservation-"
+                        "proof";
+            } else {
+              helper.details["valueAwareCalleeAbiPrimaryEntrySlotShapeRequiredAction"] =
+                  callee_abi_primary_entry_slot_shape_has_body_relocation_blocker
+                      ? "introduce-verified-helper-body-variant-or-find-additional-stack-input-"
+                        "savings"
+                      : callee_abi_primary_entry_slot_shape_has_role_conflict
+                      ? "prove-accumulator-relocation-preserves-selected-slot-or-find-"
+                        "additional-stack-input-savings"
+                      : "reduce-callee-slot-shape-cost-or-find-additional-stack-input-"
+                        "savings";
+            }
+          }
           if (net_after_primary_entry_placement_lower_bound_cells > 0) {
             helper.details["valueAwareCalleeAbiPrimaryEntryRequiredAction"] =
                 "implement-primary-stack-preserving-callee-entry-and-argument-preservation-"
@@ -55920,14 +58722,16 @@ SizeAttributionReport build_size_attribution_report(
           helper.details["valueAwareCalleeAbiPositiveLevers"] =
               callee_abi_positive_levers_text(
                   std::max(0, 1 - net_after_callee_abi_lower_bound_cells),
-                  profitable_stack_input_materialize_cells, call_argument_preservation_cells,
+                  profitable_stack_input_materialize_cells,
+                  call_argument_preservation_effective_cells,
                   callee_abi_overhead_lower_bound_cells);
           helper.details["valueAwareCalleeAbiPositiveGapReason"] =
               callee_abi_positive_gap_reason_text(net_after_callee_abi_lower_bound_cells);
           helper.details["valueAwareCalleeAbiNextProofTarget"] =
               callee_abi_next_proof_target_text(
                   std::max(0, 1 - net_after_callee_abi_lower_bound_cells),
-                  profitable_stack_input_materialize_cells, call_argument_preservation_cells,
+                  profitable_stack_input_materialize_cells,
+                  call_argument_preservation_effective_cells,
                   callee_abi_overhead_lower_bound_cells);
           helper.details["valueAwareCalleeAbiEntryOnlyOutcome"] =
               net_after_callee_abi_lower_bound_cells > 0
@@ -55952,21 +58756,32 @@ SizeAttributionReport build_size_attribution_report(
               mutation_surface_status_it->second == "exceeds-overhead-budget";
           const bool overhead_lower_bound_reaches_break_even =
               callee_abi_overhead_lower_bound_cells >= adjusted_estimated_net_cells;
+          const bool primary_entry_modeled_placement_not_positive =
+              !overhead_lower_bound_reaches_break_even &&
+              net_after_primary_entry_lower_bound_cells > 0 &&
+              callee_abi_primary_entry_modeled_placement_cells >
+                  callee_abi_primary_entry_placement_lower_bound_cells &&
+              net_after_primary_entry_modeled_placement_cells <= 0;
           helper.details["valueAwareCalleeAbiCostModelStatus"] =
               overhead_lower_bound_reaches_break_even
                   ? "overhead-lower-bound-not-positive"
-                  : (mutation_surface_exceeds_budget
-                         ? "mutation-surface-exceeds-overhead-budget"
-                         : "unestimated-stack-preserving-entry-overhead");
+                  : (primary_entry_modeled_placement_not_positive
+                         ? "primary-entry-modeled-placement-not-positive"
+                         : (mutation_surface_exceeds_budget
+                                ? "mutation-surface-exceeds-overhead-budget"
+                                : "unestimated-stack-preserving-entry-overhead"));
           helper.details["valueAwareCalleeAbiCostModelRequirement"] =
               overhead_lower_bound_reaches_break_even
                   ? "find-additional-stack-input-savings-before-callee-abi-refactor"
-                  : (helper.details["valueAwareCalleeAbiCostModelStatus"] ==
-                             "mutation-surface-exceeds-overhead-budget"
-                         ? "prove-stack-preserving-callee-abi-overhead-below-mutation-surface-"
-                           "before-ranking"
-                         : "stack-preserving-callee-abi-overhead-must-not-exceed-estimated-net-"
-                           "savings");
+                  : (primary_entry_modeled_placement_not_positive
+                         ? "reduce-primary-entry-precall-rewrite-cost-or-find-additional-stack-"
+                           "input-savings"
+                         : (helper.details["valueAwareCalleeAbiCostModelStatus"] ==
+                                    "mutation-surface-exceeds-overhead-budget"
+                                ? "prove-stack-preserving-callee-abi-overhead-below-mutation-"
+                                  "surface-before-ranking"
+                                : "stack-preserving-callee-abi-overhead-must-not-exceed-"
+                                  "estimated-net-savings"));
         }
         if (!direct_stack_input_names.empty()) {
           std::vector<std::string> direct_materialization_parts;
@@ -56471,31 +59286,46 @@ SizeAttributionReport build_size_attribution_report(
       if (const auto abi_status_it = details.find("valueAwareCalleeAbiCostModelStatus");
           abi_status_it != details.end() &&
           (abi_status_it->second == "mutation-surface-exceeds-overhead-budget" ||
-           abi_status_it->second == "overhead-lower-bound-not-positive")) {
+           abi_status_it->second == "overhead-lower-bound-not-positive" ||
+           abi_status_it->second == "primary-entry-modeled-placement-not-positive")) {
         const bool lower_bound_not_positive =
             abi_status_it->second == "overhead-lower-bound-not-positive";
+        const bool modeled_placement_not_positive =
+            abi_status_it->second == "primary-entry-modeled-placement-not-positive";
         opportunity_savings = 0;
         details["candidateStepsStatus"] = "not-a-positive-size-opportunity";
         details["sizeImpactStatus"] = "estimated-nonpositive-net";
         details["netSavingsStatus"] =
             lower_bound_not_positive
                 ? "stack-preserving-callee-abi-lower-bound-reaches-break-even"
-                : "stack-preserving-callee-abi-mutation-surface-exceeds-budget";
+                : (modeled_placement_not_positive
+                       ? "primary-entry-modeled-placement-not-positive"
+                       : "stack-preserving-callee-abi-mutation-surface-exceeds-budget");
         details["estimateKind"] =
-            lower_bound_not_positive ? "estimated-net-after-callee-abi-lower-bound"
-                                     : "estimated-net-after-callee-abi-surface";
+            lower_bound_not_positive
+                ? "estimated-net-after-callee-abi-lower-bound"
+                : (modeled_placement_not_positive
+                       ? "estimated-net-after-primary-entry-modeled-placement"
+                       : "estimated-net-after-callee-abi-surface");
         details["savingsModel"] =
             lower_bound_not_positive
                 ? "estimated-net-after-callee-abi-overhead-lower-bound"
-                : "estimated-net-after-callee-abi-surface-budget";
+                : (modeled_placement_not_positive
+                       ? "estimated-net-after-primary-entry-modeled-placement"
+                       : "estimated-net-after-callee-abi-surface-budget");
         details["requiredAction"] =
             lower_bound_not_positive
                 ? "find-additional-stack-input-savings-before-callee-abi-refactor"
-                : "prove-or-reduce-stack-preserving-callee-abi-overhead";
+                : (modeled_placement_not_positive
+                       ? "reduce-primary-entry-precall-rewrite-cost-or-find-additional-stack-"
+                         "input-savings"
+                       : "prove-or-reduce-stack-preserving-callee-abi-overhead");
         details["costModelAction"] =
             lower_bound_not_positive
                 ? "increase-value-aware-savings-before-callee-abi-refactor"
-                : "estimate-stack-preserving-callee-abi-overhead-from-mutation-surface";
+                : (modeled_placement_not_positive
+                       ? "feed-modeled-primary-entry-placement-cost-into-value-aware-scheduler"
+                       : "estimate-stack-preserving-callee-abi-overhead-from-mutation-surface");
       }
     }
     if (const std::optional<std::string> traffic_shape_action =
@@ -56613,6 +59443,7 @@ SizeAttributionReport build_size_attribution_report(
                                                  report.helpers);
     attach_packed_line_update_check_tail_details(details, candidate, current_steps,
                                                  report.helpers);
+    attach_stack_resident_entry_candidate_details(details, candidate, current_steps, report);
     int opportunity_savings = current_steps - candidate.steps;
     int opportunity_candidate_steps = candidate.steps;
     if (const auto net_lower_bound_it =
@@ -56826,7 +59657,8 @@ SizeAttributionReport build_size_attribution_report(
     const auto abi_status_it = opportunity.details.find("valueAwareCalleeAbiCostModelStatus");
     if (abi_status_it == opportunity.details.end() ||
         (abi_status_it->second != "mutation-surface-exceeds-overhead-budget" &&
-         abi_status_it->second != "overhead-lower-bound-not-positive")) {
+         abi_status_it->second != "overhead-lower-bound-not-positive" &&
+         abi_status_it->second != "primary-entry-modeled-placement-not-positive")) {
       continue;
     }
     if (const auto required_it = opportunity.details.find("requiredAction");
@@ -56847,6 +59679,15 @@ SizeAttributionReport build_size_attribution_report(
         add_next_action(opportunity, "valueAwareCalleeAbiNearPositiveAction",
                         near_action_it->second, index, "stalled-near-positive", primary_net);
       }
+    }
+    if (const auto modeled_placement_action_it =
+            opportunity.details.find(
+                "valueAwareCalleeAbiPrimaryEntryModeledPlacementRequiredAction");
+        modeled_placement_action_it != opportunity.details.end()) {
+      add_next_action(
+          opportunity,
+          "valueAwareCalleeAbiPrimaryEntryModeledPlacementRequiredAction",
+          modeled_placement_action_it->second, index, "stalled-nonpositive", 0);
     }
     if (const auto x2_action_it = opportunity.details.find("valueAwareCallArgumentX2RequiredAction");
         x2_action_it != opportunity.details.end()) {

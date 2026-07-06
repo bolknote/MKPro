@@ -287,9 +287,27 @@ void compiler_examples_match_typescript_contract() {
                 dark_table_opportunity->details.contains("proofFailure") &&
                 dark_table_opportunity->details.at("proofFailure") ==
                     "conflict-free-address-data-table-not-proved" &&
+                dark_table_opportunity->details.contains("proofDisposition") &&
+                dark_table_opportunity->details.at("proofDisposition") ==
+                    "needs-code-data-overlay-conflict-proof" &&
+                dark_table_opportunity->details.contains("layoutProofScope") &&
+                dark_table_opportunity->details.at("layoutProofScope") ==
+                    "numeric-dispatch-address-data-table" &&
+                dark_table_opportunity->details.contains("layoutProofStatus") &&
+                dark_table_opportunity->details.at("layoutProofStatus") ==
+                    "missing-conflict-free-table-artifact" &&
                 dark_table_opportunity->details.contains("layoutProofRequirement") &&
                 dark_table_opportunity->details.at("layoutProofRequirement") ==
                     "address-data-table-conflict-check" &&
+                dark_table_opportunity->details.contains("layoutProofRequiredArtifact") &&
+                dark_table_opportunity->details.at("layoutProofRequiredArtifact") ==
+                    "post-layout-address-data-conflict-map" &&
+                dark_table_opportunity->details.contains("layoutProofConflictModel") &&
+                dark_table_opportunity->details.at("layoutProofConflictModel") ==
+                    "flow-address-cells-vs-case-data-cells" &&
+                dark_table_opportunity->details.contains("layoutProofNextAction") &&
+                dark_table_opportunity->details.at("layoutProofNextAction") ==
+                    "emit-address-data-table-candidate-and-conflict-map" &&
                 dark_table_opportunity->details.contains("requiredAction") &&
                 dark_table_opportunity->details.at("requiredAction") ==
                     "prove-conflict-free-address-data-table-layout",

@@ -140,6 +140,7 @@ add_executable(mkpro_tests
   tests/example_sizes_test.cpp
   tests/constant_folding_test.cpp
   tests/cse_display_block_test.cpp
+  tests/dangerous_loading_size_report_test.cpp
   tests/dead_code_after_halt_test.cpp
   tests/dead_proc_elimination_test.cpp
   tests/dead_store_before_commutative_test.cpp
@@ -338,6 +339,9 @@ set(MKPRO_NATIVE_TEST_NAMES
   compiler_examples_match_typescript_contract
   supported_examples_match_native_oracles
   expression_helpers_match_typescript_contract
+  expression_helper_size_report_counts_entry_y_materialization_coverage
+  expression_helper_size_report_tracks_selected_stack_carried_pow10_index
+  expression_helper_size_report_tracks_symbolic_entry_stack
   expression_lowering_helpers_match_typescript_contract
   flow_structure_passes_match_typescript_contract
   flow_x_reuse_matches_typescript_contract

@@ -139,8 +139,87 @@ function analyzeFile(compiler, file) {
     role: detail(helper.details, 'role'),
     pipelineShape: detail(helper.details, 'pipelineShape'),
     bodyCellsPerAccumulatorTerm: detail(helper.details, 'bodyCellsPerAccumulatorTerm'),
+    accumulatorStatePolicy: detail(helper.details, 'accumulatorStatePolicy'),
+    interleavedPipelineShape: detail(helper.details, 'interleavedPipelineShape'),
+    interleavedPipelineBlocker: detail(helper.details, 'interleavedPipelineBlocker'),
     callCellsPerOccurrence: detail(helper.details, 'callCellsPerOccurrence'),
     nextPipelineAction: detail(helper.details, 'nextPipelineAction'),
+    nextPipelineProofTarget: detail(helper.details, 'nextPipelineProofTarget'),
+    valueAwareArgumentRecallSites: detail(
+      helper.details,
+      'argumentRecallSitesByName',
+    ) || detail(
+      helper.details,
+      'valueAwareArgumentRecallSitesByName',
+    ),
+    valueAwareRepeatedArgumentRecallSites: detail(
+      helper.details,
+      'repeatedArgumentRecallSites',
+    ) || detail(
+      helper.details,
+      'valueAwareRepeatedArgumentRecallSites',
+    ),
+    valueAwareTopRepeatedArgumentRecall: detail(
+      helper.details,
+      'topRepeatedArgumentRecall',
+    ) || detail(
+      helper.details,
+      'valueAwareTopRepeatedArgumentRecall',
+    ),
+    valueAwareSchedulerNextMaterializationTarget: detail(
+      helper.details,
+      'schedulerNextMaterializationTarget',
+    ) || detail(
+      helper.details,
+      'valueAwareSchedulerNextMaterializationTarget',
+    ),
+    valueAwareRepeatedArgumentSchedulerFeasibility: detail(
+      helper.details,
+      'repeatedArgumentSchedulerFeasibility',
+    ) || detail(
+      helper.details,
+      'valueAwareRepeatedArgumentSchedulerFeasibility',
+    ),
+    valueAwareRepeatedArgumentSchedulerStatus: detail(
+      helper.details,
+      'repeatedArgumentSchedulerStatus',
+    ) || detail(
+      helper.details,
+      'valueAwareRepeatedArgumentSchedulerStatus',
+    ),
+    valueAwareRepeatedArgumentSchedulerAction: detail(
+      helper.details,
+      'repeatedArgumentSchedulerAction',
+    ) || detail(
+      helper.details,
+      'valueAwareRepeatedArgumentSchedulerAction',
+    ),
+    valueAwareRepeatedArgumentSchedulerProfitableNet: detail(
+      helper.details,
+      'repeatedArgumentSchedulerProfitableNetCells',
+    ) || detail(
+      helper.details,
+      'valueAwareRepeatedArgumentSchedulerProfitableNetCells',
+    ),
+    valueAwareRepeatedArgumentSchedulerModelNet: detail(
+      helper.details,
+      'repeatedArgumentSchedulerModelNetCells',
+    ) || detail(
+      helper.details,
+      'valueAwareRepeatedArgumentSchedulerModelNetCells',
+    ),
+    selectedStackCarriedPlan:
+      detail(helper.details, 'valueAwareSelectedStackCarriedPlan'),
+    selectedStackCarriedStatus:
+      detail(helper.details, 'valueAwareSelectedStackCarriedStatus'),
+    selectedStackCarriedInputs:
+      detail(helper.details, 'valueAwareSelectedStackCarriedInputNames'),
+    selectedStackCarriedTargets:
+      detail(helper.details, 'valueAwareSelectedStackCarriedTargets'),
+    selectedStackCarriedSites:
+      detail(helper.details, 'valueAwareSelectedStackCarriedSites'),
+    symbolicKnownCalleeStackEffects:
+      detail(helper.details, 'valueAwareSymbolicKnownCalleeStackEffects'),
     details: helper.details ?? {},
   }));
   const candidateOpportunities = [];
@@ -165,6 +244,56 @@ function analyzeFile(compiler, file) {
         netSavingsStatus: detail(details, 'netSavingsStatus'),
         candidateStepsStatus: detail(details, 'candidateStepsStatus'),
         estimateKind: detail(details, 'estimateKind'),
+        proofEffortPriority: detail(details, 'proofEffortPriority'),
+        proofEffortReason: detail(details, 'proofEffortReason'),
+        proofEffortSizeGate: detail(details, 'proofEffortSizeGate'),
+        sizeFirstAction: detail(details, 'sizeFirstAction'),
+        layoutProofScope: detail(details, 'layoutProofScope'),
+        layoutProofStatus: detail(details, 'layoutProofStatus'),
+        layoutProofRequirement: detail(details, 'layoutProofRequirement'),
+        layoutProofRequiredArtifact: detail(
+          details,
+          'layoutProofRequiredArtifact',
+        ),
+        layoutProofConflictModel: detail(details, 'layoutProofConflictModel'),
+        layoutProofNextAction: detail(details, 'layoutProofNextAction'),
+        fractionalSelectorConsumer: detail(details, 'fractionalSelectorConsumer'),
+        fractionalSelectorSource: detail(details, 'fractionalSelectorSource'),
+        fractionalSelectorStorage: detail(details, 'fractionalSelectorStorage'),
+        selectorTarget: detail(details, 'selectorTarget'),
+        consumerAddress: detail(details, 'consumerAddress'),
+        consumerControlKind: detail(details, 'consumerControlKind'),
+        integerPartUseRole: detail(details, 'integerPartUseRole'),
+        fractionalPartUseRole: detail(details, 'fractionalPartUseRole'),
+        integerPartDataSafetyStatus: detail(details, 'integerPartDataSafetyStatus'),
+        deadIntegerProofGap: detail(details, 'deadIntegerProofGap'),
+        deadIntegerProofRequiredArtifact:
+          detail(details, 'deadIntegerProofRequiredArtifact'),
+        deadIntegerProofNextAction: detail(details, 'deadIntegerProofNextAction'),
+        deadIntegerConsumerRegister: detail(details, 'deadIntegerConsumerRegister'),
+        deadIntegerSelectorCarrierRegister: detail(
+          details,
+          'deadIntegerSelectorCarrierRegister',
+        ),
+        fractionalSelectorSourceRegister: detail(
+          details,
+          'fractionalSelectorSourceRegister',
+        ),
+        stackResidentEntryFamily: detail(details, 'stackResidentEntryFamily'),
+        stackResidentEntryDelta: detail(details, 'stackResidentEntryDeltaCells'),
+        stackResidentEntryMeasuredStatus: detail(
+          details,
+          'stackResidentEntryMeasuredStatus',
+        ),
+        stackResidentEntryAbiContext: detail(details, 'stackResidentEntryAbiContext'),
+        stackResidentEntryValueAwareContext: detail(
+          details,
+          'stackResidentEntryValueAwareContext',
+        ),
+        stackResidentEntryRequiredAction: detail(
+          details,
+          'stackResidentEntryRequiredAction',
+        ),
         details,
       });
       continue;
@@ -178,6 +307,69 @@ function analyzeFile(compiler, file) {
       candidateSteps: opportunity.candidateSteps,
       registerTrafficCells: Number(detail(details, 'registerTrafficCells') || 0),
       registerTrafficNames: detail(details, 'registerTrafficNames'),
+      valueAwareArgumentRecallSites: detail(
+        details,
+        'argumentRecallSitesByName',
+      ) || detail(
+        details,
+        'valueAwareArgumentRecallSitesByName',
+      ),
+      valueAwareRepeatedArgumentRecallSites: detail(
+        details,
+        'repeatedArgumentRecallSites',
+      ) || detail(
+        details,
+        'valueAwareRepeatedArgumentRecallSites',
+      ),
+      valueAwareTopRepeatedArgumentRecall: detail(
+        details,
+        'topRepeatedArgumentRecall',
+      ) || detail(
+        details,
+        'valueAwareTopRepeatedArgumentRecall',
+      ),
+      valueAwareSchedulerNextMaterializationTarget: detail(
+        details,
+        'schedulerNextMaterializationTarget',
+      ) || detail(
+        details,
+        'valueAwareSchedulerNextMaterializationTarget',
+      ),
+      valueAwareRepeatedArgumentSchedulerFeasibility: detail(
+        details,
+        'repeatedArgumentSchedulerFeasibility',
+      ) || detail(
+        details,
+        'valueAwareRepeatedArgumentSchedulerFeasibility',
+      ),
+      valueAwareRepeatedArgumentSchedulerStatus: detail(
+        details,
+        'repeatedArgumentSchedulerStatus',
+      ) || detail(
+        details,
+        'valueAwareRepeatedArgumentSchedulerStatus',
+      ),
+      valueAwareRepeatedArgumentSchedulerAction: detail(
+        details,
+        'repeatedArgumentSchedulerAction',
+      ) || detail(
+        details,
+        'valueAwareRepeatedArgumentSchedulerAction',
+      ),
+      valueAwareRepeatedArgumentSchedulerProfitableNet: detail(
+        details,
+        'repeatedArgumentSchedulerProfitableNetCells',
+      ) || detail(
+        details,
+        'valueAwareRepeatedArgumentSchedulerProfitableNetCells',
+      ),
+      valueAwareRepeatedArgumentSchedulerModelNet: detail(
+        details,
+        'repeatedArgumentSchedulerModelNetCells',
+      ) || detail(
+        details,
+        'valueAwareRepeatedArgumentSchedulerModelNetCells',
+      ),
       trafficShape: detail(details, 'valueAwareSchedulerTrafficShape'),
       planStatus:
         detail(details, 'valueAwareSchedulerPlanStatus') ||
@@ -190,6 +382,24 @@ function analyzeFile(compiler, file) {
       estimatedModel: detail(details, 'valueAwareEstimatedNetSavingsModel'),
       profitableInputs: detail(details, 'valueAwareProfitableStackInputNames'),
       breakEvenInputs: detail(details, 'valueAwareBreakEvenStackInputNames'),
+      breakEvenInputCount: detail(details, 'valueAwareBreakEvenStackInputCount'),
+      breakEvenInputNet: detail(details, 'valueAwareBreakEvenStackInputNetCells'),
+      breakEvenInputNeed: detail(
+        details,
+        'valueAwareBreakEvenStackInputAdditionalNetCellsToPositive',
+      ),
+      breakEvenInputGapReason: detail(
+        details,
+        'valueAwareBreakEvenStackInputPositiveGapReason',
+      ),
+      breakEvenInputNextProofTarget: detail(
+        details,
+        'valueAwareBreakEvenStackInputNextProofTarget',
+      ),
+      breakEvenInputRequiredAction: detail(
+        details,
+        'valueAwareBreakEvenStackInputRequiredAction',
+      ),
       unprofitableInputs: detail(details, 'valueAwareUnprofitableStackInputNames'),
       suggestedResidentInputs: detail(details, 'valueAwareSuggestedResidentInputNames'),
       profitBreakdown: detail(details, 'valueAwareStackInputProfitBreakdown'),
@@ -220,6 +430,26 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCallArgumentPreservationCellsByCallee',
       ),
+      callArgumentPreservationRaw: detail(
+        details,
+        'valueAwareCallArgumentPreservationRawCells',
+      ),
+      callArgumentPreservationZeroCopy: detail(
+        details,
+        'valueAwareCallArgumentPreservationZeroCopyCells',
+      ),
+      callArgumentPreservationZeroCopyStatus: detail(
+        details,
+        'valueAwareCallArgumentPreservationZeroCopyStatus',
+      ),
+      callArgumentPreservationZeroCopySites: detail(
+        details,
+        'valueAwareCallArgumentPreservationZeroCopySites',
+      ),
+      callArgumentPreservationZeroCopyBlockers: detail(
+        details,
+        'valueAwareCallArgumentPreservationZeroCopyBlockers',
+      ),
       callArgumentPreservationLowerBound: detail(
         details,
         'valueAwareCallArgumentPreservationLowerBoundCells',
@@ -245,6 +475,26 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCallArgumentX2PreloadConstantOpcodesByCallee',
       ),
+      callArgumentX2PreloadLiteralReplacementByCallee: detail(
+        details,
+        'valueAwareCallArgumentX2PreloadLiteralReplacementByCallee',
+      ),
+      callArgumentX2PreloadLiteralReplacementStatus: detail(
+        details,
+        'valueAwareCallArgumentX2PreloadLiteralReplacementStatus',
+      ),
+      callArgumentX2PreloadLiteralReplacementDelta: detail(
+        details,
+        'valueAwareCallArgumentX2PreloadLiteralReplacementDeltaCells',
+      ),
+      callArgumentX2PreloadLiteralReplacementNet: detail(
+        details,
+        'valueAwareCallArgumentX2PreloadLiteralReplacementHypotheticalNetCells',
+      ),
+      callArgumentX2PreloadRefactorRequiredAction: detail(
+        details,
+        'valueAwareCallArgumentX2PreloadRefactorRequiredAction',
+      ),
       callArgumentX2RequiredAction: detail(
         details,
         'valueAwareCallArgumentX2RequiredAction',
@@ -255,6 +505,72 @@ function analyzeFile(compiler, file) {
         'valueAwareCallArgumentInputNamesByCallee',
       ),
       callPreservationSites: detail(details, 'valueAwareCallPreservationSites'),
+      symbolicEntryStackByCallSite: detail(
+        details,
+        'valueAwareSymbolicEntryStackByCallSite',
+      ),
+      symbolicEntryStackSeed: detail(details, 'valueAwareSymbolicEntryStackSeed'),
+      symbolicEntryStackSeedStatus: detail(
+        details,
+        'valueAwareSymbolicEntryStackSeedStatus',
+      ),
+      symbolicKnownCalleeStackEffects: detail(
+        details,
+        'valueAwareSymbolicKnownCalleeStackEffects',
+      ),
+      symbolicFlowEntryStack: detail(details, 'valueAwareSymbolicFlowEntryStack'),
+      entryStackLostKnownFacts: detail(
+        details,
+        'valueAwareEntryStackLostKnownFacts',
+      ),
+      entryStackLostKnownFactCount: detail(
+        details,
+        'valueAwareEntryStackLostKnownFactCount',
+      ),
+      entryStackLostKnownFactSlots: detail(
+        details,
+        'valueAwareEntryStackLostKnownFactSlots',
+      ),
+      entryStackLostKnownFactStatus: detail(
+        details,
+        'valueAwareEntryStackLostKnownFactStatus',
+      ),
+      entryStackLostKnownFactTarget: detail(
+        details,
+        'valueAwareEntryStackLostKnownFactNextProofTarget',
+      ),
+      entryStackLostKnownFactAction: detail(
+        details,
+        'valueAwareEntryStackLostKnownFactRequiredAction',
+      ),
+      existingEntryStackInputSites: detail(
+        details,
+        'valueAwareExistingEntryStackInputSites',
+      ),
+      existingEntryStackInputSitesByName: detail(
+        details,
+        'valueAwareExistingEntryStackInputSitesByName',
+      ),
+      selectedStackCarriedPlan: detail(
+        details,
+        'valueAwareSelectedStackCarriedPlan',
+      ),
+      selectedStackCarriedStatus: detail(
+        details,
+        'valueAwareSelectedStackCarriedStatus',
+      ),
+      selectedStackCarriedInputs: detail(
+        details,
+        'valueAwareSelectedStackCarriedInputNames',
+      ),
+      selectedStackCarriedTargets: detail(
+        details,
+        'valueAwareSelectedStackCarriedTargets',
+      ),
+      selectedStackCarriedSites: detail(
+        details,
+        'valueAwareSelectedStackCarriedSites',
+      ),
       callPreservationCalleeX2Effects: detail(
         details,
         'valueAwareCallPreservationCalleeX2Effects',
@@ -276,6 +592,10 @@ function analyzeFile(compiler, file) {
       calleeNaturalPreservedSlots: detail(
         details,
         'valueAwareCalleeAbiNaturalPreservedSlotsByCallee',
+      ),
+      calleeNaturalPreservedSlotFinalSlots: detail(
+        details,
+        'valueAwareCalleeAbiNaturalPreservedSlotFinalSlotsByCallee',
       ),
       calleeNaturalRestoreCells: detail(
         details,
@@ -300,6 +620,26 @@ function analyzeFile(compiler, file) {
       calleeNaturalFirstRecallChoiceStatus: detail(
         details,
         'valueAwareCalleeAbiNaturalFirstRecallChoiceStatusByCallee',
+      ),
+      calleeNaturalFirstRecallUseShape: detail(
+        details,
+        'valueAwareCalleeAbiNaturalFirstRecallUseShapeByCallee',
+      ),
+      calleeNaturalFirstRecallUseShapeStatus: detail(
+        details,
+        'valueAwareCalleeAbiNaturalFirstRecallUseShapeStatus',
+      ),
+      calleeNaturalFirstRecallUseShapeAction: detail(
+        details,
+        'valueAwareCalleeAbiNaturalFirstRecallUseShapeAction',
+      ),
+      calleeNaturalFirstRecallChoiceSearch: detail(
+        details,
+        'valueAwareCalleeAbiNaturalFirstRecallChoiceSearchByCallee',
+      ),
+      calleeNaturalFirstRecallChoiceSearchStatus: detail(
+        details,
+        'valueAwareCalleeAbiNaturalFirstRecallChoiceSearchStatusByCallee',
       ),
       calleeRemainingPreserveDepth: detail(
         details,
@@ -542,6 +882,142 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofAction',
       ),
+      calleeAbiPrimaryEntryPreCallPlacementRewriteEstimate: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPreCallPlacementRewriteEstimateByCallee',
+      ),
+      calleeAbiPrimaryEntryPreCallPlacementRewriteStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPreCallPlacementRewriteStatus',
+      ),
+      calleeAbiPrimaryEntryPreCallPlacementRewriteModel: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPreCallPlacementRewriteModel',
+      ),
+      calleeAbiPrimaryEntryPreCallPlacementRewriteAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPreCallPlacementRewriteAction',
+      ),
+      calleeAbiPrimaryEntrySlotSearch: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotSearchByCallee',
+      ),
+      calleeAbiPrimaryEntrySlotSearchStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotSearchStatus',
+      ),
+      calleeAbiPrimaryEntrySlotSearchAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotSearchAction',
+      ),
+      calleeAbiPrimaryEntrySlotSearchActionByCallee: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotSearchActionByCallee',
+      ),
+      calleeAbiPrimaryEntrySlotShapeCandidate: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeCandidateByCallee',
+      ),
+      calleeAbiPrimaryEntrySlotShapePreCallRewriteCells: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapePreCallRewriteCells',
+      ),
+      calleeAbiPrimaryEntrySlotShapeCalleeLowerBoundCells: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeCalleeLowerBoundCells',
+      ),
+      calleeAbiPrimaryEntrySlotShapeModeledPlacementCells: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeModeledPlacementCells',
+      ),
+      calleeAbiPrimaryEntrySlotShapeBasis: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeBasis',
+      ),
+      calleeAbiPrimaryEntrySlotShapeStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeStatus',
+      ),
+      calleeAbiPrimaryEntrySlotShapeAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeAction',
+      ),
+      calleeAbiPrimaryEntrySlotShapeActionByCallee: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeActionByCallee',
+      ),
+      calleeAbiPrimaryEntrySlotShapeSafeFallback: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeSafeFallbackByCallee',
+      ),
+      calleeAbiPrimaryEntrySlotShapeSafeFallbackStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeSafeFallbackStatus',
+      ),
+      calleeAbiPrimaryEntrySlotShapeSafeFallbackAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeSafeFallbackAction',
+      ),
+      calleeAbiPrimaryEntrySlotShapeRoleRequirement: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeRoleRequirementByCallee',
+      ),
+      calleeAbiPrimaryEntrySlotShapeRoleRequirementStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeRoleRequirementStatus',
+      ),
+      calleeAbiPrimaryEntrySlotShapeRoleRequirementAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeRoleRequirementAction',
+      ),
+      calleeAbiPrimaryEntrySlotShapeRoleRequirementActionByCallee: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeRoleRequirementActionByCallee',
+      ),
+      calleeAbiPrimaryEntrySlotShapeBodyRelocation: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeBodyRelocationByCallee',
+      ),
+      calleeAbiPrimaryEntrySlotShapeBodyRelocationModel: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeBodyRelocationModel',
+      ),
+      calleeAbiPrimaryEntrySlotShapeBodyRelocationStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeBodyRelocationStatus',
+      ),
+      calleeAbiPrimaryEntrySlotShapeBodyRelocationAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeBodyRelocationAction',
+      ),
+      calleeAbiPrimaryEntrySlotShapeBodyRelocationActionByCallee: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeBodyRelocationActionByCallee',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopy: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyByCallee',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopyCells: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyCells',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopyModel: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyModel',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopyStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyStatus',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopyAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyAction',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopyActionByCallee: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyActionByCallee',
+      ),
       calleeAbiPrimaryEntryPlacementLowerBound: detail(
         details,
         'valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundCells',
@@ -554,6 +1030,18 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCalleeAbiPrimaryEntryPlacementLowerBoundBasis',
       ),
+      calleeAbiPrimaryEntryModeledPlacement: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryModeledPlacementByCallee',
+      ),
+      calleeAbiPrimaryEntryModeledPlacementCells: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryModeledPlacementCells',
+      ),
+      calleeAbiPrimaryEntryModeledPlacementBasis: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryModeledPlacementBasis',
+      ),
       calleeAbiPrimaryEntryCostBreakdown: detail(
         details,
         'valueAwareCalleeAbiPrimaryEntryCostBreakdown',
@@ -561,6 +1049,18 @@ function analyzeFile(compiler, file) {
       calleeAbiPrimaryEntryPlacementCostBreakdown: detail(
         details,
         'valueAwareCalleeAbiPrimaryEntryPlacementCostBreakdown',
+      ),
+      calleeAbiPrimaryEntryModeledPlacementCostBreakdown: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryModeledPlacementCostBreakdown',
+      ),
+      calleeAbiPrimaryEntrySlotShapeCostBreakdown: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeCostBreakdown',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopyCostBreakdown: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyCostBreakdown',
       ),
       calleeAbiPrimaryEntryNet: detail(
         details,
@@ -570,6 +1070,18 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCalleeAbiPrimaryEntryNetAfterPlacementLowerBoundCells',
       ),
+      calleeAbiPrimaryEntryModeledPlacementNet: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryNetAfterModeledPlacementCells',
+      ),
+      calleeAbiPrimaryEntrySlotShapeNet: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryNetAfterSlotShapeCells',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopyNet: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryNetAfterSlotShapeExplicitTempCopyCells',
+      ),
       calleeAbiPrimaryEntryNeed: detail(
         details,
         'valueAwareCalleeAbiPrimaryEntryAdditionalNetCellsToPositive',
@@ -578,6 +1090,18 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCalleeAbiPrimaryEntryPlacementAdditionalNetCellsToPositive',
       ),
+      calleeAbiPrimaryEntryModeledPlacementNeed: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryModeledPlacementAdditionalNetCellsToPositive',
+      ),
+      calleeAbiPrimaryEntrySlotShapeNeed: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeAdditionalNetCellsToPositive',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopyNeed: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyAdditionalNetCellsToPositive',
+      ),
       calleeAbiPrimaryEntryStatus: detail(
         details,
         'valueAwareCalleeAbiPrimaryEntryStatus',
@@ -585,6 +1109,30 @@ function analyzeFile(compiler, file) {
       calleeAbiPrimaryEntryPlacementStatus: detail(
         details,
         'valueAwareCalleeAbiPrimaryEntryPlacementStatus',
+      ),
+      calleeAbiPrimaryEntryModeledPlacementStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryModeledPlacementStatus',
+      ),
+      calleeAbiPrimaryEntrySlotShapeModelStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeModelStatus',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopyModelStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyModelStatus',
+      ),
+      calleeAbiPrimaryEntryModeledPlacementRequiredAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryModeledPlacementRequiredAction',
+      ),
+      calleeAbiPrimaryEntrySlotShapeRequiredAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeRequiredAction',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopyRequiredAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyRequiredAction',
       ),
       calleeAbiBestSubsetPrimaryEntryCostBreakdown: detail(
         details,
@@ -640,9 +1188,77 @@ function analyzeFile(compiler, file) {
       bestVariant: action.bestVariant ?? '',
       bestBlockerKind: action.bestBlockerKind ?? '',
       helper: action.bestDetails?.helperLabel ?? '',
+      profitableInputs: detail(details, 'valueAwareProfitableStackInputNames'),
+      breakEvenInputs: detail(details, 'valueAwareBreakEvenStackInputNames'),
+      breakEvenInputCount: detail(details, 'valueAwareBreakEvenStackInputCount'),
+      breakEvenInputGross: detail(details, 'valueAwareBreakEvenStackInputGrossCells'),
+      breakEvenInputMaterialize: detail(
+        details,
+        'valueAwareBreakEvenStackInputMaterializeCells',
+      ),
+      breakEvenInputNet: detail(details, 'valueAwareBreakEvenStackInputNetCells'),
+      breakEvenInputStatus: detail(details, 'valueAwareBreakEvenStackInputPlanStatus'),
+      breakEvenInputNeed: detail(
+        details,
+        'valueAwareBreakEvenStackInputAdditionalNetCellsToPositive',
+      ),
+      breakEvenInputGapReason: detail(
+        details,
+        'valueAwareBreakEvenStackInputPositiveGapReason',
+      ),
+      breakEvenInputNextProofTarget: detail(
+        details,
+        'valueAwareBreakEvenStackInputNextProofTarget',
+      ),
+      breakEvenInputRequiredAction: detail(
+        details,
+        'valueAwareBreakEvenStackInputRequiredAction',
+      ),
+      unprofitableInputs: detail(details, 'valueAwareUnprofitableStackInputNames'),
+      bestInput: detail(details, 'valueAwareBestStackInputCandidate'),
+      bestInputNet: detail(details, 'valueAwareBestStackInputNetCells'),
+      bestInputAdditionalRecallCellsToProfit:
+        detail(details, 'valueAwareBestStackInputAdditionalRecallCellsToProfit'),
+      bestInputGapReason: detail(details, 'valueAwareBestStackInputPositiveGapReason'),
+      bestInputNextProofTarget: detail(details, 'valueAwareBestStackInputNextProofTarget'),
+      profitBreakdown: detail(details, 'valueAwareStackInputProfitBreakdown'),
+      materializeCellsByName: detail(details, 'valueAwareStackInputMaterializeCellsByName'),
+      proofEffortPriority: detail(details, 'proofEffortPriority'),
+      proofEffortReason: detail(details, 'proofEffortReason'),
+      proofEffortSizeGate: detail(details, 'proofEffortSizeGate'),
+      sizeFirstAction: detail(details, 'sizeFirstAction'),
+      layoutProofScope: detail(details, 'layoutProofScope'),
+      layoutProofStatus: detail(details, 'layoutProofStatus'),
+      layoutProofRequirement: detail(details, 'layoutProofRequirement'),
+      layoutProofRequiredArtifact: detail(
+        details,
+        'layoutProofRequiredArtifact',
+      ),
+      layoutProofConflictModel: detail(details, 'layoutProofConflictModel'),
+      layoutProofNextAction: detail(details, 'layoutProofNextAction'),
       callArgumentPreservationCellsByCallee: detail(
         details,
         'valueAwareCallArgumentPreservationCellsByCallee',
+      ),
+      callArgumentPreservationRaw: detail(
+        details,
+        'valueAwareCallArgumentPreservationRawCells',
+      ),
+      callArgumentPreservationZeroCopy: detail(
+        details,
+        'valueAwareCallArgumentPreservationZeroCopyCells',
+      ),
+      callArgumentPreservationZeroCopyStatus: detail(
+        details,
+        'valueAwareCallArgumentPreservationZeroCopyStatus',
+      ),
+      callArgumentPreservationZeroCopySites: detail(
+        details,
+        'valueAwareCallArgumentPreservationZeroCopySites',
+      ),
+      callArgumentPreservationZeroCopyBlockers: detail(
+        details,
+        'valueAwareCallArgumentPreservationZeroCopyBlockers',
       ),
       callArgumentPreservationLowerBound: detail(
         details,
@@ -669,6 +1285,26 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCallArgumentX2PreloadConstantOpcodesByCallee',
       ),
+      callArgumentX2PreloadLiteralReplacementByCallee: detail(
+        details,
+        'valueAwareCallArgumentX2PreloadLiteralReplacementByCallee',
+      ),
+      callArgumentX2PreloadLiteralReplacementStatus: detail(
+        details,
+        'valueAwareCallArgumentX2PreloadLiteralReplacementStatus',
+      ),
+      callArgumentX2PreloadLiteralReplacementDelta: detail(
+        details,
+        'valueAwareCallArgumentX2PreloadLiteralReplacementDeltaCells',
+      ),
+      callArgumentX2PreloadLiteralReplacementNet: detail(
+        details,
+        'valueAwareCallArgumentX2PreloadLiteralReplacementHypotheticalNetCells',
+      ),
+      callArgumentX2PreloadRefactorRequiredAction: detail(
+        details,
+        'valueAwareCallArgumentX2PreloadRefactorRequiredAction',
+      ),
       callArgumentX2RequiredAction: detail(
         details,
         'valueAwareCallArgumentX2RequiredAction',
@@ -679,6 +1315,72 @@ function analyzeFile(compiler, file) {
         'valueAwareCallArgumentInputNamesByCallee',
       ),
       callPreservationSites: detail(details, 'valueAwareCallPreservationSites'),
+      symbolicEntryStackByCallSite: detail(
+        details,
+        'valueAwareSymbolicEntryStackByCallSite',
+      ),
+      symbolicEntryStackSeed: detail(details, 'valueAwareSymbolicEntryStackSeed'),
+      symbolicEntryStackSeedStatus: detail(
+        details,
+        'valueAwareSymbolicEntryStackSeedStatus',
+      ),
+      symbolicKnownCalleeStackEffects: detail(
+        details,
+        'valueAwareSymbolicKnownCalleeStackEffects',
+      ),
+      symbolicFlowEntryStack: detail(details, 'valueAwareSymbolicFlowEntryStack'),
+      entryStackLostKnownFacts: detail(
+        details,
+        'valueAwareEntryStackLostKnownFacts',
+      ),
+      entryStackLostKnownFactCount: detail(
+        details,
+        'valueAwareEntryStackLostKnownFactCount',
+      ),
+      entryStackLostKnownFactSlots: detail(
+        details,
+        'valueAwareEntryStackLostKnownFactSlots',
+      ),
+      entryStackLostKnownFactStatus: detail(
+        details,
+        'valueAwareEntryStackLostKnownFactStatus',
+      ),
+      entryStackLostKnownFactTarget: detail(
+        details,
+        'valueAwareEntryStackLostKnownFactNextProofTarget',
+      ),
+      entryStackLostKnownFactAction: detail(
+        details,
+        'valueAwareEntryStackLostKnownFactRequiredAction',
+      ),
+      existingEntryStackInputSites: detail(
+        details,
+        'valueAwareExistingEntryStackInputSites',
+      ),
+      existingEntryStackInputSitesByName: detail(
+        details,
+        'valueAwareExistingEntryStackInputSitesByName',
+      ),
+      selectedStackCarriedPlan: detail(
+        details,
+        'valueAwareSelectedStackCarriedPlan',
+      ),
+      selectedStackCarriedStatus: detail(
+        details,
+        'valueAwareSelectedStackCarriedStatus',
+      ),
+      selectedStackCarriedInputs: detail(
+        details,
+        'valueAwareSelectedStackCarriedInputNames',
+      ),
+      selectedStackCarriedTargets: detail(
+        details,
+        'valueAwareSelectedStackCarriedTargets',
+      ),
+      selectedStackCarriedSites: detail(
+        details,
+        'valueAwareSelectedStackCarriedSites',
+      ),
       calleeNaturalFirstRecallChoice: detail(
         details,
         'valueAwareCalleeAbiNaturalFirstRecallChoiceByCallee',
@@ -687,7 +1389,45 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCalleeAbiNaturalFirstRecallChoiceStatusByCallee',
       ),
+      calleeNaturalPreservedSlotFinalSlots: detail(
+        details,
+        'valueAwareCalleeAbiNaturalPreservedSlotFinalSlotsByCallee',
+      ),
+      calleeNaturalFirstRecallUseShape: detail(
+        details,
+        'valueAwareCalleeAbiNaturalFirstRecallUseShapeByCallee',
+      ),
+      calleeNaturalFirstRecallUseShapeStatus: detail(
+        details,
+        'valueAwareCalleeAbiNaturalFirstRecallUseShapeStatus',
+      ),
+      calleeNaturalFirstRecallUseShapeAction: detail(
+        details,
+        'valueAwareCalleeAbiNaturalFirstRecallUseShapeAction',
+      ),
+      calleeNaturalFirstRecallChoiceSearch: detail(
+        details,
+        'valueAwareCalleeAbiNaturalFirstRecallChoiceSearchByCallee',
+      ),
+      calleeNaturalFirstRecallChoiceSearchStatus: detail(
+        details,
+        'valueAwareCalleeAbiNaturalFirstRecallChoiceSearchStatusByCallee',
+      ),
       calleeAbiCostBreakdown: detail(details, 'valueAwareCalleeAbiCostBreakdown'),
+      calleeAbiNetAfterLowerBound: detail(
+        details,
+        'valueAwareCalleeAbiNetAfterLowerBoundCells',
+      ),
+      calleeAbiAdditionalNetToPositive: detail(
+        details,
+        'valueAwareCalleeAbiAdditionalNetCellsToPositive',
+      ),
+      calleeAbiPositiveLevers: detail(details, 'valueAwareCalleeAbiPositiveLevers'),
+      calleeAbiPositiveGapReason: detail(
+        details,
+        'valueAwareCalleeAbiPositiveGapReason',
+      ),
+      calleeAbiNextProofTarget: detail(details, 'valueAwareCalleeAbiNextProofTarget'),
       calleeAbiNearPositivePrimaryNet: detail(
         details,
         'valueAwareCalleeAbiNearPositivePrimaryNetCells',
@@ -707,6 +1447,36 @@ function analyzeFile(compiler, file) {
       calleeAbiNearPositiveStackPlacementRequiredAction: detail(
         details,
         'valueAwareCalleeAbiNearPositiveStackPlacementRequiredAction',
+      ),
+      calleeAbiBestSubset: detail(details, 'valueAwareCalleeAbiBestSubsetInputNames'),
+      calleeAbiSubsetCandidates: detail(details, 'valueAwareCalleeAbiSubsetCandidates'),
+      calleeAbiBestSubsetNet: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetNetAfterLowerBoundCells',
+      ),
+      calleeAbiBestSubsetNeed: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetAdditionalNetCellsToPositive',
+      ),
+      calleeAbiBestSubsetCostBreakdown: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetCostBreakdown',
+      ),
+      calleeAbiBestSubsetLevers: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetPositiveLevers',
+      ),
+      calleeAbiBestSubsetGapReason: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetPositiveGapReason',
+      ),
+      calleeAbiBestSubsetNextProofTarget: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetNextProofTarget',
+      ),
+      calleeAbiBestSubsetStatus: detail(
+        details,
+        'valueAwareCalleeAbiBestSubsetPlanStatus',
       ),
       calleeAbiPureStackPlacement: detail(
         details,
@@ -775,6 +1545,214 @@ function analyzeFile(compiler, file) {
       calleeAbiPrimaryEntryPreCallPlacementProofAction: detail(
         details,
         'valueAwareCalleeAbiPrimaryEntryPreCallPlacementProofAction',
+      ),
+      calleeAbiPrimaryEntryPreCallPlacementRewriteEstimate: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPreCallPlacementRewriteEstimateByCallee',
+      ),
+      calleeAbiPrimaryEntryPreCallPlacementRewriteStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPreCallPlacementRewriteStatus',
+      ),
+      calleeAbiPrimaryEntryPreCallPlacementRewriteModel: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPreCallPlacementRewriteModel',
+      ),
+      calleeAbiPrimaryEntryPreCallPlacementRewriteAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryPreCallPlacementRewriteAction',
+      ),
+      calleeAbiPrimaryEntrySlotSearch: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotSearchByCallee',
+      ),
+      calleeAbiPrimaryEntrySlotSearchStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotSearchStatus',
+      ),
+      calleeAbiPrimaryEntrySlotSearchAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotSearchAction',
+      ),
+      calleeAbiPrimaryEntrySlotSearchActionByCallee: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotSearchActionByCallee',
+      ),
+      calleeAbiPrimaryEntrySlotShapeCandidate: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeCandidateByCallee',
+      ),
+      calleeAbiPrimaryEntrySlotShapePreCallRewriteCells: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapePreCallRewriteCells',
+      ),
+      calleeAbiPrimaryEntrySlotShapeCalleeLowerBoundCells: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeCalleeLowerBoundCells',
+      ),
+      calleeAbiPrimaryEntrySlotShapeModeledPlacementCells: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeModeledPlacementCells',
+      ),
+      calleeAbiPrimaryEntrySlotShapeBasis: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeBasis',
+      ),
+      calleeAbiPrimaryEntrySlotShapeStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeStatus',
+      ),
+      calleeAbiPrimaryEntrySlotShapeAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeAction',
+      ),
+      calleeAbiPrimaryEntrySlotShapeActionByCallee: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeActionByCallee',
+      ),
+      calleeAbiPrimaryEntrySlotShapeSafeFallback: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeSafeFallbackByCallee',
+      ),
+      calleeAbiPrimaryEntrySlotShapeSafeFallbackStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeSafeFallbackStatus',
+      ),
+      calleeAbiPrimaryEntrySlotShapeSafeFallbackAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeSafeFallbackAction',
+      ),
+      calleeAbiPrimaryEntrySlotShapeRoleRequirement: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeRoleRequirementByCallee',
+      ),
+      calleeAbiPrimaryEntrySlotShapeRoleRequirementStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeRoleRequirementStatus',
+      ),
+      calleeAbiPrimaryEntrySlotShapeRoleRequirementAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeRoleRequirementAction',
+      ),
+      calleeAbiPrimaryEntrySlotShapeRoleRequirementActionByCallee: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeRoleRequirementActionByCallee',
+      ),
+      calleeAbiPrimaryEntrySlotShapeBodyRelocation: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeBodyRelocationByCallee',
+      ),
+      calleeAbiPrimaryEntrySlotShapeBodyRelocationModel: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeBodyRelocationModel',
+      ),
+      calleeAbiPrimaryEntrySlotShapeBodyRelocationStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeBodyRelocationStatus',
+      ),
+      calleeAbiPrimaryEntrySlotShapeBodyRelocationAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeBodyRelocationAction',
+      ),
+      calleeAbiPrimaryEntrySlotShapeBodyRelocationActionByCallee: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeBodyRelocationActionByCallee',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopy: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyByCallee',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopyCells: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyCells',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopyModel: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyModel',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopyStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyStatus',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopyAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyAction',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopyActionByCallee: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyActionByCallee',
+      ),
+      calleeAbiPrimaryEntryModeledPlacement: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryModeledPlacementByCallee',
+      ),
+      calleeAbiPrimaryEntryModeledPlacementCells: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryModeledPlacementCells',
+      ),
+      calleeAbiPrimaryEntryModeledPlacementBasis: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryModeledPlacementBasis',
+      ),
+      calleeAbiPrimaryEntryModeledPlacementCostBreakdown: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryModeledPlacementCostBreakdown',
+      ),
+      calleeAbiPrimaryEntrySlotShapeCostBreakdown: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeCostBreakdown',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopyCostBreakdown: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyCostBreakdown',
+      ),
+      calleeAbiPrimaryEntryModeledPlacementNet: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryNetAfterModeledPlacementCells',
+      ),
+      calleeAbiPrimaryEntrySlotShapeNet: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryNetAfterSlotShapeCells',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopyNet: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryNetAfterSlotShapeExplicitTempCopyCells',
+      ),
+      calleeAbiPrimaryEntryModeledPlacementNeed: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryModeledPlacementAdditionalNetCellsToPositive',
+      ),
+      calleeAbiPrimaryEntrySlotShapeNeed: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeAdditionalNetCellsToPositive',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopyNeed: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyAdditionalNetCellsToPositive',
+      ),
+      calleeAbiPrimaryEntryModeledPlacementStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryModeledPlacementStatus',
+      ),
+      calleeAbiPrimaryEntrySlotShapeModelStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeModelStatus',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopyModelStatus: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyModelStatus',
+      ),
+      calleeAbiPrimaryEntryModeledPlacementRequiredAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntryModeledPlacementRequiredAction',
+      ),
+      calleeAbiPrimaryEntrySlotShapeRequiredAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeRequiredAction',
+      ),
+      calleeAbiPrimaryEntrySlotShapeExplicitTempCopyRequiredAction: detail(
+        details,
+        'valueAwareCalleeAbiPrimaryEntrySlotShapeExplicitTempCopyRequiredAction',
       ),
     };
   });
@@ -897,8 +1875,52 @@ function printGroup(group) {
       ` best=${group.bestSavings}` +
       ` bestFile=${best.file ?? ''}` +
       ` helper=${best.helper ?? ''}` +
-      ` variant=${best.bestVariant ?? best.variant ?? ''}`,
+      ` variant=${best.bestVariant ?? best.variant ?? ''}` +
+      candidateGroupDetailSuffix(best),
   );
+}
+
+function candidateGroupDetailSuffix(row) {
+  if (!row || (!row.deadIntegerProofGap && !row.consumerControlKind &&
+      !row.proofEffortPriority && !row.layoutProofStatus && !row.breakEvenInputs)) {
+    return '';
+  }
+  const fields = [
+    ['proofPriority', row.proofEffortPriority],
+    ['proofReason', row.proofEffortReason],
+    ['sizeFirst', row.sizeFirstAction],
+    ['layoutScope', row.layoutProofScope],
+    ['layoutStatus', row.layoutProofStatus],
+    ['layoutReq', row.layoutProofRequirement],
+    ['layoutArtifact', row.layoutProofRequiredArtifact],
+    ['layoutConflict', row.layoutProofConflictModel],
+    ['layoutNext', row.layoutProofNextAction],
+    ['breakEven', row.breakEvenInputs],
+    ['breakEvenNet', row.breakEvenInputNet],
+    ['breakEvenStatus', row.breakEvenInputStatus],
+    ['breakEvenNeed', row.breakEvenInputNeed],
+    ['breakEvenAction', row.breakEvenInputRequiredAction],
+    ['bestInput', row.bestInput],
+    ['bestNet', row.bestInputNet],
+    ['bestTarget', row.bestInputNextProofTarget],
+    ['consumer', row.fractionalSelectorConsumer],
+    ['consumerAddr', row.consumerAddress],
+    ['consumerKind', row.consumerControlKind],
+    ['consumerReg', row.deadIntegerConsumerRegister],
+    ['carrierReg', row.deadIntegerSelectorCarrierRegister],
+    ['sourceReg', row.fractionalSelectorSourceRegister],
+    ['selectorTarget', row.selectorTarget],
+    ['intRole', row.integerPartUseRole],
+    ['fracRole', row.fractionalPartUseRole],
+    ['intSafety', row.integerPartDataSafetyStatus],
+    ['proofGap', row.deadIntegerProofGap],
+    ['artifact', row.deadIntegerProofRequiredArtifact],
+    ['next', row.deadIntegerProofNextAction],
+  ];
+  const rendered = fields
+    .filter(([, value]) => value !== undefined && value !== null && value !== '')
+    .map(([name, value]) => `${name}=${value}`);
+  return rendered.length === 0 ? '' : ` ${rendered.join(' ')}`;
 }
 
 function printHelperCost(row) {
@@ -913,7 +1935,21 @@ function printHelperCost(row) {
       ` shape=${row.pipelineShape || '-'}` +
       ` bodyPerTerm=${row.bodyCellsPerAccumulatorTerm || '-'}` +
       ` callPerOccurrence=${row.callCellsPerOccurrence || '-'}` +
-      ` next=${row.nextPipelineAction || '-'}`,
+      ` statePolicy=${row.accumulatorStatePolicy || '-'}` +
+      ` interleaved=${row.interleavedPipelineShape || '-'}` +
+      ` blocker=${row.interleavedPipelineBlocker || '-'}` +
+      ` next=${row.nextPipelineAction || '-'}` +
+      ` proof=${row.nextPipelineProofTarget || '-'}` +
+      ` argRecalls=${row.valueAwareArgumentRecallSites || '-'}` +
+      ` repeatedArgRecalls=${row.valueAwareRepeatedArgumentRecallSites || '-'}` +
+      ` topRepeatedArg=${row.valueAwareTopRepeatedArgumentRecall || '-'}` +
+      ` schedulerTarget=${row.valueAwareSchedulerNextMaterializationTarget || '-'}` +
+      ` schedulerFeasibility=${row.valueAwareRepeatedArgumentSchedulerFeasibility || '-'}` +
+      ` schedulerStatus=${row.valueAwareRepeatedArgumentSchedulerStatus || '-'}` +
+      ` schedulerAction=${row.valueAwareRepeatedArgumentSchedulerAction || '-'}` +
+      ` selectedStack=${row.selectedStackCarriedInputs || '-'}` +
+      ` selectedStackTargets=${row.selectedStackCarriedTargets || '-'}` +
+      ` knownCallee=${row.symbolicKnownCalleeStackEffects || '-'}`,
   );
 }
 
@@ -930,6 +1966,34 @@ function printCandidateOpportunity(row) {
       ` net=${row.netSavingsStatus || '-'}` +
       ` candidate=${row.candidateStepsStatus || '-'}` +
       ` estimate=${row.estimateKind || '-'}` +
+      ` proofPriority=${row.proofEffortPriority || '-'}` +
+      ` proofReason=${row.proofEffortReason || '-'}` +
+      ` proofSizeGate=${row.proofEffortSizeGate || '-'}` +
+      ` sizeFirst=${row.sizeFirstAction || '-'}` +
+      ` layoutScope=${row.layoutProofScope || '-'}` +
+      ` layoutStatus=${row.layoutProofStatus || '-'}` +
+      ` layoutReq=${row.layoutProofRequirement || '-'}` +
+      ` layoutArtifact=${row.layoutProofRequiredArtifact || '-'}` +
+      ` layoutConflict=${row.layoutProofConflictModel || '-'}` +
+      ` layoutNext=${row.layoutProofNextAction || '-'}` +
+      ` consumer=${row.fractionalSelectorConsumer || '-'}` +
+      ` consumerAddr=${row.consumerAddress || '-'}` +
+      ` consumerKind=${row.consumerControlKind || '-'}` +
+      ` consumerReg=${row.deadIntegerConsumerRegister || '-'}` +
+      ` carrierReg=${row.deadIntegerSelectorCarrierRegister || '-'}` +
+      ` sourceReg=${row.fractionalSelectorSourceRegister || '-'}` +
+      ` selectorTarget=${row.selectorTarget || '-'}` +
+      ` intRole=${row.integerPartUseRole || '-'}` +
+      ` fracRole=${row.fractionalPartUseRole || '-'}` +
+      ` intSafety=${row.integerPartDataSafetyStatus || '-'}` +
+      ` proofGap=${row.deadIntegerProofGap || '-'}` +
+      ` proofArtifact=${row.deadIntegerProofRequiredArtifact || '-'}` +
+      ` proofNext=${row.deadIntegerProofNextAction || '-'}` +
+      ` stackEntryDelta=${row.stackResidentEntryDelta || '-'}` +
+      ` stackEntryStatus=${row.stackResidentEntryMeasuredStatus || '-'}` +
+      ` stackEntryAbi=${row.stackResidentEntryAbiContext || '-'}` +
+      ` stackEntryBlockers=${row.stackResidentEntryValueAwareContext || '-'}` +
+      ` stackEntryAction=${row.stackResidentEntryRequiredAction || '-'}` +
       ` reason=${row.reason || '-'}`,
   );
 }
@@ -937,6 +2001,35 @@ function printCandidateOpportunity(row) {
 function actionDetailSuffix(row) {
   const fields = [
     ['argPreserve', row.callArgumentPreservationCellsByCallee],
+    ['proofPriority', row.proofEffortPriority],
+    ['proofReason', row.proofEffortReason],
+    ['proofSizeGate', row.proofEffortSizeGate],
+    ['sizeFirst', row.sizeFirstAction],
+    ['layoutScope', row.layoutProofScope],
+    ['layoutStatus', row.layoutProofStatus],
+    ['layoutReq', row.layoutProofRequirement],
+    ['layoutArtifact', row.layoutProofRequiredArtifact],
+    ['layoutConflict', row.layoutProofConflictModel],
+    ['layoutNext', row.layoutProofNextAction],
+    ['profitableInputs', row.profitableInputs],
+    ['breakEven', row.breakEvenInputs],
+    ['breakEvenCount', row.breakEvenInputCount],
+    ['breakEvenGross', row.breakEvenInputGross],
+    ['breakEvenMaterialize', row.breakEvenInputMaterialize],
+    ['breakEvenNet', row.breakEvenInputNet],
+    ['breakEvenStatus', row.breakEvenInputStatus],
+    ['breakEvenNeed', row.breakEvenInputNeed],
+    ['breakEvenGap', row.breakEvenInputGapReason],
+    ['breakEvenTarget', row.breakEvenInputNextProofTarget],
+    ['breakEvenAction', row.breakEvenInputRequiredAction],
+    ['unprofitableInputs', row.unprofitableInputs],
+    ['bestInput', row.bestInput],
+    ['bestNet', row.bestInputNet],
+    ['bestNeed', row.bestInputAdditionalRecallCellsToProfit],
+    ['bestGap', row.bestInputGapReason],
+    ['bestTarget', row.bestInputNextProofTarget],
+    ['profit', row.profitBreakdown],
+    ['materialize', row.materializeCellsByName],
     ['argPreserveLower', row.callArgumentPreservationLowerBound],
     ['argPreserveBasis', row.callArgumentPreservationLowerBoundBasis],
     ['argPreserveAction', row.callArgumentPreservationRequiredAction],
@@ -945,10 +2038,50 @@ function actionDetailSuffix(row) {
     ['x2Mutating', row.callArgumentX2MutationOpcodesByCallee],
     ['x2Class', row.callArgumentX2ClobberClassesByCallee],
     ['x2Preload', row.callArgumentX2PreloadConstantOpcodesByCallee],
+    ['x2PreloadLiteral', row.callArgumentX2PreloadLiteralReplacementByCallee],
+    ['x2PreloadLiteralStatus', row.callArgumentX2PreloadLiteralReplacementStatus],
+    ['x2PreloadLiteralDelta', row.callArgumentX2PreloadLiteralReplacementDelta],
+    ['x2PreloadLiteralNet', row.callArgumentX2PreloadLiteralReplacementNet],
+    ['x2PreloadAction', row.callArgumentX2PreloadRefactorRequiredAction],
     ['argInputs', row.callArgumentInputNamesByCallee],
     ['argSites', row.callArgumentSites],
+    ['argRecalls', row.valueAwareArgumentRecallSites],
+    ['repeatedArgRecalls', row.valueAwareRepeatedArgumentRecallSites],
+    ['topRepeatedArg', row.valueAwareTopRepeatedArgumentRecall],
+    ['schedulerTarget', row.valueAwareSchedulerNextMaterializationTarget],
+    ['schedulerFeasibility', row.valueAwareRepeatedArgumentSchedulerFeasibility],
+    ['schedulerStatus', row.valueAwareRepeatedArgumentSchedulerStatus],
+    ['schedulerAction', row.valueAwareRepeatedArgumentSchedulerAction],
+    ['schedulerProfitableNet', row.valueAwareRepeatedArgumentSchedulerProfitableNet],
+    ['schedulerModelNet', row.valueAwareRepeatedArgumentSchedulerModelNet],
     ['preserveSites', row.callPreservationSites],
+    ['entryStack', row.symbolicEntryStackSeed],
+    ['argPreserveRaw', row.callArgumentPreservationRaw],
+    ['argZeroCopy', row.callArgumentPreservationZeroCopy],
+    ['argZeroCopyStatus', row.callArgumentPreservationZeroCopyStatus],
+    ['argZeroCopySites', row.callArgumentPreservationZeroCopySites],
+    ['argZeroCopyBlockers', row.callArgumentPreservationZeroCopyBlockers],
+    ['entryStackStatus', row.symbolicEntryStackSeedStatus],
+    ['entryStackSites', row.symbolicEntryStackByCallSite],
+    ['knownCallee', row.symbolicKnownCalleeStackEffects],
+    ['flowEntry', row.symbolicFlowEntryStack],
+    ['lostEntryFacts', row.entryStackLostKnownFacts],
+    ['lostEntryFactCount', row.entryStackLostKnownFactCount],
+    ['lostEntrySlots', row.entryStackLostKnownFactSlots],
+    ['lostEntryStatus', row.entryStackLostKnownFactStatus],
+    ['lostEntryTarget', row.entryStackLostKnownFactTarget],
+    ['lostEntryAction', row.entryStackLostKnownFactAction],
+    ['entryInputs', row.existingEntryStackInputSites],
+    ['selectedStack', row.selectedStackCarriedInputs],
+    ['selectedStackStatus', row.selectedStackCarriedStatus],
+    ['selectedStackTargets', row.selectedStackCarriedTargets],
+    ['selectedStackSites', row.selectedStackCarriedSites],
     ['abiCost', row.calleeAbiCostBreakdown],
+    ['abiNet', row.calleeAbiNetAfterLowerBound],
+    ['abiNeed', row.calleeAbiAdditionalNetToPositive],
+    ['abiLevers', row.calleeAbiPositiveLevers],
+    ['abiGap', row.calleeAbiPositiveGapReason],
+    ['abiTarget', row.calleeAbiNextProofTarget],
     ['abiNearPrimaryNet', row.calleeAbiNearPositivePrimaryNet],
     ['abiNearPrimaryStatus', row.calleeAbiNearPositivePrimaryStatus],
     ['abiPlacement', row.calleeAbiNearPositiveStackPlacementStatus],
@@ -961,8 +2094,23 @@ function actionDetailSuffix(row) {
     ['abiProtocolAction', row.calleeAbiPrimaryEntryProtocolAction],
     ['abiArgRestage', row.calleeAbiPrimaryEntryArgumentRestage],
     ['abiArgRestageSites', row.calleeAbiPrimaryEntryArgumentRestageSites],
+    ['abiSubsets', row.calleeAbiSubsetCandidates],
+    ['abiSubset', row.calleeAbiBestSubset],
+    ['abiSubsetNet', row.calleeAbiBestSubsetNet],
+    ['abiSubsetNeed', row.calleeAbiBestSubsetNeed],
+    ['abiSubsetCost', row.calleeAbiBestSubsetCostBreakdown],
+    ['abiSubsetLevers', row.calleeAbiBestSubsetLevers],
+    ['abiSubsetGap', row.calleeAbiBestSubsetGapReason],
+    ['abiSubsetTarget', row.calleeAbiBestSubsetNextProofTarget],
+    ['abiSubsetStatus', row.calleeAbiBestSubsetStatus],
     ['naturalChoice', row.calleeNaturalFirstRecallChoice],
     ['naturalChoiceStatus', row.calleeNaturalFirstRecallChoiceStatus],
+    ['naturalFinalSlots', row.calleeNaturalPreservedSlotFinalSlots],
+    ['naturalUseShape', row.calleeNaturalFirstRecallUseShape],
+    ['naturalUseShapeStatus', row.calleeNaturalFirstRecallUseShapeStatus],
+    ['naturalUseShapeAction', row.calleeNaturalFirstRecallUseShapeAction],
+    ['naturalChoiceSearch', row.calleeNaturalFirstRecallChoiceSearch],
+    ['naturalChoiceSearchStatus', row.calleeNaturalFirstRecallChoiceSearchStatus],
     ['abiPrimarySiteModel', row.calleeAbiPrimaryEntryPlacementSiteModel],
     ['abiPrimarySiteStatus', row.calleeAbiPrimaryEntryPlacementSiteModelStatus],
     ['abiPrimaryPreCallPlacement', row.calleeAbiPrimaryEntryPreCallPlacement],
@@ -971,6 +2119,48 @@ function actionDetailSuffix(row) {
     ['abiPrimaryPreCallProof', row.calleeAbiPrimaryEntryPreCallPlacementProof],
     ['abiPrimaryPreCallProofStatus', row.calleeAbiPrimaryEntryPreCallPlacementProofStatus],
     ['abiPrimaryPreCallProofAction', row.calleeAbiPrimaryEntryPreCallPlacementProofAction],
+    ['abiPrimaryPreCallRewrite', row.calleeAbiPrimaryEntryPreCallPlacementRewriteEstimate],
+    ['abiPrimaryPreCallRewriteStatus', row.calleeAbiPrimaryEntryPreCallPlacementRewriteStatus],
+    ['abiPrimaryPreCallRewriteModel', row.calleeAbiPrimaryEntryPreCallPlacementRewriteModel],
+    ['abiPrimaryPreCallRewriteAction', row.calleeAbiPrimaryEntryPreCallPlacementRewriteAction],
+    ['abiPrimarySlotSearch', row.calleeAbiPrimaryEntrySlotSearch],
+    ['abiPrimarySlotSearchStatus', row.calleeAbiPrimaryEntrySlotSearchStatus],
+    ['abiPrimarySlotSearchAction', row.calleeAbiPrimaryEntrySlotSearchAction],
+    ['abiPrimarySlotShape', row.calleeAbiPrimaryEntrySlotShapeCandidate],
+    ['abiPrimarySlotShapeCost', row.calleeAbiPrimaryEntrySlotShapeCostBreakdown],
+    ['abiPrimarySlotShapeNet', row.calleeAbiPrimaryEntrySlotShapeNet],
+    ['abiPrimarySlotShapeStatus', row.calleeAbiPrimaryEntrySlotShapeModelStatus],
+    ['abiPrimarySlotShapeAction', row.calleeAbiPrimaryEntrySlotShapeRequiredAction],
+    ['abiPrimarySlotShapeSafeFallback', row.calleeAbiPrimaryEntrySlotShapeSafeFallback],
+    ['abiPrimarySlotShapeSafeFallbackStatus',
+      row.calleeAbiPrimaryEntrySlotShapeSafeFallbackStatus],
+    ['abiPrimarySlotShapeSafeFallbackAction',
+      row.calleeAbiPrimaryEntrySlotShapeSafeFallbackAction],
+    ['abiPrimarySlotShapeRole', row.calleeAbiPrimaryEntrySlotShapeRoleRequirement],
+    ['abiPrimarySlotShapeRoleStatus',
+      row.calleeAbiPrimaryEntrySlotShapeRoleRequirementStatus],
+    ['abiPrimarySlotShapeRoleAction',
+      row.calleeAbiPrimaryEntrySlotShapeRoleRequirementAction],
+    ['abiPrimarySlotShapeBody', row.calleeAbiPrimaryEntrySlotShapeBodyRelocation],
+    ['abiPrimarySlotShapeBodyModel', row.calleeAbiPrimaryEntrySlotShapeBodyRelocationModel],
+    ['abiPrimarySlotShapeBodyStatus', row.calleeAbiPrimaryEntrySlotShapeBodyRelocationStatus],
+    ['abiPrimarySlotShapeBodyAction', row.calleeAbiPrimaryEntrySlotShapeBodyRelocationAction],
+    ['abiPrimarySlotShapeTempCopy', row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopy],
+    ['abiPrimarySlotShapeTempCopyModel',
+      row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopyModel],
+    ['abiPrimarySlotShapeTempCopyCost',
+      row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopyCostBreakdown],
+    ['abiPrimarySlotShapeTempCopyNet',
+      row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopyNet],
+    ['abiPrimarySlotShapeTempCopyStatus',
+      row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopyModelStatus],
+    ['abiPrimarySlotShapeTempCopyAction',
+      row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopyRequiredAction],
+    ['abiPrimaryModeledPlacement', row.calleeAbiPrimaryEntryModeledPlacement],
+    ['abiPrimaryModeledPlacementCost', row.calleeAbiPrimaryEntryModeledPlacementCostBreakdown],
+    ['abiPrimaryModeledPlacementNet', row.calleeAbiPrimaryEntryModeledPlacementNet],
+    ['abiPrimaryModeledPlacementStatus', row.calleeAbiPrimaryEntryModeledPlacementStatus],
+    ['abiPrimaryModeledPlacementAction', row.calleeAbiPrimaryEntryModeledPlacementRequiredAction],
     ['abiPrimaryPlacement', row.calleeAbiPrimaryEntryPlacementLowerBoundByCallee],
     ['abiPrimaryPlacementNet', row.calleeAbiPrimaryEntryPlacementNet],
     ['abiPrimaryPlacementStatus', row.calleeAbiPrimaryEntryPlacementStatus],
@@ -999,6 +2189,7 @@ function helperPositiveGap(row) {
     positiveInteger(row.calleeAbiBestSubsetNearPositiveGap) ??
     positiveInteger(row.calleeAbiAdditionalNetToPositive) ??
     positiveInteger(row.calleeAbiBestSubsetNeed) ??
+    positiveInteger(row.breakEvenInputNeed) ??
     positiveInteger(row.bestInputAdditionalRecallCellsToProfit);
 }
 
@@ -1012,6 +2203,9 @@ function printHelper(row) {
       ` cost=${row.costModelAction || '-'}` +
       ` inputs=${helperInputSummary(row)}` +
       ` breakEven=${row.breakEvenInputs || '-'}` +
+      ` breakEvenNeed=${row.breakEvenInputNeed || '-'}` +
+      ` breakEvenTarget=${row.breakEvenInputNextProofTarget || '-'}` +
+      ` breakEvenAction=${row.breakEvenInputRequiredAction || '-'}` +
       ` bestInput=${row.bestInput || '-'}` +
       ` bestNet=${row.bestInputNet || '-'}` +
       ` need=${row.bestInputAdditionalRecallCellsToProfit || '-'}` +
@@ -1030,7 +2224,19 @@ function printHelper(row) {
       ` argStoreNet=${row.callerArgStoreAdjustedNet || '-'}` +
       ` argStorePlan=${row.callerArgStorePlanStatus || '-'}` +
       ` argStoreAction=${row.callerArgStoreRequiredAction || '-'}` +
+      ` argRecalls=${row.valueAwareArgumentRecallSites || '-'}` +
+      ` repeatedArgRecalls=${row.valueAwareRepeatedArgumentRecallSites || '-'}` +
+      ` topRepeatedArg=${row.valueAwareTopRepeatedArgumentRecall || '-'}` +
+      ` schedulerTarget=${row.valueAwareSchedulerNextMaterializationTarget || '-'}` +
+      ` schedulerFeasibility=${row.valueAwareRepeatedArgumentSchedulerFeasibility || '-'}` +
+      ` schedulerStatus=${row.valueAwareRepeatedArgumentSchedulerStatus || '-'}` +
+      ` schedulerAction=${row.valueAwareRepeatedArgumentSchedulerAction || '-'}` +
       ` argPreserve=${row.callArgumentPreservationCellsByCallee || '-'}` +
+      ` argPreserveRaw=${row.callArgumentPreservationRaw || '-'}` +
+      ` argZeroCopy=${row.callArgumentPreservationZeroCopy || '-'}` +
+      ` argZeroCopyStatus=${row.callArgumentPreservationZeroCopyStatus || '-'}` +
+      ` argZeroCopySites=${row.callArgumentPreservationZeroCopySites || '-'}` +
+      ` argZeroCopyBlockers=${row.callArgumentPreservationZeroCopyBlockers || '-'}` +
       ` argPreserveLower=${row.callArgumentPreservationLowerBound || '-'}` +
       ` argPreserveBasis=${row.callArgumentPreservationLowerBoundBasis || '-'}` +
       ` argPreserveAction=${row.callArgumentPreservationRequiredAction || '-'}` +
@@ -1039,11 +2245,32 @@ function printHelper(row) {
       ` argInputs=${row.callArgumentInputNamesByCallee || '-'}` +
       ` argSites=${row.callArgumentSites || '-'}` +
       ` preserveSites=${row.callPreservationSites || '-'}` +
+      ` entryStack=${row.symbolicEntryStackSeed || '-'}` +
+      ` entryStackStatus=${row.symbolicEntryStackSeedStatus || '-'}` +
+      ` entryStackSites=${row.symbolicEntryStackByCallSite || '-'}` +
+      ` knownCallee=${row.symbolicKnownCalleeStackEffects || '-'}` +
+      ` flowEntry=${row.symbolicFlowEntryStack || '-'}` +
+      ` lostEntryFacts=${row.entryStackLostKnownFacts || '-'}` +
+      ` lostEntryFactCount=${row.entryStackLostKnownFactCount || '-'}` +
+      ` lostEntrySlots=${row.entryStackLostKnownFactSlots || '-'}` +
+      ` lostEntryStatus=${row.entryStackLostKnownFactStatus || '-'}` +
+      ` lostEntryTarget=${row.entryStackLostKnownFactTarget || '-'}` +
+      ` lostEntryAction=${row.entryStackLostKnownFactAction || '-'}` +
+      ` entryInputs=${row.existingEntryStackInputSites || '-'}` +
+      ` selectedStack=${row.selectedStackCarriedInputs || '-'}` +
+      ` selectedStackStatus=${row.selectedStackCarriedStatus || '-'}` +
+      ` selectedStackTargets=${row.selectedStackCarriedTargets || '-'}` +
+      ` selectedStackSites=${row.selectedStackCarriedSites || '-'}` +
       ` mutating=${row.callPreservationMutatingOpcodes || '-'}` +
       ` x2=${row.callPreservationCalleeX2Effects || '-'}` +
       ` x2Mutating=${row.callArgumentX2MutationOpcodesByCallee || '-'}` +
       ` x2Class=${row.callArgumentX2ClobberClassesByCallee || '-'}` +
       ` x2Preload=${row.callArgumentX2PreloadConstantOpcodesByCallee || '-'}` +
+      ` x2PreloadLiteral=${row.callArgumentX2PreloadLiteralReplacementByCallee || '-'}` +
+      ` x2PreloadLiteralStatus=${row.callArgumentX2PreloadLiteralReplacementStatus || '-'}` +
+      ` x2PreloadLiteralDelta=${row.callArgumentX2PreloadLiteralReplacementDelta || '-'}` +
+      ` x2PreloadLiteralNet=${row.callArgumentX2PreloadLiteralReplacementNet || '-'}` +
+      ` x2PreloadAction=${row.callArgumentX2PreloadRefactorRequiredAction || '-'}` +
       ` directMat=${row.directMaterializationStatus || '-'}:${row.directMaterialization || '-'}` +
       ` survival=${row.calleeStackSurvival || '-'}` +
       ` natural=${row.calleeNaturalPreservedSlots || '-'}` +
@@ -1053,6 +2280,12 @@ function printHelper(row) {
       ` firstRecallStatus=${row.calleeNaturalFirstRecallStatus || '-'}` +
       ` naturalChoice=${row.calleeNaturalFirstRecallChoice || '-'}` +
       ` naturalChoiceStatus=${row.calleeNaturalFirstRecallChoiceStatus || '-'}` +
+      ` naturalFinalSlots=${row.calleeNaturalPreservedSlotFinalSlots || '-'}` +
+      ` naturalUseShape=${row.calleeNaturalFirstRecallUseShape || '-'}` +
+      ` naturalUseShapeStatus=${row.calleeNaturalFirstRecallUseShapeStatus || '-'}` +
+      ` naturalUseShapeAction=${row.calleeNaturalFirstRecallUseShapeAction || '-'}` +
+      ` naturalChoiceSearch=${row.calleeNaturalFirstRecallChoiceSearch || '-'}` +
+      ` naturalChoiceSearchStatus=${row.calleeNaturalFirstRecallChoiceSearchStatus || '-'}` +
       ` remaining=${row.calleeRemainingPreserveDepth || '-'}` +
       ` abiPureStack=${row.calleeAbiPureStackPlacement || '-'}` +
       ` abiPureStackStatus=${row.calleeAbiPureStackPlacementStatus || '-'}` +
@@ -1117,16 +2350,68 @@ function printHelper(row) {
       ` abiPrimaryPreCallProof=${row.calleeAbiPrimaryEntryPreCallPlacementProof || '-'}` +
       ` abiPrimaryPreCallProofStatus=${row.calleeAbiPrimaryEntryPreCallPlacementProofStatus || '-'}` +
       ` abiPrimaryPreCallProofAction=${row.calleeAbiPrimaryEntryPreCallPlacementProofAction || '-'}` +
+      ` abiPrimaryPreCallRewrite=${row.calleeAbiPrimaryEntryPreCallPlacementRewriteEstimate || '-'}` +
+      ` abiPrimaryPreCallRewriteStatus=${row.calleeAbiPrimaryEntryPreCallPlacementRewriteStatus || '-'}` +
+      ` abiPrimaryPreCallRewriteModel=${row.calleeAbiPrimaryEntryPreCallPlacementRewriteModel || '-'}` +
+      ` abiPrimaryPreCallRewriteAction=${row.calleeAbiPrimaryEntryPreCallPlacementRewriteAction || '-'}` +
+      ` abiPrimarySlotSearch=${row.calleeAbiPrimaryEntrySlotSearch || '-'}` +
+      ` abiPrimarySlotSearchStatus=${row.calleeAbiPrimaryEntrySlotSearchStatus || '-'}` +
+      ` abiPrimarySlotSearchAction=${row.calleeAbiPrimaryEntrySlotSearchAction || '-'}` +
+      ` abiPrimarySlotSearchActionByCallee=${row.calleeAbiPrimaryEntrySlotSearchActionByCallee || '-'}` +
+      ` abiPrimarySlotShape=${row.calleeAbiPrimaryEntrySlotShapeCandidate || '-'}` +
+      ` abiPrimarySlotShapeRewriteCells=${row.calleeAbiPrimaryEntrySlotShapePreCallRewriteCells || '-'}` +
+      ` abiPrimarySlotShapeCalleeCells=${row.calleeAbiPrimaryEntrySlotShapeCalleeLowerBoundCells || '-'}` +
+      ` abiPrimarySlotShapeCells=${row.calleeAbiPrimaryEntrySlotShapeModeledPlacementCells || '-'}` +
+      ` abiPrimarySlotShapeBasis=${row.calleeAbiPrimaryEntrySlotShapeBasis || '-'}` +
+      ` abiPrimarySlotShapeCost=${row.calleeAbiPrimaryEntrySlotShapeCostBreakdown || '-'}` +
+      ` abiPrimarySlotShapeNet=${row.calleeAbiPrimaryEntrySlotShapeNet || '-'}` +
+      ` abiPrimarySlotShapeNeed=${row.calleeAbiPrimaryEntrySlotShapeNeed || '-'}` +
+      ` abiPrimarySlotShapeStatus=${row.calleeAbiPrimaryEntrySlotShapeStatus || '-'}` +
+      ` abiPrimarySlotShapeModelStatus=${row.calleeAbiPrimaryEntrySlotShapeModelStatus || '-'}` +
+      ` abiPrimarySlotShapeAction=${row.calleeAbiPrimaryEntrySlotShapeAction || '-'}` +
+      ` abiPrimarySlotShapeActionByCallee=${row.calleeAbiPrimaryEntrySlotShapeActionByCallee || '-'}` +
+      ` abiPrimarySlotShapeRequiredAction=${row.calleeAbiPrimaryEntrySlotShapeRequiredAction || '-'}` +
+      ` abiPrimarySlotShapeSafeFallback=${row.calleeAbiPrimaryEntrySlotShapeSafeFallback || '-'}` +
+      ` abiPrimarySlotShapeSafeFallbackStatus=${row.calleeAbiPrimaryEntrySlotShapeSafeFallbackStatus || '-'}` +
+      ` abiPrimarySlotShapeSafeFallbackAction=${row.calleeAbiPrimaryEntrySlotShapeSafeFallbackAction || '-'}` +
+      ` abiPrimarySlotShapeRole=${row.calleeAbiPrimaryEntrySlotShapeRoleRequirement || '-'}` +
+      ` abiPrimarySlotShapeRoleStatus=${row.calleeAbiPrimaryEntrySlotShapeRoleRequirementStatus || '-'}` +
+      ` abiPrimarySlotShapeRoleAction=${row.calleeAbiPrimaryEntrySlotShapeRoleRequirementAction || '-'}` +
+      ` abiPrimarySlotShapeRoleActionByCallee=${row.calleeAbiPrimaryEntrySlotShapeRoleRequirementActionByCallee || '-'}` +
+      ` abiPrimarySlotShapeBody=${row.calleeAbiPrimaryEntrySlotShapeBodyRelocation || '-'}` +
+      ` abiPrimarySlotShapeBodyModel=${row.calleeAbiPrimaryEntrySlotShapeBodyRelocationModel || '-'}` +
+      ` abiPrimarySlotShapeBodyStatus=${row.calleeAbiPrimaryEntrySlotShapeBodyRelocationStatus || '-'}` +
+      ` abiPrimarySlotShapeBodyAction=${row.calleeAbiPrimaryEntrySlotShapeBodyRelocationAction || '-'}` +
+      ` abiPrimarySlotShapeBodyActionByCallee=${row.calleeAbiPrimaryEntrySlotShapeBodyRelocationActionByCallee || '-'}` +
+      ` abiPrimarySlotShapeTempCopy=${row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopy || '-'}` +
+      ` abiPrimarySlotShapeTempCopyCells=${row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopyCells || '-'}` +
+      ` abiPrimarySlotShapeTempCopyModel=${row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopyModel || '-'}` +
+      ` abiPrimarySlotShapeTempCopyStatus=${row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopyStatus || '-'}` +
+      ` abiPrimarySlotShapeTempCopyAction=${row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopyAction || '-'}` +
+      ` abiPrimarySlotShapeTempCopyActionByCallee=${row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopyActionByCallee || '-'}` +
+      ` abiPrimarySlotShapeTempCopyCost=${row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopyCostBreakdown || '-'}` +
+      ` abiPrimarySlotShapeTempCopyNet=${row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopyNet || '-'}` +
+      ` abiPrimarySlotShapeTempCopyNeed=${row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopyNeed || '-'}` +
+      ` abiPrimarySlotShapeTempCopyModelStatus=${row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopyModelStatus || '-'}` +
+      ` abiPrimarySlotShapeTempCopyRequiredAction=${row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopyRequiredAction || '-'}` +
       ` abiPrimaryPlacement=${row.calleeAbiPrimaryEntryPlacementLowerBoundByCallee || '-'}` +
       ` abiPrimaryPlacementBasis=${row.calleeAbiPrimaryEntryPlacementLowerBoundBasis || '-'}` +
+      ` abiPrimaryModeledPlacement=${row.calleeAbiPrimaryEntryModeledPlacement || '-'}` +
+      ` abiPrimaryModeledPlacementCells=${row.calleeAbiPrimaryEntryModeledPlacementCells || '-'}` +
+      ` abiPrimaryModeledPlacementBasis=${row.calleeAbiPrimaryEntryModeledPlacementBasis || '-'}` +
       ` abiPrimaryCost=${row.calleeAbiPrimaryEntryCostBreakdown || '-'}` +
       ` abiPrimaryPlacementCost=${row.calleeAbiPrimaryEntryPlacementCostBreakdown || '-'}` +
+      ` abiPrimaryModeledPlacementCost=${row.calleeAbiPrimaryEntryModeledPlacementCostBreakdown || '-'}` +
       ` abiPrimaryNet=${row.calleeAbiPrimaryEntryNet || '-'}` +
       ` abiPrimaryPlacementNet=${row.calleeAbiPrimaryEntryPlacementNet || '-'}` +
+      ` abiPrimaryModeledPlacementNet=${row.calleeAbiPrimaryEntryModeledPlacementNet || '-'}` +
       ` abiPrimaryNeed=${row.calleeAbiPrimaryEntryNeed || '-'}` +
       ` abiPrimaryPlacementNeed=${row.calleeAbiPrimaryEntryPlacementNeed || '-'}` +
+      ` abiPrimaryModeledPlacementNeed=${row.calleeAbiPrimaryEntryModeledPlacementNeed || '-'}` +
       ` abiPrimaryStatus=${row.calleeAbiPrimaryEntryStatus || '-'}` +
       ` abiPrimaryPlacementStatus=${row.calleeAbiPrimaryEntryPlacementStatus || '-'}` +
+      ` abiPrimaryModeledPlacementStatus=${row.calleeAbiPrimaryEntryModeledPlacementStatus || '-'}` +
+      ` abiPrimaryModeledPlacementAction=${row.calleeAbiPrimaryEntryModeledPlacementRequiredAction || '-'}` +
       ` abiSubsetPrimaryCost=${row.calleeAbiBestSubsetPrimaryEntryCostBreakdown || '-'}` +
       ` abiSubsetPrimaryPlacementCost=${row.calleeAbiBestSubsetPrimaryEntryPlacementCostBreakdown || '-'}` +
       ` abiSubsetPrimaryNet=${row.calleeAbiBestSubsetPrimaryEntryNet || '-'}` +
@@ -1153,17 +2438,91 @@ function printAction(row) {
 
 function printActionSummary(row) {
   const fields = [
+    ['profitableInputs', row.profitableInputs],
+    ['breakEven', row.breakEvenInputs],
+    ['breakEvenCount', row.breakEvenInputCount],
+    ['breakEvenGross', row.breakEvenInputGross],
+    ['breakEvenMaterialize', row.breakEvenInputMaterialize],
+    ['breakEvenNet', row.breakEvenInputNet],
+    ['breakEvenStatus', row.breakEvenInputStatus],
+    ['breakEvenNeed', row.breakEvenInputNeed],
+    ['breakEvenGap', row.breakEvenInputGapReason],
+    ['breakEvenTarget', row.breakEvenInputNextProofTarget],
+    ['breakEvenAction', row.breakEvenInputRequiredAction],
+    ['unprofitableInputs', row.unprofitableInputs],
+    ['bestInput', row.bestInput],
+    ['bestNet', row.bestInputNet],
+    ['bestNeed', row.bestInputAdditionalRecallCellsToProfit],
+    ['bestGap', row.bestInputGapReason],
+    ['bestTarget', row.bestInputNextProofTarget],
     ['argX2', row.callArgumentX2RestoreStatus],
     ['x2Class', row.callArgumentX2ClobberClassesByCallee],
+    ['x2Preload', row.callArgumentX2PreloadConstantOpcodesByCallee],
+    ['x2PreloadLiteral', row.callArgumentX2PreloadLiteralReplacementByCallee],
+    ['x2PreloadLiteralStatus', row.callArgumentX2PreloadLiteralReplacementStatus],
+    ['x2PreloadLiteralDelta', row.callArgumentX2PreloadLiteralReplacementDelta],
+    ['x2PreloadLiteralNet', row.callArgumentX2PreloadLiteralReplacementNet],
+    ['x2PreloadAction', row.callArgumentX2PreloadRefactorRequiredAction],
     ['abiNearPrimaryNet', row.calleeAbiNearPositivePrimaryNet],
     ['abiPlacement', row.calleeAbiNearPositiveStackPlacementStatus],
     ['abiPlacementAction', row.calleeAbiNearPositiveStackPlacementRequiredAction],
     ['abiPureStack', row.calleeAbiPureStackPlacement],
     ['abiProofDisposition', row.calleeAbiPrimaryEntryProofDisposition],
+    ['abiCost', row.calleeAbiCostBreakdown],
+    ['abiNet', row.calleeAbiNetAfterLowerBound],
+    ['abiNeed', row.calleeAbiAdditionalNetToPositive],
+    ['abiLevers', row.calleeAbiPositiveLevers],
+    ['abiGap', row.calleeAbiPositiveGapReason],
+    ['abiTarget', row.calleeAbiNextProofTarget],
+    ['argPreserveRaw', row.callArgumentPreservationRaw],
+    ['argZeroCopy', row.callArgumentPreservationZeroCopy],
+    ['argZeroCopyStatus', row.callArgumentPreservationZeroCopyStatus],
+    ['argZeroCopySites', row.callArgumentPreservationZeroCopySites],
+    ['argZeroCopyBlockers', row.callArgumentPreservationZeroCopyBlockers],
+    ['entryStack', row.symbolicEntryStackSeed],
+    ['entryStackStatus', row.symbolicEntryStackSeedStatus],
+    ['entryStackSites', row.symbolicEntryStackByCallSite],
+    ['knownCallee', row.symbolicKnownCalleeStackEffects],
+    ['flowEntry', row.symbolicFlowEntryStack],
+    ['lostEntryFacts', row.entryStackLostKnownFacts],
+    ['lostEntryFactCount', row.entryStackLostKnownFactCount],
+    ['lostEntrySlots', row.entryStackLostKnownFactSlots],
+    ['lostEntryStatus', row.entryStackLostKnownFactStatus],
+    ['lostEntryTarget', row.entryStackLostKnownFactTarget],
+    ['lostEntryAction', row.entryStackLostKnownFactAction],
+    ['entryInputs', row.existingEntryStackInputSites],
+    ['selectedStack', row.selectedStackCarriedInputs],
+    ['selectedStackStatus', row.selectedStackCarriedStatus],
+    ['selectedStackTargets', row.selectedStackCarriedTargets],
+    ['selectedStackSites', row.selectedStackCarriedSites],
     ['abiProtocol', row.calleeAbiPrimaryEntryProtocol],
     ['abiArgRestage', row.calleeAbiPrimaryEntryArgumentRestage],
+    ['argRecalls', row.valueAwareArgumentRecallSites],
+    ['repeatedArgRecalls', row.valueAwareRepeatedArgumentRecallSites],
+    ['topRepeatedArg', row.valueAwareTopRepeatedArgumentRecall],
+    ['schedulerTarget', row.valueAwareSchedulerNextMaterializationTarget],
+    ['schedulerFeasibility', row.valueAwareRepeatedArgumentSchedulerFeasibility],
+    ['schedulerStatus', row.valueAwareRepeatedArgumentSchedulerStatus],
+    ['schedulerAction', row.valueAwareRepeatedArgumentSchedulerAction],
+    ['schedulerProfitableNet', row.valueAwareRepeatedArgumentSchedulerProfitableNet],
+    ['schedulerModelNet', row.valueAwareRepeatedArgumentSchedulerModelNet],
+    ['abiSubsets', row.calleeAbiSubsetCandidates],
+    ['abiSubset', row.calleeAbiBestSubset],
+    ['abiSubsetNet', row.calleeAbiBestSubsetNet],
+    ['abiSubsetNeed', row.calleeAbiBestSubsetNeed],
+    ['abiSubsetCost', row.calleeAbiBestSubsetCostBreakdown],
+    ['abiSubsetLevers', row.calleeAbiBestSubsetLevers],
+    ['abiSubsetGap', row.calleeAbiBestSubsetGapReason],
+    ['abiSubsetTarget', row.calleeAbiBestSubsetNextProofTarget],
+    ['abiSubsetStatus', row.calleeAbiBestSubsetStatus],
     ['naturalChoice', row.calleeNaturalFirstRecallChoice],
     ['naturalChoiceStatus', row.calleeNaturalFirstRecallChoiceStatus],
+    ['naturalFinalSlots', row.calleeNaturalPreservedSlotFinalSlots],
+    ['naturalUseShape', row.calleeNaturalFirstRecallUseShape],
+    ['naturalUseShapeStatus', row.calleeNaturalFirstRecallUseShapeStatus],
+    ['naturalUseShapeAction', row.calleeNaturalFirstRecallUseShapeAction],
+    ['naturalChoiceSearch', row.calleeNaturalFirstRecallChoiceSearch],
+    ['naturalChoiceSearchStatus', row.calleeNaturalFirstRecallChoiceSearchStatus],
     ['abiPrimarySiteModel', row.calleeAbiPrimaryEntryPlacementSiteModel],
     ['abiPrimarySiteStatus', row.calleeAbiPrimaryEntryPlacementSiteModelStatus],
     ['abiPrimaryPreCallPlacement', row.calleeAbiPrimaryEntryPreCallPlacement],
@@ -1172,6 +2531,48 @@ function printActionSummary(row) {
     ['abiPrimaryPreCallProof', row.calleeAbiPrimaryEntryPreCallPlacementProof],
     ['abiPrimaryPreCallProofStatus', row.calleeAbiPrimaryEntryPreCallPlacementProofStatus],
     ['abiPrimaryPreCallProofAction', row.calleeAbiPrimaryEntryPreCallPlacementProofAction],
+    ['abiPrimaryPreCallRewrite', row.calleeAbiPrimaryEntryPreCallPlacementRewriteEstimate],
+    ['abiPrimaryPreCallRewriteStatus', row.calleeAbiPrimaryEntryPreCallPlacementRewriteStatus],
+    ['abiPrimaryPreCallRewriteModel', row.calleeAbiPrimaryEntryPreCallPlacementRewriteModel],
+    ['abiPrimaryPreCallRewriteAction', row.calleeAbiPrimaryEntryPreCallPlacementRewriteAction],
+    ['abiPrimarySlotSearch', row.calleeAbiPrimaryEntrySlotSearch],
+    ['abiPrimarySlotSearchStatus', row.calleeAbiPrimaryEntrySlotSearchStatus],
+    ['abiPrimarySlotSearchAction', row.calleeAbiPrimaryEntrySlotSearchAction],
+    ['abiPrimarySlotShape', row.calleeAbiPrimaryEntrySlotShapeCandidate],
+    ['abiPrimarySlotShapeCost', row.calleeAbiPrimaryEntrySlotShapeCostBreakdown],
+    ['abiPrimarySlotShapeNet', row.calleeAbiPrimaryEntrySlotShapeNet],
+    ['abiPrimarySlotShapeStatus', row.calleeAbiPrimaryEntrySlotShapeModelStatus],
+    ['abiPrimarySlotShapeAction', row.calleeAbiPrimaryEntrySlotShapeRequiredAction],
+    ['abiPrimarySlotShapeSafeFallback', row.calleeAbiPrimaryEntrySlotShapeSafeFallback],
+    ['abiPrimarySlotShapeSafeFallbackStatus',
+      row.calleeAbiPrimaryEntrySlotShapeSafeFallbackStatus],
+    ['abiPrimarySlotShapeSafeFallbackAction',
+      row.calleeAbiPrimaryEntrySlotShapeSafeFallbackAction],
+    ['abiPrimarySlotShapeRole', row.calleeAbiPrimaryEntrySlotShapeRoleRequirement],
+    ['abiPrimarySlotShapeRoleStatus',
+      row.calleeAbiPrimaryEntrySlotShapeRoleRequirementStatus],
+    ['abiPrimarySlotShapeRoleAction',
+      row.calleeAbiPrimaryEntrySlotShapeRoleRequirementAction],
+    ['abiPrimarySlotShapeBody', row.calleeAbiPrimaryEntrySlotShapeBodyRelocation],
+    ['abiPrimarySlotShapeBodyModel', row.calleeAbiPrimaryEntrySlotShapeBodyRelocationModel],
+    ['abiPrimarySlotShapeBodyStatus', row.calleeAbiPrimaryEntrySlotShapeBodyRelocationStatus],
+    ['abiPrimarySlotShapeBodyAction', row.calleeAbiPrimaryEntrySlotShapeBodyRelocationAction],
+    ['abiPrimarySlotShapeTempCopy', row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopy],
+    ['abiPrimarySlotShapeTempCopyModel',
+      row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopyModel],
+    ['abiPrimarySlotShapeTempCopyCost',
+      row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopyCostBreakdown],
+    ['abiPrimarySlotShapeTempCopyNet',
+      row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopyNet],
+    ['abiPrimarySlotShapeTempCopyStatus',
+      row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopyModelStatus],
+    ['abiPrimarySlotShapeTempCopyAction',
+      row.calleeAbiPrimaryEntrySlotShapeExplicitTempCopyRequiredAction],
+    ['abiPrimaryModeledPlacement', row.calleeAbiPrimaryEntryModeledPlacement],
+    ['abiPrimaryModeledPlacementCost', row.calleeAbiPrimaryEntryModeledPlacementCostBreakdown],
+    ['abiPrimaryModeledPlacementNet', row.calleeAbiPrimaryEntryModeledPlacementNet],
+    ['abiPrimaryModeledPlacementStatus', row.calleeAbiPrimaryEntryModeledPlacementStatus],
+    ['abiPrimaryModeledPlacementAction', row.calleeAbiPrimaryEntryModeledPlacementRequiredAction],
     ['abiPrimaryPlacement', row.calleeAbiPrimaryEntryPlacementLowerBoundByCallee],
     ['abiPrimaryPlacementNet', row.calleeAbiPrimaryEntryPlacementNet],
     ['abiPrimaryPlacementStatus', row.calleeAbiPrimaryEntryPlacementStatus],

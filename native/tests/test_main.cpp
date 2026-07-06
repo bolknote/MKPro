@@ -32,6 +32,7 @@ void compiler_lowers_initial_v2_subset();
 void counted_loop_unroll_matches_typescript_contract();
 void constant_folding_matches_typescript_contract();
 void cse_display_block_matches_typescript_contract();
+void dangerous_loading_size_report_tracks_flow_entry_stack();
 void dead_code_after_halt_matches_typescript_contract();
 void dead_proc_elimination_matches_typescript_contract();
 void dead_store_before_commutative_matches_typescript_contract();
@@ -87,6 +88,9 @@ void example_sizes_match_typescript_baselines();
 void compiler_examples_match_typescript_contract();
 void supported_examples_match_native_oracles();
 void expression_helpers_match_typescript_contract();
+void expression_helper_size_report_counts_entry_y_materialization_coverage();
+void expression_helper_size_report_tracks_selected_stack_carried_pow10_index();
+void expression_helper_size_report_tracks_symbolic_entry_stack();
 void expression_lowering_helpers_match_typescript_contract();
 void flow_structure_passes_match_typescript_contract();
 void flow_x_reuse_matches_typescript_contract();
@@ -241,6 +245,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(counted_loop_unroll_matches_typescript_contract),
       MKPRO_TEST(constant_folding_matches_typescript_contract),
       MKPRO_TEST(cse_display_block_matches_typescript_contract),
+      MKPRO_TEST(dangerous_loading_size_report_tracks_flow_entry_stack),
       MKPRO_TEST(dead_code_after_halt_matches_typescript_contract),
       MKPRO_TEST(dead_proc_elimination_matches_typescript_contract),
       MKPRO_TEST(dead_store_before_commutative_matches_typescript_contract),
@@ -293,6 +298,9 @@ int main(int argc, char** argv) {
       MKPRO_TEST(compiler_examples_match_typescript_contract),
       MKPRO_TEST(supported_examples_match_native_oracles),
       MKPRO_TEST(expression_helpers_match_typescript_contract),
+      MKPRO_TEST(expression_helper_size_report_counts_entry_y_materialization_coverage),
+      MKPRO_TEST(expression_helper_size_report_tracks_selected_stack_carried_pow10_index),
+      MKPRO_TEST(expression_helper_size_report_tracks_symbolic_entry_stack),
       MKPRO_TEST(expression_lowering_helpers_match_typescript_contract),
       MKPRO_TEST(flow_structure_passes_match_typescript_contract),
       MKPRO_TEST(flow_x_reuse_matches_typescript_contract),
