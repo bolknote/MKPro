@@ -53983,6 +53983,13 @@ SizeAttributionReport build_size_attribution_report(
       return summary;
     summary.stack_sources = {0, 1, 2, 3};
     const HelperRegionRange& region = region_it->second;
+    bool numeric_entry_active = false;
+    const auto is_number_entry_digit = [](int opcode) {
+      return opcode >= 0x00 && opcode <= 0x09;
+    };
+    const auto is_number_entry_continuation = [](int opcode) {
+      return opcode == 0x0a || opcode == 0x0b || opcode == 0x0c;
+    };
     for (std::size_t index = region.start; index < region.end && index < steps.size(); ++index) {
       if (index > region.start && steps.at(index - 1U).address + 1 == steps.at(index).address &&
           opcode_by_code(steps.at(index - 1U).opcode).takes_address) {
@@ -53995,7 +54002,18 @@ SizeAttributionReport build_size_attribution_report(
       if (opcode == 0x53 || (opcode >= 0xa0 && opcode <= 0xae))
         ++summary.nested_calls;
       const OpcodeInfo& info = opcode_by_code(opcode);
-      apply_helper_stack_survival_effect(summary.stack_sources, opcode, info.stack_effect);
+      StackEffect effective_stack_effect = info.stack_effect;
+      if (is_number_entry_digit(opcode)) {
+        effective_stack_effect =
+            numeric_entry_active ? StackEffect::Preserves : StackEffect::Shifts;
+        numeric_entry_active = true;
+      } else if (is_number_entry_continuation(opcode) && numeric_entry_active) {
+        effective_stack_effect = StackEffect::Preserves;
+      } else {
+        numeric_entry_active = false;
+      }
+      apply_helper_stack_survival_effect(summary.stack_sources, opcode,
+                                         effective_stack_effect);
       const auto preload_constant_value = [](const ResolvedStep& candidate_step)
           -> std::optional<std::string> {
         if (!candidate_step.comment.has_value())
@@ -54052,7 +54070,7 @@ SizeAttributionReport build_size_attribution_report(
               safe_format_label_address(step.address) + ":" + info.name + "/x2-unknown");
           break;
       }
-      switch (info.stack_effect) {
+      switch (effective_stack_effect) {
         case StackEffect::Preserves:
           ++summary.preserves;
           break;
@@ -54075,11 +54093,11 @@ SizeAttributionReport build_size_attribution_report(
           ++summary.unknown;
           break;
       }
-      if (info.stack_effect != StackEffect::Preserves) {
+      if (effective_stack_effect != StackEffect::Preserves) {
         ++summary.mutating_cells;
         summary.mutating_opcodes.push_back(safe_format_label_address(step.address) + ":" +
                                            info.name + "/" +
-                                           stack_effect_name(info.stack_effect));
+                                           stack_effect_name(effective_stack_effect));
       }
     }
     const bool has_stack_mutation =
@@ -54818,8 +54836,79 @@ SizeAttributionReport build_size_attribution_report(
     }
   }
   using SymbolicStackByIndex = std::map<std::size_t, SymbolicStackSnapshot>;
+  const auto symbolic_stack_resident_slot =
+      [](const SymbolicStackSnapshot& stack,
+         const std::string& value) -> std::optional<std::size_t> {
+    for (std::size_t slot = 0; slot < stack.size(); ++slot) {
+      if (stack.at(slot) == value)
+        return slot;
+    }
+    return std::nullopt;
+  };
+  const auto repeated_argument_residency_blocker =
+      [&](const std::string& value, const SymbolicStackByIndex& stack_by_index,
+          std::size_t site_index) {
+        if (value.empty() || stack_by_index.empty())
+          return std::string("no-symbolic-stack-history");
+
+        std::optional<std::size_t> last_known_index;
+        std::optional<std::size_t> last_known_slot;
+        SymbolicStackSnapshot last_known_stack = unknown_symbolic_stack();
+        auto before_site = stack_by_index.lower_bound(site_index);
+        while (before_site != stack_by_index.begin()) {
+          --before_site;
+          if (before_site->first >= site_index)
+            continue;
+          const std::optional<std::size_t> slot =
+              symbolic_stack_resident_slot(before_site->second, value);
+          if (!slot.has_value())
+            continue;
+          last_known_index = before_site->first;
+          last_known_slot = *slot;
+          last_known_stack = before_site->second;
+          break;
+        }
+        if (!last_known_index.has_value() || !last_known_slot.has_value())
+          return std::string("no-prior-resident-value");
+
+        std::optional<std::size_t> lost_before_index;
+        SymbolicStackSnapshot lost_before_stack = unknown_symbolic_stack();
+        for (auto it = stack_by_index.upper_bound(*last_known_index);
+             it != stack_by_index.end() && it->first <= site_index; ++it) {
+          if (symbolic_stack_resident_slot(it->second, value).has_value())
+            continue;
+          lost_before_index = it->first;
+          lost_before_stack = it->second;
+          break;
+        }
+
+        std::ostringstream out;
+        out << "lastKnown=" << safe_format_label_address(steps.at(*last_known_index).address)
+            << ":" << original_stack_slot_name(static_cast<int>(*last_known_slot)) << "("
+            << symbolic_stack_snapshot_text(last_known_stack) << ")";
+        if (lost_before_index.has_value()) {
+          out << "/lostBefore="
+              << safe_format_label_address(steps.at(*lost_before_index).address) << "("
+              << symbolic_stack_snapshot_text(lost_before_stack) << ")";
+          if (*lost_before_index > 0U) {
+            std::size_t cause_index = *lost_before_index - 1U;
+            if (cause_index > 0U &&
+                steps.at(cause_index - 1U).address + 1 == steps.at(cause_index).address &&
+                opcode_by_code(steps.at(cause_index - 1U).opcode).takes_address) {
+              cause_index -= 1U;
+            }
+            const ResolvedStep& cause = steps.at(cause_index);
+            out << "/afterStep=" << safe_format_label_address(cause.address) << ":"
+                << cause.mnemonic;
+          }
+        } else {
+          out << "/lostBy=merged-control-flow-before-site";
+        }
+        return out.str();
+      };
   struct RepeatedArgumentSchedulerFeasibilityReport {
     std::string sites;
+    std::string blockers;
     std::string status;
     std::string action;
     int profitable_net_cells = 0;
@@ -54835,6 +54924,7 @@ SizeAttributionReport build_size_attribution_report(
       return std::nullopt;
     const bool has_helper_stack = stack_by_index != nullptr;
     std::vector<std::string> site_parts;
+    std::vector<std::string> blocker_parts;
     int recall_sites = 0;
     int positive_sites = 0;
     int break_even_sites = 0;
@@ -54876,9 +54966,15 @@ SizeAttributionReport build_size_attribution_report(
         if (has_unknown_slot) {
           ++unknown_sites;
           site_parts.push_back(address_text + ":not-proved-resident");
+          blocker_parts.push_back(address_text + ":" +
+                                  repeated_argument_residency_blocker(
+                                      spill.name, *stack_by_index, index_it->second));
         } else {
           ++absent_sites;
           site_parts.push_back(address_text + ":not-resident");
+          blocker_parts.push_back(address_text + ":" +
+                                  repeated_argument_residency_blocker(
+                                      spill.name, *stack_by_index, index_it->second));
         }
         continue;
       }
@@ -54925,6 +55021,7 @@ SizeAttributionReport build_size_attribution_report(
                  std::to_string(absent_sites) + ",unknown=" +
                  std::to_string(unknown_sites) + "/" +
                  join_strings(site_parts, ","),
+        .blockers = join_strings(blocker_parts, ";"),
         .status = std::move(status),
         .action = std::move(action),
         .profitable_net_cells = profitable_net_cells,
@@ -55257,6 +55354,10 @@ SizeAttributionReport build_size_attribution_report(
               std::to_string(feasibility->profitable_net_cells);
           helper.details["repeatedArgumentSchedulerModelNetCells"] =
               std::to_string(feasibility->model_net_cells);
+          if (!feasibility->blockers.empty()) {
+            helper.details["repeatedArgumentSchedulerResidencyBlockers"] =
+                feasibility->blockers;
+          }
         }
       }
     }
@@ -55310,6 +55411,10 @@ SizeAttributionReport build_size_attribution_report(
               std::to_string(feasibility->profitable_net_cells);
           helper.details["valueAwareRepeatedArgumentSchedulerModelNetCells"] =
               std::to_string(feasibility->model_net_cells);
+          if (!feasibility->blockers.empty()) {
+            helper.details["valueAwareRepeatedArgumentSchedulerResidencyBlockers"] =
+                feasibility->blockers;
+          }
         }
         if (const std::optional<SplitEntryRepeatedArgumentSchedulerReport> split_entry =
                 split_entry_repeated_argument_scheduler_report(helper.label,
@@ -55334,6 +55439,10 @@ SizeAttributionReport build_size_attribution_report(
               "requires-flow-entry-stack-proof-or-entry-seed-splitting";
           helper.details["valueAwareSplitEntryRepeatedArgumentRequiredAction"] =
               "split-helper-entry-seeds-or-prove-flow-entry-stack-before-repeated-argument-rewrite";
+          if (!split_entry->feasibility.blockers.empty()) {
+            helper.details["valueAwareSplitEntryRepeatedArgumentResidencyBlockers"] =
+                split_entry->feasibility.blockers;
+          }
         }
       }
       std::set<std::string> stack_input_names;

@@ -643,6 +643,20 @@ void expression_helper_size_report_tracks_symbolic_entry_stack() {
                   "negative=0,absent=0,unknown=3/73:not-proved-resident,"
                   "76:not-proved-resident,80:not-proved-resident",
           "candidate_score should model top repeated argument stack-residency feasibility");
+  require(candidate_score->details.contains("valueAwareRepeatedArgumentSchedulerResidencyBlockers") &&
+              candidate_score->details.at("valueAwareRepeatedArgumentSchedulerResidencyBlockers")
+                      .find("73:no-prior-resident-value") != std::string::npos &&
+              candidate_score->details.at("valueAwareRepeatedArgumentSchedulerResidencyBlockers")
+                      .find("76:lastKnown=74:X") != std::string::npos &&
+              candidate_score->details.at("valueAwareRepeatedArgumentSchedulerResidencyBlockers")
+                      .find("afterStep=74:") != std::string::npos &&
+              candidate_score->details.at("valueAwareRepeatedArgumentSchedulerResidencyBlockers")
+                      .find("80:lastKnown=77:X") != std::string::npos &&
+              candidate_score->details.at("valueAwareRepeatedArgumentSchedulerResidencyBlockers")
+                      .find("lostBefore=79") != std::string::npos &&
+              candidate_score->details.at("valueAwareRepeatedArgumentSchedulerResidencyBlockers")
+                      .find("afterStep=77:") != std::string::npos,
+          "candidate_score should explain why repeated y recalls are not yet stack-resident");
   require(candidate_score->details.contains("repeatedArgumentSchedulerStatus") &&
               candidate_score->details.at("repeatedArgumentSchedulerStatus") ==
                   "missing-stack-residency-proof",

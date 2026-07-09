@@ -180,6 +180,13 @@ function analyzeFile(compiler, file) {
       helper.details,
       'valueAwareRepeatedArgumentSchedulerFeasibility',
     ),
+    valueAwareRepeatedArgumentSchedulerResidencyBlockers: detail(
+      helper.details,
+      'repeatedArgumentSchedulerResidencyBlockers',
+    ) || detail(
+      helper.details,
+      'valueAwareRepeatedArgumentSchedulerResidencyBlockers',
+    ),
     valueAwareRepeatedArgumentSchedulerStatus: detail(
       helper.details,
       'repeatedArgumentSchedulerStatus',
@@ -223,6 +230,10 @@ function analyzeFile(compiler, file) {
     splitRepeatedFeasibility: detail(
       helper.details,
       'valueAwareSplitEntryRepeatedArgumentFeasibility',
+    ),
+    splitRepeatedResidencyBlockers: detail(
+      helper.details,
+      'valueAwareSplitEntryRepeatedArgumentResidencyBlockers',
     ),
     splitRepeatedStatus: detail(
       helper.details,
@@ -381,6 +392,13 @@ function analyzeFile(compiler, file) {
       ) || detail(
         details,
         'valueAwareRepeatedArgumentSchedulerFeasibility',
+      ),
+      valueAwareRepeatedArgumentSchedulerResidencyBlockers: detail(
+        details,
+        'repeatedArgumentSchedulerResidencyBlockers',
+      ) || detail(
+        details,
+        'valueAwareRepeatedArgumentSchedulerResidencyBlockers',
       ),
       valueAwareRepeatedArgumentSchedulerStatus: detail(
         details,
@@ -616,6 +634,13 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareRepeatedArgumentSchedulerFeasibility',
       ),
+      valueAwareRepeatedArgumentSchedulerResidencyBlockers: detail(
+        details,
+        'repeatedArgumentSchedulerResidencyBlockers',
+      ) || detail(
+        details,
+        'valueAwareRepeatedArgumentSchedulerResidencyBlockers',
+      ),
       valueAwareRepeatedArgumentSchedulerStatus: detail(
         details,
         'repeatedArgumentSchedulerStatus',
@@ -659,6 +684,10 @@ function analyzeFile(compiler, file) {
       splitRepeatedFeasibility: detail(
         details,
         'valueAwareSplitEntryRepeatedArgumentFeasibility',
+      ),
+      splitRepeatedResidencyBlockers: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentResidencyBlockers',
       ),
       splitRepeatedStatus: detail(
         details,
@@ -1475,6 +1504,13 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareRepeatedArgumentSchedulerFeasibility',
       ),
+      valueAwareRepeatedArgumentSchedulerResidencyBlockers: detail(
+        details,
+        'repeatedArgumentSchedulerResidencyBlockers',
+      ) || detail(
+        details,
+        'valueAwareRepeatedArgumentSchedulerResidencyBlockers',
+      ),
       valueAwareRepeatedArgumentSchedulerStatus: detail(
         details,
         'repeatedArgumentSchedulerStatus',
@@ -1518,6 +1554,10 @@ function analyzeFile(compiler, file) {
       splitRepeatedFeasibility: detail(
         details,
         'valueAwareSplitEntryRepeatedArgumentFeasibility',
+      ),
+      splitRepeatedResidencyBlockers: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentResidencyBlockers',
       ),
       splitRepeatedStatus: detail(
         details,
@@ -2302,6 +2342,7 @@ function printHelperCost(row) {
       ` topRepeatedArg=${row.valueAwareTopRepeatedArgumentRecall || '-'}` +
       ` schedulerTarget=${row.valueAwareSchedulerNextMaterializationTarget || '-'}` +
       ` schedulerFeasibility=${row.valueAwareRepeatedArgumentSchedulerFeasibility || '-'}` +
+      ` schedulerBlockers=${row.valueAwareRepeatedArgumentSchedulerResidencyBlockers || '-'}` +
       ` schedulerStatus=${row.valueAwareRepeatedArgumentSchedulerStatus || '-'}` +
       ` schedulerAction=${row.valueAwareRepeatedArgumentSchedulerAction || '-'}` +
       ` selectedStack=${row.selectedStackCarriedInputs || '-'}` +
@@ -2407,6 +2448,7 @@ function actionDetailSuffix(row) {
     ['topRepeatedArg', row.valueAwareTopRepeatedArgumentRecall],
     ['schedulerTarget', row.valueAwareSchedulerNextMaterializationTarget],
     ['schedulerFeasibility', row.valueAwareRepeatedArgumentSchedulerFeasibility],
+    ['schedulerBlockers', row.valueAwareRepeatedArgumentSchedulerResidencyBlockers],
     ['schedulerStatus', row.valueAwareRepeatedArgumentSchedulerStatus],
     ['schedulerAction', row.valueAwareRepeatedArgumentSchedulerAction],
     ['schedulerProfitableNet', row.valueAwareRepeatedArgumentSchedulerProfitableNet],
@@ -2415,6 +2457,7 @@ function actionDetailSuffix(row) {
     ['splitRepeatedSlot', row.splitRepeatedSeedSlots],
     ['splitRepeatedSites', row.splitRepeatedSeedSites],
     ['splitRepeatedFeasibility', row.splitRepeatedFeasibility],
+    ['splitRepeatedBlockers', row.splitRepeatedResidencyBlockers],
     ['splitRepeatedStatus', row.splitRepeatedStatus],
     ['splitRepeatedNet', row.splitRepeatedProfitableNet],
     ['splitRepeatedModelNet', row.splitRepeatedModelNet],
@@ -2611,12 +2654,14 @@ function printHelper(row) {
       ` topRepeatedArg=${row.valueAwareTopRepeatedArgumentRecall || '-'}` +
       ` schedulerTarget=${row.valueAwareSchedulerNextMaterializationTarget || '-'}` +
       ` schedulerFeasibility=${row.valueAwareRepeatedArgumentSchedulerFeasibility || '-'}` +
+      ` schedulerBlockers=${row.valueAwareRepeatedArgumentSchedulerResidencyBlockers || '-'}` +
       ` schedulerStatus=${row.valueAwareRepeatedArgumentSchedulerStatus || '-'}` +
       ` schedulerAction=${row.valueAwareRepeatedArgumentSchedulerAction || '-'}` +
       ` splitRepeated=${row.splitRepeatedCandidate || '-'}` +
       ` splitRepeatedSlot=${row.splitRepeatedSeedSlots || '-'}` +
       ` splitRepeatedSites=${row.splitRepeatedSeedSites || '-'}` +
       ` splitRepeatedFeasibility=${row.splitRepeatedFeasibility || '-'}` +
+      ` splitRepeatedBlockers=${row.splitRepeatedResidencyBlockers || '-'}` +
       ` splitRepeatedStatus=${row.splitRepeatedStatus || '-'}` +
       ` splitRepeatedNet=${row.splitRepeatedProfitableNet || '-'}` +
       ` splitRepeatedModelNet=${row.splitRepeatedModelNet || '-'}` +
@@ -2909,6 +2954,7 @@ function printActionSummary(row) {
     ['topRepeatedArg', row.valueAwareTopRepeatedArgumentRecall],
     ['schedulerTarget', row.valueAwareSchedulerNextMaterializationTarget],
     ['schedulerFeasibility', row.valueAwareRepeatedArgumentSchedulerFeasibility],
+    ['schedulerBlockers', row.valueAwareRepeatedArgumentSchedulerResidencyBlockers],
     ['schedulerStatus', row.valueAwareRepeatedArgumentSchedulerStatus],
     ['schedulerAction', row.valueAwareRepeatedArgumentSchedulerAction],
     ['schedulerProfitableNet', row.valueAwareRepeatedArgumentSchedulerProfitableNet],
@@ -2917,6 +2963,7 @@ function printActionSummary(row) {
     ['splitRepeatedSlot', row.splitRepeatedSeedSlots],
     ['splitRepeatedSites', row.splitRepeatedSeedSites],
     ['splitRepeatedFeasibility', row.splitRepeatedFeasibility],
+    ['splitRepeatedBlockers', row.splitRepeatedResidencyBlockers],
     ['splitRepeatedStatus', row.splitRepeatedStatus],
     ['splitRepeatedNet', row.splitRepeatedProfitableNet],
     ['splitRepeatedModelNet', row.splitRepeatedModelNet],
