@@ -208,6 +208,46 @@ function analyzeFile(compiler, file) {
       helper.details,
       'valueAwareRepeatedArgumentSchedulerModelNetCells',
     ),
+    splitRepeatedCandidate: detail(
+      helper.details,
+      'valueAwareSplitEntryRepeatedArgumentCandidate',
+    ),
+    splitRepeatedSeedSlots: detail(
+      helper.details,
+      'valueAwareSplitEntryRepeatedArgumentSeedSlots',
+    ),
+    splitRepeatedSeedSites: detail(
+      helper.details,
+      'valueAwareSplitEntryRepeatedArgumentSeedSites',
+    ),
+    splitRepeatedFeasibility: detail(
+      helper.details,
+      'valueAwareSplitEntryRepeatedArgumentFeasibility',
+    ),
+    splitRepeatedStatus: detail(
+      helper.details,
+      'valueAwareSplitEntryRepeatedArgumentStatus',
+    ),
+    splitRepeatedAction: detail(
+      helper.details,
+      'valueAwareSplitEntryRepeatedArgumentAction',
+    ),
+    splitRepeatedProfitableNet: detail(
+      helper.details,
+      'valueAwareSplitEntryRepeatedArgumentProfitableNetCells',
+    ),
+    splitRepeatedModelNet: detail(
+      helper.details,
+      'valueAwareSplitEntryRepeatedArgumentModelNetCells',
+    ),
+    splitRepeatedProofStatus: detail(
+      helper.details,
+      'valueAwareSplitEntryRepeatedArgumentProofStatus',
+    ),
+    splitRepeatedRequiredAction: detail(
+      helper.details,
+      'valueAwareSplitEntryRepeatedArgumentRequiredAction',
+    ),
     selectedStackCarriedPlan:
       detail(helper.details, 'valueAwareSelectedStackCarriedPlan'),
     selectedStackCarriedStatus:
@@ -418,6 +458,43 @@ function analyzeFile(compiler, file) {
         detail(details, 'valueAwareCurrentXStackInputMaterializeProofStatus'),
       currentXMaterializeAction:
         detail(details, 'valueAwareCurrentXStackInputMaterializeRequiredAction'),
+      splitEntrySites: detail(details, 'valueAwareSplitEntryStackInputSites'),
+      splitEntryCandidates: detail(
+        details,
+        'valueAwareSplitEntryStackInputCandidateNames',
+      ),
+      splitEntryPositiveInputs: detail(
+        details,
+        'valueAwareSplitEntryStackInputPositiveNames',
+      ),
+      splitEntrySavedCells: detail(
+        details,
+        'valueAwareSplitEntryStackInputMaterializeSavedCells',
+      ),
+      splitEntryPositiveNet: detail(
+        details,
+        'valueAwareSplitEntryStackInputPositiveNetCells',
+      ),
+      splitEntryProfitBreakdown: detail(
+        details,
+        'valueAwareSplitEntryStackInputProfitBreakdown',
+      ),
+      splitEntryPlanStatus: detail(
+        details,
+        'valueAwareSplitEntryStackInputPlanStatus',
+      ),
+      splitEntryProofStatus: detail(
+        details,
+        'valueAwareSplitEntryStackInputProofStatus',
+      ),
+      splitEntryNextProofTarget: detail(
+        details,
+        'valueAwareSplitEntryStackInputNextProofTarget',
+      ),
+      splitEntryRequiredAction: detail(
+        details,
+        'valueAwareSplitEntryStackInputRequiredAction',
+      ),
       callerArgStoreCells: detail(details, 'valueAwareCallArgumentStoreCells'),
       callerArgStoreCellsByName: detail(details, 'valueAwareCallArgumentStoreCellsByName'),
       callerArgStoreAdjustedNet: detail(
@@ -504,6 +581,109 @@ function analyzeFile(compiler, file) {
         details,
         'valueAwareCallArgumentInputNamesByCallee',
       ),
+      valueAwareArgumentRecallSites: detail(
+        details,
+        'argumentRecallSitesByName',
+      ) || detail(
+        details,
+        'valueAwareArgumentRecallSitesByName',
+      ),
+      valueAwareRepeatedArgumentRecallSites: detail(
+        details,
+        'repeatedArgumentRecallSites',
+      ) || detail(
+        details,
+        'valueAwareRepeatedArgumentRecallSites',
+      ),
+      valueAwareTopRepeatedArgumentRecall: detail(
+        details,
+        'topRepeatedArgumentRecall',
+      ) || detail(
+        details,
+        'valueAwareTopRepeatedArgumentRecall',
+      ),
+      valueAwareSchedulerNextMaterializationTarget: detail(
+        details,
+        'schedulerNextMaterializationTarget',
+      ) || detail(
+        details,
+        'valueAwareSchedulerNextMaterializationTarget',
+      ),
+      valueAwareRepeatedArgumentSchedulerFeasibility: detail(
+        details,
+        'repeatedArgumentSchedulerFeasibility',
+      ) || detail(
+        details,
+        'valueAwareRepeatedArgumentSchedulerFeasibility',
+      ),
+      valueAwareRepeatedArgumentSchedulerStatus: detail(
+        details,
+        'repeatedArgumentSchedulerStatus',
+      ) || detail(
+        details,
+        'valueAwareRepeatedArgumentSchedulerStatus',
+      ),
+      valueAwareRepeatedArgumentSchedulerAction: detail(
+        details,
+        'repeatedArgumentSchedulerAction',
+      ) || detail(
+        details,
+        'valueAwareRepeatedArgumentSchedulerAction',
+      ),
+      valueAwareRepeatedArgumentSchedulerProfitableNet: detail(
+        details,
+        'repeatedArgumentSchedulerProfitableNetCells',
+      ) || detail(
+        details,
+        'valueAwareRepeatedArgumentSchedulerProfitableNetCells',
+      ),
+      valueAwareRepeatedArgumentSchedulerModelNet: detail(
+        details,
+        'repeatedArgumentSchedulerModelNetCells',
+      ) || detail(
+        details,
+        'valueAwareRepeatedArgumentSchedulerModelNetCells',
+      ),
+      splitRepeatedCandidate: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentCandidate',
+      ),
+      splitRepeatedSeedSlots: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentSeedSlots',
+      ),
+      splitRepeatedSeedSites: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentSeedSites',
+      ),
+      splitRepeatedFeasibility: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentFeasibility',
+      ),
+      splitRepeatedStatus: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentStatus',
+      ),
+      splitRepeatedAction: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentAction',
+      ),
+      splitRepeatedProfitableNet: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentProfitableNetCells',
+      ),
+      splitRepeatedModelNet: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentModelNetCells',
+      ),
+      splitRepeatedProofStatus: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentProofStatus',
+      ),
+      splitRepeatedRequiredAction: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentRequiredAction',
+      ),
       callPreservationSites: detail(details, 'valueAwareCallPreservationSites'),
       symbolicEntryStackByCallSite: detail(
         details,
@@ -542,6 +722,43 @@ function analyzeFile(compiler, file) {
       entryStackLostKnownFactAction: detail(
         details,
         'valueAwareEntryStackLostKnownFactRequiredAction',
+      ),
+      splitEntrySites: detail(details, 'valueAwareSplitEntryStackInputSites'),
+      splitEntryCandidates: detail(
+        details,
+        'valueAwareSplitEntryStackInputCandidateNames',
+      ),
+      splitEntryPositiveInputs: detail(
+        details,
+        'valueAwareSplitEntryStackInputPositiveNames',
+      ),
+      splitEntrySavedCells: detail(
+        details,
+        'valueAwareSplitEntryStackInputMaterializeSavedCells',
+      ),
+      splitEntryPositiveNet: detail(
+        details,
+        'valueAwareSplitEntryStackInputPositiveNetCells',
+      ),
+      splitEntryProfitBreakdown: detail(
+        details,
+        'valueAwareSplitEntryStackInputProfitBreakdown',
+      ),
+      splitEntryPlanStatus: detail(
+        details,
+        'valueAwareSplitEntryStackInputPlanStatus',
+      ),
+      splitEntryProofStatus: detail(
+        details,
+        'valueAwareSplitEntryStackInputProofStatus',
+      ),
+      splitEntryNextProofTarget: detail(
+        details,
+        'valueAwareSplitEntryStackInputNextProofTarget',
+      ),
+      splitEntryRequiredAction: detail(
+        details,
+        'valueAwareSplitEntryStackInputRequiredAction',
       ),
       existingEntryStackInputSites: detail(
         details,
@@ -1223,6 +1440,109 @@ function analyzeFile(compiler, file) {
       bestInputNextProofTarget: detail(details, 'valueAwareBestStackInputNextProofTarget'),
       profitBreakdown: detail(details, 'valueAwareStackInputProfitBreakdown'),
       materializeCellsByName: detail(details, 'valueAwareStackInputMaterializeCellsByName'),
+      valueAwareArgumentRecallSites: detail(
+        details,
+        'argumentRecallSitesByName',
+      ) || detail(
+        details,
+        'valueAwareArgumentRecallSitesByName',
+      ),
+      valueAwareRepeatedArgumentRecallSites: detail(
+        details,
+        'repeatedArgumentRecallSites',
+      ) || detail(
+        details,
+        'valueAwareRepeatedArgumentRecallSites',
+      ),
+      valueAwareTopRepeatedArgumentRecall: detail(
+        details,
+        'topRepeatedArgumentRecall',
+      ) || detail(
+        details,
+        'valueAwareTopRepeatedArgumentRecall',
+      ),
+      valueAwareSchedulerNextMaterializationTarget: detail(
+        details,
+        'schedulerNextMaterializationTarget',
+      ) || detail(
+        details,
+        'valueAwareSchedulerNextMaterializationTarget',
+      ),
+      valueAwareRepeatedArgumentSchedulerFeasibility: detail(
+        details,
+        'repeatedArgumentSchedulerFeasibility',
+      ) || detail(
+        details,
+        'valueAwareRepeatedArgumentSchedulerFeasibility',
+      ),
+      valueAwareRepeatedArgumentSchedulerStatus: detail(
+        details,
+        'repeatedArgumentSchedulerStatus',
+      ) || detail(
+        details,
+        'valueAwareRepeatedArgumentSchedulerStatus',
+      ),
+      valueAwareRepeatedArgumentSchedulerAction: detail(
+        details,
+        'repeatedArgumentSchedulerAction',
+      ) || detail(
+        details,
+        'valueAwareRepeatedArgumentSchedulerAction',
+      ),
+      valueAwareRepeatedArgumentSchedulerProfitableNet: detail(
+        details,
+        'repeatedArgumentSchedulerProfitableNetCells',
+      ) || detail(
+        details,
+        'valueAwareRepeatedArgumentSchedulerProfitableNetCells',
+      ),
+      valueAwareRepeatedArgumentSchedulerModelNet: detail(
+        details,
+        'repeatedArgumentSchedulerModelNetCells',
+      ) || detail(
+        details,
+        'valueAwareRepeatedArgumentSchedulerModelNetCells',
+      ),
+      splitRepeatedCandidate: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentCandidate',
+      ),
+      splitRepeatedSeedSlots: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentSeedSlots',
+      ),
+      splitRepeatedSeedSites: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentSeedSites',
+      ),
+      splitRepeatedFeasibility: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentFeasibility',
+      ),
+      splitRepeatedStatus: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentStatus',
+      ),
+      splitRepeatedAction: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentAction',
+      ),
+      splitRepeatedProfitableNet: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentProfitableNetCells',
+      ),
+      splitRepeatedModelNet: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentModelNetCells',
+      ),
+      splitRepeatedProofStatus: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentProofStatus',
+      ),
+      splitRepeatedRequiredAction: detail(
+        details,
+        'valueAwareSplitEntryRepeatedArgumentRequiredAction',
+      ),
       proofEffortPriority: detail(details, 'proofEffortPriority'),
       proofEffortReason: detail(details, 'proofEffortReason'),
       proofEffortSizeGate: detail(details, 'proofEffortSizeGate'),
@@ -1352,6 +1672,43 @@ function analyzeFile(compiler, file) {
       entryStackLostKnownFactAction: detail(
         details,
         'valueAwareEntryStackLostKnownFactRequiredAction',
+      ),
+      splitEntrySites: detail(details, 'valueAwareSplitEntryStackInputSites'),
+      splitEntryCandidates: detail(
+        details,
+        'valueAwareSplitEntryStackInputCandidateNames',
+      ),
+      splitEntryPositiveInputs: detail(
+        details,
+        'valueAwareSplitEntryStackInputPositiveNames',
+      ),
+      splitEntrySavedCells: detail(
+        details,
+        'valueAwareSplitEntryStackInputMaterializeSavedCells',
+      ),
+      splitEntryPositiveNet: detail(
+        details,
+        'valueAwareSplitEntryStackInputPositiveNetCells',
+      ),
+      splitEntryProfitBreakdown: detail(
+        details,
+        'valueAwareSplitEntryStackInputProfitBreakdown',
+      ),
+      splitEntryPlanStatus: detail(
+        details,
+        'valueAwareSplitEntryStackInputPlanStatus',
+      ),
+      splitEntryProofStatus: detail(
+        details,
+        'valueAwareSplitEntryStackInputProofStatus',
+      ),
+      splitEntryNextProofTarget: detail(
+        details,
+        'valueAwareSplitEntryStackInputNextProofTarget',
+      ),
+      splitEntryRequiredAction: detail(
+        details,
+        'valueAwareSplitEntryStackInputRequiredAction',
       ),
       existingEntryStackInputSites: detail(
         details,
@@ -2054,6 +2411,15 @@ function actionDetailSuffix(row) {
     ['schedulerAction', row.valueAwareRepeatedArgumentSchedulerAction],
     ['schedulerProfitableNet', row.valueAwareRepeatedArgumentSchedulerProfitableNet],
     ['schedulerModelNet', row.valueAwareRepeatedArgumentSchedulerModelNet],
+    ['splitRepeated', row.splitRepeatedCandidate],
+    ['splitRepeatedSlot', row.splitRepeatedSeedSlots],
+    ['splitRepeatedSites', row.splitRepeatedSeedSites],
+    ['splitRepeatedFeasibility', row.splitRepeatedFeasibility],
+    ['splitRepeatedStatus', row.splitRepeatedStatus],
+    ['splitRepeatedNet', row.splitRepeatedProfitableNet],
+    ['splitRepeatedModelNet', row.splitRepeatedModelNet],
+    ['splitRepeatedProof', row.splitRepeatedProofStatus],
+    ['splitRepeatedAction', row.splitRepeatedRequiredAction],
     ['preserveSites', row.callPreservationSites],
     ['entryStack', row.symbolicEntryStackSeed],
     ['argPreserveRaw', row.callArgumentPreservationRaw],
@@ -2071,6 +2437,13 @@ function actionDetailSuffix(row) {
     ['lostEntryStatus', row.entryStackLostKnownFactStatus],
     ['lostEntryTarget', row.entryStackLostKnownFactTarget],
     ['lostEntryAction', row.entryStackLostKnownFactAction],
+    ['splitEntry', row.splitEntryCandidates],
+    ['splitEntryPositive', row.splitEntryPositiveInputs],
+    ['splitEntrySaved', row.splitEntrySavedCells],
+    ['splitEntryNet', row.splitEntryPositiveNet],
+    ['splitEntryStatus', row.splitEntryPlanStatus],
+    ['splitEntryTarget', row.splitEntryNextProofTarget],
+    ['splitEntryAction', row.splitEntryRequiredAction],
     ['entryInputs', row.existingEntryStackInputSites],
     ['selectedStack', row.selectedStackCarriedInputs],
     ['selectedStackStatus', row.selectedStackCarriedStatus],
@@ -2220,6 +2593,15 @@ function printHelper(row) {
       ` currentXRetainedReasons=${row.currentXRetainedReasons || '-'}` +
       ` currentXProof=${row.currentXMaterializeProof || '-'}` +
       ` currentXAction=${row.currentXMaterializeAction || '-'}` +
+      ` splitEntry=${row.splitEntryCandidates || '-'}` +
+      ` splitEntryPositive=${row.splitEntryPositiveInputs || '-'}` +
+      ` splitEntrySaved=${row.splitEntrySavedCells || '-'}` +
+      ` splitEntryNet=${row.splitEntryPositiveNet || '-'}` +
+      ` splitEntryProfit=${row.splitEntryProfitBreakdown || '-'}` +
+      ` splitEntryStatus=${row.splitEntryPlanStatus || '-'}` +
+      ` splitEntryProof=${row.splitEntryProofStatus || '-'}` +
+      ` splitEntryTarget=${row.splitEntryNextProofTarget || '-'}` +
+      ` splitEntryAction=${row.splitEntryRequiredAction || '-'}` +
       ` argStores=${row.callerArgStoreCellsByName || '-'}` +
       ` argStoreNet=${row.callerArgStoreAdjustedNet || '-'}` +
       ` argStorePlan=${row.callerArgStorePlanStatus || '-'}` +
@@ -2231,6 +2613,15 @@ function printHelper(row) {
       ` schedulerFeasibility=${row.valueAwareRepeatedArgumentSchedulerFeasibility || '-'}` +
       ` schedulerStatus=${row.valueAwareRepeatedArgumentSchedulerStatus || '-'}` +
       ` schedulerAction=${row.valueAwareRepeatedArgumentSchedulerAction || '-'}` +
+      ` splitRepeated=${row.splitRepeatedCandidate || '-'}` +
+      ` splitRepeatedSlot=${row.splitRepeatedSeedSlots || '-'}` +
+      ` splitRepeatedSites=${row.splitRepeatedSeedSites || '-'}` +
+      ` splitRepeatedFeasibility=${row.splitRepeatedFeasibility || '-'}` +
+      ` splitRepeatedStatus=${row.splitRepeatedStatus || '-'}` +
+      ` splitRepeatedNet=${row.splitRepeatedProfitableNet || '-'}` +
+      ` splitRepeatedModelNet=${row.splitRepeatedModelNet || '-'}` +
+      ` splitRepeatedProof=${row.splitRepeatedProofStatus || '-'}` +
+      ` splitRepeatedAction=${row.splitRepeatedRequiredAction || '-'}` +
       ` argPreserve=${row.callArgumentPreservationCellsByCallee || '-'}` +
       ` argPreserveRaw=${row.callArgumentPreservationRaw || '-'}` +
       ` argZeroCopy=${row.callArgumentPreservationZeroCopy || '-'}` +
@@ -2256,6 +2647,15 @@ function printHelper(row) {
       ` lostEntryStatus=${row.entryStackLostKnownFactStatus || '-'}` +
       ` lostEntryTarget=${row.entryStackLostKnownFactTarget || '-'}` +
       ` lostEntryAction=${row.entryStackLostKnownFactAction || '-'}` +
+      ` splitEntry=${row.splitEntryCandidates || '-'}` +
+      ` splitEntryPositive=${row.splitEntryPositiveInputs || '-'}` +
+      ` splitEntrySaved=${row.splitEntrySavedCells || '-'}` +
+      ` splitEntryNet=${row.splitEntryPositiveNet || '-'}` +
+      ` splitEntryProfit=${row.splitEntryProfitBreakdown || '-'}` +
+      ` splitEntryStatus=${row.splitEntryPlanStatus || '-'}` +
+      ` splitEntryProof=${row.splitEntryProofStatus || '-'}` +
+      ` splitEntryTarget=${row.splitEntryNextProofTarget || '-'}` +
+      ` splitEntryAction=${row.splitEntryRequiredAction || '-'}` +
       ` entryInputs=${row.existingEntryStackInputSites || '-'}` +
       ` selectedStack=${row.selectedStackCarriedInputs || '-'}` +
       ` selectedStackStatus=${row.selectedStackCarriedStatus || '-'}` +
@@ -2490,6 +2890,13 @@ function printActionSummary(row) {
     ['lostEntryStatus', row.entryStackLostKnownFactStatus],
     ['lostEntryTarget', row.entryStackLostKnownFactTarget],
     ['lostEntryAction', row.entryStackLostKnownFactAction],
+    ['splitEntry', row.splitEntryCandidates],
+    ['splitEntryPositive', row.splitEntryPositiveInputs],
+    ['splitEntrySaved', row.splitEntrySavedCells],
+    ['splitEntryNet', row.splitEntryPositiveNet],
+    ['splitEntryStatus', row.splitEntryPlanStatus],
+    ['splitEntryTarget', row.splitEntryNextProofTarget],
+    ['splitEntryAction', row.splitEntryRequiredAction],
     ['entryInputs', row.existingEntryStackInputSites],
     ['selectedStack', row.selectedStackCarriedInputs],
     ['selectedStackStatus', row.selectedStackCarriedStatus],
@@ -2506,6 +2913,15 @@ function printActionSummary(row) {
     ['schedulerAction', row.valueAwareRepeatedArgumentSchedulerAction],
     ['schedulerProfitableNet', row.valueAwareRepeatedArgumentSchedulerProfitableNet],
     ['schedulerModelNet', row.valueAwareRepeatedArgumentSchedulerModelNet],
+    ['splitRepeated', row.splitRepeatedCandidate],
+    ['splitRepeatedSlot', row.splitRepeatedSeedSlots],
+    ['splitRepeatedSites', row.splitRepeatedSeedSites],
+    ['splitRepeatedFeasibility', row.splitRepeatedFeasibility],
+    ['splitRepeatedStatus', row.splitRepeatedStatus],
+    ['splitRepeatedNet', row.splitRepeatedProfitableNet],
+    ['splitRepeatedModelNet', row.splitRepeatedModelNet],
+    ['splitRepeatedProof', row.splitRepeatedProofStatus],
+    ['splitRepeatedAction', row.splitRepeatedRequiredAction],
     ['abiSubsets', row.calleeAbiSubsetCandidates],
     ['abiSubset', row.calleeAbiBestSubset],
     ['abiSubsetNet', row.calleeAbiBestSubsetNet],

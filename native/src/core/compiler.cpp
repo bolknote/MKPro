@@ -54641,6 +54641,8 @@ SizeAttributionReport build_size_attribution_report(
   std::map<std::string, std::vector<std::string>> helper_symbolic_flow_entry_stack_parts;
   std::map<std::string, std::map<int, std::vector<std::string>>>
       helper_symbolic_callsite_known_entry_facts_by_slot;
+  std::map<std::string, std::map<int, std::set<std::string>>>
+      helper_symbolic_callsite_known_entry_values_by_slot;
   std::map<std::string, std::map<int, std::vector<std::string>>>
       helper_symbolic_flow_unknown_entry_slots_by_slot;
   std::map<std::string, SymbolicStackSnapshot> helper_symbolic_entry_stack_seed_by_label;
@@ -54677,6 +54679,9 @@ SizeAttributionReport build_size_attribution_report(
           const std::string& value = snapshot.at(slot);
           if (!symbolic_stack_value_is_known(value))
             continue;
+          helper_symbolic_callsite_known_entry_values_by_slot[label]
+                                                               [static_cast<int>(slot)]
+              .insert(value);
           facts_by_slot[static_cast<int>(slot)].push_back(
               value + "@" + site + "<-entry-" +
               original_stack_slot_name(static_cast<int>(slot)));
@@ -54812,6 +54817,7 @@ SizeAttributionReport build_size_attribution_report(
           original_stack_slot_name(slot));
     }
   }
+  using SymbolicStackByIndex = std::map<std::size_t, SymbolicStackSnapshot>;
   struct RepeatedArgumentSchedulerFeasibilityReport {
     std::string sites;
     std::string status;
@@ -54819,16 +54825,15 @@ SizeAttributionReport build_size_attribution_report(
     int profitable_net_cells = 0;
     int model_net_cells = 0;
   };
-  const auto repeated_argument_scheduler_feasibility_report =
-      [&](const std::string& helper_label,
-          const SizeHelperSpillSummaryReport& spill)
+  const auto repeated_argument_scheduler_feasibility_report_from_stack =
+      [&](const std::string& helper_label, const SizeHelperSpillSummaryReport& spill,
+          const SymbolicStackByIndex* stack_by_index)
       -> std::optional<RepeatedArgumentSchedulerFeasibilityReport> {
     const std::string key = helper_label + "\x1f" + spill.name;
     const auto access_it = helper_spill_accesses_by_key.find(key);
     if (access_it == helper_spill_accesses_by_key.end())
       return std::nullopt;
-    const auto stack_by_index_it = helper_symbolic_stack_before_index.find(helper_label);
-    const bool has_helper_stack = stack_by_index_it != helper_symbolic_stack_before_index.end();
+    const bool has_helper_stack = stack_by_index != nullptr;
     std::vector<std::string> site_parts;
     int recall_sites = 0;
     int positive_sites = 0;
@@ -54849,8 +54854,8 @@ SizeAttributionReport build_size_attribution_report(
         site_parts.push_back(address_text + ":missing-symbolic-stack");
         continue;
       }
-      const auto snapshot_it = stack_by_index_it->second.find(index_it->second);
-      if (snapshot_it == stack_by_index_it->second.end()) {
+      const auto snapshot_it = stack_by_index->find(index_it->second);
+      if (snapshot_it == stack_by_index->end()) {
         ++unknown_sites;
         site_parts.push_back(address_text + ":missing-symbolic-stack");
         continue;
@@ -54925,6 +54930,94 @@ SizeAttributionReport build_size_attribution_report(
         .profitable_net_cells = profitable_net_cells,
         .model_net_cells = model_net_cells,
     };
+  };
+  const auto repeated_argument_scheduler_feasibility_report =
+      [&](const std::string& helper_label,
+          const SizeHelperSpillSummaryReport& spill)
+      -> std::optional<RepeatedArgumentSchedulerFeasibilityReport> {
+    const auto stack_by_index_it = helper_symbolic_stack_before_index.find(helper_label);
+    return repeated_argument_scheduler_feasibility_report_from_stack(
+        helper_label, spill,
+        stack_by_index_it == helper_symbolic_stack_before_index.end()
+            ? nullptr
+            : &stack_by_index_it->second);
+  };
+  struct SplitEntryRepeatedArgumentSchedulerReport {
+    std::string seed_slots;
+    std::string seed_sites;
+    RepeatedArgumentSchedulerFeasibilityReport feasibility;
+  };
+  const auto split_entry_repeated_argument_scheduler_report =
+      [&](const std::string& helper_label,
+          const SizeHelperSpillSummaryReport& spill)
+      -> std::optional<SplitEntryRepeatedArgumentSchedulerReport> {
+    const auto region_it = helper_region_by_label.find(helper_label);
+    if (region_it == helper_region_by_label.end())
+      return std::nullopt;
+    const auto values_by_slot_it =
+        helper_symbolic_callsite_known_entry_values_by_slot.find(helper_label);
+    const auto facts_by_slot_it =
+        helper_symbolic_callsite_known_entry_facts_by_slot.find(helper_label);
+    const auto unknown_by_slot_it =
+        helper_symbolic_flow_unknown_entry_slots_by_slot.find(helper_label);
+    if (values_by_slot_it == helper_symbolic_callsite_known_entry_values_by_slot.end() ||
+        facts_by_slot_it == helper_symbolic_callsite_known_entry_facts_by_slot.end() ||
+        unknown_by_slot_it == helper_symbolic_flow_unknown_entry_slots_by_slot.end()) {
+      return std::nullopt;
+    }
+
+    std::optional<SplitEntryRepeatedArgumentSchedulerReport> best_report;
+    for (const auto& [slot, values] : values_by_slot_it->second) {
+      if (!values.contains(spill.name))
+        continue;
+      const auto unknown_slot_it = unknown_by_slot_it->second.find(slot);
+      if (unknown_slot_it == unknown_by_slot_it->second.end() ||
+          unknown_slot_it->second.empty()) {
+        continue;
+      }
+
+      SymbolicStackSnapshot seed = unknown_symbolic_stack();
+      if (slot < 0 || slot >= static_cast<int>(seed.size()))
+        continue;
+      seed.at(static_cast<std::size_t>(slot)) = spill.name;
+      const SymbolicStackByIndex stack_by_index = compute_symbolic_stack_before_index(
+          region_it->second.start, region_it->second.end, seed, std::nullopt);
+      const std::optional<RepeatedArgumentSchedulerFeasibilityReport> feasibility =
+          repeated_argument_scheduler_feasibility_report_from_stack(helper_label, spill,
+                                                                    &stack_by_index);
+      if (!feasibility.has_value())
+        continue;
+
+      std::vector<std::string> seed_sites;
+      if (const auto fact_slot_it = facts_by_slot_it->second.find(slot);
+          fact_slot_it != facts_by_slot_it->second.end()) {
+        for (const std::string& fact : fact_slot_it->second) {
+          if (fact.starts_with(spill.name + "@"))
+            seed_sites.push_back(fact);
+        }
+      }
+      if (seed_sites.empty()) {
+        seed_sites.push_back(spill.name + "<-entry-" + original_stack_slot_name(slot));
+      }
+      for (std::string& site : seed_sites) {
+        site += "/blockedBy=" + join_strings(unknown_slot_it->second, ",");
+      }
+
+      SplitEntryRepeatedArgumentSchedulerReport candidate{
+          .seed_slots = original_stack_slot_name(slot),
+          .seed_sites = join_strings(seed_sites, ";"),
+          .feasibility = *feasibility,
+      };
+      if (!best_report.has_value() ||
+          candidate.feasibility.profitable_net_cells >
+              best_report->feasibility.profitable_net_cells ||
+          (candidate.feasibility.profitable_net_cells ==
+               best_report->feasibility.profitable_net_cells &&
+           candidate.feasibility.model_net_cells > best_report->feasibility.model_net_cells)) {
+        best_report = std::move(candidate);
+      }
+    }
+    return best_report;
   };
   std::map<std::string, std::set<int>> helper_spill_registers;
   for (const HelperRegionRange& region : helper_regions) {
@@ -55218,6 +55311,30 @@ SizeAttributionReport build_size_attribution_report(
           helper.details["valueAwareRepeatedArgumentSchedulerModelNetCells"] =
               std::to_string(feasibility->model_net_cells);
         }
+        if (const std::optional<SplitEntryRepeatedArgumentSchedulerReport> split_entry =
+                split_entry_repeated_argument_scheduler_report(helper.label,
+                                                               *top_repeated_spill)) {
+          helper.details["valueAwareSplitEntryRepeatedArgumentCandidate"] =
+              top_repeated_spill->name;
+          helper.details["valueAwareSplitEntryRepeatedArgumentSeedSlots"] =
+              split_entry->seed_slots;
+          helper.details["valueAwareSplitEntryRepeatedArgumentSeedSites"] =
+              split_entry->seed_sites;
+          helper.details["valueAwareSplitEntryRepeatedArgumentFeasibility"] =
+              split_entry->feasibility.sites;
+          helper.details["valueAwareSplitEntryRepeatedArgumentStatus"] =
+              split_entry->feasibility.status;
+          helper.details["valueAwareSplitEntryRepeatedArgumentAction"] =
+              split_entry->feasibility.action;
+          helper.details["valueAwareSplitEntryRepeatedArgumentProfitableNetCells"] =
+              std::to_string(split_entry->feasibility.profitable_net_cells);
+          helper.details["valueAwareSplitEntryRepeatedArgumentModelNetCells"] =
+              std::to_string(split_entry->feasibility.model_net_cells);
+          helper.details["valueAwareSplitEntryRepeatedArgumentProofStatus"] =
+              "requires-flow-entry-stack-proof-or-entry-seed-splitting";
+          helper.details["valueAwareSplitEntryRepeatedArgumentRequiredAction"] =
+              "split-helper-entry-seeds-or-prove-flow-entry-stack-before-repeated-argument-rewrite";
+        }
       }
       std::set<std::string> stack_input_names;
       std::set<std::string> state_output_names;
@@ -55351,11 +55468,14 @@ SizeAttributionReport build_size_attribution_report(
         std::map<std::string, int> existing_stack_materialize_cells_by_name;
         std::map<std::string, std::set<int>> existing_stack_input_covered_call_addresses_by_name;
         std::map<std::string, int> existing_entry_stack_input_sites_by_name;
+        std::map<std::string, std::set<int>>
+            split_entry_stack_input_covered_call_addresses_by_name;
         std::map<std::string, int> current_x_stack_materialize_cells_by_name;
         std::map<std::string, int> retained_current_x_store_cells_by_name;
         std::map<std::string, int> inserted_stack_materialize_cells_by_name;
         std::vector<std::string> existing_stack_materialize_parts;
         std::vector<std::string> existing_entry_stack_input_parts;
+        std::vector<std::string> split_entry_stack_input_parts;
         std::vector<std::string> current_x_stack_materialize_parts;
         std::vector<std::string> retained_current_x_store_parts;
         std::vector<std::string> retained_current_x_store_reason_parts;
@@ -55453,6 +55573,13 @@ SizeAttributionReport build_size_attribution_report(
                 if (uniform) {
                   existing_stack_input_covered_call_addresses_by_name[entry_value].insert(
                       call_site.address);
+                } else {
+                  split_entry_stack_input_covered_call_addresses_by_name[entry_value].insert(
+                      call_site.address);
+                  split_entry_stack_input_parts.push_back(
+                      entry_value + "@call" + safe_format_label_address(call_site.address) +
+                      "<-entry-" + original_stack_slot_name(slot) +
+                      "/requires-split-entry-seed");
                 }
                 existing_entry_stack_input_parts.push_back(
                     entry_value + "@call" + safe_format_label_address(call_site.address) +
@@ -55869,6 +55996,67 @@ SizeAttributionReport build_size_attribution_report(
             entry_stack_input_count_parts.push_back(name + ":" + std::to_string(sites));
           helper.details["valueAwareExistingEntryStackInputSitesByName"] =
               join_strings(entry_stack_input_count_parts, ";");
+        }
+        if (!split_entry_stack_input_parts.empty()) {
+          int split_entry_saved_materialize_cells = 0;
+          int split_entry_positive_net_cells = 0;
+          std::vector<std::string> split_entry_model_parts;
+          std::vector<std::string> split_entry_candidate_names;
+          std::vector<std::string> split_entry_positive_names;
+          for (const auto& [name, cells] : ranked_stack_inputs) {
+            const auto covered_it =
+                split_entry_stack_input_covered_call_addresses_by_name.find(name);
+            if (covered_it == split_entry_stack_input_covered_call_addresses_by_name.end() ||
+                covered_it->second.empty()) {
+              continue;
+            }
+            const int conservative_materialize = materialize_cells_for_input(name);
+            const int saved_cells = std::min(
+                conservative_materialize,
+                static_cast<int>(covered_it->second.size()));
+            if (saved_cells <= 0)
+              continue;
+            const int split_entry_materialize =
+                std::max(0, conservative_materialize - saved_cells);
+            const int split_entry_net_cells = cells - split_entry_materialize;
+            split_entry_saved_materialize_cells += saved_cells;
+            split_entry_candidate_names.push_back(name);
+            split_entry_model_parts.push_back(
+                name + ":" + std::to_string(cells) + "g/" +
+                std::to_string(split_entry_materialize) + "m/" +
+                std::to_string(saved_cells) + "s/" +
+                signed_cells_text(split_entry_net_cells) + "n");
+            if (split_entry_net_cells > 0) {
+              split_entry_positive_names.push_back(name);
+              split_entry_positive_net_cells += split_entry_net_cells;
+            }
+          }
+          if (split_entry_saved_materialize_cells > 0) {
+            helper.details["valueAwareSplitEntryStackInputSites"] =
+                join_strings(split_entry_stack_input_parts, ";");
+            helper.details["valueAwareSplitEntryStackInputCandidateNames"] =
+                join_strings(split_entry_candidate_names, ",");
+            helper.details["valueAwareSplitEntryStackInputMaterializeSavedCells"] =
+                std::to_string(split_entry_saved_materialize_cells);
+            helper.details["valueAwareSplitEntryStackInputProfitBreakdown"] =
+                join_strings(split_entry_model_parts, ";");
+            helper.details["valueAwareSplitEntryStackInputPositiveNetCells"] =
+                std::to_string(split_entry_positive_net_cells);
+            helper.details["valueAwareSplitEntryStackInputPlanStatus"] =
+                split_entry_positive_net_cells > 0
+                    ? "positive-if-split-entry-seed-proved"
+                    : "nonpositive-after-split-entry-seed-proof";
+            if (!split_entry_positive_names.empty()) {
+              helper.details["valueAwareSplitEntryStackInputPositiveNames"] =
+                  join_strings(split_entry_positive_names, ",");
+            }
+            helper.details["valueAwareSplitEntryStackInputProofStatus"] =
+                "requires-flow-entry-stack-proof-or-entry-seed-splitting";
+            helper.details["valueAwareSplitEntryStackInputNextProofTarget"] =
+                "prove-flow-entry-stack-values-or-split-helper-entry-seeds";
+            helper.details["valueAwareSplitEntryStackInputRequiredAction"] =
+                "split-helper-entry-seeds-or-prove-flow-entry-stack-before-stack-input-rewrite";
+          }
         }
         int current_x_stack_materialize_cells = 0;
         int retained_current_x_store_cells = 0;

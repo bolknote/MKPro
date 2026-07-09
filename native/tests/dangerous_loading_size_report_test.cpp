@@ -132,6 +132,28 @@ void dangerous_loading_size_report_tracks_flow_entry_stack() {
   require(detail(*resolve_turn, "valueAwareStackInputProfitBreakdown")
                   .find("boat:1g/1m/+0n") != std::string::npos,
           "boat stack input should be break-even, not profitable");
+  require(detail(*resolve_turn, "valueAwareSplitEntryStackInputSites")
+                  .find("boat@call22<-entry-X/requires-split-entry-seed") !=
+              std::string::npos,
+          "resolve_turn should model the partial entry-X fact as a split-entry seed candidate");
+  require(detail(*resolve_turn, "valueAwareSplitEntryStackInputCandidateNames") == "boat" &&
+              detail(*resolve_turn, "valueAwareSplitEntryStackInputPositiveNames") == "boat" &&
+              detail(*resolve_turn, "valueAwareSplitEntryStackInputMaterializeSavedCells") ==
+                  "1" &&
+              detail(*resolve_turn, "valueAwareSplitEntryStackInputPositiveNetCells") == "1",
+          "resolve_turn split-entry model should show that boat becomes positive after saving "
+          "one materialization cell");
+  require(detail(*resolve_turn, "valueAwareSplitEntryStackInputProfitBreakdown") ==
+                  "boat:1g/0m/1s/+1n" &&
+              detail(*resolve_turn, "valueAwareSplitEntryStackInputPlanStatus") ==
+                  "positive-if-split-entry-seed-proved" &&
+              detail(*resolve_turn, "valueAwareSplitEntryStackInputProofStatus") ==
+                  "requires-flow-entry-stack-proof-or-entry-seed-splitting" &&
+              detail(*resolve_turn, "valueAwareSplitEntryStackInputNextProofTarget") ==
+                  "prove-flow-entry-stack-values-or-split-helper-entry-seeds" &&
+              detail(*resolve_turn, "valueAwareSplitEntryStackInputRequiredAction") ==
+                  "split-helper-entry-seeds-or-prove-flow-entry-stack-before-stack-input-rewrite",
+          "resolve_turn split-entry scheduler model should name the remaining proof and action");
   require(detail(*resolve_turn, "valueAwareBreakEvenStackInputNames") == "boat,threat" &&
               detail(*resolve_turn, "valueAwareBreakEvenStackInputCount") == "2" &&
               detail(*resolve_turn, "valueAwareBreakEvenStackInputGrossCells") == "2" &&
@@ -178,6 +200,79 @@ void dangerous_loading_size_report_tracks_flow_entry_stack() {
               action->best_details.at("valueAwareEntryStackLostKnownFacts")
                       .find("boat@call22<-entry-X/blockedBy=X=?@30") != std::string::npos,
           "resolve_turn stalled scheduler action should retain lost entry-stack facts");
+  require(action != nullptr &&
+              action->best_details.contains("valueAwareSplitEntryStackInputPositiveNames") &&
+              action->best_details.at("valueAwareSplitEntryStackInputPositiveNames") ==
+                  "boat" &&
+              action->best_details.at("valueAwareSplitEntryStackInputPositiveNetCells") == "1",
+          "resolve_turn stalled scheduler action should retain the split-entry positive model");
+}
+
+void wumpus_size_report_tracks_split_entry_repeated_argument() {
+  CompileOptions options;
+  options.analysis = true;
+  options.budget = 999999;
+
+  const std::filesystem::path root = std::filesystem::current_path();
+  const CompileResult result =
+      compile_source(read_text(root / "examples" / "wumpus.mkpro"), options);
+
+  require(result.implemented, "wumpus should compile");
+  require(!has_error_diagnostic(result), "wumpus should not report compile errors");
+  require(result.steps.size() == 105, "wumpus size should stay at the baseline");
+
+  const SizeHelperSummaryReport* inspect = find_size_helper(result, "inspect");
+  require(inspect != nullptr, "wumpus should summarize inspect");
+  require(inspect->body_cells == 37 && inspect->call_site_cells == 2,
+          "inspect size attribution mismatch");
+  require(detail(*inspect, "valueAwareTopRepeatedArgumentRecall") ==
+              "room:6@68,72,75,80,83,99",
+          "inspect should keep room as the top repeated argument recall");
+  require(detail(*inspect, "valueAwareRepeatedArgumentSchedulerFeasibility")
+                  .find("unknown=6/68:not-proved-resident") != std::string::npos,
+          "inspect should keep the conservative repeated-argument scheduler proof blocked");
+  require(detail(*inspect, "valueAwareEntryStackLostKnownFacts")
+                  .find("room@call97/via=inspect<-entry-X/blockedBy=X=?@68") !=
+              std::string::npos,
+          "inspect should report that the recursive entry-X room fact is killed by the "
+          "unknown flow-entry stack");
+  require(detail(*inspect, "valueAwareSplitEntryRepeatedArgumentCandidate") == "room" &&
+              detail(*inspect, "valueAwareSplitEntryRepeatedArgumentSeedSlots") == "X",
+          "inspect should model room as a split-entry repeated-argument candidate");
+  require(detail(*inspect, "valueAwareSplitEntryRepeatedArgumentSeedSites")
+                  .find("room@call97/via=inspect<-entry-X/blockedBy=X=?@68") !=
+              std::string::npos,
+          "inspect split repeated model should name the blocked entry-X seed site");
+  require(detail(*inspect, "valueAwareSplitEntryRepeatedArgumentFeasibility")
+                      .find("room:6recalls/profitableNet=+1/modelNet=+0") !=
+                  std::string::npos &&
+              detail(*inspect, "valueAwareSplitEntryRepeatedArgumentFeasibility")
+                      .find("68:X(restore=0,net=+1)") != std::string::npos &&
+              detail(*inspect, "valueAwareSplitEntryRepeatedArgumentFeasibility")
+                      .find("75:Z(restore=2,net=-1)") != std::string::npos,
+          "inspect split repeated model should price resident room recalls under the split "
+          "entry seed");
+  require(detail(*inspect, "valueAwareSplitEntryRepeatedArgumentStatus") ==
+                  "has-profitable-x-resident-recall-sites" &&
+              detail(*inspect, "valueAwareSplitEntryRepeatedArgumentProfitableNetCells") ==
+                  "1" &&
+              detail(*inspect, "valueAwareSplitEntryRepeatedArgumentModelNetCells") == "0" &&
+              detail(*inspect, "valueAwareSplitEntryRepeatedArgumentProofStatus") ==
+                  "requires-flow-entry-stack-proof-or-entry-seed-splitting" &&
+              detail(*inspect, "valueAwareSplitEntryRepeatedArgumentRequiredAction") ==
+                  "split-helper-entry-seeds-or-prove-flow-entry-stack-before-repeated-argument-rewrite",
+          "inspect split repeated model should name the remaining proof and action");
+
+  const SizeNextActionSummaryReport* action = find_size_next_action(
+      result, "costModelAction",
+      "find-profitable-stack-input-call-sites-or-reduce-materialization-cost");
+  require(action != nullptr && action->best_details.contains(
+                                "valueAwareSplitEntryRepeatedArgumentCandidate") &&
+              action->best_details.at("valueAwareSplitEntryRepeatedArgumentCandidate") ==
+                  "room" &&
+              action->best_details.at(
+                  "valueAwareSplitEntryRepeatedArgumentProfitableNetCells") == "1",
+          "wumpus stalled scheduler action should retain the split repeated model");
 }
 
 }  // namespace mkpro::tests

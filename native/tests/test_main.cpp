@@ -33,6 +33,7 @@ void counted_loop_unroll_matches_typescript_contract();
 void constant_folding_matches_typescript_contract();
 void cse_display_block_matches_typescript_contract();
 void dangerous_loading_size_report_tracks_flow_entry_stack();
+void wumpus_size_report_tracks_split_entry_repeated_argument();
 void dead_code_after_halt_matches_typescript_contract();
 void dead_proc_elimination_matches_typescript_contract();
 void dead_store_before_commutative_matches_typescript_contract();
@@ -246,6 +247,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(constant_folding_matches_typescript_contract),
       MKPRO_TEST(cse_display_block_matches_typescript_contract),
       MKPRO_TEST(dangerous_loading_size_report_tracks_flow_entry_stack),
+      MKPRO_TEST(wumpus_size_report_tracks_split_entry_repeated_argument),
       MKPRO_TEST(dead_code_after_halt_matches_typescript_contract),
       MKPRO_TEST(dead_proc_elimination_matches_typescript_contract),
       MKPRO_TEST(dead_store_before_commutative_matches_typescript_contract),
