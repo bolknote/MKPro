@@ -42804,7 +42804,7 @@ std::vector<V2Statement> build_explicit_score_walk_body(const ScoreBankWalkMatch
   return body;
 }
 
-void canonicalize_packed_line_bank_walks(V2Program& program,
+void canonicalize_packed_line_bank_walks(V2Program& program, bool rewrite_score_walks,
                                          std::vector<OptimizationReport>& optimizations) {
   const std::optional<PackedLineBankField> bank = packed_line_bank_field(program);
   if (!bank.has_value())
@@ -42869,26 +42869,28 @@ void canonicalize_packed_line_bank_walks(V2Program& program,
     }
   }
 
-  // Score side: collect new leaf rules separately to avoid invalidating the
-  // rule references being iterated.
-  std::vector<V2Rule> new_leaves;
-  std::set<std::string> used_names = collect_callable_names(program);
-  for (V2Rule& rule : program.rules) {
-    ScoreBankWalkMatch match;
-    if (!detect_score_bank_walk(program, rule, *bank, match))
-      continue;
-    match.score_leaf = fresh_callable_name(used_names, "__score_one", 0);
-    match.slot_param = slot_param;
-    match.selector = score_selector;
-    new_leaves.push_back(make_score_bank_walk_leaf(match));
-    rule.body = build_explicit_score_walk_body(match);
-    rewritten_scorers.push_back(rule.name);
-  }
-  if (!new_leaves.empty()) {
-    ensure_implicit_param_state_field(program, slot_param, new_leaves.front().line);
-    ensure_implicit_param_state_field(program, score_selector, new_leaves.front().line);
-    for (V2Rule& leaf : new_leaves)
-      program.rules.push_back(std::move(leaf));
+  if (rewrite_score_walks) {
+    // Score side: collect new leaf rules separately to avoid invalidating the
+    // rule references being iterated.
+    std::vector<V2Rule> new_leaves;
+    std::set<std::string> used_names = collect_callable_names(program);
+    for (V2Rule& rule : program.rules) {
+      ScoreBankWalkMatch match;
+      if (!detect_score_bank_walk(program, rule, *bank, match))
+        continue;
+      match.score_leaf = fresh_callable_name(used_names, "__score_one", 0);
+      match.slot_param = slot_param;
+      match.selector = score_selector;
+      new_leaves.push_back(make_score_bank_walk_leaf(match));
+      rule.body = build_explicit_score_walk_body(match);
+      rewritten_scorers.push_back(rule.name);
+    }
+    if (!new_leaves.empty()) {
+      ensure_implicit_param_state_field(program, slot_param, new_leaves.front().line);
+      ensure_implicit_param_state_field(program, score_selector, new_leaves.front().line);
+      for (V2Rule& leaf : new_leaves)
+        program.rules.push_back(std::move(leaf));
+    }
   }
 
   if (rewritten_markers.empty() && rewritten_scorers.empty())
@@ -47403,8 +47405,13 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
       run_interprocedural_ast_passes(options, *ast.v2, context.optimizations);
       if (options.alternating_sign_toggle_args)
         toggle_alternating_literal_call_args(*ast.v2, context.optimizations);
-      if (options.canonicalize_packed_line_bank_walks)
-        canonicalize_packed_line_bank_walks(*ast.v2, context.optimizations);
+      if (options.canonicalize_packed_line_bank_walks) {
+        const bool rewrite_score_walks =
+            !options.packed_line_family_mutating_selector_update_check_tail &&
+            !options.packed_line_family_borrowed_mutating_selector_update_check_tail;
+        canonicalize_packed_line_bank_walks(*ast.v2, rewrite_score_walks,
+                                            context.optimizations);
+      }
       // TS performs dead-source residual temp reuse before common-tail hoisting.
       // Native currently lowers residual-temp reuse later, but the common-tail
       // pass must still run in this candidate so single-use tail inlining can
