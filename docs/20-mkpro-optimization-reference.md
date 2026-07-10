@@ -2405,7 +2405,10 @@ The IR pipeline defined in `native/src/core/passes/index.cpp` runs repeatedly:
     address byte, while leaving that branch's ordinary continuation after the
     operand byte, when static control flow proves the old entry had no linear
     fallthrough and removing the old cell cannot shift fixed numeric/formal
-    targets. If the ordinary official address byte does not match, the verifier
+    targets. Such a distant executable must itself have no linear continuation:
+    either `В/О`, or an unconditional `К БП R` carrying a final
+    `indirect-target=NN` artifact whose target is before the removed cell and
+    therefore does not shift. If the ordinary official address byte does not match, the verifier
     may choose the executable byte as a formal-address alias, but only when that
     formal byte decodes to the same final target label. The overlaid executable
     cell may be an ordinary op or an existing numeric/formal address byte; if the

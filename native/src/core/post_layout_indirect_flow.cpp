@@ -68,6 +68,9 @@ struct MachineCell {
   const MachineItem* item = nullptr;
 };
 
+std::optional<int> known_indirect_flow_target_comment(const std::optional<std::string>& comment,
+                                                      AddressSpaceModel model);
+
 struct StopTailReuseBase {
   std::string register_name;
   int target = 0;
@@ -548,6 +551,18 @@ std::vector<MachineItem> immediate_overlay_candidate(const std::vector<MachineIt
   return candidate;
 }
 
+bool overlay_opcode_has_no_linear_continuation(const MachineItem& item, int removed_cell_address,
+                                               AddressSpaceModel model) {
+  if (item.kind != MachineItemKind::Op)
+    return false;
+  if (item.opcode == 0x52)
+    return true;
+  if (item.opcode < 0x80 || item.opcode > 0x8e)
+    return false;
+  const std::optional<int> target = known_indirect_flow_target_comment(item.comment, model);
+  return target.has_value() && *target < removed_cell_address;
+}
+
 std::optional<AddressCodeOverlayApplication>
 apply_address_code_overlay(const std::vector<MachineItem>& items, AddressSpaceModel model) {
   const std::map<int, int> address_by_item = machine_address_by_item_index(items);
@@ -655,17 +670,19 @@ apply_address_code_overlay(const std::vector<MachineItem>& items, AddressSpaceMo
           overlay_executable_at(items, labels_end, model);
       if (!executable.has_value() || is_address_taking_opcode(executable->opcode))
         continue;
+      const auto removed_address_it = layout.address_by_item_index.find(labels_end);
+      if (removed_address_it == layout.address_by_item_index.end())
+        continue;
       // Relocating a distant label onto the branch address byte changes the
-      // linear continuation of the overlaid cell: after executing the byte at
-      // the branch operand, control falls into the cells following the branch,
-      // not into the label's original block. That is only sound when the
-      // overlaid opcode never continues linearly (В/О returns to the caller).
-      if (executable->opcode != 0x52)
+      // cell after the overlaid opcode. This is sound only when that cell is
+      // unreachable: В/О returns and an unconditional indirect jump transfers
+      // to a proof-carrying target before the removed cell. Later targets would
+      // shift and cannot be repaired when the selector is computed at runtime.
+      if (!overlay_opcode_has_no_linear_continuation(
+              items.at(static_cast<std::size_t>(labels_end)), removed_address_it->second, model))
         continue;
 
-      const auto removed_address_it = layout.address_by_item_index.find(labels_end);
-      if (removed_address_it == layout.address_by_item_index.end() ||
-          !fixed_address_targets_survive_removal(items, removed_address_it->second, model)) {
+      if (!fixed_address_targets_survive_removal(items, removed_address_it->second, model)) {
         continue;
       }
 

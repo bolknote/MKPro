@@ -835,6 +835,62 @@ void post_layout_indirect_flow_matches_typescript_contract() {
 
   {
     std::vector<MachineItem> program;
+    const std::vector<MachineItem> outer_jump = jump("target");
+    program.insert(program.end(), outer_jump.begin(), outer_jump.end());
+    const std::vector<MachineItem> skip_entry = jump("after_entry");
+    program.insert(program.end(), skip_entry.begin(), skip_entry.end());
+    program.push_back(MachineItem::label("entry"));
+    MachineItem indirect_jump = MachineItem::op(0x8e, "К БП e");
+    indirect_jump.comment = "proved distant overlay indirect-target=0";
+    program.push_back(indirect_jump);
+    program.push_back(MachineItem::label("after_entry"));
+    for (int index = 0; index < 90; ++index)
+      program.push_back(digit());
+    program.push_back(MachineItem::label("target"));
+    program.push_back(MachineItem::op(0x50, "С/П"));
+    const std::vector<MachineItem> entry_jump = jump("entry");
+    program.insert(program.end(), entry_jump.begin(), entry_jump.end());
+
+    std::vector<MachineItem> unproved_program = program;
+    const auto unproved_jump = std::find_if(unproved_program.begin(), unproved_program.end(),
+                                            [](const MachineItem& item) {
+                                              return item.kind == MachineItemKind::Op &&
+                                                     item.opcode == 0x8e;
+                                            });
+    require(unproved_jump != unproved_program.end(),
+            "indirect-jump overlay fixture should contain its candidate opcode");
+    unproved_jump->comment.reset();
+    const core::PostLayoutIndirectFlowResult unproved =
+        core::optimize_post_layout_address_code_overlay(unproved_program);
+    require(unproved.applied == 0,
+            "distant indirect-jump overlay should require a final target artifact");
+
+    const core::PostLayoutIndirectFlowResult result =
+        core::optimize_post_layout_address_code_overlay(program);
+
+    require(result.applied == 1,
+            "address/code overlay should move a distant unconditional indirect jump");
+    require(core::machine_cell_count(result.items) == core::machine_cell_count(program) - 1,
+            "indirect-jump overlay should remove the original executable cell");
+    const auto entry = std::find_if(result.items.begin(), result.items.end(),
+                                    [](const MachineItem& item) {
+                                      return item.kind == MachineItemKind::Label &&
+                                             item.name == "entry";
+                                    });
+    require(entry != result.items.end() && std::next(entry) != result.items.end() &&
+                std::next(entry)->kind == MachineItemKind::Address &&
+                std::next(entry)->formal_opcode.has_value() &&
+                *std::next(entry)->formal_opcode == 0x8e,
+            "indirect-jump overlay should execute the formal address byte at the moved entry");
+    require(std::none_of(result.items.begin(), result.items.end(),
+                         [](const MachineItem& item) {
+                           return item.kind == MachineItemKind::Op && item.opcode == 0x8e;
+                         }),
+            "indirect-jump overlay should remove the original indirect jump opcode");
+  }
+
+  {
+    std::vector<MachineItem> program;
     const std::vector<MachineItem> branch = cjump("target");
     program.insert(program.end(), branch.begin(), branch.end());
     program.push_back(MachineItem::label("entry"));
