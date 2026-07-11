@@ -32,7 +32,9 @@ void compiler_lowers_initial_v2_subset();
 void counted_loop_unroll_matches_typescript_contract();
 void constant_folding_matches_typescript_contract();
 void cse_display_block_matches_typescript_contract();
+void cyclic_end_return_relocates_only_proved_direct_call_helpers();
 void dark_side_suffix_helper_rewrites_only_proved_layouts();
+void helper_invariant_recall_hoist_rewrites_only_proved_calls();
 void dangerous_loading_size_report_tracks_flow_entry_stack();
 void wumpus_size_report_tracks_split_entry_repeated_argument();
 void dead_code_after_halt_matches_typescript_contract();
@@ -116,6 +118,7 @@ void match_blocks_match_typescript_contract();
 void maxmin_zero_lint_matches_typescript_contract();
 void mk61_trig_matches_emulator_contract();
 void mk61_trig_calculate_matches_rom_values();
+void natural_component_layout_rewrites_only_proved_shared_continuations();
 void opcode_catalog_matches_typescript_contract();
 void oracle_index_loads_committed_artifacts();
 void packed_counter_stripes_match_typescript_contract();
@@ -124,10 +127,12 @@ void packed_display_helpers_match_typescript_contract();
 void packed_line_joint_family_alpha_renamed_fixture_preserves_behavior();
 void packed_score_helpers_match_typescript_contract();
 void parser_matches_initial_v2_source_contract();
+void phase_selector_materializer_requires_proved_raw_phase_and_factor();
 void expression_parser_matches_initial_contract();
 void parser_accepts_all_example_sources();
 void pass_pipeline_matches_initial_typescript_contract();
 void post_layout_indirect_flow_matches_typescript_contract();
+void raw_bcd_unary_selector_matches_emulator_oracle();
 void r0_fractional_sentinel_matches_typescript_contract();
 void random_cell_helpers_match_typescript_contract();
 void recall_removal_engine_matches_initial_typescript_contract();
@@ -143,6 +148,8 @@ void callee_hole_helper_matches_direct_call_semantics();
 void canonicalize_packed_line_bank_walk_rewrites_explicit_slot_leaves();
 void segmented_bitplanes_match_typescript_contract();
 void setup_program_matches_typescript_contract();
+void terminal_report_tail_rewrites_only_with_explicit_proofs();
+void terminal_retry_sentinel_plan_discovers_only_local_proved_prefix();
 void setup_only_counted_loop_matches_typescript_contract();
 void store_recall_peephole_matches_typescript_contract();
 void show_read_guarded_transfer_matches_typescript_contract();
@@ -252,7 +259,9 @@ int main(int argc, char** argv) {
       MKPRO_TEST(counted_loop_unroll_matches_typescript_contract),
       MKPRO_TEST(constant_folding_matches_typescript_contract),
       MKPRO_TEST(cse_display_block_matches_typescript_contract),
+      MKPRO_TEST(cyclic_end_return_relocates_only_proved_direct_call_helpers),
       MKPRO_TEST(dark_side_suffix_helper_rewrites_only_proved_layouts),
+      MKPRO_TEST(helper_invariant_recall_hoist_rewrites_only_proved_calls),
       MKPRO_TEST(dangerous_loading_size_report_tracks_flow_entry_stack),
       MKPRO_TEST(wumpus_size_report_tracks_split_entry_repeated_argument),
       MKPRO_TEST(dead_code_after_halt_matches_typescript_contract),
@@ -332,6 +341,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(maxmin_zero_lint_matches_typescript_contract),
       MKPRO_TEST(mk61_trig_matches_emulator_contract),
       MKPRO_TEST(mk61_trig_calculate_matches_rom_values),
+      MKPRO_TEST(natural_component_layout_rewrites_only_proved_shared_continuations),
       MKPRO_TEST(opcode_catalog_matches_typescript_contract),
       MKPRO_TEST(oracle_index_loads_committed_artifacts),
       MKPRO_TEST(packed_counter_stripes_match_typescript_contract),
@@ -340,10 +350,12 @@ int main(int argc, char** argv) {
       MKPRO_TEST(packed_line_joint_family_alpha_renamed_fixture_preserves_behavior),
       MKPRO_TEST(packed_score_helpers_match_typescript_contract),
       MKPRO_TEST(parser_matches_initial_v2_source_contract),
+      MKPRO_TEST(phase_selector_materializer_requires_proved_raw_phase_and_factor),
       MKPRO_TEST(expression_parser_matches_initial_contract),
       MKPRO_TEST(parser_accepts_all_example_sources),
       MKPRO_TEST(pass_pipeline_matches_initial_typescript_contract),
       MKPRO_TEST(post_layout_indirect_flow_matches_typescript_contract),
+      MKPRO_TEST(raw_bcd_unary_selector_matches_emulator_oracle),
       MKPRO_TEST(r0_fractional_sentinel_matches_typescript_contract),
       MKPRO_TEST(random_cell_helpers_match_typescript_contract),
       MKPRO_TEST(recall_removal_engine_matches_initial_typescript_contract),
@@ -359,6 +371,8 @@ int main(int argc, char** argv) {
       MKPRO_TEST(canonicalize_packed_line_bank_walk_rewrites_explicit_slot_leaves),
       MKPRO_TEST(segmented_bitplanes_match_typescript_contract),
       MKPRO_TEST(setup_program_matches_typescript_contract),
+      MKPRO_TEST(terminal_report_tail_rewrites_only_with_explicit_proofs),
+      MKPRO_TEST(terminal_retry_sentinel_plan_discovers_only_local_proved_prefix),
       MKPRO_TEST(setup_only_counted_loop_matches_typescript_contract),
       MKPRO_TEST(store_recall_peephole_matches_typescript_contract),
       MKPRO_TEST(show_optimization_strategies_match_typescript_contract),

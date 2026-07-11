@@ -161,8 +161,11 @@ struct JointPackedLineFamilyEmissionPlan {
   std::string score_leaf_label;
   std::string update_leaf_label;
   std::string walker_label;
+  std::string selector_store_label;
   int selector_register = 0xe;
   bool score_selector_bias = false;
+  bool inline_score_selector_entry = false;
+  bool update_tail_fallthrough = false;
   bool leaves_emitted = false;
 };
 

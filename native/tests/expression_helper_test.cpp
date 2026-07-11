@@ -228,18 +228,19 @@ program SelectedStackCarriedPow10 {
 void expression_helper_size_report_tracks_symbolic_entry_stack() {
   CompileOptions options;
   options.analysis = true;
-  options.budget = 999;
+  options.budget = 105;
+  options.fast_candidate_search = true;
   const std::filesystem::path root = std::filesystem::current_path();
   const std::string source =
       read_text(root / "examples" / "pending-optimizer" / "tic-tac-toe-4x4.mkpro");
   const CompileResult result = compile_source(source, options);
 
   require(result.implemented, "tic-tac-toe-4x4 should compile for size-attribution proof");
-  require(result.steps.size() == 128,
-          "ordinary generic candidate search should keep the current 128-cell checkpoint, got " +
+  require(result.steps.size() == 120,
+          "ordinary generic candidate search should keep the current 120-cell checkpoint, got " +
               std::to_string(result.steps.size()));
   require(has_optimization(result, "joint-packed-line-family-walk"),
-          "automatic candidate search should reach 105 through reusable packed-line passes");
+          "automatic candidate search should select the reusable packed-line family pass");
 
   CompileOptions mutating_options;
   mutating_options.analysis = true;
@@ -251,8 +252,8 @@ void expression_helper_size_report_tracks_symbolic_entry_stack() {
   const CompileResult mutating = compile_source(source, mutating_options);
   require(mutating.implemented && mutating.diagnostics.empty(),
           "forced mutating packed-line candidate should compile");
-  require(mutating.steps.size() == 142,
-          "the pinned mid-level candidate should stay at its independently tested 142-cell "
+  require(mutating.steps.size() == 140,
+          "the pinned mid-level candidate should stay at its independently tested 140-cell "
           "layout, got " +
               std::to_string(mutating.steps.size()));
   require(!mutating.registers.contains("__bank_slot") &&

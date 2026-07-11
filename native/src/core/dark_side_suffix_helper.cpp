@@ -140,6 +140,87 @@ bool has_official_fallthrough_barrier(const std::vector<MachineItem>& items,
          items.at(*flow).opcode == 0x51;
 }
 
+bool verify_official_fallthrough_mode(
+    const std::vector<MachineItem>& items, const ArtifactIndex& index,
+    std::size_t helper_label_item, const std::string& helper_label,
+    const DarkSideSuffixHelperOptions& options, bool final_artifact,
+    DarkSideSuffixHelperProof* proof, std::vector<std::string>& reasons) {
+  if (!options.proved_official_fallthrough.has_value()) {
+    if (!has_official_fallthrough_barrier(items, helper_label_item)) {
+      reasons.push_back(
+          "official control can fall through into the helper without an explicit predecessor "
+          "proof");
+      return false;
+    }
+    return true;
+  }
+
+  const DarkSideOfficialFallthroughEntry& claimed =
+      *options.proved_official_fallthrough;
+  if (claimed.entry_label.empty() || claimed.entry_label != helper_label) {
+    reasons.push_back(
+        "proved official fallthrough entry does not name the helper root label");
+    return false;
+  }
+  if (claimed.predecessor_item_index >= items.size()) {
+    reasons.push_back("proved official fallthrough predecessor item is outside the artifact");
+    return false;
+  }
+
+  const std::optional<std::size_t> actual_predecessor =
+      previous_cell_item(items, helper_label_item);
+  if (!actual_predecessor.has_value() ||
+      *actual_predecessor != claimed.predecessor_item_index) {
+    reasons.push_back(
+        "proved official fallthrough predecessor is not the helper's unique immediate "
+        "physical predecessor");
+    return false;
+  }
+  const MachineItem& predecessor = items.at(*actual_predecessor);
+  const auto root_address = index.label_addresses.find(helper_label);
+  if (root_address == index.label_addresses.end() ||
+      index.item_addresses.at(*actual_predecessor) != root_address->second - 1) {
+    reasons.push_back(
+        "proved official fallthrough predecessor is not immediately before the helper entry");
+    return false;
+  }
+  if (predecessor.kind != MachineItemKind::Op ||
+      !is_straight_line_body_opcode(predecessor.opcode)) {
+    reasons.push_back(
+        "proved official fallthrough predecessor is not a straight-line executable command");
+    return false;
+  }
+  if (has_official_fallthrough_barrier(items, helper_label_item)) {
+    reasons.push_back(
+        "proved official fallthrough predecessor is fenced by a control-flow barrier");
+    return false;
+  }
+
+  const int expected_continuation_address =
+      final_artifact ? kExplicitReturnPhysical : kExplicitReturnPhysical + 1;
+  const auto continuation = index.cell_items.find(expected_continuation_address);
+  if (continuation == index.cell_items.end() ||
+      items.at(continuation->second).kind != MachineItemKind::Op) {
+    reasons.push_back(
+        final_artifact
+            ? "final dual-mode artifact has no executable official continuation at physical 48"
+            : "dual-mode suffix has no executable continuation after the removable В/О");
+    return false;
+  }
+
+  if (proof != nullptr) {
+    proof->official_fallthrough_proved = true;
+    proof->official_fallthrough_predecessor_item_index = *actual_predecessor;
+    proof->official_fallthrough_predecessor_address =
+        index.item_addresses.at(*actual_predecessor);
+    proof->official_fallthrough_entry_label = helper_label;
+    proof->official_continuation_address = kExplicitReturnPhysical;
+    proof->official_continuation_item_index = continuation->second;
+    proof->official_continuation_opcode = items.at(continuation->second).opcode;
+  }
+  return true;
+}
+
 std::optional<int> referenced_physical_address(const MachineItem& address,
                                                const ArtifactIndex& index,
                                                AddressSpaceModel model) {
@@ -178,6 +259,10 @@ std::map<std::string, DarkSideSuffixEntry> entry_map(const DarkSideSuffixHelperP
 DarkSideSuffixHelperOptions
 shifted_options_after_erasure(const DarkSideSuffixHelperOptions& options, std::size_t erased_item) {
   DarkSideSuffixHelperOptions shifted = options;
+  if (shifted.proved_official_fallthrough.has_value() &&
+      shifted.proved_official_fallthrough->predecessor_item_index > erased_item) {
+    --shifted.proved_official_fallthrough->predecessor_item_index;
+  }
   shifted.proved_indirect_flow_targets.clear();
   for (const auto& [item, targets] : options.proved_indirect_flow_targets) {
     if (item == erased_item)
@@ -197,11 +282,27 @@ bool verify_rewritten_artifact(const std::vector<MachineItem>& items,
     return false;
   }
   const auto root = index.label_addresses.find(original.helper_label);
-  if (root == index.label_addresses.end() ||
+  const auto root_item = index.label_items.find(original.helper_label);
+  if (root == index.label_addresses.end() || root_item == index.label_items.end() ||
       index.duplicate_labels.contains(original.helper_label) ||
       root->second != original.body_start_address) {
     reasons.push_back("final artifact moved or removed the dark-side helper entry");
     return false;
+  }
+  if (!verify_official_fallthrough_mode(items, index, root_item->second,
+                                        original.helper_label, options,
+                                        /*final_artifact=*/true, nullptr, reasons)) {
+    return false;
+  }
+  if (original.official_fallthrough_proved) {
+    const auto continuation = index.cell_items.find(kExplicitReturnPhysical);
+    if (continuation == index.cell_items.end() ||
+        items.at(continuation->second).kind != MachineItemKind::Op ||
+        items.at(continuation->second).opcode != original.official_continuation_opcode) {
+      reasons.push_back(
+          "final dual-mode continuation differs from the proved post-return command");
+      return false;
+    }
   }
   const auto return_zero = index.cell_items.find(0);
   if (return_zero == index.cell_items.end() ||
@@ -317,11 +418,6 @@ verify_dark_side_suffix_helper(const std::vector<MachineItem>& items,
     proof.reasons.push_back(
         "physical 00 is not В/О, so crossing the side-space boundary cannot return");
   }
-  if (!has_official_fallthrough_barrier(items, root_item->second)) {
-    proof.reasons.push_back(
-        "official control can fall through into the helper after its explicit return is removed");
-  }
-
   std::map<std::string, int> entry_addresses;
   for (std::size_t item_index = root_item->second; item_index < items.size(); ++item_index) {
     const MachineItem& item = items.at(item_index);
@@ -356,6 +452,9 @@ verify_dark_side_suffix_helper(const std::vector<MachineItem>& items,
     proof.reasons.push_back("helper body length is outside 1..48 cells");
   if (proof.explicit_return_address != kExplicitReturnPhysical)
     proof.reasons.push_back("no removable explicit В/О was proved at physical 48");
+  (void)verify_official_fallthrough_mode(
+      items, index, root_item->second, helper_label, options,
+      /*final_artifact=*/false, &proof, proof.reasons);
   for (const std::string& duplicate : index.duplicate_labels) {
     if (entry_addresses.contains(duplicate))
       proof.reasons.push_back("helper entry label '" + duplicate + "' is duplicated");
@@ -511,11 +610,16 @@ rewrite_dark_side_suffix_helper(const std::vector<MachineItem>& items,
   }
 
   result.applied = 1;
+  const std::string official_mode = result.proof.official_fallthrough_proved
+                                        ? ", preserved one proved official fallthrough entry "
+                                              "whose post-F9 continuation is physical 48"
+                                        : "";
   result.optimizations.push_back(passes::AppliedOptimization{
       .name = "dark-side-suffix-helper",
       .detail = "Rebound " + std::to_string(result.proof.calls.size()) + " direct helper call" +
                 (result.proof.calls.size() == 1U ? "" : "s") + " to B2..F9 side-space entr" +
                 (result.proof.entries.size() == 1U ? "y" : "ies") +
+                official_mode +
                 " and removed В/О at physical 48 after a final-artifact proof.",
   });
   return result;

@@ -29,7 +29,9 @@ add_library(mkpro_core STATIC
   src/core/ast_json.cpp
   src/core/compiler.cpp
   src/core/constant_folder.cpp
+  src/core/cyclic_end_return.cpp
   src/core/dark_side_suffix_helper.cpp
+  src/core/helper_invariant_recall_hoist.cpp
   src/core/emit/lowering/coord_list.cpp
   src/core/emit/lowering/display.cpp
   src/core/emit/lowering/expr.cpp
@@ -46,8 +48,10 @@ add_library(mkpro_core STATIC
   src/core/late_bound_decimal_selector.cpp
   src/core/machine_profile.cpp
   src/core/mk61_trig.cpp
+  src/core/natural_component_layout.cpp
   src/core/opcodes.cpp
   src/core/parser.cpp
+  src/core/phase_selector_materializer.cpp
   src/core/passes/arithmetic_if.cpp
   src/core/passes/branch_target_x_reuse.cpp
   src/core/passes/cfg.cpp
@@ -91,12 +95,16 @@ add_library(mkpro_core STATIC
   src/core/passes/x2_literal_restore.cpp
   src/core/passes/x2_noop_restore.cpp
   src/core/post_layout_indirect_flow.cpp
+  src/core/raw_bcd_unary_selector.cpp
   src/core/register_allocator.cpp
   src/core/return_stack_script.cpp
   src/core/rule_cfg.cpp
   src/core/rules.cpp
+  src/core/shared_helper_continuation.cpp
   src/core/state_banks.cpp
   src/core/super_dark_layout.cpp
+  src/core/terminal_report_tail.cpp
+  src/core/terminal_retry_sentinel_plan.cpp
   src/core/v2_const.cpp
   src/oracle.cpp
   src/stub_compiler.cpp
@@ -142,8 +150,10 @@ add_executable(mkpro_tests
   tests/example_sizes_test.cpp
   tests/constant_folding_test.cpp
   tests/cse_display_block_test.cpp
+  tests/cyclic_end_return_test.cpp
   tests/dangerous_loading_size_report_test.cpp
   tests/dark_side_suffix_helper_test.cpp
+  tests/helper_invariant_recall_hoist_test.cpp
   tests/dead_code_after_halt_test.cpp
   tests/dead_proc_elimination_test.cpp
   tests/dead_store_before_commutative_test.cpp
@@ -208,6 +218,7 @@ add_executable(mkpro_tests
   tests/match_blocks_test.cpp
   tests/maxmin_zero_lint_test.cpp
   tests/mk61_trig_test.cpp
+  tests/natural_component_layout_test.cpp
   tests/opcodes_test.cpp
   tests/oracle_test.cpp
   tests/packed_counter_stripes_test.cpp
@@ -215,8 +226,10 @@ add_executable(mkpro_tests
   tests/packed_score_helper_test.cpp
   tests/setup_format_contract_test.cpp
   tests/parser_test.cpp
+  tests/phase_selector_materializer_test.cpp
   tests/passes_test.cpp
   tests/post_layout_indirect_flow_test.cpp
+  tests/raw_bcd_unary_selector_test.cpp
   tests/r0_fractional_sentinel_test.cpp
   tests/random_cell_helper_test.cpp
   tests/recall_removal_test.cpp
@@ -229,6 +242,8 @@ add_executable(mkpro_tests
   tests/safe_minmax_test.cpp
   tests/segmented_bitplane_test.cpp
   tests/setup_program_test.cpp
+  tests/terminal_report_tail_test.cpp
+  tests/terminal_retry_sentinel_plan_test.cpp
   tests/setup_only_counted_loop_test.cpp
   tests/store_recall_peephole_pass_test.cpp
   tests/show_read_guarded_transfer_test.cpp
@@ -293,7 +308,9 @@ set(MKPRO_NATIVE_TEST_NAMES
   counted_loop_unroll_matches_typescript_contract
   constant_folding_matches_typescript_contract
   cse_display_block_matches_typescript_contract
+  cyclic_end_return_relocates_only_proved_direct_call_helpers
   dark_side_suffix_helper_rewrites_only_proved_layouts
+  helper_invariant_recall_hoist_rewrites_only_proved_calls
   dead_code_after_halt_matches_typescript_contract
   dead_proc_elimination_matches_typescript_contract
   dead_store_before_commutative_matches_typescript_contract
@@ -369,6 +386,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   maxmin_zero_lint_matches_typescript_contract
   mk61_trig_matches_emulator_contract
   mk61_trig_calculate_matches_rom_values
+  natural_component_layout_rewrites_only_proved_shared_continuations
   opcode_catalog_matches_typescript_contract
   oracle_index_loads_committed_artifacts
   packed_counter_stripes_match_typescript_contract
@@ -376,10 +394,12 @@ set(MKPRO_NATIVE_TEST_NAMES
   packed_line_joint_family_alpha_renamed_fixture_preserves_behavior
   packed_score_helpers_match_typescript_contract
   parser_matches_initial_v2_source_contract
+  phase_selector_materializer_requires_proved_raw_phase_and_factor
   expression_parser_matches_initial_contract
   parser_accepts_all_example_sources
   pass_pipeline_matches_initial_typescript_contract
   post_layout_indirect_flow_matches_typescript_contract
+  raw_bcd_unary_selector_matches_emulator_oracle
   r0_fractional_sentinel_matches_typescript_contract
   random_cell_helpers_match_typescript_contract
   recall_removal_engine_matches_initial_typescript_contract
@@ -394,6 +414,8 @@ set(MKPRO_NATIVE_TEST_NAMES
   canonicalize_packed_line_bank_walk_rewrites_explicit_slot_leaves
   segmented_bitplanes_match_typescript_contract
   setup_program_matches_typescript_contract
+  terminal_report_tail_rewrites_only_with_explicit_proofs
+  terminal_retry_sentinel_plan_discovers_only_local_proved_prefix
   setup_only_counted_loop_matches_typescript_contract
   store_recall_peephole_matches_typescript_contract
   show_optimization_strategies_match_typescript_contract

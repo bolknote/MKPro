@@ -204,11 +204,10 @@ void post_layout_indirect_flow_matches_typescript_contract() {
             "proved fractional fixed-point call should save one program cell");
     require(fixed_point.preloads.empty(),
             "fractional fixed-point call should reuse the delivered constant preload");
-    const auto indirect_call =
-        std::find_if(fixed_point.items.begin(), fixed_point.items.end(),
-                     [](const MachineItem& item) {
-                       return item.kind == MachineItemKind::Op && item.opcode == 0xae;
-                     });
+    const auto indirect_call = std::find_if(
+        fixed_point.items.begin(), fixed_point.items.end(), [](const MachineItem& item) {
+          return item.kind == MachineItemKind::Op && item.opcode == 0xae;
+        });
     require(indirect_call != fixed_point.items.end() && indirect_call->comment.has_value() &&
                 indirect_call->comment->find("indirect-target=76") != std::string::npos,
             "natural 0.41200076 selector should become one-cell К ПП e to final address 76");
@@ -231,9 +230,8 @@ void post_layout_indirect_flow_matches_typescript_contract() {
     overwritten_program.at(2) = MachineItem::op(0x4e, "П→x e");
     const core::PostLayoutIndirectFlowResult overwritten =
         core::optimize_post_layout_indirect_flow(overwritten_program, fixed_point_options, 0);
-    require(overwritten.applied == 0 &&
-                core::machine_cell_count(overwritten.items) ==
-                    core::machine_cell_count(overwritten_program),
+    require(overwritten.applied == 0 && core::machine_cell_count(overwritten.items) ==
+                                            core::machine_cell_count(overwritten_program),
             "fractional fixed-point call should fail closed when program code can overwrite "
             "the preloaded selector register");
   }
@@ -256,11 +254,9 @@ void post_layout_indirect_flow_matches_typescript_contract() {
             "expanded post-layout indirect flow should rewrite a forward target at 105");
     require(result.preloads.size() == 1 && result.preloads.at(0).value == "A5",
             "expanded post-layout selector for final target 105 should be A5");
-    const std::optional<core::IndirectAddressEvaluation> decoded =
-        core::evaluate_indirect_address(result.preloads.at(0).register_name,
-                                        result.preloads.at(0).value,
-                                        core::IndirectOperationKind::Flow,
-                                        AddressSpaceModel::Mk61SMiniExpanded);
+    const std::optional<core::IndirectAddressEvaluation> decoded = core::evaluate_indirect_address(
+        result.preloads.at(0).register_name, result.preloads.at(0).value,
+        core::IndirectOperationKind::Flow, AddressSpaceModel::Mk61SMiniExpanded);
     require(decoded.has_value() && decoded->actual_flow_target == 105,
             "expanded A5 selector should decode to official address 105");
   }
@@ -467,24 +463,75 @@ void post_layout_indirect_flow_matches_typescript_contract() {
 
     require(result.applied == 1,
             "post-layout stop-tail reuse should apply empty-stack tail-call rewrite");
-    require(core::machine_cell_count(result.items) == core::machine_cell_count(program) - 1,
-            "empty-stack tail-call rewrite should remove the proved loop-back cell");
+    require(core::machine_cell_count(result.items) == core::machine_cell_count(program) - 3,
+            "adjacent empty-stack tail-call rewrite should remove the call, operand, and proved "
+            "loop-back cell");
     require(!result.optimizations.empty() &&
                 result.optimizations.at(0).name == "post-layout-empty-stack-tail-call",
             "empty-stack post-layout rewrite should report the TS optimization name");
-    require(result.items.at(2).kind == MachineItemKind::Op && result.items.at(2).opcode == 0x51,
-            "empty-stack post-layout rewrite should replace the call with a direct jump");
-    require(result.items.at(2).comment.has_value() &&
-                result.items.at(2).comment->find("empty-return-stack") != std::string::npos,
-            "empty-stack post-layout rewrite should preserve the proof in the comment");
-    require(result.items.at(3).kind == MachineItemKind::Address &&
-                std::get<std::string>(result.items.at(3).target) == "finish_turn",
-            "empty-stack post-layout rewrite should keep the original procedure target");
+    require(std::none_of(result.items.begin(), result.items.end(),
+                         [](const MachineItem& item) {
+                           return item.kind == MachineItemKind::Op &&
+                                  (item.opcode == 0x51 || item.opcode == 0x53);
+                         }),
+            "adjacent empty-stack tail call should become natural fallthrough");
+    require(std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                        [](const auto& optimization) {
+                          return optimization.name == "post-layout-empty-stack-tail-fallthrough";
+                        }),
+            "natural component entry should carry its own proof report");
     require(std::none_of(result.items.begin(), result.items.end(),
                          [](const MachineItem& item) {
                            return item.kind == MachineItemKind::Op && item.opcode == 0x88;
                          }),
             "empty-stack post-layout rewrite should remove the proved loop-back jump");
+  }
+
+  {
+    MachineItem proc = MachineItem::label("finish_turn");
+    proc.procedure_boundary = "start";
+    std::vector<MachineItem> program = {
+        MachineItem::label("main"),
+        digit(),
+        MachineItem::op(0x53, "ПП"),
+        MachineItem::address("finish_turn"),
+        MachineItem::label("unreferenced_loop_back_cell"),
+        MachineItem::op(0x88, "К БП 8"),
+        proc,
+        digit(),
+        MachineItem::op(0x52, "В/О"),
+    };
+    program.at(2).comment = "proc call finish_turn";
+    const auto result = core::optimize_post_layout_stop_tail_reuse(
+        program,
+        {PreloadReport{.register_name = "8", .value = "B2", .counts_against_program = false}});
+    require(result.applied == 1 &&
+                core::machine_cell_count(result.items) == core::machine_cell_count(program) - 3,
+            "an unreferenced metadata label must not look like an external removed-cell entry");
+  }
+
+  {
+    MachineItem proc = MachineItem::label("finish_turn");
+    proc.procedure_boundary = "start";
+    std::vector<MachineItem> program = {
+        MachineItem::label("main"),
+        MachineItem::op(0x5e, "F x=0"),
+        MachineItem::address("loop_back_entry"),
+        digit(),
+        MachineItem::op(0x53, "ПП"),
+        MachineItem::address("finish_turn"),
+        MachineItem::label("loop_back_entry"),
+        MachineItem::op(0x88, "К БП 8"),
+        proc,
+        digit(),
+        MachineItem::op(0x52, "В/О"),
+    };
+    program.at(4).comment = "proc call finish_turn";
+    const auto result = core::optimize_post_layout_stop_tail_reuse(
+        program,
+        {PreloadReport{.register_name = "8", .value = "B2", .counts_against_program = false}});
+    require(result.applied == 0 && result.items.size() == program.size(),
+            "a direct external entry into the removed loop-back cell must reject fallthrough");
   }
 
   {
@@ -510,16 +557,18 @@ void post_layout_indirect_flow_matches_typescript_contract() {
     require(result.applied == 1,
             "empty-stack tail-call rewrite should recognize a direct jump to address zero; got " +
                 std::to_string(result.applied));
-    require(core::machine_cell_count(result.items) == core::machine_cell_count(program) - 2,
-            "direct empty-stack tail-call rewrite should remove the loop-back opcode and address");
-    require(result.items.at(2).kind == MachineItemKind::Op && result.items.at(2).opcode == 0x51,
-            "direct empty-stack tail-call rewrite should replace the call with a direct jump");
-    require(result.items.at(3).kind == MachineItemKind::Address &&
-                std::get<std::string>(result.items.at(3).target) == "finish_turn",
-            "direct empty-stack tail-call rewrite should preserve the procedure target");
+    require(core::machine_cell_count(result.items) == core::machine_cell_count(program) - 4,
+            "adjacent direct empty-stack tail-call rewrite should remove both transfers");
+    require(std::none_of(result.items.begin(), result.items.end(),
+                         [](const MachineItem& item) {
+                           return item.kind == MachineItemKind::Op &&
+                                  (item.opcode == 0x51 || item.opcode == 0x53);
+                         }),
+            "adjacent direct tail call should fall through into its procedure");
     require(result.preloads.size() == 1 && result.preloads.at(0).register_name == "8" &&
-                result.preloads.at(0).value == "B6",
-            "direct empty-stack tail-call rewrite should retarget selectors across two deletions");
+                result.preloads.at(0).value == "B4",
+            "direct empty-stack tail-call fallthrough should retarget selectors across four "
+            "deletions");
   }
 
   {
@@ -946,11 +995,10 @@ void post_layout_indirect_flow_matches_typescript_contract() {
     program.insert(program.end(), entry_jump.begin(), entry_jump.end());
 
     std::vector<MachineItem> unproved_program = program;
-    const auto unproved_jump = std::find_if(unproved_program.begin(), unproved_program.end(),
-                                            [](const MachineItem& item) {
-                                              return item.kind == MachineItemKind::Op &&
-                                                     item.opcode == 0x8e;
-                                            });
+    const auto unproved_jump =
+        std::find_if(unproved_program.begin(), unproved_program.end(), [](const MachineItem& item) {
+          return item.kind == MachineItemKind::Op && item.opcode == 0x8e;
+        });
     require(unproved_jump != unproved_program.end(),
             "indirect-jump overlay fixture should contain its candidate opcode");
     unproved_jump->comment.reset();
@@ -966,11 +1014,10 @@ void post_layout_indirect_flow_matches_typescript_contract() {
             "address/code overlay should move a distant unconditional indirect jump");
     require(core::machine_cell_count(result.items) == core::machine_cell_count(program) - 1,
             "indirect-jump overlay should remove the original executable cell");
-    const auto entry = std::find_if(result.items.begin(), result.items.end(),
-                                    [](const MachineItem& item) {
-                                      return item.kind == MachineItemKind::Label &&
-                                             item.name == "entry";
-                                    });
+    const auto entry =
+        std::find_if(result.items.begin(), result.items.end(), [](const MachineItem& item) {
+          return item.kind == MachineItemKind::Label && item.name == "entry";
+        });
     require(entry != result.items.end() && std::next(entry) != result.items.end() &&
                 std::next(entry)->kind == MachineItemKind::Address &&
                 std::next(entry)->formal_opcode.has_value() &&
@@ -1013,11 +1060,10 @@ void post_layout_indirect_flow_matches_typescript_contract() {
             "address/code overlay should move a distant op across equivalent jump tails");
     require(core::machine_cell_count(result.items) == core::machine_cell_count(program) - 1,
             "equivalent-continuation overlay should remove the original executable cell");
-    const auto entry = std::find_if(result.items.begin(), result.items.end(),
-                                    [](const MachineItem& item) {
-                                      return item.kind == MachineItemKind::Label &&
-                                             item.name == "entry";
-                                    });
+    const auto entry =
+        std::find_if(result.items.begin(), result.items.end(), [](const MachineItem& item) {
+          return item.kind == MachineItemKind::Label && item.name == "entry";
+        });
     require(entry != result.items.end() && std::next(entry) != result.items.end() &&
                 std::next(entry)->kind == MachineItemKind::Address,
             "equivalent-continuation overlay should move the entry label onto the address byte");
@@ -1028,17 +1074,15 @@ void post_layout_indirect_flow_matches_typescript_contract() {
             "equivalent-continuation overlay should remove the original opcode");
 
     std::vector<MachineItem> mismatched = program;
-    const auto old_tail = std::find_if(mismatched.begin(), mismatched.end(),
-                                       [](const MachineItem& item) {
-                                         return item.kind == MachineItemKind::Label &&
-                                                item.name == "entry";
-                                       });
+    const auto old_tail =
+        std::find_if(mismatched.begin(), mismatched.end(), [](const MachineItem& item) {
+          return item.kind == MachineItemKind::Label && item.name == "entry";
+        });
     require(old_tail != mismatched.end(),
             "equivalent-continuation fixture should contain its old entry");
-    const auto old_tail_address = std::find_if(
-        std::next(old_tail, 2), mismatched.end(), [](const MachineItem& item) {
-          return item.kind == MachineItemKind::Address;
-        });
+    const auto old_tail_address =
+        std::find_if(std::next(old_tail, 2), mismatched.end(),
+                     [](const MachineItem& item) { return item.kind == MachineItemKind::Address; });
     require(old_tail_address != mismatched.end(),
             "equivalent-continuation fixture should contain its old jump operand");
     old_tail_address->target = std::string("after_entry");

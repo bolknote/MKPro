@@ -1,5 +1,6 @@
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/compiler.hpp"
+#include "mkpro/core/compiler_static_proof_gate.hpp"
 #include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
@@ -281,12 +282,31 @@ void tic_tac_toe_4x4_generic_optimizer_checkpoint_is_name_independent() {
   const CompileResult compiled = compile_source(source, options);
   require(compiled.implemented && compiled.diagnostics.empty(),
           "forced reusable packed-line pipeline should compile the source");
-  require(compiled.steps.size() == 128U,
-          "generic checkpoint after removing the whole-program recognizer should be 128 cells, "
+  require(compiled.steps.size() == 121U,
+          "generic checkpoint after removing the whole-program recognizer should be 121 cells, "
           "got " +
               std::to_string(compiled.steps.size()));
   require(has_optimization(compiled, "joint-packed-line-family-walk"),
           "checkpoint should expose the reusable joint packed-line walk");
+  const std::optional<std::string> compiled_rejection =
+      optimizer_static_proof_gate_rejection_reason_for_testing(options, compiled);
+  require(!compiled_rejection.has_value(),
+          "basic generic candidate should carry a valid final selector proof: " +
+              compiled_rejection.value_or("accepted"));
+
+  CompileOptions composed_options = options;
+  composed_options.dual_use_constant_indirect_flow = true;
+  composed_options.tail_branch_inversion = true;
+  composed_options.proc_layout_strategy = "reverse";
+  const CompileResult composed = compile_source(source, composed_options);
+  require(composed.implemented && composed.steps.size() == 120U,
+          "generic joint/dual-use/reverse composition should occupy 120 cells, got " +
+              std::to_string(composed.steps.size()));
+  const std::optional<std::string> composed_rejection =
+      optimizer_static_proof_gate_rejection_reason_for_testing(composed_options, composed);
+  require(!composed_rejection.has_value(),
+          "composed generic candidate should carry a valid final selector proof: " +
+              composed_rejection.value_or("accepted"));
 
   const std::string alpha = replace_identifier_tokens(
       source,
@@ -312,9 +332,13 @@ void tic_tac_toe_4x4_generic_optimizer_checkpoint_is_name_independent() {
        {"x", "axis_p"},
        {"y", "axis_q"}});
   const CompileResult alpha_compiled = compile_source(alpha, options);
-  require(alpha_compiled.implemented && alpha_compiled.steps.size() == 128U &&
+  require(alpha_compiled.implemented && alpha_compiled.steps.size() == 121U &&
               has_optimization(alpha_compiled, "joint-packed-line-family-walk"),
           "alpha-renamed source should keep the same checkpoint through reusable passes");
+  const CompileResult alpha_composed = compile_source(alpha, composed_options);
+  require(alpha_composed.implemented && alpha_composed.steps.size() == 120U &&
+              optimizer_static_proof_gate_accepts_for_testing(composed_options, alpha_composed),
+          "alpha-renamed source should keep the same proved composed layout");
 }
 
 } // namespace mkpro::tests

@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -27,8 +28,31 @@ struct DarkSideSuffixCall {
   std::string entry_label;
 };
 
+// An external control-flow proof for the dual-mode F9 layout.  The named
+// physical entry is reached in two deliberately different ways:
+//
+// - ordinary execution falls through from `predecessor_item_index`, traverses
+//   the suffix, and continues at physical 48 after the explicit return cell is
+//   removed;
+// - direct ПП callers are rebound to a B2..F9 side-space alias, so crossing F9
+//   wraps to physical 00 and executes the shared В/О instead.
+//
+// The verifier accepts only the one immediate predecessor recorded here and
+// still rejects every official address operand or proved indirect-flow target
+// into the suffix.  Merely enabling the option therefore cannot turn an
+// unproved second entry into a natural path.
+struct DarkSideOfficialFallthroughEntry {
+  std::size_t predecessor_item_index = 0;
+  std::string entry_label;
+};
+
 struct DarkSideSuffixHelperOptions {
   AddressSpaceModel address_space_model = AddressSpaceModel::Standard;
+
+  // Absent means the traditional helper-only mode: official linear control
+  // must be fenced off immediately before the helper.  Present enables the
+  // dual-mode natural-entry proof described above.
+  std::optional<DarkSideOfficialFallthroughEntry> proved_official_fallthrough;
 
   // Indirect control flow is unknowable from opcodes alone.  A caller may
   // provide a complete set of resolved physical targets for every indirect
@@ -46,6 +70,13 @@ struct DarkSideSuffixHelperProof {
   int body_cells = 0;
   int explicit_return_address = -1;
   std::size_t explicit_return_item_index = 0;
+  bool official_fallthrough_proved = false;
+  std::size_t official_fallthrough_predecessor_item_index = 0;
+  int official_fallthrough_predecessor_address = -1;
+  std::string official_fallthrough_entry_label;
+  int official_continuation_address = -1;
+  std::size_t official_continuation_item_index = 0;
+  int official_continuation_opcode = -1;
   std::vector<DarkSideSuffixEntry> entries;
   std::vector<DarkSideSuffixCall> calls;
   std::vector<std::string> reasons;
@@ -61,7 +92,10 @@ struct DarkSideSuffixHelperResult {
 // Verifies the pre-rewrite artifact.  The helper must already be co-laid out:
 // its executable body occupies a suffix ending at physical cell 47 and its
 // explicit В/О is physical cell 48.  The verifier accepts internal entry
-// labels, but no executable branch inside the body.
+// labels, but no executable branch inside the body.  With an explicit
+// `proved_official_fallthrough`, exactly one ordinary predecessor may enter the
+// root of the suffix; after the rewrite that path continues at physical 48,
+// while aliased ПП entries still return through physical 00.
 DarkSideSuffixHelperProof
 verify_dark_side_suffix_helper(const std::vector<MachineItem>& items,
                                const std::string& helper_label,

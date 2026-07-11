@@ -60,6 +60,33 @@ std::vector<MachineItem> nine_cell_suffix_fixture() {
   return items;
 }
 
+std::vector<MachineItem> dual_mode_suffix_fixture() {
+  std::vector<MachineItem> items = {
+      MachineItem::op(0x52, "В/О"), MachineItem::op(0x02, "2"),
+      MachineItem::op(0x53, "ПП"),  MachineItem::address(std::string("dual_helper")),
+      MachineItem::op(0x40, "хП0"), MachineItem::op(0x51, "БП"),
+      MachineItem::address(std::string("official_predecessor")),
+  };
+  while (cell_count(items) < 38)
+    items.push_back(MachineItem::op(0x50, "С/П"));
+
+  // The one externally proved official path reaches the helper by ordinary
+  // physical fallthrough.  After the rewrite it must continue at physical 48.
+  items.push_back(MachineItem::label("official_predecessor"));
+  items.push_back(MachineItem::op(0x60, "Пх0")); // 38
+  items.push_back(MachineItem::label("dual_helper"));
+  for (int index = 0; index < 9; ++index)
+    items.push_back(MachineItem::op(0x31, "F|x|")); // 39..47/F9
+
+  // This is the provisional return used by ordinary helper lowering.  The
+  // dual-mode finalizer removes it, shifting the official continuation to 48.
+  items.push_back(MachineItem::op(0x52, "В/О")); // removable 48
+  items.push_back(MachineItem::label("official_continuation"));
+  items.push_back(MachineItem::op(0x41, "хП1")); // 49 -> 48
+  items.push_back(MachineItem::op(0x50, "С/П")); // 50 -> 49
+  return items;
+}
+
 std::size_t item_at_address(const std::vector<MachineItem>& items, int wanted) {
   int address = 0;
   for (std::size_t index = 0; index < items.size(); ++index) {
@@ -76,6 +103,16 @@ int cell_count(const std::vector<MachineItem>& items) {
   return static_cast<int>(std::count_if(items.begin(), items.end(), [](const MachineItem& item) {
     return item.kind != MachineItemKind::Label;
   }));
+}
+
+core::DarkSideSuffixHelperOptions
+dual_mode_options(const std::vector<MachineItem>& items) {
+  core::DarkSideSuffixHelperOptions options;
+  options.proved_official_fallthrough = core::DarkSideOfficialFallthroughEntry{
+      .predecessor_item_index = item_at_address(items, 38),
+      .entry_label = "dual_helper",
+  };
+  return options;
 }
 
 std::string compact(std::string value) {
@@ -187,6 +224,90 @@ void dark_side_suffix_helper_rewrites_only_proved_layouts() {
     require(direct_nine.stopped && dark_nine.stopped && direct_nine.r0 == dark_nine.r0 &&
                 dark_nine.r0 == "7,",
             "the generic nine-cell EB suffix should preserve direct-call behavior");
+  }
+
+  // A side-space helper may also be a natural physical suffix of ordinary
+  // control.  The two entry modes intentionally have different successors:
+  // ПП EB wraps F9->00 and returns, while the one proved official predecessor
+  // executes 39..47 and continues at the shifted physical48 command.
+  {
+    const std::vector<MachineItem> dual = dual_mode_suffix_fixture();
+    const core::DarkSideSuffixHelperOptions options = dual_mode_options(dual);
+    const core::DarkSideSuffixHelperProof dual_proof =
+        core::verify_dark_side_suffix_helper(dual, "dual_helper", options);
+    require(dual_proof.proved && dual_proof.official_fallthrough_proved &&
+                dual_proof.body_start_address == 39 && dual_proof.body_end_address == 47 &&
+                dual_proof.official_fallthrough_predecessor_address == 38 &&
+                dual_proof.official_fallthrough_entry_label == "dual_helper" &&
+                dual_proof.official_continuation_address == 48 &&
+                dual_proof.official_continuation_opcode == 0x41,
+            "dual-mode proof should expose the unique 38->39 official edge and its physical48 "
+            "continuation");
+
+    const core::DarkSideSuffixHelperResult dual_rewritten =
+        core::rewrite_dark_side_suffix_helper(dual, "dual_helper", options);
+    require(dual_rewritten.applied == 1 && dual_rewritten.proof.proved &&
+                dual_rewritten.proof.final_artifact_proved &&
+                dual_rewritten.proof.official_fallthrough_proved &&
+                cell_count(dual) == 51 && cell_count(dual_rewritten.items) == 50,
+            "proved dual-mode suffix should remove only its provisional physical48 return");
+    require(dual_rewritten.items.at(item_at_address(dual_rewritten.items, 3)).formal_opcode ==
+                    0xeb &&
+                dual_rewritten.items.at(item_at_address(dual_rewritten.items, 48)).opcode == 0x41,
+            "dual-mode result should bind PP EB while shifting the official continuation to 48");
+    const core::DarkSideSuffixHelperResult dual_automatic =
+        core::optimize_dark_side_suffix_helper(dual, options);
+    require(dual_automatic.applied == 1 &&
+                dual_automatic.proof.helper_label == "dual_helper" &&
+                dual_automatic.proof.official_fallthrough_proved &&
+                dual_automatic.proof.final_artifact_proved,
+            "generic candidate scan should retain the explicit dual-mode proof");
+
+    const EmulatorOutcome outcome = run(dual_rewritten.items);
+    require(outcome.stopped && outcome.r0 == "2," && outcome.r1 == "2,",
+            "emulator should observe both dual successors: aliased call returns to store R0, "
+            "then official fallthrough reaches the physical48 store R1");
+
+    // Negative emulator control: an ordinary direct ПП 39 does not have the
+    // side-space wrap.  It reaches physical48 and stops before its caller can
+    // store R0, demonstrating why every helper call must carry the proved EB
+    // alias in the final artifact.
+    std::vector<MachineItem> ordinary_call = dual_rewritten.items;
+    ordinary_call.at(item_at_address(ordinary_call, 3)).formal_opcode.reset();
+    const EmulatorOutcome wrong_mode = run(ordinary_call);
+    require(wrong_mode.stopped && wrong_mode.r0 == "0," && wrong_mode.r1 == "2,",
+            "ordinary direct call should take the official continuation, not masquerade as a "
+            "dark-side return");
+
+    const core::DarkSideSuffixHelperResult unproved =
+        core::rewrite_dark_side_suffix_helper(dual, "dual_helper");
+    require(unproved.applied == 0 &&
+                contains_reason(unproved.proof, "without an explicit predecessor proof"),
+            "natural entry must remain disabled unless its one predecessor is explicit");
+
+    core::DarkSideSuffixHelperOptions wrong_predecessor = options;
+    wrong_predecessor.proved_official_fallthrough->predecessor_item_index =
+        item_at_address(dual, 37);
+    const core::DarkSideSuffixHelperResult mismatched =
+        core::rewrite_dark_side_suffix_helper(dual, "dual_helper", wrong_predecessor);
+    require(mismatched.applied == 0 &&
+                contains_reason(mismatched.proof, "unique immediate physical predecessor"),
+            "a proof naming any predecessor other than physical38 must fail closed");
+
+    std::vector<MachineItem> no_continuation = dual;
+    no_continuation.erase(
+        no_continuation.begin() +
+            static_cast<std::ptrdiff_t>(item_at_address(no_continuation, 49)),
+        no_continuation.end());
+    core::DarkSideSuffixHelperOptions no_continuation_options =
+        dual_mode_options(no_continuation);
+    const core::DarkSideSuffixHelperResult missing_continuation =
+        core::rewrite_dark_side_suffix_helper(no_continuation, "dual_helper",
+                                              no_continuation_options);
+    require(missing_continuation.applied == 0 &&
+                contains_reason(missing_continuation.proof,
+                                "no executable continuation after the removable"),
+            "dual mode must prove a real command that will become physical48");
   }
 
   // Crossing the side space reaches physical 00; without В/О there, the

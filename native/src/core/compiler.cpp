@@ -3,7 +3,9 @@
 #include "mkpro/core/address_formula_solver.hpp"
 #include "mkpro/core/compiler_static_proof_gate.hpp"
 #include "mkpro/core/constant_folder.hpp"
+#include "mkpro/core/cyclic_end_return.hpp"
 #include "mkpro/core/dark_side_suffix_helper.hpp"
+#include "mkpro/core/helper_invariant_recall_hoist.hpp"
 #include "mkpro/core/emit/lowering/coord_list.hpp"
 #include "mkpro/core/emit/lowering/display.hpp"
 #include "mkpro/core/emit/lowering/expr.hpp"
@@ -22715,6 +22717,8 @@ void plan_joint_packed_line_family_walks(LoweringContext& context,
       !context.packed_line_family_mutating_selector_update_check_tail) {
     return;
   }
+  if (!context.joint_packed_line_family_plans.empty())
+    return;
 
   std::set<std::string> used_rules;
   for (const V2Rule& score_rule : program.rules) {
@@ -22735,6 +22739,11 @@ void plan_joint_packed_line_family_walks(LoweringContext& context,
       if (!match.has_value() || used_rules.contains(match->update.update_rule))
         continue;
 
+      const bool score_selector_bias = joint_packed_line_score_selector_bias_safe(
+          program, *match, score_rule.name, update_rule.name);
+      const int score_call_count = context.proc_call_counts.contains(score_rule.name)
+                                       ? context.proc_call_counts.at(score_rule.name)
+                                       : 0;
       JointPackedLineFamilyEmissionPlan plan{
           .score_rule = score_rule.name,
           .update_rule = update_rule.name,
@@ -22742,9 +22751,12 @@ void plan_joint_packed_line_family_walks(LoweringContext& context,
           .score_leaf_label = context.emitter.fresh_label("joint_packed_line_score_leaf"),
           .update_leaf_label = context.emitter.fresh_label("joint_packed_line_update_leaf"),
           .walker_label = context.emitter.fresh_label("joint_packed_line_walker"),
+          .selector_store_label =
+              context.emitter.fresh_label("joint_packed_line_selector_store"),
           .selector_register = 0xe,
-          .score_selector_bias = joint_packed_line_score_selector_bias_safe(
-              program, *match, score_rule.name, update_rule.name),
+          .score_selector_bias = score_selector_bias,
+          .inline_score_selector_entry = score_selector_bias && score_call_count == 1,
+          .update_tail_fallthrough = score_selector_bias && score_call_count == 1,
       };
       const std::size_t plan_index = context.joint_packed_line_family_plans.size();
       context.joint_packed_line_family_plans.push_back(std::move(plan));
@@ -23245,7 +23257,7 @@ std::string joint_packed_line_selector_name(const JointPackedLineFamilyEmissionP
   return core::register_name_for_index(plan.selector_register);
 }
 
-void emit_joint_packed_line_late_selector_charge(
+void emit_joint_packed_line_late_selector_digits(
     LoweringContext& context, const JointPackedLineFamilyEmissionPlan& plan,
     const std::string& target_label, int line) {
   const std::string selector = joint_packed_line_selector_name(plan);
@@ -23257,8 +23269,30 @@ void emit_joint_packed_line_late_selector_charge(
   context.emitter.emit_op(0x00, "0", comment, line);
   context.emitter.items.back().roles.push_back(core::make_late_bound_decimal_selector_role(
       core::LateBoundDecimalSelectorPart::Low, target_label));
+}
+
+void emit_joint_packed_line_selector_store(
+    LoweringContext& context, const JointPackedLineFamilyEmissionPlan& plan,
+    const std::string& target_label, int line, bool shared_entry) {
+  const std::string selector = joint_packed_line_selector_name(plan);
+  const std::string comment = "joint-packed-line selector charge; selector=" + selector +
+                              "; target-label=" + target_label;
+  if (shared_entry) {
+    context.emitter.emit_label(plan.selector_store_label, {.hidden = true});
+  }
   context.emitter.emit_op(0x40 + plan.selector_register, "X->П " + selector,
                           comment + "; charge-store", line);
+  if (shared_entry) {
+    context.emitter.items.back().roles.push_back(
+        "joint-packed-line-shared-selector-store:" + selector);
+  }
+}
+
+void emit_joint_packed_line_late_selector_charge(
+    LoweringContext& context, const JointPackedLineFamilyEmissionPlan& plan,
+    const std::string& target_label, int line, bool shared_entry = false) {
+  emit_joint_packed_line_late_selector_digits(context, plan, target_label, line);
+  emit_joint_packed_line_selector_store(context, plan, target_label, line, shared_entry);
 }
 
 std::string joint_packed_line_dispatch_comment(
@@ -23386,8 +23420,9 @@ bool lower_joint_packed_line_family_update_rule(
   emit_store(context, match->update.update.selector,
              "joint packed-line mutating selector start " +
                  std::to_string(first_slot + 1));
-  emit_joint_packed_line_late_selector_charge(context, plan, plan.update_leaf_label,
-                                               match->update.line);
+  emit_joint_packed_line_late_selector_charge(
+      context, plan, plan.update_leaf_label, match->update.line,
+      plan.inline_score_selector_entry);
 
   context.emitter.emit_label(plan.walker_label, {.hidden = true});
   const std::string dispatch_comment = joint_packed_line_dispatch_comment(plan);
@@ -31149,6 +31184,38 @@ bool lower_invoke_statement(LoweringContext& context, const V2Statement& stateme
   }
 
   const V2Rule& rule = *rule_it->second;
+  if (statement.args.empty()) {
+    if (JointPackedLineFamilyEmissionPlan* joint_plan =
+            joint_packed_line_family_plan_for_rule(context, rule.name);
+        joint_plan != nullptr && joint_plan->inline_score_selector_entry &&
+        rule.name == joint_plan->score_rule) {
+      const std::optional<PackedLineFamilyScoreRule> score =
+          packed_line_family_score_rule(context, rule);
+      if (!score.has_value())
+        return false;
+      emit_joint_packed_line_late_selector_digits(
+          context, *joint_plan, joint_plan->score_leaf_label, statement.line);
+      context.emitter.emit_jump(
+          0x53, "ПП", joint_plan->selector_store_label,
+          "joint packed-line shared selector-store entry", statement.line);
+      if (context.emitter.items.size() >= 2U) {
+        context.emitter.items.at(context.emitter.items.size() - 2U)
+            .roles.push_back("joint-packed-line-shared-selector-call:" +
+                             joint_plan->selector_store_label);
+        context.emitter.items.back().roles.push_back(
+            "joint-packed-line-shared-selector-address:" +
+            joint_plan->selector_store_label);
+      }
+      mark_current_x(context, score->score);
+      context.emitter.current_x_known_zero = false;
+      context.optimizations.push_back(OptimizationReport{
+          .name = "joint-packed-line-shared-selector-entry",
+          .detail = "Charged the single structural score entry for " + rule.name +
+                    " at its call site and shared the update walker's selector-store entry.",
+      });
+      return true;
+    }
+  }
   if (statement.args.empty() && context.inline_statement_rules.contains(rule.name)) {
     if (context.inline_call_stack.contains(rule.name)) {
       context.diagnostics.push_back(
@@ -34288,6 +34355,21 @@ std::vector<const V2Rule*> function_rule_emission_order(LoweringContext& context
               });
   }
 
+  // A proved empty-return-stack tail can enter the joint update wrapper by
+  // physical fallthrough. Keep that component first while preserving the
+  // selected relative order of every unrelated rule.
+  std::set<std::string> fallthrough_entries;
+  for (const JointPackedLineFamilyEmissionPlan& plan :
+       context.joint_packed_line_family_plans) {
+    if (plan.update_tail_fallthrough)
+      fallthrough_entries.insert(plan.update_rule);
+  }
+  if (!fallthrough_entries.empty()) {
+    std::stable_partition(indexed.begin(), indexed.end(), [&](const IndexedRule& entry) {
+      return entry.rule != nullptr && fallthrough_entries.contains(entry.rule->name);
+    });
+  }
+
   std::vector<const V2Rule*> order;
   order.reserve(indexed.size());
   for (const IndexedRule& entry : indexed)
@@ -34342,12 +34424,22 @@ bool lower_function_rules(LoweringContext& context, const V2Program& program) {
       continue;
     if (match_trig_near_rule(*rule).has_value())
       continue;
+    if (JointPackedLineFamilyEmissionPlan* joint_plan =
+            joint_packed_line_family_plan_for_rule(context, rule->name);
+        joint_plan != nullptr && joint_plan->inline_score_selector_entry &&
+        rule->name == joint_plan->score_rule) {
+      continue;
+    }
     if (context.inline_statement_rules.contains(rule->name))
       continue;
     if (packed_line_consumed_update_rules.contains(rule->name))
       continue;
-    if (JointPackedLineFamilyEmissionPlan* joint_plan =
-            joint_packed_line_family_plan_for_rule(context, rule->name)) {
+    JointPackedLineFamilyEmissionPlan* joint_plan =
+        joint_packed_line_family_plan_for_rule(context, rule->name);
+    const bool defer_joint_leaves =
+        joint_plan != nullptr && joint_plan->update_tail_fallthrough &&
+        rule->name == joint_plan->update_rule;
+    if (joint_plan != nullptr && !defer_joint_leaves) {
       if (!emit_joint_packed_line_family_leaves(context, *joint_plan))
         return false;
     }
@@ -34358,6 +34450,8 @@ bool lower_function_rules(LoweringContext& context, const V2Program& program) {
         continue;
     }
     if (!lower_function_rule(context, *rule))
+      return false;
+    if (defer_joint_leaves && !emit_joint_packed_line_family_leaves(context, *joint_plan))
       return false;
   }
   return true;
@@ -47989,6 +48083,7 @@ bind_joint_packed_line_selector_register(const std::vector<MachineItem>& items) 
   std::vector<std::size_t> marked;
   std::set<int> used;
   int charge_stores = 0;
+  int shared_charge_stores = 0;
   int calls = 0;
   int tail_jumps = 0;
   for (std::size_t index = 0; index < items.size(); ++index) {
@@ -47998,9 +48093,14 @@ bind_joint_packed_line_selector_register(const std::vector<MachineItem>& items) 
       const std::optional<int> register_index = machine_opcode_register_index(item.opcode);
       if (register_index.has_value()) {
         marked.push_back(index);
-        if ((item.opcode & 0xf0) == 0x40)
+        if ((item.opcode & 0xf0) == 0x40) {
           ++charge_stores;
-        else if ((item.opcode & 0xf0) == 0xa0)
+          if (std::any_of(item.roles.begin(), item.roles.end(), [](const std::string& role) {
+                return role.starts_with("joint-packed-line-shared-selector-store:");
+              })) {
+            ++shared_charge_stores;
+          }
+        } else if ((item.opcode & 0xf0) == 0xa0)
           ++calls;
         else if ((item.opcode & 0xf0) == 0x80)
           ++tail_jumps;
@@ -48014,8 +48114,11 @@ bind_joint_packed_line_selector_register(const std::vector<MachineItem>& items) 
   }
   if (marked.empty())
     return result;
-  if (charge_stores <= 0 || calls != charge_stores ||
-      tail_jumps != charge_stores / 2 || charge_stores % 2 != 0) {
+  const bool ordinary_shape = charge_stores > 0 && calls == charge_stores &&
+                              tail_jumps == charge_stores / 2 && charge_stores % 2 == 0;
+  const bool shared_entry_shape = charge_stores == 1 && shared_charge_stores == 1 &&
+                                  calls == 2 && tail_jumps == 1;
+  if (!ordinary_shape && !shared_entry_shape) {
     result.diagnostics.push_back(diagnostic(
         DiagnosticSeverity::Error, "joint-packed-line-selector-shape",
         "Joint packed-line selector binding requires two charge stores, two indirect calls, "
@@ -48051,6 +48154,11 @@ bind_joint_packed_line_selector_register(const std::vector<MachineItem>& items) 
         item.comment->replace(cursor, old_text.size(), new_text);
         cursor += new_text.size();
       }
+    }
+    for (std::string& role : item.roles) {
+      const std::string old_role = "joint-packed-line-shared-selector-store:" + old_selector;
+      if (role == old_role)
+        role = "joint-packed-line-shared-selector-store:" + new_selector;
     }
   }
   result.applied = static_cast<int>(marked.size());
@@ -48224,6 +48332,32 @@ void joint_packed_line_append_comment(MachineItem& item, const std::string& suff
   item.comment = item.comment.has_value() ? *item.comment + "; " + suffix : suffix;
 }
 
+void joint_packed_line_rebind_preloaded_flow_comment(MachineItem& item,
+                                                     const std::string& selector,
+                                                     const std::string& value,
+                                                     int target) {
+  const std::string replacement =
+      "preloaded R" + selector + "=" + value + " indirect-target=" +
+      std::to_string(target) + " indirect flow";
+  if (!item.comment.has_value()) {
+    item.comment = replacement;
+    return;
+  }
+  const std::size_t begin = item.comment->find("preloaded R");
+  if (begin == std::string::npos) {
+    joint_packed_line_append_comment(item, replacement);
+    return;
+  }
+  constexpr std::string_view kEndMarker = "indirect flow";
+  const std::size_t marker = item.comment->find(kEndMarker, begin);
+  if (marker == std::string::npos) {
+    joint_packed_line_append_comment(item, replacement);
+    return;
+  }
+  const std::size_t end = marker + kEndMarker.size();
+  item.comment->replace(begin, end - begin, replacement);
+}
+
 struct JointPackedLineReportReturnFusionResult {
   std::vector<MachineItem> items;
   std::vector<PreloadReport> setup_preloads;
@@ -48235,6 +48369,97 @@ struct JointPackedLineReportReturnFusionResult {
   std::optional<std::string> selector_value;
   std::optional<int> return_address;
 };
+
+struct ProvedIndirectFlowSet {
+  std::map<std::size_t, std::vector<int>> targets;
+  // Numeric annotations name a selector value that is already materialized or
+  // preloaded.  Unlike label-derived dispatch sets, they cannot be silently
+  // retargeted by a later late-bound-selector pass.
+  std::map<std::size_t, std::vector<int>> fixed_numeric_targets;
+};
+
+std::optional<ProvedIndirectFlowSet> collect_proved_indirect_flow_set(
+    const std::vector<MachineItem>& items, AddressSpaceModel model) {
+  std::map<std::string, int> label_addresses;
+  int address = 0;
+  for (const MachineItem& item : items) {
+    if (item.kind == MachineItemKind::Label) {
+      if (label_addresses.contains(item.name))
+        return std::nullopt;
+      label_addresses.emplace(item.name, address);
+    } else {
+      ++address;
+    }
+  }
+
+  ProvedIndirectFlowSet proof;
+  for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
+    const MachineItem& item = items.at(item_index);
+    if (item.kind != MachineItemKind::Op)
+      continue;
+    const int family = item.opcode & 0xf0;
+    if (family != 0x70 && family != 0x80 && family != 0x90 && family != 0xa0 &&
+        family != 0xc0 && family != 0xe0) {
+      continue;
+    }
+
+    const std::vector<IrOp> raised = raise_machine_to_ir({item});
+    if (raised.size() != 1U)
+      return std::nullopt;
+    const std::vector<std::string> target_labels =
+        core::passes::computed_dispatch_target_labels(raised.front());
+    if (!target_labels.empty()) {
+      std::vector<int> targets;
+      for (const std::string& label : target_labels) {
+        const auto found = label_addresses.find(label);
+        if (found == label_addresses.end())
+          return std::nullopt;
+        targets.push_back(found->second);
+      }
+      std::sort(targets.begin(), targets.end());
+      targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+      proof.targets.emplace(item_index, std::move(targets));
+      continue;
+    }
+
+    const std::optional<int> numeric =
+        core::passes::known_indirect_flow_target(raised.front(), model);
+    if (!numeric.has_value())
+      return std::nullopt;
+    std::vector<int> targets{*numeric};
+    proof.targets.emplace(item_index, targets);
+    proof.fixed_numeric_targets.emplace(item_index, std::move(targets));
+  }
+  return proof;
+}
+
+std::optional<std::size_t> helper_hoist_reindexed_item(
+    std::size_t old_item, const core::HelperInvariantRecallHoistProof& proof) {
+  std::set<std::size_t> removed;
+  for (const core::HelperInvariantRecallCall& call : proof.calls)
+    removed.insert(call.recall_item_index);
+  if (removed.contains(old_item))
+    return std::nullopt;
+  std::size_t result = old_item;
+  result -= static_cast<std::size_t>(std::distance(removed.begin(), removed.lower_bound(old_item)));
+  if (proof.helper_label_item_index < old_item)
+    ++result;
+  return result;
+}
+
+bool helper_hoist_preserves_fixed_indirect_targets(
+    const ProvedIndirectFlowSet& before,
+    const core::HelperInvariantRecallHoistProof& after) {
+  for (const auto& [old_item, targets] : before.fixed_numeric_targets) {
+    const std::optional<std::size_t> new_item = helper_hoist_reindexed_item(old_item, after);
+    if (!new_item.has_value())
+      return false;
+    const auto found = after.final_indirect_flow_targets.find(*new_item);
+    if (found == after.final_indirect_flow_targets.end() || found->second != targets)
+      return false;
+  }
+  return true;
+}
 
 JointPackedLineReportReturnFusionResult fuse_joint_packed_line_report_return(
     const std::vector<MachineItem>& input_items,
@@ -48448,6 +48673,9 @@ JointPackedLineReportReturnFusionResult fuse_joint_packed_line_report_return(
                center_flow_uses.end()) {
       item.opcode = (item.opcode & 0xf0) | register_index(*replacement_selector);
       item.mnemonic = opcode_by_code(item.opcode).name;
+      joint_packed_line_rebind_preloaded_flow_comment(
+          item, *replacement_selector, *replacement_value,
+          *old_center_target->actual_flow_target);
       joint_packed_line_append_comment(
           item, std::string(kJointPackedLineSelectorRehomeMarker) +
                     " from=" + center_selector + "; to=" + *replacement_selector +
@@ -49251,6 +49479,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
         collect_near_any_helper_stats(context, *ast.v2);
         trace_stage("metadata-plan-packed-line-borrowed-selector");
         plan_packed_line_family_borrowed_mutating_selectors(context, *ast.v2);
+        trace_stage("metadata-plan-joint-packed-line-family");
+        plan_joint_packed_line_family_walks(context, *ast.v2);
       }
       if (can_attempt_lowering) {
         trace_stage("lower-main-functions-helpers");
@@ -49822,6 +50052,32 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                                      post_layout_overlay.optimizations.begin(),
                                      post_layout_overlay.optimizations.end());
 
+    // Move a register value used identically around every direct call into the
+    // root of the called straight-line helper.  The pass scans all labels and
+    // accepts only a complete bounded stack/X2/CFG proof.  Existing indirect
+    // control flow is supplied as a complete target set; already-materialized
+    // numeric selectors must keep the same target after the deletion, while
+    // label-derived dispatches are rebound by the late selector pass below.
+    const std::optional<ProvedIndirectFlowSet> indirect_flow_proof =
+        collect_proved_indirect_flow_set(post_layout_items,
+                                         address_space_model_for_options(options));
+    if (indirect_flow_proof.has_value()) {
+      const core::HelperInvariantRecallHoistResult recall_hoist =
+          core::optimize_helper_invariant_recall_hoist(
+              post_layout_items,
+              core::HelperInvariantRecallHoistOptions{
+                  .proved_indirect_flow_targets = indirect_flow_proof->targets,
+              });
+      if (recall_hoist.applied > 0 && recall_hoist.proof.final_artifact_proved &&
+          helper_hoist_preserves_fixed_indirect_targets(*indirect_flow_proof,
+                                                        recall_hoist.proof)) {
+        post_layout_items = recall_hoist.items;
+        post_layout_optimizations.insert(post_layout_optimizations.end(),
+                                         recall_hoist.optimizations.begin(),
+                                         recall_hoist.optimizations.end());
+      }
+    }
+
   } else {
     if (options.return_stack_script && options.analysis) {
       result.diagnostics.push_back(diagnostic(
@@ -49894,6 +50150,22 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
           .detail = std::move(detail),
       });
     }
+  }
+
+  // A one-cell-over-limit artifact may use the physical A4 -> 00 wrap as a
+  // return only after the generic helper verifier has proved every entry and
+  // relocation edge. The pass is deliberately profile- and layout-driven; it
+  // has no source/program recognizer.
+  const core::CyclicEndReturnResult cyclic_end_return =
+      core::optimize_cyclic_end_return(
+          post_layout_items,
+          core::CyclicEndReturnOptions{
+              .address_space_model = address_space_model_for_options(options)});
+  if (cyclic_end_return.applied > 0) {
+    post_layout_items = cyclic_end_return.items;
+    post_layout_optimizations.insert(post_layout_optimizations.end(),
+                                     cyclic_end_return.optimizations.begin(),
+                                     cyclic_end_return.optimizations.end());
   }
 
   // This proof is intentionally run after every other layout-changing pass.
@@ -50364,12 +50636,15 @@ bool joint_packed_line_family_artifacts_proved(const CompileResult& result) {
   constexpr std::string_view kHigh = "late-decimal-selector-high:";
   constexpr std::string_view kLow = "late-decimal-selector-low:";
   std::map<std::string, int> label_addresses;
+  std::map<std::string, std::size_t> label_items;
   int address = 0;
-  for (const MachineItem& item : result.items) {
+  for (std::size_t item_index = 0; item_index < result.items.size(); ++item_index) {
+    const MachineItem& item = result.items.at(item_index);
     if (item.kind == MachineItemKind::Label) {
       if (label_addresses.contains(item.name))
         return false;
       label_addresses[item.name] = address;
+      label_items[item.name] = item_index;
     } else {
       ++address;
     }
@@ -50400,14 +50675,54 @@ bool joint_packed_line_family_artifacts_proved(const CompileResult& result) {
     const std::optional<std::string> high = marked_label(result.items.at(index), kHigh);
     if (!high.has_value())
       continue;
-    if (index + 2U >= result.items.size())
+    if (index + 1U >= result.items.size())
       return false;
     const std::optional<std::string> low = marked_label(result.items.at(index + 1U), kLow);
-    const MachineItem& store = result.items.at(index + 2U);
+    if (!low.has_value() || *low != *high)
+      return false;
+
+    const std::optional<std::size_t> next_after_low =
+        joint_packed_line_next_cell(result.items, index + 1U);
+    if (!next_after_low.has_value())
+      return false;
+    std::size_t store_index = *next_after_low;
+    bool shared_store_entry = false;
+    if (store_index < result.items.size() &&
+        result.items.at(store_index).kind == MachineItemKind::Op &&
+        result.items.at(store_index).opcode == 0x53) {
+      const std::optional<std::size_t> operand_index =
+          joint_packed_line_next_cell(result.items, store_index);
+      if (!operand_index.has_value())
+        return false;
+      const MachineItem& call = result.items.at(store_index);
+      const MachineItem& operand = result.items.at(*operand_index);
+      const std::optional<std::string> call_entry =
+          marked_label(call, "joint-packed-line-shared-selector-call:");
+      if (!call_entry.has_value() || operand.kind != MachineItemKind::Address ||
+          !std::holds_alternative<std::string>(operand.target) ||
+          std::get<std::string>(operand.target) != *call_entry) {
+        return false;
+      }
+      const auto entry_item = label_items.find(*call_entry);
+      const auto entry_address = label_addresses.find(*call_entry);
+      if (entry_item == label_items.end() || entry_address == label_addresses.end() ||
+          joint_packed_line_resolve_target(operand.target, label_addresses) !=
+              std::optional<int>(entry_address->second)) {
+        return false;
+      }
+      const std::optional<std::size_t> shared_store =
+          joint_packed_line_next_cell(result.items, entry_item->second);
+      if (!shared_store.has_value())
+        return false;
+      store_index = *shared_store;
+      shared_store_entry = true;
+    }
+    if (store_index >= result.items.size())
+      return false;
+    const MachineItem& store = result.items.at(store_index);
     const auto target = label_addresses.find(*high);
     const std::optional<int> selector = machine_opcode_register_index(store.opcode);
-    if (!low.has_value() || *low != *high || target == label_addresses.end() ||
-        target->second < 0 || target->second > 99 ||
+    if (target == label_addresses.end() || target->second < 0 || target->second > 99 ||
         result.items.at(index).kind != MachineItemKind::Op ||
         result.items.at(index + 1U).kind != MachineItemKind::Op ||
         result.items.at(index).opcode != target->second / 10 ||
@@ -50415,6 +50730,12 @@ bool joint_packed_line_family_artifacts_proved(const CompileResult& result) {
         store.kind != MachineItemKind::Op || (store.opcode & 0xf0) != 0x40 ||
         !selector.has_value() || *selector < 7 || !is_joint_packed_line_selector_item(store)) {
       return false;
+    }
+    if (shared_store_entry) {
+      const std::string role = "joint-packed-line-shared-selector-store:" +
+                               core::register_name_for_index(*selector);
+      if (std::find(store.roles.begin(), store.roles.end(), role) == store.roles.end())
+        return false;
     }
     const std::string selector_name = core::register_name_for_index(*selector);
     const std::optional<core::IndirectAddressEvaluation> evaluated =
@@ -50427,8 +50748,8 @@ bool joint_packed_line_family_artifacts_proved(const CompileResult& result) {
                              .selector = *selector,
                              .high = index,
                              .low = index + 1U,
-                             .store = index + 2U});
-    index += 2U;
+                             .store = store_index});
+    index += 1U;
   }
   if (charges.size() != 2U || charges.front().label == charges.back().label ||
       charges.front().target == charges.back().target ||
@@ -51213,6 +51534,10 @@ enum class CandidateGate {
 };
 
 int estimated_candidate_search_cost_ms(std::string_view name) {
+  // The structural joint-family candidates are measured as ordinary lowering
+  // passes even when a candidate name also mentions its component layout.
+  if (name.starts_with("joint-packed-line-family-walk"))
+    return 300;
   if (name == "call-count-proc-layout" || name == "size-desc-proc-layout" ||
       name == "reverse-proc-layout") {
     return 300;
@@ -55814,6 +56139,21 @@ SizeAttributionReport build_size_attribution_report(
   for (std::size_t index = 0; index < steps.size(); ++index)
     index_by_address.emplace(steps.at(index).address, index);
 
+  // ResolvedStep intentionally keeps address operands as ordinary byte-sized
+  // listing entries.  Do not reinterpret an operand whose numeric value is
+  // itself an address-taking opcode as a second instruction.  Apart from
+  // inventing bogus calls, that used to create overlapping helper regions and
+  // merge unrelated symbolic-stack paths in the size report.
+  std::vector<bool> address_operand(steps.size(), false);
+  for (std::size_t index = 0; index < steps.size(); ++index) {
+    if (address_operand.at(index))
+      continue;
+    if (!opcode_by_code(steps.at(index).opcode).takes_address || index + 1U >= steps.size())
+      continue;
+    if (steps.at(index).address + 1 == steps.at(index + 1U).address)
+      address_operand.at(index + 1U) = true;
+  }
+
   struct CalledRegion {
     int target = 0;
     std::string label;
@@ -55853,6 +56193,8 @@ SizeAttributionReport build_size_attribution_report(
       };
 
   for (std::size_t index = 0; index < steps.size(); ++index) {
+    if (address_operand.at(index))
+      continue;
     const ResolvedStep& step = steps.at(index);
     const std::optional<std::string> label = size_report_call_label(step);
     if (!label.has_value())
@@ -56461,8 +56803,7 @@ SizeAttributionReport build_size_attribution_report(
       return opcode == 0x0a || opcode == 0x0b || opcode == 0x0c;
     };
     for (std::size_t index = region.start; index < region.end && index < steps.size(); ++index) {
-      if (index > region.start && steps.at(index - 1U).address + 1 == steps.at(index).address &&
-          opcode_by_code(steps.at(index - 1U).opcode).takes_address) {
+      if (address_operand.at(index)) {
         continue;
       }
       const ResolvedStep& step = steps.at(index);
@@ -56979,8 +57320,7 @@ SizeAttributionReport build_size_attribution_report(
         const auto enqueue = [&](std::size_t index, const SymbolicStackSnapshot& stack) {
           if (index < start || index >= end || index >= steps.size())
             return;
-          if (index > start && steps.at(index - 1U).address + 1 == steps.at(index).address &&
-              opcode_by_code(steps.at(index - 1U).opcode).takes_address) {
+          if (address_operand.at(index)) {
             return;
           }
           const auto [it, inserted] = before_index.emplace(index, stack);
