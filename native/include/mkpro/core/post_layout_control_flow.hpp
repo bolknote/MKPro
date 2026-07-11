@@ -50,6 +50,11 @@ struct PostLayoutControlFlowOptions {
   // real entry explicitly; labels are opaque identities, never interpreted by
   // spelling.
   IrTarget main_entry = 0;
+  // Exact opt-in hardware continuation for В/О with no return frame.  The
+  // ordinary proof remains fail-closed; profiles that have separately pinned
+  // the MK-61 empty-return behavior may name physical 01 (or an opaque label)
+  // here.
+  std::optional<IrTarget> empty_return_target;
 };
 
 // One authoritative, fail-closed fact set for post-layout consumers. Indirect
@@ -59,6 +64,7 @@ struct AuthoritativePostLayoutControlFlow {
   std::vector<PostLayoutExternalEntryState> external_entries;
   std::map<std::size_t, std::vector<PostLayoutCommandIdentity>> indirect_flow_targets;
   std::map<std::size_t, std::vector<int>> indirect_memory_targets;
+  std::optional<PostLayoutCommandIdentity> empty_return_target;
   int maximum_observed_return_depth = 0;
   std::size_t explored_states = 0;
   std::vector<std::string> reasons;

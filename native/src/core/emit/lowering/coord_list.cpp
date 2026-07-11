@@ -38,6 +38,13 @@ std::string coord_list_indirect_targets_suffix(const CoordListIndirectContext& c
   return suffix;
 }
 
+std::vector<int> coord_list_indirect_targets(const CoordListIndirectContext& context) {
+  std::vector<int> targets = context.item_registers;
+  std::sort(targets.begin(), targets.end());
+  targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+  return targets;
+}
+
 std::optional<std::vector<std::string>> coord_list_items_for(
     const std::map<std::string, const V2StateField*>& state_fields,
     const std::string& list_name) {
@@ -115,6 +122,7 @@ void emit_coord_list_indirect_recall(CoordListEmitApi& api,
   const int pointer_index = api.register_index_for(context.pointer);
   api.emitter.emit_op(0xd0 + pointer_index, "К П->X " + api.register_text_for(context.pointer),
                       comment + coord_list_indirect_targets_suffix(context), source_line);
+  api.emitter.items.back().indirect_memory_targets = coord_list_indirect_targets(context);
   api.emitter.current_x_variable.reset();
   api.emitter.current_x_aliases.clear();
 }
@@ -260,6 +268,7 @@ bool lower_coord_list_remove(CoordListEmitApi& api, const CoordListIndirectConte
   const int pointer_index = api.register_index_for(context.pointer);
   api.emitter.emit_op(0xb0 + pointer_index, "К X->П " + api.register_text_for(context.pointer),
                       "coord_list remove current", source_line);
+  api.emitter.items.back().indirect_memory_targets = coord_list_indirect_targets(context);
   api.emitter.current_x_variable.reset();
   api.emitter.current_x_aliases.clear();
   api.emitter.current_x_known_zero = false;

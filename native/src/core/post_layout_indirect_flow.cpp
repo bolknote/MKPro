@@ -105,6 +105,7 @@ struct BranchRewrite {
   std::string mnemonic;
   std::string comment;
   std::optional<int> source_line;
+  IrTarget target = 0;
 };
 
 struct RetargetedMachine {
@@ -1063,6 +1064,8 @@ IrOp indirect_flow_op(const IrOp& op, const std::string& register_name,
                              " indirect-target=" + std::to_string(target) +
                              (super_dark ? " super-dark" : "") + " shifted-forward indirect flow";
   IrOp result = op;
+  result.meta.indirect_flow_targets = std::vector<IrTarget>{
+      std::holds_alternative<std::string>(op.target) ? op.target : IrTarget{target}};
   result.register_name = register_name;
   result.target = 0;
   result.target_meta = {};
@@ -1148,6 +1151,9 @@ std::vector<MachineItem>
 retarget_machine_selector_comments(std::vector<MachineItem> items,
                                    const std::map<std::string, std::string>& selector_by_register,
                                    AddressSpaceModel model) {
+  const std::vector<MachineCell> cells = machine_cells(items);
+  const std::map<int, std::vector<std::string>> labels_by_address =
+      machine_labels_by_address(items);
   for (MachineItem& item : items) {
     if (item.kind != MachineItemKind::Op)
       continue;
@@ -1161,8 +1167,19 @@ retarget_machine_selector_comments(std::vector<MachineItem> items,
         *register_name, selector_it->second, IndirectOperationKind::Flow, model);
     if (!decoded.has_value() || !decoded->actual_flow_target.has_value())
       continue;
+    const int target = *decoded->actual_flow_target;
+    const std::optional<MachineCell> target_cell = machine_cell_at(cells, target);
+    if (!target_cell.has_value() || target_cell->item == nullptr ||
+        target_cell->item->kind != MachineItemKind::Op) {
+      continue;
+    }
+    const auto aliases = labels_by_address.find(target);
+    item.indirect_flow_targets = std::vector<IrTarget>{
+        aliases != labels_by_address.end() && !aliases->second.empty()
+            ? IrTarget{aliases->second.front()}
+            : IrTarget{target}};
     item.comment = replace_indirect_target_comment(
-        item.comment, *register_name, selector_it->second, *decoded->actual_flow_target);
+        item.comment, *register_name, selector_it->second, target);
   }
   return items;
 }
@@ -1384,9 +1401,11 @@ apply_fractional_r0_flow_rewrite(const std::vector<MachineItem>& items) {
 }
 
 MachineItem indirect_jump_machine_op(const std::string& register_name, const std::string& comment,
+                                     IrTarget target,
                                      const std::optional<int>& source_line = std::nullopt) {
   MachineItem item = MachineItem::op(0x80 + register_index(register_name), "К БП " + register_name);
   item.comment = comment;
+  item.indirect_flow_targets = std::vector<IrTarget>{std::move(target)};
   if (source_line.has_value())
     item.source_line = *source_line;
   return item;
@@ -2443,6 +2462,7 @@ std::vector<MachineItem> apply_stop_tail_reuse_rewrite(const std::vector<Machine
           indirect_jump_machine_op(rewrite.base.register_name,
                                    std::string(rewrite.zero_prefixed ? "zero then " : "") +
                                        "reuse stop tail at " + std::to_string(rewrite.base.target),
+                                   rewrite.base.target,
                                    source.source_line));
       continue;
     }
@@ -2494,6 +2514,7 @@ find_existing_selector_flow_rewrite(const std::vector<MachineItem>& items,
           .mnemonic = indirect_branch_mnemonic(*opcode, preload.register_name),
           .comment = comment,
           .source_line = branch.item->source_line,
+          .target = address.item->target,
       };
     }
   }
@@ -2562,6 +2583,10 @@ find_branch_to_stop_tail_selector_rewrite(const std::vector<MachineItem>& items,
         .mnemonic = indirect_branch_mnemonic(*opcode, *register_name),
         .comment = comment,
         .source_line = branch.item->source_line,
+        .target = labels_by_address.contains(*decoded->actual_flow_target) &&
+                          !labels_by_address.at(*decoded->actual_flow_target).empty()
+                      ? IrTarget{labels_by_address.at(*decoded->actual_flow_target).front()}
+                      : IrTarget{*decoded->actual_flow_target},
     };
   }
   return std::nullopt;
@@ -2577,6 +2602,7 @@ std::vector<MachineItem> apply_branch_rewrite(const std::vector<MachineItem>& it
     if (index == rewrite.branch_index) {
       MachineItem item = MachineItem::op(rewrite.opcode, rewrite.mnemonic);
       item.comment = rewrite.comment;
+      item.indirect_flow_targets = std::vector<IrTarget>{rewrite.target};
       if (rewrite.source_line.has_value())
         item.source_line = *rewrite.source_line;
       result.push_back(item);

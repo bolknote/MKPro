@@ -512,7 +512,11 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
 
     if (opcode == kReturnOpcode) {
       if (state.returns.empty()) {
-        add_reason(result, "reachable В/О has an empty return stack");
+        if (!result.empty_return_target.has_value()) {
+          add_reason(result, "reachable В/О has an empty return stack");
+        } else {
+          enqueue(result.empty_return_target->address, state.returns);
+        }
         continue;
       }
       std::vector<int> returns = state.returns;
@@ -642,6 +646,15 @@ build_post_layout_control_flow(const std::vector<MachineItem>& items,
 
   const ArtifactIndex index = index_artifact(items);
   validate_artifact_and_typed_targets(items, index, options, result);
+  if (options.empty_return_target.has_value()) {
+    const std::optional<PostLayoutCommandIdentity> target =
+        resolve_indirect_target(items, index, *options.empty_return_target);
+    if (!target.has_value()) {
+      add_reason(result, "typed empty-return target is unresolved or not executable");
+    } else {
+      result.empty_return_target = *target;
+    }
+  }
   const std::map<std::size_t, ManualProtocol> protocols =
       validate_manual_protocols(items, index, result);
   if (!result.reasons.empty())

@@ -12096,12 +12096,8 @@ void cache_bank_selector(LoweringContext& context, const std::string& selector,
   };
 }
 
-std::string indexed_memory_comment(const LoweringContext& context, const std::string& action,
-                                   const Expression& expression, const V2StateField& field,
-                                   const PreparedIndexedSelector& prepared) {
-  std::vector<std::string> suffixes;
-  if (prepared.integer_part.has_value())
-    suffixes.push_back("indirect-selector-integer-part=" + *prepared.integer_part);
+std::vector<int> indexed_memory_targets(const LoweringContext& context,
+                                        const V2StateField& field) {
   std::vector<int> targets;
   if (field.bank.has_value()) {
     for (int index = field.bank->min; index <= field.bank->max; ++index) {
@@ -12113,8 +12109,19 @@ std::string indexed_memory_comment(const LoweringContext& context, const std::st
       }
     }
   }
+  std::sort(targets.begin(), targets.end());
+  targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+  return targets;
+}
+
+std::string indexed_memory_comment(const LoweringContext& context, const std::string& action,
+                                   const Expression& expression, const V2StateField& field,
+                                   const PreparedIndexedSelector& prepared) {
+  std::vector<std::string> suffixes;
+  if (prepared.integer_part.has_value())
+    suffixes.push_back("indirect-selector-integer-part=" + *prepared.integer_part);
+  const std::vector<int> targets = indexed_memory_targets(context, field);
   if (!targets.empty()) {
-    std::sort(targets.begin(), targets.end());
     std::ostringstream out;
     for (std::size_t index = 0; index < targets.size(); ++index) {
       if (index > 0)
@@ -12128,6 +12135,17 @@ std::string indexed_memory_comment(const LoweringContext& context, const std::st
   for (const std::string& suffix : suffixes)
     comment += "; " + suffix;
   return comment;
+}
+
+void attach_indexed_memory_targets(LoweringContext& context, const Expression& expression) {
+  if (context.emitter.items.empty())
+    return;
+  const V2StateField* field = indexed_state_field(context, expression);
+  if (field == nullptr)
+    return;
+  std::vector<int> targets = indexed_memory_targets(context, *field);
+  if (!targets.empty())
+    context.emitter.items.back().indirect_memory_targets = std::move(targets);
 }
 
 std::string indexed_memory_comment_or_action(LoweringContext& context, const std::string& action,
@@ -12377,6 +12395,7 @@ void emit_prepared_indirect_indexed_recall(LoweringContext& context, const Expre
   context.emitter.emit_op(0xd0 + selector_index,
                           "К П->X " + register_text_for(context, prepared.selector), comment,
                           source_line);
+  attach_indexed_memory_targets(context, expression);
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_expression = std::make_shared<Expression>(expression);
   context.emitter.current_x_aliases.clear();
@@ -12395,6 +12414,7 @@ void emit_prepared_indirect_indexed_store(LoweringContext& context, const Expres
   context.emitter.emit_op(0xb0 + selector_index,
                           "К X->П " + register_text_for(context, prepared.selector), comment,
                           source_line);
+  attach_indexed_memory_targets(context, expression);
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_expression = std::make_shared<Expression>(expression);
   context.emitter.current_x_aliases.clear();
@@ -21683,6 +21703,7 @@ bool emit_indexed_packed_pow10_delta_from_stack_index(LoweringContext& context,
                               context, "indexed packed digit update base", target,
                               prepared_selector),
                           line);
+  attach_indexed_memory_targets(context, target);
   const std::optional<std::pair<int, std::string>> opcode = binary_opcode(op);
   if (!opcode.has_value())
     return false;
@@ -21778,6 +21799,7 @@ bool lower_indexed_packed_pow10_delta_statement(LoweringContext& context,
                               context, "indexed packed digit update base", target,
                               *prepared_selector),
                           statement.line);
+  attach_indexed_memory_targets(context, target);
   clear_current_x_facts(context);
   emit_recall(context, index_name);
   context.emitter.emit_op(0x15, "F 10^x", "indexed packed digit pow10", statement.line);
@@ -22054,6 +22076,7 @@ void emit_x_param_indexed_fractional_report_tail(
                               context, "indexed packed digit update base", update.target,
                               prepared_selector),
                           update.update_line);
+  attach_indexed_memory_targets(context, update.target);
   const std::optional<std::pair<int, std::string>> op = binary_opcode(update.op);
   if (op.has_value())
     context.emitter.emit_op(op->first, op->second, "indexed packed digit update",
@@ -22156,6 +22179,7 @@ bool lower_x_param_indexed_fractional_report_tail_rule(LoweringContext& context,
                                 context, "indexed packed digit update base", match->target,
                                 prepared_selector),
                             match->update_line);
+    attach_indexed_memory_targets(context, match->target);
     const std::optional<std::pair<int, std::string>> op = binary_opcode(match->op);
     if (!op.has_value())
       return false;
@@ -30300,6 +30324,7 @@ bool lower_packed_score_y_stack_update(LoweringContext& context, const V2Stateme
       "К П->X " + register_text_for(context, prepared->selector),
       indexed_memory_comment_or_action(context, "indexed recall", bank, *prepared),
       statement.line);
+  attach_indexed_memory_targets(context, bank);
   context.emitter.emit_op(0x14, "X<->Y", "packed-score y-stack digit order", statement.line);
   context.emitter.emit_op(0x13, "/", "packed-score y-stack digit extract", statement.line);
   context.emitter.emit_op(0x35, "К {x}", "packed-score y-stack frac", statement.line);
@@ -37744,6 +37769,7 @@ bool lower_preincrement_indexed_store(LoweringContext& context, const V2Statemen
                           indexed_memory_comment(context, "preincrement indexed set",
                                                  store->target, *field, prepared_selector),
                           store->line);
+  attach_indexed_memory_targets(context, store->target);
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_expression.reset();
   context.emitter.current_x_aliases.clear();
@@ -37802,6 +37828,7 @@ bool lower_predecrement_indexed_store(LoweringContext& context, const V2Statemen
                           indexed_memory_comment(context, "predecrement indexed set",
                                                  store->target, *field, prepared_selector),
                           store->line);
+  attach_indexed_memory_targets(context, store->target);
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_expression.reset();
   context.emitter.current_x_aliases.clear();
@@ -37866,6 +37893,7 @@ bool lower_mutating_indexed_recall_assignment(LoweringContext& context,
                           indexed_memory_comment(context, action + " indexed recall", expression,
                                                  *field, prepared_selector),
                           recall_statement.line);
+  attach_indexed_memory_targets(context, expression);
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_expression = std::make_shared<Expression>(expression);
   context.emitter.current_x_aliases.clear();

@@ -148,6 +148,7 @@ void segmented_bitplanes_match_typescript_contract();
 void setup_program_matches_typescript_contract();
 void terminal_report_tail_rewrites_only_with_explicit_proofs();
 void terminal_cyclic_layout_derives_complete_proofs_transactionally();
+void typed_indirect_facts_are_materialized_and_relocated();
 void setup_only_counted_loop_matches_typescript_contract();
 void store_recall_peephole_matches_typescript_contract();
 void show_read_guarded_transfer_matches_typescript_contract();
@@ -369,6 +370,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(setup_program_matches_typescript_contract),
       MKPRO_TEST(terminal_report_tail_rewrites_only_with_explicit_proofs),
       MKPRO_TEST(terminal_cyclic_layout_derives_complete_proofs_transactionally),
+      MKPRO_TEST(typed_indirect_facts_are_materialized_and_relocated),
       MKPRO_TEST(setup_only_counted_loop_matches_typescript_contract),
       MKPRO_TEST(store_recall_peephole_matches_typescript_contract),
       MKPRO_TEST(show_optimization_strategies_match_typescript_contract),

@@ -244,6 +244,10 @@ bool validate_complete_control_flow(const std::vector<MachineItem>& items,
       .maximum_return_depth = options.maximum_return_depth,
       .maximum_execution_states = static_cast<std::size_t>(options.maximum_execution_states),
       .main_entry = main->entry.address,
+      .empty_return_target =
+          control.empty_return_target.has_value()
+              ? std::optional<IrTarget>{control.empty_return_target->address}
+              : std::nullopt,
   };
   const AuthoritativePostLayoutControlFlow rebuilt =
       build_post_layout_control_flow(items, cfg_options);
@@ -255,6 +259,7 @@ bool validate_complete_control_flow(const std::vector<MachineItem>& items,
   if (rebuilt.external_entries != control.external_entries ||
       rebuilt.indirect_flow_targets != control.indirect_flow_targets ||
       rebuilt.indirect_memory_targets != control.indirect_memory_targets ||
+      rebuilt.empty_return_target != control.empty_return_target ||
       rebuilt.maximum_observed_return_depth != control.maximum_observed_return_depth ||
       rebuilt.explored_states != control.explored_states) {
     add_reason(reasons,

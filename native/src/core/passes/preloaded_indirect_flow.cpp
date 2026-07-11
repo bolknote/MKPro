@@ -307,6 +307,11 @@ IrOp indirect_flow_op(const IrOp& op, const std::string& register_name,
                              " indirect-target=" + std::to_string(target) +
                              (super_dark ? " super-dark" : "") + " indirect flow";
   IrOp result = op;
+  // Preserve the deleted direct operand as an opaque command identity whenever
+  // it was symbolic. Numeric operands are rebound to the proved final address
+  // supplied by the fixed-point layout calculation.
+  result.meta.indirect_flow_targets = std::vector<IrTarget>{
+      std::holds_alternative<std::string>(op.target) ? op.target : IrTarget{target}};
   result.register_name = register_name;
   result.target = 0;
   result.target_meta = {};

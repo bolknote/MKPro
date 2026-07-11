@@ -242,6 +242,7 @@ add_executable(mkpro_tests
   tests/setup_program_test.cpp
   tests/terminal_report_tail_test.cpp
   tests/terminal_cyclic_layout_test.cpp
+  tests/typed_indirect_facts_test.cpp
   tests/setup_only_counted_loop_test.cpp
   tests/store_recall_peephole_pass_test.cpp
   tests/show_read_guarded_transfer_test.cpp
@@ -412,6 +413,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   setup_program_matches_typescript_contract
   terminal_report_tail_rewrites_only_with_explicit_proofs
   terminal_cyclic_layout_derives_complete_proofs_transactionally
+  typed_indirect_facts_are_materialized_and_relocated
   setup_only_counted_loop_matches_typescript_contract
   store_recall_peephole_matches_typescript_contract
   show_optimization_strategies_match_typescript_contract
