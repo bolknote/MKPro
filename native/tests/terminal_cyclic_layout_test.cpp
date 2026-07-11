@@ -62,8 +62,10 @@ std::vector<MachineItem> fixture(std::string_view suffix = "a") {
   items.push_back(stop(StopDisposition::Terminal)); // 06
   pad_to(items, 10);
   items.push_back(MachineItem::op(0x8c, "К БП c")); // 10
+  items.back().indirect_flow_targets = std::vector<IrTarget>{0};
   pad_to(items, 20);
   items.at(item_at_address(items, 15)) = MachineItem::op(0xd7, "К П->X 7");
+  items.at(item_at_address(items, 15)).indirect_memory_targets = std::vector<int>{4};
 
   MachineItem update_label = MachineItem::label(update);
   update_label.procedure_boundary = "start";
@@ -100,21 +102,43 @@ std::vector<MachineItem> fixture(std::string_view suffix = "a") {
   return items;
 }
 
-core::TerminalCyclicControlFlow complete_flow(const std::vector<MachineItem>& items) {
-  core::TerminalCyclicControlFlow flow;
-  flow.external_entries = {{.pc = 1}};
-  flow.indirect_flow_targets[item_at_address(items, 10)] = {0};
-  const std::size_t memory_item = item_at_address(items, 15);
-  if (items.at(memory_item).kind == MachineItemKind::Op &&
-      ((items.at(memory_item).opcode & 0xf0) == 0xb0 ||
-       (items.at(memory_item).opcode & 0xf0) == 0xd0)) {
-    flow.indirect_memory_targets[memory_item] = {4};
-  }
-  return flow;
+core::AuthoritativePostLayoutControlFlow complete_flow(const std::vector<MachineItem>& items,
+                                                       int main_entry = 1) {
+  core::PostLayoutControlFlowOptions options;
+  options.main_entry = main_entry;
+  return core::build_post_layout_control_flow(items, options);
 }
 
 std::vector<PreloadReport> preloads() {
   return {PreloadReport{.register_name = "c", .value = "0.41200076"}};
+}
+
+std::vector<MachineItem> relocated_main_fixture() {
+  return {
+      MachineItem::op(0x52, "В/О"),
+      MachineItem::label("generic_tail"),
+      MachineItem::op(0x37, "К AND"),
+      MachineItem::op(0x35, "К frac"),
+      MachineItem::op(0x57, "F x!=0"),
+      MachineItem::address(std::string("generic_tail_return")),
+      MachineItem::op(0x0a, "."),
+      stop(StopDisposition::Terminal),
+      MachineItem::op(0x01, "1"),
+      MachineItem::label("generic_tail_return"),
+      MachineItem::op(0x52, "В/О"),
+      MachineItem::label("opaque_ui_entry"),
+      MachineItem::op(0x53, "ПП"),
+      MachineItem::address(std::string("generic_tail")),
+      MachineItem::op(0x63, "П->X 3"),
+      stop(StopDisposition::Terminal),
+  };
+}
+
+core::AuthoritativePostLayoutControlFlow
+relocated_main_flow(const std::vector<MachineItem>& items) {
+  core::PostLayoutControlFlowOptions options;
+  options.main_entry = std::string("opaque_ui_entry");
+  return core::build_post_layout_control_flow(items, options);
 }
 
 std::vector<MachineItem> payload_oracle_fixture() {
@@ -138,10 +162,9 @@ std::vector<MachineItem> payload_oracle_fixture() {
   };
 }
 
-core::TerminalCyclicControlFlow payload_oracle_flow(const std::vector<MachineItem>&) {
-  return core::TerminalCyclicControlFlow{
-      .external_entries = {{.pc = 1}},
-  };
+core::AuthoritativePostLayoutControlFlow
+payload_oracle_flow(const std::vector<MachineItem>& items) {
+  return complete_flow(items);
 }
 
 std::string compact(std::string value) {
@@ -193,6 +216,24 @@ bool contains_reason(const core::TerminalCyclicLayoutPlan& plan, std::string_vie
 
 void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
   {
+    const std::vector<MachineItem> moving_entry = relocated_main_fixture();
+    const core::AuthoritativePostLayoutControlFlow moving_flow =
+        relocated_main_flow(moving_entry);
+    require(moving_flow.proved &&
+                moving_flow.external_entries.front().entry.address == 9,
+            "synthetic terminal fixture should begin with an exact late main identity");
+    const auto moved =
+        core::optimize_terminal_cyclic_layout(moving_entry, preloads(), moving_flow);
+    require(moved.applied == 1 && moved.removed_cells == 2 &&
+                moved.plan.terminal_control_flow.proved &&
+                moved.plan.terminal_control_flow.external_entries.front().entry.address == 7 &&
+                moved.plan.terminal_control_flow.external_entries.front().entry.labels ==
+                    std::vector<std::string>{"opaque_ui_entry"},
+            "terminal relocation must rebind the exact main identity instead of preserving its "
+            "stale physical address");
+  }
+
+  {
     const std::vector<MachineItem> oracle_input = payload_oracle_fixture();
     const std::vector<PreloadReport> oracle_preloads = {
         PreloadReport{.register_name = "a", .value = "ГE-2"}};
@@ -222,7 +263,8 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
   }
 
   const std::vector<MachineItem> input = fixture();
-  const core::TerminalCyclicControlFlow flow = complete_flow(input);
+  const core::AuthoritativePostLayoutControlFlow flow = complete_flow(input);
+  require(flow.proved, "typed fixture CFG should be authoritative before layout optimization");
   const core::TerminalCyclicLayoutPlan plan =
       core::verify_terminal_cyclic_layout(input, preloads(), flow);
   require(plan.terminal_proved && plan.cyclic_proved && plan.final_artifact_proved &&
@@ -258,15 +300,22 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
   require(rewritten.applied == 2 && rewritten.removed_cells == 3 &&
               cell_count(rewritten.items) == 105 && rewritten.plan.final_artifact_proved,
           "terminal and cyclic rewrites should commit only after both final checks");
-  require(rewritten.plan.final_indirect_flow_targets.size() == 2U &&
-              std::all_of(rewritten.plan.final_indirect_flow_targets.begin(),
-                          rewritten.plan.final_indirect_flow_targets.end(),
-                          [](const auto& entry) { return entry.second == std::vector<int>{0}; }),
+  require(rewritten.plan.final_control_flow.indirect_flow_targets.size() == 2U &&
+              std::all_of(rewritten.plan.final_control_flow.indirect_flow_targets.begin(),
+                          rewritten.plan.final_control_flow.indirect_flow_targets.end(),
+                          [](const auto& entry) {
+                            return entry.second.size() == 1U &&
+                                   entry.second.front().address == 0;
+                          }),
           "final proof should contain the old flow and derived terminal flow target sets");
-  require(rewritten.plan.final_external_entries == std::vector<core::ExternalEntryState>{{.pc = 1}},
-          "external entry identity should survive both relocations");
-  require(rewritten.plan.final_indirect_memory_targets.size() == 1U &&
-              rewritten.plan.final_indirect_memory_targets.begin()->second == std::vector<int>{4},
+  require(rewritten.plan.final_control_flow.external_entries.size() == 1U &&
+              rewritten.plan.final_control_flow.external_entries.front().entry.address == 1 &&
+              rewritten.plan.final_control_flow.external_entries.front().kind ==
+                  core::ExternalEntryKind::Main,
+          "exact external entry identity should survive both relocations");
+  require(rewritten.plan.final_control_flow.indirect_memory_targets.size() == 1U &&
+              rewritten.plan.final_control_flow.indirect_memory_targets.begin()->second ==
+                  std::vector<int>{4},
           "the total indirect-memory map should be reindexed and rechecked in the final gate");
   const MachineItem& a4 = rewritten.items.at(item_at_address(rewritten.items, 104));
   require(a4.kind == MachineItemKind::Op && a4.opcode == 0x31 &&
@@ -302,35 +351,19 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
             "mnemonics, comments, and roles must not participate in the proof");
   }
   {
-    core::TerminalCyclicControlFlow incomplete = flow;
+    core::AuthoritativePostLayoutControlFlow incomplete = flow;
     incomplete.indirect_flow_targets.clear();
     const auto rejected = core::optimize_terminal_cyclic_layout(input, preloads(), incomplete);
     require(rejected.applied == 0 && cell_count(rejected.items) == 108 &&
-                contains_reason(rejected.plan, "missing"),
+                contains_reason(rejected.plan, "does not match"),
             "unknown indirect flow must reject the transaction");
   }
   {
-    core::TerminalCyclicControlFlow bad_entry = flow;
-    bad_entry.external_entries = {{.pc = 24}};
+    core::AuthoritativePostLayoutControlFlow bad_entry = complete_flow(input, 24);
     const auto rejected = core::optimize_terminal_cyclic_layout(input, preloads(), bad_entry);
     require(rejected.applied == 0 && cell_count(rejected.items) == 108 &&
                 contains_reason(rejected.plan, "interior"),
             "entry into the dot rewritten as a store must fail closed");
-  }
-  {
-    core::TerminalCyclicControlFlow nonempty_stack = flow;
-    nonempty_stack.external_entries = {{.pc = 3, .return_stack = {7}}};
-    const auto accepted = core::optimize_terminal_cyclic_layout(input, preloads(), nonempty_stack);
-    require(accepted.applied == 2 && cell_count(accepted.items) == 105 &&
-                accepted.plan.final_external_entries == nonempty_stack.external_entries,
-            "typed nonempty hardware return-stack entries must be explored and preserved");
-  }
-  {
-    core::TerminalCyclicControlFlow too_deep = flow;
-    too_deep.external_entries = {{.pc = 3, .return_stack = {7, 8, 9, 11, 12, 13}}};
-    const auto rejected = core::optimize_terminal_cyclic_layout(input, preloads(), too_deep);
-    require(rejected.applied == 0 && contains_reason(rejected.plan, "five-level"),
-            "entry protocol cannot exceed the five-level MK-61 return stack");
   }
   {
     core::TerminalCyclicLayoutOptions impossible_depth;
@@ -346,8 +379,8 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
         StopDisposition::Resumable;
     const auto rejected = core::optimize_terminal_cyclic_layout(resumable_sink, preloads(),
                                                                 complete_flow(resumable_sink));
-    require(rejected.applied == 0 && contains_reason(rejected.plan, "resumable STOP"),
-            "an ordinary resumable STOP cannot hide continuation stack/X2 differences");
+    require(rejected.applied == 0 && contains_reason(rejected.plan, "authoritative"),
+            "a resumable sink whose continuation cannot be proved must fail closed");
   }
   {
     std::vector<MachineItem> untyped_candidate = input;
@@ -355,7 +388,7 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
         StopDisposition::Unknown;
     const auto rejected = core::optimize_terminal_cyclic_layout(untyped_candidate, preloads(),
                                                                 complete_flow(untyped_candidate));
-    require(rejected.applied == 0 && contains_reason(rejected.plan, "halt provenance"),
+    require(rejected.applied == 0 && contains_reason(rejected.plan, "unknown disposition"),
             "the provisional STOP must retain compiler-owned source halt provenance");
   }
   {
@@ -378,8 +411,8 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
   {
     std::vector<MachineItem> observed = input;
     observed.at(item_at_address(observed, 26)) = MachineItem::op(0xd7, "К П->X 7");
-    core::TerminalCyclicControlFlow observed_flow = complete_flow(observed);
-    observed_flow.indirect_memory_targets[item_at_address(observed, 26)] = {3};
+    observed.at(item_at_address(observed, 26)).indirect_memory_targets = std::vector<int>{3};
+    core::AuthoritativePostLayoutControlFlow observed_flow = complete_flow(observed);
     const auto rejected =
         core::optimize_terminal_cyclic_layout(observed, preloads(), observed_flow);
     require(rejected.applied == 0 && cell_count(rejected.items) == 108 &&
@@ -428,10 +461,13 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
             "a symbolic reference into the removed STOP must not be called relocatable");
   }
   {
-    core::TerminalCyclicControlFlow indirect_interior = flow;
-    indirect_interior.indirect_flow_targets[item_at_address(input, 10)] = {24};
-    const auto rejected =
-        core::optimize_terminal_cyclic_layout(input, preloads(), indirect_interior);
+    std::vector<MachineItem> indirect_target = input;
+    indirect_target.at(item_at_address(indirect_target, 10)).indirect_flow_targets =
+        std::vector<IrTarget>{24};
+    const core::AuthoritativePostLayoutControlFlow indirect_interior =
+        complete_flow(indirect_target);
+    const auto rejected = core::optimize_terminal_cyclic_layout(
+        indirect_target, preloads(), indirect_interior);
     require(rejected.applied == 0 && contains_reason(rejected.plan, "interior"),
             "an indirect target into the rewritten dot/store interior must fail closed");
   }
@@ -447,8 +483,7 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
     std::vector<MachineItem> non_call = input;
     non_call.at(item_at_address(non_call, 1)).opcode = 0x51;
     non_call.at(item_at_address(non_call, 1)).mnemonic = "БП";
-    core::TerminalCyclicControlFlow entry_after_jump = complete_flow(non_call);
-    entry_after_jump.external_entries = {{.pc = 3}};
+    core::AuthoritativePostLayoutControlFlow entry_after_jump = complete_flow(non_call, 3);
     const auto terminal_only =
         core::optimize_terminal_cyclic_layout(non_call, preloads(), entry_after_jump);
     require(terminal_only.applied == 1 && terminal_only.removed_cells == 2 &&

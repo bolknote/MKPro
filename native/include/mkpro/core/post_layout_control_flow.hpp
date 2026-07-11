@@ -44,6 +44,12 @@ struct PostLayoutControlFlowOptions {
   AddressSpaceModel address_space_model = AddressSpaceModel::Standard;
   int maximum_return_depth = 5;
   std::size_t maximum_execution_states = 20000;
+  // Exact compiler-owned entry command.  The default preserves the ordinary
+  // physical-00 program entry.  A layout that deliberately places a return at
+  // 00 (for example, to use cyclic address-space continuation) must name its
+  // real entry explicitly; labels are opaque identities, never interpreted by
+  // spelling.
+  IrTarget main_entry = 0;
 };
 
 // One authoritative, fail-closed fact set for post-layout consumers. Indirect

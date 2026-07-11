@@ -104,6 +104,44 @@ std::vector<MachineItem> typed_indirect_program(std::size_t& condition, std::siz
 
 void post_layout_control_flow_matches_typed_contract() {
   {
+    std::vector<MachineItem> shifted_main = {
+        op(0x52, "В/О"), MachineItem::label("opaque_entry"),
+        stop(StopDisposition::Terminal)};
+    core::PostLayoutControlFlowOptions options;
+    options.main_entry = std::string("opaque_entry");
+    const auto facts = core::build_post_layout_control_flow(shifted_main, options);
+    require(facts.proved && has_entry(facts, 1, core::ExternalEntryKind::Main),
+            "an exact typed main identity may differ from physical 00");
+
+    const auto empty_return = core::build_post_layout_control_flow(shifted_main);
+    require(!empty_return.proved && reason_contains(empty_return, "empty return stack"),
+            "physical-00 return with no typed alternate main must fail closed");
+  }
+
+  {
+    std::vector<MachineItem> cyclic;
+    cyclic.push_back(op(0x52, "В/О"));                       // 00
+    cyclic.push_back(MachineItem::label("typed_main"));
+    cyclic.push_back(op(0x53, "ПП"));                       // 01
+    cyclic.push_back(MachineItem::address(std::string("suffix_helper"))); // 02
+    cyclic.push_back(stop(StopDisposition::Terminal));       // 03
+    while (static_cast<int>(std::count_if(
+               cyclic.begin(), cyclic.end(),
+               [](const MachineItem& item) { return item.kind != MachineItemKind::Label; })) <
+           103) {
+      cyclic.push_back(stop(StopDisposition::Terminal));
+    }
+    cyclic.push_back(MachineItem::label("suffix_helper"));
+    cyclic.push_back(op(0x0d, "Cx")); // A3
+    cyclic.push_back(op(0x0d, "Cx")); // A4 -> 00 -> В/О
+    core::PostLayoutControlFlowOptions options;
+    options.main_entry = std::string("typed_main");
+    const auto facts = core::build_post_layout_control_flow(cyclic, options);
+    require(facts.proved && facts.maximum_observed_return_depth == 1,
+            "a full 105-cell artifact must model the hardware A4-to-00 continuation exactly");
+  }
+
+  {
     const core::AuthoritativePostLayoutControlFlow facts =
         core::build_post_layout_control_flow(two_phase_protocol_program());
     require(facts.proved && facts.reasons.empty(),

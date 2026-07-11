@@ -126,6 +126,21 @@ std::optional<PostLayoutCommandIdentity> identity_at_address(const std::vector<M
   };
 }
 
+std::optional<int> sequential_successor(const ArtifactIndex& index, int address,
+                                        AddressSpaceModel address_space_model) {
+  const int next = address + 1;
+  if (next < index.cells)
+    return next;
+  // MK-61 program memory is cyclic only at the real end of the selected
+  // address space.  A shorter artifact falling off its last emitted cell is
+  // still malformed and must not acquire an invented continuation.
+  if (index.cells == official_program_step_limit(address_space_model) &&
+      address == index.cells - 1) {
+    return 0;
+  }
+  return std::nullopt;
+}
+
 std::optional<int> direct_target_address(const MachineItem& operand, const ArtifactIndex& index,
                                          AddressSpaceModel address_space_model,
                                          AuthoritativePostLayoutControlFlow& result) {
@@ -422,15 +437,16 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
                                        const std::map<std::size_t, ManualProtocol>& protocols,
                                        const PostLayoutControlFlowOptions& options,
                                        AuthoritativePostLayoutControlFlow& result) {
-  const std::optional<PostLayoutCommandIdentity> main = identity_at_address(items, index, 0);
+  const std::optional<PostLayoutCommandIdentity> main =
+      resolve_indirect_target(items, index, options.main_entry);
   if (!main.has_value()) {
-    add_reason(result, "physical main entry 0 is not an executable command cell");
+    add_reason(result, "typed main entry is unresolved or not an executable command cell");
     return;
   }
-  add_external_entry(result, items, index, 0, {}, ExternalEntryKind::Main);
+  add_external_entry(result, items, index, main->address, {}, ExternalEntryKind::Main);
 
   std::deque<ExecutionState> pending;
-  pending.push_back(ExecutionState{.pc = 0});
+  pending.push_back(ExecutionState{.pc = main->address});
   std::set<ExecutionState> visited;
   while (!pending.empty() && result.reasons.empty()) {
     ExecutionState state = std::move(pending.front());
@@ -482,10 +498,13 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
             enqueue(index.item_addresses.at(phase_item), state.returns);
         }
       } else {
-        const int resume_pc = state.pc + 1;
-        if (add_external_entry(result, items, index, resume_pc, state.returns,
+        const std::optional<int> resume_pc =
+            sequential_successor(index, state.pc, options.address_space_model);
+        if (!resume_pc.has_value()) {
+          add_reason(result, "resumable STOP has no executable continuation");
+        } else if (add_external_entry(result, items, index, *resume_pc, state.returns,
                                ExternalEntryKind::ResumableStop)) {
-          enqueue(resume_pc, state.returns);
+          enqueue(*resume_pc, state.returns);
         }
       }
       continue;
@@ -513,7 +532,8 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
           direct_target_address(items.at(*operand), index, options.address_space_model, result);
       if (!target.has_value())
         continue;
-      const int fallthrough = index.item_addresses.at(*operand) + 1;
+      const std::optional<int> fallthrough = sequential_successor(
+          index, index.item_addresses.at(*operand), options.address_space_model);
       if (opcode == kJumpOpcode) {
         enqueue(*target, state.returns);
       } else if (opcode == kCallOpcode) {
@@ -521,16 +541,21 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
           add_reason(result, "control flow exceeds the configured return-stack depth");
           continue;
         }
-        if (!identity_at_address(items, index, fallthrough).has_value()) {
+        if (!fallthrough.has_value() ||
+            !identity_at_address(items, index, *fallthrough).has_value()) {
           add_reason(result, "direct call has no executable continuation");
           continue;
         }
         std::vector<int> returns = state.returns;
-        returns.push_back(fallthrough);
+        returns.push_back(*fallthrough);
         enqueue(*target, returns);
       } else if (is_direct_conditional_opcode(opcode)) {
+        if (!fallthrough.has_value()) {
+          add_reason(result, "direct conditional has no executable fallthrough");
+          continue;
+        }
         enqueue(*target, state.returns);
-        enqueue(fallthrough, state.returns);
+        enqueue(*fallthrough, state.returns);
       } else {
         add_reason(result, "unsupported address-taking command in exact CFG");
       }
@@ -549,21 +574,36 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
           add_reason(result, "control flow exceeds the configured return-stack depth");
           continue;
         }
-        const int continuation = state.pc + 1;
-        if (!identity_at_address(items, index, continuation).has_value()) {
+        const std::optional<int> continuation =
+            sequential_successor(index, state.pc, options.address_space_model);
+        if (!continuation.has_value() ||
+            !identity_at_address(items, index, *continuation).has_value()) {
           add_reason(result, "indirect call has no executable continuation");
           continue;
         }
-        returns.push_back(continuation);
+        returns.push_back(*continuation);
       }
       for (const PostLayoutCommandIdentity& target : targets->second)
         enqueue(target.address, returns);
-      if (is_indirect_conditional_opcode(opcode))
-        enqueue(state.pc + 1, state.returns);
+      if (is_indirect_conditional_opcode(opcode)) {
+        const std::optional<int> fallthrough =
+            sequential_successor(index, state.pc, options.address_space_model);
+        if (!fallthrough.has_value()) {
+          add_reason(result, "indirect conditional has no executable fallthrough");
+        } else {
+          enqueue(*fallthrough, state.returns);
+        }
+      }
       continue;
     }
 
-    enqueue(state.pc + 1, state.returns);
+    const std::optional<int> successor =
+        sequential_successor(index, state.pc, options.address_space_model);
+    if (!successor.has_value()) {
+      add_reason(result, "control flow has a missing executable successor");
+    } else {
+      enqueue(*successor, state.returns);
+    }
   }
   result.explored_states = visited.size();
 

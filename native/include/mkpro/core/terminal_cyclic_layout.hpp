@@ -4,38 +4,15 @@
 #include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/ir.hpp"
 #include "mkpro/core/passes/helpers.hpp"
+#include "mkpro/core/post_layout_control_flow.hpp"
 #include "mkpro/core/result.hpp"
 #include "mkpro/core/terminal_report_tail.hpp"
 
-#include <compare>
 #include <cstddef>
-#include <map>
 #include <string>
 #include <vector>
 
 namespace mkpro::core {
-
-// One compiler-protocol entry state. `return_stack.back()` is the next В/О
-// destination. The compiler-owned manual-entry analysis must enumerate every
-// possible stack state; an address-only entry silently assuming an empty stack
-// is not accepted by this API.
-struct ExternalEntryState {
-  int pc = -1;
-  std::vector<int> return_stack;
-  auto operator<=>(const ExternalEntryState&) const = default;
-};
-
-// Authoritative non-boolean inputs produced by compiler CFG/lowering protocol
-// analysis. This type is deliberately not inferred from comments, names, or
-// optimizer switches. The maps are total: every indirect flow or indirect
-// memory command in `items` must have exactly one entry. Terminal-vs-resumable
-// STOP provenance is read directly from MachineItem::stop_disposition, so it
-// cannot diverge from a separately reindexed caller-supplied set.
-struct TerminalCyclicControlFlow {
-  std::vector<ExternalEntryState> external_entries;
-  std::map<std::size_t, std::vector<int>> indirect_flow_targets;
-  std::map<std::size_t, std::vector<int>> indirect_memory_targets;
-};
 
 struct TerminalCyclicLayoutOptions {
   AddressSpaceModel address_space_model = AddressSpaceModel::Standard;
@@ -63,12 +40,10 @@ struct TerminalCyclicLayoutPlan {
   TerminalReportTailVerification terminal_verification;
   CyclicEndReturnProof cyclic_verification;
 
-  std::map<std::size_t, std::vector<int>> terminal_indirect_flow_targets;
-  std::map<std::size_t, std::vector<int>> terminal_indirect_memory_targets;
-  std::map<std::size_t, std::vector<int>> final_indirect_flow_targets;
-  std::map<std::size_t, std::vector<int>> final_indirect_memory_targets;
-  std::vector<ExternalEntryState> terminal_external_entries;
-  std::vector<ExternalEntryState> final_external_entries;
+  // Exact command identities and complete return stacks are retained across
+  // each relocation.  Consumers never receive a second address-only CFG type.
+  AuthoritativePostLayoutControlFlow terminal_control_flow;
+  AuthoritativePostLayoutControlFlow final_control_flow;
   std::vector<std::string> reasons;
 };
 
@@ -88,7 +63,7 @@ struct TerminalCyclicLayoutResult {
 TerminalCyclicLayoutPlan
 verify_terminal_cyclic_layout(const std::vector<MachineItem>& items,
                               const std::vector<PreloadReport>& preloads,
-                              const TerminalCyclicControlFlow& control_flow,
+                              const AuthoritativePostLayoutControlFlow& control_flow,
                               const TerminalCyclicLayoutOptions& options = {});
 
 // Reconstruct proofs, apply the two-cell terminal rewrite transactionally,
@@ -99,7 +74,7 @@ verify_terminal_cyclic_layout(const std::vector<MachineItem>& items,
 TerminalCyclicLayoutResult
 optimize_terminal_cyclic_layout(const std::vector<MachineItem>& items,
                                 const std::vector<PreloadReport>& preloads,
-                                const TerminalCyclicControlFlow& control_flow,
+                                const AuthoritativePostLayoutControlFlow& control_flow,
                                 const TerminalCyclicLayoutOptions& options = {});
 
 } // namespace mkpro::core
