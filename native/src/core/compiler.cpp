@@ -27,6 +27,7 @@
 #include "mkpro/core/return_stack_script.hpp"
 #include "mkpro/core/rules.hpp"
 #include "mkpro/core/state_banks.hpp"
+#include "mkpro/core/stack_value_equivalence.hpp"
 #include "mkpro/core/v2_const.hpp"
 
 #include <algorithm>
@@ -10544,6 +10545,8 @@ bool program_desugars_to_named_bit_primitive(const LoweringContext& context,
                                              const V2Program& program);
 bool program_requires_shared_bit_mask_scratch(const LoweringContext& context,
                                               const V2Program& program);
+void elide_packed_line_mutating_leaf_registers_after_allocation(
+    LoweringContext& context, const V2Program& program);
 void collect_guarded_update_scratch_registers(LoweringContext& context,
                                               RegisterCollection& collection,
                                               const V2Program& program);
@@ -10825,6 +10828,7 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   apply_scaled_coord_register_hints(context, collection, hints);
   apply_segmented_bitplane_register_hints(context, collection, hints);
   allocate_collected_registers(context, collection, hints);
+  elide_packed_line_mutating_leaf_registers_after_allocation(context, program);
 }
 
 void index_rules(LoweringContext& context, const V2Program& program) {
@@ -22324,6 +22328,304 @@ void apply_packed_line_family_mutating_selector_hints(const LoweringContext& con
   }
 }
 
+bool expression_uses_dynamic_bank_selector(const LoweringContext& context,
+                                           const Expression& expression,
+                                           const std::string& selector_name) {
+  if (expression.kind == "indexed" &&
+      bank_selector_variable_name(expression.base, expression.field) == selector_name &&
+      dynamic_state_bank_index_needs_selector(context, expression)) {
+    return true;
+  }
+  const auto child_uses = [&](const ExpressionPtr& child) {
+    return child != nullptr &&
+           expression_uses_dynamic_bank_selector(context, *child, selector_name);
+  };
+  if (child_uses(expression.index) || child_uses(expression.expr) || child_uses(expression.left) ||
+      child_uses(expression.right)) {
+    return true;
+  }
+  return std::any_of(expression.args.begin(), expression.args.end(), [&](const Expression& arg) {
+    return expression_uses_dynamic_bank_selector(context, arg, selector_name);
+  });
+}
+
+bool source_expression_uses_dynamic_bank_selector(const LoweringContext& context,
+                                                  const std::string& source,
+                                                  const std::string& selector_name, int line) {
+  try {
+    return expression_uses_dynamic_bank_selector(context, parse_expression(source, line),
+                                                 selector_name);
+  } catch (const std::exception&) {
+    return true;
+  }
+}
+
+bool statements_use_dynamic_bank_selector(const LoweringContext& context,
+                                          const std::vector<V2Statement>& statements,
+                                          const std::string& selector_name) {
+  for (const V2Statement& statement : statements) {
+    const auto source_uses = [&](const std::optional<std::string>& source) {
+      return source.has_value() && source_expression_uses_dynamic_bank_selector(
+                                       context, *source, selector_name, statement.line);
+    };
+    if (source_uses(statement.target) || source_uses(statement.expr))
+      return true;
+    for (const std::string& arg : statement.args) {
+      if (source_expression_uses_dynamic_bank_selector(context, arg, selector_name,
+                                                       statement.line)) {
+        return true;
+      }
+    }
+    if (statement.predicate.has_value() &&
+        (source_expression_uses_dynamic_bank_selector(
+             context, statement.predicate->left, selector_name, statement.line) ||
+         source_expression_uses_dynamic_bank_selector(
+             context, statement.predicate->right, selector_name, statement.line) ||
+         (!statement.predicate->item.empty() &&
+          source_expression_uses_dynamic_bank_selector(
+              context, statement.predicate->item, selector_name, statement.line)))) {
+      return true;
+    }
+    if (statement.items.has_value()) {
+      for (const DisplayItem& item : *statement.items) {
+        if (item.expr.has_value() &&
+            expression_uses_dynamic_bank_selector(context, *item.expr, selector_name)) {
+          return true;
+        }
+      }
+    }
+    if (statements_use_dynamic_bank_selector(context, statement.body, selector_name) ||
+        statements_use_dynamic_bank_selector(context, statement.then_body, selector_name) ||
+        statements_use_dynamic_bank_selector(context, statement.else_body, selector_name)) {
+      return true;
+    }
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.action != nullptr &&
+          statements_use_dynamic_bank_selector(
+              context, std::vector<V2Statement>{*match_case.action}, selector_name)) {
+        return true;
+      }
+    }
+    if (statement.otherwise != nullptr &&
+        statements_use_dynamic_bank_selector(
+            context, std::vector<V2Statement>{*statement.otherwise}, selector_name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool dynamic_bank_selector_used_outside_rule(const LoweringContext& context,
+                                             const V2Program& program,
+                                             const std::string& excluded_rule,
+                                             const std::string& selector_name) {
+  if (statements_use_dynamic_bank_selector(context, program.body, selector_name))
+    return true;
+  for (const V2Rule& rule : program.rules) {
+    if (rule.name != excluded_rule &&
+        statements_use_dynamic_bank_selector(context, rule.body, selector_name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void elide_packed_line_mutating_leaf_registers_after_allocation(
+    LoweringContext& context, const V2Program& program) {
+  if (!context.packed_line_family_mutating_selector_update_check_tail)
+    return;
+  for (const V2Rule& rule : program.rules) {
+    if (context.inline_statement_rules.contains(rule.name))
+      continue;
+    const std::optional<PackedLineFamilyUpdateRule> match =
+        packed_line_family_update_rule(context, rule, PackedLineSelectorMode::Mutating);
+    if (match.has_value()) {
+      context.register_index_by_name.erase(match->update.param);
+      context.registers.erase(match->update.param);
+      const std::string bank_selector = bank_selector_variable_name(
+          match->update.target.base, match->update.target.field);
+      if (!dynamic_bank_selector_used_outside_rule(context, program, match->update_rule,
+                                                   bank_selector)) {
+        context.register_index_by_name.erase(bank_selector);
+        context.registers.erase(bank_selector);
+        context.optimizations.push_back(OptimizationReport{
+            .name = "packed-line-family-elided-leaf-register-state",
+            .detail = "Removed the suppressed leaf parameter " + match->update.param +
+                      " and dynamic bank selector " + bank_selector +
+                      " after proving that no emitted rule outside " +
+                      match->update_rule + " uses that bank selector.",
+        });
+      }
+    }
+  }
+}
+
+bool statement_tree_writes_identifier(const V2Program& program, const V2Statement& statement,
+                                      const std::string& name,
+                                      std::set<std::string>& visited_rules);
+
+bool statements_tree_write_identifier(const V2Program& program,
+                                      const std::vector<V2Statement>& statements,
+                                      const std::string& name,
+                                      std::set<std::string>& visited_rules) {
+  return std::any_of(statements.begin(), statements.end(), [&](const V2Statement& statement) {
+    return statement_tree_writes_identifier(program, statement, name, visited_rules);
+  });
+}
+
+bool statement_tree_writes_identifier(const V2Program& program, const V2Statement& statement,
+                                      const std::string& name,
+                                      std::set<std::string>& visited_rules) {
+  if (statement_writes_identifier_for_stack_analysis(statement, name))
+    return true;
+  if (statement.kind == "v2_invoke" && statement.name.has_value() &&
+      visited_rules.insert(*statement.name).second) {
+    const auto rule = std::find_if(program.rules.begin(), program.rules.end(),
+                                   [&](const V2Rule& candidate) {
+                                     return candidate.name == *statement.name;
+                                   });
+    if (rule != program.rules.end() &&
+        statements_tree_write_identifier(program, rule->body, name, visited_rules)) {
+      return true;
+    }
+  }
+  if (statements_tree_write_identifier(program, statement.body, name, visited_rules) ||
+      statements_tree_write_identifier(program, statement.then_body, name, visited_rules) ||
+      statements_tree_write_identifier(program, statement.else_body, name, visited_rules)) {
+    return true;
+  }
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr &&
+        statement_tree_writes_identifier(program, *match_case.action, name, visited_rules)) {
+      return true;
+    }
+  }
+  return statement.otherwise != nullptr &&
+         statement_tree_writes_identifier(program, *statement.otherwise, name, visited_rules);
+}
+
+bool packed_line_borrow_owner_is_cluster_write_free(const V2Program& program,
+                                                    const V2Rule& marker,
+                                                    const std::string& owner) {
+  std::set<std::string> visited_rules{marker.name};
+  return !statements_tree_write_identifier(program, marker.body, owner, visited_rules);
+}
+
+bool packed_line_continuation_rewrites_owner_before_read(
+    const V2Program& program, const std::vector<V2Statement>& statements, std::size_t start,
+    const std::string& owner) {
+  for (std::size_t index = start; index < statements.size(); ++index) {
+    const V2Statement& statement = statements.at(index);
+    std::set<std::string> seen_rules;
+    if (statement_reads_identifier_for_stack_analysis(program, statement, owner, seen_rules))
+      return false;
+    if (statement_writes_identifier_for_stack_analysis(statement, owner))
+      return true;
+    if (statement.kind == "v2_invoke" || statement.kind == "v2_if" ||
+        statement.kind == "v2_match" || statement.kind == "v2_loop" ||
+        statement.kind == "v2_while" || statement.kind == "v2_block" ||
+        statement.kind == "v2_raw") {
+      return false;
+    }
+  }
+  return false;
+}
+
+bool packed_line_call_continuations_rewrite_owner_before_read(
+    const V2Program& program, const std::vector<V2Statement>& statements,
+    const std::string& marker_rule, const std::string& owner, int& call_sites) {
+  for (std::size_t index = 0; index < statements.size(); ++index) {
+    const V2Statement& statement = statements.at(index);
+    if (statement.kind == "v2_invoke" && statement.name == marker_rule) {
+      ++call_sites;
+      if (!packed_line_continuation_rewrites_owner_before_read(program, statements, index + 1U,
+                                                               owner)) {
+        return false;
+      }
+    }
+    if (!packed_line_call_continuations_rewrite_owner_before_read(
+            program, statement.body, marker_rule, owner, call_sites) ||
+        !packed_line_call_continuations_rewrite_owner_before_read(
+            program, statement.then_body, marker_rule, owner, call_sites) ||
+        !packed_line_call_continuations_rewrite_owner_before_read(
+            program, statement.else_body, marker_rule, owner, call_sites)) {
+      return false;
+    }
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.action != nullptr &&
+          !packed_line_call_continuations_rewrite_owner_before_read(
+              program, std::vector<V2Statement>{*match_case.action}, marker_rule, owner,
+              call_sites)) {
+        return false;
+      }
+    }
+    if (statement.otherwise != nullptr &&
+        !packed_line_call_continuations_rewrite_owner_before_read(
+            program, std::vector<V2Statement>{*statement.otherwise}, marker_rule, owner,
+            call_sites)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool packed_line_owner_is_rewritten_after_every_call(const V2Program& program,
+                                                     const std::string& marker_rule,
+                                                     const std::string& owner) {
+  int call_sites = 0;
+  if (!packed_line_call_continuations_rewrite_owner_before_read(
+          program, program.body, marker_rule, owner, call_sites)) {
+    return false;
+  }
+  for (const V2Rule& rule : program.rules) {
+    if (!packed_line_call_continuations_rewrite_owner_before_read(
+            program, rule.body, marker_rule, owner, call_sites)) {
+      return false;
+    }
+  }
+  return call_sites > 0;
+}
+
+void plan_packed_line_family_borrowed_mutating_selectors(LoweringContext& context,
+                                                         const V2Program& program) {
+  context.packed_line_borrowed_selector_registers.clear();
+  context.packed_line_borrowed_selector_owners.clear();
+  if (!context.packed_line_family_borrowed_mutating_selector_update_check_tail)
+    return;
+
+  const std::vector<int> preferred_registers = {0x3, 0x0, 0x1, 0x2};
+  for (const V2Rule& rule : program.rules) {
+    const std::optional<PackedLineFamilyUpdateRule> match =
+        packed_line_family_update_rule(context, rule, PackedLineSelectorMode::Allocation);
+    if (!match.has_value() || !packed_line_family_update_steps_descend_by_one(match->steps) ||
+        !packed_line_family_update_steps_preserve_y(context, match->steps)) {
+      continue;
+    }
+    for (const int candidate_register : preferred_registers) {
+      std::vector<std::string> owners;
+      for (const auto& [name, register_index] : context.register_index_by_name) {
+        if (register_index == candidate_register)
+          owners.push_back(name);
+      }
+      std::sort(owners.begin(), owners.end());
+
+      const bool safe = std::all_of(owners.begin(), owners.end(), [&](const std::string& owner) {
+        const bool eliminated_leaf_param = owner == match->update.param;
+        return owner != match->update.selector &&
+               packed_line_borrow_owner_is_cluster_write_free(program, rule, owner) &&
+               (eliminated_leaf_param ||
+                packed_line_owner_is_rewritten_after_every_call(program, rule.name, owner));
+      });
+      if (!safe)
+        continue;
+
+      context.packed_line_borrowed_selector_registers[rule.name] = candidate_register;
+      context.packed_line_borrowed_selector_owners[rule.name] = owners;
+      break;
+    }
+  }
+}
+
 void emit_packed_line_family_update_check_tail(LoweringContext& context,
                                                const IndexedPackedUpdateTailRule& update) {
   emit_store(context, update.selector, "set " + update.selector + " from X parameter");
@@ -22430,10 +22732,12 @@ void emit_packed_line_family_mutating_update_check_tail(LoweringContext& context
   if (op.has_value())
     context.emitter.emit_op(op->first, op->second, "mutating-selector packed digit update",
                             update.update_line);
+  const PreparedIndexedSelector prepared_selector{.selector = update.selector};
   context.emitter.emit_op(0xb0 + update.selector_register,
                           "К X->П " + core::register_name_for_index(update.selector_register),
-                          "predecrement indexed set " +
-                              bank_member_key(update.target.base, update.target.field),
+                          indexed_memory_comment_or_action(
+                              context, "predecrement indexed set", update.target,
+                              prepared_selector),
                           update.update_line);
 
   (void)lower_expression_to_x(context, update.mask);
@@ -22584,6 +22888,76 @@ bool lower_packed_line_family_mutating_update_rule(LoweringContext& context, con
   }
 
   emit_packed_line_family_mutating_update_check_tail(context, match->update);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-line-family-mutating-selector-update-check-tail",
+      .detail = "Lowered the descending packed-line walk in " + rule.name +
+                " through one pre-decrementing selector and suppressed " +
+                match->update_rule + " together with its canonical slot-parameter state.",
+  });
+  return true;
+}
+
+bool lower_packed_line_family_borrowed_mutating_update_rule(LoweringContext& context,
+                                                            const V2Rule& rule) {
+  const auto register_it = context.packed_line_borrowed_selector_registers.find(rule.name);
+  if (register_it == context.packed_line_borrowed_selector_registers.end())
+    return false;
+  std::optional<PackedLineFamilyUpdateRule> match =
+      packed_line_family_update_rule(context, rule, PackedLineSelectorMode::Allocation);
+  if (!match.has_value() || !packed_line_family_update_steps_descend_by_one(match->steps) ||
+      !packed_line_family_update_steps_preserve_y(context, match->steps)) {
+    return false;
+  }
+  match->update.selector_register = register_it->second;
+
+  emit_store(context, match->delta_name, "set " + match->delta_name + " from X parameter");
+  const int first_slot = match->steps.front().slot;
+  emit_number_or_preload(context, std::to_string(first_slot + 1),
+                         "packed-line borrowed mutating selector start", match->line);
+  context.emitter.emit_op(
+      0x40 + register_it->second,
+      "X->П " + core::register_name_for_index(register_it->second, context.feature_profile),
+      "packed-line borrowed mutating selector start " + std::to_string(first_slot + 1),
+      match->line);
+  clear_current_x_facts(context);
+
+  const std::string tail_label =
+      context.emitter.fresh_label("packed_line_family_borrowed_mutating_update_check_tail");
+  for (std::size_t index = 0; index < match->steps.size(); ++index) {
+    const PackedLineFamilyUpdateStep& step = match->steps.at(index);
+    if (!lower_expression_to_x(context,
+                               packed_line_family_update_step_line_value(match->update, step))) {
+      return false;
+    }
+    if (!lower_expression_preserving_previous_x_as_y(context, step.line_expr, step.source_line))
+      return false;
+    if (step.normalizer.has_value()) {
+      context.emitter.emit_jump(0x53, "ПП", function_label(*step.normalizer),
+                                "proc call " + *step.normalizer, step.source_line);
+      mark_current_x(context, match->update.y_name);
+    }
+    if (index + 1U == match->steps.size()) {
+      context.emitter.emit_label(tail_label);
+    } else {
+      context.emitter.emit_jump(0x53, "ПП", tail_label,
+                                "packed-line borrowed mutating shared update/check tail",
+                                step.source_line);
+      clear_current_x_facts(context);
+    }
+  }
+
+  emit_packed_line_family_mutating_update_check_tail(context, match->update);
+  const std::vector<std::string>& owners =
+      context.packed_line_borrowed_selector_owners.at(rule.name);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-line-family-borrowed-mutating-selector-update-check-tail",
+      .detail = "Borrowed " +
+                core::register_name_for_index(register_it->second, context.feature_profile) +
+                (owners.empty() ? " (free at lowering)" : " from " + join_strings(owners, ", ")) +
+                " for the descending packed-line selector in " + rule.name +
+                " after call-continuation analysis proved every owner write-free through the "
+                "marker cluster and rewritten before its next read after every call.",
+  });
   return true;
 }
 
@@ -27076,7 +27450,6 @@ std::set<std::string> compiler_inline_statement_rule_names(const LoweringContext
       continue;
     if (rule_is_directly_recursive(rule))
       continue;
-
     const int body_cost = inline_naming_body_cost(context, rule.body);
     if (body_cost >= branch_order_infinite_cost()) {
       if (uses == 1)
@@ -32957,6 +33330,10 @@ bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
   if (lower_x_param_packed_score_shared_tail_rule(context, rule))
     return true;
 
+  if (context.packed_line_family_borrowed_mutating_selector_update_check_tail &&
+      lower_packed_line_family_borrowed_mutating_update_rule(context, rule))
+    return true;
+
   if (context.packed_line_family_mutating_selector_update_check_tail &&
       lower_packed_line_family_mutating_update_rule(context, rule))
     return true;
@@ -33194,6 +33571,16 @@ bool lower_function_rules(LoweringContext& context, const V2Program& program) {
       context.packed_line_family_mutating_selector_update_check_tail ||
       context.packed_line_family_borrowed_mutating_selector_update_check_tail) {
     for (const V2Rule& rule : program.rules) {
+      if (context.packed_line_family_borrowed_mutating_selector_update_check_tail) {
+        if (context.packed_line_borrowed_selector_registers.contains(rule.name)) {
+          if (const std::optional<PackedLineFamilyUpdateRule> borrowed_update =
+                  packed_line_family_update_rule(context, rule,
+                                                 PackedLineSelectorMode::Allocation)) {
+            packed_line_consumed_update_rules.insert(borrowed_update->update_rule);
+            continue;
+          }
+        }
+      }
       if (context.packed_line_family_mutating_selector_update_check_tail) {
         if (const std::optional<PackedLineFamilyUpdateRule> mutating_update =
                 packed_line_family_update_rule(context, rule, PackedLineSelectorMode::Mutating)) {
@@ -47500,6 +47887,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
         plan_spatial_line_count_preloads(context, *ast.v2);
         trace_stage("metadata-near-any");
         collect_near_any_helper_stats(context, *ast.v2);
+        trace_stage("metadata-plan-packed-line-borrowed-selector");
+        plan_packed_line_family_borrowed_mutating_selectors(context, *ast.v2);
       }
       if (can_attempt_lowering) {
         trace_stage("lower-main-functions-helpers");
@@ -49387,7 +49776,8 @@ void append_candidate_report_once(std::vector<CandidateReport>& reports,
 }
 
 bool should_report_nonwinning_candidate(std::string_view name) {
-  return name == "packed-score-accumulator-helper" ||
+  return name.find("callee-hole") != std::string_view::npos ||
+         name == "packed-score-accumulator-helper" ||
          name == "packed-score-accumulator-aggressive-post-layout" ||
          name == "packed-score-accumulator-stack-helper-entries" ||
          name == "generic-packed-score-accumulator-fallback" ||
@@ -49899,6 +50289,84 @@ bool runtime_indirect_call_targets_proved(const std::vector<OptimizationReport>&
 
 constexpr std::string_view kCalleeHoleCallMarker = "callee-hole indirect call;";
 constexpr std::string_view kCalleeHoleSkeletonCallMarker = "callee-hole skeleton call";
+constexpr std::string_view kCalleeHoleChargeMarker = "callee-hole selector-value=";
+constexpr std::string_view kCalleeHoleEntryEqualityMarker =
+    "callee-hole entry-X equivalence ";
+
+struct CalleeHoleSelectorCharge {
+  int value = 0;
+  int target = 0;
+};
+
+std::optional<CalleeHoleSelectorCharge> callee_hole_selector_charge_from_comment(
+    const std::optional<std::string>& comment, const CompileOptions& options) {
+  if (!comment.has_value() || !comment->starts_with(kCalleeHoleChargeMarker))
+    return std::nullopt;
+  std::size_t pos = kCalleeHoleChargeMarker.size();
+  const auto parse_nonnegative = [&](std::size_t& cursor) -> std::optional<int> {
+    if (cursor >= comment->size() ||
+        !std::isdigit(static_cast<unsigned char>((*comment)[cursor]))) {
+      return std::nullopt;
+    }
+    int value = 0;
+    while (cursor < comment->size() &&
+           std::isdigit(static_cast<unsigned char>((*comment)[cursor]))) {
+      value = value * 10 + ((*comment)[cursor] - '0');
+      ++cursor;
+    }
+    return value;
+  };
+  const std::optional<int> value = parse_nonnegative(pos);
+  constexpr std::string_view kTargetMarker = " indirect-target=";
+  if (!value.has_value() || comment->substr(pos, kTargetMarker.size()) != kTargetMarker)
+    return std::nullopt;
+  pos += kTargetMarker.size();
+  const std::optional<int> target = parse_nonnegative(pos);
+  if (!target.has_value() || pos != comment->size() || *target < 0 ||
+      *target > official_last_program_address_for_options(options)) {
+    return std::nullopt;
+  }
+  return CalleeHoleSelectorCharge{.value = *value, .target = *target};
+}
+
+bool callee_hole_charge_literal_precedes_store(const std::vector<ResolvedStep>& steps,
+                                               std::size_t store_index,
+                                               const CalleeHoleSelectorCharge& charge,
+                                               const CompileOptions& options) {
+  std::string reversed_digits;
+  std::size_t index = store_index;
+  while (index > 0) {
+    const ResolvedStep& digit = steps.at(index - 1U);
+    if (digit.opcode < 0 || digit.opcode > 9)
+      break;
+    const std::optional<CalleeHoleSelectorCharge> annotated =
+        callee_hole_selector_charge_from_comment(digit.comment, options);
+    if (!annotated.has_value() || annotated->value != charge.value ||
+        annotated->target != charge.target) {
+      break;
+    }
+    reversed_digits.push_back(static_cast<char>('0' + digit.opcode));
+    --index;
+  }
+  return !reversed_digits.empty() &&
+         std::string(reversed_digits.rbegin(), reversed_digits.rend()) ==
+             std::to_string(charge.value);
+}
+
+std::optional<std::string> callee_hole_proof_id_from_comment(
+    const std::optional<std::string>& comment) {
+  if (!comment.has_value() || !comment->starts_with(kCalleeHoleCallMarker))
+    return std::nullopt;
+  constexpr std::string_view kMarker = "proof=";
+  const std::size_t marker = comment->find(kMarker);
+  if (marker == std::string::npos)
+    return std::nullopt;
+  const std::size_t start = marker + kMarker.size();
+  const std::size_t end = comment->find(';', start);
+  if (start == comment->size() || end == start)
+    return std::nullopt;
+  return comment->substr(start, end == std::string::npos ? std::string::npos : end - start);
+}
 
 std::optional<std::set<std::string>> indirect_memory_targets_from_comment(
     const std::optional<std::string>& comment);
@@ -49944,30 +50412,63 @@ std::optional<std::map<int, std::string>> callee_hole_leaf_targets_from_comment(
   return targets;
 }
 
-// Callee-hole proof: the skeleton's К ПП r hole is fed exclusively by charge
-// sites (literal digits of a leaf address + X->П r immediately followed by the
-// direct skeleton call), every charged address is a member of the hole's
-// annotated leaf-target set, nothing else can write the selector register, and
-// each annotated leaf address re-derives from the delivered listing: the step
-// carrying that leaf's entry marker must sit at exactly that address. The last
-// check catches layout shifts after the rewrite froze the charge digits.
+bool callee_hole_entry_stack_difference_erased(const std::vector<ResolvedStep>& steps,
+                                               std::size_t start, std::size_t hole,
+                                               const std::string& selector_register) {
+  core::StackValueEqualityState equality;
+  for (std::size_t index = start; index < hole; ++index) {
+    if (core::stack_values_fully_equal(equality))
+      return true;
+    const int opcode = steps.at(index).opcode;
+    core::StackValueEqualityStepKind kind = core::StackValueEqualityStepKind::Plain;
+    bool reads_selector = false;
+    if (opcode >= 0x60 && opcode <= 0x6e) {
+      kind = core::StackValueEqualityStepKind::Recall;
+      reads_selector = core::register_name_for_index(opcode - 0x60) == selector_register;
+    } else if (opcode >= 0xd0 && opcode <= 0xde) {
+      kind = core::StackValueEqualityStepKind::Recall;
+      reads_selector = core::register_name_for_index(opcode - 0xd0) == selector_register;
+    } else if (opcode >= 0x40 && opcode <= 0x4e) {
+      kind = core::StackValueEqualityStepKind::Store;
+      reads_selector = core::register_name_for_index(opcode - 0x40) == selector_register;
+    } else if (opcode >= 0xb0 && opcode <= 0xbe) {
+      kind = core::StackValueEqualityStepKind::Store;
+      reads_selector = core::register_name_for_index(opcode - 0xb0) == selector_register;
+    } else if (opcode_by_code(opcode).takes_address || opcode == 0x50 || opcode == 0x52 ||
+               (opcode >= 0x70 && opcode <= 0xae) ||
+               (opcode >= 0xc0 && opcode <= 0xee)) {
+      kind = core::StackValueEqualityStepKind::Flow;
+    }
+    if (core::transfer_stack_value_equality(equality, opcode, kind, reads_selector) ==
+        core::StackValueEqualityTransfer::Rejected) {
+      return false;
+    }
+  }
+  return core::stack_values_fully_equal(equality);
+}
+
+// Callee-hole proof: charge literals and their semantic leaf targets are
+// independently re-derived from the delivered listing. Stable selectors use
+// target==charge. Mutating R0..R6 selectors additionally have to resolve their
+// pre-modified charge to the leaf and carry a final-code proof that the charge's
+// different X/X2 value is erased before the skeleton observes it.
 bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationReport>& optimizations,
                                               const std::vector<ResolvedStep>& steps,
                                               const CompileOptions& options) {
   if (!has_optimization_named(optimizations, "callee-hole-straight-line-helper"))
     return false;
 
-  std::map<std::string, std::set<int>> charged_targets;
+  std::map<std::string, std::map<int, std::set<int>>> charged_values;
   std::set<std::string> poisoned;
   bool all_poisoned = false;
   for (std::size_t index = 0; index < steps.size(); ++index) {
     const ResolvedStep& step = steps.at(index);
     const std::optional<std::string> store_register = store_register_for_opcode(step.opcode);
     if (store_register.has_value()) {
-      const std::optional<int> stored_target =
-          runtime_selector_target_from_comment(step.comment, options);
-      if (stored_target.has_value() &&
-          runtime_selector_literal_precedes_store(steps, index, *stored_target, options)) {
+      const std::optional<CalleeHoleSelectorCharge> charge =
+          callee_hole_selector_charge_from_comment(step.comment, options);
+      if (charge.has_value() &&
+          callee_hole_charge_literal_precedes_store(steps, index, *charge, options)) {
         // Charges bound for the skeleton must transfer control to it right
         // away, otherwise the register value at the hole is unconstrained.
         const bool followed_by_skeleton_call =
@@ -49976,14 +50477,27 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
             steps.at(index + 1U).comment->find(kCalleeHoleSkeletonCallMarker) !=
                 std::string::npos;
         if (followed_by_skeleton_call) {
-          charged_targets[*store_register].insert(*stored_target);
+          charged_values[*store_register][charge->target].insert(charge->value);
           continue;
         }
       }
       poisoned.insert(*store_register);
       continue;
     }
+    if (step.opcode >= 0x60 && step.opcode <= 0x6e) {
+      poisoned.insert(core::register_name_for_index(step.opcode - 0x60));
+    }
+    if (step.opcode >= 0x70 && step.opcode <= 0xee &&
+        !(step.opcode >= 0xb0 && step.opcode <= 0xbe)) {
+      const std::string register_name =
+          core::register_name_for_index(step.opcode & 0x0f);
+      const bool is_callee_hole = step.comment.has_value() &&
+                                  step.comment->starts_with(kCalleeHoleCallMarker);
+      if (!is_callee_hole)
+        poisoned.insert(register_name);
+    }
     if (step.opcode >= 0xb0 && step.opcode <= 0xbe) {
+      poisoned.insert(core::register_name_for_index(step.opcode - 0xb0));
       const std::optional<std::set<std::string>> targets =
           indirect_memory_targets_from_comment(step.comment);
       if (!targets.has_value()) {
@@ -49992,6 +50506,25 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
       }
       poisoned.insert(targets->begin(), targets->end());
     }
+  }
+
+  std::map<std::string, std::size_t> equality_entry_by_proof;
+  std::set<std::string> duplicate_equality_entries;
+  for (std::size_t index = 0; index < steps.size(); ++index) {
+    if (!steps.at(index).comment.has_value())
+      continue;
+    const std::size_t marker = steps.at(index).comment->find(kCalleeHoleEntryEqualityMarker);
+    if (marker == std::string::npos)
+      continue;
+    const std::size_t start = marker + kCalleeHoleEntryEqualityMarker.size();
+    const std::size_t end = steps.at(index).comment->find(';', start);
+    const std::string proof = steps.at(index).comment->substr(
+        start, end == std::string::npos ? std::string::npos : end - start);
+    if (proof.empty() || equality_entry_by_proof.contains(proof)) {
+      duplicate_equality_entries.insert(proof);
+      continue;
+    }
+    equality_entry_by_proof[proof] = index;
   }
 
   const auto leaf_entry_address = [&](const std::string& label) -> std::optional<int> {
@@ -50008,7 +50541,8 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
   };
 
   bool saw_proved_hole = false;
-  for (const ResolvedStep& step : steps) {
+  for (std::size_t step_index = 0; step_index < steps.size(); ++step_index) {
+    const ResolvedStep& step = steps.at(step_index);
     const std::optional<std::map<int, std::string>> leaf_targets =
         callee_hole_leaf_targets_from_comment(step.comment, options);
     if (!leaf_targets.has_value())
@@ -50016,7 +50550,7 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
     if (all_poisoned || step.opcode < 0xa0 || step.opcode > 0xae)
       return false;
     const std::string register_name = core::register_name_for_index(step.opcode - 0xa0);
-    if (!core::is_stable_indirect_selector(register_name) || poisoned.contains(register_name))
+    if (poisoned.contains(register_name))
       return false;
     std::set<int> annotated;
     for (const auto& [target, label] : *leaf_targets) {
@@ -50025,9 +50559,36 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
         return false;
       annotated.insert(target);
     }
-    const auto charged = charged_targets.find(register_name);
-    if (charged == charged_targets.end() || charged->second != annotated)
+    const auto charged = charged_values.find(register_name);
+    if (charged == charged_values.end())
       return false;
+    std::set<int> charged_targets;
+    for (const auto& [target, values] : charged->second) {
+      if (values.empty())
+        return false;
+      for (const int value : values) {
+        if (!selector_value_resolves_to_flow_target(
+                register_name, std::to_string(value), target,
+                address_space_model_for_options(options))) {
+          return false;
+        }
+      }
+      charged_targets.insert(target);
+    }
+    if (charged_targets != annotated)
+      return false;
+
+    if (!core::is_stable_indirect_selector(register_name)) {
+      const std::optional<std::string> proof = callee_hole_proof_id_from_comment(step.comment);
+      if (!proof.has_value() || duplicate_equality_entries.contains(*proof))
+        return false;
+      const auto entry = equality_entry_by_proof.find(*proof);
+      if (entry == equality_entry_by_proof.end() || entry->second >= step_index ||
+          !callee_hole_entry_stack_difference_erased(steps, entry->second, step_index,
+                                                     register_name)) {
+        return false;
+      }
+    }
     saw_proved_hole = true;
   }
   return saw_proved_hole;
@@ -50908,9 +51469,61 @@ std::optional<std::size_t> unique_resolved_step_index_by_address(
   return found;
 }
 
-bool resolved_step_erases_dead_integer_fractional_selector(
-    const std::vector<ResolvedStep>& steps, std::optional<std::size_t> index) {
-  return index.has_value() && steps.at(*index).opcode == kDeadIntegerFractionalEraseOpcode;
+bool dead_integer_fractional_selector_target_erases_before_x_use(
+    const std::vector<ResolvedStep>& steps, std::optional<std::size_t> entry_index,
+    const CompileOptions& options) {
+  std::set<std::size_t> visited;
+  std::optional<std::size_t> index = entry_index;
+  while (index.has_value() && visited.insert(*index).second) {
+    const ResolvedStep& step = steps.at(*index);
+    if (step.opcode == kDeadIntegerFractionalEraseOpcode)
+      return true;
+    if (step.opcode >= 0x54 && step.opcode <= 0x56) {
+      index = unique_resolved_step_index_by_address(steps, step.address + 1);
+      continue;
+    }
+    if (step.opcode == 0x51) {
+      if (*index + 1U >= steps.size() ||
+          steps.at(*index + 1U).address != step.address + 1) {
+        return false;
+      }
+      const FormalAddressInfo target = formal_address_info(
+          steps.at(*index + 1U).opcode, address_space_model_for_options(options));
+      index = unique_resolved_step_index_by_address(steps, target.actual);
+      continue;
+    }
+    if (step.opcode >= 0x80 && step.opcode <= 0x8e) {
+      const std::optional<int> target = indirect_target_from_comment(step.comment, options);
+      if (!target.has_value())
+        return false;
+      index = unique_resolved_step_index_by_address(steps, *target);
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
+
+bool dead_integer_fractional_selector_direct_jump_live_x_use_proved(
+    const std::vector<ResolvedStep>& steps, std::size_t jump_index, int register_index,
+    std::optional<int> selector_target, const CompileOptions& options) {
+  if (jump_index >= steps.size())
+    return false;
+  const ResolvedStep& step = steps.at(jump_index);
+  if (!dead_integer_fractional_selector_direct_jump_use_proved(step, register_index, options))
+    return false;
+  const std::optional<std::string> register_name = indirect_flow_register_for_opcode(step.opcode);
+  if (!register_name.has_value())
+    return false;
+  const std::optional<PreloadedSelectorAnnotation> annotation =
+      preloaded_selector_annotation_from_comment(step.comment, *register_name,
+                                                 address_space_model_for_options(options));
+  if (!annotation.has_value() ||
+      (selector_target.has_value() && annotation->target != *selector_target)) {
+    return false;
+  }
+  return dead_integer_fractional_selector_target_erases_before_x_use(
+      steps, unique_resolved_step_index_by_address(steps, annotation->target), options);
 }
 
 bool dead_integer_fractional_selector_conditional_flow_use_proved(
@@ -50938,8 +51551,8 @@ bool dead_integer_fractional_selector_conditional_flow_use_proved(
       unique_resolved_step_index_by_address(steps, annotation->target);
   const std::optional<std::size_t> fallthrough =
       unique_resolved_step_index_by_address(steps, step.address + 1);
-  return resolved_step_erases_dead_integer_fractional_selector(steps, branch) &&
-         resolved_step_erases_dead_integer_fractional_selector(steps, fallthrough);
+  return dead_integer_fractional_selector_target_erases_before_x_use(steps, branch, options) &&
+         dead_integer_fractional_selector_target_erases_before_x_use(steps, fallthrough, options);
 }
 
 bool dead_integer_fractional_selector_indirect_call_use_proved(
@@ -50965,13 +51578,14 @@ bool dead_integer_fractional_selector_indirect_call_use_proved(
 
   const std::optional<std::size_t> callee =
       unique_resolved_step_index_by_address(steps, annotation->target);
-  return resolved_step_erases_dead_integer_fractional_selector(steps, callee);
+  return dead_integer_fractional_selector_target_erases_before_x_use(steps, callee, options);
 }
 
 enum class DeadIntegerStoredLiveXProof {
   OverwrittenByMemoryRecall,
   OverwrittenByRegisterRecall,
   ErasedBySameRegisterRecall,
+  ErasedByDirectJumpTarget,
   ErasedByConditionalSuccessors,
   ErasedByIndirectCallCallee,
 };
@@ -50987,6 +51601,10 @@ bool dead_integer_fractional_selector_same_register_recall_next_use_proved(
     return true;
   if (dead_integer_fractional_selector_memory_recall_use_proved(next, register_index,
                                                                 carrier_value)) {
+    return true;
+  }
+  if (dead_integer_fractional_selector_direct_jump_live_x_use_proved(
+          steps, recall_index + 1U, register_index, selector_target, options)) {
     return true;
   }
   if (dead_integer_fractional_selector_conditional_flow_use_proved(
@@ -51023,6 +51641,10 @@ dead_integer_fractional_selector_stored_live_x_use_proved(
             steps, consumer_index, register_index, carrier_value, selector_target, options)) {
       return DeadIntegerStoredLiveXProof::ErasedBySameRegisterRecall;
     }
+  }
+  if (dead_integer_fractional_selector_direct_jump_live_x_use_proved(
+          steps, consumer_index, register_index, selector_target, options)) {
+    return DeadIntegerStoredLiveXProof::ErasedByDirectJumpTarget;
   }
   if (dead_integer_fractional_selector_conditional_flow_use_proved(
           steps, consumer_index, register_index, selector_target, options)) {
@@ -51101,6 +51723,23 @@ std::string dead_integer_fractional_selector_rejection_context(
     parts.push_back("returnSite=" +
                     dead_integer_fractional_selector_address_text(consumer_step->address + 1));
     parts.push_back("xLivenessProofScope=indirect-call-return");
+  }
+  const bool consumer_uses_selector_carrier = [&]() {
+    if (consumer_step == nullptr || !selector_carrier_register_index.has_value())
+      return false;
+    const std::optional<std::string> consumer_register =
+        indirect_flow_register_for_opcode(consumer_step->opcode);
+    return consumer_register.has_value() &&
+           *consumer_register ==
+               register_name_for_step_index(*selector_carrier_register_index);
+  }();
+  if (consumer_step != nullptr && consumer_step->opcode >= 0x80 &&
+      consumer_step->opcode <= 0x8e && consumer_uses_selector_carrier) {
+    if (selector_target.has_value()) {
+      parts.push_back("branchTarget=" +
+                      dead_integer_fractional_selector_address_text(*selector_target));
+    }
+    parts.push_back("xLivenessProofScope=unconditional-indirect-flow");
   }
   if (consumer_step != nullptr &&
       dead_integer_fractional_selector_next_step_name(*consumer_step).rfind("К x", 0) == 0) {
@@ -51461,8 +52100,9 @@ std::vector<ProofReport> build_proof_report(const ProgramAst& ast,
         .status = "proved",
         .detail =
             "Every callee-hole skeleton dispatch reads a selector register that is written only "
-            "by literal leaf-address charges immediately followed by the skeleton call, and the "
-            "charged addresses match the hole's annotated leaf-target set.",
+            "by verified literal charges immediately followed by the skeleton call; each charge "
+            "resolves to an annotated final leaf address, and mutating-selector entry stack "
+            "differences are erased before observation.",
     });
   }
   if (fractional_selector_data_values_proved(optimizations, options, preloads, steps)) {
@@ -52269,7 +52909,26 @@ size_opportunity_details(const CandidateReport& candidate,
         }
       } else if (consumer.rfind("К БП", 0) == 0 || consumer.rfind("K BP", 0) == 0) {
         details.emplace("consumerControlKind", "direct-indirect-jump");
-        if (unrelated_control_with_live_x) {
+        const bool proved_jump_with_unerased_target =
+            details.contains("xLivenessProofScope") &&
+            details["xLivenessProofScope"] == "unconditional-indirect-flow";
+        if (proved_jump_with_unerased_target) {
+          details["integerPartUseRole"] = "live-x-carrier-crosses-control-flow";
+          details["deadIntegerProofGap"] =
+              "proved-unconditional-jump-target-does-not-erase-live-x";
+          details["deadIntegerProofRequiredArtifact"] =
+              "target-path-K{x}-before-live-x-use";
+          details["deadIntegerProofNextAction"] =
+              "erase-live-x-on-proved-transparent-target-path-or-before-jump";
+          details["proofDisposition"] = "needs-control-successor-x-liveness-proof";
+          details["requiredAction"] =
+              "make-proved-unconditional-jump-target-erase-live-x";
+          details["integerPartHazard"] =
+              "proved-indirect-jump-target-can-consume-live-x-carrier";
+          details["proofOnlySavingsStatus"] =
+              "blocked-by-live-x-at-unconditional-jump-target";
+          details["xLivenessAction"] = "insert-or-prove-target-entry-fractional-erase";
+        } else if (unrelated_control_with_live_x) {
           details.emplace("proofDisposition", "needs-control-successor-x-liveness-proof");
           details.emplace("requiredAction",
                           "prove-control-successor-erases-live-x-or-erase-before-use");
@@ -52527,6 +53186,28 @@ void attach_rejected_candidate_size_details(std::map<std::string, std::string>& 
       savings > 0 ? "measured-positive-vs-current"
                   : (savings == 0 ? "measured-break-even-vs-current"
                                   : "measured-negative-vs-current");
+  if (candidate.variant.find("callee-hole") != std::string::npos) {
+    details["regionGraphCandidate"] = "callee-hole-straight-line-skeleton";
+    details["calleeHoleSelectorPolicy"] =
+        "globally-free-stable-R7..Re-or-proved-mutating-R0..R6";
+    details["calleeHoleMutatingSelectorStatus"] =
+        "available-when-entry-X-X2-difference-erases-before-observation";
+    details["calleeHoleStackValueHazard"] =
+        "mutating-selector-charge-value-differs-from-leaf-address-in-live-X";
+    details["calleeHoleProofRequiredArtifact"] =
+        "entry-X-dead-before-observation-or-stack-neutral-selector-charge";
+    details["requiredAction"] =
+        savings > 0
+            ? "prove-entry-X-dead-before-borrowed-mutating-selector-charge"
+            : "find-size-positive-callee-hole-region-before-entry-stack-proof";
+    details["layoutAction"] =
+        savings > 0 ? "co-design-region-skeleton-selector-and-entry-stack"
+                    : "find-profitable-region-skeleton-before-entry-stack-proof";
+    details["layoutActionStatus"] =
+        savings > 0 ? "blocked-positive" : "stalled-nonpositive";
+    details["calleeHoleProofDisposition"] =
+        savings > 0 ? "required-for-positive-candidate" : "deferred-by-negative-size";
+  }
   if (savings <= 0 &&
       (details.contains("requiredAction") || details.contains("blockedProofAction") ||
        details.contains("proofDisposition") || details.contains("blockedProof"))) {
@@ -59741,7 +60422,11 @@ SizeAttributionReport build_size_attribution_report(
                                  overlay_action_by_address);
     if (candidate.site == "candidate-search" || candidate.site == "layout")
       details.emplace("savingsAggregation", "alternative-candidate");
-    const std::string blocker_kind = size_opportunity_blocker_kind(candidate);
+    const std::string blocker_kind =
+        candidate.site == "candidate-search" && candidate.steps >= current_steps &&
+                candidate.variant.find("callee-hole") != std::string::npos
+            ? "nonwinning-candidate"
+            : size_opportunity_blocker_kind(candidate);
     attach_rejected_candidate_size_details(details, candidate, current_steps, blocker_kind);
     attach_generic_packed_score_fallback_details(details, candidate, current_steps,
                                                  report.helpers);
@@ -59779,13 +60464,19 @@ SizeAttributionReport build_size_attribution_report(
       } catch (const std::exception&) {
       }
     }
+    const std::string opportunity_reason =
+        blocker_kind == "nonwinning-candidate" &&
+                candidate.variant.find("callee-hole") != std::string::npos
+            ? "not selected because the measured callee-hole candidate did not improve final "
+              "program size"
+            : candidate.reason;
     report.opportunities.push_back(SizeOpportunityReport{
         .site = candidate.site,
         .variant = candidate.variant,
         .current_steps = current_steps,
         .candidate_steps = opportunity_candidate_steps,
         .savings = opportunity_savings,
-        .reason = candidate.reason,
+        .reason = opportunity_reason,
         .blocker_kind = blocker_kind,
         .details = std::move(details),
     });
@@ -61576,7 +62267,8 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
   auto add_fractional_selector_candidates_for_base =
       [&](const CompileOptions& base_options, std::set<std::string>& tried, std::string name,
           const std::function<std::string(const FractionalConstantSelectorPlan&)>& detail,
-          bool emit_plain = true, bool emit_rescue_twins = false, std::size_t limit = 12U) {
+          bool emit_plain = true, bool emit_rescue_twins = false, std::size_t limit = 12U,
+          int target_seed_slack = 0) {
         CompileResult probe;
         try {
           CompileOptions probe_options = base_options;
@@ -61610,35 +62302,43 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
                                                           /*include_dead_integer_plans=*/false);
           if (plain_plans.size() > limit)
             plain_plans.resize(limit);
-          for (const FractionalConstantSelectorPlan& plan : plain_plans) {
-            CompileOptions candidate_options = base_options_for_plan(plan);
-            const std::string key = implemented_candidate_key(candidate_options);
-            if (tried.insert(key).second)
-              add_configured_candidate(std::move(candidate_options), name, detail(plan));
+          for (const FractionalConstantSelectorPlan& discovered_plan : plain_plans) {
+            for (int target_shift = 0; target_shift <= target_seed_slack; ++target_shift) {
+              FractionalConstantSelectorPlan plan = discovered_plan;
+              plan.target += target_shift;
+              if (plan.target >=
+                  static_cast<int>(program_step_limit_size_for_options(base_options)))
+                break;
 
-            CompileOptions refined_options = base_options_for_plan(plan);
-            if (refined_options.tail_branch_inversion) {
-              bool changed = false;
-              if (!refined_options.stack_resident_temps) {
-                refined_options.stack_resident_temps = true;
-                changed = true;
-              }
-              if (refined_options.order_procs_by_call_count) {
-                refined_options.order_procs_by_call_count = false;
-                changed = true;
-              }
-              if (refined_options.proc_layout_strategy != "reverse") {
-                refined_options.proc_layout_strategy = "reverse";
-                changed = true;
-              }
-              if (changed) {
-                const std::string refined_key = implemented_candidate_key(refined_options);
-                if (tried.insert(refined_key).second) {
-                  add_configured_candidate(
-                      std::move(refined_options), name,
-                      detail(plan) +
-                          " with stack-resident temporaries and reverse procedure layout",
-                      CandidateGate::SizeRescue);
+              CompileOptions candidate_options = base_options_for_plan(plan);
+              const std::string key = implemented_candidate_key(candidate_options);
+              if (tried.insert(key).second)
+                add_configured_candidate(std::move(candidate_options), name, detail(plan));
+
+              CompileOptions refined_options = base_options_for_plan(plan);
+              if (refined_options.tail_branch_inversion) {
+                bool changed = false;
+                if (!refined_options.stack_resident_temps) {
+                  refined_options.stack_resident_temps = true;
+                  changed = true;
+                }
+                if (refined_options.order_procs_by_call_count) {
+                  refined_options.order_procs_by_call_count = false;
+                  changed = true;
+                }
+                if (refined_options.proc_layout_strategy != "reverse") {
+                  refined_options.proc_layout_strategy = "reverse";
+                  changed = true;
+                }
+                if (changed) {
+                  const std::string refined_key = implemented_candidate_key(refined_options);
+                  if (tried.insert(refined_key).second) {
+                    add_configured_candidate(
+                        std::move(refined_options), name,
+                        detail(plan) +
+                            " with stack-resident temporaries and reverse procedure layout",
+                        CandidateGate::SizeRescue);
+                  }
                 }
               }
             }
@@ -61730,6 +62430,10 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
       }
       if (options.analysis && result.implemented &&
           should_report_nonwinning_candidate(candidate.name)) {
+        const bool unapplied_callee_hole =
+            candidate.name.find("callee-hole") != std::string::npos &&
+            !has_optimization_named(result.optimizations,
+                                    "callee-hole-straight-line-helper");
         append_candidate_report_once(
             search_candidate_cost_reports,
             CandidateReport{
@@ -61737,8 +62441,12 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
                 .variant = candidate.name,
                 .steps = static_cast<int>(result.steps.size()),
                 .selected = false,
-                .reason =
-                    "not selected because it did not improve the final candidate-search result",
+                .reason = unapplied_callee_hole
+                              ? "callee-hole skeleton was not applied because no profitable "
+                                "region had both a globally free stable selector and a proved "
+                                "stack-neutral charge (missing-stack-neutral-selector-proof)"
+                              : "not selected because it did not improve the final "
+                                "candidate-search result",
             });
       }
       if (!candidate_beats_best(result, best, options)) {
@@ -62188,14 +62896,26 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
       CandidateGate::SizeRescue);
   add_candidate(
       [](CompileOptions& candidate_options) {
+        candidate_options.canonicalize_packed_line_bank_walks = true;
         candidate_options.packed_line_family_mutating_selector_update_check_tail = true;
       },
-      "packed-line-family-mutating-selector-update-check-tail",
-      "Tried a descending R0..R3 mutating-selector packed-line update/check tail for source-shaped "
-      "packed line families",
+      "packed-line-family-mutating-selector-update-check-tail-register-materialized",
+      "Tried a descending R0..R3 mutating-selector packed-line update/check tail while retaining "
+      "register-materialized temporary fallback",
       CandidateGate::SizeRescue);
   add_candidate(
       [](CompileOptions& candidate_options) {
+        candidate_options.canonicalize_packed_line_bank_walks = true;
+        candidate_options.packed_line_family_mutating_selector_update_check_tail = true;
+        candidate_options.stack_resident_temps = true;
+      },
+      "packed-line-family-mutating-selector-update-check-tail",
+      "Tried a descending R0..R3 mutating-selector packed-line update/check tail for source-shaped "
+      "packed line families together with stack-resident temporary scheduling",
+      CandidateGate::SizeRescue);
+  add_candidate(
+      [](CompileOptions& candidate_options) {
+        candidate_options.canonicalize_packed_line_bank_walks = true;
         candidate_options.packed_line_family_borrowed_mutating_selector_update_check_tail = true;
       },
       "packed-line-family-borrowed-mutating-selector-update-check-tail",
@@ -63318,13 +64038,26 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
         "Tried a local shared packed-line update/check tail", CandidateGate::SizeRescue);
     add_candidate(
         [](CompileOptions& candidate_options) {
+          candidate_options.canonicalize_packed_line_bank_walks = true;
           candidate_options.packed_line_family_mutating_selector_update_check_tail = true;
         },
-        "packed-line-family-mutating-selector-update-check-tail",
-        "Tried a descending R0..R3 mutating-selector packed-line update/check tail",
+        "packed-line-family-mutating-selector-update-check-tail-register-materialized",
+        "Tried a descending R0..R3 mutating-selector packed-line update/check tail while retaining "
+        "register-materialized temporary fallback",
         CandidateGate::SizeRescue);
     add_candidate(
         [](CompileOptions& candidate_options) {
+          candidate_options.canonicalize_packed_line_bank_walks = true;
+          candidate_options.packed_line_family_mutating_selector_update_check_tail = true;
+          candidate_options.stack_resident_temps = true;
+        },
+        "packed-line-family-mutating-selector-update-check-tail",
+        "Tried a descending R0..R3 mutating-selector packed-line update/check tail together with "
+        "stack-resident temporary scheduling",
+        CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.canonicalize_packed_line_bank_walks = true;
           candidate_options.packed_line_family_borrowed_mutating_selector_update_check_tail = true;
         },
         "packed-line-family-borrowed-mutating-selector-update-check-tail",
@@ -63561,6 +64294,14 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
     });
     add_fractional_base([](CompileOptions& base_options) {
       base_options.dual_use_constant_indirect_flow = true;
+      base_options.tail_branch_inversion = true;
+      base_options.stack_resident_temps = true;
+      base_options.canonicalize_packed_line_bank_walks = true;
+      base_options.packed_line_family_mutating_selector_update_check_tail = true;
+      base_options.proc_layout_strategy = "reverse";
+    });
+    add_fractional_base([](CompileOptions& base_options) {
+      base_options.dual_use_constant_indirect_flow = true;
       base_options.stack_resident_temps = true;
       base_options.order_procs_by_call_count = true;
     });
@@ -63594,7 +64335,9 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
           [](const FractionalConstantSelectorPlan& plan) {
             return "Packed direct-flow target " + std::to_string(plan.target) +
                    " into fractional constant " + plan.value;
-          });
+          },
+          /*emit_plain=*/true, /*emit_rescue_twins=*/false, /*limit=*/12U,
+          base_options.packed_line_family_mutating_selector_update_check_tail ? 4 : 0);
     }
   }
 

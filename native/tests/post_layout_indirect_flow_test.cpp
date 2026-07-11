@@ -429,6 +429,41 @@ void post_layout_indirect_flow_matches_typescript_contract() {
   }
 
   {
+    MachineItem proc = MachineItem::label("finish_turn");
+    proc.procedure_boundary = "start";
+    std::vector<MachineItem> program = {
+        MachineItem::label("main"),
+        digit(),
+        MachineItem::op(0x53, "ПП"),
+        MachineItem::address("finish_turn"),
+        MachineItem::op(0x51, "БП"),
+        MachineItem::address("main"),
+        proc,
+        digit(),
+        MachineItem::op(0x52, "В/О"),
+    };
+    program.at(2).comment = "proc call finish_turn";
+
+    const core::PostLayoutIndirectFlowResult result = core::optimize_post_layout_stop_tail_reuse(
+        program,
+        {PreloadReport{.register_name = "8", .value = "B8", .counts_against_program = false}});
+
+    require(result.applied == 1,
+            "empty-stack tail-call rewrite should recognize a direct jump to address zero; got " +
+                std::to_string(result.applied));
+    require(core::machine_cell_count(result.items) == core::machine_cell_count(program) - 2,
+            "direct empty-stack tail-call rewrite should remove the loop-back opcode and address");
+    require(result.items.at(2).kind == MachineItemKind::Op && result.items.at(2).opcode == 0x51,
+            "direct empty-stack tail-call rewrite should replace the call with a direct jump");
+    require(result.items.at(3).kind == MachineItemKind::Address &&
+                std::get<std::string>(result.items.at(3).target) == "finish_turn",
+            "direct empty-stack tail-call rewrite should preserve the procedure target");
+    require(result.preloads.size() == 1 && result.preloads.at(0).register_name == "8" &&
+                result.preloads.at(0).value == "B6",
+            "direct empty-stack tail-call rewrite should retarget selectors across two deletions");
+  }
+
+  {
     std::vector<MachineItem> program = {
         MachineItem::op(0x00, "0"),
         MachineItem::op(0x0a, "."),
@@ -887,6 +922,71 @@ void post_layout_indirect_flow_matches_typescript_contract() {
                            return item.kind == MachineItemKind::Op && item.opcode == 0x8e;
                          }),
             "indirect-jump overlay should remove the original indirect jump opcode");
+  }
+
+  {
+    std::vector<MachineItem> program;
+    const std::vector<MachineItem> outer_jump = jump("target");
+    program.insert(program.end(), outer_jump.begin(), outer_jump.end());
+    const std::vector<MachineItem> relocated_continuation = jump("done");
+    program.insert(program.end(), relocated_continuation.begin(), relocated_continuation.end());
+    for (int index = 0; index < 3; ++index)
+      program.push_back(digit());
+    program.push_back(MachineItem::label("target"));
+    program.push_back(MachineItem::op(0x50, "С/П"));
+    const std::vector<MachineItem> skip_entry = jump("after_entry");
+    program.insert(program.end(), skip_entry.begin(), skip_entry.end());
+    program.push_back(MachineItem::label("entry"));
+    program.push_back(MachineItem::op(0x07, "7"));
+    const std::vector<MachineItem> original_continuation = jump("done");
+    program.insert(program.end(), original_continuation.begin(), original_continuation.end());
+    program.push_back(MachineItem::label("after_entry"));
+    program.push_back(MachineItem::op(0x50, "С/П"));
+    program.push_back(MachineItem::label("done"));
+    program.push_back(MachineItem::op(0x50, "С/П"));
+    const std::vector<MachineItem> entry_jump = jump("entry");
+    program.insert(program.end(), entry_jump.begin(), entry_jump.end());
+
+    const core::PostLayoutIndirectFlowResult result =
+        core::optimize_post_layout_address_code_overlay(program);
+
+    require(result.applied == 1,
+            "address/code overlay should move a distant op across equivalent jump tails");
+    require(core::machine_cell_count(result.items) == core::machine_cell_count(program) - 1,
+            "equivalent-continuation overlay should remove the original executable cell");
+    const auto entry = std::find_if(result.items.begin(), result.items.end(),
+                                    [](const MachineItem& item) {
+                                      return item.kind == MachineItemKind::Label &&
+                                             item.name == "entry";
+                                    });
+    require(entry != result.items.end() && std::next(entry) != result.items.end() &&
+                std::next(entry)->kind == MachineItemKind::Address,
+            "equivalent-continuation overlay should move the entry label onto the address byte");
+    require(std::none_of(result.items.begin(), result.items.end(),
+                         [](const MachineItem& item) {
+                           return item.kind == MachineItemKind::Op && item.opcode == 0x07;
+                         }),
+            "equivalent-continuation overlay should remove the original opcode");
+
+    std::vector<MachineItem> mismatched = program;
+    const auto old_tail = std::find_if(mismatched.begin(), mismatched.end(),
+                                       [](const MachineItem& item) {
+                                         return item.kind == MachineItemKind::Label &&
+                                                item.name == "entry";
+                                       });
+    require(old_tail != mismatched.end(),
+            "equivalent-continuation fixture should contain its old entry");
+    const auto old_tail_address = std::find_if(
+        std::next(old_tail, 2), mismatched.end(), [](const MachineItem& item) {
+          return item.kind == MachineItemKind::Address;
+        });
+    require(old_tail_address != mismatched.end(),
+            "equivalent-continuation fixture should contain its old jump operand");
+    old_tail_address->target = std::string("after_entry");
+    const core::PostLayoutIndirectFlowResult rejected =
+        core::optimize_post_layout_address_code_overlay(mismatched);
+    require(rejected.applied == 0,
+            "address/code overlay should reject different old and new jump tails");
   }
 
   {

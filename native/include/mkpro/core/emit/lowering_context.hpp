@@ -166,6 +166,8 @@ struct LoweringContext {
   std::set<std::pair<std::string, int>> terminal_underflow_unit_decrements;
   std::map<std::string, XParamProcLowering> x_param_procs;
   std::map<std::string, XParamYStackProcLowering> x_param_y_stack_procs;
+  std::map<std::string, int> packed_line_borrowed_selector_registers;
+  std::map<std::string, std::vector<std::string>> packed_line_borrowed_selector_owners;
   std::optional<std::string> current_y_variable;
   std::set<std::string> ephemeral_input_targets;
   std::map<std::string, Expression> loop_prompt_initials;

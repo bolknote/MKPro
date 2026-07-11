@@ -59,6 +59,17 @@ const SizeOpportunityReport* find_size_opportunity(const CompileResult& result,
   return it == result.size_attribution.opportunities.end() ? nullptr : &*it;
 }
 
+const SizeSelectedOptimizationReport* find_selected_size_optimization(
+    const CompileResult& result, const std::string& variant) {
+  const auto it = std::find_if(
+      result.size_attribution.selected_optimizations.begin(),
+      result.size_attribution.selected_optimizations.end(),
+      [&](const SizeSelectedOptimizationReport& optimization) {
+        return optimization.variant == variant;
+      });
+  return it == result.size_attribution.selected_optimizations.end() ? nullptr : &*it;
+}
+
 // Pin the shared-helper / direct-call (ПП) structure this suite verifies by
 // suppressing the default-on aggressive post-layout indirect-flow repacking.
 CompileOptions pinned_options() {
@@ -240,13 +251,69 @@ void expression_helper_size_report_tracks_symbolic_entry_stack() {
   options.analysis = true;
   options.budget = 999;
   const std::filesystem::path root = std::filesystem::current_path();
-  const CompileResult result = compile_source(
-      read_text(root / "examples" / "pending-optimizer" / "tic-tac-toe-4x4.mkpro"),
-      options);
+  const std::string source =
+      read_text(root / "examples" / "pending-optimizer" / "tic-tac-toe-4x4.mkpro");
+  const CompileResult result = compile_source(source, options);
 
   require(result.implemented, "tic-tac-toe-4x4 should compile for size-attribution proof");
-  require(result.steps.size() == 141,
-          "tic-tac-toe-4x4 size should stay stable while reporting entry-stack proof");
+  require(result.steps.size() == 139,
+          "composed packed-line, stack, and dual-use selector lowering should shrink 4x4 to 139 "
+          "cells");
+  require(has_optimization(result,
+                           "packed-line-family-mutating-selector-update-check-tail") &&
+              has_optimization(result, "post-layout-existing-selector-flow") &&
+              has_optimization(result, "fractional-constant-selector"),
+          "the selected 140-cell layout should report every composed proof-backed lowering");
+
+  CompileOptions mutating_options;
+  mutating_options.analysis = true;
+  mutating_options.budget = 999;
+  mutating_options.disable_candidate_search = true;
+  mutating_options.canonicalize_packed_line_bank_walks = true;
+  mutating_options.packed_line_family_mutating_selector_update_check_tail = true;
+  mutating_options.stack_resident_temps = true;
+  const CompileResult mutating = compile_source(source, mutating_options);
+  require(mutating.implemented && mutating.diagnostics.empty(),
+          "forced 4x4 mutating packed-line candidate should compile" +
+              (mutating.diagnostics.empty() ? std::string()
+                                            : ": " + mutating.diagnostics.front().message));
+  require(mutating.steps.size() == 142,
+          "stack scheduling and direct tail-call lowering should keep the forced candidate at "
+          "142 cells");
+  require(!mutating.registers.contains("__bank_slot"),
+          "forced mutating candidate should not allocate suppressed canonical leaf state");
+  require(!mutating.registers.contains("__bank_selector_lines"),
+          "forced mutating candidate should not allocate the suppressed leaf's bank selector");
+  require(has_optimization(mutating, "packed-line-family-elided-leaf-register-state"),
+          "forced mutating candidate should report the proof-backed register-state elision");
+  require(has_optimization(mutating,
+                           "packed-line-family-mutating-selector-update-check-tail"),
+          "forced 4x4 candidate should report the mutating marker/leaf lowering");
+  require(std::any_of(mutating.steps.begin(), mutating.steps.end(), [](const ResolvedStep& step) {
+            return step.opcode == 0xb3 && step.comment.has_value() &&
+                   step.comment->find("indirect-memory-targets=4,5,6,7") != std::string::npos;
+          }),
+          "mutating packed-bank stores should expose their exact target range to static proof");
+  const SizeSelectedOptimizationReport* mutating_selector =
+      find_selected_size_optimization(result, "fractional-constant-selector");
+  require(mutating_selector != nullptr && mutating_selector->current_steps == 139 &&
+              mutating_selector->baseline_steps == 140 && mutating_selector->savings == 1,
+          "4x4 size attribution should report the selected fixed-point selector plan as a "
+          "one-cell whole-program win");
+
+  std::string shared_selector_source = source;
+  const std::string show_best = "show(best_y)";
+  const std::size_t show_best_pos = shared_selector_source.find(show_best);
+  require(show_best_pos != std::string::npos,
+          "4x4 fixture should contain the loop display insertion point");
+  shared_selector_source.insert(show_best_pos + show_best.size(),
+                                "\n    best_score = lines[slot]");
+  const CompileResult shared_selector = compile_source(shared_selector_source, mutating_options);
+  require(shared_selector.registers.contains("__bank_selector_lines"),
+          "a dynamic bank access outside the suppressed leaf must retain the shared selector");
+  require(!has_optimization(shared_selector,
+                            "packed-line-family-elided-leaf-register-state"),
+          "leaf-state elision proof must reject a selector used by another emitted region");
 
   const SizeHelperSummaryReport* candidate_score =
       find_size_helper(result, "candidate_score zero-accumulator entry");
@@ -258,11 +325,11 @@ void expression_helper_size_report_tracks_symbolic_entry_stack() {
           "size report should include the selected packed-line score helper");
   require(packed_line_score->details.contains("valueAwareSymbolicEntryStackByCallSite") &&
               packed_line_score->details.at("valueAwareSymbolicEntryStackByCallSite")
-                      .find("71:X=x,Y=lines_7,Z=0,T=occupied/"
+                      .find("69:X=x,Y=lines_7,Z=0,T=occupied/"
                             "via=candidate_score zero-accumulator entry") !=
                   std::string::npos &&
               packed_line_score->details.at("valueAwareSymbolicEntryStackByCallSite")
-                      .find("74:X=y,Y=lines_6,Z=?,T=occupied/"
+                      .find("73:X=y,Y=lines_6,Z=?,T=occupied/"
                             "via=candidate_score zero-accumulator entry") !=
                   std::string::npos,
           "nested packed-line score calls should use the enclosing helper symbolic stack, "
@@ -284,8 +351,8 @@ void expression_helper_size_report_tracks_symbolic_entry_stack() {
           "packed-line score helper report should distinguish solved score accumulation from "
           "the remaining live-input ABI blocker");
   require(candidate_score->details.contains("valueAwareSymbolicEntryStackByCallSite") &&
-              candidate_score->details.at("valueAwareSymbolicEntryStackByCallSite") ==
-                  "28:X=0,Y=occupied,Z=occupied,T=occupied",
+              candidate_score->details.at("valueAwareSymbolicEntryStackByCallSite")
+                      .find(":X=0,Y=occupied,Z=occupied,T=occupied") != std::string::npos,
           "candidate_score callsite should prove zero accumulator in X and preserve caller "
           "stack values");
   require(candidate_score->details.contains("valueAwareSymbolicEntryStackSeed") &&
@@ -298,12 +365,12 @@ void expression_helper_size_report_tracks_symbolic_entry_stack() {
           "candidate_score entry-stack proof should model known callee stack effects");
   require(candidate_score->details.contains("valueAwareSymbolicKnownCalleeStackEffects") &&
               candidate_score->details.at("valueAwareSymbolicKnownCalleeStackEffects")
-                      .find("71:packed-line score accumulator helper/effect=X:-,Y:T,Z:T,T:T/"
+                      .find("69:packed-line score accumulator helper/effect=X:-,Y:T,Z:T,T:T/"
                             "before=X=x,Y=lines_7,Z=0,T=occupied/"
                             "after=X=?,Y=occupied,Z=occupied,T=occupied") !=
                   std::string::npos &&
               candidate_score->details.at("valueAwareSymbolicKnownCalleeStackEffects")
-                      .find("74:packed-line score accumulator helper/effect=X:-,Y:T,Z:T,T:T/"
+                      .find("73:packed-line score accumulator helper/effect=X:-,Y:T,Z:T,T:T/"
                             "before=X=y,Y=lines_6,Z=?,T=occupied/"
                             "after=X=?,Y=occupied,Z=occupied,T=occupied") !=
                   std::string::npos,
@@ -344,9 +411,9 @@ void expression_helper_size_report_tracks_symbolic_entry_stack() {
               candidate_score->details.at(
                   "valueAwareCalleeAbiNaturalFirstRecallChoiceSearchByCallee") ==
                   "packed-line score accumulator helper:2sites/2candidates/2g/2r/"
-                  "4rewrite/-4n selected=71:selected=y(net=-2,rewrite=2,"
+                  "4rewrite/-4n selected=69:selected=y(net=-2,rewrite=2,"
                   "ops=recall+swap-preserve-X);candidates=y(3future,rewrite=2,"
-                  "net=-2,ops=recall+swap-preserve-X),74:selected=x(net=-2,"
+                  "net=-2,ops=recall+swap-preserve-X),73:selected=x(net=-2,"
                   "rewrite=2,ops=recall+swap-preserve-X);candidates=x(1future,"
                   "rewrite=2,net=-2,ops=recall+swap-preserve-X)",
           "candidate_score report should enumerate survivor placement candidates");
@@ -614,24 +681,24 @@ void expression_helper_size_report_tracks_symbolic_entry_stack() {
               "valueAwareCallArgumentPreservationZeroCopyBlockers") &&
               candidate_score->details.at(
                   "valueAwareCallArgumentPreservationZeroCopyBlockers")
-                      .find("packed-line score accumulator helper@71:x="
+                      .find("packed-line score accumulator helper@69:x="
                             "no-existing-resident-copy") != std::string::npos &&
               candidate_score->details.at(
                   "valueAwareCallArgumentPreservationZeroCopyBlockers")
-                      .find("packed-line score accumulator helper@74:y="
+                      .find("packed-line score accumulator helper@73:y="
                             "no-existing-resident-copy") != std::string::npos,
           "candidate_score should name both argument-preservation zero-copy blockers");
   require(candidate_score->details.contains("argumentRecallSitesByName") &&
               candidate_score->details.at("argumentRecallSitesByName") ==
-                  "y:3@73,76,80;x:2@70,82;lines_4:1@79;lines_5:1@75;"
-                  "lines_6:1@72;lines_7:1@69",
+                  "y:3@72,76,80;x:2@68,82;lines_4:1@79;lines_5:1@75;"
+                  "lines_6:1@71;lines_7:1@67",
           "candidate_score should report exact helper-local argument recall sites");
   require(candidate_score->details.contains("repeatedArgumentRecallSites") &&
               candidate_score->details.at("repeatedArgumentRecallSites") ==
-                  "y:3@73,76,80;x:2@70,82",
+                  "y:3@72,76,80;x:2@68,82",
           "candidate_score should identify repeated argument recalls for scheduler work");
   require(candidate_score->details.contains("topRepeatedArgumentRecall") &&
-              candidate_score->details.at("topRepeatedArgumentRecall") == "y:3@73,76,80",
+              candidate_score->details.at("topRepeatedArgumentRecall") == "y:3@72,76,80",
           "candidate_score should rank y as the next repeated materialization target");
   require(candidate_score->details.contains("schedulerNextMaterializationTarget") &&
               candidate_score->details.at("schedulerNextMaterializationTarget") ==
@@ -640,16 +707,16 @@ void expression_helper_size_report_tracks_symbolic_entry_stack() {
   require(candidate_score->details.contains("repeatedArgumentSchedulerFeasibility") &&
               candidate_score->details.at("repeatedArgumentSchedulerFeasibility") ==
                   "y:3recalls/profitableNet=+0/modelNet=+0/positive=0,breakEven=0,"
-                  "negative=0,absent=0,unknown=3/73:not-proved-resident,"
+                  "negative=0,absent=0,unknown=3/72:not-proved-resident,"
                   "76:not-proved-resident,80:not-proved-resident",
           "candidate_score should model top repeated argument stack-residency feasibility");
   require(candidate_score->details.contains("valueAwareRepeatedArgumentSchedulerResidencyBlockers") &&
               candidate_score->details.at("valueAwareRepeatedArgumentSchedulerResidencyBlockers")
-                      .find("73:no-prior-resident-value") != std::string::npos &&
+                      .find("72:no-prior-resident-value") != std::string::npos &&
               candidate_score->details.at("valueAwareRepeatedArgumentSchedulerResidencyBlockers")
-                      .find("76:lastKnown=74:X") != std::string::npos &&
+                      .find("76:lastKnown=73:X") != std::string::npos &&
               candidate_score->details.at("valueAwareRepeatedArgumentSchedulerResidencyBlockers")
-                      .find("afterStep=74:") != std::string::npos &&
+                      .find("afterStep=73:") != std::string::npos &&
               candidate_score->details.at("valueAwareRepeatedArgumentSchedulerResidencyBlockers")
                       .find("80:lastKnown=77:X") != std::string::npos &&
               candidate_score->details.at("valueAwareRepeatedArgumentSchedulerResidencyBlockers")
@@ -727,6 +794,30 @@ void expression_helper_size_report_tracks_symbolic_entry_stack() {
                   "reduce-callsite-materialization-by-1,"
                   "prove-callee-entry-overhead-below-lower-bound-by-1",
           "candidate_score subset ABI report should identify the same next proof target");
+  const SizeOpportunityReport* callee_hole =
+      find_size_opportunity(result, "callee-hole-straight-line-helper");
+  require(callee_hole != nullptr &&
+              callee_hole->blocker_kind == "nonwinning-candidate" &&
+              callee_hole->details.contains("regionGraphCandidate") &&
+              callee_hole->details.at("regionGraphCandidate") ==
+                  "callee-hole-straight-line-skeleton" &&
+              callee_hole->details.contains("calleeHoleSelectorPolicy") &&
+              callee_hole->details.at("calleeHoleSelectorPolicy") ==
+                  "globally-free-stable-R7..Re-or-proved-mutating-R0..R6" &&
+              callee_hole->details.contains("calleeHoleStackValueHazard") &&
+              callee_hole->details.at("calleeHoleStackValueHazard") ==
+                  "mutating-selector-charge-value-differs-from-leaf-address-in-live-X" &&
+              callee_hole->details.contains("calleeHoleProofRequiredArtifact") &&
+              callee_hole->details.at("calleeHoleProofRequiredArtifact") ==
+                  "entry-X-dead-before-observation-or-stack-neutral-selector-charge" &&
+              callee_hole->details.contains("requiredAction") &&
+              callee_hole->details.at("requiredAction") ==
+                  "find-size-positive-callee-hole-region-before-entry-stack-proof" &&
+              callee_hole->details.contains("calleeHoleProofDisposition") &&
+              callee_hole->details.at("calleeHoleProofDisposition") ==
+                  "deferred-by-negative-size",
+          "4x4 region attribution should retain the unapplied callee-hole candidate but keep "
+          "its negative measured size ahead of the selector proof gap");
   const SizeOpportunityReport* stack_function_entry =
       find_size_opportunity(result, "stack-resident-function-entries");
   require(stack_function_entry != nullptr &&

@@ -561,6 +561,49 @@ RuleCfg build_rule_cfg(V2Program& program) {
   return Builder(program).build();
 }
 
+RuleCfgLiveness compute_rule_cfg_liveness(const RuleCfg& cfg) {
+  std::set<std::string> all_vars;
+  for (const RuleCfgNode& node : cfg.nodes) {
+    all_vars.insert(node.defs.begin(), node.defs.end());
+    all_vars.insert(node.uses.begin(), node.uses.end());
+  }
+
+  RuleCfgLiveness result{
+      .live_in = std::vector<std::set<std::string>>(cfg.nodes.size()),
+      .live_out = std::vector<std::set<std::string>>(cfg.nodes.size()),
+  };
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (int index = static_cast<int>(cfg.nodes.size()) - 1; index >= 0; --index) {
+      const RuleCfgNode& node = cfg.nodes.at(static_cast<std::size_t>(index));
+      std::set<std::string> next_out;
+      for (const int successor : node.succ) {
+        const std::set<std::string>& successor_in =
+            result.live_in.at(static_cast<std::size_t>(successor));
+        next_out.insert(successor_in.begin(), successor_in.end());
+      }
+
+      std::set<std::string> next_in =
+          node.barrier ? all_vars : std::set<std::string>{node.uses.begin(), node.uses.end()};
+      if (!node.barrier) {
+        for (const std::string& name : next_out) {
+          if (std::find(node.defs.begin(), node.defs.end(), name) == node.defs.end())
+            next_in.insert(name);
+        }
+      }
+
+      const std::size_t slot = static_cast<std::size_t>(index);
+      if (next_in != result.live_in.at(slot) || next_out != result.live_out.at(slot)) {
+        result.live_in.at(slot) = std::move(next_in);
+        result.live_out.at(slot) = std::move(next_out);
+        changed = true;
+      }
+    }
+  }
+  return result;
+}
+
 std::set<std::string> program_state_fields(const V2Program& program) {
   std::set<std::string> fields;
   for (const V2StateField& field : program.state) {

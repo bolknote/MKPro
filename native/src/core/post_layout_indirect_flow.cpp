@@ -87,6 +87,7 @@ struct StopTailReuseRewrite {
 struct EmptyStackTailCallRewrite {
   int call_index = 0;
   int loop_back_index = 0;
+  std::optional<int> loop_back_address_index;
   std::string mnemonic;
   std::string comment;
   std::optional<int> source_line;
@@ -551,16 +552,42 @@ std::vector<MachineItem> immediate_overlay_candidate(const std::vector<MachineIt
   return candidate;
 }
 
-bool overlay_opcode_has_no_linear_continuation(const MachineItem& item, int removed_cell_address,
-                                               AddressSpaceModel model) {
+std::optional<int> direct_jump_continuation_target(const std::vector<MachineItem>& items,
+                                                   int start_index,
+                                                   const MachineLayout& layout) {
+  int branch_index = start_index;
+  while (branch_index < static_cast<int>(items.size()) &&
+         items.at(static_cast<std::size_t>(branch_index)).kind == MachineItemKind::Label) {
+    ++branch_index;
+  }
+  if (branch_index >= static_cast<int>(items.size()))
+    return std::nullopt;
+  const MachineItem& branch = items.at(static_cast<std::size_t>(branch_index));
+  if (branch.kind != MachineItemKind::Op || branch.opcode != 0x51)
+    return std::nullopt;
+  const std::optional<IrTarget> target = direct_address_target(items, branch_index);
+  return target.has_value() ? resolved_machine_target(*target, layout.labels) : std::nullopt;
+}
+
+bool overlay_opcode_has_safe_continuation(const std::vector<MachineItem>& items,
+                                          const MachineItem& item, int target_continuation_index,
+                                          int source_continuation_index, int removed_cell_address,
+                                          const MachineLayout& layout, AddressSpaceModel model) {
   if (item.kind != MachineItemKind::Op)
     return false;
   if (item.opcode == 0x52)
     return true;
-  if (item.opcode < 0x80 || item.opcode > 0x8e)
-    return false;
-  const std::optional<int> target = known_indirect_flow_target_comment(item.comment, model);
-  return target.has_value() && *target < removed_cell_address;
+  if (item.opcode >= 0x80 && item.opcode <= 0x8e) {
+    const std::optional<int> target = known_indirect_flow_target_comment(item.comment, model);
+    return target.has_value() && *target < removed_cell_address;
+  }
+
+  const std::optional<int> target_continuation =
+      direct_jump_continuation_target(items, target_continuation_index, layout);
+  const std::optional<int> source_continuation =
+      direct_jump_continuation_target(items, source_continuation_index, layout);
+  return target_continuation.has_value() && source_continuation.has_value() &&
+         *target_continuation == *source_continuation;
 }
 
 std::optional<AddressCodeOverlayApplication>
@@ -674,12 +701,14 @@ apply_address_code_overlay(const std::vector<MachineItem>& items, AddressSpaceMo
       if (removed_address_it == layout.address_by_item_index.end())
         continue;
       // Relocating a distant label onto the branch address byte changes the
-      // cell after the overlaid opcode. This is sound only when that cell is
-      // unreachable: В/О returns and an unconditional indirect jump transfers
-      // to a proof-carrying target before the removed cell. Later targets would
-      // shift and cannot be repaired when the selector is computed at runtime.
-      if (!overlay_opcode_has_no_linear_continuation(
-              items.at(static_cast<std::size_t>(labels_end)), removed_address_it->second, model))
+      // cell after the overlaid opcode. This is sound when that cell is
+      // unreachable (В/О or a proved unconditional indirect jump), or when the
+      // old and new continuations are both direct jumps to the same target.
+      // Later indirect targets would shift and cannot be repaired when the
+      // selector is computed at runtime.
+      if (!overlay_opcode_has_safe_continuation(
+              items, items.at(static_cast<std::size_t>(labels_end)), index + 2, labels_end + 1,
+              removed_address_it->second, layout, model))
         continue;
 
       if (!fixed_address_targets_survive_removal(items, removed_address_it->second, model)) {
@@ -1471,6 +1500,7 @@ find_empty_stack_tail_call_rewrite(const std::vector<MachineItem>& items,
                                    const std::vector<PreloadReport>& preloads,
                                    AddressSpaceModel model) {
   const std::vector<MachineCell> cells = machine_cells(items);
+  const std::map<std::string, int> labels = machine_label_addresses(items);
   const std::optional<int> first_proc = first_procedure_start_address(items);
   if (!first_proc.has_value())
     return std::nullopt;
@@ -1486,12 +1516,25 @@ find_empty_stack_tail_call_rewrite(const std::vector<MachineItem>& items,
         address.item->kind != MachineItemKind::Address) {
       continue;
     }
-    if (known_machine_indirect_jump_target(*loop_back.item, preloads, model) != 0)
-      continue;
+    std::optional<int> loop_back_address_index;
+    if (known_machine_indirect_jump_target(*loop_back.item, preloads, model) != 0) {
+      if (loop_back.item->kind != MachineItemKind::Op || loop_back.item->opcode != 0x51 ||
+          index + 3 >= cells.size()) {
+        continue;
+      }
+      const MachineCell& loop_back_address = cells.at(index + 3);
+      if (loop_back_address.item == nullptr ||
+          loop_back_address.item->kind != MachineItemKind::Address ||
+          resolved_machine_target(loop_back_address.item->target, labels) != 0) {
+        continue;
+      }
+      loop_back_address_index = loop_back_address.item_index;
+    }
 
     return EmptyStackTailCallRewrite{
         .call_index = call.item_index,
         .loop_back_index = loop_back.item_index,
+        .loop_back_address_index = loop_back_address_index,
         .mnemonic = "БП",
         .comment = empty_stack_tail_call_comment(*call.item),
         .source_line = call.item->source_line,
@@ -1504,9 +1547,9 @@ std::vector<MachineItem>
 apply_empty_stack_tail_call_rewrite(const std::vector<MachineItem>& items,
                                     const EmptyStackTailCallRewrite& rewrite) {
   std::vector<MachineItem> result;
-  result.reserve(items.size() - 1);
+  result.reserve(items.size() - (rewrite.loop_back_address_index.has_value() ? 2 : 1));
   for (int index = 0; index < static_cast<int>(items.size()); ++index) {
-    if (index == rewrite.loop_back_index)
+    if (index == rewrite.loop_back_index || index == rewrite.loop_back_address_index)
       continue;
     if (index == rewrite.call_index) {
       MachineItem item = MachineItem::op(0x51, rewrite.mnemonic);
@@ -1614,8 +1657,12 @@ std::optional<RetargetedIr> retarget_existing_selectors_after_shift(
 
 std::optional<RetargetedMachine> retarget_selector_preloads_after_machine_deletion(
     const std::vector<MachineItem>& before_items, std::vector<MachineItem> after_items,
-    const std::vector<PreloadReport>& preloads, int removed_item_index,
+    const std::vector<PreloadReport>& preloads, std::vector<int> removed_item_indices,
     int replaced_item_index, AddressSpaceModel model) {
+  std::ranges::sort(removed_item_indices);
+  removed_item_indices.erase(
+      std::unique(removed_item_indices.begin(), removed_item_indices.end()),
+      removed_item_indices.end());
   const std::vector<MachineCell> before_cells = machine_cells(before_items);
   const std::map<int, int> after_address_by_item_index =
       machine_address_by_item_index(after_items);
@@ -1631,13 +1678,15 @@ std::optional<RetargetedMachine> retarget_selector_preloads_after_machine_deleti
     const std::optional<MachineCell> before_cell = machine_cell_at(before_cells, target);
     if (!before_cell.has_value())
       return std::nullopt;
-    if (before_cell->item_index == removed_item_index ||
+    if (std::ranges::binary_search(removed_item_indices, before_cell->item_index) ||
         before_cell->item_index == replaced_item_index) {
       return std::nullopt;
     }
-    const int after_item_index =
-        before_cell->item_index > removed_item_index ? before_cell->item_index - 1
-                                                     : before_cell->item_index;
+    const int removed_before = static_cast<int>(std::ranges::lower_bound(
+                                                   removed_item_indices,
+                                                   before_cell->item_index) -
+                                               removed_item_indices.begin());
+    const int after_item_index = before_cell->item_index - removed_before;
     const auto shifted_target_it = after_address_by_item_index.find(after_item_index);
     if (shifted_target_it == after_address_by_item_index.end())
       return std::nullopt;
@@ -2582,10 +2631,13 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
       std::vector<MachineItem> candidate = apply_empty_stack_tail_call_rewrite(current, *rewrite);
       if (machine_cell_count(candidate) >= machine_cell_count(current))
         break;
+      std::vector<int> removed_indices = {rewrite->loop_back_index};
+      if (rewrite->loop_back_address_index.has_value())
+        removed_indices.push_back(*rewrite->loop_back_address_index);
       const std::optional<RetargetedMachine> retargeted =
           retarget_selector_preloads_after_machine_deletion(current, std::move(candidate),
                                                             current_preloads,
-                                                            rewrite->loop_back_index,
+                                                            std::move(removed_indices),
                                                             rewrite->call_index, model);
       if (!retargeted.has_value())
         break;
@@ -2603,7 +2655,7 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
       const std::optional<RetargetedMachine> retargeted =
           retarget_selector_preloads_after_machine_deletion(current, std::move(candidate),
                                                             current_preloads,
-                                                            rewrite->address_index,
+                                                            {rewrite->address_index},
                                                             rewrite->branch_index, model);
       if (!retargeted.has_value())
         break;
@@ -2621,7 +2673,7 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
       const std::optional<RetargetedMachine> retargeted =
           retarget_selector_preloads_after_machine_deletion(current, std::move(candidate),
                                                             current_preloads,
-                                                            rewrite->address_index,
+                                                            {rewrite->address_index},
                                                             rewrite->branch_index, model);
       if (!retargeted.has_value())
         break;
@@ -2638,7 +2690,7 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
         break;
       const std::optional<RetargetedMachine> retargeted =
           retarget_selector_preloads_after_machine_deletion(current, std::move(candidate),
-                                                            current_preloads, rewrite->remove_index,
+                                                            current_preloads, {rewrite->remove_index},
                                                             rewrite->replace_index, model);
       if (!retargeted.has_value())
         break;

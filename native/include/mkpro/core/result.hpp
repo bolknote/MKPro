@@ -315,7 +315,9 @@ struct CompileOptions {
   // Extract one skeleton from straight-line regions that are identical except
   // for the target of their (single, repeated) leaf call. Callers charge a
   // spare stable register with their leaf address and the skeleton dispatches
-  // through К ПП r. Verified by callee_hole_indirect_call_targets_proved.
+  // through К ПП r. A globally unused R0..R6 may also be used when a final-code
+  // equality proof shows that its adjusted charge disappears from X/Y/Z/T/X2
+  // before the dispatch. Verified by callee_hole_indirect_call_targets_proved.
   bool callee_hole_straight_line_helper = false;
   bool disable_interprocedural_opts = false;
   bool coalesce_copies = false;

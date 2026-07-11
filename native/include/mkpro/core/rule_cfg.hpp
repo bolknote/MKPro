@@ -25,11 +25,17 @@ struct RuleCfg {
   std::map<std::string, int> routine_exit;
 };
 
+struct RuleCfgLiveness {
+  std::vector<std::set<std::string>> live_in;
+  std::vector<std::set<std::string>> live_out;
+};
+
 void collect_expression_vars(const Expression& expression, std::set<std::string>& out);
 std::vector<std::string> expression_vars(const Expression& expression);
 bool expression_is_call_free(const Expression& expression);
 
 RuleCfg build_rule_cfg(V2Program& program);
+RuleCfgLiveness compute_rule_cfg_liveness(const RuleCfg& cfg);
 std::set<std::string> program_state_fields(const V2Program& program);
 
 } // namespace mkpro::core

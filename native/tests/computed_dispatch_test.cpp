@@ -1,6 +1,7 @@
 #include "mkpro/compiler.hpp"
 #include "mkpro/core/address_formula_solver.hpp"
 #include "mkpro/core/compiler_static_proof_gate.hpp"
+#include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/ir.hpp"
 #include "mkpro/core/passes/dead_code_after_halt.hpp"
@@ -1757,6 +1758,74 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
               std::string::npos,
           "dead-integer rejection reason should classify unsafe live-X memory stores after a "
           "selector store");
+
+  CompileResult safe_stored_immediate_jump_result = forward_result;
+  safe_stored_immediate_jump_result.optimizations.push_back(
+      optimization_report("dead-integer-fractional-selector-use"));
+  safe_stored_immediate_jump_result.steps.push_back(
+      resolved_step(0x69, "preload const 3.123456; fractional selector source 0.123456"));
+  safe_stored_immediate_jump_result.steps.push_back(resolved_step(0x49, "set saved selector"));
+  safe_stored_immediate_jump_result.steps.push_back(resolved_step_with_mnemonic_at(
+      70, 0x89, "К БП 9", indirect_target_comment("9", "3", target)));
+  safe_stored_immediate_jump_result.steps.push_back(
+      resolved_step_at(target, 0x35, "jump target erases live selector"));
+  safe_stored_immediate_jump_result.steps.push_back(
+      resolved_step(0x49, "overwrite saved selector"));
+  require(optimizer_static_proof_gate_accepts_for_testing(safe_dead_integer_options,
+                                                          safe_stored_immediate_jump_result),
+          "dead-integer fractional selector elision should accept a stored selector immediately "
+          "used by proved unconditional indirect flow when its target erases live X");
+
+  CompileResult safe_stored_transparent_jump_target_result =
+      safe_stored_immediate_jump_result;
+  safe_stored_transparent_jump_target_result.steps.at(
+      safe_stored_transparent_jump_target_result.steps.size() - 2U) =
+      resolved_step_at(target, 0x54, "transparent jump-target prefix");
+  safe_stored_transparent_jump_target_result.steps.insert(
+      safe_stored_transparent_jump_target_result.steps.end() - 1U,
+      resolved_step_at(target + 1, 0x35, "jump target erases live selector after K NOP"));
+  require(optimizer_static_proof_gate_accepts_for_testing(
+              safe_dead_integer_options, safe_stored_transparent_jump_target_result),
+          "dead-integer fractional selector elision should follow X-preserving empty target "
+          "prefixes before K {x}");
+
+  const int chained_erase_target = target + 10;
+  CompileResult safe_stored_chained_jump_target_result =
+      safe_stored_immediate_jump_result;
+  safe_stored_chained_jump_target_result.steps.at(
+      safe_stored_chained_jump_target_result.steps.size() - 2U) =
+      resolved_step_at(target, 0x51, "transparent direct jump before erase");
+  safe_stored_chained_jump_target_result.steps.insert(
+      safe_stored_chained_jump_target_result.steps.end() - 1U,
+      resolved_step_at(target + 1, official_address_to_opcode(chained_erase_target),
+                       "transparent direct jump target"));
+  safe_stored_chained_jump_target_result.steps.insert(
+      safe_stored_chained_jump_target_result.steps.end() - 1U,
+      resolved_step_at(chained_erase_target, 0x35,
+                       "chained jump target erases live selector"));
+  require(optimizer_static_proof_gate_accepts_for_testing(
+              safe_dead_integer_options, safe_stored_chained_jump_target_result),
+          "dead-integer fractional selector elision should follow proved direct jump links "
+          "before K {x}");
+
+  CompileResult unsafe_stored_immediate_jump_target_result =
+      safe_stored_immediate_jump_result;
+  unsafe_stored_immediate_jump_target_result.steps.at(
+      unsafe_stored_immediate_jump_target_result.steps.size() - 2U) =
+      resolved_step_at(target, 0x10, "jump target consumes live selector");
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              safe_dead_integer_options, unsafe_stored_immediate_jump_target_result),
+          "dead-integer fractional selector elision must reject unconditional indirect flow "
+          "when its target consumes live X before K {x}");
+  const std::optional<std::string> unsafe_stored_immediate_jump_target_reason =
+      optimizer_static_proof_gate_rejection_reason_for_testing(
+          safe_dead_integer_options, unsafe_stored_immediate_jump_target_result);
+  require(unsafe_stored_immediate_jump_target_reason.has_value() &&
+              unsafe_stored_immediate_jump_target_reason->find(
+                  "xLivenessProofScope=unconditional-indirect-flow") != std::string::npos &&
+              unsafe_stored_immediate_jump_target_reason->find("branchTarget=") !=
+                  std::string::npos,
+          "dead-integer unconditional-flow rejection should expose the target erasure proof gap");
 
   CompileResult unsafe_stored_immediate_jump_result = safe_stored_immediate_memory_recall_result;
   unsafe_stored_immediate_jump_result.steps.at(unsafe_stored_immediate_jump_result.steps.size() -

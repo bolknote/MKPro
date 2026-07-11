@@ -14,56 +14,6 @@ namespace mkpro::core {
 
 namespace {
 
-bool sets_equal(const std::set<std::string>& left, const std::set<std::string>& right) {
-  return left == right;
-}
-
-std::set<std::string> collect_all_vars(const RuleCfg& cfg) {
-  std::set<std::string> vars;
-  for (const RuleCfgNode& node : cfg.nodes) {
-    vars.insert(node.defs.begin(), node.defs.end());
-    vars.insert(node.uses.begin(), node.uses.end());
-  }
-  return vars;
-}
-
-std::vector<std::set<std::string>> compute_live_out(const RuleCfg& cfg,
-                                                    const std::set<std::string>& all_vars) {
-  const std::size_t n = cfg.nodes.size();
-  std::vector<std::set<std::string>> live_in(n);
-  std::vector<std::set<std::string>> live_out(n);
-  bool changed = true;
-  int rounds = 0;
-  while (changed && rounds < 1000) {
-    changed = false;
-    ++rounds;
-    for (int i = static_cast<int>(n) - 1; i >= 0; --i) {
-      const RuleCfgNode& node = cfg.nodes.at(static_cast<std::size_t>(i));
-      std::set<std::string> new_out;
-      for (const int successor : node.succ) {
-        const std::set<std::string>& successor_in = live_in.at(static_cast<std::size_t>(successor));
-        new_out.insert(successor_in.begin(), successor_in.end());
-      }
-
-      const std::vector<std::string> defs = node.barrier ? std::vector<std::string>{} : node.defs;
-      std::set<std::string> new_in =
-          node.barrier ? all_vars : std::set<std::string>{node.uses.begin(), node.uses.end()};
-      for (const std::string& reg : new_out) {
-        if (std::find(defs.begin(), defs.end(), reg) == defs.end())
-          new_in.insert(reg);
-      }
-
-      if (!sets_equal(new_in, live_in.at(static_cast<std::size_t>(i))) ||
-          !sets_equal(new_out, live_out.at(static_cast<std::size_t>(i)))) {
-        live_in.at(static_cast<std::size_t>(i)) = std::move(new_in);
-        live_out.at(static_cast<std::size_t>(i)) = std::move(new_out);
-        changed = true;
-      }
-    }
-  }
-  return live_out;
-}
-
 std::optional<Expression> parse_expression_safe(const std::string& text, int line) {
   try {
     return parse_expression(text, line);
@@ -188,8 +138,7 @@ int eliminate_interprocedural_dead_stores(V2Program& program,
     return 0;
 
   const RuleCfg cfg = build_rule_cfg(program);
-  const std::set<std::string> all_vars = collect_all_vars(cfg);
-  const std::vector<std::set<std::string>> live_out = compute_live_out(cfg, all_vars);
+  const RuleCfgLiveness liveness = compute_rule_cfg_liveness(cfg);
   const std::set<std::string> loop_show_targets = loop_header_show_targets(program);
 
   std::set<const V2Statement*> doomed;
@@ -207,7 +156,7 @@ int eliminate_interprocedural_dead_stores(V2Program& program,
     const std::optional<Expression> expr = parse_expression_safe(*assign->expr, assign->line);
     if (!expr.has_value() || !expression_is_call_free(*expr))
       continue;
-    if (live_out.at(static_cast<std::size_t>(node.id)).contains(target->name))
+    if (liveness.live_out.at(static_cast<std::size_t>(node.id)).contains(target->name))
       continue;
     doomed.insert(assign);
   }
