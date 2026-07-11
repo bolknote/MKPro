@@ -767,6 +767,12 @@ dedicated MK-61 `F 10^x` opcode, just like `pow10(exponent)`.
 used by board and packed-row logic throughout the examples. Constant decimal
 powers such as `pow10(4)` and literal `10000` are materialized through MK-61
 `F 10^x` when that is shorter than digit entry.
+`grid_norm(value)` truncates `value` toward zero, wraps the resulting integer
+modulo four, and returns a one-based result in `1..4`. The optional literal form
+`grid_norm(value, width)` (also spelled `grid_wrap`) returns `1..width` for any
+signed calculator number; exact multiples and zero map to `width`. Repeated
+calls with the same width may share one X-argument helper. The width must be a
+positive integer literal representable in at most eight decimal digits.
 `sum(a, b, ...)` is variadic addition sugar. It lowers like an ordinary `+`
 chain, but optimizer passes can recognize it as an explicit accumulator shape.
 `1 / x` lowers through the MK-61 reciprocal opcode (`F 1/x`), matching
@@ -1053,8 +1059,9 @@ match key {
   `cell_at`, `cell_clear`, `cell_has`, `cell_mask`, `cell_set`, `cell_toggle`,
   `cos`, `digit_add`, `digit_at`, `digit_set`, `entered`, `eq_any`, `exp`,
   `frac`, `from_min`, `from_sec`, `inv`, `int`, `lg`, `ln`, `line_count`, `max`,
-  `neighbor_count`, `near_any`, `packed_add`, `packed_digit`, `packed_score`,
-  `pi`, `pow`, `pow10`, `random`, `sign`, `sin`, `sqr`, `sqrt`, `sum`, `tg`,
+  `grid_norm`, `grid_wrap`, `neighbor_count`, `near_any`, `packed_add`,
+  `packed_digit`, `packed_score`, `pi`, `pow`, `pow10`, `random`, `sign`,
+  `sin`, `sqr`, `sqrt`, `sum`, `tg`,
   `to_min`, `to_sec`.
 - contracted `raw { ... }` blocks for explicit MK-61 command sequences
 

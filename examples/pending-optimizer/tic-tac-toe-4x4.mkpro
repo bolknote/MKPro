@@ -45,10 +45,8 @@ program TicTacToe4x4 {
     // Match the original calculator UI for arbitrary numeric coordinates:
     // discard the fractional part and wrap the integer into 1..4.  Normalize
     // Y first so the two manual-entry phases retain their original stack flow.
-    normalize(y)
-    y = line
-    normalize(x)
-    x = line
+    y = grid_norm(y)
+    x = grid_norm(x)
     line = cell_mask(x, y)
 
     if bit_and(occupied, line) != 0 {
@@ -124,9 +122,9 @@ program TicTacToe4x4 {
   }
 
   fn normalize(raw_line) {
-    line = frac(int(raw_line) / 4) * 4
-    if line <= 0 {
-      line += 4
-    }
+    // Internal callers pass only x+y or x-y after UI normalization, so the
+    // complete domain is [-3, 8]. On that proved range, shifting by three
+    // gives the shorter one-based modulo form without a signed correction.
+    line = frac((raw_line + 3) / 4) * 4 + 1
   }
 }

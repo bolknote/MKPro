@@ -139,6 +139,7 @@ add_executable(mkpro_tests
   tests/arithmetic_if_pass_test.cpp
   tests/bit_mask_quotient_reuse_test.cpp
   tests/board_width_macros_test.cpp
+  tests/emulator_grid_norm_test.cpp
   tests/branch_target_x_reuse_pass_test.cpp
   tests/cfg_test.cpp
   tests/compiler_coord_list_test.cpp
@@ -297,6 +298,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   arithmetic_if_matches_typescript_contract
   bit_mask_quotient_reuse_matches_typescript_contract
   board_width_macros_matches_typescript_contract
+  emulator_grid_norm_signed_modulo_matches_language_contract
   branch_target_x_reuse_matches_typescript_contract
   cfg_matches_typescript_contract
   compiler_coord_list_lowering_matches_typescript_contract

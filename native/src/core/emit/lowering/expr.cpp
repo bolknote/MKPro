@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
+#include <limits>
 #include <map>
 
 namespace mkpro::core::emit {
@@ -404,14 +406,36 @@ bool lower_commutative_call_with_destructive_selector_last(
   return true;
 }
 
+bool is_grid_norm_name(const std::string& name) {
+  return name == "grid_norm" || name == "grid_wrap";
+}
+
+std::optional<int> grid_norm_call_width_impl(const std::vector<Expression>& args) {
+  if (args.empty() || args.size() > 2U)
+    return std::nullopt;
+  if (args.size() == 1U)
+    return k_default_board_width;
+  const Expression& width = args.at(1);
+  if (width.kind != "number")
+    return std::nullopt;
+  const std::string raw = width.raw.empty() ? width.text : width.raw;
+  char* end = nullptr;
+  const double value = std::strtod(raw.c_str(), &end);
+  if (end == raw.c_str() || *end != '\0' || !std::isfinite(value) || std::floor(value) != value ||
+      value < 1.0 || value > 99999999.0) {
+    return std::nullopt;
+  }
+  return static_cast<int>(value);
+}
+
 std::optional<std::size_t> packed_grid_macro_arity_impl(const std::string& name) {
   static const std::map<std::string, std::size_t> arities = {
-      {"grid_norm", 1},        {"grid_wrap", 1},    {"bit_mask", 1},   {"bit_has", 2},
-      {"bit_set", 2},          {"bit_clear", 2},    {"bit_toggle", 2}, {"diag_left_index", 2},
-      {"diag_right_index", 2}, {"cell_mask", 2},    {"cell_has", 3},   {"cell_set", 3},
-      {"cell_clear", 3},       {"cell_toggle", 3},  {"cell_used", 3},  {"cell_mark", 3},
-      {"digit_at", 2},         {"digit_add", 3},    {"digit_set", 3},  {"packed_add", 3},
-      {"packed_digit", 2},     {"packed_score", 2},
+      {"bit_mask", 1},        {"bit_has", 2},      {"bit_set", 2},       {"bit_clear", 2},
+      {"bit_toggle", 2},      {"diag_left_index", 2},
+      {"diag_right_index", 2}, {"cell_mask", 2},   {"cell_has", 3},      {"cell_set", 3},
+      {"cell_clear", 3},      {"cell_toggle", 3},  {"cell_used", 3},     {"cell_mark", 3},
+      {"digit_at", 2},        {"digit_add", 3},    {"digit_set", 3},     {"packed_add", 3},
+      {"packed_digit", 2},    {"packed_score", 2},
   };
   const auto it = arities.find(name);
   return it == arities.end() ? std::nullopt : std::optional<std::size_t>{it->second};
@@ -436,8 +460,12 @@ Expression digit_set_expression(Expression value, Expression index, Expression d
 
 std::optional<Expression> packed_grid_expression_macro_impl(const std::string& name,
                                                             const std::vector<Expression>& args) {
-  if (name == "grid_norm" || name == "grid_wrap")
-    return grid_norm_expression(args.at(0));
+  if (is_grid_norm_name(name)) {
+    const std::optional<int> width = grid_norm_call_width_impl(args);
+    if (!width.has_value())
+      return std::nullopt;
+    return grid_norm_expression(args.at(0), *width);
+  }
   if (name == "bit_mask")
     return bit_mask_expression(args.at(0));
   if (name == "bit_has")
@@ -502,6 +530,61 @@ std::optional<std::size_t> packed_grid_macro_arity(const std::string& name) {
 std::optional<Expression> packed_grid_expression_macro(const std::string& name,
                                                        const std::vector<Expression>& args) {
   return packed_grid_expression_macro_impl(name, args);
+}
+
+std::optional<int> grid_norm_call_width(const std::vector<Expression>& args) {
+  return grid_norm_call_width_impl(args);
+}
+
+std::string grid_norm_use_count_key(int width) {
+  return "__grid_norm_width:" + std::to_string(width);
+}
+
+void emit_grid_norm_body(ExpressionEmitApi& api, int width) {
+  const std::string width_literal = std::to_string(width);
+  const std::string adjust = api.emitter.fresh_label("grid_norm_adjust");
+  const std::string done = api.emitter.fresh_label("grid_norm_done");
+
+  api.emitter.emit_op(0x34, "К [x]", "grid_norm integer part");
+  if (width == k_default_board_width) {
+    // Preserve the original MK-61 width-four UI arithmetic byte-for-byte:
+    // division by four has exactly the signed .00/.25/.50/.75 remainder shape
+    // used by the reference program.
+    api.emit_number_or_preload(width_literal, "grid_norm width divisor", std::nullopt);
+    api.emitter.emit_op(0x13, "/", "grid_norm quotient");
+    api.emitter.emit_op(0x35, "К {x}", "grid_norm signed fraction");
+    api.emit_number_or_preload(width_literal, "grid_norm width scale", std::nullopt);
+    api.emitter.emit_op(0x12, "*", "grid_norm signed remainder");
+  } else {
+    // A repeating decimal quotient (for example 4 / 3) cannot safely recover
+    // an integer remainder by multiplying its fractional part. Keep the
+    // truncated dividend in one compiler-owned scratch and form
+    // n - int(n / width) * width. The scratch preserves caller Y/Z and keeps
+    // the same ordinary sticky-T boundary as the compact width-four form.
+    api.emit_store("__grid_norm_dividend", "grid_norm preserve dividend");
+    api.emit_number_or_preload(width_literal, "grid_norm width divisor", std::nullopt);
+    api.emitter.emit_op(0x13, "/", "grid_norm quotient");
+    api.emitter.emit_op(0x34, "К [x]", "grid_norm quotient integer part");
+    api.emit_number_or_preload(width_literal, "grid_norm width scale", std::nullopt);
+    api.emitter.emit_op(0x12, "*", "grid_norm quotient multiple");
+    api.emit_recall("__grid_norm_dividend");
+    api.emitter.emit_op(0x14, "X↔Y", "grid_norm restore dividend above multiple");
+    api.emitter.emit_op(0x11, "-", "grid_norm signed remainder");
+  }
+
+  // MK-61 direct conditionals branch when the named condition is false.
+  // Negative remainders jump directly to the correction.  Non-negative
+  // remainders then use F x=0 to skip the correction only when non-zero.
+  api.emitter.emit_jump(0x59, "F x>=0", adjust, "grid_norm negative correction");
+  api.emitter.emit_jump(0x5e, "F x=0", done, "grid_norm positive result");
+  api.emitter.emit_label(adjust, {.hidden = true});
+  api.emit_number_or_preload(width_literal, "grid_norm one-based correction", std::nullopt);
+  api.emitter.emit_op(0x10, "+", "grid_norm corrected result");
+  api.emitter.emit_label(done, {.hidden = true});
+  api.emitter.current_x_variable.reset();
+  api.emitter.current_x_aliases.clear();
+  api.emitter.current_x_expression.reset();
+  api.emitter.current_x_known_zero = false;
 }
 
 std::optional<bool> lower_basic_expression_to_x(ExpressionEmitApi& api, LoweringContext& context,
@@ -777,6 +860,67 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
     }
     api.emitter.emit_number("1");
     api.emitter.emit_op(0x16, "F e^x", expression.callee + "()");
+    return true;
+  }
+
+  if (is_grid_norm_name(callee)) {
+    if (expression.args.empty() || expression.args.size() > 2U) {
+      context.diagnostics.push_back(Diagnostic{
+          .severity = DiagnosticSeverity::Error,
+          .code = "native-unsupported",
+          .message = expression.callee + "() expects one value and an optional width literal",
+      });
+      return false;
+    }
+    const std::optional<int> width = grid_norm_call_width_impl(expression.args);
+    if (!width.has_value()) {
+      context.diagnostics.push_back(Diagnostic{
+          .severity = DiagnosticSeverity::Error,
+          .code = "native-unsupported",
+          .message = expression.callee +
+                     "() width must be a positive integer literal no greater than 99999999",
+      });
+      return false;
+    }
+    if (*width != k_default_board_width &&
+        !api.ensure_hidden_register("__grid_norm_dividend")) {
+      return false;
+    }
+    if (!api.lower_expression_to_x(expression.args.front()))
+      return false;
+
+    const std::string count_key = grid_norm_use_count_key(*width);
+    const auto count_it = context.expression_call_counts.find(count_key);
+    const bool shared = count_it != context.expression_call_counts.end() && count_it->second >= 2;
+    if (shared) {
+      auto label_it = context.grid_norm_helper_labels.find(*width);
+      if (label_it == context.grid_norm_helper_labels.end()) {
+        label_it = context.grid_norm_helper_labels
+                       .emplace(*width,
+                                api.emitter.fresh_label("grid_norm_w" +
+                                                        std::to_string(*width)))
+                       .first;
+        context.grid_norm_helper_order.push_back(*width);
+      }
+      api.emitter.emit_jump(0x53, "ПП", label_it->second, "grid_norm shared helper");
+      context.optimizations.push_back(OptimizationReport{
+          .name = "signed-grid-normalization-helper-call",
+          .detail = "Normalized a signed calculator value into 1.." + std::to_string(*width) +
+                    " through a shared X-argument helper.",
+      });
+    } else {
+      emit_grid_norm_body(api, *width);
+      context.optimizations.push_back(OptimizationReport{
+          .name = "signed-grid-normalization-inline",
+          .detail = "Normalized a signed calculator value into 1.." + std::to_string(*width) +
+                    " with one local modulo/correction sequence.",
+      });
+    }
+    context.optimizations.push_back(OptimizationReport{
+        .name = "packed-grid-primitive-lowering",
+        .detail = "Lowered " + expression.callee +
+                  "() as signed one-based coordinate normalization.",
+    });
     return true;
   }
 

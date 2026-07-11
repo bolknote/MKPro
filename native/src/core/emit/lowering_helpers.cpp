@@ -743,14 +743,18 @@ double cell_mask_row_constant(int width) {
 }
 
 Expression grid_norm_expression(Expression expression, int width) {
-  Expression rem = multiply_expression(
+  const Expression rem = multiply_expression(
       frac_expression(divide_expression(int_expression(std::move(expression)),
                                         number_expression(board_width_literal(width)))),
       number_expression(board_width_literal(width)));
+  // `K max` is not a mathematical maximum when either operand is zero on the
+  // MK-61, so max(rem, 0) cannot be used as a positivity test here.  For a
+  // signed remainder, abs(rem) + rem is positive exactly when rem is positive
+  // and zero for both rem == 0 and rem < 0.
   Expression correction = multiply_expression(
       number_expression(board_width_literal(width)),
-      one_minus_expression(sign_expression(max_expression(rem, number_expression("0")))));
-  return add_expression(std::move(rem), std::move(correction));
+      one_minus_expression(sign_expression(add_expression(abs_expression(rem), rem))));
+  return add_expression(rem, std::move(correction));
 }
 
 Expression positive_grid_norm_expression(Expression expression, int width) {

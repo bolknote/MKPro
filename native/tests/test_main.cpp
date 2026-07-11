@@ -20,6 +20,7 @@ void optimizer_translation_unit_stays_emulator_free();
 void arithmetic_if_matches_typescript_contract();
 void bit_mask_quotient_reuse_matches_typescript_contract();
 void board_width_macros_matches_typescript_contract();
+void emulator_grid_norm_signed_modulo_matches_language_contract();
 void branch_target_x_reuse_matches_typescript_contract();
 void cfg_matches_typescript_contract();
 void compiler_coord_list_lowering_matches_typescript_contract();
@@ -244,6 +245,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(arithmetic_if_matches_typescript_contract),
       MKPRO_TEST(bit_mask_quotient_reuse_matches_typescript_contract),
       MKPRO_TEST(board_width_macros_matches_typescript_contract),
+      MKPRO_TEST(emulator_grid_norm_signed_modulo_matches_language_contract),
       MKPRO_TEST(branch_target_x_reuse_matches_typescript_contract),
       MKPRO_TEST(cfg_matches_typescript_contract),
       MKPRO_TEST(compiler_coord_list_lowering_matches_typescript_contract),

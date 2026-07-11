@@ -800,7 +800,14 @@ helper, выполняющему этот update; имя helper не имеет 
 `pow10(k)` доступен как удобный helper для десятичного масштабирования разрядов
 и используется в логике досок и packed-строк во всех примерах. Константные
 десятичные степени вроде `pow10(4)` и литерала `10000` материализуются через
-MK-61 `F 10^x`, когда это короче ввода цифр. `sum(a, b, ...)` — вариадический
+MK-61 `F 10^x`, когда это короче ввода цифр. `grid_norm(value)` отбрасывает
+дробную часть `value` к нулю, берёт остаток по модулю четыре и возвращает
+однобазовый результат `1..4`. Вариант `grid_norm(value, width)` с буквальной
+шириной (алиас `grid_wrap`) возвращает `1..width` для любого знакового числа
+калькулятора; ноль и точные кратные переходят в `width`. Повторные вызовы с
+одинаковой шириной могут использовать один helper с аргументом в X. Ширина
+должна быть положительным целым литералом не длиннее восьми десятичных цифр.
+`sum(a, b, ...)` — вариадический
 сахар для сложения. Он понижается как обычная цепочка `+`, но optimizer passes
 могут распознавать его как явную accumulator-форму. `1 / x` понижается через opcode
 обратной величины MK-61 (`F 1/x`), как и `inv(x)`. `max(a, b)` —
@@ -1098,8 +1105,8 @@ match key {
   `bit_xor`, `cell_at`, `cell_clear`, `cell_has`, `cell_mask`, `cell_set`,
   `cell_toggle`, `cos`, `digit_add`, `digit_at`, `digit_set`, `entered`,
   `eq_any`, `exp`, `frac`, `from_min`, `from_sec`, `inv`, `int`, `lg`, `ln`,
-  `line_count`, `max`, `neighbor_count`, `near_any`, `packed_add`,
-  `packed_digit`, `packed_score`, `pi`, `pow`, `pow10`, `random`, `sign`,
+  `grid_norm`, `grid_wrap`, `line_count`, `max`, `neighbor_count`, `near_any`,
+  `packed_add`, `packed_digit`, `packed_score`, `pi`, `pow`, `pow10`, `random`, `sign`,
   `sin`, `sqr`, `sqrt`, `sum`, `tg`, `to_min`, `to_sec`.
 - контрактные блоки `raw { ... }` для явных последовательностей команд MK-61
 

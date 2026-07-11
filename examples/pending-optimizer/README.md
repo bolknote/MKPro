@@ -14,7 +14,7 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 181 | 105 | +76 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 166 | 105 | +61 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
@@ -26,11 +26,15 @@ mode may reject over-window programs earlier than the analysis path.
   pair `X:Y`, arbitrary signed/fractional coordinates must normalize like the
   original, wins must report the original fractional packed mask, and move
   selection must keep the source-style max/tie behavior.
-- Packed occupied masks and four logical line banks are semantic state. Their
-  physical registers, selector values, initial preload layout, and temporary
-  encodings are compiler decisions and are not part of the UI contract.
-- The main remaining size pressure is helper and ABI traffic around
-  signed modulo, `cell_mask`, `packed_score`, `candidate_score`, and the
+- Only the manual input/STOP protocol and its visible `X:Y` results are the
+  external contract. Occupied cells and logical line evolution are an internal
+  model used to prove future UI behavior; their physical registers, initial and
+  intermediate representations, selector values, and preload layout are not
+  externally fixed. Any replacement must still prove the same later UI.
+- The input path now uses the generic signed `grid_norm` primitive; internal
+  diagonal indexes use a separate domain-proved one-based modulo form. The main
+  remaining size pressure is helper and ABI traffic around `grid_norm`,
+  `cell_mask`, `packed_score`, `candidate_score`, and the
   line-update/check path.
 - Optimizer tests must use unrelated synthetic programs and local proof
   obligations. The tic-tac-toe fixture may lock only its size and observable

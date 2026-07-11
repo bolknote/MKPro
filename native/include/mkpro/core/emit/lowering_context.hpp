@@ -229,6 +229,8 @@ struct LoweringContext {
   std::map<std::string, int> expression_helper_regular_call_sites;
   std::vector<ExpressionHelperRequest> expression_helpers;
   std::map<std::string, ExpressionHelperStackEntryRequest> expression_helper_stack_entries;
+  std::map<int, std::string> grid_norm_helper_labels;
+  std::vector<int> grid_norm_helper_order;
   std::map<std::string, FunctionStackEntryPlan> stack_entry_functions;
   std::map<std::string, RuleStackInputEntryPlan> stack_input_rule_entries;
   std::map<std::string, NearAnyHelperStats> near_any_helper_stats;

@@ -86,6 +86,8 @@ using core::emit::DisplayLiteralProgram;
 using core::emit::divide_expression;
 using core::emit::FirstSpliceDisplayLiteralProgram;
 using core::emit::frac_expression;
+using core::emit::grid_norm_call_width;
+using core::emit::grid_norm_use_count_key;
 using core::emit::identifier_expression;
 using core::emit::int_expression;
 using core::emit::is_unsigned_decimal_digits;
@@ -6195,6 +6197,11 @@ int guarded_estimate_call_cost(const Expression& expression) {
           small_set_expression_macro(name, expression.args)) {
     return guarded_estimate_expression_cost(*small_set_macro);
   }
+  if (name == "grid_norm" || name == "grid_wrap") {
+    if (!grid_norm_call_width(expression.args).has_value())
+      return std::numeric_limits<int>::max() / 4;
+    return guarded_estimate_expression_cost(expression.args.front()) + 12;
+  }
   if (const std::optional<std::size_t> arity = packed_grid_macro_arity(name)) {
     if (expression.args.size() != *arity)
       return std::numeric_limits<int>::max() / 4;
@@ -6285,6 +6292,13 @@ int guarded_estimate_call_cost_for_condition(
   if (const std::optional<Expression> small_set_macro =
           small_set_expression_macro(name, expression.args)) {
     return guarded_estimate_expression_cost_for_condition(*small_set_macro, preloaded_numbers);
+  }
+  if (name == "grid_norm" || name == "grid_wrap") {
+    if (!grid_norm_call_width(expression.args).has_value())
+      return std::numeric_limits<int>::max() / 4;
+    return guarded_estimate_expression_cost_for_condition(expression.args.front(),
+                                                          preloaded_numbers) +
+           12;
   }
   if (const std::optional<std::size_t> arity = packed_grid_macro_arity(name)) {
     if (expression.args.size() != *arity)
@@ -9089,6 +9103,10 @@ void collect_expression_use_count(LoweringContext& context, const Expression& ex
   if (expression.kind == "call") {
     const std::string callee = lower_ascii(expression.callee);
     ++context.expression_call_counts[callee];
+    if (callee == "grid_norm" || callee == "grid_wrap") {
+      if (const std::optional<int> width = grid_norm_call_width(expression.args))
+        ++context.expression_call_counts[grid_norm_use_count_key(*width)];
+    }
     if (callee == "line_count" && expression.args.size() == 2) {
       if (const std::optional<std::string> key =
               line_count_group_key_for(context, expression.args.at(0), expression.args.at(1))) {
@@ -13414,6 +13432,15 @@ void collect_preload_number_literals(const Expression& expression, ValueSet& val
     collect_preload_number_literals(*expression.right, values, occurrences);
   if (expression.kind == "call") {
     const std::string callee = lower_ascii(expression.callee);
+    if (callee == "grid_norm" || callee == "grid_wrap") {
+      if (grid_norm_call_width(expression.args).has_value()) {
+        if (const std::optional<Expression> macro =
+                packed_grid_expression_macro(callee, expression.args)) {
+          collect_preload_number_literals(*macro, values, occurrences);
+          return;
+        }
+      }
+    }
     if (const std::optional<std::size_t> arity = packed_grid_macro_arity(callee);
         arity.has_value() && *arity == expression.args.size()) {
       if (const std::optional<Expression> macro =
@@ -39444,6 +39471,26 @@ bool lower_expression_helpers(LoweringContext& context) {
   return true;
 }
 
+bool lower_grid_norm_helpers(LoweringContext& context) {
+  for (const int width : context.grid_norm_helper_order) {
+    const auto label_it = context.grid_norm_helper_labels.find(width);
+    if (label_it == context.grid_norm_helper_labels.end())
+      return false;
+    context.emitter.emit_label(
+        label_it->second,
+        {.procedure_boundary = "start", .procedure_name = label_it->second, .hidden = true});
+    auto api = expression_emit_api(context, false);
+    core::emit::emit_grid_norm_body(api, width);
+    context.emitter.emit_op(0x52, "В/О", "grid_norm helper return");
+    context.optimizations.push_back(OptimizationReport{
+        .name = "signed-grid-normalization-helper",
+        .detail = "Emitted one shared signed one-based modulo helper for width " +
+                  std::to_string(width) + ".",
+    });
+  }
+  return true;
+}
+
 bool lower_near_any_helpers(LoweringContext& context) {
   for (const NearAnyHelperRequest& helper : context.near_any_helpers) {
     const std::string comment_kind = near_any_helper_comment_kind(helper.kind);
@@ -46500,6 +46547,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
               lower_packed_display_helpers(context) && lower_display_byte_helpers(context) &&
               lower_show_sequence_helpers(context) && lower_literal_display_helpers(context) &&
               lower_random_cell_helpers(context) && lower_expression_helpers(context) &&
+              lower_grid_norm_helpers(context) &&
               lower_near_any_helpers(context) && lower_line_count_helpers(context) &&
               lower_spatial_line_progression_helpers(context) &&
               lower_spatial_sum_helpers(context) && lower_bit_mask_helper(context) &&
