@@ -66,7 +66,7 @@ std::string call_target_key(const IrTarget& target) {
 }
 
 bool is_shareable_body_op(const IrOp& op, bool allow_direct_calls = false) {
-  if (has_rewrite_barrier(op) || is_display_focus_sensitive(op))
+  if (has_rewrite_barrier(op) || is_display_focus_sensitive(op) || !op.meta.roles.empty())
     return false;
   switch (op.kind) {
   case IrKind::Store:

@@ -3,6 +3,7 @@
 #include "mkpro/core/address_formula_solver.hpp"
 #include "mkpro/core/compiler_static_proof_gate.hpp"
 #include "mkpro/core/constant_folder.hpp"
+#include "mkpro/core/dark_side_suffix_helper.hpp"
 #include "mkpro/core/emit/lowering/coord_list.hpp"
 #include "mkpro/core/emit/lowering/display.hpp"
 #include "mkpro/core/emit/lowering/expr.hpp"
@@ -17,6 +18,7 @@
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/interprocedural_dse.hpp"
 #include "mkpro/core/interprocedural_value_propagation.hpp"
+#include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/machine_profile.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/parser.hpp"
@@ -10547,6 +10549,8 @@ bool program_requires_shared_bit_mask_scratch(const LoweringContext& context,
                                               const V2Program& program);
 void elide_packed_line_mutating_leaf_registers_after_allocation(
     LoweringContext& context, const V2Program& program);
+bool suppress_packed_line_mutating_family_inline_rules(LoweringContext& context,
+                                                       const V2Program& program);
 void collect_guarded_update_scratch_registers(LoweringContext& context,
                                               RegisterCollection& collection,
                                               const V2Program& program);
@@ -10675,6 +10679,18 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   context.x_param_procs = collect_x_param_proc_lowerings(program, context.inline_statement_rules);
   context.x_param_y_stack_procs = collect_x_param_y_stack_proc_lowerings(
       program, context.x_param_procs, context.canonicalize_packed_line_bank_walks);
+  if (context.packed_line_family_mutating_selector_update_check_tail) {
+    for (const V2StateField& field : program.state) {
+      if (field.bank.has_value())
+        context.state_banks[state_bank_key(field)] = &field;
+    }
+    if (suppress_packed_line_mutating_family_inline_rules(context, program)) {
+      context.x_param_procs =
+          collect_x_param_proc_lowerings(program, context.inline_statement_rules);
+      context.x_param_y_stack_procs = collect_x_param_y_stack_proc_lowerings(
+          program, context.x_param_procs, context.canonicalize_packed_line_bank_walks);
+    }
+  }
   context.ephemeral_input_targets = collect_ephemeral_input_targets(program);
   for (const auto& [unused_prompt, input] : context.loop_prompt_inputs) {
     (void)unused_prompt;
@@ -21503,6 +21519,7 @@ struct PackedLineFamilyUpdateRule {
   std::string rule;
   std::string update_rule;
   std::string delta_name;
+  std::optional<std::string> alternating_sign_state;
   IndexedPackedUpdateTailRule update;
   std::vector<PackedLineFamilyUpdateStep> steps;
   int line = 0;
@@ -22250,11 +22267,28 @@ packed_line_family_update_rule(const LoweringContext& context, const V2Rule& rul
                                PackedLineSelectorMode mode = PackedLineSelectorMode::Direct) {
   if (rule.body.size() < 5)
     return std::nullopt;
-  const V2Statement& first = rule.body.front();
+  std::size_t prefix = 0;
+  std::optional<std::string> alternating_sign_state;
+  if (rule.body.size() >= 2U) {
+    const V2Statement& toggle = rule.body.front();
+    if (toggle.kind == "v2_assign" && toggle.target.has_value() &&
+        toggle.expr.has_value()) {
+      const Expression toggled = parse_expression(*toggle.expr, toggle.line);
+      if (toggled.kind == "unary" && toggled.op == "-" && toggled.expr != nullptr &&
+          toggled.expr->kind == "identifier" &&
+          toggled.expr->name == *toggle.target) {
+        alternating_sign_state = *toggle.target;
+        prefix = 1;
+      }
+    }
+  }
+  const V2Statement& first = rule.body.at(prefix);
   if (first.kind != "v2_assign" || !first.target.has_value() || !first.expr.has_value())
     return std::nullopt;
   const Expression first_expression = parse_expression(*first.expr, first.line);
-  if (first_expression.kind != "identifier")
+  if (first_expression.kind != "identifier" ||
+      (alternating_sign_state.has_value() &&
+       first_expression.name != *alternating_sign_state))
     return std::nullopt;
 
   for (const auto& [unused_name, candidate] : context.rules) {
@@ -22266,7 +22300,8 @@ packed_line_family_update_rule(const LoweringContext& context, const V2Rule& rul
     if (!update.has_value() || update->factor.kind != "identifier" ||
         update->factor.name != *first.target)
       continue;
-    std::vector<V2Statement> rest(rule.body.begin() + 1, rule.body.end());
+    std::vector<V2Statement> rest(
+        rule.body.begin() + static_cast<std::ptrdiff_t>(prefix + 1U), rule.body.end());
     std::optional<std::vector<PackedLineFamilyUpdateStep>> steps =
         packed_line_family_update_steps(context, rest, *update);
     if (!steps.has_value())
@@ -22280,12 +22315,457 @@ packed_line_family_update_rule(const LoweringContext& context, const V2Rule& rul
         .rule = rule.name,
         .update_rule = candidate->name,
         .delta_name = *first.target,
+        .alternating_sign_state = alternating_sign_state,
         .update = *update,
         .steps = std::move(*steps),
         .line = first.line,
     };
   }
   return std::nullopt;
+}
+
+struct PackedLineBankLocation {
+  std::string bank_key;
+  int slot = 0;
+};
+
+std::optional<PackedLineBankLocation>
+packed_line_bank_location(const LoweringContext& context, const Expression& expression) {
+  if (expression.kind == "indexed" && expression.index != nullptr) {
+    const std::string key = bank_member_key(expression.base, expression.field);
+    const auto bank = context.state_banks.find(key);
+    const std::optional<int> slot = numeric_index_value(*expression.index);
+    if (bank == context.state_banks.end() || bank->second == nullptr ||
+        !bank->second->bank.has_value() || !slot.has_value() ||
+        *slot < bank->second->bank->min || *slot > bank->second->bank->max) {
+      return std::nullopt;
+    }
+    return PackedLineBankLocation{.bank_key = key, .slot = *slot};
+  }
+
+  if (expression.kind != "identifier")
+    return std::nullopt;
+  for (const auto& [key, field] : context.state_banks) {
+    if (field == nullptr || !field->bank.has_value())
+      continue;
+    for (int slot = field->bank->min; slot <= field->bank->max; ++slot) {
+      if (expression.name == state_bank_element_name(*field, slot))
+        return PackedLineBankLocation{.bank_key = key, .slot = slot};
+    }
+  }
+  return std::nullopt;
+}
+
+struct JointPackedLineFamilyRule {
+  PackedLineFamilyScoreRule score;
+  PackedLineFamilyUpdateRule update;
+};
+
+std::optional<JointPackedLineFamilyRule> joint_packed_line_family_rule(
+    const LoweringContext& context, const V2Rule& score_rule, const V2Rule& update_rule) {
+  const std::optional<PackedLineFamilyScoreRule> score =
+      packed_line_family_score_rule(context, score_rule);
+  const std::optional<PackedLineFamilyUpdateRule> update =
+      packed_line_family_update_rule(context, update_rule, PackedLineSelectorMode::Mutating);
+  if (!score.has_value() || !update.has_value() || update->steps.size() != 4U ||
+      !packed_line_family_update_steps_descend_by_one(update->steps) ||
+      !packed_line_family_update_steps_preserve_y(context, update->steps) ||
+      score->normalizer_return != update->update.y_name) {
+    return std::nullopt;
+  }
+
+  const std::array<const PackedScoreTerm*, 4> score_terms = {
+      &score->first, &score->second, &score->diagonal_add, &score->diagonal_sub};
+  std::optional<std::string> bank_key;
+  for (std::size_t index = 0; index < score_terms.size(); ++index) {
+    const std::optional<PackedLineBankLocation> location =
+        packed_line_bank_location(context, score_terms.at(index)->line_value);
+    if (!location.has_value() || location->slot != update->steps.at(index).slot)
+      return std::nullopt;
+    if (bank_key.has_value() && *bank_key != location->bank_key)
+      return std::nullopt;
+    bank_key = location->bank_key;
+  }
+  if (!bank_key.has_value() ||
+      *bank_key != bank_member_key(update->update.target.base, update->update.target.field)) {
+    return std::nullopt;
+  }
+
+  if (!expression_equals(score->first.index, update->steps.at(0).line_expr) ||
+      !expression_equals(score->second.index, update->steps.at(1).line_expr) ||
+      !expression_equals(add_expression(score->shared, score->partial),
+                         update->steps.at(2).line_expr) ||
+      !expression_equals(subtract_expression(score->shared, score->partial),
+                         update->steps.at(3).line_expr) ||
+      update->steps.at(0).normalizer.has_value() ||
+      update->steps.at(1).normalizer.has_value() ||
+      update->steps.at(2).normalizer != score->normalizer ||
+      update->steps.at(3).normalizer != score->normalizer) {
+    return std::nullopt;
+  }
+
+  return JointPackedLineFamilyRule{.score = *score, .update = *update};
+}
+
+bool joint_packed_line_statement_invokes(const V2Statement& statement,
+                                         const std::string& rule_name) {
+  if (statement.kind == "v2_invoke" && statement.name == rule_name)
+    return true;
+  const auto block_invokes = [&](const std::vector<V2Statement>& block) {
+    return std::any_of(block.begin(), block.end(), [&](const V2Statement& child) {
+      return joint_packed_line_statement_invokes(child, rule_name);
+    });
+  };
+  if (block_invokes(statement.body) || block_invokes(statement.then_body) ||
+      block_invokes(statement.else_body)) {
+    return true;
+  }
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr &&
+        joint_packed_line_statement_invokes(*match_case.action, rule_name)) {
+      return true;
+    }
+  }
+  return statement.otherwise != nullptr &&
+         joint_packed_line_statement_invokes(*statement.otherwise, rule_name);
+}
+
+bool joint_packed_line_block_invokes(const std::vector<V2Statement>& statements,
+                                     const std::string& rule_name) {
+  return std::any_of(statements.begin(), statements.end(), [&](const V2Statement& statement) {
+    return joint_packed_line_statement_invokes(statement, rule_name);
+  });
+}
+
+std::optional<std::string> joint_packed_line_affine_max_target(
+    const V2Statement& statement, const std::string& score_name) {
+  const std::optional<std::string> target = scalar_statement_target_name(statement);
+  if (!target.has_value())
+    return std::nullopt;
+  std::optional<Expression> candidate;
+  try {
+    candidate = max_assign_candidate(statement);
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+  if (!candidate.has_value() ||
+      !expression_is_identifier_named(*candidate, score_name)) {
+    return std::nullopt;
+  }
+  return target;
+}
+
+bool joint_packed_line_score_equality_predicate(const V2Predicate& predicate,
+                                                const std::string& score_name,
+                                                const std::set<std::string>& best_names,
+                                                int line) {
+  if (predicate.kind != "v2_compare" || predicate.op != "==")
+    return false;
+  try {
+    const Expression left = parse_expression(predicate.left, line);
+    const Expression right = parse_expression(predicate.right, line);
+    return (expression_is_identifier_named(left, score_name) && right.kind == "identifier" &&
+            best_names.contains(right.name)) ||
+           (expression_is_identifier_named(right, score_name) && left.kind == "identifier" &&
+            best_names.contains(left.name));
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+void joint_packed_line_collect_affine_max_targets(
+    const std::vector<V2Statement>& statements, const std::string& score_name,
+    std::set<std::string>& best_names) {
+  for (const V2Statement& statement : statements) {
+    if (const std::optional<std::string> target =
+            joint_packed_line_affine_max_target(statement, score_name)) {
+      best_names.insert(*target);
+    }
+    joint_packed_line_collect_affine_max_targets(statement.body, score_name, best_names);
+    joint_packed_line_collect_affine_max_targets(statement.then_body, score_name, best_names);
+    joint_packed_line_collect_affine_max_targets(statement.else_body, score_name, best_names);
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.action != nullptr) {
+        joint_packed_line_collect_affine_max_targets(
+            std::vector<V2Statement>{*match_case.action}, score_name, best_names);
+      }
+    }
+    if (statement.otherwise != nullptr) {
+      joint_packed_line_collect_affine_max_targets(
+          std::vector<V2Statement>{*statement.otherwise}, score_name, best_names);
+    }
+  }
+}
+
+bool joint_packed_line_score_reads_are_affine(
+    const std::vector<V2Statement>& statements, const std::string& score_name,
+    const std::set<std::string>& best_names, int& equality_reads) {
+  const auto text_reads = [&](const std::optional<std::string>& text, int line) {
+    return text.has_value() && expression_text_contains_identifier(*text, score_name, line);
+  };
+  for (const V2Statement& statement : statements) {
+    if ((statement.kind == "v2_assign" || statement.kind == "v2_update") &&
+        statement.target.has_value()) {
+      try {
+        const Expression target = parse_expression(*statement.target, statement.line);
+        if (target.kind == "identifier" && target.name == score_name)
+          return false;
+        if (target.kind != "identifier" && expression_contains_identifier(target, score_name))
+          return false;
+      } catch (const std::exception&) {
+        return false;
+      }
+    }
+
+    if (statement.kind == "v2_assign" && text_reads(statement.expr, statement.line)) {
+      if (!joint_packed_line_affine_max_target(statement, score_name).has_value())
+        return false;
+    } else if (statement.kind == "v2_update" &&
+               text_reads(statement.expr, statement.line)) {
+      return false;
+    } else if ((statement.kind == "v2_if" || statement.kind == "v2_while") &&
+               statement.predicate.has_value() &&
+               predicate_reads_identifier(*statement.predicate, score_name)) {
+      if (!joint_packed_line_score_equality_predicate(
+              *statement.predicate, score_name, best_names, statement.line)) {
+        return false;
+      }
+      ++equality_reads;
+    } else if (statement.kind == "v2_invoke") {
+      for (const std::string& arg : statement.args) {
+        if (expression_text_contains_identifier(arg, score_name, statement.line))
+          return false;
+      }
+    } else if (statement.kind == "v2_show" || statement.kind == "v2_stop" ||
+               statement.kind == "v2_preview" || statement.kind == "v2_return") {
+      if (text_reads(statement.target, statement.line) || text_reads(statement.expr, statement.line))
+        return false;
+      if (statement.items.has_value() &&
+          std::any_of(statement.items->begin(), statement.items->end(),
+                      [&](const DisplayItem& item) {
+                        return display_item_reads_identifier(item, score_name);
+                      })) {
+        return false;
+      }
+    } else if (statement.kind == "v2_match") {
+      if (text_reads(statement.expr, statement.line))
+        return false;
+      for (const V2MatchCase& match_case : statement.cases) {
+        for (const std::string& value : match_case.values) {
+          if (expression_text_contains_identifier(value, score_name, match_case.line))
+            return false;
+        }
+      }
+    } else if (statement.kind == "v2_raw" &&
+               statement_reads_identifier(statement, score_name, false)) {
+      return false;
+    }
+
+    if (!joint_packed_line_score_reads_are_affine(statement.body, score_name, best_names,
+                                                   equality_reads) ||
+        !joint_packed_line_score_reads_are_affine(statement.then_body, score_name, best_names,
+                                                   equality_reads) ||
+        !joint_packed_line_score_reads_are_affine(statement.else_body, score_name, best_names,
+                                                   equality_reads)) {
+      return false;
+    }
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.action != nullptr &&
+          !joint_packed_line_score_reads_are_affine(
+              std::vector<V2Statement>{*match_case.action}, score_name, best_names,
+              equality_reads)) {
+        return false;
+      }
+    }
+    if (statement.otherwise != nullptr &&
+        !joint_packed_line_score_reads_are_affine(
+            std::vector<V2Statement>{*statement.otherwise}, score_name, best_names,
+            equality_reads)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool joint_packed_line_negative_update_call(const V2Statement& statement,
+                                            const std::string& update_rule) {
+  if (statement.kind != "v2_invoke" || statement.name != update_rule ||
+      statement.args.size() != 1U)
+    return false;
+  try {
+    const Expression value = parse_expression(statement.args.front(), statement.line);
+    const std::optional<double> numeric = numeric_literal_value(value);
+    return numeric.has_value() && *numeric < 0.0;
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+bool joint_packed_line_chooser_calls_are_guarded(
+    const std::vector<V2Statement>& statements, const std::string& chooser_rule,
+    const std::string& update_rule, int& chooser_calls) {
+  for (std::size_t index = 0; index < statements.size(); ++index) {
+    const V2Statement& statement = statements.at(index);
+    if (statement.kind == "v2_invoke" && statement.name == chooser_rule) {
+      if (index == 0U ||
+          !joint_packed_line_negative_update_call(statements.at(index - 1U), update_rule)) {
+        return false;
+      }
+      ++chooser_calls;
+    }
+    if (!joint_packed_line_chooser_calls_are_guarded(statement.body, chooser_rule, update_rule,
+                                                      chooser_calls) ||
+        !joint_packed_line_chooser_calls_are_guarded(statement.then_body, chooser_rule,
+                                                      update_rule, chooser_calls) ||
+        !joint_packed_line_chooser_calls_are_guarded(statement.else_body, chooser_rule,
+                                                      update_rule, chooser_calls)) {
+      return false;
+    }
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.action != nullptr &&
+          !joint_packed_line_chooser_calls_are_guarded(
+              std::vector<V2Statement>{*match_case.action}, chooser_rule, update_rule,
+              chooser_calls)) {
+        return false;
+      }
+    }
+    if (statement.otherwise != nullptr &&
+        !joint_packed_line_chooser_calls_are_guarded(
+            std::vector<V2Statement>{*statement.otherwise}, chooser_rule, update_rule,
+            chooser_calls)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool joint_packed_line_score_selector_bias_safe(
+    const V2Program& program, const JointPackedLineFamilyRule& match,
+    const std::string& score_rule, const std::string& update_rule) {
+  const auto reject = [&](std::string_view reason) {
+    if (std::getenv("MKPRO_TRACE_JOINT_BIAS") != nullptr)
+      std::cerr << "[joint-score-bias] reject " << score_rule << ": " << reason << "\n";
+    return false;
+  };
+  std::vector<const V2Rule*> callers;
+  if (joint_packed_line_block_invokes(program.body, score_rule))
+    return reject("score is invoked directly from the program body");
+  for (const V2Rule& rule : program.rules) {
+    if (rule.name != score_rule && joint_packed_line_block_invokes(rule.body, score_rule))
+      callers.push_back(&rule);
+  }
+  if (callers.size() != 1U || callers.front() == nullptr)
+    return reject("score does not have exactly one direct caller rule");
+
+  std::set<std::string> best_names;
+  joint_packed_line_collect_affine_max_targets(program.body, match.score.score, best_names);
+  for (const V2Rule& rule : program.rules) {
+    if (rule.name != score_rule)
+      joint_packed_line_collect_affine_max_targets(rule.body, match.score.score, best_names);
+  }
+  if (best_names.size() != 1U || *best_names.begin() != match.update.delta_name) {
+    if (std::getenv("MKPRO_TRACE_JOINT_BIAS") != nullptr) {
+      std::cerr << "[joint-score-bias] score=" << match.score.score
+                << " delta=" << match.update.delta_name << " best=";
+      for (const std::string& name : best_names)
+        std::cerr << name << ",";
+      std::cerr << "\n";
+    }
+    return reject("max target is not the packed update delta field");
+  }
+
+  int equality_reads = 0;
+  if (!joint_packed_line_score_reads_are_affine(program.body, match.score.score, best_names,
+                                                 equality_reads)) {
+    return reject("program-body score read is not affine-invariant");
+  }
+  for (const V2Rule& rule : program.rules) {
+    if (rule.name == score_rule)
+      continue;
+    if (!joint_packed_line_score_reads_are_affine(rule.body, match.score.score, best_names,
+                                                   equality_reads)) {
+      return reject("rule-body score read is not affine-invariant");
+    }
+  }
+  if (equality_reads == 0)
+    return reject("no score/max equality consumer was proved");
+
+  int chooser_calls = 0;
+  if (!joint_packed_line_chooser_calls_are_guarded(
+          program.body, callers.front()->name, update_rule, chooser_calls)) {
+    return reject("program-body chooser call is not preceded by a negative update");
+  }
+  for (const V2Rule& rule : program.rules) {
+    if (!joint_packed_line_chooser_calls_are_guarded(
+            rule.body, callers.front()->name, update_rule, chooser_calls)) {
+      return reject("rule-body chooser call is not preceded by a negative update");
+    }
+  }
+  if (chooser_calls == 0)
+    return reject("no guarded chooser call was found");
+  if (std::getenv("MKPRO_TRACE_JOINT_BIAS") != nullptr)
+    std::cerr << "[joint-score-bias] accept " << score_rule << "\n";
+  return true;
+}
+
+void plan_joint_packed_line_family_walks(LoweringContext& context,
+                                         const V2Program& program) {
+  if (!context.joint_packed_line_family_walk ||
+      !context.canonicalize_packed_line_bank_walks ||
+      !context.packed_line_family_mutating_selector_update_check_tail) {
+    return;
+  }
+
+  std::set<std::string> used_rules;
+  for (const V2Rule& score_rule : program.rules) {
+    if (used_rules.contains(score_rule.name) ||
+        !packed_line_family_score_rule(context, score_rule).has_value()) {
+      continue;
+    }
+    const std::optional<PackedLineFamilyScoreRule> score_match =
+        packed_line_family_score_rule(context, score_rule);
+    if (!score_match.has_value()) {
+      continue;
+    }
+    for (const V2Rule& update_rule : program.rules) {
+      if (score_rule.name == update_rule.name || used_rules.contains(update_rule.name))
+        continue;
+      const std::optional<JointPackedLineFamilyRule> match =
+          joint_packed_line_family_rule(context, score_rule, update_rule);
+      if (!match.has_value() || used_rules.contains(match->update.update_rule))
+        continue;
+
+      JointPackedLineFamilyEmissionPlan plan{
+          .score_rule = score_rule.name,
+          .update_rule = update_rule.name,
+          .suppressed_update_leaf_rule = match->update.update_rule,
+          .score_leaf_label = context.emitter.fresh_label("joint_packed_line_score_leaf"),
+          .update_leaf_label = context.emitter.fresh_label("joint_packed_line_update_leaf"),
+          .walker_label = context.emitter.fresh_label("joint_packed_line_walker"),
+          .selector_register = 0xe,
+          .score_selector_bias = joint_packed_line_score_selector_bias_safe(
+              program, *match, score_rule.name, update_rule.name),
+      };
+      const std::size_t plan_index = context.joint_packed_line_family_plans.size();
+      context.joint_packed_line_family_plans.push_back(std::move(plan));
+      context.joint_packed_line_family_plan_by_rule[score_rule.name] = plan_index;
+      context.joint_packed_line_family_plan_by_rule[update_rule.name] = plan_index;
+      used_rules.insert(score_rule.name);
+      used_rules.insert(update_rule.name);
+      used_rules.insert(match->update.update_rule);
+      break;
+    }
+  }
+}
+
+JointPackedLineFamilyEmissionPlan* joint_packed_line_family_plan_for_rule(
+    LoweringContext& context, const std::string& rule_name) {
+  const auto found = context.joint_packed_line_family_plan_by_rule.find(rule_name);
+  if (found == context.joint_packed_line_family_plan_by_rule.end() ||
+      found->second >= context.joint_packed_line_family_plans.size()) {
+    return nullptr;
+  }
+  return &context.joint_packed_line_family_plans.at(found->second);
 }
 
 void apply_packed_line_family_mutating_selector_hints(const LoweringContext& context,
@@ -22761,6 +23241,226 @@ void emit_packed_line_family_mutating_update_check_tail(LoweringContext& context
   clear_current_x_facts(context);
 }
 
+std::string joint_packed_line_selector_name(const JointPackedLineFamilyEmissionPlan& plan) {
+  return core::register_name_for_index(plan.selector_register);
+}
+
+void emit_joint_packed_line_late_selector_charge(
+    LoweringContext& context, const JointPackedLineFamilyEmissionPlan& plan,
+    const std::string& target_label, int line) {
+  const std::string selector = joint_packed_line_selector_name(plan);
+  const std::string comment = "joint-packed-line selector charge; selector=" + selector +
+                              "; target-label=" + target_label;
+  context.emitter.emit_op(0x00, "0", comment, line);
+  context.emitter.items.back().roles.push_back(core::make_late_bound_decimal_selector_role(
+      core::LateBoundDecimalSelectorPart::High, target_label));
+  context.emitter.emit_op(0x00, "0", comment, line);
+  context.emitter.items.back().roles.push_back(core::make_late_bound_decimal_selector_role(
+      core::LateBoundDecimalSelectorPart::Low, target_label));
+  context.emitter.emit_op(0x40 + plan.selector_register, "X->П " + selector,
+                          comment + "; charge-store", line);
+}
+
+std::string joint_packed_line_dispatch_comment(
+    const JointPackedLineFamilyEmissionPlan& plan) {
+  return "joint-packed-line leaf dispatch; selector=" +
+         joint_packed_line_selector_name(plan) + "; target-labels=" +
+         plan.score_leaf_label + "," + plan.update_leaf_label + "; walker=" +
+         plan.walker_label;
+}
+
+bool emit_joint_packed_line_family_leaves(LoweringContext& context,
+                                          JointPackedLineFamilyEmissionPlan& plan) {
+  if (plan.leaves_emitted)
+    return true;
+  const auto score_rule = context.rules.find(plan.score_rule);
+  const auto update_rule = context.rules.find(plan.update_rule);
+  if (score_rule == context.rules.end() || update_rule == context.rules.end() ||
+      score_rule->second == nullptr || update_rule->second == nullptr) {
+    return false;
+  }
+  const std::optional<JointPackedLineFamilyRule> match =
+      joint_packed_line_family_rule(context, *score_rule->second, *update_rule->second);
+  if (!match.has_value())
+    return false;
+
+  clear_current_x_facts(context);
+  context.emitter.emit_label(plan.score_leaf_label, {.hidden = true});
+  context.emitter.emit_op(0x15, "F 10^x", "joint packed-line score leaf pow10",
+                          match->score.line);
+  context.emitter.emit_op(0x13, "/", "joint packed-line score leaf divide",
+                          match->score.line);
+  context.emitter.emit_op(0x35, "К {x}", "joint packed-line score leaf frac",
+                          match->score.line);
+  emit_number_or_preload(context, "0.41200076");
+  context.emitter.emit_op(0x11, "-", "joint packed-line score leaf center",
+                          match->score.line);
+  context.emitter.emit_op(0x22, "F x^2", "joint packed-line score leaf square",
+                          match->score.line);
+  context.emitter.emit_op(0x10, "+", "joint packed-line score leaf accumulate",
+                          match->score.line);
+  if (!context.stack_only_state_fields.contains(match->score.score))
+    emit_store(context, match->score.score, "joint packed-line score leaf store");
+  context.emitter.emit_op(0x52, "В/О", "joint packed-line score leaf return",
+                          match->score.line);
+
+  context.emitter.emit_label(plan.update_leaf_label, {.hidden = true});
+  emit_packed_line_family_mutating_update_check_tail(context, match->update.update);
+  plan.leaves_emitted = true;
+  return true;
+}
+
+bool lower_joint_packed_line_family_score_rule(
+    LoweringContext& context, const V2Rule& rule,
+    const JointPackedLineFamilyEmissionPlan& plan) {
+  if (rule.name != plan.score_rule)
+    return false;
+  const std::optional<PackedLineFamilyScoreRule> match =
+      packed_line_family_score_rule(context, rule);
+  if (!match.has_value())
+    return false;
+
+  context.emitter.emit_label(packed_line_family_score_zero_entry_label(rule.name),
+                             {.hidden = true});
+  emit_joint_packed_line_late_selector_charge(context, plan, plan.score_leaf_label, match->line);
+  if (plan.score_selector_bias) {
+    if (!context.emitter.items.empty()) {
+      MachineItem& store = context.emitter.items.back();
+      const std::string suffix =
+          "joint packed-line score selector/affine accumulator; score-rule=" + rule.name;
+      store.comment = store.comment.has_value() ? *store.comment + "; " + suffix : suffix;
+      context.emitter.items.back().roles.push_back(
+          "joint-packed-line-score-selector-bias:" + rule.name);
+    }
+    context.optimizations.push_back(OptimizationReport{
+        .name = "joint-packed-line-selector-score-bias",
+        .detail = "Used the late-bound score-leaf selector as a common positive score bias in " +
+                  rule.name +
+                  " after proving that every score consumer is an affine-invariant max/equality "
+                  "selection guarded by a negative update pass.",
+    });
+  } else {
+    context.emitter.emit_number("0");
+    if (!context.emitter.items.empty())
+      context.emitter.items.back().comment = "joint packed-line score accumulator";
+  }
+  context.emitter.emit_jump(0x51, "БП", plan.walker_label,
+                            "joint packed-line score walker", match->line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "joint-packed-line-family-walk",
+      .detail = "Routed packed score rule " + rule.name +
+                " through a late-bound shared four-bank score/update walker.",
+  });
+  clear_current_x_facts(context);
+  return true;
+}
+
+bool lower_joint_packed_line_family_update_rule(
+    LoweringContext& context, const V2Rule& rule,
+    const JointPackedLineFamilyEmissionPlan& plan) {
+  if (rule.name != plan.update_rule)
+    return false;
+  const auto score_rule = context.rules.find(plan.score_rule);
+  if (score_rule == context.rules.end() || score_rule->second == nullptr)
+    return false;
+  const std::optional<JointPackedLineFamilyRule> match =
+      joint_packed_line_family_rule(context, *score_rule->second, rule);
+  if (!match.has_value())
+    return false;
+
+  if (match->update.alternating_sign_state.has_value()) {
+    emit_recall(context, *match->update.alternating_sign_state);
+    context.emitter.emit_op(0x0b, "/-/", "alternating packed-line update sign",
+                            match->update.line);
+    emit_store(context, *match->update.alternating_sign_state,
+               "set alternating packed-line update sign");
+    emit_store(context, match->update.delta_name,
+               "set " + match->update.delta_name + " from alternating sign");
+  } else {
+    emit_store(context, match->update.delta_name,
+               "set " + match->update.delta_name + " from X parameter");
+  }
+  const int first_slot = match->update.steps.front().slot;
+  emit_number_or_preload(context, std::to_string(first_slot + 1),
+                         "joint packed-line mutating selector start", match->update.line);
+  emit_store(context, match->update.update.selector,
+             "joint packed-line mutating selector start " +
+                 std::to_string(first_slot + 1));
+  emit_joint_packed_line_late_selector_charge(context, plan, plan.update_leaf_label,
+                                               match->update.line);
+
+  context.emitter.emit_label(plan.walker_label, {.hidden = true});
+  const std::string dispatch_comment = joint_packed_line_dispatch_comment(plan);
+  for (std::size_t index = 0; index < 2U; ++index) {
+    const PackedLineFamilyUpdateStep& step = match->update.steps.at(index);
+    if (!lower_expression_to_x(
+            context, packed_line_family_update_step_line_value(match->update.update, step)) ||
+        !lower_expression_preserving_previous_x_as_y(context, step.line_expr,
+                                                      step.source_line)) {
+      return false;
+    }
+    context.emitter.emit_op(0xa0 + plan.selector_register,
+                            "К ПП " + joint_packed_line_selector_name(plan),
+                            dispatch_comment + "; call",
+                            step.source_line);
+    clear_current_x_facts(context);
+  }
+
+  const PackedLineFamilyUpdateStep& diagonal_add = match->update.steps.at(2);
+  const PackedLineFamilyUpdateStep& diagonal_sub = match->update.steps.at(3);
+  const std::string diagonal_tail =
+      context.emitter.fresh_label("joint_packed_line_diagonal_tail");
+  if (!lower_expression_to_x(
+          context,
+          packed_line_family_update_step_line_value(match->update.update, diagonal_add)) ||
+      !lower_expression_preserving_previous_x_as_y(context, match->score.partial,
+                                                    diagonal_add.source_line)) {
+    return false;
+  }
+  context.emitter.emit_jump(0x53, "ПП", diagonal_tail,
+                            "joint packed-line shared returned-index tail",
+                            diagonal_add.source_line);
+
+  if (!lower_expression_to_x(
+          context,
+          packed_line_family_update_step_line_value(match->update.update, diagonal_sub)) ||
+      !lower_expression_preserving_previous_x_as_y(context, match->score.partial,
+                                                    diagonal_sub.source_line)) {
+    return false;
+  }
+  context.emitter.emit_op(0x0b, "/-/", "joint packed-line negative diagonal index",
+                          diagonal_sub.source_line);
+  context.emitter.emit_label(diagonal_tail, {.hidden = true});
+  if (!lower_expression_preserving_previous_x_as_y(context, match->score.shared,
+                                                    diagonal_add.source_line)) {
+    return false;
+  }
+  context.emitter.emit_op(0x10, "+", "joint packed-line diagonal index",
+                          diagonal_add.source_line);
+  context.emitter.emit_jump(0x53, "ПП", function_label(match->score.normalizer),
+                            "joint packed-line direct normalizer", diagonal_add.source_line);
+  context.emitter.emit_op(0x80 + plan.selector_register,
+                          "К БП " + joint_packed_line_selector_name(plan),
+                          dispatch_comment + "; tail", diagonal_add.source_line);
+
+  context.optimizations.push_back(OptimizationReport{
+      .name = "joint-packed-line-family-walk",
+      .detail = "Fused packed update rule " + rule.name + " and score rule " +
+                plan.score_rule + " into one four-bank walker with late-bound leaf dispatch.",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-line-family-mutating-selector-update-check-tail",
+      .detail = "Kept the descending pre-decrement packed-bank selector inside the joint "
+                "score/update walker for " + rule.name + ".",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = "joint-packed-line-shared-returned-index-tail",
+      .detail = "Shared the normalize-and-leaf tail between additive and subtractive diagonal "
+                "indices in " + rule.name + ".",
+  });
+  return true;
+}
+
 bool lower_x_param_indexed_fractional_report_tail_rule(LoweringContext& context,
                                                        const V2Rule& rule) {
   const auto y_stack_it = context.x_param_y_stack_procs.find(rule.name);
@@ -22994,6 +23694,27 @@ bool lower_packed_line_family_update_rule(LoweringContext& context, const V2Rule
 
   emit_packed_line_family_update_check_tail(context, match->update);
   return true;
+}
+
+bool suppress_packed_line_mutating_family_inline_rules(LoweringContext& context,
+                                                       const V2Program& program) {
+  if (!context.packed_line_family_mutating_selector_update_check_tail)
+    return false;
+
+  bool changed = false;
+  for (const V2Rule& rule : program.rules) {
+    if (!context.inline_statement_rules.contains(rule.name))
+      continue;
+    const std::optional<PackedLineFamilyUpdateRule> match =
+        packed_line_family_update_rule(context, rule, PackedLineSelectorMode::Allocation);
+    if (!match.has_value() || !packed_line_family_update_steps_descend_by_one(match->steps) ||
+        !packed_line_family_update_steps_preserve_y(context, match->steps)) {
+      continue;
+    }
+    context.inline_statement_rules.erase(rule.name);
+    changed = true;
+  }
+  return changed;
 }
 
 bool is_numeric_zero_expression(const LoweringContext& context, const Expression& expression) {
@@ -33324,6 +34045,19 @@ bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
   if (lower_x_param_indexed_fractional_report_tail_rule(context, rule))
     return true;
 
+  if (JointPackedLineFamilyEmissionPlan* joint_plan =
+          joint_packed_line_family_plan_for_rule(context, rule.name)) {
+    if (rule.name == joint_plan->score_rule &&
+        lower_joint_packed_line_family_score_rule(context, rule, *joint_plan)) {
+      return true;
+    }
+    if (rule.name == joint_plan->update_rule &&
+        lower_joint_packed_line_family_update_rule(context, rule, *joint_plan)) {
+      return true;
+    }
+    return false;
+  }
+
   if (lower_packed_line_family_score_rule(context, rule))
     return true;
 
@@ -33566,7 +34300,14 @@ bool lower_function_rules(LoweringContext& context, const V2Program& program) {
       context.clock_shape || context.cave_sketch_shape || context.ninety_nine_bottles_shape ||
       dungeon_shape_specific_enabled(context))
     return true;
+  plan_joint_packed_line_family_walks(context, program);
   std::set<std::string> packed_line_consumed_update_rules;
+  for (const JointPackedLineFamilyEmissionPlan& plan :
+       context.joint_packed_line_family_plans) {
+    packed_line_consumed_update_rules.insert(plan.suppressed_update_leaf_rule);
+    context.inline_statement_rules.erase(plan.score_rule);
+    context.inline_statement_rules.erase(plan.update_rule);
+  }
   if (context.packed_line_family_update_check_tail ||
       context.packed_line_family_mutating_selector_update_check_tail ||
       context.packed_line_family_borrowed_mutating_selector_update_check_tail) {
@@ -33605,6 +34346,11 @@ bool lower_function_rules(LoweringContext& context, const V2Program& program) {
       continue;
     if (packed_line_consumed_update_rules.contains(rule->name))
       continue;
+    if (JointPackedLineFamilyEmissionPlan* joint_plan =
+            joint_packed_line_family_plan_for_rule(context, rule->name)) {
+      if (!emit_joint_packed_line_family_leaves(context, *joint_plan))
+        return false;
+    }
     if (match_x_param_stack_stop_risk_rule(*rule).has_value()) {
       const int uses =
           context.proc_call_counts.contains(rule->name) ? context.proc_call_counts[rule->name] : 0;
@@ -47212,6 +47958,621 @@ void trim_display_edge_whitespace(V2Program& program,
   });
 }
 
+bool is_joint_packed_line_selector_item(const MachineItem& item) {
+  return item.kind == MachineItemKind::Op && item.comment.has_value() &&
+         (item.comment->starts_with("joint-packed-line selector charge;") ||
+          item.comment->starts_with("joint-packed-line leaf dispatch;"));
+}
+
+std::optional<int> machine_opcode_register_index(int opcode) {
+  const int high = opcode & 0xf0;
+  const int low = opcode & 0x0f;
+  if (low > core::k_max_register_index)
+    return std::nullopt;
+  if (high == 0x40 || high == 0x60 || high == 0x70 || high == 0x80 || high == 0x90 ||
+      high == 0xa0 || high == 0xb0 || high == 0xc0 || high == 0xd0 || high == 0xe0) {
+    return low;
+  }
+  return std::nullopt;
+}
+
+struct JointPackedLineSelectorBindingResult {
+  std::vector<MachineItem> items;
+  int applied = 0;
+  std::optional<std::string> selector;
+  std::vector<Diagnostic> diagnostics;
+};
+
+JointPackedLineSelectorBindingResult
+bind_joint_packed_line_selector_register(const std::vector<MachineItem>& items) {
+  JointPackedLineSelectorBindingResult result{.items = items};
+  std::vector<std::size_t> marked;
+  std::set<int> used;
+  int charge_stores = 0;
+  int calls = 0;
+  int tail_jumps = 0;
+  for (std::size_t index = 0; index < items.size(); ++index) {
+    const MachineItem& item = items.at(index);
+    const bool joint = is_joint_packed_line_selector_item(item);
+    if (joint) {
+      const std::optional<int> register_index = machine_opcode_register_index(item.opcode);
+      if (register_index.has_value()) {
+        marked.push_back(index);
+        if ((item.opcode & 0xf0) == 0x40)
+          ++charge_stores;
+        else if ((item.opcode & 0xf0) == 0xa0)
+          ++calls;
+        else if ((item.opcode & 0xf0) == 0x80)
+          ++tail_jumps;
+      }
+      continue;
+    }
+    if (item.kind != MachineItemKind::Op)
+      continue;
+    if (const std::optional<int> register_index = machine_opcode_register_index(item.opcode))
+      used.insert(*register_index);
+  }
+  if (marked.empty())
+    return result;
+  if (charge_stores <= 0 || calls != charge_stores ||
+      tail_jumps != charge_stores / 2 || charge_stores % 2 != 0) {
+    result.diagnostics.push_back(diagnostic(
+        DiagnosticSeverity::Error, "joint-packed-line-selector-shape",
+        "Joint packed-line selector binding requires two charge stores, two indirect calls, "
+        "and one indirect tail jump per fused walker."));
+    return result;
+  }
+
+  std::optional<int> selected;
+  for (int candidate = core::k_max_register_index; candidate >= 7; --candidate) {
+    if (!used.contains(candidate)) {
+      selected = candidate;
+      break;
+    }
+  }
+  if (!selected.has_value()) {
+    result.diagnostics.push_back(diagnostic(
+        DiagnosticSeverity::Error, "joint-packed-line-selector-unavailable",
+        "Joint packed-line walker needs one stable R7..Re register unused by final emitted code."));
+    return result;
+  }
+
+  const std::string old_selector = "e";
+  const std::string new_selector = core::register_name_for_index(*selected);
+  for (const std::size_t index : marked) {
+    MachineItem& item = result.items.at(index);
+    item.opcode = (item.opcode & 0xf0) | *selected;
+    item.mnemonic = opcode_by_code(item.opcode).name;
+    if (item.comment.has_value()) {
+      const std::string old_text = "selector=" + old_selector;
+      const std::string new_text = "selector=" + new_selector;
+      std::size_t cursor = 0;
+      while ((cursor = item.comment->find(old_text, cursor)) != std::string::npos) {
+        item.comment->replace(cursor, old_text.size(), new_text);
+        cursor += new_text.size();
+      }
+    }
+  }
+  result.applied = static_cast<int>(marked.size());
+  result.selector = new_selector;
+  return result;
+}
+
+constexpr std::string_view kJointPackedLineReportReturnMarker =
+    "joint-packed-line-shared-report-return;";
+constexpr std::string_view kJointPackedLineReportReturnTargetMarker =
+    "joint-packed-line-shared-report-return-target;";
+constexpr std::string_view kJointPackedLineSelectorRehomeMarker =
+    "joint-packed-line-selector-rehome;";
+
+std::optional<std::set<std::string>> joint_packed_line_indirect_memory_targets(
+    const std::optional<std::string>& comment) {
+  if (!comment.has_value())
+    return std::nullopt;
+  constexpr std::string_view kMarker = "indirect-memory-targets=";
+  std::string lowered = *comment;
+  std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  const std::size_t marker = lowered.find(kMarker);
+  if (marker == std::string::npos)
+    return std::nullopt;
+  std::size_t cursor = marker + kMarker.size();
+  std::set<std::string> targets;
+  bool expect_register = true;
+  while (cursor < lowered.size()) {
+    const char ch = lowered.at(cursor);
+    const bool valid = (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'e');
+    if (expect_register) {
+      if (!valid)
+        break;
+      targets.insert(std::string(1, ch));
+      expect_register = false;
+      ++cursor;
+      continue;
+    }
+    if (ch != ',')
+      break;
+    expect_register = true;
+    ++cursor;
+  }
+  if (targets.empty() || expect_register)
+    return std::nullopt;
+  return targets;
+}
+
+bool joint_packed_line_indirect_flow_opcode(int opcode) {
+  const int high = opcode & 0xf0;
+  return high == 0x70 || high == 0x80 || high == 0x90 || high == 0xa0 ||
+         high == 0xc0 || high == 0xe0;
+}
+
+std::optional<int> joint_packed_line_item_address(const std::vector<MachineItem>& items,
+                                                  std::size_t wanted) {
+  if (wanted >= items.size())
+    return std::nullopt;
+  int address = 0;
+  for (std::size_t index = 0; index < items.size(); ++index) {
+    if (index == wanted)
+      return address;
+    if (items.at(index).kind != MachineItemKind::Label)
+      ++address;
+  }
+  return std::nullopt;
+}
+
+std::map<std::string, int>
+joint_packed_line_label_addresses(const std::vector<MachineItem>& items) {
+  std::map<std::string, int> labels;
+  int address = 0;
+  for (const MachineItem& item : items) {
+    if (item.kind == MachineItemKind::Label)
+      labels[item.name] = address;
+    else
+      ++address;
+  }
+  return labels;
+}
+
+std::optional<int> joint_packed_line_resolve_target(
+    const IrTarget& target, const std::map<std::string, int>& labels) {
+  if (const auto* numeric = std::get_if<int>(&target))
+    return *numeric;
+  const auto* label = std::get_if<std::string>(&target);
+  if (label == nullptr)
+    return std::nullopt;
+  const auto found = labels.find(*label);
+  return found == labels.end() ? std::nullopt : std::optional<int>(found->second);
+}
+
+std::optional<std::size_t> joint_packed_line_next_cell(
+    const std::vector<MachineItem>& items, std::size_t index) {
+  for (++index; index < items.size(); ++index) {
+    if (items.at(index).kind != MachineItemKind::Label)
+      return index;
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> joint_packed_line_preload_value(
+    const std::vector<PreloadReport>& preloads, const std::string& register_name) {
+  std::optional<std::string> value;
+  for (const PreloadReport& preload : preloads) {
+    if (preload.register_name != register_name)
+      continue;
+    if (value.has_value() && normalize_number_key(*value) != normalize_number_key(preload.value))
+      return std::nullopt;
+    value = preload.value;
+  }
+  return value;
+}
+
+std::optional<std::string> joint_packed_line_effective_preload_value(
+    const std::vector<PreloadReport>& setup_preloads,
+    const std::vector<PreloadReport>& flow_preloads,
+    const std::vector<PreloadReport>& stop_tail_preloads,
+    const std::string& register_name) {
+  if (const std::optional<std::string> stop =
+          joint_packed_line_preload_value(stop_tail_preloads, register_name)) {
+    return stop;
+  }
+  if (const std::optional<std::string> setup =
+          joint_packed_line_preload_value(setup_preloads, register_name)) {
+    return setup;
+  }
+  return joint_packed_line_preload_value(flow_preloads, register_name);
+}
+
+bool joint_packed_line_selector_unwritten(const std::vector<MachineItem>& items,
+                                          const std::string& register_name) {
+  const int register_index_value = register_index(register_name);
+  if (!core::is_stable_indirect_selector(register_name))
+    return false;
+  for (const MachineItem& item : items) {
+    if (item.kind != MachineItemKind::Op)
+      continue;
+    if (item.opcode == 0x40 + register_index_value)
+      return false;
+    if (item.opcode < 0xb0 || item.opcode > 0xbe)
+      continue;
+    const std::optional<std::set<std::string>> targets =
+        joint_packed_line_indirect_memory_targets(item.comment);
+    if (!targets.has_value() || targets->contains(register_name))
+      return false;
+  }
+  return true;
+}
+
+std::optional<std::string>
+joint_packed_line_score_constant(const MachineItem& recall) {
+  if (!recall.comment.has_value())
+    return std::nullopt;
+  constexpr std::string_view kPrefix = "preload const ";
+  if (!recall.comment->starts_with(kPrefix))
+    return std::nullopt;
+  std::size_t end = kPrefix.size();
+  while (end < recall.comment->size() && recall.comment->at(end) != ';' &&
+         std::isspace(static_cast<unsigned char>(recall.comment->at(end))) == 0) {
+    ++end;
+  }
+  if (end == kPrefix.size())
+    return std::nullopt;
+  return recall.comment->substr(kPrefix.size(), end - kPrefix.size());
+}
+
+void joint_packed_line_append_comment(MachineItem& item, const std::string& suffix) {
+  item.comment = item.comment.has_value() ? *item.comment + "; " + suffix : suffix;
+}
+
+struct JointPackedLineReportReturnFusionResult {
+  std::vector<MachineItem> items;
+  std::vector<PreloadReport> setup_preloads;
+  std::vector<PreloadReport> flow_preloads;
+  std::vector<PreloadReport> stop_tail_preloads;
+  int removed_cells = 0;
+  std::optional<std::string> return_selector;
+  std::optional<std::string> replacement_selector;
+  std::optional<std::string> selector_value;
+  std::optional<int> return_address;
+};
+
+JointPackedLineReportReturnFusionResult fuse_joint_packed_line_report_return(
+    const std::vector<MachineItem>& input_items,
+    const std::vector<PreloadReport>& input_setup_preloads,
+    const std::vector<PreloadReport>& input_flow_preloads,
+    const std::vector<PreloadReport>& input_stop_tail_preloads,
+    AddressSpaceModel address_model) {
+  JointPackedLineReportReturnFusionResult result{
+      .items = input_items,
+      .setup_preloads = input_setup_preloads,
+      .flow_preloads = input_flow_preloads,
+      .stop_tail_preloads = input_stop_tail_preloads,
+  };
+
+  std::vector<std::size_t> score_cells;
+  std::optional<std::size_t> score_return;
+  for (std::size_t index = 0; index < input_items.size(); ++index) {
+    const MachineItem& item = input_items.at(index);
+    if (item.kind != MachineItemKind::Op || !item.comment.has_value())
+      continue;
+    if (*item.comment == "joint packed-line score leaf pow10") {
+      score_cells.clear();
+      score_cells.push_back(index);
+      continue;
+    }
+    if (!score_cells.empty() && !score_return.has_value())
+      score_cells.push_back(index);
+    if (*item.comment == "joint packed-line score leaf return") {
+      if (score_return.has_value())
+        return result;
+      score_return = index;
+    }
+  }
+  if (!score_return.has_value() || score_cells.size() != 8U ||
+      score_cells.back() != *score_return)
+    return result;
+  const std::array<int, 8> expected_score_opcodes = {0x15, 0x13, 0x35, -1,
+                                                      0x11, 0x22, 0x10, 0x52};
+  for (std::size_t index = 0; index < expected_score_opcodes.size(); ++index) {
+    const MachineItem& item = input_items.at(score_cells.at(index));
+    if (item.kind != MachineItemKind::Op ||
+        (expected_score_opcodes.at(index) >= 0 &&
+         item.opcode != expected_score_opcodes.at(index))) {
+      return result;
+    }
+  }
+  const MachineItem& score_constant_recall = input_items.at(score_cells.at(3));
+  if (score_constant_recall.opcode < 0x67 || score_constant_recall.opcode > 0x6e)
+    return result;
+  const std::string center_selector =
+      core::register_name_for_index(score_constant_recall.opcode - 0x60);
+  if (!joint_packed_line_selector_unwritten(input_items, center_selector))
+    return result;
+  const std::optional<std::string> semantic_center =
+      joint_packed_line_score_constant(score_constant_recall);
+  const std::optional<std::string> old_center_value =
+      joint_packed_line_effective_preload_value(
+          input_setup_preloads, input_flow_preloads, input_stop_tail_preloads,
+          center_selector);
+  if (!semantic_center.has_value() || !old_center_value.has_value())
+    return result;
+
+  double semantic_numeric = 0.0;
+  double old_numeric = 0.0;
+  try {
+    semantic_numeric = std::stod(*semantic_center);
+    old_numeric = std::stod(*old_center_value);
+  } catch (const std::exception&) {
+    return result;
+  }
+  if (!std::isfinite(semantic_numeric) || !std::isfinite(old_numeric) ||
+      std::fabs(semantic_numeric - old_numeric) > 1e-12)
+    return result;
+
+  const std::optional<int> score_return_address =
+      joint_packed_line_item_address(input_items, *score_return);
+  const std::optional<std::pair<std::string, int>> natural_selector =
+      natural_fractional_selector_preload_value(normalize_number_key(*semantic_center));
+  if (!score_return_address.has_value() || !natural_selector.has_value() ||
+      natural_selector->second != *score_return_address)
+    return result;
+  const std::optional<core::IndirectAddressEvaluation> natural_target =
+      core::evaluate_indirect_address(center_selector, natural_selector->first,
+                                      core::IndirectOperationKind::Flow, address_model);
+  if (!natural_target.has_value() ||
+      natural_target->actual_flow_target != *score_return_address)
+    return result;
+
+  std::optional<std::size_t> report_branch;
+  std::optional<std::size_t> report_address_cell;
+  std::optional<std::size_t> local_return;
+  std::optional<std::size_t> restore;
+  std::optional<std::size_t> stop;
+  for (std::size_t index = 0; index < input_items.size(); ++index) {
+    const MachineItem& item = input_items.at(index);
+    if (item.kind != MachineItemKind::Op || item.opcode != 0x5e ||
+        !item.comment.has_value() ||
+        *item.comment != "true branch for packed fractional report !=") {
+      continue;
+    }
+    if (report_branch.has_value())
+      return result;
+    report_branch = index;
+    report_address_cell = joint_packed_line_next_cell(input_items, index);
+    if (!report_address_cell.has_value())
+      return result;
+    local_return = joint_packed_line_next_cell(input_items, *report_address_cell);
+    if (!local_return.has_value())
+      return result;
+    restore = joint_packed_line_next_cell(input_items, *local_return);
+    if (!restore.has_value())
+      return result;
+    stop = joint_packed_line_next_cell(input_items, *restore);
+    if (!stop.has_value())
+      return result;
+  }
+  if (!report_branch.has_value() || !report_address_cell.has_value() ||
+      !local_return.has_value() || !restore.has_value() || !stop.has_value())
+    return result;
+  const MachineItem& branch_address = input_items.at(*report_address_cell);
+  const MachineItem& return_item = input_items.at(*local_return);
+  const MachineItem& restore_item = input_items.at(*restore);
+  const MachineItem& stop_item = input_items.at(*stop);
+  if (branch_address.kind != MachineItemKind::Address ||
+      return_item.kind != MachineItemKind::Op || return_item.opcode != 0x52 ||
+      !return_item.comment.has_value() || *return_item.comment != "packed fractional report return" ||
+      restore_item.kind != MachineItemKind::Op || restore_item.opcode != 0x0a ||
+      !restore_item.comment.has_value() ||
+      *restore_item.comment != "updated packed fractional report X2 restore" ||
+      stop_item.kind != MachineItemKind::Op || stop_item.opcode != 0x50)
+    return result;
+  const std::map<std::string, int> label_addresses =
+      joint_packed_line_label_addresses(input_items);
+  const std::optional<int> old_halt_target =
+      joint_packed_line_resolve_target(branch_address.target, label_addresses);
+  const std::optional<int> restore_address =
+      joint_packed_line_item_address(input_items, *restore);
+  if (!old_halt_target.has_value() || !restore_address.has_value() ||
+      *old_halt_target != *restore_address)
+    return result;
+
+  const std::optional<core::IndirectAddressEvaluation> old_center_target =
+      core::evaluate_indirect_address(center_selector, *old_center_value,
+                                      core::IndirectOperationKind::Flow, address_model);
+  if (!old_center_target.has_value() || !old_center_target->actual_flow_target.has_value())
+    return result;
+  std::vector<std::size_t> center_flow_uses;
+  for (std::size_t index = 0; index < input_items.size(); ++index) {
+    const MachineItem& item = input_items.at(index);
+    if (item.kind != MachineItemKind::Op ||
+        !joint_packed_line_indirect_flow_opcode(item.opcode) ||
+        (item.opcode & 0x0f) != register_index(center_selector)) {
+      continue;
+    }
+    center_flow_uses.push_back(index);
+  }
+
+  std::optional<std::string> replacement_selector;
+  std::optional<std::string> replacement_value;
+  if (!center_flow_uses.empty()) {
+    for (const PreloadReport& preload : input_setup_preloads) {
+      if (preload.register_name == center_selector ||
+          !core::is_stable_indirect_selector(preload.register_name) ||
+          !joint_packed_line_selector_unwritten(input_items, preload.register_name)) {
+        continue;
+      }
+      const std::optional<std::string> effective =
+          joint_packed_line_effective_preload_value(
+              input_setup_preloads, input_flow_preloads, input_stop_tail_preloads,
+              preload.register_name);
+      if (!effective.has_value())
+        continue;
+      const std::optional<core::IndirectAddressEvaluation> evaluated =
+          core::evaluate_indirect_address(preload.register_name, *effective,
+                                          core::IndirectOperationKind::Flow, address_model);
+      if (!evaluated.has_value() ||
+          evaluated->actual_flow_target != old_center_target->actual_flow_target)
+        continue;
+      replacement_selector = preload.register_name;
+      replacement_value = *effective;
+      break;
+    }
+    if (!replacement_selector.has_value() || !replacement_value.has_value())
+      return result;
+  }
+
+  std::vector<MachineItem> rewritten;
+  rewritten.reserve(input_items.size() - 2U);
+  for (std::size_t index = 0; index < input_items.size(); ++index) {
+    if (index == *report_address_cell || index == *local_return)
+      continue;
+    MachineItem item = input_items.at(index);
+    if (index == *report_branch) {
+      item.opcode = 0x70 + register_index(center_selector);
+      item.mnemonic = opcode_by_code(item.opcode).name;
+      item.comment = std::string(kJointPackedLineReportReturnMarker) +
+                     " selector=" + center_selector +
+                     "; target=" + std::to_string(*score_return_address) +
+                     "; semantic-value=" + *semantic_center +
+                     "; selector-value=" + natural_selector->first;
+      item.roles.push_back("joint-packed-line-report-return:" + center_selector + ":" +
+                           std::to_string(*score_return_address));
+    } else if (index == *score_return) {
+      joint_packed_line_append_comment(
+          item, std::string(kJointPackedLineReportReturnTargetMarker) +
+                    " selector=" + center_selector +
+                    "; target=" + std::to_string(*score_return_address));
+      item.roles.push_back("joint-packed-line-report-return-target:" + center_selector + ":" +
+                           std::to_string(*score_return_address));
+    } else if (std::find(center_flow_uses.begin(), center_flow_uses.end(), index) !=
+               center_flow_uses.end()) {
+      item.opcode = (item.opcode & 0xf0) | register_index(*replacement_selector);
+      item.mnemonic = opcode_by_code(item.opcode).name;
+      joint_packed_line_append_comment(
+          item, std::string(kJointPackedLineSelectorRehomeMarker) +
+                    " from=" + center_selector + "; to=" + *replacement_selector +
+                    "; target=" +
+                    std::to_string(*old_center_target->actual_flow_target) +
+                    "; replacement-value=" + *replacement_value);
+      item.roles.push_back("joint-packed-line-selector-rehome:" + center_selector + ":" +
+                           *replacement_selector + ":" +
+                           std::to_string(*old_center_target->actual_flow_target));
+    }
+    rewritten.push_back(std::move(item));
+  }
+
+  auto retune = [&](std::vector<PreloadReport>& preloads) {
+    for (PreloadReport& preload : preloads) {
+      if (preload.register_name == center_selector)
+        preload.value = natural_selector->first;
+    }
+  };
+  result.items = std::move(rewritten);
+  retune(result.setup_preloads);
+  retune(result.flow_preloads);
+  retune(result.stop_tail_preloads);
+  result.removed_cells = 2;
+  result.return_selector = center_selector;
+  result.replacement_selector = replacement_selector;
+  result.selector_value = natural_selector->first;
+  result.return_address = score_return_address;
+  return result;
+}
+
+JointPackedLineReportReturnFusionResult fuse_joint_packed_line_direct_report_return(
+    const std::vector<MachineItem>& input_items,
+    const std::vector<PreloadReport>& input_setup_preloads,
+    const std::vector<PreloadReport>& input_flow_preloads,
+    const std::vector<PreloadReport>& input_stop_tail_preloads) {
+  JointPackedLineReportReturnFusionResult result{
+      .items = input_items,
+      .setup_preloads = input_setup_preloads,
+      .flow_preloads = input_flow_preloads,
+      .stop_tail_preloads = input_stop_tail_preloads,
+  };
+  std::optional<std::size_t> score_return;
+  std::optional<std::size_t> report_branch;
+  for (std::size_t index = 0; index < input_items.size(); ++index) {
+    const MachineItem& item = input_items.at(index);
+    if (item.kind != MachineItemKind::Op || !item.comment.has_value())
+      continue;
+    if (*item.comment == "joint packed-line score leaf return") {
+      if (score_return.has_value())
+        return result;
+      score_return = index;
+    }
+    if (item.opcode == 0x5e &&
+        *item.comment == "true branch for packed fractional report !=") {
+      if (report_branch.has_value())
+        return result;
+      report_branch = index;
+    }
+  }
+  if (!score_return.has_value() || !report_branch.has_value())
+    return result;
+  const std::optional<std::size_t> address_cell =
+      joint_packed_line_next_cell(input_items, *report_branch);
+  const std::optional<std::size_t> local_return =
+      address_cell.has_value() ? joint_packed_line_next_cell(input_items, *address_cell)
+                               : std::nullopt;
+  const std::optional<std::size_t> restore =
+      local_return.has_value() ? joint_packed_line_next_cell(input_items, *local_return)
+                               : std::nullopt;
+  const std::optional<std::size_t> stop =
+      restore.has_value() ? joint_packed_line_next_cell(input_items, *restore) : std::nullopt;
+  const std::optional<int> score_return_address =
+      joint_packed_line_item_address(input_items, *score_return);
+  if (!address_cell.has_value() || !local_return.has_value() || !restore.has_value() ||
+      !stop.has_value() || !score_return_address.has_value() ||
+      input_items.at(*address_cell).kind != MachineItemKind::Address ||
+      input_items.at(*local_return).kind != MachineItemKind::Op ||
+      input_items.at(*local_return).opcode != 0x52 ||
+      !input_items.at(*local_return).comment.has_value() ||
+      *input_items.at(*local_return).comment != "packed fractional report return" ||
+      input_items.at(*restore).kind != MachineItemKind::Op ||
+      input_items.at(*restore).opcode != 0x0a ||
+      input_items.at(*stop).kind != MachineItemKind::Op ||
+      input_items.at(*stop).opcode != 0x50) {
+    return result;
+  }
+
+  std::vector<MachineItem> rewritten;
+  rewritten.reserve(input_items.size() - 1U);
+  for (std::size_t index = 0; index < input_items.size(); ++index) {
+    if (index == *local_return)
+      continue;
+    MachineItem item = input_items.at(index);
+    if (index == *report_branch) {
+      item.opcode = 0x57;
+      item.mnemonic = opcode_by_code(item.opcode).name;
+      item.comment = std::string(kJointPackedLineReportReturnMarker) +
+                     " mode=direct; target=" +
+                     std::to_string(*score_return_address);
+      item.roles.push_back("joint-packed-line-report-return-direct:" +
+                           std::to_string(*score_return_address));
+    } else if (index == *address_cell) {
+      item.target = *score_return_address;
+      item.comment = std::string(kJointPackedLineReportReturnMarker) +
+                     " mode=direct; target=" +
+                     std::to_string(*score_return_address);
+      item.roles.push_back("joint-packed-line-report-return-direct-address:" +
+                           std::to_string(*score_return_address));
+    } else if (index == *score_return) {
+      joint_packed_line_append_comment(
+          item, std::string(kJointPackedLineReportReturnTargetMarker) +
+                    " mode=direct; target=" +
+                    std::to_string(*score_return_address));
+      item.roles.push_back("joint-packed-line-report-return-target-direct:" +
+                           std::to_string(*score_return_address));
+    }
+    rewritten.push_back(std::move(item));
+  }
+  result.items = std::move(rewritten);
+  result.removed_cells = 1;
+  result.return_address = score_return_address;
+  return result;
+}
+
 std::set<std::string> packed_decimal_zero_run_floor_sources(const V2Program& program) {
   std::set<std::string> domains;
   for (const V2World& world : program.worlds) {
@@ -47640,6 +49001,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
       options.packed_line_family_mutating_selector_update_check_tail;
   context.packed_line_family_borrowed_mutating_selector_update_check_tail =
       options.packed_line_family_borrowed_mutating_selector_update_check_tail;
+  context.joint_packed_line_family_walk = options.joint_packed_line_family_walk;
   context.packed_score_accumulator_helpers = options.packed_score_accumulator_helpers;
   context.disable_packed_line_family_score_accumulator =
       options.disable_packed_line_family_score_accumulator;
@@ -47949,15 +49311,29 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
     pass_options.aggressive_indirect_call_threshold = true;
   merge_planned_preloaded_constant_registers(pass_options, context);
 
+  const JointPackedLineSelectorBindingResult joint_selector_binding =
+      bind_joint_packed_line_selector_register(context.emitter.items);
+  result.diagnostics.insert(result.diagnostics.end(), joint_selector_binding.diagnostics.begin(),
+                            joint_selector_binding.diagnostics.end());
+
   trace_stage("ir-passes");
   const core::passes::RunPassesResult optimized =
-      exact_decimal_series ? core::passes::RunPassesResult{.items = context.emitter.items}
-                           : core::passes::run_ir_passes(context.emitter.items, pass_options);
+      exact_decimal_series ? core::passes::RunPassesResult{.items = joint_selector_binding.items}
+                           : core::passes::run_ir_passes(joint_selector_binding.items,
+                                                        pass_options);
   result.registers = context.registers;
   hide_internal_constant_report_registers(result.registers);
   if (ast.v2.has_value())
     hide_inline_x_param_report_registers(result.registers, context, *ast.v2);
   result.optimizations = context.optimizations;
+  if (joint_selector_binding.applied > 0 && joint_selector_binding.selector.has_value()) {
+    result.optimizations.push_back(OptimizationReport{
+        .name = "joint-packed-line-selector-binding",
+        .detail = "Bound the joint packed-line leaf selector before IR and post-layout flow "
+                  "selection to emitted-code-unused R" +
+                  *joint_selector_binding.selector + ".",
+    });
+  }
   for (const core::passes::AppliedOptimization& optimization : optimized.optimizations) {
     result.optimizations.push_back(OptimizationReport{
         .name = optimization.name,
@@ -48455,6 +49831,87 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
     setup_preloads = build_preload_reports(context, *ast.v2, post_layout_items);
   }
 
+  const core::LateBoundDecimalSelectorResult late_bound_selectors =
+      core::bind_late_bound_decimal_selectors(
+          post_layout_items,
+          core::LateBoundDecimalSelectorOptions{.minimum_target_address = 0,
+                                                .maximum_target_address = 99});
+  post_layout_items = late_bound_selectors.items;
+  result.diagnostics.insert(result.diagnostics.end(), late_bound_selectors.diagnostics.begin(),
+                            late_bound_selectors.diagnostics.end());
+  for (const core::LateBoundDecimalSelectorProof& proof : late_bound_selectors.proofs) {
+    for (const std::size_t item_index : {proof.high_item_index, proof.low_item_index}) {
+      if (item_index >= post_layout_items.size())
+        continue;
+      MachineItem& item = post_layout_items.at(item_index);
+      const std::string proof_comment =
+          "late-bound-target=" + std::to_string(proof.target_address);
+      item.comment = item.comment.has_value() ? *item.comment + "; " + proof_comment
+                                              : proof_comment;
+    }
+  }
+  if (late_bound_selectors.applied > 0) {
+    post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+        .name = "late-bound-decimal-selector",
+        .detail = "Bound " + std::to_string(late_bound_selectors.applied) +
+                  " two-cell selector charge(s) to their final post-layout helper addresses.",
+    });
+  }
+
+  if (options.joint_packed_line_family_walk) {
+    JointPackedLineReportReturnFusionResult report_return =
+        fuse_joint_packed_line_report_return(
+            post_layout_items, setup_preloads, post_layout_flow_preloads,
+            stop_tail_preloads, address_space_model_for_options(options));
+    if (report_return.removed_cells == 0) {
+      report_return = fuse_joint_packed_line_direct_report_return(
+          post_layout_items, setup_preloads, post_layout_flow_preloads,
+          stop_tail_preloads);
+    }
+    if (report_return.removed_cells > 0 && report_return.return_address.has_value()) {
+      post_layout_items = report_return.items;
+      setup_preloads = report_return.setup_preloads;
+      post_layout_flow_preloads = report_return.flow_preloads;
+      stop_tail_preloads = report_return.stop_tail_preloads;
+      std::string detail = "Shared the joint packed-line score leaf return at address " +
+                           std::to_string(*report_return.return_address) +
+                           " with the update/report leaf";
+      if (report_return.return_selector.has_value() &&
+          report_return.selector_value.has_value()) {
+        detail += " through stable R" + *report_return.return_selector + "=" +
+                  *report_return.selector_value;
+        if (report_return.replacement_selector.has_value()) {
+          detail += " after rehoming the selector's prior flow uses to equivalent stable R" +
+                    *report_return.replacement_selector;
+        }
+      } else {
+        detail += " through an inverted direct no-report branch";
+      }
+      detail += ", removing " + std::to_string(report_return.removed_cells) + " cell" +
+                (report_return.removed_cells == 1 ? "." : "s.");
+      post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+          .name = "joint-packed-line-shared-report-return",
+          .detail = std::move(detail),
+      });
+    }
+  }
+
+  // This proof is intentionally run after every other layout-changing pass.
+  // With no supplied indirect-target map it accepts only artifacts that contain
+  // no indirect control flow, so an unknown selector can never be smuggled
+  // across the deleted physical-48 return cell.
+  const core::DarkSideSuffixHelperResult dark_side_suffix =
+      core::optimize_dark_side_suffix_helper(
+          post_layout_items,
+          core::DarkSideSuffixHelperOptions{
+              .address_space_model = address_space_model_for_options(options)});
+  if (dark_side_suffix.applied > 0) {
+    post_layout_items = dark_side_suffix.items;
+    post_layout_optimizations.insert(post_layout_optimizations.end(),
+                                     dark_side_suffix.optimizations.begin(),
+                                     dark_side_suffix.optimizations.end());
+  }
+
   const std::vector<PreloadReport> comment_flow_preloads =
       preloaded_indirect_flow_comment_preloads(post_layout_items, options);
   for (const PreloadReport& preload : comment_flow_preloads) {
@@ -48639,6 +50096,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.x_param_y_stack_stored_entry || options.packed_line_family_update_check_tail ||
          options.packed_line_family_mutating_selector_update_check_tail ||
          options.packed_line_family_borrowed_mutating_selector_update_check_tail ||
+         options.joint_packed_line_family_walk ||
          options.inline_floor_packed_row_expressions || options.unroll_counted_loops ||
          options.setup_only_counted_loop_init || options.domain_error_guards ||
          options.show_read_guarded_transfer || options.comparison_guarded_update_selectors ||
@@ -48699,6 +50157,7 @@ bool candidate_needs_static_proof_gate(const CompileOptions& options) {
          options.forward_indirect_flow || options.aggressive_indirect_call ||
          options.aggressive_indirect_call_threshold ||
          options.callee_hole_straight_line_helper ||
+         options.joint_packed_line_family_walk ||
          options.assume_dead_selector_integer_part ||
          !options.suppress_constant_preloads.empty() ||
          !options.fractional_constant_selectors.empty() ||
@@ -48739,6 +50198,302 @@ std::optional<std::string> dead_integer_fractional_selector_uses_rejection_reaso
     const std::vector<ResolvedStep>& steps);
 bool address_code_overlay_artifacts_proved(const std::vector<OptimizationReport>& optimizations,
                                            const std::vector<ResolvedStep>& steps);
+bool suppressed_preload_static_gate_accepts(const CompileOptions& candidate_options,
+                                            const CompileResult& result);
+
+bool joint_packed_line_shared_report_return_proved(const CompileResult& result) {
+  const bool reported = std::any_of(
+      result.optimizations.begin(), result.optimizations.end(), [](const OptimizationReport& item) {
+        return item.name == "joint-packed-line-shared-report-return";
+      });
+  if (!reported)
+    return true;
+
+  const std::map<std::string, int> labels = joint_packed_line_label_addresses(result.items);
+  auto item_address = [&](std::size_t index) {
+    return joint_packed_line_item_address(result.items, index);
+  };
+  auto unique_role = [&](std::string_view prefix)
+      -> std::optional<std::pair<std::size_t, std::string>> {
+    std::optional<std::pair<std::size_t, std::string>> found;
+    for (std::size_t index = 0; index < result.items.size(); ++index) {
+      for (const std::string& role : result.items.at(index).roles) {
+        if (!role.starts_with(prefix))
+          continue;
+        if (found.has_value() || role.size() == prefix.size())
+          return std::nullopt;
+        found = std::pair<std::size_t, std::string>{index, role.substr(prefix.size())};
+      }
+    }
+    return found;
+  };
+  auto parse_int = [](std::string_view text) -> std::optional<int> {
+    if (text.empty())
+      return std::nullopt;
+    int value = 0;
+    const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
+    return error == std::errc{} && end == text.data() + text.size()
+               ? std::optional<int>(value)
+               : std::nullopt;
+  };
+  auto target_item_at = [&](int target, std::string_view required_role) -> bool {
+    int matches = 0;
+    for (std::size_t index = 0; index < result.items.size(); ++index) {
+      const std::optional<int> address = item_address(index);
+      if (!address.has_value() || *address != target)
+        continue;
+      const MachineItem& item = result.items.at(index);
+      if (item.kind != MachineItemKind::Op || item.opcode != 0x52)
+        return false;
+      const bool marked = std::any_of(item.roles.begin(), item.roles.end(), [&](const std::string& role) {
+        return role == required_role;
+      });
+      if (!marked)
+        return false;
+      ++matches;
+    }
+    return matches == 1;
+  };
+
+  if (const auto direct = unique_role("joint-packed-line-report-return-direct:");
+      direct.has_value()) {
+    const std::optional<int> target = parse_int(direct->second);
+    const auto address = unique_role("joint-packed-line-report-return-direct-address:");
+    if (!target.has_value() || !address.has_value() ||
+        parse_int(address->second) != target ||
+        result.items.at(direct->first).kind != MachineItemKind::Op ||
+        result.items.at(direct->first).opcode != 0x57 ||
+        result.items.at(address->first).kind != MachineItemKind::Address ||
+        joint_packed_line_resolve_target(result.items.at(address->first).target, labels) != target) {
+      return false;
+    }
+    const std::optional<std::size_t> next_address =
+        joint_packed_line_next_cell(result.items, direct->first);
+    const std::optional<std::size_t> restore =
+        address.has_value() ? joint_packed_line_next_cell(result.items, address->first)
+                            : std::nullopt;
+    const std::optional<std::size_t> stop =
+        restore.has_value() ? joint_packed_line_next_cell(result.items, *restore) : std::nullopt;
+    if (!next_address.has_value() || *next_address != address->first ||
+        !restore.has_value() || !stop.has_value() ||
+        result.items.at(*restore).kind != MachineItemKind::Op ||
+        result.items.at(*restore).opcode != 0x0a ||
+        result.items.at(*stop).kind != MachineItemKind::Op ||
+        result.items.at(*stop).opcode != 0x50 ||
+        !target_item_at(*target,
+                        "joint-packed-line-report-return-target-direct:" +
+                            std::to_string(*target))) {
+      return false;
+    }
+    return true;
+  }
+
+  const auto indirect = unique_role("joint-packed-line-report-return:");
+  if (!indirect.has_value())
+    return false;
+  const std::size_t separator = indirect->second.find(':');
+  if (separator == std::string::npos)
+    return false;
+  const std::string selector = indirect->second.substr(0, separator);
+  const std::optional<int> target = parse_int(indirect->second.substr(separator + 1U));
+  if (!target.has_value() || selector.size() != 1U ||
+      !core::is_stable_indirect_selector(selector) ||
+      result.items.at(indirect->first).kind != MachineItemKind::Op ||
+      result.items.at(indirect->first).opcode != 0x70 + register_index(selector) ||
+      !target_item_at(*target, "joint-packed-line-report-return-target:" + selector + ":" +
+                                  std::to_string(*target))) {
+    return false;
+  }
+  const std::optional<std::size_t> restore =
+      joint_packed_line_next_cell(result.items, indirect->first);
+  const std::optional<std::size_t> stop =
+      restore.has_value() ? joint_packed_line_next_cell(result.items, *restore) : std::nullopt;
+  if (!restore.has_value() || !stop.has_value() ||
+      result.items.at(*restore).kind != MachineItemKind::Op ||
+      result.items.at(*restore).opcode != 0x0a ||
+      result.items.at(*stop).kind != MachineItemKind::Op ||
+      result.items.at(*stop).opcode != 0x50 ||
+      !joint_packed_line_selector_unwritten(result.items, selector)) {
+    return false;
+  }
+  const std::optional<std::string> selector_value =
+      joint_packed_line_preload_value(result.preloads, selector);
+  const std::optional<core::IndirectAddressEvaluation> evaluated =
+      selector_value.has_value()
+          ? core::evaluate_indirect_address(selector, *selector_value,
+                                            core::IndirectOperationKind::Flow,
+                                            address_space_model_for_feature_profile(
+                                                result.feature_profile))
+          : std::nullopt;
+  if (!evaluated.has_value() || evaluated->actual_flow_target != target)
+    return false;
+
+  bool found_semantic_recall = false;
+  for (const MachineItem& item : result.items) {
+    if (item.kind == MachineItemKind::Op && item.opcode == 0x60 + register_index(selector) &&
+        item.comment.has_value() && item.comment->starts_with("preload const ")) {
+      const std::optional<std::string> semantic = joint_packed_line_score_constant(item);
+      if (!semantic.has_value())
+        return false;
+      try {
+        if (std::fabs(std::stod(*semantic) - std::stod(*selector_value)) > 1e-12)
+          return false;
+      } catch (const std::exception&) {
+        return false;
+      }
+      found_semantic_recall = true;
+    }
+    if (item.kind == MachineItemKind::Op &&
+        joint_packed_line_indirect_flow_opcode(item.opcode) &&
+        (item.opcode & 0x0f) == register_index(selector) &&
+        &item != &result.items.at(indirect->first)) {
+      return false;
+    }
+  }
+  return found_semantic_recall;
+}
+
+bool joint_packed_line_family_artifacts_proved(const CompileResult& result) {
+  const bool reported = std::any_of(
+      result.optimizations.begin(), result.optimizations.end(), [](const OptimizationReport& item) {
+        return item.name == "joint-packed-line-family-walk";
+      });
+  if (!reported)
+    return false;
+
+  constexpr std::string_view kHigh = "late-decimal-selector-high:";
+  constexpr std::string_view kLow = "late-decimal-selector-low:";
+  std::map<std::string, int> label_addresses;
+  int address = 0;
+  for (const MachineItem& item : result.items) {
+    if (item.kind == MachineItemKind::Label) {
+      if (label_addresses.contains(item.name))
+        return false;
+      label_addresses[item.name] = address;
+    } else {
+      ++address;
+    }
+  }
+
+  struct Charge {
+    std::string label;
+    int target = 0;
+    int selector = -1;
+    std::size_t high = 0;
+    std::size_t low = 0;
+    std::size_t store = 0;
+  };
+  std::vector<Charge> charges;
+  auto marked_label = [&](const MachineItem& item,
+                          std::string_view prefix) -> std::optional<std::string> {
+    std::optional<std::string> label;
+    for (const std::string& role : item.roles) {
+      if (!role.starts_with(prefix))
+        continue;
+      if (label.has_value() || role.size() == prefix.size())
+        return std::nullopt;
+      label = role.substr(prefix.size());
+    }
+    return label;
+  };
+  for (std::size_t index = 0; index < result.items.size(); ++index) {
+    const std::optional<std::string> high = marked_label(result.items.at(index), kHigh);
+    if (!high.has_value())
+      continue;
+    if (index + 2U >= result.items.size())
+      return false;
+    const std::optional<std::string> low = marked_label(result.items.at(index + 1U), kLow);
+    const MachineItem& store = result.items.at(index + 2U);
+    const auto target = label_addresses.find(*high);
+    const std::optional<int> selector = machine_opcode_register_index(store.opcode);
+    if (!low.has_value() || *low != *high || target == label_addresses.end() ||
+        target->second < 0 || target->second > 99 ||
+        result.items.at(index).kind != MachineItemKind::Op ||
+        result.items.at(index + 1U).kind != MachineItemKind::Op ||
+        result.items.at(index).opcode != target->second / 10 ||
+        result.items.at(index + 1U).opcode != target->second % 10 ||
+        store.kind != MachineItemKind::Op || (store.opcode & 0xf0) != 0x40 ||
+        !selector.has_value() || *selector < 7 || !is_joint_packed_line_selector_item(store)) {
+      return false;
+    }
+    const std::string selector_name = core::register_name_for_index(*selector);
+    const std::optional<core::IndirectAddressEvaluation> evaluated =
+        core::evaluate_indirect_address(selector_name, std::to_string(target->second),
+                                        core::IndirectOperationKind::Flow);
+    if (!evaluated.has_value() || evaluated->actual_flow_target != target->second)
+      return false;
+    charges.push_back(Charge{.label = *high,
+                             .target = target->second,
+                             .selector = *selector,
+                             .high = index,
+                             .low = index + 1U,
+                             .store = index + 2U});
+    index += 2U;
+  }
+  if (charges.size() != 2U || charges.front().label == charges.back().label ||
+      charges.front().target == charges.back().target ||
+      charges.front().selector != charges.back().selector) {
+    return false;
+  }
+
+  const int selector = charges.front().selector;
+  std::set<std::size_t> allowed_selector_uses;
+  for (const Charge& charge : charges)
+    allowed_selector_uses.insert(charge.store);
+  int call_count = 0;
+  int tail_count = 0;
+  for (std::size_t index = 0; index < result.items.size(); ++index) {
+    const MachineItem& item = result.items.at(index);
+    if (item.kind != MachineItemKind::Op || !item.comment.has_value() ||
+        !item.comment->starts_with("joint-packed-line leaf dispatch;")) {
+      continue;
+    }
+    const std::optional<int> dispatch_selector = machine_opcode_register_index(item.opcode);
+    if (!dispatch_selector.has_value() || *dispatch_selector != selector)
+      return false;
+    if ((item.opcode & 0xf0) == 0xa0)
+      ++call_count;
+    else if ((item.opcode & 0xf0) == 0x80)
+      ++tail_count;
+    else
+      return false;
+    for (const Charge& charge : charges) {
+      if (item.comment->find(charge.label) == std::string::npos)
+        return false;
+    }
+    allowed_selector_uses.insert(index);
+  }
+  if (call_count != 2 || tail_count != 1)
+    return false;
+
+  for (std::size_t index = 0; index < result.items.size(); ++index) {
+    const MachineItem& item = result.items.at(index);
+    if (item.kind != MachineItemKind::Op)
+      continue;
+    const std::optional<int> used_register = machine_opcode_register_index(item.opcode);
+    if (used_register == selector && !allowed_selector_uses.contains(index))
+      return false;
+  }
+  return joint_packed_line_shared_report_return_proved(result);
+}
+
+bool joint_packed_line_family_static_gate_accepts(const CompileOptions& candidate_options,
+                                                  const CompileResult& result) {
+  if (!candidate_options.joint_packed_line_family_walk ||
+      candidate_options.aggressive_post_layout_indirect_flow ||
+      candidate_options.dual_use_constant_indirect_flow ||
+      candidate_options.preloaded_indirect_flow || candidate_options.forward_indirect_flow ||
+      candidate_options.runtime_indirect_call_flow ||
+      candidate_options.callee_hole_straight_line_helper ||
+      candidate_options.assume_dead_selector_integer_part ||
+      !candidate_options.synthesized_dispatch_plans.empty() ||
+      !candidate_options.fractional_constant_selectors.empty() ||
+      !candidate_options.force_fractional_constant_selector_preloads.empty()) {
+    return false;
+  }
+  return suppressed_preload_static_gate_accepts(candidate_options, result) &&
+         joint_packed_line_family_artifacts_proved(result);
+}
 
 std::vector<core::AddressConstraint> address_constraints_for_proof(
     const SynthesizedDispatchPlan& plan) {
@@ -49097,7 +50852,8 @@ bool dual_use_constant_indirect_flow_static_gate_accepts(const CompileOptions& c
       std::any_of(result.optimizations.begin(), result.optimizations.end(),
                   [](const OptimizationReport& item) {
                     return item.name == "constants-dual-use" ||
-                           item.name == "preloaded-indirect-flow";
+                           item.name == "preloaded-indirect-flow" ||
+                           item.name == "post-layout-existing-selector-flow";
                   });
   const bool has_indirect_flow_proof =
       indirect_flow_targets_proved(result.optimizations, result.preloads, result.steps,
@@ -49222,12 +50978,28 @@ bool callee_hole_straight_line_helper_static_gate_accepts(const CompileOptions& 
 
 bool optimizer_static_gate_accepts(const CompileOptions& candidate_options,
                                    const CompileResult& result) {
+  // Joint packed-line dispatch is a composable proof obligation: no other
+  // selector/flow family may accept the candidate on its behalf. This keeps a
+  // later dual-use or fractional layout from bypassing the joint leaf proof.
+  if (candidate_options.joint_packed_line_family_walk &&
+      !joint_packed_line_family_artifacts_proved(result)) {
+    return false;
+  }
+  if (candidate_options.joint_packed_line_family_walk &&
+      !candidate_options.fractional_constant_selectors.empty() &&
+      std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                  [](const OptimizationReport& item) {
+                    return item.name == "fractional-constant-selector-use";
+                  })) {
+    return false;
+  }
   return computed_dispatch_static_gate_accepts(candidate_options, result) ||
          suppress_constant_preload_only_static_gate_accepts(candidate_options, result) ||
          preloaded_indirect_flow_static_gate_accepts(candidate_options, result) ||
          aggressive_post_layout_indirect_flow_static_gate_accepts(candidate_options, result) ||
          runtime_indirect_call_flow_static_gate_accepts(candidate_options, result) ||
          callee_hole_straight_line_helper_static_gate_accepts(candidate_options, result) ||
+         joint_packed_line_family_static_gate_accepts(candidate_options, result) ||
          dual_use_constant_indirect_flow_static_gate_accepts(candidate_options, result) ||
          forward_indirect_flow_static_gate_accepts(candidate_options, result);
 }
@@ -49236,6 +51008,15 @@ std::optional<std::string> optimizer_static_gate_rejection_reason(
     const CompileOptions& candidate_options, const CompileResult& result) {
   if (optimizer_static_gate_accepts(candidate_options, result))
     return std::nullopt;
+  if (candidate_options.joint_packed_line_family_walk &&
+      !candidate_options.fractional_constant_selectors.empty() &&
+      std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                  [](const OptimizationReport& item) {
+                    return item.name == "fractional-constant-selector-use";
+                  })) {
+    return "joint packed-line fractional flow requires a natural selector value; recovered "
+           "fractional constants add a stack-affecting K {x} inside the shared score leaf";
+  }
   if (candidate_options.assume_dead_selector_integer_part) {
     if (const std::optional<std::string> reason =
             dead_integer_fractional_selector_uses_rejection_reason(
@@ -49365,6 +51146,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << options.packed_line_family_mutating_selector_update_check_tail
       << ";packed_line_family_borrowed_mutating_selector_update_check_tail="
       << options.packed_line_family_borrowed_mutating_selector_update_check_tail
+      << ";joint_packed_line_family_walk=" << options.joint_packed_line_family_walk
       << ";inline_floor_packed_row_expressions=" << options.inline_floor_packed_row_expressions
       << ";unroll_counted_loops=" << options.unroll_counted_loops
       << ";setup_only_counted_loop_init=" << options.setup_only_counted_loop_init
@@ -62916,6 +64698,46 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
   add_candidate(
       [](CompileOptions& candidate_options) {
         candidate_options.canonicalize_packed_line_bank_walks = true;
+        candidate_options.packed_line_family_mutating_selector_update_check_tail = true;
+        candidate_options.stack_resident_temps = true;
+        candidate_options.joint_packed_line_family_walk = true;
+      },
+      "joint-packed-line-family-walk",
+      "Fused structurally identical four-bank score and mutating update walks through one "
+      "late-bound leaf selector",
+      CandidateGate::SizeRescue);
+  add_candidate(
+      [](CompileOptions& candidate_options) {
+        candidate_options.canonicalize_packed_line_bank_walks = true;
+        candidate_options.packed_line_family_mutating_selector_update_check_tail = true;
+        candidate_options.stack_resident_temps = true;
+        candidate_options.joint_packed_line_family_walk = true;
+        candidate_options.dual_use_constant_indirect_flow = true;
+        candidate_options.tail_branch_inversion = true;
+        candidate_options.proc_layout_strategy = "reverse";
+      },
+      "joint-packed-line-family-walk-composed-layout",
+      "Combined the joint four-bank walker with dual-use flow, tail inversion, and reverse "
+      "procedure layout",
+      CandidateGate::SizeRescue);
+  add_candidate(
+      [](CompileOptions& candidate_options) {
+        candidate_options.alternating_sign_toggle_args = true;
+        candidate_options.canonicalize_packed_line_bank_walks = true;
+        candidate_options.packed_line_family_mutating_selector_update_check_tail = true;
+        candidate_options.stack_resident_temps = true;
+        candidate_options.joint_packed_line_family_walk = true;
+        candidate_options.dual_use_constant_indirect_flow = true;
+        candidate_options.tail_branch_inversion = true;
+        candidate_options.proc_layout_strategy = "reverse";
+      },
+      "joint-packed-line-family-walk-alternating-sign",
+      "Combined the joint four-bank walker with the structurally proved alternating-sign "
+      "callee state and dual-use flow layout",
+      CandidateGate::SizeRescue);
+  add_candidate(
+      [](CompileOptions& candidate_options) {
+        candidate_options.canonicalize_packed_line_bank_walks = true;
         candidate_options.packed_line_family_borrowed_mutating_selector_update_check_tail = true;
       },
       "packed-line-family-borrowed-mutating-selector-update-check-tail",
@@ -64298,6 +66120,15 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
       base_options.stack_resident_temps = true;
       base_options.canonicalize_packed_line_bank_walks = true;
       base_options.packed_line_family_mutating_selector_update_check_tail = true;
+      base_options.proc_layout_strategy = "reverse";
+    });
+    add_fractional_base([](CompileOptions& base_options) {
+      base_options.dual_use_constant_indirect_flow = true;
+      base_options.tail_branch_inversion = true;
+      base_options.stack_resident_temps = true;
+      base_options.canonicalize_packed_line_bank_walks = true;
+      base_options.packed_line_family_mutating_selector_update_check_tail = true;
+      base_options.joint_packed_line_family_walk = true;
       base_options.proc_layout_strategy = "reverse";
     });
     add_fractional_base([](CompileOptions& base_options) {

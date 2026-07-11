@@ -8,7 +8,7 @@ program TicTacToe4x4 {
   grid: board(1..4, 1..4)
 
   state {
-    expected_mode_only("grd")
+    expected_mode_only("deg")
 
     occupied: packed = 0
     lines: packed[4..7] = [44444.4, 44444.4, 44444.4, 44444.4]

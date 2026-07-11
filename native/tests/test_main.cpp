@@ -32,6 +32,7 @@ void compiler_lowers_initial_v2_subset();
 void counted_loop_unroll_matches_typescript_contract();
 void constant_folding_matches_typescript_contract();
 void cse_display_block_matches_typescript_contract();
+void dark_side_suffix_helper_rewrites_only_proved_layouts();
 void dangerous_loading_size_report_tracks_flow_entry_stack();
 void wumpus_size_report_tracks_split_entry_repeated_argument();
 void dead_code_after_halt_matches_typescript_contract();
@@ -107,6 +108,7 @@ void int128_fallback_matches_builtin();
 void inline_floor_packed_row_matches_typescript_contract();
 void ir_round_trip_matches_typescript_contract();
 void last_x_reuse_matches_typescript_contract();
+void late_bound_decimal_selector_binds_only_proved_pairs();
 void liveness_analysis_matches_typescript_contract();
 void lowering_helpers_match_typescript_contract();
 void machine_profile_matches_typescript_contract();
@@ -119,6 +121,7 @@ void oracle_index_loads_committed_artifacts();
 void packed_counter_stripes_match_typescript_contract();
 void sentinel_decimal_pack_matches_strategy_contract();
 void packed_display_helpers_match_typescript_contract();
+void packed_line_joint_family_alpha_renamed_fixture_preserves_behavior();
 void packed_score_helpers_match_typescript_contract();
 void parser_matches_initial_v2_source_contract();
 void expression_parser_matches_initial_contract();
@@ -154,6 +157,9 @@ void strict_allocation_matches_typescript_contract();
 void style_lints_matches_typescript_contract();
 void super_dark_layout_matches_typescript_contract();
 void trig_fractional_pack_matches_strategy_contract();
+void tic_tac_toe_4x4_reference_transcript_matches_original_listing();
+void tic_tac_toe_4x4_source_uses_reference_angle_mode();
+void tic_tac_toe_4x4_generic_optimizer_checkpoint_is_name_independent();
 void v2_const_matches_typescript_contract();
 void x2_register_dataflow_matches_typescript_contract();
 void x2_shape_data_model_matches_typescript_contract();
@@ -246,6 +252,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(counted_loop_unroll_matches_typescript_contract),
       MKPRO_TEST(constant_folding_matches_typescript_contract),
       MKPRO_TEST(cse_display_block_matches_typescript_contract),
+      MKPRO_TEST(dark_side_suffix_helper_rewrites_only_proved_layouts),
       MKPRO_TEST(dangerous_loading_size_report_tracks_flow_entry_stack),
       MKPRO_TEST(wumpus_size_report_tracks_split_entry_repeated_argument),
       MKPRO_TEST(dead_code_after_halt_matches_typescript_contract),
@@ -317,6 +324,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(inline_floor_packed_row_matches_typescript_contract),
       MKPRO_TEST(ir_round_trip_matches_typescript_contract),
       MKPRO_TEST(last_x_reuse_matches_typescript_contract),
+      MKPRO_TEST(late_bound_decimal_selector_binds_only_proved_pairs),
       MKPRO_TEST(liveness_analysis_matches_typescript_contract),
       MKPRO_TEST(lowering_helpers_match_typescript_contract),
       MKPRO_TEST(machine_profile_matches_typescript_contract),
@@ -329,6 +337,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(packed_counter_stripes_match_typescript_contract),
       MKPRO_TEST(sentinel_decimal_pack_matches_strategy_contract),
       MKPRO_TEST(packed_display_helpers_match_typescript_contract),
+      MKPRO_TEST(packed_line_joint_family_alpha_renamed_fixture_preserves_behavior),
       MKPRO_TEST(packed_score_helpers_match_typescript_contract),
       MKPRO_TEST(parser_matches_initial_v2_source_contract),
       MKPRO_TEST(expression_parser_matches_initial_contract),
@@ -365,6 +374,9 @@ int main(int argc, char** argv) {
       MKPRO_TEST(style_lints_matches_typescript_contract),
       MKPRO_TEST(super_dark_layout_matches_typescript_contract),
       MKPRO_TEST(trig_fractional_pack_matches_strategy_contract),
+      MKPRO_TEST(tic_tac_toe_4x4_reference_transcript_matches_original_listing),
+      MKPRO_TEST(tic_tac_toe_4x4_source_uses_reference_angle_mode),
+      MKPRO_TEST(tic_tac_toe_4x4_generic_optimizer_checkpoint_is_name_independent),
       MKPRO_TEST(v2_const_matches_typescript_contract),
       MKPRO_TEST(x2_register_dataflow_matches_typescript_contract),
       MKPRO_TEST(x2_shape_data_model_matches_typescript_contract),

@@ -14,7 +14,7 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 139 | 105 | +34 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 128 | 105 | +23 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.

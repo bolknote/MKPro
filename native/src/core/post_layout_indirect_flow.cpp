@@ -1857,7 +1857,105 @@ std::optional<RewriteStep> better_rewrite(std::optional<RewriteStep> current,
     return candidate->super_dark ? candidate : current;
   if (candidate->dark_entry != current->dark_entry)
     return candidate->dark_entry ? candidate : current;
+  if (candidate->existing_preload != current->existing_preload)
+    return candidate->existing_preload ? candidate : current;
   return current;
+}
+
+bool fixed_point_selector_register_is_overwritten(const std::vector<IrOp>& ops,
+                                                   const std::string& register_name) {
+  for (const IrOp& op : ops) {
+    if (op.kind == IrKind::Store && op.register_name == register_name)
+      return true;
+    if (op.kind != IrKind::IndirectStore)
+      continue;
+    const std::optional<std::set<std::string>> targets =
+        passes::known_indirect_memory_targets(op);
+    if (!targets.has_value() || targets->contains(register_name))
+      return true;
+  }
+  return false;
+}
+
+std::optional<RewriteStep> apply_existing_selector_fixed_point_rewrite(
+    const std::vector<IrOp>& ir,
+    const std::vector<std::optional<std::string>>& target_labels,
+    const std::vector<MachineItem>& items, const CompileOptions& options) {
+  if (!options.dual_use_constant_indirect_flow || !options.forward_indirect_flow ||
+      options.preloaded_constant_registers.empty()) {
+    return std::nullopt;
+  }
+
+  const AddressSpaceModel model = address_space_model_for_options(options);
+  const std::vector<int> addresses = address_by_index(ir);
+  const std::map<std::string, int> original_labels = passes::calculate_label_addresses(ir);
+  std::optional<RewriteStep> best;
+
+  for (std::size_t index = 0; index < ir.size(); ++index) {
+    const IrOp& original = ir.at(index);
+    if (passes::has_rewrite_barrier(original) ||
+        !is_convertible_post_layout_branch(original) ||
+        !target_labels.at(index).has_value()) {
+      continue;
+    }
+    const std::string& target_label = *target_labels.at(index);
+    const auto original_target = original_labels.find(target_label);
+    if (original_target == original_labels.end() ||
+        original_target->second <= addresses.at(index)) {
+      continue;
+    }
+
+    for (const auto& [register_name, selector_value] :
+         options.preloaded_constant_registers) {
+      if (!is_stable_indirect_selector(register_name) ||
+          fixed_point_selector_register_is_overwritten(ir, register_name)) {
+        continue;
+      }
+
+      std::vector<IrOp> candidate = ir;
+      candidate.at(index) =
+          indirect_flow_op(original, register_name, selector_value, 0, false);
+      const std::map<std::string, int> final_labels =
+          passes::calculate_label_addresses(candidate);
+      const auto final_target = final_labels.find(target_label);
+      if (final_target == final_labels.end() ||
+          final_target->second == original_target->second) {
+        continue;
+      }
+
+      const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
+          register_name, selector_value, IndirectOperationKind::Flow, model);
+      if (!decoded.has_value() || decoded->actual_flow_target != final_target->second)
+        continue;
+      const bool super_dark = decoded->super_dark.has_value() &&
+                              decoded->super_dark->entry_address == final_target->second;
+      candidate.at(index) = indirect_flow_op(original, register_name, selector_value,
+                                             final_target->second, super_dark);
+      std::vector<MachineItem> candidate_items = lower_ir_to_machine(candidate);
+      if (machine_cell_count(candidate_items) >= machine_cell_count(items))
+        continue;
+
+      best = better_rewrite(
+          std::move(best),
+          RewriteStep{
+              .ops = std::move(candidate),
+              .items = std::move(candidate_items),
+              .preload =
+                  PreloadReport{
+                      .register_name = register_name,
+                      .value = selector_value,
+                      .counts_against_program = false,
+                  },
+              .super_dark = super_dark,
+              .dark_entry = is_dark_entry_target(*decoded),
+              .converted_addresses = {addresses.at(index)},
+              .protected_targets = {final_target->second},
+              .existing_preload = true,
+              .converted = 1,
+          });
+    }
+  }
+  return best;
 }
 
 std::optional<RewriteStep> validate_forward_rewrite_group(
@@ -2114,6 +2212,10 @@ std::optional<RewriteStep> apply_one_rewrite(const std::vector<MachineItem>& ite
       best = better_rewrite(std::move(best), std::move(group));
     }
   }
+
+  best = better_rewrite(
+      std::move(best),
+      apply_existing_selector_fixed_point_rewrite(ir, view.target_labels, items, round_options));
 
   std::optional<RewriteStep> forward =
       apply_forward_rewrite(ir, view.target_labels, items, reserved, model);

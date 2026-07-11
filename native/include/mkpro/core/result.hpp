@@ -368,6 +368,11 @@ struct CompileOptions {
   bool packed_line_family_update_check_tail = false;
   bool packed_line_family_mutating_selector_update_check_tail = false;
   bool packed_line_family_borrowed_mutating_selector_update_check_tail = false;
+  // Fuse a structurally identical four-bank score walk and mutating update
+  // walk into one runtime-selected walker. The selector charge is bound to
+  // the final helper addresses after every layout rewrite and is accepted by
+  // candidate search only with a final-artifact proof.
+  bool joint_packed_line_family_walk = false;
   bool inline_floor_packed_row_expressions = false;
   bool unroll_counted_loops = false;
   bool setup_only_counted_loop_init = false;

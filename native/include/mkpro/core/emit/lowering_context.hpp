@@ -154,6 +154,18 @@ struct BankSelectorCacheEntry {
   int offset = 0;
 };
 
+struct JointPackedLineFamilyEmissionPlan {
+  std::string score_rule;
+  std::string update_rule;
+  std::string suppressed_update_leaf_rule;
+  std::string score_leaf_label;
+  std::string update_leaf_label;
+  std::string walker_label;
+  int selector_register = 0xe;
+  bool score_selector_bias = false;
+  bool leaves_emitted = false;
+};
+
 struct LoweringContext {
   MachineEmitter emitter;
   const V2Program* program = nullptr;
@@ -168,6 +180,8 @@ struct LoweringContext {
   std::map<std::string, XParamYStackProcLowering> x_param_y_stack_procs;
   std::map<std::string, int> packed_line_borrowed_selector_registers;
   std::map<std::string, std::vector<std::string>> packed_line_borrowed_selector_owners;
+  std::vector<JointPackedLineFamilyEmissionPlan> joint_packed_line_family_plans;
+  std::map<std::string, std::size_t> joint_packed_line_family_plan_by_rule;
   std::optional<std::string> current_y_variable;
   std::set<std::string> ephemeral_input_targets;
   std::map<std::string, Expression> loop_prompt_initials;
@@ -276,6 +290,7 @@ struct LoweringContext {
   bool packed_line_family_update_check_tail = false;
   bool packed_line_family_mutating_selector_update_check_tail = false;
   bool packed_line_family_borrowed_mutating_selector_update_check_tail = false;
+  bool joint_packed_line_family_walk = false;
   bool shared_bit_mask_helper_calls = false;
   bool compact_bit_mask_helper_body = false;
   bool domain_error_guards = false;

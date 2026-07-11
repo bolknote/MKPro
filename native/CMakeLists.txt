@@ -29,6 +29,7 @@ add_library(mkpro_core STATIC
   src/core/ast_json.cpp
   src/core/compiler.cpp
   src/core/constant_folder.cpp
+  src/core/dark_side_suffix_helper.cpp
   src/core/emit/lowering/coord_list.cpp
   src/core/emit/lowering/display.cpp
   src/core/emit/lowering/expr.cpp
@@ -42,6 +43,7 @@ add_library(mkpro_core STATIC
   src/core/interprocedural_dse.cpp
   src/core/interprocedural_value_propagation.cpp
   src/core/ir.cpp
+  src/core/late_bound_decimal_selector.cpp
   src/core/machine_profile.cpp
   src/core/mk61_trig.cpp
   src/core/opcodes.cpp
@@ -141,6 +143,7 @@ add_executable(mkpro_tests
   tests/constant_folding_test.cpp
   tests/cse_display_block_test.cpp
   tests/dangerous_loading_size_report_test.cpp
+  tests/dark_side_suffix_helper_test.cpp
   tests/dead_code_after_halt_test.cpp
   tests/dead_proc_elimination_test.cpp
   tests/dead_store_before_commutative_test.cpp
@@ -168,6 +171,7 @@ add_executable(mkpro_tests
   tests/emulator_near_any_helper_test.cpp
   tests/emulator_number_entry_concat_test.cpp
   tests/emulator_packed_line_family_test.cpp
+  tests/packed_line_joint_family_fixture_test.cpp
   tests/sign_toggle_arg_test.cpp
   tests/callee_hole_helper_test.cpp
   tests/bank_walk_canonicalize_test.cpp
@@ -197,6 +201,7 @@ add_executable(mkpro_tests
   tests/ir_round_trip_test.cpp
   tests/golden_listing_contract_test.cpp
   tests/last_x_reuse_test.cpp
+  tests/late_bound_decimal_selector_test.cpp
   tests/liveness_analysis_test.cpp
   tests/lowering_helpers_test.cpp
   tests/machine_profile_test.cpp
@@ -240,6 +245,7 @@ add_executable(mkpro_tests
   tests/super_dark_layout_test.cpp
   tests/test_main.cpp
   tests/trig_fractional_pack_test.cpp
+  tests/tic_tac_toe_4x4_reference_test.cpp
   tests/v2_const_test.cpp
   tests/x2_register_dataflow_test.cpp
   tests/x2_shape_data_model_test.cpp
@@ -287,6 +293,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   counted_loop_unroll_matches_typescript_contract
   constant_folding_matches_typescript_contract
   cse_display_block_matches_typescript_contract
+  dark_side_suffix_helper_rewrites_only_proved_layouts
   dead_code_after_halt_matches_typescript_contract
   dead_proc_elimination_matches_typescript_contract
   dead_store_before_commutative_matches_typescript_contract
@@ -354,6 +361,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   inline_floor_packed_row_matches_typescript_contract
   ir_round_trip_matches_typescript_contract
   last_x_reuse_matches_typescript_contract
+  late_bound_decimal_selector_binds_only_proved_pairs
   liveness_analysis_matches_typescript_contract
   lowering_helpers_match_typescript_contract
   machine_profile_matches_typescript_contract
@@ -365,6 +373,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   oracle_index_loads_committed_artifacts
   packed_counter_stripes_match_typescript_contract
   packed_display_helpers_match_typescript_contract
+  packed_line_joint_family_alpha_renamed_fixture_preserves_behavior
   packed_score_helpers_match_typescript_contract
   parser_matches_initial_v2_source_contract
   expression_parser_matches_initial_contract
@@ -400,6 +409,9 @@ set(MKPRO_NATIVE_TEST_NAMES
   strict_allocation_matches_typescript_contract
   style_lints_matches_typescript_contract
   super_dark_layout_matches_typescript_contract
+  tic_tac_toe_4x4_reference_transcript_matches_original_listing
+  tic_tac_toe_4x4_source_uses_reference_angle_mode
+  tic_tac_toe_4x4_generic_optimizer_checkpoint_is_name_independent
   v2_const_matches_typescript_contract
   x2_register_dataflow_matches_typescript_contract
   x2_shape_data_model_matches_typescript_contract

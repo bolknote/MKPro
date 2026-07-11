@@ -63,6 +63,11 @@ IR and lowering optimizer switches:
   --x-param-y-stack-stored-entry  Use Y-stack stored entry for X-parameter paths.
   --canonicalize-repeated-unary-update-args
                                   Canonicalize repeated unary update arguments.
+  --alternating-sign-toggle-args  Replace proved alternating signed call arguments with state.
+  --canonicalize-packed-line-bank-walks
+                                  Canonicalize four-bank packed-line walks.
+  --packed-line-mutating-selector Use a descending mutating selector for packed-line updates.
+  --joint-packed-line-family-walk Share structurally matching score/update four-bank walks.
   --coalesce-copies               Coalesce copy-only register moves.
   --shared-straight-line-call-bodies
                                   Share duplicate straight-line call bodies.
@@ -1210,6 +1215,14 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       options.x_param_y_stack_stored_entry = true;
     } else if (arg == "--canonicalize-repeated-unary-update-args") {
       options.canonicalize_repeated_unary_update_args = true;
+    } else if (arg == "--alternating-sign-toggle-args") {
+      options.alternating_sign_toggle_args = true;
+    } else if (arg == "--canonicalize-packed-line-bank-walks") {
+      options.canonicalize_packed_line_bank_walks = true;
+    } else if (arg == "--packed-line-mutating-selector") {
+      options.packed_line_family_mutating_selector_update_check_tail = true;
+    } else if (arg == "--joint-packed-line-family-walk") {
+      options.joint_packed_line_family_walk = true;
     } else if (arg == "--coalesce-copies") {
       options.coalesce_copies = true;
     } else if (arg == "--shared-straight-line-call-bodies") {

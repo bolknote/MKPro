@@ -180,6 +180,65 @@ void post_layout_indirect_flow_matches_typescript_contract() {
   }
 
   {
+    std::vector<MachineItem> program;
+    const std::vector<MachineItem> direct_call = call("fractional_target");
+    program.insert(program.end(), direct_call.begin(), direct_call.end());
+    for (int index = 0; index < 75; ++index)
+      program.push_back(digit());
+    program.push_back(MachineItem::label("fractional_target"));
+    program.push_back(MachineItem::op(0x52, "В/О"));
+
+    CompileOptions fixed_point_options = options;
+    fixed_point_options.dual_use_constant_indirect_flow = true;
+    fixed_point_options.forward_indirect_flow = true;
+    for (const std::string& register_name : {"7", "8", "9", "a", "b", "c", "d"})
+      fixed_point_options.preloaded_constant_registers[register_name] = "0";
+    fixed_point_options.preloaded_constant_registers["e"] = "4.1200076E-1";
+
+    const core::PostLayoutIndirectFlowResult fixed_point =
+        core::optimize_post_layout_indirect_flow(program, fixed_point_options, 0);
+    require(fixed_point.applied == 1,
+            "post-layout dual-use flow should solve an existing fractional selector against "
+            "the target address after deleting the direct call operand");
+    require(core::machine_cell_count(fixed_point.items) == core::machine_cell_count(program) - 1,
+            "proved fractional fixed-point call should save one program cell");
+    require(fixed_point.preloads.empty(),
+            "fractional fixed-point call should reuse the delivered constant preload");
+    const auto indirect_call =
+        std::find_if(fixed_point.items.begin(), fixed_point.items.end(),
+                     [](const MachineItem& item) {
+                       return item.kind == MachineItemKind::Op && item.opcode == 0xae;
+                     });
+    require(indirect_call != fixed_point.items.end() && indirect_call->comment.has_value() &&
+                indirect_call->comment->find("indirect-target=76") != std::string::npos,
+            "natural 0.41200076 selector should become one-cell К ПП e to final address 76");
+    require(std::any_of(fixed_point.optimizations.begin(), fixed_point.optimizations.end(),
+                        [](const core::passes::AppliedOptimization& optimization) {
+                          return optimization.name == "constants-dual-use";
+                        }),
+            "fractional fixed-point call should report existing-constant dual use");
+
+    CompileOptions mismatched_options = fixed_point_options;
+    mismatched_options.preloaded_constant_registers["e"] = "4.1200075E-1";
+    const core::PostLayoutIndirectFlowResult mismatched =
+        core::optimize_post_layout_indirect_flow(program, mismatched_options, 0);
+    require(mismatched.applied == 0 &&
+                core::machine_cell_count(mismatched.items) == core::machine_cell_count(program),
+            "fractional fixed-point call should fail closed when the delivered selector misses "
+            "the post-deletion target");
+
+    std::vector<MachineItem> overwritten_program = program;
+    overwritten_program.at(2) = MachineItem::op(0x4e, "П→x e");
+    const core::PostLayoutIndirectFlowResult overwritten =
+        core::optimize_post_layout_indirect_flow(overwritten_program, fixed_point_options, 0);
+    require(overwritten.applied == 0 &&
+                core::machine_cell_count(overwritten.items) ==
+                    core::machine_cell_count(overwritten_program),
+            "fractional fixed-point call should fail closed when program code can overwrite "
+            "the preloaded selector register");
+  }
+
+  {
     CompileOptions expanded_options = options;
     expanded_options.feature_profile = FeatureProfile::Mk61SMiniExpanded;
     std::vector<MachineItem> program = {MachineItem::label("main")};
