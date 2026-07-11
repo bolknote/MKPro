@@ -93,6 +93,10 @@ IrMeta meta_from_op(const MachineItem& item) {
   if (item.raw)
     meta.raw = true;
   meta.roles = item.roles;
+  meta.stop_disposition = item.stop_disposition;
+  meta.manual_interaction = item.manual_interaction;
+  meta.indirect_flow_targets = item.indirect_flow_targets;
+  meta.indirect_memory_targets = item.indirect_memory_targets;
   return meta;
 }
 
@@ -147,6 +151,10 @@ MachineItem machine_op_from_meta(int opcode, const IrMeta& meta) {
   if (meta.raw)
     item.raw = true;
   item.roles = meta.roles;
+  item.stop_disposition = meta.stop_disposition;
+  item.manual_interaction = meta.manual_interaction;
+  item.indirect_flow_targets = meta.indirect_flow_targets;
+  item.indirect_memory_targets = meta.indirect_memory_targets;
   return item;
 }
 
@@ -232,6 +240,14 @@ std::string target_to_json(const IrTarget& target) {
   return json_escape(std::get<std::string>(target));
 }
 
+std::string target_array_to_json(const std::vector<IrTarget>& targets) {
+  return json_array(targets, [](const IrTarget& target) { return target_to_json(target); });
+}
+
+std::string int_array_to_json(const std::vector<int>& values) {
+  return json_array(values, [](int value) { return std::to_string(value); });
+}
+
 std::string meta_to_json(const IrMeta& meta) {
   std::ostringstream out;
   bool first = true;
@@ -246,6 +262,31 @@ std::string meta_to_json(const IrMeta& meta) {
     add_field(out, first, "raw", "true");
   if (!meta.roles.empty())
     add_field(out, first, "roles", string_array_to_json(meta.roles));
+  if (meta.stop_disposition != StopDisposition::Unknown) {
+    add_field(out, first, "stopDisposition",
+              json_escape(meta.stop_disposition == StopDisposition::Terminal ? "terminal"
+                                                                            : "resumable"));
+  }
+  if (meta.manual_interaction.has_value()) {
+    add_field(out, first, "manualProtocol",
+              std::to_string(meta.manual_interaction->protocol_id));
+    add_field(out, first, "manualPhase", std::to_string(meta.manual_interaction->phase));
+    const ManualInteractionAnchorKind kind = meta.manual_interaction->kind;
+    add_field(out, first, "manualInteractionKind",
+              json_escape(kind == ManualInteractionAnchorKind::PromptStop
+                              ? "prompt-stop"
+                              : kind == ManualInteractionAnchorKind::SingleStepCommand
+                                    ? "single-step-command"
+                                    : "continuous-resume"));
+  }
+  if (meta.indirect_flow_targets.has_value()) {
+    add_field(out, first, "indirectFlowTargets",
+              target_array_to_json(*meta.indirect_flow_targets));
+  }
+  if (meta.indirect_memory_targets.has_value()) {
+    add_field(out, first, "indirectMemoryTargets",
+              int_array_to_json(*meta.indirect_memory_targets));
+  }
   if (meta.tactic.has_value())
     add_field(out, first, "tactic", json_escape(*meta.tactic));
   out << '}';
@@ -296,6 +337,31 @@ std::string machine_item_to_json(const MachineItem& item) {
     }
     if (item.raw)
       add_field(out, first, "raw", "true");
+    if (item.stop_disposition != StopDisposition::Unknown) {
+      add_field(out, first, "stopDisposition",
+                json_escape(item.stop_disposition == StopDisposition::Terminal ? "terminal"
+                                                                               : "resumable"));
+    }
+    if (item.manual_interaction.has_value()) {
+      add_field(out, first, "manualProtocol",
+                std::to_string(item.manual_interaction->protocol_id));
+      add_field(out, first, "manualPhase", std::to_string(item.manual_interaction->phase));
+      const ManualInteractionAnchorKind kind = item.manual_interaction->kind;
+      add_field(out, first, "manualInteractionKind",
+                json_escape(kind == ManualInteractionAnchorKind::PromptStop
+                                ? "prompt-stop"
+                                : kind == ManualInteractionAnchorKind::SingleStepCommand
+                                      ? "single-step-command"
+                                      : "continuous-resume"));
+    }
+    if (item.indirect_flow_targets.has_value()) {
+      add_field(out, first, "indirectFlowTargets",
+                target_array_to_json(*item.indirect_flow_targets));
+    }
+    if (item.indirect_memory_targets.has_value()) {
+      add_field(out, first, "indirectMemoryTargets",
+                int_array_to_json(*item.indirect_memory_targets));
+    }
   } else {
     add_field(out, first, "kind", json_escape("address"));
     add_field(out, first, "target", target_to_json(item.target));
@@ -708,7 +774,11 @@ bool machine_items_equal(const MachineItem& a, const MachineItem& b) {
   }
   if (a.kind == MachineItemKind::Op) {
     return a.opcode == b.opcode && a.mnemonic == b.mnemonic && a.comment == b.comment &&
-           a.source_line == b.source_line && a.raw == b.raw && a.roles == b.roles;
+           a.source_line == b.source_line && a.raw == b.raw && a.roles == b.roles &&
+           a.stop_disposition == b.stop_disposition &&
+           a.manual_interaction == b.manual_interaction &&
+           a.indirect_flow_targets == b.indirect_flow_targets &&
+           a.indirect_memory_targets == b.indirect_memory_targets;
   }
   return targets_equal(a.target, b.target) && a.comment == b.comment &&
          a.source_line == b.source_line && a.formal_opcode == b.formal_opcode;

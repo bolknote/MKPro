@@ -176,6 +176,8 @@ void MachineEmitter::emit_op(int opcode, std::optional<std::string> mnemonic,
   item.comment = std::move(comment);
   item.source_line = source_line;
   item.raw = raw;
+  item.manual_interaction = std::move(next_op_manual_interaction);
+  next_op_manual_interaction.reset();
   items.push_back(std::move(item));
 
   if (opcode >= 0x80 && opcode <= 0xfe)
@@ -186,6 +188,14 @@ void MachineEmitter::emit_op(int opcode, std::optional<std::string> mnemonic,
   current_x_aliases.clear();
   current_x_known_zero = false;
   machine_entry_open = opcode <= 0x0c;
+}
+
+void MachineEmitter::emit_stop(StopDisposition disposition,
+                               std::optional<std::string> mnemonic,
+                               std::optional<std::string> comment,
+                               std::optional<int> source_line, bool raw) {
+  emit_op(0x50, std::move(mnemonic), std::move(comment), source_line, raw);
+  items.back().stop_disposition = disposition;
 }
 
 void MachineEmitter::record_label_edge(const std::string& label, std::optional<std::string> fact) {

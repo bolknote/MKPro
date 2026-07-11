@@ -110,16 +110,6 @@ std::size_t count_steps_with_comment(const CompileResult& result, const std::str
       }));
 }
 
-const SizeHelperSummaryReport* find_size_helper(const CompileResult& result,
-                                                const std::string& label) {
-  const auto it = std::find_if(result.size_attribution.helpers.begin(),
-                               result.size_attribution.helpers.end(),
-                               [&](const SizeHelperSummaryReport& helper) {
-                                 return helper.label == label;
-                               });
-  return it == result.size_attribution.helpers.end() ? nullptr : &*it;
-}
-
 std::vector<int> step_opcodes(const CompileResult& result) {
   std::vector<int> opcodes;
   opcodes.reserve(result.steps.size());
@@ -1938,6 +1928,9 @@ program XParamNameCollision {
   require(x_param_name_collision.registers.find("value") != x_param_name_collision.registers.end(),
           "same-named parameter should remain allocated when another procedure needs storage");
 
+  CompileOptions entered_test_options;
+  entered_test_options.disable_candidate_search = true;
+  entered_test_options.budget = 999;
   const CompileResult entered_current_x = compile_source(R"mkpro(
 program EnteredCurrentX {
   state {
@@ -1951,13 +1944,131 @@ program EnteredCurrentX {
     halt(y)
   }
 }
-)mkpro");
+)mkpro", entered_test_options);
   require(entered_current_x.implemented, "native compiler should lower entered()");
   require(entered_current_x.diagnostics.empty(), "entered() compile should not report diagnostics");
   require(entered_current_x.listing.find("read()") == std::string::npos,
           "entered() should consume current X without emitting a read stop");
   require(has_optimization(entered_current_x, "entered-current-x"),
           "entered() should report the TS strategy name");
+  require(entered_current_x.interaction_protocols.empty(),
+          "unbounded entered() without a preceding prompt should not invent a protocol fact");
+
+  const CompileResult bounded_manual_entry = compile_source(R"mkpro(
+program BoundedManualEntry {
+  state {
+    prompt: packed = 0
+    first: counter 0..9 = 0
+    second: counter 0..9 = 0
+  }
+
+  loop {
+    show(prompt)
+    first = entered(1, 4)
+    second = entered(1, 4)
+    halt(first + second)
+  }
+}
+)mkpro", entered_test_options);
+  require(bounded_manual_entry.implemented && bounded_manual_entry.diagnostics.empty(),
+          "bounded entered() protocol should compile without emitting range checks");
+  require(bounded_manual_entry.interaction_protocols.size() == 1U,
+          "show plus consecutive entered() assignments should expose one typed protocol");
+  const ManualInteractionProtocolFact& manual =
+      bounded_manual_entry.interaction_protocols.front();
+  require(manual.phases.size() == 2U && manual.phases.at(0).target == "first" &&
+              manual.phases.at(1).target == "second" &&
+              manual.phases.at(0).admitted_domain.minimum == 1 &&
+              manual.phases.at(0).admitted_domain.maximum == 4 &&
+              manual.phases.at(1).admitted_domain == manual.phases.at(0).admitted_domain,
+          "typed protocol should retain both independent inclusive input domains");
+  int prompt_anchors = 0;
+  int single_step_anchors = 0;
+  int continuous_anchors = 0;
+  int resumable_stops = 0;
+  int terminal_stops = 0;
+  for (const MachineItem& item : bounded_manual_entry.items) {
+    if (item.kind != MachineItemKind::Op)
+      continue;
+    if (item.opcode == 0x50 && item.stop_disposition == StopDisposition::Resumable)
+      ++resumable_stops;
+    if (item.opcode == 0x50 && item.stop_disposition == StopDisposition::Terminal)
+      ++terminal_stops;
+    if (!item.manual_interaction.has_value())
+      continue;
+    if (item.manual_interaction->kind == ManualInteractionAnchorKind::PromptStop)
+      ++prompt_anchors;
+    if (item.manual_interaction->kind == ManualInteractionAnchorKind::SingleStepCommand)
+      ++single_step_anchors;
+    if (item.manual_interaction->kind == ManualInteractionAnchorKind::ContinuousResume)
+      ++continuous_anchors;
+  }
+  require(prompt_anchors == 1 && single_step_anchors == 1 && continuous_anchors == 1,
+          "lowering should bind typed prompt, PP single-step, and continuous-resume anchors; got " +
+              std::to_string(prompt_anchors) + "/" + std::to_string(single_step_anchors) + "/" +
+              std::to_string(continuous_anchors));
+  require(resumable_stops >= 1 && terminal_stops >= 1,
+          "typed STOP provenance should distinguish the prompt from halt()");
+
+  const auto has_diagnostic_code = [](const CompileResult& compiled, std::string_view code) {
+    return std::any_of(compiled.diagnostics.begin(), compiled.diagnostics.end(),
+                       [&](const Diagnostic& item) { return item.code == code; });
+  };
+  const CompileResult reversed_entered_domain = compile_source(R"mkpro(
+program ReversedEnteredDomain {
+  state {
+    input: counter 0..9 = 0
+  }
+  loop {
+    input = entered(4, 1)
+  }
+}
+)mkpro");
+  require(!reversed_entered_domain.implemented &&
+              has_diagnostic_code(reversed_entered_domain, "entered-domain-invalid"),
+          "entered(min,max) should reject a reversed finite domain");
+
+  const CompileResult escaped_entered_domain = compile_source(R"mkpro(
+program EscapedEnteredDomain {
+  state {
+    input: counter 1..4 = 1
+  }
+  loop {
+    input = entered(1, 5)
+  }
+}
+)mkpro");
+  require(!escaped_entered_domain.implemented &&
+              has_diagnostic_code(escaped_entered_domain, "entered-domain-target"),
+          "entered(min,max) should fit the assigned counter's declared range");
+
+  const CompileResult nested_entered_domain = compile_source(R"mkpro(
+program NestedEnteredDomain {
+  state {
+    input: counter 0..9 = 0
+  }
+  loop {
+    input = entered(1, 4) + 0
+  }
+}
+)mkpro");
+  require(!nested_entered_domain.implemented &&
+              has_diagnostic_code(nested_entered_domain, "entered-domain-target"),
+          "ranged entered() should be a complete direct counter assignment");
+
+  const CompileResult folded_entered_bound = compile_source(R"mkpro(
+program FoldedEnteredBound {
+  state {
+    input: counter 0..9 = 0
+  }
+  loop {
+    input = entered(1 + 0, 4)
+  }
+}
+)mkpro");
+  require(!folded_entered_bound.implemented &&
+              has_diagnostic_code(folded_entered_bound, "entered-domain-invalid"),
+          "entered(min,max) bounds should be source integer literals, not folded expressions");
 
   CompileOptions input_branch_options;
   input_branch_options.analysis = true;
@@ -2081,48 +2192,9 @@ program PackedScoreHelper {
   require(has_optimization(packed_score_helper, "packed-score-sequence-stack-accumulator"),
           "three statement-level packed_score calls should report sequence accumulator lowering");
 
-  const CompileResult packed_line_score_proc = compile_source(R"mkpro(
-program PackedLineScoreProc {
-  state {
-    lines: packed[4..7] = [44444.4, 44444.4, 44444.4, 44444.4]
-    x: counter 0..5 = 4
-    y: counter 0..5 = 4
-    line: packed = 0
-    score: packed = 0
-  }
-
-  fn score_move() {
-    score = packed_score(lines[7], x) + packed_score(lines[6], y)
-    normalize(x + y)
-    score += packed_score(lines[5], line)
-    normalize(x - y)
-    score += packed_score(lines[4], line)
-  }
-
-  fn normalize(raw_line) {
-    line = frac((raw_line + 3) / 4) * 4 + 1
-  }
-
-  loop {
-    score_move()
-    halt(score)
-  }
-}
-)mkpro");
-  require(packed_line_score_proc.implemented,
-          "native compiler should lower packed-line score procedure shape");
-  require(packed_line_score_proc.diagnostics.empty(),
-          "packed-line score procedure compile should not report diagnostics");
-  require(packed_line_score_proc.listing.find("packed-line score helper accumulate") !=
-              std::string::npos,
-          "four-term packed_score procedure should use the packed-line accumulator helper");
-  require(has_optimization(packed_line_score_proc, "packed-line-family-score-accumulator"),
-          "four-term packed_score procedure should report the TS accumulator strategy");
-
   CompileOptions generic_packed_score_tail_options;
   generic_packed_score_tail_options.analysis = true;
   generic_packed_score_tail_options.packed_score_accumulator_helpers = true;
-  generic_packed_score_tail_options.disable_packed_line_family_score_accumulator = true;
   const CompileResult generic_packed_score_tail = compile_source(R"mkpro(
 program GenericPackedScoreSharedReturnedIndexTail {
   state {
@@ -2170,215 +2242,6 @@ program GenericPackedScoreSharedReturnedIndexTail {
   require(generic_packed_score_tail.listing.find(
               "x-param packed_score shared returned-index tail") != std::string::npos,
           "generic packed_score shared tail should emit a shared returned-index helper call");
-
-  CompileOptions mixed_packed_score_options;
-  mixed_packed_score_options.analysis = true;
-  mixed_packed_score_options.packed_score_accumulator_helpers = true;
-  const CompileResult mixed_packed_score_helpers = compile_source(R"mkpro(
-program MixedPackedScoreHelperSharing {
-  state {
-    lines: packed[4..7] = [44444.4, 44444.4, 44444.4, 44444.4]
-    a: packed = 44444.4
-    b: packed = 44445.4
-    c: packed = 44446.4
-    x: counter 0..5 = 4
-    y: counter 0..5 = 4
-    slot: counter 0..7 = 3
-    line: packed = 0
-    score: packed = 0
-  }
-
-  fn score_move() {
-    score = packed_score(lines[7], x) + packed_score(lines[6], y)
-    normalize(x + y)
-    score += packed_score(lines[5], line)
-    normalize(x - y)
-    score += packed_score(lines[4], line)
-  }
-
-  fn normalize(raw_line) {
-    line = frac((raw_line + 3) / 4) * 4 + 1
-  }
-
-  loop {
-    score_move()
-    halt(sum(score, packed_score(a, x), packed_score(b, y), packed_score(c, slot)))
-  }
-}
-)mkpro",
-                                                               mixed_packed_score_options);
-  require(mixed_packed_score_helpers.implemented,
-          "mixed generic/packed-line packed_score accumulator program should compile");
-  require(mixed_packed_score_helpers.diagnostics.empty(),
-          "mixed packed_score helper sharing compile should not report diagnostics");
-  require(has_optimization(mixed_packed_score_helpers,
-                           "packed-score-sum-accumulator"),
-          "mixed program should still lower the generic packed_score expression as an "
-          "accumulator");
-  require(has_optimization_detail(mixed_packed_score_helpers,
-                                  "packed-line-family-score-accumulator",
-                                  "Shared the generic packed_score accumulator helper"),
-          "packed-line score lowering should share the generic accumulator helper when it is "
-          "already needed for a separate packed_score pipeline");
-  require(count_steps_with_comment(mixed_packed_score_helpers,
-                                   "packed_score accumulator helper add") == 1,
-          "mixed helper sharing should emit one generic accumulator helper body");
-  require(count_steps_with_comment(mixed_packed_score_helpers,
-                                   "packed-line score helper accumulate") == 0,
-          "mixed helper sharing should not emit a duplicate packed-line accumulator body");
-  require(count_steps_with_comment(mixed_packed_score_helpers,
-                                   "packed_score accumulator helper") >= 7,
-          "mixed helper sharing should route generic and packed-line score terms through the "
-          "same accumulator helper");
-  const SizeHelperSummaryReport* mixed_accumulator_helper =
-      find_size_helper(mixed_packed_score_helpers, "packed_score accumulator helper");
-  require(mixed_accumulator_helper != nullptr &&
-              mixed_accumulator_helper->details.contains("sharedTailTerms") &&
-              mixed_accumulator_helper->details.at("sharedTailTerms") == "4",
-          "size attribution should attach packed-line shared-tail terms to the shared generic "
-          "accumulator helper");
-  require(find_size_helper(mixed_packed_score_helpers,
-                           "packed-line score accumulator helper") == nullptr,
-          "size attribution should not report a separate packed-line helper when its body is "
-          "shared with the generic accumulator helper");
-
-  const CompileResult packed_line_score_proc_sum = compile_source(R"mkpro(
-program PackedLineScoreProcSumSyntax {
-  state {
-    lines: packed[4..7] = [44444.4, 44444.4, 44444.4, 44444.4]
-    x: counter 0..5 = 4
-    y: counter 0..5 = 4
-    line: packed = 0
-    score: packed = 0
-  }
-
-  fn score_move() {
-    score = sum(packed_score(lines[7], x), packed_score(lines[6], y))
-    normalize(x + y)
-    score = sum(score, packed_score(lines[5], line))
-    normalize(x - y)
-    score += sum(packed_score(lines[4], line))
-  }
-
-  fn normalize(raw_line) {
-    line = frac((raw_line + 3) / 4) * 4 + 1
-  }
-
-  loop {
-    score_move()
-    halt(score)
-  }
-}
-)mkpro");
-  require(packed_line_score_proc_sum.implemented,
-          "native compiler should lower sum(...) packed-line score procedure shape");
-  require(packed_line_score_proc_sum.diagnostics.empty(),
-          "sum(...) packed-line score procedure compile should not report diagnostics");
-  require(packed_line_score_proc_sum.listing.find("packed-line score helper accumulate") !=
-              std::string::npos,
-          "sum(...) four-term packed_score procedure should use the packed-line accumulator "
-          "helper");
-  require(has_optimization(packed_line_score_proc_sum, "packed-line-family-score-accumulator"),
-          "sum(...) four-term packed_score procedure should report the accumulator strategy");
-
-  const CompileResult packed_line_score_proc_sum_zero = compile_source(R"mkpro(
-program PackedLineScoreProcSumZeroSyntax {
-  state {
-    lines: packed[4..7] = [44444.4, 44444.4, 44444.4, 44444.4]
-    x: counter 0..5 = 4
-    y: counter 0..5 = 4
-    line: packed = 0
-    score: packed = 0
-  }
-
-  fn score_move() {
-    score = sum(0, packed_score(lines[7], x), packed_score(lines[6], y))
-    normalize(x + y)
-    score = sum(score, 0, packed_score(lines[5], line))
-    normalize(x - y)
-    score += sum(0, packed_score(lines[4], line))
-  }
-
-  fn normalize(raw_line) {
-    line = frac((raw_line + 3) / 4) * 4 + 1
-  }
-
-  loop {
-    score_move()
-    halt(score)
-  }
-}
-)mkpro");
-  require(packed_line_score_proc_sum_zero.implemented,
-          "native compiler should lower zero-padded sum(...) packed-line score procedure shape");
-  require(packed_line_score_proc_sum_zero.diagnostics.empty(),
-          "zero-padded sum(...) packed-line score procedure compile should not report diagnostics");
-  require(packed_line_score_proc_sum_zero.listing.find("packed-line score helper accumulate") !=
-              std::string::npos,
-          "zero-padded sum(...) four-term packed_score procedure should use the packed-line "
-          "accumulator helper");
-  require(has_optimization(packed_line_score_proc_sum_zero,
-                           "packed-line-family-score-accumulator"),
-          "zero-padded sum(...) four-term packed_score procedure should report the accumulator "
-          "strategy");
-
-  const CompileResult packed_line_stack_score = compile_source(R"mkpro(
-program PackedLineStackScore {
-  state {
-    lines: packed[4..7] = [44444.4, 44444.4, 44444.4, 44444.4]
-    x: counter 0..5 = 4
-    y: counter 0..5 = 4
-    best_y: counter 0..5 = 0
-    best_score: packed = 0
-    score: packed = 0
-    line: packed = 0
-    slot: counter 0..7 = 4
-  }
-
-  fn score_move() {
-    score = packed_score(lines[7], x) + packed_score(lines[6], y)
-    normalize(x + y)
-    score += packed_score(lines[5], line)
-    normalize(x - y)
-    score += packed_score(lines[4], line)
-  }
-
-  fn normalize(raw_line) {
-    line = frac((raw_line + 3) / 4) * 4 + 1
-  }
-
-  loop {
-    best_score = 0
-    score_move()
-    best_score = max(score, best_score)
-    if score == best_score {
-      slot = x
-      best_y = y
-    }
-    halt(best_score)
-  }
-}
-)mkpro");
-  require(packed_line_stack_score.implemented,
-          "native compiler should lower stack-only packed-line score consumers");
-  require(packed_line_stack_score.diagnostics.empty(),
-          "stack-only packed-line score compile should not report diagnostics");
-  require(packed_line_stack_score.registers.find("score") ==
-              packed_line_stack_score.registers.end(),
-          "stack-only packed-line score should not allocate a score register");
-  require(packed_line_stack_score.listing.find("set score") == std::string::npos,
-          "stack-only packed-line score should not store score");
-  require(packed_line_stack_score.listing.find("recall score") == std::string::npos,
-          "stack-only packed-line score should not recall score");
-  require(has_optimization(packed_line_stack_score, "stack-only-state-field"),
-          "stack-only packed-line score should report stack-only-state-field");
-  require(has_optimization(packed_line_stack_score, "zero-accumulator-proc-entry"),
-          "stack-only packed-line score should report zero-accumulator-proc-entry");
-  require(packed_line_stack_score.listing.find("max-assignment equality compare") !=
-              std::string::npos,
-          "stack-only packed-line score should fuse the following max/equality branch");
-  require(packed_line_stack_score.listing.find("zero-accumulator entry") != std::string::npos,
-          "stack-only packed-line score should enter after the redundant zero literal");
 
   const CompileResult packed_line_update_proc = compile_source(R"mkpro(
 program PackedLineUpdateProc {

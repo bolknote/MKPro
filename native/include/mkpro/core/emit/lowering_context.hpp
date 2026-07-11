@@ -154,21 +154,6 @@ struct BankSelectorCacheEntry {
   int offset = 0;
 };
 
-struct JointPackedLineFamilyEmissionPlan {
-  std::string score_rule;
-  std::string update_rule;
-  std::string suppressed_update_leaf_rule;
-  std::string score_leaf_label;
-  std::string update_leaf_label;
-  std::string walker_label;
-  std::string selector_store_label;
-  int selector_register = 0xe;
-  bool score_selector_bias = false;
-  bool inline_score_selector_entry = false;
-  bool update_tail_fallthrough = false;
-  bool leaves_emitted = false;
-};
-
 struct LoweringContext {
   MachineEmitter emitter;
   const V2Program* program = nullptr;
@@ -181,10 +166,6 @@ struct LoweringContext {
   std::set<std::pair<std::string, int>> terminal_underflow_unit_decrements;
   std::map<std::string, XParamProcLowering> x_param_procs;
   std::map<std::string, XParamYStackProcLowering> x_param_y_stack_procs;
-  std::map<std::string, int> packed_line_borrowed_selector_registers;
-  std::map<std::string, std::vector<std::string>> packed_line_borrowed_selector_owners;
-  std::vector<JointPackedLineFamilyEmissionPlan> joint_packed_line_family_plans;
-  std::map<std::string, std::size_t> joint_packed_line_family_plan_by_rule;
   std::optional<std::string> current_y_variable;
   std::set<std::string> ephemeral_input_targets;
   std::map<std::string, Expression> loop_prompt_initials;
@@ -193,6 +174,9 @@ struct LoweringContext {
   std::set<std::string> stack_only_state_fields;
   std::set<std::string> inline_call_stack;
   std::map<std::string, const V2StateField*> state_fields;
+  std::vector<ManualInteractionProtocolFact> interaction_protocols;
+  std::map<const V2Statement*, ManualInteractionAnchor> prompt_interaction_anchors;
+  std::map<const V2Statement*, ManualInteractionAnchor> entered_interaction_anchors;
   std::map<std::string, std::set<int>> path_excluded_numeric_values;
   std::map<std::string, const V2Board*> boards;
   std::map<std::string, const V2World*> worlds;
@@ -281,19 +265,12 @@ struct LoweringContext {
   bool use_packed_score_accumulator_helper = false;
   bool use_packed_score_accumulator_for_singletons = false;
   bool packed_score_helper_paid_by_non_accumulator_groups = false;
-  bool share_packed_line_score_accumulator_with_generic_helper = false;
-  bool disable_packed_line_family_score_accumulator = false;
   bool stack_resident_temps = false;
   bool stack_argument_helper_entries = false;
   bool setup_only_counted_loop_init = false;
   bool x_param_value_functions = false;
   bool x_param_y_stack_stored_entry = false;
   bool stack_argument_function_entries = false;
-  bool canonicalize_packed_line_bank_walks = false;
-  bool packed_line_family_update_check_tail = false;
-  bool packed_line_family_mutating_selector_update_check_tail = false;
-  bool packed_line_family_borrowed_mutating_selector_update_check_tail = false;
-  bool joint_packed_line_family_walk = false;
   bool shared_bit_mask_helper_calls = false;
   bool compact_bit_mask_helper_body = false;
   bool domain_error_guards = false;

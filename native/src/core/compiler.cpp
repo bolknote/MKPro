@@ -8911,10 +8911,6 @@ void apply_unit_update_hints(const LoweringContext& context, const V2Program& pr
   }
 }
 
-void apply_packed_line_family_mutating_selector_hints(const LoweringContext& context,
-                                                      const V2Program& program,
-                                                      const RegisterCollection& collection,
-                                                      RegisterHints& hints);
 std::set<std::string> collect_scaled_coord_list_names(LoweringContext& context,
                                                       const V2Program& program);
 std::set<std::string> collect_scaled_coord_cell_names(LoweringContext& context,
@@ -9188,6 +9184,290 @@ void index_program_metadata(LoweringContext& context, const V2Program& program) 
     if (board_it != context.boards.end() && is_segmented_bitplane_board(board_it->second))
       context.segmented_cells[field.name] = core::emit::segmented_bitplane_names(field.name);
   }
+}
+
+bool is_entered_call(const Expression& expression) {
+  return expression.kind == "call" && lower_ascii(expression.callee) == "entered";
+}
+
+std::optional<int> entered_integer_literal(const Expression& expression) {
+  const bool literal = expression.kind == "number" ||
+                       (expression.kind == "unary" && expression.op == "-" &&
+                        expression.expr != nullptr && expression.expr->kind == "number");
+  if (!literal)
+    return std::nullopt;
+  const std::optional<double> value = numeric_literal_value(expression);
+  if (!value.has_value() || !std::isfinite(*value) || std::trunc(*value) != *value ||
+      *value < static_cast<double>(std::numeric_limits<int>::min()) ||
+      *value > static_cast<double>(std::numeric_limits<int>::max())) {
+    return std::nullopt;
+  }
+  return static_cast<int>(*value);
+}
+
+const V2StateField* entered_target_field(const V2Program& program,
+                                         const V2Statement& statement) {
+  if (statement.kind != "v2_assign" || !statement.target.has_value())
+    return nullptr;
+  try {
+    const Expression target = parse_expression(*statement.target, statement.line);
+    if (target.kind != "identifier")
+      return nullptr;
+    const auto field =
+        std::find_if(program.state.begin(), program.state.end(), [&](const V2StateField& item) {
+          return item.name == target.name;
+        });
+    return field == program.state.end() ? nullptr : &*field;
+  } catch (const std::exception&) {
+    return nullptr;
+  }
+}
+
+EnteredInputDomain validate_entered_assignment_domain(const V2Program& program,
+                                                      const V2Statement& statement,
+                                                      const Expression& entered,
+                                                      std::vector<Diagnostic>& diagnostics) {
+  EnteredInputDomain domain;
+  if (entered.args.empty())
+    return domain;
+  if (entered.args.size() != 2U) {
+    diagnostics.push_back(diagnostic(
+        DiagnosticSeverity::Error, "entered-domain-invalid",
+        "entered() at line " + std::to_string(statement.line) +
+            " expects either no arguments or exactly two integer literal bounds."));
+    return domain;
+  }
+  const std::optional<int> minimum = entered_integer_literal(entered.args.at(0));
+  const std::optional<int> maximum = entered_integer_literal(entered.args.at(1));
+  if (!minimum.has_value() || !maximum.has_value()) {
+    diagnostics.push_back(diagnostic(
+        DiagnosticSeverity::Error, "entered-domain-invalid",
+        "entered(min, max) at line " + std::to_string(statement.line) +
+            " requires two finite integer literals."));
+    return domain;
+  }
+  if (*minimum > *maximum) {
+    diagnostics.push_back(diagnostic(
+        DiagnosticSeverity::Error, "entered-domain-invalid",
+        "entered(min, max) at line " + std::to_string(statement.line) +
+            " requires min <= max."));
+    return domain;
+  }
+
+  const V2StateField* field = entered_target_field(program, statement);
+  if (field == nullptr || field->type != "counter" || !field->min.has_value() ||
+      !field->max.has_value()) {
+    diagnostics.push_back(diagnostic(
+        DiagnosticSeverity::Error, "entered-domain-target",
+        "entered(min, max) at line " + std::to_string(statement.line) +
+            " must be the complete right-hand side of an assignment to a bounded counter."));
+    return domain;
+  }
+  if (*minimum < *field->min || *maximum > *field->max) {
+    diagnostics.push_back(diagnostic(
+        DiagnosticSeverity::Error, "entered-domain-target",
+        "entered(" + std::to_string(*minimum) + ", " + std::to_string(*maximum) +
+            ") at line " + std::to_string(statement.line) + " is outside counter " +
+            field->name + " range " + std::to_string(*field->min) + ".." +
+            std::to_string(*field->max) + "."));
+    return domain;
+  }
+  domain.minimum = *minimum;
+  domain.maximum = *maximum;
+  return domain;
+}
+
+void reject_nested_ranged_entered(const Expression& expression, int line,
+                                  std::vector<Diagnostic>& diagnostics,
+                                  bool allow_this_call = false) {
+  if (is_entered_call(expression)) {
+    if (!allow_this_call && !expression.args.empty()) {
+      diagnostics.push_back(diagnostic(
+          DiagnosticSeverity::Error, "entered-domain-target",
+          "entered(min, max) at line " + std::to_string(line) +
+              " must be the complete right-hand side of a direct counter assignment."));
+    }
+    return;
+  }
+  if (expression.index != nullptr)
+    reject_nested_ranged_entered(*expression.index, line, diagnostics);
+  if (expression.expr != nullptr)
+    reject_nested_ranged_entered(*expression.expr, line, diagnostics);
+  if (expression.left != nullptr)
+    reject_nested_ranged_entered(*expression.left, line, diagnostics);
+  if (expression.right != nullptr)
+    reject_nested_ranged_entered(*expression.right, line, diagnostics);
+  for (const Expression& argument : expression.args)
+    reject_nested_ranged_entered(argument, line, diagnostics);
+}
+
+std::optional<ManualInteractionPhaseFact>
+entered_assignment_phase(const V2Program& program, const V2Statement& statement,
+                         std::vector<Diagnostic>& diagnostics) {
+  if (statement.kind != "v2_assign" || !statement.expr.has_value() ||
+      lower_ascii(*statement.expr).find("entered") == std::string::npos)
+    return std::nullopt;
+  Expression expression;
+  try {
+    expression = parse_expression(*statement.expr, statement.line);
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+  if (!is_entered_call(expression)) {
+    reject_nested_ranged_entered(expression, statement.line, diagnostics);
+    return std::nullopt;
+  }
+  const V2StateField* field = entered_target_field(program, statement);
+  const std::string target = field == nullptr ? statement.target.value_or("") : field->name;
+  return ManualInteractionPhaseFact{
+      .target = target,
+      .source_line = statement.line,
+      .admitted_domain =
+          validate_entered_assignment_domain(program, statement, expression, diagnostics),
+  };
+}
+
+void validate_other_entered_expression(const std::optional<std::string>& text, int line,
+                                       std::vector<Diagnostic>& diagnostics) {
+  if (!text.has_value() || lower_ascii(*text).find("entered") == std::string::npos)
+    return;
+  try {
+    reject_nested_ranged_entered(parse_expression(*text, line), line, diagnostics);
+  } catch (const std::exception&) {
+  }
+}
+
+void validate_entered_contracts_in_block(const V2Program& program,
+                                         const std::vector<V2Statement>& statements,
+                                         std::vector<Diagnostic>& diagnostics);
+
+void validate_entered_contracts_in_statement(const V2Program& program,
+                                             const V2Statement& statement,
+                                             std::vector<Diagnostic>& diagnostics) {
+  (void)entered_assignment_phase(program, statement, diagnostics);
+  if (statement.kind != "v2_assign")
+    validate_other_entered_expression(statement.expr, statement.line, diagnostics);
+  for (const std::string& argument : statement.args)
+    validate_other_entered_expression(argument, statement.line, diagnostics);
+  if (statement.predicate.has_value()) {
+    validate_other_entered_expression(statement.predicate->left, statement.line, diagnostics);
+    validate_other_entered_expression(statement.predicate->right, statement.line, diagnostics);
+    validate_other_entered_expression(statement.predicate->collection, statement.line, diagnostics);
+    validate_other_entered_expression(statement.predicate->item, statement.line, diagnostics);
+  }
+  if (statement.items.has_value()) {
+    for (const DisplayItem& item : *statement.items) {
+      if (item.expr.has_value())
+        reject_nested_ranged_entered(*item.expr, item.line, diagnostics);
+    }
+  }
+  for (const V2RawInput& input : statement.inputs)
+    validate_other_entered_expression(input.expr, input.line, diagnostics);
+
+  validate_entered_contracts_in_block(program, statement.body, diagnostics);
+  validate_entered_contracts_in_block(program, statement.then_body, diagnostics);
+  validate_entered_contracts_in_block(program, statement.else_body, diagnostics);
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr)
+      validate_entered_contracts_in_statement(program, *match_case.action, diagnostics);
+  }
+  if (statement.otherwise != nullptr)
+    validate_entered_contracts_in_statement(program, *statement.otherwise, diagnostics);
+}
+
+void validate_entered_contracts_in_block(const V2Program& program,
+                                         const std::vector<V2Statement>& statements,
+                                         std::vector<Diagnostic>& diagnostics) {
+  for (const V2Statement& statement : statements)
+    validate_entered_contracts_in_statement(program, statement, diagnostics);
+}
+
+void validate_entered_contracts(const V2Program& program,
+                                std::vector<Diagnostic>& diagnostics) {
+  for (const V2Const& constant : program.consts)
+    validate_other_entered_expression(constant.expr, constant.line, diagnostics);
+  for (const V2StateField& field : program.state)
+    validate_other_entered_expression(field.initial, field.line, diagnostics);
+  validate_entered_contracts_in_block(program, program.body, diagnostics);
+  for (const V2Rule& rule : program.rules)
+    validate_entered_contracts_in_block(program, rule.body, diagnostics);
+}
+
+void analyze_manual_interaction_block(LoweringContext& context, const V2Program& program,
+                                      const std::vector<V2Statement>& statements,
+                                      int& next_protocol_id) {
+  std::vector<std::optional<ManualInteractionPhaseFact>> entered(statements.size());
+  std::vector<Diagnostic> ignored_validation;
+  for (std::size_t index = 0; index < statements.size(); ++index) {
+    const V2Statement& statement = statements.at(index);
+    entered.at(index) = entered_assignment_phase(program, statement, ignored_validation);
+  }
+
+  for (std::size_t prompt = 0; prompt < statements.size(); ++prompt) {
+    if (statements.at(prompt).kind != "v2_show" || prompt + 1U >= statements.size() ||
+        !entered.at(prompt + 1U).has_value()) {
+      continue;
+    }
+    std::size_t end = prompt + 1U;
+    while (end < statements.size() && entered.at(end).has_value())
+      ++end;
+    ManualInteractionProtocolFact protocol{
+        .protocol_id = next_protocol_id++,
+        .prompt_source_line = statements.at(prompt).line,
+    };
+    context.prompt_interaction_anchors.emplace(
+        &statements.at(prompt),
+        ManualInteractionAnchor{.protocol_id = protocol.protocol_id,
+                                .phase = -1,
+                                .kind = ManualInteractionAnchorKind::PromptStop});
+    for (std::size_t index = prompt + 1U; index < end; ++index) {
+      ManualInteractionPhaseFact phase = *entered.at(index);
+      phase.phase = static_cast<int>(protocol.phases.size());
+      protocol.phases.push_back(phase);
+      const bool last = index + 1U == end;
+      context.entered_interaction_anchors.emplace(
+          &statements.at(index),
+          ManualInteractionAnchor{
+              .protocol_id = protocol.protocol_id,
+              .phase = phase.phase,
+              .kind = last ? ManualInteractionAnchorKind::ContinuousResume
+                           : ManualInteractionAnchorKind::SingleStepCommand,
+          });
+    }
+    context.interaction_protocols.push_back(std::move(protocol));
+    prompt = end - 1U;
+  }
+
+  const auto recurse = [&](const std::vector<V2Statement>& nested) {
+    analyze_manual_interaction_block(context, program, nested, next_protocol_id);
+  };
+  const auto recurse_single = [&](const V2Statement& nested) {
+    recurse(nested.body);
+    recurse(nested.then_body);
+    recurse(nested.else_body);
+  };
+  for (const V2Statement& statement : statements) {
+    recurse(statement.body);
+    recurse(statement.then_body);
+    recurse(statement.else_body);
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.action != nullptr)
+        recurse_single(*match_case.action);
+    }
+    if (statement.otherwise != nullptr)
+      recurse_single(*statement.otherwise);
+  }
+}
+
+void analyze_manual_interaction_protocols(LoweringContext& context,
+                                          const V2Program& program) {
+  context.interaction_protocols.clear();
+  context.prompt_interaction_anchors.clear();
+  context.entered_interaction_anchors.clear();
+  int next_protocol_id = 0;
+  analyze_manual_interaction_block(context, program, program.body, next_protocol_id);
+  for (const V2Rule& rule : program.rules)
+    analyze_manual_interaction_block(context, program, rule.body, next_protocol_id);
 }
 
 void index_constants(LoweringContext& context, const V2Program& program) {
@@ -9683,8 +9963,7 @@ bool all_x_param_calls_have_y_stack_producer(const V2Program& program, const std
 }
 
 std::map<std::string, XParamYStackProcLowering> collect_x_param_y_stack_proc_lowerings(
-    const V2Program& program, const std::map<std::string, XParamProcLowering>& x_param_procs,
-    bool allow_packed_score_index) {
+    const V2Program& program, const std::map<std::string, XParamProcLowering>& x_param_procs) {
   std::map<std::string, XParamYStackProcLowering> result;
   for (const V2Rule& rule : program.rules) {
     const auto lowering_it = x_param_procs.find(rule.name);
@@ -9693,7 +9972,7 @@ std::map<std::string, XParamYStackProcLowering> collect_x_param_y_stack_proc_low
       continue;
     std::optional<std::string> y_name =
         indexed_packed_pow10_delta_stack_index_name_for_analysis(rule.body.at(1));
-    if (!y_name.has_value() && allow_packed_score_index)
+    if (!y_name.has_value())
       y_name = packed_score_y_stack_index_name_for_analysis(rule.body.at(1));
     if (!y_name.has_value())
       continue;
@@ -10261,8 +10540,7 @@ int stack_only_covered_run(
 
   if (indexed_packed_pow10_delta_stack_index_name_for_analysis(statement) == name)
     return 1;
-  if (context.canonicalize_packed_line_bank_walks &&
-      packed_score_y_stack_index_name_for_analysis(statement) == name)
+  if (packed_score_y_stack_index_name_for_analysis(statement) == name)
     return 1;
 
   const bool read_was_preceded_by_show =
@@ -10549,10 +10827,6 @@ bool program_desugars_to_named_bit_primitive(const LoweringContext& context,
                                              const V2Program& program);
 bool program_requires_shared_bit_mask_scratch(const LoweringContext& context,
                                               const V2Program& program);
-void elide_packed_line_mutating_leaf_registers_after_allocation(
-    LoweringContext& context, const V2Program& program);
-bool suppress_packed_line_mutating_family_inline_rules(LoweringContext& context,
-                                                       const V2Program& program);
 void collect_guarded_update_scratch_registers(LoweringContext& context,
                                               RegisterCollection& collection,
                                               const V2Program& program);
@@ -10574,18 +10848,11 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   context.dungeon_shape = is_dungeon_shape(program);
   context.uses_formatted_coord_report = core::emit::program_uses_formatted_coord_report(program);
   const int packed_score_calls = count_expression_calls_in_program(program, "packed_score");
-  const int regular_accumulator_packed_score_calls =
-      packed_score_accumulator_regular_eligible_call_count_in_program(program);
-  const int x_param_accumulator_packed_score_calls =
-      x_param_packed_score_accumulator_eligible_call_count_in_program(program);
   const int accumulator_packed_score_calls =
       packed_score_accumulator_eligible_call_count_in_program(program);
   context.use_packed_score_accumulator_helper =
       context.packed_score_accumulator_helpers &&
       packed_score_accumulator_helper_has_cost_effective_family(program);
-  context.share_packed_line_score_accumulator_with_generic_helper =
-      context.use_packed_score_accumulator_helper &&
-      (regular_accumulator_packed_score_calls >= 3 || x_param_accumulator_packed_score_calls >= 3);
   const int non_accumulator_group_packed_score_calls =
       std::max(0, packed_score_calls - accumulator_packed_score_calls);
   context.use_packed_score_accumulator_for_singletons =
@@ -10679,20 +10946,8 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   context.proc_call_counts = collect_rule_call_counts(program);
   context.inline_statement_rules = compiler_inline_statement_rule_names(context, program);
   context.x_param_procs = collect_x_param_proc_lowerings(program, context.inline_statement_rules);
-  context.x_param_y_stack_procs = collect_x_param_y_stack_proc_lowerings(
-      program, context.x_param_procs, context.canonicalize_packed_line_bank_walks);
-  if (context.packed_line_family_mutating_selector_update_check_tail) {
-    for (const V2StateField& field : program.state) {
-      if (field.bank.has_value())
-        context.state_banks[state_bank_key(field)] = &field;
-    }
-    if (suppress_packed_line_mutating_family_inline_rules(context, program)) {
-      context.x_param_procs =
-          collect_x_param_proc_lowerings(program, context.inline_statement_rules);
-      context.x_param_y_stack_procs = collect_x_param_y_stack_proc_lowerings(
-          program, context.x_param_procs, context.canonicalize_packed_line_bank_walks);
-    }
-  }
+  context.x_param_y_stack_procs =
+      collect_x_param_y_stack_proc_lowerings(program, context.x_param_procs);
   context.ephemeral_input_targets = collect_ephemeral_input_targets(program);
   for (const auto& [unused_prompt, input] : context.loop_prompt_inputs) {
     (void)unused_prompt;
@@ -10831,8 +11086,6 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   }
   collect_spatial_count_scratch_registers(collection);
   collect_guarded_update_scratch_registers(context, collection, program);
-  if (context.packed_line_family_mutating_selector_update_check_tail)
-    apply_packed_line_family_mutating_selector_hints(context, program, collection, hints);
   apply_direct_state_bank_selector_hints(context, program, collection, hints);
   apply_state_bank_selector_hints(collection, hints);
   apply_coord_list_item_register_hints(collection, hints);
@@ -10846,7 +11099,6 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   apply_scaled_coord_register_hints(context, collection, hints);
   apply_segmented_bitplane_register_hints(context, collection, hints);
   allocate_collected_registers(context, collection, hints);
-  elide_packed_line_mutating_leaf_registers_after_allocation(context, program);
 }
 
 void index_rules(LoweringContext& context, const V2Program& program) {
@@ -11023,7 +11275,7 @@ void emit_two_digit_text_display(LoweringContext& context, const std::string& so
   context.emitter.emit_jump(0x53, "ПП", renderer_target, "text digit renderer", line);
   context.emitter.emit_op(0x6a, "П->X a", "text display rendered ones", line);
   context.emitter.emit_op(0x0e, "В↑", "show text", line);
-  context.emitter.emit_op(0x50, "С/П", "show text", line);
+  context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "show text", line);
   context.emitter.emit_op(0x06, "6", "text digit renderer", line);
   context.emitter.emit_op(0x11, "-", "text digit renderer", line);
   context.emitter.emit_op(0x0b, "/-/", "text digit renderer", line);
@@ -16302,7 +16554,8 @@ bool lower_packed_numeric_display_statement(
         context.emitter.emit_op(0x10, "+", "packed display field append", source_line);
       }
     }
-    context.emitter.emit_op(0x50, "С/П", show_comment, source_line);
+    context.emitter.emit_stop(StopDisposition::Resumable, "С/П", show_comment,
+                              source_line);
     context.optimizations.push_back(OptimizationReport{
         .name = current_index == static_cast<int>(fields.size()) - 1
                     ? "display-current-x-suffix-reuse"
@@ -16323,7 +16576,8 @@ bool lower_packed_numeric_display_statement(
   if (!lower_packed_display_fields_in_order(context, fields, source_line, true,
                                             display_source_comment, digit_literal_comment))
     return false;
-  context.emitter.emit_op(0x50, "С/П", show_comment, source_line);
+  context.emitter.emit_stop(StopDisposition::Resumable, "С/П", show_comment,
+                            source_line);
   if (has_literal_field) {
     context.optimizations.push_back(OptimizationReport{
         .name = "display-decimal-literal-field",
@@ -16373,7 +16627,7 @@ bool lower_packed_storage_reuse_display_statement(LoweringContext& context,
     if (index > 0)
       context.emitter.emit_op(0x10, "+", "packed display storage append", source_line);
   }
-  context.emitter.emit_op(0x50, "С/П", "show", source_line);
+  context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "show", source_line);
   context.optimizations.push_back(OptimizationReport{
       .name = "packed-display-storage-reuse",
       .detail = "Displayed by adding fields already stored in their decimal positions.",
@@ -16381,9 +16635,12 @@ bool lower_packed_storage_reuse_display_statement(LoweringContext& context,
   return true;
 }
 
-core::emit::DisplayEmitApi display_emit_api(LoweringContext& context) {
+core::emit::DisplayEmitApi display_emit_api(
+    LoweringContext& context,
+    StopDisposition stop_disposition = StopDisposition::Resumable) {
   return core::emit::DisplayEmitApi{
       .emitter = context.emitter,
+      .stop_disposition = stop_disposition,
       .emit_recall = [&](const std::string& name) { emit_recall(context, name); },
       .emit_store = [&](const std::string& name,
                         std::string comment) { emit_store(context, name, std::move(comment)); },
@@ -16418,6 +16675,15 @@ core::emit::DisplayEmitApi display_emit_api(LoweringContext& context) {
   };
 }
 
+void set_emitted_stop_disposition(MachineEmitter& emitter, std::size_t begin,
+                                  StopDisposition disposition) {
+  for (std::size_t index = begin; index < emitter.items.size(); ++index) {
+    MachineItem& item = emitter.items.at(index);
+    if (item.kind == MachineItemKind::Op && item.opcode == 0x50)
+      item.stop_disposition = disposition;
+  }
+}
+
 void report_screen_literal_lowering(LoweringContext& context, std::string name,
                                     std::string detail) {
   context.optimizations.push_back(OptimizationReport{
@@ -16446,7 +16712,7 @@ bool lower_preloaded_display_literal(LoweringContext& context, const std::string
     context.emitter.items.back().comment = "display " + display_name + " literal";
     context.emitter.items.back().source_line = line;
   }
-  context.emitter.emit_op(0x50, "С/П", "show " + display_name, line);
+  context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "show " + display_name, line);
   report_screen_literal_lowering(context, "screen-text-literal-preload",
                                  "Displayed screen " + display_name + " from prebuilt literal R" +
                                      register_text_for(context, preload_it->second) + ".");
@@ -16474,7 +16740,7 @@ bool lower_leading_zero_hex_product_display(LoweringContext& context,
   context.emitter.emit_op(0x34, "К [x]", "display leading-zero hex source", line);
   emit_number_or_preload(context, plan->factor);
   context.emitter.emit_op(0x12, "*", "display leading-zero hex product", line);
-  context.emitter.emit_op(0x50, "С/П", "show " + display_name, line);
+  context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "show " + display_name, line);
   report_screen_literal_lowering(
       context, "screen-leading-zero-hex-lowering",
       "Lowered screen " + display_name +
@@ -16517,7 +16783,7 @@ bool lower_zero_digit_tail_display(LoweringContext& context, const std::string& 
   context.emitter.emit_op(0x6c, "П->X c", "display zero-digit tail hidden tail", line);
   context.emitter.emit_op(0x0c, "ВП", "display zero-digit tail restore", line);
   context.emitter.emit_op(0x07, "7", "display zero-digit tail exponent", line);
-  context.emitter.emit_op(0x50, "С/П", "show " + display_name, line);
+  context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "show " + display_name, line);
   report_screen_literal_lowering(context, "screen-zero-digit-tail-lowering",
                                  "Lowered screen " + display_name +
                                      " through the 0C tail sign-digit display trick.");
@@ -16616,7 +16882,7 @@ bool lower_sign_digit_literal_display(LoweringContext& context, const std::strin
   emit_register_op(context.emitter, FeatureProfile::Standard, 0x60, indirect, "П->X",
                    "display sign-digit final body", line);
   emit_sign_digit_first_cell_splice(context.emitter, line);
-  context.emitter.emit_op(0x50, "С/П", "show " + display_name, line);
+  context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "show " + display_name, line);
   report_screen_literal_lowering(context, "screen-sign-digit-literal-lowering",
                                  "Lowered screen " + display_name +
                                      " through indirect sign-digit display construction.");
@@ -16917,7 +17183,7 @@ std::optional<std::string> select_display_strategy(LoweringContext& context,
 bool lower_literal_display_body(LoweringContext& context, const std::string& display_name,
                                 const std::string& literal, int line) {
   if (literal.empty()) {
-    context.emitter.emit_op(0x50, "С/П", "show " + display_name, line);
+    context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "show " + display_name, line);
     report_screen_literal_lowering(context, "screen-empty-literal-lowering",
                                    "Lowered empty screen " + display_name + " as a plain pause.");
     return true;
@@ -16947,12 +17213,12 @@ bool lower_literal_display_body(LoweringContext& context, const std::string& dis
     }
     if (program->negative)
       context.emitter.emit_op(0x0b, "/-/", "display literal sign", line);
-    context.emitter.emit_op(0x50, "С/П", "show " + display_name, line);
+    context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "show " + display_name, line);
     return true;
   }
   if (const std::optional<std::string> decimal = decimal_display_literal_number(literal)) {
     context.emitter.emit_number(*decimal);
-    context.emitter.emit_op(0x50, "С/П", "pause", line);
+    context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "pause", line);
     report_screen_literal_lowering(context, "screen-decimal-literal-lowering",
                                    "Lowered screen " + display_name +
                                        " as an ordinary decimal display literal.");
@@ -16973,7 +17239,7 @@ bool lower_literal_display_body(LoweringContext& context, const std::string& dis
     if (!core::emit::emit_first_splice_display_literal_program(display_api, context, *first_splice,
                                                                scratch, line))
       return false;
-    context.emitter.emit_op(0x50, "С/П", "show " + display_name, line);
+    context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "show " + display_name, line);
     report_screen_literal_lowering(
         context, "screen-text-literal-first-splice",
         "Lowered screen " + display_name +
@@ -17065,7 +17331,8 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
     return false;
 
   if (statement.items->size() == 1) {
-    context.emitter.emit_op(0x50, "С/П", show_comment, statement.line);
+    context.emitter.emit_stop(StopDisposition::Resumable, "С/П", show_comment,
+                              statement.line);
     return true;
   }
 
@@ -17077,7 +17344,8 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
       return false;
     context.emitter.emit_op(0x10, "+", "packed display field append", statement.line);
   }
-  context.emitter.emit_op(0x50, "С/П", show_comment, statement.line);
+  context.emitter.emit_stop(StopDisposition::Resumable, "С/П", show_comment,
+                            statement.line);
   return true;
 }
 
@@ -17091,7 +17359,8 @@ void report_terminal_literal_stop(LoweringContext& context, const std::string& l
 
 bool lower_literal_terminal_stop(LoweringContext& context, const std::string& literal, int line) {
   if (literal.empty()) {
-    context.emitter.emit_op(0x50, "С/П", "show __halt_literal_" + std::to_string(line), line);
+    context.emitter.emit_stop(StopDisposition::Terminal, "С/П",
+                              "show __halt_literal_" + std::to_string(line), line);
     report_terminal_literal_stop(context, literal, line);
     return true;
   }
@@ -17100,7 +17369,7 @@ bool lower_literal_terminal_stop(LoweringContext& context, const std::string& li
     context.emitter.emit_number("0");
     if (!context.emitter.items.empty())
       context.emitter.items.back().comment = "halt";
-    context.emitter.emit_op(0x50, "С/П", "halt", line);
+    context.emitter.emit_stop(StopDisposition::Terminal, "С/П", "halt", line);
     report_terminal_literal_stop(context, literal, line);
     return true;
   }
@@ -17117,8 +17386,10 @@ bool lower_literal_terminal_stop(LoweringContext& context, const std::string& li
     }
   }
 
+  const std::size_t begin = context.emitter.items.size();
   if (lower_literal_display_body(context, "__halt_literal_" + std::to_string(line), literal,
                                  line)) {
+    set_emitted_stop_disposition(context.emitter, begin, StopDisposition::Terminal);
     report_terminal_literal_stop(context, literal, line);
     return true;
   }
@@ -17515,14 +17786,14 @@ bool lower_coord_list_remove_update(LoweringContext& context, const std::string&
 bool lower_tiny_terminal_call(LoweringContext& context, const std::string& name) {
   if (name == "success") {
     context.emitter.emit_number("6");
-    context.emitter.emit_op(0x50, "С/П", "halt");
+    context.emitter.emit_stop(StopDisposition::Terminal, "С/П", "halt");
     return true;
   }
   if (name == "ignored") {
     context.emitter.emit_number("0");
     if (!context.emitter.items.empty())
       context.emitter.items.back().comment = "halt";
-    context.emitter.emit_op(0x50, "С/П", "halt");
+    context.emitter.emit_stop(StopDisposition::Terminal, "С/П", "halt");
     return true;
   }
   if (name == "drain") {
@@ -17542,7 +17813,7 @@ bool lower_human_terminal_call(LoweringContext& context, const std::string& name
     context.emitter.emit_number("0");
     if (!context.emitter.items.empty())
       context.emitter.items.back().comment = "halt";
-    context.emitter.emit_op(0x50, "С/П", "halt");
+    context.emitter.emit_stop(StopDisposition::Terminal, "С/П", "halt");
     return true;
   }
   context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
@@ -17723,7 +17994,7 @@ bool lower_cave_sketch_match(LoweringContext& context, const V2Statement& statem
                           "case mismatch; preloaded R7=B2 indirect-target=0 indirect flow",
                           statement.line);
   context.emitter.emit_number("0");
-  context.emitter.emit_op(0x50, "С/П", "halt", statement.line);
+  context.emitter.emit_stop(StopDisposition::Terminal, "С/П", "halt", statement.line);
   return true;
 }
 
@@ -17771,7 +18042,7 @@ bool lower_dungeon_match(LoweringContext& context, const V2Statement& statement)
   emit_store(context, "pos", "set pos");
   context.emitter.emit_op(0x3b, "К СЧ", "random()", statement.line);
   emit_store(context, "plan", "set plan");
-  context.emitter.emit_op(0x50, "С/П", "show __inline_show_31_1", statement.line);
+  context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "show __inline_show_31_1", statement.line);
   context.emitter.emit_op(
       0x87, "К БП 7",
       "tail jump check_room; preloaded R7=51 indirect-target=51 shifted-forward indirect flow",
@@ -17884,10 +18155,6 @@ void mark_last_emitted_call_role(LoweringContext& context, std::string role) {
 
 std::string x_param_y_stack_stored_entry_label(const std::string& name) {
   return "__xparam_ystack_entry_" + name;
-}
-
-std::string packed_line_family_score_zero_entry_label(const std::string& name) {
-  return "__packed_line_family_score_zero_entry_" + name;
 }
 
 bool lower_rule_arguments(LoweringContext& context, const V2Rule& rule,
@@ -19115,24 +19382,6 @@ struct PackedScoreAccumulatorStep {
   Kind kind = Kind::Term;
   PackedScoreTerm term;
   Expression expression;
-  int line = 0;
-};
-
-struct PackedLineFamilyScoreRule {
-  std::string score;
-  std::string normalizer;
-  std::string normalizer_param;
-  std::string normalizer_return;
-  PackedScoreTerm first;
-  PackedScoreTerm second;
-  PackedScoreTerm diagonal_add;
-  PackedScoreTerm diagonal_sub;
-  Expression shared;
-  Expression partial;
-  int diagonal_add_raw_line = 0;
-  int diagonal_sub_raw_line = 0;
-  int diagonal_add_score_line = 0;
-  int diagonal_sub_score_line = 0;
   int line = 0;
 };
 
@@ -21130,7 +21379,7 @@ bool lower_stack_carried_read_run(LoweringContext& context,
   if (statements_read_identifier_before_write(context, tail, *read.target))
     return false;
 
-  context.emitter.emit_op(0x50, "С/П", "read " + *read.target, read.line);
+  context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "read " + *read.target, read.line);
   context.emitter.machine_entry_open = true;
   mark_current_x(context, *read.target);
   if (context.stack_only_state_fields.contains(*read.target))
@@ -21144,115 +21393,6 @@ bool lower_stack_carried_read_run(LoweringContext& context,
   return true;
 }
 
-std::optional<std::pair<PackedScoreTerm, PackedScoreTerm>>
-packed_score_pair(const Expression& expression, int line) {
-  std::vector<PackedScoreTerm> terms;
-  const auto collect = [&](const auto& self, const Expression& item) -> bool {
-    if (expression_is_zero_literal_syntax(item))
-      return true;
-    if (const std::optional<PackedScoreTerm> term = packed_score_term(item, line);
-        term.has_value()) {
-      terms.push_back(*term);
-      return true;
-    }
-    if (item.kind == "call" && lower_ascii(item.callee) == "sum") {
-      return std::all_of(item.args.begin(), item.args.end(),
-                         [&](const Expression& arg) { return self(self, arg); });
-    }
-    if (item.kind == "binary" && item.op == "+" && item.left != nullptr &&
-        item.right != nullptr) {
-      return self(self, *item.left) && self(self, *item.right);
-    }
-    return false;
-  };
-  if (!collect(collect, expression) || terms.size() != 2U)
-    return std::nullopt;
-  return std::pair{terms.at(0), terms.at(1)};
-}
-
-std::optional<PackedScoreTerm> packed_score_single_sum_term(const Expression& expression,
-                                                            int line) {
-  std::vector<PackedScoreTerm> terms;
-  const auto collect = [&](const auto& self, const Expression& item) -> bool {
-    if (expression_is_zero_literal_syntax(item))
-      return true;
-    if (const std::optional<PackedScoreTerm> term = packed_score_term(item, line);
-        term.has_value()) {
-      terms.push_back(*term);
-      return true;
-    }
-    if (item.kind == "call" && lower_ascii(item.callee) == "sum") {
-      return std::all_of(item.args.begin(), item.args.end(),
-                         [&](const Expression& arg) { return self(self, arg); });
-    }
-    if (item.kind == "binary" && item.op == "+" && item.left != nullptr &&
-        item.right != nullptr) {
-      return self(self, *item.left) && self(self, *item.right);
-    }
-    return false;
-  };
-  if (!collect(collect, expression) || terms.size() != 1U)
-    return std::nullopt;
-  return terms.front();
-}
-
-std::optional<PackedScoreTerm> packed_score_target_accumulator_term(const Expression& expression,
-                                                                    const std::string& score,
-                                                                    int line) {
-  std::optional<PackedScoreTerm> term;
-  bool saw_score = false;
-  const auto collect = [&](const auto& self, const Expression& item) -> bool {
-    if (expression_is_zero_literal_syntax(item))
-      return true;
-    if (expression_is_identifier_named(item, score)) {
-      if (saw_score)
-        return false;
-      saw_score = true;
-      return true;
-    }
-    if (const std::optional<PackedScoreTerm> next = packed_score_term(item, line);
-        next.has_value()) {
-      if (term.has_value())
-        return false;
-      term = *next;
-      return true;
-    }
-    if (item.kind == "call" && lower_ascii(item.callee) == "sum") {
-      return std::all_of(item.args.begin(), item.args.end(),
-                         [&](const Expression& arg) { return self(self, arg); });
-    }
-    if (item.kind == "binary" && item.op == "+" && item.left != nullptr &&
-        item.right != nullptr) {
-      return self(self, *item.left) && self(self, *item.right);
-    }
-    return false;
-  };
-  if (!collect(collect, expression) || !saw_score || !term.has_value())
-    return std::nullopt;
-  return term;
-}
-
-std::optional<PackedScoreTerm> packed_score_accumulator_term(const V2Statement& statement,
-                                                             const std::string& score,
-                                                             const std::string& index_name) {
-  if (!statement.target.has_value() || *statement.target != score || !statement.expr.has_value())
-    return std::nullopt;
-  if (statement.kind == "v2_update" && statement.op == "+=") {
-    const Expression expression = parse_expression(*statement.expr, statement.line);
-    std::optional<PackedScoreTerm> term = packed_score_single_sum_term(expression, statement.line);
-    if (term.has_value() && term->index.kind == "identifier" && term->index.name == index_name)
-      return term;
-  }
-  if (statement.kind == "v2_assign") {
-    const Expression expression = parse_expression(*statement.expr, statement.line);
-    std::optional<PackedScoreTerm> term =
-        packed_score_target_accumulator_term(expression, score, statement.line);
-    if (term.has_value() && term->index.kind == "identifier" && term->index.name == index_name)
-      return term;
-  }
-  return std::nullopt;
-}
-
 std::optional<std::pair<Expression, Expression>> shared_add_sub_operands(const Expression& add,
                                                                          const Expression& sub) {
   if (add.kind != "binary" || add.op != "+" || sub.kind != "binary" || sub.op != "-" ||
@@ -21263,236 +21403,6 @@ std::optional<std::pair<Expression, Expression>> shared_add_sub_operands(const E
   if (!is_simple_stack_load(*add.left) || !is_simple_stack_load(*add.right))
     return std::nullopt;
   return std::pair{*add.left, *add.right};
-}
-
-std::optional<PackedLineFamilyScoreRule>
-packed_line_family_score_rule(const LoweringContext& context, const V2Rule& rule) {
-  if (rule.body.empty())
-    return std::nullopt;
-
-  const V2Statement& first_assign = rule.body.front();
-  if (first_assign.kind != "v2_assign" || !first_assign.target.has_value() ||
-      !first_assign.expr.has_value()) {
-    return std::nullopt;
-  }
-
-  const Expression first_expression = parse_expression(*first_assign.expr, first_assign.line);
-  const std::optional<std::pair<PackedScoreTerm, PackedScoreTerm>> first_pair =
-      packed_score_pair(first_expression, first_assign.line);
-  if (!first_pair.has_value())
-    return std::nullopt;
-
-  auto finish_match = [&](const V2Statement& add_call, const V2Statement& add_score,
-                          const V2Statement& sub_call, const V2Statement& sub_score,
-                          const Expression& add_arg, const Expression& sub_arg,
-                          int add_raw_line,
-                          int sub_raw_line) -> std::optional<PackedLineFamilyScoreRule> {
-    if (add_call.kind != "v2_invoke" || sub_call.kind != "v2_invoke" ||
-        !add_call.name.has_value() || !sub_call.name.has_value() ||
-        *add_call.name != *sub_call.name) {
-      return std::nullopt;
-    }
-
-    const auto normalizer_it = context.x_param_procs.find(*add_call.name);
-    if (normalizer_it == context.x_param_procs.end() ||
-        !normalizer_it->second.first.target.has_value()) {
-      return std::nullopt;
-    }
-    const std::string& normalizer_return = *normalizer_it->second.first.target;
-
-    const std::optional<PackedScoreTerm> add_term =
-        packed_score_accumulator_term(add_score, *first_assign.target, normalizer_return);
-    const std::optional<PackedScoreTerm> sub_term =
-        packed_score_accumulator_term(sub_score, *first_assign.target, normalizer_return);
-    if (!add_term.has_value() || !sub_term.has_value()) {
-      return std::nullopt;
-    }
-
-    const std::optional<std::pair<Expression, Expression>> diagonal =
-        shared_add_sub_operands(add_arg, sub_arg);
-    if (!diagonal.has_value()) {
-      return std::nullopt;
-    }
-
-    return PackedLineFamilyScoreRule{
-        .score = *first_assign.target,
-        .normalizer = *add_call.name,
-        .normalizer_param = normalizer_it->second.param,
-        .normalizer_return = normalizer_return,
-        .first = first_pair->first,
-        .second = first_pair->second,
-        .diagonal_add = *add_term,
-        .diagonal_sub = *sub_term,
-        .shared = diagonal->first,
-        .partial = diagonal->second,
-        .diagonal_add_raw_line = add_raw_line,
-        .diagonal_sub_raw_line = sub_raw_line,
-        .diagonal_add_score_line = add_score.line,
-        .diagonal_sub_score_line = sub_score.line,
-        .line = first_assign.line,
-    };
-  };
-
-  if (rule.body.size() == 5) {
-    const V2Statement& add_call = rule.body.at(1);
-    const V2Statement& add_score = rule.body.at(2);
-    const V2Statement& sub_call = rule.body.at(3);
-    const V2Statement& sub_score = rule.body.at(4);
-    if (add_call.args.size() != 1U || sub_call.args.size() != 1U)
-      return std::nullopt;
-    return finish_match(add_call, add_score, sub_call, sub_score,
-                        parse_expression(add_call.args.front(), add_call.line),
-                        parse_expression(sub_call.args.front(), sub_call.line), add_call.line,
-                        sub_call.line);
-  }
-
-  if (rule.body.size() == 7) {
-    const V2Statement& add_raw = rule.body.at(1);
-    const V2Statement& add_call = rule.body.at(2);
-    const V2Statement& add_score = rule.body.at(3);
-    const V2Statement& sub_raw = rule.body.at(4);
-    const V2Statement& sub_call = rule.body.at(5);
-    const V2Statement& sub_score = rule.body.at(6);
-    if (add_raw.kind != "v2_assign" || !add_raw.target.has_value() ||
-        !add_raw.expr.has_value() || sub_raw.kind != "v2_assign" ||
-        !sub_raw.target.has_value() || !sub_raw.expr.has_value() ||
-        *add_raw.target != *sub_raw.target) {
-      return std::nullopt;
-    }
-    const auto normalizer_it = add_call.name.has_value()
-                                   ? context.x_param_procs.find(*add_call.name)
-                                   : context.x_param_procs.end();
-    if (normalizer_it == context.x_param_procs.end() ||
-        normalizer_it->second.param != *add_raw.target) {
-      return std::nullopt;
-    }
-    return finish_match(add_call, add_score, sub_call, sub_score,
-                        parse_expression(*add_raw.expr, add_raw.line),
-                        parse_expression(*sub_raw.expr, sub_raw.line), add_raw.line,
-                        sub_raw.line);
-  }
-
-  return std::nullopt;
-}
-
-bool lower_packed_line_family_score_rule(LoweringContext& context, const V2Rule& rule) {
-  if (context.disable_packed_line_family_score_accumulator)
-    return false;
-  const std::optional<PackedLineFamilyScoreRule> match =
-      packed_line_family_score_rule(context, rule);
-  if (!match.has_value())
-    return false;
-
-  // Each diagonal line value is pushed under its index before the shared tail
-  // runs, so it must lower as a single stack lift (one recall or one digit).
-  const auto diagonal_line_value_single_lift = [&](const Expression& line_value) -> bool {
-    if (line_value.kind == "number")
-      return true;
-    if (line_value.kind == "identifier")
-      return context.register_index_by_name.contains(line_value.name);
-    if (line_value.kind == "indexed" && line_value.index != nullptr) {
-      const std::optional<int> index = numeric_index_value(*line_value.index);
-      const auto bank_it =
-          context.state_banks.find(bank_member_key(line_value.base, line_value.field));
-      if (!index.has_value() || bank_it == context.state_banks.end() ||
-          bank_it->second == nullptr || !bank_it->second->bank.has_value())
-        return false;
-      return context.register_index_by_name.contains(
-          state_bank_element_name(*bank_it->second, *index));
-    }
-    return false;
-  };
-  if (!diagonal_line_value_single_lift(match->diagonal_add.line_value) ||
-      !diagonal_line_value_single_lift(match->diagonal_sub.line_value))
-    return false;
-
-  const bool share_generic_helper =
-      context.share_packed_line_score_accumulator_with_generic_helper ||
-      context.packed_score_accumulator_helper.has_value();
-  const std::string helper =
-      share_generic_helper ? packed_score_accumulator_helper_label(context)
-                           : context.emitter.fresh_label("packed_line_family_score_accumulator");
-  const std::string helper_call_comment =
-      share_generic_helper ? "packed_score accumulator helper"
-                           : "packed-line score accumulator helper";
-  auto emit_score = [&](const PackedScoreTerm& term) -> bool {
-    if (!lower_expression_to_x(context, term.line_value))
-      return false;
-    if (!lower_expression_to_x(context, term.index))
-      return false;
-    context.emitter.emit_jump(0x53, "ПП", helper, helper_call_comment, term.line);
-    mark_current_x(context, match->score);
-    context.emitter.current_x_known_zero = false;
-    return true;
-  };
-
-  context.emitter.current_x_known_zero = false;
-  context.emitter.emit_number("0");
-  if (!context.emitter.items.empty())
-    context.emitter.items.back().comment = "packed-line score accumulator";
-  context.emitter.emit_label(packed_line_family_score_zero_entry_label(rule.name),
-                             {.hidden = true});
-  if (!emit_score(match->first))
-    return false;
-  if (!emit_score(match->second))
-    return false;
-
-  const std::string tail = context.emitter.fresh_label("packed_line_family_score_tail");
-  if (!lower_expression_to_x(context, match->diagonal_add.line_value))
-    return false;
-  if (!lower_expression_to_x(context, match->partial))
-    return false;
-  context.emitter.emit_jump(0x53, "ПП", tail, "packed-line shared diagonal score",
-                            match->diagonal_add_score_line);
-  mark_current_x(context, match->score);
-  context.emitter.current_x_known_zero = false;
-
-  if (!lower_expression_to_x(context, match->diagonal_sub.line_value))
-    return false;
-  if (!lower_expression_to_x(context, match->partial))
-    return false;
-  context.emitter.emit_op(0x0b, "/-/", "packed-line negative diagonal index",
-                          match->diagonal_sub_raw_line);
-  context.emitter.emit_label(tail);
-  if (!lower_expression_to_x(context, match->shared))
-    return false;
-  context.emitter.emit_op(0x10, "+", "packed-line diagonal index", match->diagonal_add_raw_line);
-  context.emitter.emit_jump(0x53, "ПП", function_label(match->normalizer),
-                            "proc call " + match->normalizer, match->diagonal_add_raw_line);
-  mark_current_x(context, match->normalizer_return);
-  context.emitter.emit_jump(0x53, "ПП", helper, helper_call_comment,
-                            match->diagonal_add_score_line);
-  if (context.stack_only_state_fields.contains(match->score)) {
-    mark_current_x(context, match->score);
-    context.emitter.current_x_known_zero = false;
-  } else {
-    emit_store(context, match->score, "set " + match->score);
-  }
-  context.emitter.emit_op(0x52, "В/О", "packed-line family score return",
-                          match->diagonal_sub_score_line);
-
-  if (!share_generic_helper) {
-    context.emitter.emit_label(helper);
-    context.emitter.emit_op(0x15, "F 10^x", "packed-line score helper pow10", match->line);
-    context.emitter.emit_op(0x13, "/", "packed-line score helper divide", match->line);
-    context.emitter.emit_op(0x35, "К {x}", "packed-line score helper frac", match->line);
-    emit_number_or_preload(context, "0.41200076");
-    context.emitter.emit_op(0x11, "-", "packed-line score helper center", match->line);
-    context.emitter.emit_op(0x22, "F x^2", "packed-line score helper square", match->line);
-    context.emitter.emit_op(0x10, "+", "packed-line score helper accumulate", match->line);
-    context.emitter.emit_op(0x52, "В/О", "packed-line score helper return", match->line);
-  }
-  context.optimizations.push_back(OptimizationReport{
-      .name = "packed-line-family-score-accumulator",
-      .detail = "Accumulated four packed_score() terms through one helper while sharing diagonal "
-                "scoring for " +
-                expression_to_source(add_expression(match->shared, match->partial)) + " and " +
-                expression_to_source(subtract_expression(match->shared, match->partial)) + " in " +
-                rule.name +
-                (share_generic_helper ? " Shared the generic packed_score accumulator helper."
-                                      : "."),
-  });
-  return true;
 }
 
 struct IndexedPackedUpdateTailRule {
@@ -21508,29 +21418,6 @@ struct IndexedPackedUpdateTailRule {
   int update_line = 0;
   int branch_line = 0;
   int halt_line = 0;
-};
-
-struct PackedLineFamilyUpdateStep {
-  Expression line_expr;
-  int slot = 0;
-  int source_line = 0;
-  std::optional<std::string> normalizer;
-};
-
-struct PackedLineFamilyUpdateRule {
-  std::string rule;
-  std::string update_rule;
-  std::string delta_name;
-  std::optional<std::string> alternating_sign_state;
-  IndexedPackedUpdateTailRule update;
-  std::vector<PackedLineFamilyUpdateStep> steps;
-  int line = 0;
-};
-
-enum class PackedLineSelectorMode {
-  Allocation,
-  Direct,
-  Mutating,
 };
 
 std::optional<int> integer_value_of_expression(const LoweringContext& context,
@@ -21991,7 +21878,7 @@ bool lower_indexed_packed_pow10_delta_report_branch(LoweringContext& context,
       context.emitter.emit_label(halt_label);
       context.emitter.emit_op(0x0a, ".", "updated packed fractional report X2 restore",
                               branch.line);
-      context.emitter.emit_op(0x50, "С/П", "halt", report->halt_line);
+      context.emitter.emit_stop(StopDisposition::Terminal, "С/П", "halt", report->halt_line);
       clear_current_x_facts(context);
       context.optimizations.push_back(OptimizationReport{
           .name = "indexed-packed-fractional-report-x2-tail",
@@ -22009,7 +21896,7 @@ bool lower_indexed_packed_pow10_delta_report_branch(LoweringContext& context,
                               "false branch for packed fractional report !=", branch.line);
     context.emitter.emit_op(0x25, "F reverse", "updated packed fractional report restore",
                             branch.line);
-    context.emitter.emit_op(0x50, "С/П", "halt", report->halt_line);
+    context.emitter.emit_stop(StopDisposition::Terminal, "С/П", "halt", report->halt_line);
     context.emitter.emit_label(false_label, {.hidden = true});
     context.optimizations.push_back(OptimizationReport{
         .name = "indexed-packed-fractional-report-branch",
@@ -22032,7 +21919,7 @@ bool lower_indexed_packed_pow10_delta_report_branch(LoweringContext& context,
   if (!lower_expression_to_x(context, report->neutral))
     return false;
   context.emitter.emit_op(0x10, "+", "updated packed report restore", branch.line);
-  context.emitter.emit_op(0x50, "С/П", "halt", report->halt_line);
+  context.emitter.emit_stop(StopDisposition::Terminal, "С/П", "halt", report->halt_line);
   context.emitter.emit_label(false_label, {.hidden = true});
   context.optimizations.push_back(OptimizationReport{
       .name = "indexed-packed-bit-report-branch",
@@ -22043,8 +21930,7 @@ bool lower_indexed_packed_pow10_delta_report_branch(LoweringContext& context,
 }
 
 std::optional<IndexedPackedUpdateTailRule> x_param_indexed_fractional_report_tail_rule(
-    const LoweringContext& context, const V2Rule& rule,
-    PackedLineSelectorMode mode = PackedLineSelectorMode::Direct) {
+    const LoweringContext& context, const V2Rule& rule) {
   const auto lowering_it = context.x_param_procs.find(rule.name);
   if (lowering_it == context.x_param_procs.end() || lowering_it->second.kind != "copy" ||
       rule.body.size() < 3)
@@ -22061,21 +21947,10 @@ std::optional<IndexedPackedUpdateTailRule> x_param_indexed_fractional_report_tai
   const Expression target = parse_expression(*update.target, update.line);
   if (target.kind != "indexed")
     return std::nullopt;
-  int selector_register = 0;
-  if (mode == PackedLineSelectorMode::Direct) {
-    const std::optional<int> direct_selector =
-        direct_physical_indexed_selector_register(context, target, *first.target);
-    if (!direct_selector.has_value())
-      return std::nullopt;
-    selector_register = *direct_selector;
-  } else if (mode == PackedLineSelectorMode::Mutating) {
-    const std::optional<int> mutating_selector =
-        physical_indexed_selector_register(context, target, *first.target);
-    if (!mutating_selector.has_value() || core::indirect_selector_mutation(*mutating_selector) !=
-                                              core::IndirectSelectorMutation::PreDecrement)
-      return std::nullopt;
-    selector_register = *mutating_selector;
-  }
+  const std::optional<int> selector_register =
+      direct_physical_indexed_selector_register(context, target, *first.target);
+  if (!selector_register.has_value())
+    return std::nullopt;
 
   const Expression update_expression = parse_expression(*update.expr, update.line);
   const std::optional<std::tuple<std::string, std::string, Expression>> delta =
@@ -22092,7 +21967,7 @@ std::optional<IndexedPackedUpdateTailRule> x_param_indexed_fractional_report_tai
       .update_rule = rule.name,
       .param = lowering_it->second.param,
       .selector = *first.target,
-      .selector_register = selector_register,
+      .selector_register = *selector_register,
       .y_name = std::get<1>(*delta),
       .target = target,
       .factor = std::get<2>(*delta),
@@ -22102,122 +21977,6 @@ std::optional<IndexedPackedUpdateTailRule> x_param_indexed_fractional_report_tai
       .branch_line = report->branch_line,
       .halt_line = report->halt_line,
   };
-}
-
-bool packed_line_family_update_slot_matches_bank(const LoweringContext& context,
-                                                 const Expression& target, int slot) {
-  const std::string key = bank_member_key(target.base, target.field);
-  const auto bank_it = context.state_banks.find(key);
-  if (bank_it == context.state_banks.end() || !bank_it->second->bank.has_value())
-    return false;
-  return slot >= bank_it->second->bank->min && slot <= bank_it->second->bank->max;
-}
-
-std::optional<PackedLineFamilyUpdateStep> packed_line_family_update_direct_step(
-    const LoweringContext& context, const std::vector<V2Statement>& statements, std::size_t cursor,
-    const IndexedPackedUpdateTailRule& update, std::size_t& consumed) {
-  if (cursor + 1U >= statements.size())
-    return std::nullopt;
-  const V2Statement& line_assign = statements.at(cursor);
-  const V2Statement& call = statements.at(cursor + 1U);
-  if (line_assign.kind != "v2_assign" || !line_assign.target.has_value() ||
-      *line_assign.target != update.y_name || !line_assign.expr.has_value() ||
-      call.kind != "v2_invoke" || !call.name.has_value() || *call.name != update.update_rule ||
-      call.args.size() != 1)
-    return std::nullopt;
-
-  const Expression slot_expression = parse_expression(call.args.front(), call.line);
-  const std::optional<int> slot = integer_value_of_expression(context, slot_expression);
-  if (!slot.has_value())
-    return std::nullopt;
-  consumed = 2;
-  return PackedLineFamilyUpdateStep{
-      .line_expr = parse_expression(*line_assign.expr, line_assign.line),
-      .slot = *slot,
-      .source_line = line_assign.line,
-  };
-}
-
-std::optional<PackedLineFamilyUpdateStep> packed_line_family_update_normalized_step(
-    const LoweringContext& context, const std::vector<V2Statement>& statements, std::size_t cursor,
-    const IndexedPackedUpdateTailRule& update, std::size_t& consumed) {
-  if (cursor + 1U >= statements.size())
-    return std::nullopt;
-  const V2Statement& normalizer_call = statements.at(cursor);
-  const V2Statement& call = statements.at(cursor + 1U);
-  if (normalizer_call.kind != "v2_invoke" || !normalizer_call.name.has_value() ||
-      normalizer_call.args.size() != 1 || call.kind != "v2_invoke" || !call.name.has_value() ||
-      *call.name != update.update_rule || call.args.size() != 1)
-    return std::nullopt;
-
-  const auto normalizer_it = context.x_param_procs.find(*normalizer_call.name);
-  if (normalizer_it == context.x_param_procs.end() || !normalizer_it->second.first.target ||
-      *normalizer_it->second.first.target != update.y_name)
-    return std::nullopt;
-
-  const Expression slot_expression = parse_expression(call.args.front(), call.line);
-  const std::optional<int> slot = integer_value_of_expression(context, slot_expression);
-  if (!slot.has_value())
-    return std::nullopt;
-  consumed = 2;
-  return PackedLineFamilyUpdateStep{
-      .line_expr = parse_expression(normalizer_call.args.front(), normalizer_call.line),
-      .slot = *slot,
-      .source_line = normalizer_call.line,
-      .normalizer = *normalizer_call.name,
-  };
-}
-
-std::optional<std::vector<PackedLineFamilyUpdateStep>>
-packed_line_family_update_steps(const LoweringContext& context,
-                                const std::vector<V2Statement>& statements,
-                                const IndexedPackedUpdateTailRule& update) {
-  std::vector<PackedLineFamilyUpdateStep> steps;
-  std::optional<std::string> normalizer;
-  std::size_t cursor = 0;
-  while (cursor < statements.size()) {
-    std::size_t consumed = 0;
-    if (std::optional<PackedLineFamilyUpdateStep> direct =
-            packed_line_family_update_direct_step(context, statements, cursor, update, consumed)) {
-      steps.push_back(std::move(*direct));
-      cursor += consumed;
-      continue;
-    }
-    if (std::optional<PackedLineFamilyUpdateStep> normalized =
-            packed_line_family_update_normalized_step(context, statements, cursor, update,
-                                                      consumed)) {
-      if (normalizer.has_value() && normalized->normalizer != normalizer)
-        return std::nullopt;
-      normalizer = normalized->normalizer;
-      steps.push_back(std::move(*normalized));
-      cursor += consumed;
-      continue;
-    }
-    return std::nullopt;
-  }
-
-  if (steps.size() < 4)
-    return std::nullopt;
-  std::set<int> unique_slots;
-  for (const PackedLineFamilyUpdateStep& step : steps) {
-    unique_slots.insert(step.slot);
-    if (!packed_line_family_update_slot_matches_bank(context, update.target, step.slot))
-      return std::nullopt;
-  }
-  if (unique_slots.size() < 4)
-    return std::nullopt;
-  return steps;
-}
-
-bool packed_line_family_update_steps_descend_by_one(
-    const std::vector<PackedLineFamilyUpdateStep>& steps) {
-  if (steps.size() < 2)
-    return false;
-  for (std::size_t index = 1; index < steps.size(); ++index) {
-    if (steps.at(index - 1).slot - steps.at(index).slot != 1)
-      return false;
-  }
-  return true;
 }
 
 bool expression_preserves_previous_x_as_y_for_packed_line(const Expression& expression) {
@@ -22254,872 +22013,8 @@ bool x_param_proc_preserves_caller_y(const LoweringContext& context, const std::
   return expression_preserves_previous_x_as_y_for_packed_line(expression);
 }
 
-bool packed_line_family_update_steps_preserve_y(
-    const LoweringContext& context, const std::vector<PackedLineFamilyUpdateStep>& steps) {
-  return std::all_of(steps.begin(), steps.end(), [&](const PackedLineFamilyUpdateStep& step) {
-    if (!expression_preserves_previous_x_as_y_for_packed_line(step.line_expr))
-      return false;
-    return !step.normalizer.has_value() ||
-           x_param_proc_preserves_caller_y(context, *step.normalizer);
-  });
-}
-
-std::optional<PackedLineFamilyUpdateRule>
-packed_line_family_update_rule(const LoweringContext& context, const V2Rule& rule,
-                               PackedLineSelectorMode mode = PackedLineSelectorMode::Direct) {
-  if (rule.body.size() < 5)
-    return std::nullopt;
-  std::size_t prefix = 0;
-  std::optional<std::string> alternating_sign_state;
-  if (rule.body.size() >= 2U) {
-    const V2Statement& toggle = rule.body.front();
-    if (toggle.kind == "v2_assign" && toggle.target.has_value() &&
-        toggle.expr.has_value()) {
-      const Expression toggled = parse_expression(*toggle.expr, toggle.line);
-      if (toggled.kind == "unary" && toggled.op == "-" && toggled.expr != nullptr &&
-          toggled.expr->kind == "identifier" &&
-          toggled.expr->name == *toggle.target) {
-        alternating_sign_state = *toggle.target;
-        prefix = 1;
-      }
-    }
-  }
-  const V2Statement& first = rule.body.at(prefix);
-  if (first.kind != "v2_assign" || !first.target.has_value() || !first.expr.has_value())
-    return std::nullopt;
-  const Expression first_expression = parse_expression(*first.expr, first.line);
-  if (first_expression.kind != "identifier" ||
-      (alternating_sign_state.has_value() &&
-       first_expression.name != *alternating_sign_state))
-    return std::nullopt;
-
-  for (const auto& [unused_name, candidate] : context.rules) {
-    (void)unused_name;
-    if (candidate == nullptr)
-      continue;
-    const std::optional<IndexedPackedUpdateTailRule> update =
-        x_param_indexed_fractional_report_tail_rule(context, *candidate, mode);
-    if (!update.has_value() || update->factor.kind != "identifier" ||
-        update->factor.name != *first.target)
-      continue;
-    std::vector<V2Statement> rest(
-        rule.body.begin() + static_cast<std::ptrdiff_t>(prefix + 1U), rule.body.end());
-    std::optional<std::vector<PackedLineFamilyUpdateStep>> steps =
-        packed_line_family_update_steps(context, rest, *update);
-    if (!steps.has_value())
-      continue;
-    if (mode == PackedLineSelectorMode::Mutating &&
-        (!packed_line_family_update_steps_descend_by_one(*steps) ||
-         !packed_line_family_update_steps_preserve_y(context, *steps))) {
-      continue;
-    }
-    return PackedLineFamilyUpdateRule{
-        .rule = rule.name,
-        .update_rule = candidate->name,
-        .delta_name = *first.target,
-        .alternating_sign_state = alternating_sign_state,
-        .update = *update,
-        .steps = std::move(*steps),
-        .line = first.line,
-    };
-  }
-  return std::nullopt;
-}
-
-struct PackedLineBankLocation {
-  std::string bank_key;
-  int slot = 0;
-};
-
-std::optional<PackedLineBankLocation>
-packed_line_bank_location(const LoweringContext& context, const Expression& expression) {
-  if (expression.kind == "indexed" && expression.index != nullptr) {
-    const std::string key = bank_member_key(expression.base, expression.field);
-    const auto bank = context.state_banks.find(key);
-    const std::optional<int> slot = numeric_index_value(*expression.index);
-    if (bank == context.state_banks.end() || bank->second == nullptr ||
-        !bank->second->bank.has_value() || !slot.has_value() ||
-        *slot < bank->second->bank->min || *slot > bank->second->bank->max) {
-      return std::nullopt;
-    }
-    return PackedLineBankLocation{.bank_key = key, .slot = *slot};
-  }
-
-  if (expression.kind != "identifier")
-    return std::nullopt;
-  for (const auto& [key, field] : context.state_banks) {
-    if (field == nullptr || !field->bank.has_value())
-      continue;
-    for (int slot = field->bank->min; slot <= field->bank->max; ++slot) {
-      if (expression.name == state_bank_element_name(*field, slot))
-        return PackedLineBankLocation{.bank_key = key, .slot = slot};
-    }
-  }
-  return std::nullopt;
-}
-
-struct JointPackedLineFamilyRule {
-  PackedLineFamilyScoreRule score;
-  PackedLineFamilyUpdateRule update;
-};
-
-std::optional<JointPackedLineFamilyRule> joint_packed_line_family_rule(
-    const LoweringContext& context, const V2Rule& score_rule, const V2Rule& update_rule) {
-  const std::optional<PackedLineFamilyScoreRule> score =
-      packed_line_family_score_rule(context, score_rule);
-  const std::optional<PackedLineFamilyUpdateRule> update =
-      packed_line_family_update_rule(context, update_rule, PackedLineSelectorMode::Mutating);
-  if (!score.has_value() || !update.has_value() || update->steps.size() != 4U ||
-      !packed_line_family_update_steps_descend_by_one(update->steps) ||
-      !packed_line_family_update_steps_preserve_y(context, update->steps) ||
-      score->normalizer_return != update->update.y_name) {
-    return std::nullopt;
-  }
-
-  const std::array<const PackedScoreTerm*, 4> score_terms = {
-      &score->first, &score->second, &score->diagonal_add, &score->diagonal_sub};
-  std::optional<std::string> bank_key;
-  for (std::size_t index = 0; index < score_terms.size(); ++index) {
-    const std::optional<PackedLineBankLocation> location =
-        packed_line_bank_location(context, score_terms.at(index)->line_value);
-    if (!location.has_value() || location->slot != update->steps.at(index).slot)
-      return std::nullopt;
-    if (bank_key.has_value() && *bank_key != location->bank_key)
-      return std::nullopt;
-    bank_key = location->bank_key;
-  }
-  if (!bank_key.has_value() ||
-      *bank_key != bank_member_key(update->update.target.base, update->update.target.field)) {
-    return std::nullopt;
-  }
-
-  if (!expression_equals(score->first.index, update->steps.at(0).line_expr) ||
-      !expression_equals(score->second.index, update->steps.at(1).line_expr) ||
-      !expression_equals(add_expression(score->shared, score->partial),
-                         update->steps.at(2).line_expr) ||
-      !expression_equals(subtract_expression(score->shared, score->partial),
-                         update->steps.at(3).line_expr) ||
-      update->steps.at(0).normalizer.has_value() ||
-      update->steps.at(1).normalizer.has_value() ||
-      update->steps.at(2).normalizer != score->normalizer ||
-      update->steps.at(3).normalizer != score->normalizer) {
-    return std::nullopt;
-  }
-
-  return JointPackedLineFamilyRule{.score = *score, .update = *update};
-}
-
-bool joint_packed_line_statement_invokes(const V2Statement& statement,
-                                         const std::string& rule_name) {
-  if (statement.kind == "v2_invoke" && statement.name == rule_name)
-    return true;
-  const auto block_invokes = [&](const std::vector<V2Statement>& block) {
-    return std::any_of(block.begin(), block.end(), [&](const V2Statement& child) {
-      return joint_packed_line_statement_invokes(child, rule_name);
-    });
-  };
-  if (block_invokes(statement.body) || block_invokes(statement.then_body) ||
-      block_invokes(statement.else_body)) {
-    return true;
-  }
-  for (const V2MatchCase& match_case : statement.cases) {
-    if (match_case.action != nullptr &&
-        joint_packed_line_statement_invokes(*match_case.action, rule_name)) {
-      return true;
-    }
-  }
-  return statement.otherwise != nullptr &&
-         joint_packed_line_statement_invokes(*statement.otherwise, rule_name);
-}
-
-bool joint_packed_line_block_invokes(const std::vector<V2Statement>& statements,
-                                     const std::string& rule_name) {
-  return std::any_of(statements.begin(), statements.end(), [&](const V2Statement& statement) {
-    return joint_packed_line_statement_invokes(statement, rule_name);
-  });
-}
-
-std::optional<std::string> joint_packed_line_affine_max_target(
-    const V2Statement& statement, const std::string& score_name) {
-  const std::optional<std::string> target = scalar_statement_target_name(statement);
-  if (!target.has_value())
-    return std::nullopt;
-  std::optional<Expression> candidate;
-  try {
-    candidate = max_assign_candidate(statement);
-  } catch (const std::exception&) {
-    return std::nullopt;
-  }
-  if (!candidate.has_value() ||
-      !expression_is_identifier_named(*candidate, score_name)) {
-    return std::nullopt;
-  }
-  return target;
-}
-
-bool joint_packed_line_score_equality_predicate(const V2Predicate& predicate,
-                                                const std::string& score_name,
-                                                const std::set<std::string>& best_names,
-                                                int line) {
-  if (predicate.kind != "v2_compare" || predicate.op != "==")
-    return false;
-  try {
-    const Expression left = parse_expression(predicate.left, line);
-    const Expression right = parse_expression(predicate.right, line);
-    return (expression_is_identifier_named(left, score_name) && right.kind == "identifier" &&
-            best_names.contains(right.name)) ||
-           (expression_is_identifier_named(right, score_name) && left.kind == "identifier" &&
-            best_names.contains(left.name));
-  } catch (const std::exception&) {
-    return false;
-  }
-}
-
-void joint_packed_line_collect_affine_max_targets(
-    const std::vector<V2Statement>& statements, const std::string& score_name,
-    std::set<std::string>& best_names) {
-  for (const V2Statement& statement : statements) {
-    if (const std::optional<std::string> target =
-            joint_packed_line_affine_max_target(statement, score_name)) {
-      best_names.insert(*target);
-    }
-    joint_packed_line_collect_affine_max_targets(statement.body, score_name, best_names);
-    joint_packed_line_collect_affine_max_targets(statement.then_body, score_name, best_names);
-    joint_packed_line_collect_affine_max_targets(statement.else_body, score_name, best_names);
-    for (const V2MatchCase& match_case : statement.cases) {
-      if (match_case.action != nullptr) {
-        joint_packed_line_collect_affine_max_targets(
-            std::vector<V2Statement>{*match_case.action}, score_name, best_names);
-      }
-    }
-    if (statement.otherwise != nullptr) {
-      joint_packed_line_collect_affine_max_targets(
-          std::vector<V2Statement>{*statement.otherwise}, score_name, best_names);
-    }
-  }
-}
-
-bool joint_packed_line_score_reads_are_affine(
-    const std::vector<V2Statement>& statements, const std::string& score_name,
-    const std::set<std::string>& best_names, int& equality_reads) {
-  const auto text_reads = [&](const std::optional<std::string>& text, int line) {
-    return text.has_value() && expression_text_contains_identifier(*text, score_name, line);
-  };
-  for (const V2Statement& statement : statements) {
-    if ((statement.kind == "v2_assign" || statement.kind == "v2_update") &&
-        statement.target.has_value()) {
-      try {
-        const Expression target = parse_expression(*statement.target, statement.line);
-        if (target.kind == "identifier" && target.name == score_name)
-          return false;
-        if (target.kind != "identifier" && expression_contains_identifier(target, score_name))
-          return false;
-      } catch (const std::exception&) {
-        return false;
-      }
-    }
-
-    if (statement.kind == "v2_assign" && text_reads(statement.expr, statement.line)) {
-      if (!joint_packed_line_affine_max_target(statement, score_name).has_value())
-        return false;
-    } else if (statement.kind == "v2_update" &&
-               text_reads(statement.expr, statement.line)) {
-      return false;
-    } else if ((statement.kind == "v2_if" || statement.kind == "v2_while") &&
-               statement.predicate.has_value() &&
-               predicate_reads_identifier(*statement.predicate, score_name)) {
-      if (!joint_packed_line_score_equality_predicate(
-              *statement.predicate, score_name, best_names, statement.line)) {
-        return false;
-      }
-      ++equality_reads;
-    } else if (statement.kind == "v2_invoke") {
-      for (const std::string& arg : statement.args) {
-        if (expression_text_contains_identifier(arg, score_name, statement.line))
-          return false;
-      }
-    } else if (statement.kind == "v2_show" || statement.kind == "v2_stop" ||
-               statement.kind == "v2_preview" || statement.kind == "v2_return") {
-      if (text_reads(statement.target, statement.line) || text_reads(statement.expr, statement.line))
-        return false;
-      if (statement.items.has_value() &&
-          std::any_of(statement.items->begin(), statement.items->end(),
-                      [&](const DisplayItem& item) {
-                        return display_item_reads_identifier(item, score_name);
-                      })) {
-        return false;
-      }
-    } else if (statement.kind == "v2_match") {
-      if (text_reads(statement.expr, statement.line))
-        return false;
-      for (const V2MatchCase& match_case : statement.cases) {
-        for (const std::string& value : match_case.values) {
-          if (expression_text_contains_identifier(value, score_name, match_case.line))
-            return false;
-        }
-      }
-    } else if (statement.kind == "v2_raw" &&
-               statement_reads_identifier(statement, score_name, false)) {
-      return false;
-    }
-
-    if (!joint_packed_line_score_reads_are_affine(statement.body, score_name, best_names,
-                                                   equality_reads) ||
-        !joint_packed_line_score_reads_are_affine(statement.then_body, score_name, best_names,
-                                                   equality_reads) ||
-        !joint_packed_line_score_reads_are_affine(statement.else_body, score_name, best_names,
-                                                   equality_reads)) {
-      return false;
-    }
-    for (const V2MatchCase& match_case : statement.cases) {
-      if (match_case.action != nullptr &&
-          !joint_packed_line_score_reads_are_affine(
-              std::vector<V2Statement>{*match_case.action}, score_name, best_names,
-              equality_reads)) {
-        return false;
-      }
-    }
-    if (statement.otherwise != nullptr &&
-        !joint_packed_line_score_reads_are_affine(
-            std::vector<V2Statement>{*statement.otherwise}, score_name, best_names,
-            equality_reads)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-bool joint_packed_line_negative_update_call(const V2Statement& statement,
-                                            const std::string& update_rule) {
-  if (statement.kind != "v2_invoke" || statement.name != update_rule ||
-      statement.args.size() != 1U)
-    return false;
-  try {
-    const Expression value = parse_expression(statement.args.front(), statement.line);
-    const std::optional<double> numeric = numeric_literal_value(value);
-    return numeric.has_value() && *numeric < 0.0;
-  } catch (const std::exception&) {
-    return false;
-  }
-}
-
-bool joint_packed_line_chooser_calls_are_guarded(
-    const std::vector<V2Statement>& statements, const std::string& chooser_rule,
-    const std::string& update_rule, int& chooser_calls) {
-  for (std::size_t index = 0; index < statements.size(); ++index) {
-    const V2Statement& statement = statements.at(index);
-    if (statement.kind == "v2_invoke" && statement.name == chooser_rule) {
-      if (index == 0U ||
-          !joint_packed_line_negative_update_call(statements.at(index - 1U), update_rule)) {
-        return false;
-      }
-      ++chooser_calls;
-    }
-    if (!joint_packed_line_chooser_calls_are_guarded(statement.body, chooser_rule, update_rule,
-                                                      chooser_calls) ||
-        !joint_packed_line_chooser_calls_are_guarded(statement.then_body, chooser_rule,
-                                                      update_rule, chooser_calls) ||
-        !joint_packed_line_chooser_calls_are_guarded(statement.else_body, chooser_rule,
-                                                      update_rule, chooser_calls)) {
-      return false;
-    }
-    for (const V2MatchCase& match_case : statement.cases) {
-      if (match_case.action != nullptr &&
-          !joint_packed_line_chooser_calls_are_guarded(
-              std::vector<V2Statement>{*match_case.action}, chooser_rule, update_rule,
-              chooser_calls)) {
-        return false;
-      }
-    }
-    if (statement.otherwise != nullptr &&
-        !joint_packed_line_chooser_calls_are_guarded(
-            std::vector<V2Statement>{*statement.otherwise}, chooser_rule, update_rule,
-            chooser_calls)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-bool joint_packed_line_score_selector_bias_safe(
-    const V2Program& program, const JointPackedLineFamilyRule& match,
-    const std::string& score_rule, const std::string& update_rule) {
-  const auto reject = [&](std::string_view reason) {
-    if (std::getenv("MKPRO_TRACE_JOINT_BIAS") != nullptr)
-      std::cerr << "[joint-score-bias] reject " << score_rule << ": " << reason << "\n";
-    return false;
-  };
-  std::vector<const V2Rule*> callers;
-  if (joint_packed_line_block_invokes(program.body, score_rule))
-    return reject("score is invoked directly from the program body");
-  for (const V2Rule& rule : program.rules) {
-    if (rule.name != score_rule && joint_packed_line_block_invokes(rule.body, score_rule))
-      callers.push_back(&rule);
-  }
-  if (callers.size() != 1U || callers.front() == nullptr)
-    return reject("score does not have exactly one direct caller rule");
-
-  std::set<std::string> best_names;
-  joint_packed_line_collect_affine_max_targets(program.body, match.score.score, best_names);
-  for (const V2Rule& rule : program.rules) {
-    if (rule.name != score_rule)
-      joint_packed_line_collect_affine_max_targets(rule.body, match.score.score, best_names);
-  }
-  if (best_names.size() != 1U || *best_names.begin() != match.update.delta_name) {
-    if (std::getenv("MKPRO_TRACE_JOINT_BIAS") != nullptr) {
-      std::cerr << "[joint-score-bias] score=" << match.score.score
-                << " delta=" << match.update.delta_name << " best=";
-      for (const std::string& name : best_names)
-        std::cerr << name << ",";
-      std::cerr << "\n";
-    }
-    return reject("max target is not the packed update delta field");
-  }
-
-  int equality_reads = 0;
-  if (!joint_packed_line_score_reads_are_affine(program.body, match.score.score, best_names,
-                                                 equality_reads)) {
-    return reject("program-body score read is not affine-invariant");
-  }
-  for (const V2Rule& rule : program.rules) {
-    if (rule.name == score_rule)
-      continue;
-    if (!joint_packed_line_score_reads_are_affine(rule.body, match.score.score, best_names,
-                                                   equality_reads)) {
-      return reject("rule-body score read is not affine-invariant");
-    }
-  }
-  if (equality_reads == 0)
-    return reject("no score/max equality consumer was proved");
-
-  int chooser_calls = 0;
-  if (!joint_packed_line_chooser_calls_are_guarded(
-          program.body, callers.front()->name, update_rule, chooser_calls)) {
-    return reject("program-body chooser call is not preceded by a negative update");
-  }
-  for (const V2Rule& rule : program.rules) {
-    if (!joint_packed_line_chooser_calls_are_guarded(
-            rule.body, callers.front()->name, update_rule, chooser_calls)) {
-      return reject("rule-body chooser call is not preceded by a negative update");
-    }
-  }
-  if (chooser_calls == 0)
-    return reject("no guarded chooser call was found");
-  if (std::getenv("MKPRO_TRACE_JOINT_BIAS") != nullptr)
-    std::cerr << "[joint-score-bias] accept " << score_rule << "\n";
-  return true;
-}
-
-void plan_joint_packed_line_family_walks(LoweringContext& context,
-                                         const V2Program& program) {
-  if (!context.joint_packed_line_family_walk ||
-      !context.canonicalize_packed_line_bank_walks ||
-      !context.packed_line_family_mutating_selector_update_check_tail) {
-    return;
-  }
-  if (!context.joint_packed_line_family_plans.empty())
-    return;
-
-  std::set<std::string> used_rules;
-  for (const V2Rule& score_rule : program.rules) {
-    if (used_rules.contains(score_rule.name) ||
-        !packed_line_family_score_rule(context, score_rule).has_value()) {
-      continue;
-    }
-    const std::optional<PackedLineFamilyScoreRule> score_match =
-        packed_line_family_score_rule(context, score_rule);
-    if (!score_match.has_value()) {
-      continue;
-    }
-    for (const V2Rule& update_rule : program.rules) {
-      if (score_rule.name == update_rule.name || used_rules.contains(update_rule.name))
-        continue;
-      const std::optional<JointPackedLineFamilyRule> match =
-          joint_packed_line_family_rule(context, score_rule, update_rule);
-      if (!match.has_value() || used_rules.contains(match->update.update_rule))
-        continue;
-
-      const bool score_selector_bias = joint_packed_line_score_selector_bias_safe(
-          program, *match, score_rule.name, update_rule.name);
-      const int score_call_count = context.proc_call_counts.contains(score_rule.name)
-                                       ? context.proc_call_counts.at(score_rule.name)
-                                       : 0;
-      JointPackedLineFamilyEmissionPlan plan{
-          .score_rule = score_rule.name,
-          .update_rule = update_rule.name,
-          .suppressed_update_leaf_rule = match->update.update_rule,
-          .score_leaf_label = context.emitter.fresh_label("joint_packed_line_score_leaf"),
-          .update_leaf_label = context.emitter.fresh_label("joint_packed_line_update_leaf"),
-          .walker_label = context.emitter.fresh_label("joint_packed_line_walker"),
-          .selector_store_label =
-              context.emitter.fresh_label("joint_packed_line_selector_store"),
-          .selector_register = 0xe,
-          .score_selector_bias = score_selector_bias,
-          .inline_score_selector_entry = score_selector_bias && score_call_count == 1,
-          .update_tail_fallthrough = score_selector_bias && score_call_count == 1,
-      };
-      const std::size_t plan_index = context.joint_packed_line_family_plans.size();
-      context.joint_packed_line_family_plans.push_back(std::move(plan));
-      context.joint_packed_line_family_plan_by_rule[score_rule.name] = plan_index;
-      context.joint_packed_line_family_plan_by_rule[update_rule.name] = plan_index;
-      used_rules.insert(score_rule.name);
-      used_rules.insert(update_rule.name);
-      used_rules.insert(match->update.update_rule);
-      break;
-    }
-  }
-}
-
-JointPackedLineFamilyEmissionPlan* joint_packed_line_family_plan_for_rule(
-    LoweringContext& context, const std::string& rule_name) {
-  const auto found = context.joint_packed_line_family_plan_by_rule.find(rule_name);
-  if (found == context.joint_packed_line_family_plan_by_rule.end() ||
-      found->second >= context.joint_packed_line_family_plans.size()) {
-    return nullptr;
-  }
-  return &context.joint_packed_line_family_plans.at(found->second);
-}
-
-void apply_packed_line_family_mutating_selector_hints(const LoweringContext& context,
-                                                      const V2Program& program,
-                                                      const RegisterCollection& collection,
-                                                      RegisterHints& hints) {
-  std::map<std::string, const V2Rule*> rules;
-  for (const V2Rule& rule : program.rules)
-    rules[rule.name] = &rule;
-
-  LoweringContext probe = context;
-  probe.rules = std::move(rules);
-
-  std::set<std::string> selectors;
-  for (const V2Rule& rule : program.rules) {
-    if (const std::optional<PackedLineFamilyUpdateRule> match =
-            packed_line_family_update_rule(probe, rule, PackedLineSelectorMode::Allocation)) {
-      if (packed_line_family_update_steps_descend_by_one(match->steps) &&
-          packed_line_family_update_steps_preserve_y(probe, match->steps)) {
-        selectors.insert(match->update.selector);
-      }
-    }
-  }
-
-  const std::vector<int> preferred = {0x3, 0x0, 0x1, 0x2};
-  std::set<int> used;
-  for (const auto& [unused_name, hint] : hints) {
-    (void)unused_name;
-    used.insert(hint.index);
-  }
-  for (const std::string& selector : selectors) {
-    if (!collection.variables.contains(selector) || hints.contains(selector))
-      continue;
-    const auto candidate = std::find_if(preferred.begin(), preferred.end(),
-                                        [&](int index) { return !used.contains(index); });
-    if (candidate == preferred.end())
-      return;
-    hints[selector] = RegisterHint{.mode = RegisterHintMode::Prefer, .index = *candidate};
-    used.insert(*candidate);
-  }
-}
-
-bool expression_uses_dynamic_bank_selector(const LoweringContext& context,
-                                           const Expression& expression,
-                                           const std::string& selector_name) {
-  if (expression.kind == "indexed" &&
-      bank_selector_variable_name(expression.base, expression.field) == selector_name &&
-      dynamic_state_bank_index_needs_selector(context, expression)) {
-    return true;
-  }
-  const auto child_uses = [&](const ExpressionPtr& child) {
-    return child != nullptr &&
-           expression_uses_dynamic_bank_selector(context, *child, selector_name);
-  };
-  if (child_uses(expression.index) || child_uses(expression.expr) || child_uses(expression.left) ||
-      child_uses(expression.right)) {
-    return true;
-  }
-  return std::any_of(expression.args.begin(), expression.args.end(), [&](const Expression& arg) {
-    return expression_uses_dynamic_bank_selector(context, arg, selector_name);
-  });
-}
-
-bool source_expression_uses_dynamic_bank_selector(const LoweringContext& context,
-                                                  const std::string& source,
-                                                  const std::string& selector_name, int line) {
-  try {
-    return expression_uses_dynamic_bank_selector(context, parse_expression(source, line),
-                                                 selector_name);
-  } catch (const std::exception&) {
-    return true;
-  }
-}
-
-bool statements_use_dynamic_bank_selector(const LoweringContext& context,
-                                          const std::vector<V2Statement>& statements,
-                                          const std::string& selector_name) {
-  for (const V2Statement& statement : statements) {
-    const auto source_uses = [&](const std::optional<std::string>& source) {
-      return source.has_value() && source_expression_uses_dynamic_bank_selector(
-                                       context, *source, selector_name, statement.line);
-    };
-    if (source_uses(statement.target) || source_uses(statement.expr))
-      return true;
-    for (const std::string& arg : statement.args) {
-      if (source_expression_uses_dynamic_bank_selector(context, arg, selector_name,
-                                                       statement.line)) {
-        return true;
-      }
-    }
-    if (statement.predicate.has_value() &&
-        (source_expression_uses_dynamic_bank_selector(
-             context, statement.predicate->left, selector_name, statement.line) ||
-         source_expression_uses_dynamic_bank_selector(
-             context, statement.predicate->right, selector_name, statement.line) ||
-         (!statement.predicate->item.empty() &&
-          source_expression_uses_dynamic_bank_selector(
-              context, statement.predicate->item, selector_name, statement.line)))) {
-      return true;
-    }
-    if (statement.items.has_value()) {
-      for (const DisplayItem& item : *statement.items) {
-        if (item.expr.has_value() &&
-            expression_uses_dynamic_bank_selector(context, *item.expr, selector_name)) {
-          return true;
-        }
-      }
-    }
-    if (statements_use_dynamic_bank_selector(context, statement.body, selector_name) ||
-        statements_use_dynamic_bank_selector(context, statement.then_body, selector_name) ||
-        statements_use_dynamic_bank_selector(context, statement.else_body, selector_name)) {
-      return true;
-    }
-    for (const V2MatchCase& match_case : statement.cases) {
-      if (match_case.action != nullptr &&
-          statements_use_dynamic_bank_selector(
-              context, std::vector<V2Statement>{*match_case.action}, selector_name)) {
-        return true;
-      }
-    }
-    if (statement.otherwise != nullptr &&
-        statements_use_dynamic_bank_selector(
-            context, std::vector<V2Statement>{*statement.otherwise}, selector_name)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool dynamic_bank_selector_used_outside_rule(const LoweringContext& context,
-                                             const V2Program& program,
-                                             const std::string& excluded_rule,
-                                             const std::string& selector_name) {
-  if (statements_use_dynamic_bank_selector(context, program.body, selector_name))
-    return true;
-  for (const V2Rule& rule : program.rules) {
-    if (rule.name != excluded_rule &&
-        statements_use_dynamic_bank_selector(context, rule.body, selector_name)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-void elide_packed_line_mutating_leaf_registers_after_allocation(
-    LoweringContext& context, const V2Program& program) {
-  if (!context.packed_line_family_mutating_selector_update_check_tail)
-    return;
-  for (const V2Rule& rule : program.rules) {
-    if (context.inline_statement_rules.contains(rule.name))
-      continue;
-    const std::optional<PackedLineFamilyUpdateRule> match =
-        packed_line_family_update_rule(context, rule, PackedLineSelectorMode::Mutating);
-    if (match.has_value()) {
-      context.register_index_by_name.erase(match->update.param);
-      context.registers.erase(match->update.param);
-      const std::string bank_selector = bank_selector_variable_name(
-          match->update.target.base, match->update.target.field);
-      if (!dynamic_bank_selector_used_outside_rule(context, program, match->update_rule,
-                                                   bank_selector)) {
-        context.register_index_by_name.erase(bank_selector);
-        context.registers.erase(bank_selector);
-        context.optimizations.push_back(OptimizationReport{
-            .name = "packed-line-family-elided-leaf-register-state",
-            .detail = "Removed the suppressed leaf parameter " + match->update.param +
-                      " and dynamic bank selector " + bank_selector +
-                      " after proving that no emitted rule outside " +
-                      match->update_rule + " uses that bank selector.",
-        });
-      }
-    }
-  }
-}
-
-bool statement_tree_writes_identifier(const V2Program& program, const V2Statement& statement,
-                                      const std::string& name,
-                                      std::set<std::string>& visited_rules);
-
-bool statements_tree_write_identifier(const V2Program& program,
-                                      const std::vector<V2Statement>& statements,
-                                      const std::string& name,
-                                      std::set<std::string>& visited_rules) {
-  return std::any_of(statements.begin(), statements.end(), [&](const V2Statement& statement) {
-    return statement_tree_writes_identifier(program, statement, name, visited_rules);
-  });
-}
-
-bool statement_tree_writes_identifier(const V2Program& program, const V2Statement& statement,
-                                      const std::string& name,
-                                      std::set<std::string>& visited_rules) {
-  if (statement_writes_identifier_for_stack_analysis(statement, name))
-    return true;
-  if (statement.kind == "v2_invoke" && statement.name.has_value() &&
-      visited_rules.insert(*statement.name).second) {
-    const auto rule = std::find_if(program.rules.begin(), program.rules.end(),
-                                   [&](const V2Rule& candidate) {
-                                     return candidate.name == *statement.name;
-                                   });
-    if (rule != program.rules.end() &&
-        statements_tree_write_identifier(program, rule->body, name, visited_rules)) {
-      return true;
-    }
-  }
-  if (statements_tree_write_identifier(program, statement.body, name, visited_rules) ||
-      statements_tree_write_identifier(program, statement.then_body, name, visited_rules) ||
-      statements_tree_write_identifier(program, statement.else_body, name, visited_rules)) {
-    return true;
-  }
-  for (const V2MatchCase& match_case : statement.cases) {
-    if (match_case.action != nullptr &&
-        statement_tree_writes_identifier(program, *match_case.action, name, visited_rules)) {
-      return true;
-    }
-  }
-  return statement.otherwise != nullptr &&
-         statement_tree_writes_identifier(program, *statement.otherwise, name, visited_rules);
-}
-
-bool packed_line_borrow_owner_is_cluster_write_free(const V2Program& program,
-                                                    const V2Rule& marker,
-                                                    const std::string& owner) {
-  std::set<std::string> visited_rules{marker.name};
-  return !statements_tree_write_identifier(program, marker.body, owner, visited_rules);
-}
-
-bool packed_line_continuation_rewrites_owner_before_read(
-    const V2Program& program, const std::vector<V2Statement>& statements, std::size_t start,
-    const std::string& owner) {
-  for (std::size_t index = start; index < statements.size(); ++index) {
-    const V2Statement& statement = statements.at(index);
-    std::set<std::string> seen_rules;
-    if (statement_reads_identifier_for_stack_analysis(program, statement, owner, seen_rules))
-      return false;
-    if (statement_writes_identifier_for_stack_analysis(statement, owner))
-      return true;
-    if (statement.kind == "v2_invoke" || statement.kind == "v2_if" ||
-        statement.kind == "v2_match" || statement.kind == "v2_loop" ||
-        statement.kind == "v2_while" || statement.kind == "v2_block" ||
-        statement.kind == "v2_raw") {
-      return false;
-    }
-  }
-  return false;
-}
-
-bool packed_line_call_continuations_rewrite_owner_before_read(
-    const V2Program& program, const std::vector<V2Statement>& statements,
-    const std::string& marker_rule, const std::string& owner, int& call_sites) {
-  for (std::size_t index = 0; index < statements.size(); ++index) {
-    const V2Statement& statement = statements.at(index);
-    if (statement.kind == "v2_invoke" && statement.name == marker_rule) {
-      ++call_sites;
-      if (!packed_line_continuation_rewrites_owner_before_read(program, statements, index + 1U,
-                                                               owner)) {
-        return false;
-      }
-    }
-    if (!packed_line_call_continuations_rewrite_owner_before_read(
-            program, statement.body, marker_rule, owner, call_sites) ||
-        !packed_line_call_continuations_rewrite_owner_before_read(
-            program, statement.then_body, marker_rule, owner, call_sites) ||
-        !packed_line_call_continuations_rewrite_owner_before_read(
-            program, statement.else_body, marker_rule, owner, call_sites)) {
-      return false;
-    }
-    for (const V2MatchCase& match_case : statement.cases) {
-      if (match_case.action != nullptr &&
-          !packed_line_call_continuations_rewrite_owner_before_read(
-              program, std::vector<V2Statement>{*match_case.action}, marker_rule, owner,
-              call_sites)) {
-        return false;
-      }
-    }
-    if (statement.otherwise != nullptr &&
-        !packed_line_call_continuations_rewrite_owner_before_read(
-            program, std::vector<V2Statement>{*statement.otherwise}, marker_rule, owner,
-            call_sites)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-bool packed_line_owner_is_rewritten_after_every_call(const V2Program& program,
-                                                     const std::string& marker_rule,
-                                                     const std::string& owner) {
-  int call_sites = 0;
-  if (!packed_line_call_continuations_rewrite_owner_before_read(
-          program, program.body, marker_rule, owner, call_sites)) {
-    return false;
-  }
-  for (const V2Rule& rule : program.rules) {
-    if (!packed_line_call_continuations_rewrite_owner_before_read(
-            program, rule.body, marker_rule, owner, call_sites)) {
-      return false;
-    }
-  }
-  return call_sites > 0;
-}
-
-void plan_packed_line_family_borrowed_mutating_selectors(LoweringContext& context,
-                                                         const V2Program& program) {
-  context.packed_line_borrowed_selector_registers.clear();
-  context.packed_line_borrowed_selector_owners.clear();
-  if (!context.packed_line_family_borrowed_mutating_selector_update_check_tail)
-    return;
-
-  const std::vector<int> preferred_registers = {0x3, 0x0, 0x1, 0x2};
-  for (const V2Rule& rule : program.rules) {
-    const std::optional<PackedLineFamilyUpdateRule> match =
-        packed_line_family_update_rule(context, rule, PackedLineSelectorMode::Allocation);
-    if (!match.has_value() || !packed_line_family_update_steps_descend_by_one(match->steps) ||
-        !packed_line_family_update_steps_preserve_y(context, match->steps)) {
-      continue;
-    }
-    for (const int candidate_register : preferred_registers) {
-      std::vector<std::string> owners;
-      for (const auto& [name, register_index] : context.register_index_by_name) {
-        if (register_index == candidate_register)
-          owners.push_back(name);
-      }
-      std::sort(owners.begin(), owners.end());
-
-      const bool safe = std::all_of(owners.begin(), owners.end(), [&](const std::string& owner) {
-        const bool eliminated_leaf_param = owner == match->update.param;
-        return owner != match->update.selector &&
-               packed_line_borrow_owner_is_cluster_write_free(program, rule, owner) &&
-               (eliminated_leaf_param ||
-                packed_line_owner_is_rewritten_after_every_call(program, rule.name, owner));
-      });
-      if (!safe)
-        continue;
-
-      context.packed_line_borrowed_selector_registers[rule.name] = candidate_register;
-      context.packed_line_borrowed_selector_owners[rule.name] = owners;
-      break;
-    }
-  }
-}
-
-void emit_packed_line_family_update_check_tail(LoweringContext& context,
-                                               const IndexedPackedUpdateTailRule& update) {
+void emit_x_param_indexed_fractional_report_tail(
+    LoweringContext& context, const IndexedPackedUpdateTailRule& update) {
   emit_store(context, update.selector, "set " + update.selector + " from X parameter");
   context.emitter.emit_op(0x14, "X<->Y", "stack-carried packed digit index", update.update_line);
   context.emitter.emit_op(0x15, "F 10^x", "stack-carried packed digit pow10", update.update_line);
@@ -23150,7 +22045,7 @@ void emit_packed_line_family_update_check_tail(LoweringContext& context,
   context.emitter.emit_label(halt_label);
   context.emitter.emit_op(0x0a, ".", "updated packed fractional report X2 restore",
                           update.branch_line);
-  context.emitter.emit_op(0x50, "С/П", "halt", update.halt_line);
+  context.emitter.emit_stop(StopDisposition::Terminal, "С/П", "halt", update.halt_line);
   context.optimizations.push_back(OptimizationReport{
       .name = "indexed-packed-fractional-report-x2-tail",
       .detail = "Restored the terminal fractional packed report through X2 after branching "
@@ -23158,13 +22053,6 @@ void emit_packed_line_family_update_check_tail(LoweringContext& context,
                 std::to_string(update.branch_line) + ".",
   });
   clear_current_x_facts(context);
-}
-
-Expression packed_line_family_update_step_line_value(const IndexedPackedUpdateTailRule& update,
-                                                     const PackedLineFamilyUpdateStep& step) {
-  Expression target = update.target;
-  target.index = std::make_shared<Expression>(number_expression(std::to_string(step.slot)));
-  return target;
 }
 
 bool lower_expression_preserving_previous_x_as_y(LoweringContext& context,
@@ -23215,287 +22103,6 @@ bool lower_expression_preserving_previous_x_as_y(LoweringContext& context,
   return false;
 }
 
-void emit_packed_line_family_mutating_update_check_tail(LoweringContext& context,
-                                                        const IndexedPackedUpdateTailRule& update) {
-  context.emitter.emit_op(0x15, "F 10^x", "stack-carried packed digit pow10", update.update_line);
-  (void)lower_expression_to_x(context, update.factor);
-  context.emitter.emit_op(0x12, "*", "stack-carried packed digit delta", update.update_line);
-  const std::optional<std::pair<int, std::string>> op = binary_opcode(update.op);
-  if (op.has_value())
-    context.emitter.emit_op(op->first, op->second, "mutating-selector packed digit update",
-                            update.update_line);
-  const PreparedIndexedSelector prepared_selector{.selector = update.selector};
-  context.emitter.emit_op(0xb0 + update.selector_register,
-                          "К X->П " + core::register_name_for_index(update.selector_register),
-                          indexed_memory_comment_or_action(
-                              context, "predecrement indexed set", update.target,
-                              prepared_selector),
-                          update.update_line);
-
-  (void)lower_expression_to_x(context, update.mask);
-  context.emitter.emit_op(0x37, "К ∧", "updated packed fractional report mask", update.branch_line);
-  context.emitter.emit_op(0x35, "К {x}", "updated packed fractional report predicate",
-                          update.branch_line);
-  const std::string halt_label = context.emitter.fresh_label("packed_frac_report_x2_halt");
-  context.emitter.emit_jump(0x5e, "F x=0", halt_label,
-                            "true branch for packed fractional report !=", update.branch_line);
-  context.emitter.emit_op(0x52, "В/О", "packed fractional report return", update.branch_line);
-  context.emitter.emit_label(halt_label);
-  context.emitter.emit_op(0x0a, ".", "updated packed fractional report X2 restore",
-                          update.branch_line);
-  context.emitter.emit_op(0x50, "С/П", "halt", update.halt_line);
-  context.optimizations.push_back(OptimizationReport{
-      .name = "indexed-packed-fractional-report-x2-tail",
-      .detail = "Restored the terminal fractional packed report through X2 after branching "
-                "directly to the halt path at line " +
-                std::to_string(update.branch_line) + ".",
-  });
-  clear_current_x_facts(context);
-}
-
-std::string joint_packed_line_selector_name(const JointPackedLineFamilyEmissionPlan& plan) {
-  return core::register_name_for_index(plan.selector_register);
-}
-
-void emit_joint_packed_line_late_selector_digits(
-    LoweringContext& context, const JointPackedLineFamilyEmissionPlan& plan,
-    const std::string& target_label, int line) {
-  const std::string selector = joint_packed_line_selector_name(plan);
-  const std::string comment = "joint-packed-line selector charge; selector=" + selector +
-                              "; target-label=" + target_label;
-  context.emitter.emit_op(0x00, "0", comment, line);
-  context.emitter.items.back().roles.push_back(core::make_late_bound_decimal_selector_role(
-      core::LateBoundDecimalSelectorPart::High, target_label));
-  context.emitter.emit_op(0x00, "0", comment, line);
-  context.emitter.items.back().roles.push_back(core::make_late_bound_decimal_selector_role(
-      core::LateBoundDecimalSelectorPart::Low, target_label));
-}
-
-void emit_joint_packed_line_selector_store(
-    LoweringContext& context, const JointPackedLineFamilyEmissionPlan& plan,
-    const std::string& target_label, int line, bool shared_entry) {
-  const std::string selector = joint_packed_line_selector_name(plan);
-  const std::string comment = "joint-packed-line selector charge; selector=" + selector +
-                              "; target-label=" + target_label;
-  if (shared_entry) {
-    context.emitter.emit_label(plan.selector_store_label, {.hidden = true});
-  }
-  context.emitter.emit_op(0x40 + plan.selector_register, "X->П " + selector,
-                          comment + "; charge-store", line);
-  if (shared_entry) {
-    context.emitter.items.back().roles.push_back(
-        "joint-packed-line-shared-selector-store:" + selector);
-  }
-}
-
-void emit_joint_packed_line_late_selector_charge(
-    LoweringContext& context, const JointPackedLineFamilyEmissionPlan& plan,
-    const std::string& target_label, int line, bool shared_entry = false) {
-  emit_joint_packed_line_late_selector_digits(context, plan, target_label, line);
-  emit_joint_packed_line_selector_store(context, plan, target_label, line, shared_entry);
-}
-
-std::string joint_packed_line_dispatch_comment(
-    const JointPackedLineFamilyEmissionPlan& plan) {
-  return "joint-packed-line leaf dispatch; selector=" +
-         joint_packed_line_selector_name(plan) + "; target-labels=" +
-         plan.score_leaf_label + "," + plan.update_leaf_label + "; walker=" +
-         plan.walker_label;
-}
-
-bool emit_joint_packed_line_family_leaves(LoweringContext& context,
-                                          JointPackedLineFamilyEmissionPlan& plan) {
-  if (plan.leaves_emitted)
-    return true;
-  const auto score_rule = context.rules.find(plan.score_rule);
-  const auto update_rule = context.rules.find(plan.update_rule);
-  if (score_rule == context.rules.end() || update_rule == context.rules.end() ||
-      score_rule->second == nullptr || update_rule->second == nullptr) {
-    return false;
-  }
-  const std::optional<JointPackedLineFamilyRule> match =
-      joint_packed_line_family_rule(context, *score_rule->second, *update_rule->second);
-  if (!match.has_value())
-    return false;
-
-  clear_current_x_facts(context);
-  context.emitter.emit_label(plan.score_leaf_label, {.hidden = true});
-  context.emitter.emit_op(0x15, "F 10^x", "joint packed-line score leaf pow10",
-                          match->score.line);
-  context.emitter.emit_op(0x13, "/", "joint packed-line score leaf divide",
-                          match->score.line);
-  context.emitter.emit_op(0x35, "К {x}", "joint packed-line score leaf frac",
-                          match->score.line);
-  emit_number_or_preload(context, "0.41200076");
-  context.emitter.emit_op(0x11, "-", "joint packed-line score leaf center",
-                          match->score.line);
-  context.emitter.emit_op(0x22, "F x^2", "joint packed-line score leaf square",
-                          match->score.line);
-  context.emitter.emit_op(0x10, "+", "joint packed-line score leaf accumulate",
-                          match->score.line);
-  if (!context.stack_only_state_fields.contains(match->score.score))
-    emit_store(context, match->score.score, "joint packed-line score leaf store");
-  context.emitter.emit_op(0x52, "В/О", "joint packed-line score leaf return",
-                          match->score.line);
-
-  context.emitter.emit_label(plan.update_leaf_label, {.hidden = true});
-  emit_packed_line_family_mutating_update_check_tail(context, match->update.update);
-  plan.leaves_emitted = true;
-  return true;
-}
-
-bool lower_joint_packed_line_family_score_rule(
-    LoweringContext& context, const V2Rule& rule,
-    const JointPackedLineFamilyEmissionPlan& plan) {
-  if (rule.name != plan.score_rule)
-    return false;
-  const std::optional<PackedLineFamilyScoreRule> match =
-      packed_line_family_score_rule(context, rule);
-  if (!match.has_value())
-    return false;
-
-  context.emitter.emit_label(packed_line_family_score_zero_entry_label(rule.name),
-                             {.hidden = true});
-  emit_joint_packed_line_late_selector_charge(context, plan, plan.score_leaf_label, match->line);
-  if (plan.score_selector_bias) {
-    if (!context.emitter.items.empty()) {
-      MachineItem& store = context.emitter.items.back();
-      const std::string suffix =
-          "joint packed-line score selector/affine accumulator; score-rule=" + rule.name;
-      store.comment = store.comment.has_value() ? *store.comment + "; " + suffix : suffix;
-      context.emitter.items.back().roles.push_back(
-          "joint-packed-line-score-selector-bias:" + rule.name);
-    }
-    context.optimizations.push_back(OptimizationReport{
-        .name = "joint-packed-line-selector-score-bias",
-        .detail = "Used the late-bound score-leaf selector as a common positive score bias in " +
-                  rule.name +
-                  " after proving that every score consumer is an affine-invariant max/equality "
-                  "selection guarded by a negative update pass.",
-    });
-  } else {
-    context.emitter.emit_number("0");
-    if (!context.emitter.items.empty())
-      context.emitter.items.back().comment = "joint packed-line score accumulator";
-  }
-  context.emitter.emit_jump(0x51, "БП", plan.walker_label,
-                            "joint packed-line score walker", match->line);
-  context.optimizations.push_back(OptimizationReport{
-      .name = "joint-packed-line-family-walk",
-      .detail = "Routed packed score rule " + rule.name +
-                " through a late-bound shared four-bank score/update walker.",
-  });
-  clear_current_x_facts(context);
-  return true;
-}
-
-bool lower_joint_packed_line_family_update_rule(
-    LoweringContext& context, const V2Rule& rule,
-    const JointPackedLineFamilyEmissionPlan& plan) {
-  if (rule.name != plan.update_rule)
-    return false;
-  const auto score_rule = context.rules.find(plan.score_rule);
-  if (score_rule == context.rules.end() || score_rule->second == nullptr)
-    return false;
-  const std::optional<JointPackedLineFamilyRule> match =
-      joint_packed_line_family_rule(context, *score_rule->second, rule);
-  if (!match.has_value())
-    return false;
-
-  if (match->update.alternating_sign_state.has_value()) {
-    emit_recall(context, *match->update.alternating_sign_state);
-    context.emitter.emit_op(0x0b, "/-/", "alternating packed-line update sign",
-                            match->update.line);
-    emit_store(context, *match->update.alternating_sign_state,
-               "set alternating packed-line update sign");
-    emit_store(context, match->update.delta_name,
-               "set " + match->update.delta_name + " from alternating sign");
-  } else {
-    emit_store(context, match->update.delta_name,
-               "set " + match->update.delta_name + " from X parameter");
-  }
-  const int first_slot = match->update.steps.front().slot;
-  emit_number_or_preload(context, std::to_string(first_slot + 1),
-                         "joint packed-line mutating selector start", match->update.line);
-  emit_store(context, match->update.update.selector,
-             "joint packed-line mutating selector start " +
-                 std::to_string(first_slot + 1));
-  emit_joint_packed_line_late_selector_charge(
-      context, plan, plan.update_leaf_label, match->update.line,
-      plan.inline_score_selector_entry);
-
-  context.emitter.emit_label(plan.walker_label, {.hidden = true});
-  const std::string dispatch_comment = joint_packed_line_dispatch_comment(plan);
-  for (std::size_t index = 0; index < 2U; ++index) {
-    const PackedLineFamilyUpdateStep& step = match->update.steps.at(index);
-    if (!lower_expression_to_x(
-            context, packed_line_family_update_step_line_value(match->update.update, step)) ||
-        !lower_expression_preserving_previous_x_as_y(context, step.line_expr,
-                                                      step.source_line)) {
-      return false;
-    }
-    context.emitter.emit_op(0xa0 + plan.selector_register,
-                            "К ПП " + joint_packed_line_selector_name(plan),
-                            dispatch_comment + "; call",
-                            step.source_line);
-    clear_current_x_facts(context);
-  }
-
-  const PackedLineFamilyUpdateStep& diagonal_add = match->update.steps.at(2);
-  const PackedLineFamilyUpdateStep& diagonal_sub = match->update.steps.at(3);
-  const std::string diagonal_tail =
-      context.emitter.fresh_label("joint_packed_line_diagonal_tail");
-  if (!lower_expression_to_x(
-          context,
-          packed_line_family_update_step_line_value(match->update.update, diagonal_add)) ||
-      !lower_expression_preserving_previous_x_as_y(context, match->score.partial,
-                                                    diagonal_add.source_line)) {
-    return false;
-  }
-  context.emitter.emit_jump(0x53, "ПП", diagonal_tail,
-                            "joint packed-line shared returned-index tail",
-                            diagonal_add.source_line);
-
-  if (!lower_expression_to_x(
-          context,
-          packed_line_family_update_step_line_value(match->update.update, diagonal_sub)) ||
-      !lower_expression_preserving_previous_x_as_y(context, match->score.partial,
-                                                    diagonal_sub.source_line)) {
-    return false;
-  }
-  context.emitter.emit_op(0x0b, "/-/", "joint packed-line negative diagonal index",
-                          diagonal_sub.source_line);
-  context.emitter.emit_label(diagonal_tail, {.hidden = true});
-  if (!lower_expression_preserving_previous_x_as_y(context, match->score.shared,
-                                                    diagonal_add.source_line)) {
-    return false;
-  }
-  context.emitter.emit_op(0x10, "+", "joint packed-line diagonal index",
-                          diagonal_add.source_line);
-  context.emitter.emit_jump(0x53, "ПП", function_label(match->score.normalizer),
-                            "joint packed-line direct normalizer", diagonal_add.source_line);
-  context.emitter.emit_op(0x80 + plan.selector_register,
-                          "К БП " + joint_packed_line_selector_name(plan),
-                          dispatch_comment + "; tail", diagonal_add.source_line);
-
-  context.optimizations.push_back(OptimizationReport{
-      .name = "joint-packed-line-family-walk",
-      .detail = "Fused packed update rule " + rule.name + " and score rule " +
-                plan.score_rule + " into one four-bank walker with late-bound leaf dispatch.",
-  });
-  context.optimizations.push_back(OptimizationReport{
-      .name = "packed-line-family-mutating-selector-update-check-tail",
-      .detail = "Kept the descending pre-decrement packed-bank selector inside the joint "
-                "score/update walker for " + rule.name + ".",
-  });
-  context.optimizations.push_back(OptimizationReport{
-      .name = "joint-packed-line-shared-returned-index-tail",
-      .detail = "Shared the normalize-and-leaf tail between additive and subtractive diagonal "
-                "indices in " + rule.name + ".",
-  });
-  return true;
-}
-
 bool lower_x_param_indexed_fractional_report_tail_rule(LoweringContext& context,
                                                        const V2Rule& rule) {
   const auto y_stack_it = context.x_param_y_stack_procs.find(rule.name);
@@ -23543,7 +22150,7 @@ bool lower_x_param_indexed_fractional_report_tail_rule(LoweringContext& context,
     context.emitter.emit_label(halt_label);
     context.emitter.emit_op(0x0a, ".", "updated packed fractional report X2 restore",
                             match->branch_line);
-    context.emitter.emit_op(0x50, "С/П", "halt", match->halt_line);
+    context.emitter.emit_stop(StopDisposition::Terminal, "С/П", "halt", match->halt_line);
     context.optimizations.push_back(OptimizationReport{
         .name = "indexed-packed-fractional-report-x2-tail",
         .detail = "Restored the terminal fractional packed report through X2 after branching "
@@ -23552,7 +22159,7 @@ bool lower_x_param_indexed_fractional_report_tail_rule(LoweringContext& context,
     });
     clear_current_x_facts(context);
   } else {
-    emit_packed_line_family_update_check_tail(context, *match);
+    emit_x_param_indexed_fractional_report_tail(context, *match);
   }
 
   context.current_y_variable.reset();
@@ -23584,172 +22191,6 @@ bool lower_x_param_indexed_fractional_report_tail_rule(LoweringContext& context,
                 std::to_string(match->branch_line) + ".",
   });
   return true;
-}
-
-bool lower_packed_line_family_mutating_update_rule(LoweringContext& context, const V2Rule& rule) {
-  const std::optional<PackedLineFamilyUpdateRule> match =
-      packed_line_family_update_rule(context, rule, PackedLineSelectorMode::Mutating);
-  if (!match.has_value())
-    return false;
-
-  emit_store(context, match->delta_name, "set " + match->delta_name + " from X parameter");
-  const int first_slot = match->steps.front().slot;
-  emit_number_or_preload(context, std::to_string(first_slot + 1),
-                         "packed-line mutating selector start", match->line);
-  emit_store(context, match->update.selector,
-             "packed-line mutating selector start " + std::to_string(first_slot + 1));
-
-  const std::string tail_label =
-      context.emitter.fresh_label("packed_line_family_mutating_update_check_tail");
-  for (std::size_t index = 0; index < match->steps.size(); ++index) {
-    const PackedLineFamilyUpdateStep& step = match->steps.at(index);
-    if (!lower_expression_to_x(context,
-                               packed_line_family_update_step_line_value(match->update, step)))
-      return false;
-    if (!lower_expression_preserving_previous_x_as_y(context, step.line_expr, step.source_line))
-      return false;
-    if (step.normalizer.has_value()) {
-      context.emitter.emit_jump(0x53, "ПП", function_label(*step.normalizer),
-                                "proc call " + *step.normalizer, step.source_line);
-      mark_current_x(context, match->update.y_name);
-    }
-    if (index + 1U == match->steps.size()) {
-      context.emitter.emit_label(tail_label);
-    } else {
-      context.emitter.emit_jump(0x53, "ПП", tail_label,
-                                "packed-line mutating shared update/check tail", step.source_line);
-      clear_current_x_facts(context);
-    }
-  }
-
-  emit_packed_line_family_mutating_update_check_tail(context, match->update);
-  context.optimizations.push_back(OptimizationReport{
-      .name = "packed-line-family-mutating-selector-update-check-tail",
-      .detail = "Lowered the descending packed-line walk in " + rule.name +
-                " through one pre-decrementing selector and suppressed " +
-                match->update_rule + " together with its canonical slot-parameter state.",
-  });
-  return true;
-}
-
-bool lower_packed_line_family_borrowed_mutating_update_rule(LoweringContext& context,
-                                                            const V2Rule& rule) {
-  const auto register_it = context.packed_line_borrowed_selector_registers.find(rule.name);
-  if (register_it == context.packed_line_borrowed_selector_registers.end())
-    return false;
-  std::optional<PackedLineFamilyUpdateRule> match =
-      packed_line_family_update_rule(context, rule, PackedLineSelectorMode::Allocation);
-  if (!match.has_value() || !packed_line_family_update_steps_descend_by_one(match->steps) ||
-      !packed_line_family_update_steps_preserve_y(context, match->steps)) {
-    return false;
-  }
-  match->update.selector_register = register_it->second;
-
-  emit_store(context, match->delta_name, "set " + match->delta_name + " from X parameter");
-  const int first_slot = match->steps.front().slot;
-  emit_number_or_preload(context, std::to_string(first_slot + 1),
-                         "packed-line borrowed mutating selector start", match->line);
-  context.emitter.emit_op(
-      0x40 + register_it->second,
-      "X->П " + core::register_name_for_index(register_it->second, context.feature_profile),
-      "packed-line borrowed mutating selector start " + std::to_string(first_slot + 1),
-      match->line);
-  clear_current_x_facts(context);
-
-  const std::string tail_label =
-      context.emitter.fresh_label("packed_line_family_borrowed_mutating_update_check_tail");
-  for (std::size_t index = 0; index < match->steps.size(); ++index) {
-    const PackedLineFamilyUpdateStep& step = match->steps.at(index);
-    if (!lower_expression_to_x(context,
-                               packed_line_family_update_step_line_value(match->update, step))) {
-      return false;
-    }
-    if (!lower_expression_preserving_previous_x_as_y(context, step.line_expr, step.source_line))
-      return false;
-    if (step.normalizer.has_value()) {
-      context.emitter.emit_jump(0x53, "ПП", function_label(*step.normalizer),
-                                "proc call " + *step.normalizer, step.source_line);
-      mark_current_x(context, match->update.y_name);
-    }
-    if (index + 1U == match->steps.size()) {
-      context.emitter.emit_label(tail_label);
-    } else {
-      context.emitter.emit_jump(0x53, "ПП", tail_label,
-                                "packed-line borrowed mutating shared update/check tail",
-                                step.source_line);
-      clear_current_x_facts(context);
-    }
-  }
-
-  emit_packed_line_family_mutating_update_check_tail(context, match->update);
-  const std::vector<std::string>& owners =
-      context.packed_line_borrowed_selector_owners.at(rule.name);
-  context.optimizations.push_back(OptimizationReport{
-      .name = "packed-line-family-borrowed-mutating-selector-update-check-tail",
-      .detail = "Borrowed " +
-                core::register_name_for_index(register_it->second, context.feature_profile) +
-                (owners.empty() ? " (free at lowering)" : " from " + join_strings(owners, ", ")) +
-                " for the descending packed-line selector in " + rule.name +
-                " after call-continuation analysis proved every owner write-free through the "
-                "marker cluster and rewritten before its next read after every call.",
-  });
-  return true;
-}
-
-bool lower_packed_line_family_update_rule(LoweringContext& context, const V2Rule& rule) {
-  const std::optional<PackedLineFamilyUpdateRule> match =
-      packed_line_family_update_rule(context, rule);
-  if (!match.has_value())
-    return false;
-
-  emit_store(context, match->delta_name, "set " + match->delta_name + " from X parameter");
-  const std::string tail_label =
-      context.emitter.fresh_label("packed_line_family_update_check_tail");
-
-  for (std::size_t index = 0; index < match->steps.size(); ++index) {
-    const PackedLineFamilyUpdateStep& step = match->steps.at(index);
-    if (!lower_expression_to_x(context, step.line_expr))
-      return false;
-    if (step.normalizer.has_value()) {
-      context.emitter.emit_jump(0x53, "ПП", function_label(*step.normalizer),
-                                "proc call " + *step.normalizer, step.source_line);
-      mark_current_x(context, match->update.y_name);
-    } else {
-      mark_current_x(context, match->update.y_name);
-    }
-    emit_number_or_preload(context, std::to_string(step.slot), std::nullopt, step.source_line);
-    if (index + 1U == match->steps.size()) {
-      context.emitter.emit_label(tail_label);
-    } else {
-      context.emitter.emit_jump(0x53, "ПП", tail_label, "packed-line shared update/check tail",
-                                step.source_line);
-      clear_current_x_facts(context);
-    }
-  }
-
-  emit_packed_line_family_update_check_tail(context, match->update);
-  return true;
-}
-
-bool suppress_packed_line_mutating_family_inline_rules(LoweringContext& context,
-                                                       const V2Program& program) {
-  if (!context.packed_line_family_mutating_selector_update_check_tail)
-    return false;
-
-  bool changed = false;
-  for (const V2Rule& rule : program.rules) {
-    if (!context.inline_statement_rules.contains(rule.name))
-      continue;
-    const std::optional<PackedLineFamilyUpdateRule> match =
-        packed_line_family_update_rule(context, rule, PackedLineSelectorMode::Allocation);
-    if (!match.has_value() || !packed_line_family_update_steps_descend_by_one(match->steps) ||
-        !packed_line_family_update_steps_preserve_y(context, match->steps)) {
-      continue;
-    }
-    context.inline_statement_rules.erase(rule.name);
-    changed = true;
-  }
-  return changed;
 }
 
 bool is_numeric_zero_expression(const LoweringContext& context, const Expression& expression) {
@@ -24451,7 +22892,7 @@ bool lower_call_to_x(LoweringContext& context, const Expression& expression) {
       const std::string display_name =
           rule.body.empty() ? risk_rule->param
                             : rule.body.front().inline_name.value_or(risk_rule->param);
-      context.emitter.emit_op(0x50, "С/П", "show " + display_name);
+      context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "show " + display_name);
       compile_stack_stop_risk_tail(context, risk_rule->risk, rule.body.back().line,
                                    rule.body.back().line);
       context.optimizations.push_back(OptimizationReport{
@@ -24473,18 +22914,6 @@ bool lower_call_to_x(LoweringContext& context, const Expression& expression) {
     return true;
   if (context.x_param_procs.contains(rule.name))
     return lower_x_param_rule_call(context, rule, expression.args, 0);
-  if (expression.args.empty() && context.emitter.current_x_known_zero &&
-      !context.disable_packed_line_family_score_accumulator) {
-    const std::optional<PackedLineFamilyScoreRule> score_rule =
-        packed_line_family_score_rule(context, rule);
-    if (score_rule.has_value() && context.stack_only_state_fields.contains(score_rule->score)) {
-      context.emitter.emit_jump(0x53, "ПП", packed_line_family_score_zero_entry_label(rule.name),
-                                "call function " + rule.name + " zero-accumulator entry");
-      mark_current_x(context, score_rule->score);
-      context.emitter.current_x_known_zero = false;
-      return true;
-    }
-  }
   if (!lower_rule_arguments(context, rule, expression.args))
     return false;
   context.emitter.emit_jump(0x53, "ПП", function_label(rule.name), "call function " + rule.name);
@@ -27633,7 +26062,7 @@ bool compile_residual_head_statement(LoweringContext& context, const V2Statement
                                      const Expression& residual, int line,
                                      const std::string& branch) {
   if (display_statement_is_single_expression(statement, residual)) {
-    context.emitter.emit_op(0x50, "С/П", "show", statement.line);
+    context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "show", statement.line);
     report_branch_residual_reuse(context, residual, line, branch);
     return true;
   }
@@ -27641,7 +26070,7 @@ bool compile_residual_head_statement(LoweringContext& context, const V2Statement
   if (statement.kind == "v2_show" && statement.target.has_value()) {
     try {
       if (expression_equals(parse_expression(*statement.target, statement.line), residual)) {
-        context.emitter.emit_op(0x50, "С/П", "pause", statement.line);
+        context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "pause", statement.line);
         report_branch_residual_reuse(context, residual, line, branch);
         return true;
       }
@@ -27653,7 +26082,7 @@ bool compile_residual_head_statement(LoweringContext& context, const V2Statement
   if (statement.kind == "v2_stop" && statement.target.has_value() && !statement.items.has_value()) {
     try {
       if (expression_equals(parse_expression(*statement.target, statement.line), residual)) {
-        context.emitter.emit_op(0x50, "С/П", "halt", statement.line);
+        context.emitter.emit_stop(StopDisposition::Terminal, "С/П", "halt", statement.line);
         report_branch_residual_reuse(context, residual, line, branch);
         return true;
       }
@@ -27892,38 +26321,6 @@ bool equality_true_fallthrough_leaves_zero(LoweringContext&, const V2Predicate& 
   } catch (const std::exception&) {
     return false;
   }
-}
-
-bool statement_can_enter_packed_line_family_score_zero_entry(LoweringContext& context,
-                                                             const V2Statement* statement) {
-  if (context.disable_packed_line_family_score_accumulator)
-    return false;
-  if (statement == nullptr || statement->kind != "v2_invoke" || !statement->name.has_value() ||
-      !statement->args.empty()) {
-    return false;
-  }
-  const auto rule_it = context.rules.find(*statement->name);
-  return rule_it != context.rules.end() &&
-         packed_line_family_score_rule(context, *rule_it->second).has_value();
-}
-
-bool equality_true_fallthrough_can_feed_zero_accumulator(
-    LoweringContext& context, const V2Predicate& predicate, bool negated,
-    const std::vector<V2Statement>& then_body, int line) {
-  const std::optional<NormalizedZeroComparison> normalized =
-      normalize_zero_comparison(context, predicate, negated, line);
-  if (!normalized.has_value() || normalized->op != "==" ||
-      !guarded_can_test_against_zero_directly(normalized->op)) {
-    return false;
-  }
-  if (normalized->expression.kind == "call") {
-    const std::string callee = lower_ascii(normalized->expression.callee);
-    if (callee == "coord_list_has" || callee == "__mkpro_negative_zero_ge")
-      return false;
-  }
-  return expression_pure_for_substitution(normalized->expression) &&
-         statement_can_enter_packed_line_family_score_zero_entry(
-             context, then_body.empty() ? nullptr : &then_body.front());
 }
 
 bool inequality_false_branch_leaves_zero(LoweringContext& context, const V2Predicate& predicate,
@@ -28880,7 +27277,7 @@ bool lower_negative_zero_terminal_select(LoweringContext& context, const V2State
 
   if (!lower_expression_to_x(context, candidate->expression))
     return false;
-  context.emitter.emit_op(0x50, "С/П", "halt", statement.line);
+  context.emitter.emit_stop(StopDisposition::Terminal, "С/П", "halt", statement.line);
   context.optimizations.push_back(OptimizationReport{
       .name = "branch-removal",
       .detail = candidate->detail + " at line " + std::to_string(statement.line) +
@@ -29801,11 +28198,7 @@ bool lower_if_statement(LoweringContext& context, const V2Statement& statement) 
       has_else && inequality_false_branch_leaves_zero(context, *selected.predicate,
                                                       selected.negated, selected.line);
   const bool true_fallthrough_known_zero = equality_true_fallthrough_leaves_zero(
-                                               context, *selected.predicate, selected.negated,
-                                               selected.line) ||
-                                           equality_true_fallthrough_can_feed_zero_accumulator(
-                                               context, *selected.predicate, selected.negated,
-                                               selected.then_body, selected.line);
+      context, *selected.predicate, selected.negated, selected.line);
   const std::string false_label = context.emitter.fresh_label(has_else ? "if_else" : "if_end");
   const std::string end_label = has_else ? context.emitter.fresh_label("if_end") : false_label;
   if (!lower_condition_false_branch(context, *selected.predicate, selected.negated, false_label,
@@ -31100,10 +29493,10 @@ bool lower_lunar_if(LoweringContext& context, const V2Statement& statement) {
       statement.line);
   emit_recall(context, "__const_safe_777");
   context.emitter.items.back().comment = "preload const 777";
-  context.emitter.emit_op(0x50, "С/П", "halt", statement.line);
+  context.emitter.emit_stop(StopDisposition::Terminal, "С/П", "halt", statement.line);
   emit_recall(context, "__const_crash_666");
   context.emitter.items.back().comment = "preload const 666";
-  context.emitter.emit_op(0x50, "С/П", "halt", statement.line);
+  context.emitter.emit_stop(StopDisposition::Terminal, "С/П", "halt", statement.line);
   return true;
 }
 
@@ -31184,38 +29577,6 @@ bool lower_invoke_statement(LoweringContext& context, const V2Statement& stateme
   }
 
   const V2Rule& rule = *rule_it->second;
-  if (statement.args.empty()) {
-    if (JointPackedLineFamilyEmissionPlan* joint_plan =
-            joint_packed_line_family_plan_for_rule(context, rule.name);
-        joint_plan != nullptr && joint_plan->inline_score_selector_entry &&
-        rule.name == joint_plan->score_rule) {
-      const std::optional<PackedLineFamilyScoreRule> score =
-          packed_line_family_score_rule(context, rule);
-      if (!score.has_value())
-        return false;
-      emit_joint_packed_line_late_selector_digits(
-          context, *joint_plan, joint_plan->score_leaf_label, statement.line);
-      context.emitter.emit_jump(
-          0x53, "ПП", joint_plan->selector_store_label,
-          "joint packed-line shared selector-store entry", statement.line);
-      if (context.emitter.items.size() >= 2U) {
-        context.emitter.items.at(context.emitter.items.size() - 2U)
-            .roles.push_back("joint-packed-line-shared-selector-call:" +
-                             joint_plan->selector_store_label);
-        context.emitter.items.back().roles.push_back(
-            "joint-packed-line-shared-selector-address:" +
-            joint_plan->selector_store_label);
-      }
-      mark_current_x(context, score->score);
-      context.emitter.current_x_known_zero = false;
-      context.optimizations.push_back(OptimizationReport{
-          .name = "joint-packed-line-shared-selector-entry",
-          .detail = "Charged the single structural score entry for " + rule.name +
-                    " at its call site and shared the update walker's selector-store entry.",
-      });
-      return true;
-    }
-  }
   if (statement.args.empty() && context.inline_statement_rules.contains(rule.name)) {
     if (context.inline_call_stack.contains(rule.name)) {
       context.diagnostics.push_back(
@@ -31268,25 +29629,6 @@ bool lower_invoke_statement(LoweringContext& context, const V2Statement& stateme
     return true;
   if (lower_stack_input_rule_call(context, rule, args, statement.line, "proc call "))
     return true;
-  if (args.empty() && context.emitter.current_x_known_zero &&
-      !context.disable_packed_line_family_score_accumulator) {
-    const std::optional<PackedLineFamilyScoreRule> score_rule =
-        packed_line_family_score_rule(context, rule);
-    if (score_rule.has_value() && context.stack_only_state_fields.contains(score_rule->score)) {
-      context.emitter.emit_jump(0x53, "ПП", packed_line_family_score_zero_entry_label(rule.name),
-                                "proc call " + rule.name + " zero-accumulator entry",
-                                statement.line);
-      mark_current_x(context, score_rule->score);
-      context.emitter.current_x_known_zero = false;
-      context.optimizations.push_back(OptimizationReport{
-          .name = "zero-accumulator-proc-entry",
-          .detail = "Entered " + rule.name +
-                    " after its zero literal because X already held a proved zero at line " +
-                    std::to_string(statement.line) + ".",
-      });
-      return true;
-    }
-  }
   if (!lower_rule_arguments(context, rule, args))
     return false;
 
@@ -31367,23 +29709,6 @@ void compile_block_call(LoweringContext& context, const std::string& block_name,
         .name = "terminal-rule-tail-call",
         .detail = "Compiled terminal rule " + rule.name +
                   " as a direct jump instead of a subroutine call.",
-    });
-    return;
-  }
-  if (context.emitter.current_x_known_zero &&
-      !context.disable_packed_line_family_score_accumulator &&
-      packed_line_family_score_rule(context, rule)) {
-    context.emitter.emit_jump(0x53, "ПП", packed_line_family_score_zero_entry_label(rule.name),
-                              "proc call " + rule.name + " zero-accumulator entry", line);
-    if (const std::optional<std::string> return_x = proc_return_x_variable(context, rule)) {
-      mark_current_x(context, *return_x);
-      context.emitter.current_x_known_zero = false;
-    }
-    context.optimizations.push_back(OptimizationReport{
-        .name = "zero-accumulator-proc-entry",
-        .detail = "Entered " + rule.name +
-                  " after its zero literal because X already held a proved zero at line " +
-                  std::to_string(line) + ".",
     });
     return;
   }
@@ -31926,8 +30251,6 @@ bool lower_x_param_value_scratch_assignment(LoweringContext& context, const V2St
 // procedure entry: consume the stack-resident index instead of recalling it
 // from a register, so the walk call sites stay free of index stores.
 bool lower_packed_score_y_stack_update(LoweringContext& context, const V2Statement& statement) {
-  if (!context.canonicalize_packed_line_bank_walks)
-    return false;
   const std::optional<std::string> index_name =
       packed_score_y_stack_index_name_for_analysis(statement);
   if (!index_name.has_value() || context.current_y_variable != *index_name)
@@ -32959,7 +31282,7 @@ bool lower_pause_statement(LoweringContext& context, const V2Statement& statemen
   } else if (!lower_expression_to_x(context, expression)) {
     return false;
   }
-  context.emitter.emit_op(0x50, "С/П", "pause", statement.line);
+  context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "pause", statement.line);
   return true;
 }
 
@@ -33358,7 +31681,7 @@ bool lower_loop_carried_prompt_statement(LoweringContext& context, const V2State
   const std::string label = context.emitter.fresh_label("loop_prompt");
   context.emitter.emit_label(label);
   mark_current_x(context, prompt_name);
-  context.emitter.emit_op(0x50, "С/П", "show " + show.inline_name.value_or(prompt_name), show.line);
+  context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "show " + show.inline_name.value_or(prompt_name), show.line);
   mark_current_x(context, input_it->second);
 
   std::vector<V2Statement> body(statement.body.begin() + 2, statement.body.end());
@@ -33389,6 +31712,48 @@ void report_intent_read_lowering(LoweringContext& context, int line) {
       .detail = "Lowered read at line " + std::to_string(line) +
                 " to calculator stop plus register store.",
   });
+}
+
+bool attach_manual_interaction_anchor(LoweringContext& context,
+                                      const V2Statement& statement, std::size_t begin,
+                                      bool prompt) {
+  const auto& anchors = prompt ? context.prompt_interaction_anchors
+                               : context.entered_interaction_anchors;
+  const auto anchor = anchors.find(&statement);
+  if (anchor == anchors.end())
+    return true;
+
+  std::optional<std::size_t> selected;
+  for (std::size_t index = begin; index < context.emitter.items.size(); ++index) {
+    const MachineItem& item = context.emitter.items.at(index);
+    if (item.kind != MachineItemKind::Op)
+      continue;
+    const bool matches = prompt ? item.opcode == 0x50
+                                : item.opcode >= 0x40 && item.opcode <= 0x4e;
+    if (prompt && !matches)
+      continue;
+    if (!matches || selected.has_value()) {
+      context.diagnostics.push_back(diagnostic(
+          DiagnosticSeverity::Error, "manual-protocol-lowering",
+          "Manual entered() protocol at line " + std::to_string(statement.line) +
+              (prompt ? " did not lower to one unambiguous prompt STOP."
+                      : " did not lower to one direct single-step store.")));
+      return false;
+    }
+    selected = index;
+  }
+  if (!selected.has_value()) {
+    context.diagnostics.push_back(diagnostic(
+        DiagnosticSeverity::Error, "manual-protocol-lowering",
+        "Manual entered() protocol at line " + std::to_string(statement.line) +
+            (prompt ? " has no emitted prompt STOP." : " has no emitted input store.")));
+    return false;
+  }
+  MachineItem& item = context.emitter.items.at(*selected);
+  item.manual_interaction = anchor->second;
+  if (prompt)
+    item.stop_disposition = StopDisposition::Resumable;
+  return true;
 }
 
 bool lower_statement(LoweringContext& context, const V2Statement& statement,
@@ -33445,9 +31810,10 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
   }
 
   if (statement.kind == "v2_show") {
-    if (statement.target.has_value())
-      return lower_pause_statement(context, statement);
-    return lower_display_statement(context, statement);
+    const std::size_t begin = context.emitter.items.size();
+    const bool lowered = statement.target.has_value() ? lower_pause_statement(context, statement)
+                                                       : lower_display_statement(context, statement);
+    return lowered && attach_manual_interaction_anchor(context, statement, begin, true);
   }
 
   if (statement.kind == "v2_read" && statement.target.has_value()) {
@@ -33462,7 +31828,7 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
       return true;
     }
     if (context.scaled_coord_cell_names.contains(*statement.target)) {
-      context.emitter.emit_op(0x50, "С/П", "read " + *statement.target, statement.line);
+      context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "read " + *statement.target, statement.line);
       context.emitter.emit_op(0x0e, "В↑", "separate read entry before scaled coord",
                               statement.line);
       emit_number_or_preload(context, "10", std::nullopt, statement.line);
@@ -33477,7 +31843,7 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
       return true;
     }
     if (next_statement != nullptr && next_statement->kind == "v2_match") {
-      context.emitter.emit_op(0x50, "С/П", "read " + *statement.target, statement.line);
+      context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "read " + *statement.target, statement.line);
       context.emitter.machine_entry_open = true;
       mark_current_x(context, *statement.target);
       if (!context.ephemeral_input_targets.contains(*statement.target)) {
@@ -33490,7 +31856,7 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
       emit_store(context, *statement.target, "read " + *statement.target);
       return true;
     }
-    context.emitter.emit_op(0x50, "С/П", "read " + *statement.target, statement.line);
+    context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "read " + *statement.target, statement.line);
     context.emitter.machine_entry_open = true;
     mark_current_x(context, *statement.target);
     emit_store(context, *statement.target, "read " + *statement.target);
@@ -33619,6 +31985,7 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
       return true;
     if (has_errors(context.diagnostics))
       return false;
+    const std::size_t assignment_begin = context.emitter.items.size();
     if (!lower_expression_to_x(context, expression))
       return false;
     const bool literal_assignment =
@@ -33632,10 +31999,10 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
     mark_current_x(context, *statement.target);
     if (context.stack_only_state_fields.contains(*statement.target)) {
       report_stack_only_state_field(context, *statement.target, statement.line);
-      return true;
+      return attach_manual_interaction_anchor(context, statement, assignment_begin, false);
     }
     emit_store(context, *statement.target, "set " + *statement.target);
-    return true;
+    return attach_manual_interaction_anchor(context, statement, assignment_begin, false);
   }
 
   if (statement.kind == "v2_return") {
@@ -33656,7 +32023,11 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
           core::emit::collapse_literal_only_display(*statement.items);
       if (literal.has_value())
         return lower_literal_terminal_stop(context, *literal, statement.line);
-      return lower_display_statement(context, statement);
+      const std::size_t begin = context.emitter.items.size();
+      const bool lowered = lower_display_statement(context, statement);
+      if (lowered)
+        set_emitted_stop_disposition(context.emitter, begin, StopDisposition::Terminal);
+      return lowered;
     }
     if (statement.target.has_value()) {
       const Expression expression = parse_expression(*statement.target, statement.line);
@@ -33669,7 +32040,7 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
         context.emitter.items.back().comment = "halt";
       }
     }
-    context.emitter.emit_op(0x50, "С/П", "halt", statement.line);
+    context.emitter.emit_stop(StopDisposition::Terminal, "С/П", "halt", statement.line);
     return true;
   }
 
@@ -34099,7 +32470,7 @@ bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
     const V2Statement& show = rule.body.front();
     const V2Statement& ret = rule.body.back();
     context.emitter.emit_op(0x0e, "В↑", "x-param keep displayed value", show.line);
-    context.emitter.emit_op(0x50, "С/П", "show " + x_param_risk->param, show.line);
+    context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "show " + x_param_risk->param, show.line);
     compile_stack_stop_risk_tail(context, x_param_risk->risk, ret.line, ret.line);
     context.emitter.emit_op(0x52, "В/О", "x-param stack-stop-risk return", ret.line);
     context.optimizations.push_back(OptimizationReport{
@@ -34112,35 +32483,7 @@ bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
   if (lower_x_param_indexed_fractional_report_tail_rule(context, rule))
     return true;
 
-  if (JointPackedLineFamilyEmissionPlan* joint_plan =
-          joint_packed_line_family_plan_for_rule(context, rule.name)) {
-    if (rule.name == joint_plan->score_rule &&
-        lower_joint_packed_line_family_score_rule(context, rule, *joint_plan)) {
-      return true;
-    }
-    if (rule.name == joint_plan->update_rule &&
-        lower_joint_packed_line_family_update_rule(context, rule, *joint_plan)) {
-      return true;
-    }
-    return false;
-  }
-
-  if (lower_packed_line_family_score_rule(context, rule))
-    return true;
-
   if (lower_x_param_packed_score_shared_tail_rule(context, rule))
-    return true;
-
-  if (context.packed_line_family_borrowed_mutating_selector_update_check_tail &&
-      lower_packed_line_family_borrowed_mutating_update_rule(context, rule))
-    return true;
-
-  if (context.packed_line_family_mutating_selector_update_check_tail &&
-      lower_packed_line_family_mutating_update_rule(context, rule))
-    return true;
-
-  if (context.packed_line_family_update_check_tail &&
-      lower_packed_line_family_update_rule(context, rule))
     return true;
 
   const auto x_param_it = context.x_param_procs.find(rule.name);
@@ -34355,21 +32698,6 @@ std::vector<const V2Rule*> function_rule_emission_order(LoweringContext& context
               });
   }
 
-  // A proved empty-return-stack tail can enter the joint update wrapper by
-  // physical fallthrough. Keep that component first while preserving the
-  // selected relative order of every unrelated rule.
-  std::set<std::string> fallthrough_entries;
-  for (const JointPackedLineFamilyEmissionPlan& plan :
-       context.joint_packed_line_family_plans) {
-    if (plan.update_tail_fallthrough)
-      fallthrough_entries.insert(plan.update_rule);
-  }
-  if (!fallthrough_entries.empty()) {
-    std::stable_partition(indexed.begin(), indexed.end(), [&](const IndexedRule& entry) {
-      return entry.rule != nullptr && fallthrough_entries.contains(entry.rule->name);
-    });
-  }
-
   std::vector<const V2Rule*> order;
   order.reserve(indexed.size());
   for (const IndexedRule& entry : indexed)
@@ -34382,67 +32710,13 @@ bool lower_function_rules(LoweringContext& context, const V2Program& program) {
       context.clock_shape || context.cave_sketch_shape || context.ninety_nine_bottles_shape ||
       dungeon_shape_specific_enabled(context))
     return true;
-  plan_joint_packed_line_family_walks(context, program);
-  std::set<std::string> packed_line_consumed_update_rules;
-  for (const JointPackedLineFamilyEmissionPlan& plan :
-       context.joint_packed_line_family_plans) {
-    packed_line_consumed_update_rules.insert(plan.suppressed_update_leaf_rule);
-    context.inline_statement_rules.erase(plan.score_rule);
-    context.inline_statement_rules.erase(plan.update_rule);
-  }
-  if (context.packed_line_family_update_check_tail ||
-      context.packed_line_family_mutating_selector_update_check_tail ||
-      context.packed_line_family_borrowed_mutating_selector_update_check_tail) {
-    for (const V2Rule& rule : program.rules) {
-      if (context.packed_line_family_borrowed_mutating_selector_update_check_tail) {
-        if (context.packed_line_borrowed_selector_registers.contains(rule.name)) {
-          if (const std::optional<PackedLineFamilyUpdateRule> borrowed_update =
-                  packed_line_family_update_rule(context, rule,
-                                                 PackedLineSelectorMode::Allocation)) {
-            packed_line_consumed_update_rules.insert(borrowed_update->update_rule);
-            continue;
-          }
-        }
-      }
-      if (context.packed_line_family_mutating_selector_update_check_tail) {
-        if (const std::optional<PackedLineFamilyUpdateRule> mutating_update =
-                packed_line_family_update_rule(context, rule, PackedLineSelectorMode::Mutating)) {
-          packed_line_consumed_update_rules.insert(mutating_update->update_rule);
-          continue;
-        }
-      }
-      if (context.packed_line_family_update_check_tail) {
-        if (const std::optional<PackedLineFamilyUpdateRule> direct_update =
-                packed_line_family_update_rule(context, rule)) {
-          packed_line_consumed_update_rules.insert(direct_update->update_rule);
-        }
-      }
-    }
-  }
   for (const V2Rule* rule : function_rule_emission_order(context, program)) {
     if (rule == nullptr)
       continue;
     if (match_trig_near_rule(*rule).has_value())
       continue;
-    if (JointPackedLineFamilyEmissionPlan* joint_plan =
-            joint_packed_line_family_plan_for_rule(context, rule->name);
-        joint_plan != nullptr && joint_plan->inline_score_selector_entry &&
-        rule->name == joint_plan->score_rule) {
-      continue;
-    }
     if (context.inline_statement_rules.contains(rule->name))
       continue;
-    if (packed_line_consumed_update_rules.contains(rule->name))
-      continue;
-    JointPackedLineFamilyEmissionPlan* joint_plan =
-        joint_packed_line_family_plan_for_rule(context, rule->name);
-    const bool defer_joint_leaves =
-        joint_plan != nullptr && joint_plan->update_tail_fallthrough &&
-        rule->name == joint_plan->update_rule;
-    if (joint_plan != nullptr && !defer_joint_leaves) {
-      if (!emit_joint_packed_line_family_leaves(context, *joint_plan))
-        return false;
-    }
     if (match_x_param_stack_stop_risk_rule(*rule).has_value()) {
       const int uses =
           context.proc_call_counts.contains(rule->name) ? context.proc_call_counts[rule->name] : 0;
@@ -34450,8 +32724,6 @@ bool lower_function_rules(LoweringContext& context, const V2Program& program) {
         continue;
     }
     if (!lower_function_rule(context, *rule))
-      return false;
-    if (defer_joint_leaves && !emit_joint_packed_line_family_leaves(context, *joint_plan))
       return false;
   }
   return true;
@@ -35343,7 +33615,7 @@ bool lower_show_read_stack_stop_risk_result(LoweringContext& context, const V2St
   if (!context.emitter.items.empty())
     context.emitter.items.back().comment = "display " + show_display_name(show) + " source";
   context.emitter.emit_op(0x0e, "В↑", "keep displayed value in Y", show.line);
-  context.emitter.emit_op(0x50, "С/П", "show " + show_display_name(show), show.line);
+  context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "show " + show_display_name(show), show.line);
   context.current_y_variable = *parked;
   compile_stack_stop_risk_tail(context, *match, input == nullptr ? consumer.line : input->line,
                                consumer.line);
@@ -35631,7 +33903,7 @@ bool lower_ephemeral_input_branch(LoweringContext& context,
       return false;
     }
   } else {
-    context.emitter.emit_op(0x50, "С/П", "read " + *read->target, read->line);
+    context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "read " + *read->target, read->line);
   }
 
   mark_current_x(context, *read->target);
@@ -35688,7 +33960,7 @@ bool lower_ephemeral_input_dispatch(LoweringContext& context,
       return false;
     }
   } else {
-    context.emitter.emit_op(0x50, "С/П", "read " + *read->target, read->line);
+    context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "read " + *read->target, read->line);
   }
 
   context.emitter.machine_entry_open = true;
@@ -38306,7 +36578,7 @@ bool lower_dead_source_residual_temp_reuse(LoweringContext& context,
     return false;
   }
 
-  context.emitter.emit_op(0x50, "С/П", "read " + source, read.line);
+  context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "read " + source, read.line);
   mark_current_x(context, source);
   emit_store(context, source, "read " + source);
   emit_number_or_preload(context, std::to_string(*residual_value));
@@ -38315,7 +36587,7 @@ bool lower_dead_source_residual_temp_reuse(LoweringContext& context,
 
   const std::string outer_else_label = context.emitter.fresh_label("residual_temp_else");
   context.emitter.emit_jump(0x5e, "F x=0", outer_else_label, "false branch for ==", outer.line);
-  context.emitter.emit_op(0x50, "С/П", "halt", outer.then_body.front().line);
+  context.emitter.emit_stop(StopDisposition::Terminal, "С/П", "halt", outer.then_body.front().line);
 
   context.emitter.emit_label(outer_else_label, {.hidden = true});
   mark_current_x(context, source);
@@ -38326,10 +36598,10 @@ bool lower_dead_source_residual_temp_reuse(LoweringContext& context,
   context.emitter.emit_jump(0x5e, "F x=0", inner_else_label, "false branch for ==", inner.line);
   emit_recall(context, source);
   context.emitter.emit_op(0x32, "К ЗН", "sign()", sign_assign.line);
-  context.emitter.emit_op(0x50, "С/П", "halt", sign_halt.line);
+  context.emitter.emit_stop(StopDisposition::Terminal, "С/П", "halt", sign_halt.line);
 
   context.emitter.emit_label(inner_else_label, {.hidden = true});
-  context.emitter.emit_op(0x50, "С/П", "halt", else_halt.line);
+  context.emitter.emit_stop(StopDisposition::Terminal, "С/П", "halt", else_halt.line);
   context.optimizations.push_back(OptimizationReport{
       .name = "dead-source-residual-temp-reuse",
       .detail = "Reused " + source + " as a residual temporary before allocation.",
@@ -40061,7 +38333,7 @@ bool lower_stack_resident_consumer(LoweringContext& context, const V2Statement& 
     return true;
   }
   if (consumer.kind == "v2_stop") {
-    context.emitter.emit_op(0x50, "С/П", "halt", consumer.line);
+    context.emitter.emit_stop(StopDisposition::Terminal, "С/П", "halt", consumer.line);
     return true;
   }
   if (consumer.kind == "v2_preview")
@@ -40413,6 +38685,26 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
   }
 
   for (std::size_t index = 0; index < statements.size(); ++index) {
+    const V2Statement& current_statement = statements.at(index);
+    const auto entered_anchor = context.entered_interaction_anchors.find(&current_statement);
+    if (entered_anchor != context.entered_interaction_anchors.end()) {
+      if (entered_anchor->second.kind == ManualInteractionAnchorKind::SingleStepCommand) {
+        const V2Statement* next =
+            index + 1U < statements.size() ? &statements.at(index + 1U) : nullptr;
+        if (!lower_statement(context, current_statement, next))
+          return false;
+        continue;
+      }
+      if (context.emitter.next_op_manual_interaction.has_value()) {
+        context.diagnostics.push_back(diagnostic(
+            DiagnosticSeverity::Error, "manual-protocol-lowering",
+            "Manual entered() protocol at line " + std::to_string(current_statement.line) +
+                " overlaps an unresolved continuous-resume entry."));
+        return false;
+      }
+      context.emitter.next_op_manual_interaction = entered_anchor->second;
+    }
+
     std::size_t coord_list_consumed = 0;
     if (lower_fused_coord_list_scan(context, statements, index, coord_list_consumed)) {
       index += coord_list_consumed - 1U;
@@ -40915,7 +39207,7 @@ bool lower_packed_display_helpers(LoweringContext& context) {
     context.emitting_packed_display_helper = previous;
     if (!lowered)
       return false;
-    context.emitter.emit_op(0x50, "С/П", "show", helper.line);
+    context.emitter.emit_stop(StopDisposition::Resumable, "С/П", "show", helper.line);
     context.emitter.emit_op(0x52, "В/О", "packed display return", helper.line);
     context.optimizations.push_back(OptimizationReport{
         .name = "packed-display-helper",
@@ -43524,619 +41816,6 @@ void toggle_alternating_literal_call_args(V2Program& program,
       .name = "alternating-sign-toggle-arg",
       .detail = "Replaced strictly alternating literal arguments of " + join_strings(toggled, ", ") +
                 " with a callee-owned sign-toggle register.",
-  });
-}
-
-struct PackedLineBankField {
-  std::string name;
-  int min = 0;
-  int max = 0;
-};
-
-std::optional<PackedLineBankField> packed_line_bank_field(const V2Program& program) {
-  for (const V2StateField& field : program.state) {
-    if (!field.bank.has_value())
-      continue;
-    return PackedLineBankField{
-        .name = field.name,
-        .min = field.bank->min,
-        .max = field.bank->max,
-    };
-  }
-  return std::nullopt;
-}
-
-std::optional<int> literal_integer_expression(const Expression& expression) {
-  if (expression.kind != "number")
-    return std::nullopt;
-  try {
-    const std::optional<double> value = numeric_literal_value(expression);
-    if (!value.has_value() || std::fabs(*value - std::round(*value)) >= 1e-12)
-      return std::nullopt;
-    return static_cast<int>(round_to_long_long(*value));
-  } catch (const std::exception&) {
-    return std::nullopt;
-  }
-}
-
-std::optional<int> indexed_literal_slot(const Expression& expression,
-                                        const PackedLineBankField& bank) {
-  if (expression.kind == "indexed" && expression.base == bank.name &&
-      expression.index != nullptr) {
-    const std::optional<int> slot = literal_integer_expression(*expression.index);
-    if (slot.has_value() && *slot >= bank.min && *slot <= bank.max)
-      return slot;
-    return std::nullopt;
-  }
-  // resolve_constant_indexed_state may already have flattened bank[N] into the
-  // "<bank>_<N>" element identifier.
-  if (expression.kind == "identifier" && expression.name.size() > bank.name.size() + 1U &&
-      expression.name.compare(0, bank.name.size(), bank.name) == 0 &&
-      expression.name.at(bank.name.size()) == '_') {
-    const std::string suffix = expression.name.substr(bank.name.size() + 1U);
-    if (!suffix.empty() &&
-        std::all_of(suffix.begin(), suffix.end(), [](char c) { return c >= '0' && c <= '9'; })) {
-      const int slot = std::stoi(suffix);
-      if (slot >= bank.min && slot <= bank.max)
-        return slot;
-    }
-  }
-  return std::nullopt;
-}
-
-V2Statement make_assign_statement(const std::string& target, const Expression& expression, int line) {
-  V2Statement statement;
-  statement.kind = "v2_assign";
-  statement.target = target;
-  statement.expr = expression_to_source(expression);
-  statement.line = line;
-  return statement;
-}
-
-V2Statement make_update_statement(const std::string& target, const std::string& op,
-                                  const Expression& expression, int line) {
-  V2Statement statement;
-  statement.kind = "v2_update";
-  statement.target = target;
-  statement.op = op;
-  statement.expr = expression_to_source(expression);
-  statement.line = line;
-  return statement;
-}
-
-V2Statement make_invoke_statement(const std::string& name, std::vector<std::string> args, int line) {
-  V2Statement statement;
-  statement.kind = "v2_invoke";
-  statement.name = name;
-  statement.args = std::move(args);
-  statement.line = line;
-  return statement;
-}
-
-Expression indexed_bank_slot(const std::string& bank_name, const Expression& slot) {
-  Expression indexed;
-  indexed.kind = "indexed";
-  indexed.base = bank_name;
-  indexed.index = std::make_shared<Expression>(slot);
-  return indexed;
-}
-
-// A "mark leaf" is a zero-param rule that pre-decrements a selector register
-// and packed_add-updates the bank cell it now points at:
-//   slot--
-//   bank[slot] = packed_add(bank[slot], line, ...)
-//   ...tail...
-// The canonicalization turns the mutating selector into an explicit slot
-// parameter so callers can spell the same walk with literal bank slots.
-std::optional<std::pair<std::string, std::string>>
-self_decrement_mark_leaf_shape(const V2Rule& leaf, const std::string& bank_name) {
-  if (!leaf.params.empty() || leaf.body.size() < 2U)
-    return std::nullopt;
-  const V2Statement& decrement = leaf.body.front();
-  if (!statement_is_unit_decrement(decrement) || !decrement.target.has_value())
-    return std::nullopt;
-  const std::string& selector = *decrement.target;
-  const V2Statement& update = leaf.body.at(1);
-  if (update.kind != "v2_assign" || !update.target.has_value() || !update.expr.has_value())
-    return std::nullopt;
-  try {
-    const Expression target = parse_expression(*update.target, update.line);
-    if (target.kind != "indexed" || target.base != bank_name || target.index == nullptr ||
-        target.index->kind != "identifier" || target.index->name != selector) {
-      return std::nullopt;
-    }
-    const Expression expr = parse_expression(*update.expr, update.line);
-    if (expr.kind != "call" || lower_ascii(expr.callee) != "packed_add" ||
-        expr.args.size() < 2U || expr.args.at(1).kind != "identifier") {
-      return std::nullopt;
-    }
-    const Expression& current = expr.args.front();
-    if (current.kind != "indexed" || current.base != bank_name || current.index == nullptr ||
-        current.index->kind != "identifier" || current.index->name != selector) {
-      return std::nullopt;
-    }
-    return std::pair{selector, expr.args.at(1).name};
-  } catch (const std::exception&) {
-    return std::nullopt;
-  }
-}
-
-void rewrite_self_decrement_mark_leaf(V2Rule& leaf, const std::string& selector_name,
-                                      const std::string& param_name) {
-  const int line = leaf.body.front().line;
-  leaf.params = {param_name};
-  V2Statement assign;
-  assign.kind = "v2_assign";
-  assign.target = selector_name;
-  assign.expr = param_name;
-  assign.line = line;
-  leaf.body.front() = std::move(assign);
-}
-
-struct CanonicalBankWalkStep {
-  enum class PrepKind { AssignLine, NormalizeLine };
-  PrepKind prep = PrepKind::AssignLine;
-  Expression line_expr;
-  std::string normalizer;
-  Expression normalizer_arg;
-  int slot = 0;
-  int source_line = 0;
-};
-
-bool parse_zero_arg_leaf_invoke(const V2Statement& statement, const std::string& leaf_name) {
-  return statement.kind == "v2_invoke" && statement.name.has_value() &&
-         *statement.name == leaf_name && statement.args.empty();
-}
-
-bool parse_direct_bank_walk_step(const V2Statement& prep, const V2Statement& call,
-                                 const std::string& leaf_name, const std::string& line_name,
-                                 CanonicalBankWalkStep& step) {
-  if (prep.kind != "v2_assign" || prep.target != line_name || !prep.expr.has_value() ||
-      !parse_zero_arg_leaf_invoke(call, leaf_name)) {
-    return false;
-  }
-  step.prep = CanonicalBankWalkStep::PrepKind::AssignLine;
-  step.line_expr = parse_expression(*prep.expr, prep.line);
-  step.source_line = prep.line;
-  return true;
-}
-
-bool parse_normalized_bank_walk_step(const V2Statement& prep, const V2Statement& call,
-                                     const std::string& leaf_name,
-                                     CanonicalBankWalkStep& step) {
-  if (prep.kind != "v2_invoke" || !prep.name.has_value() || prep.args.size() != 1U ||
-      !parse_zero_arg_leaf_invoke(call, leaf_name)) {
-    return false;
-  }
-  step.prep = CanonicalBankWalkStep::PrepKind::NormalizeLine;
-  step.normalizer = *prep.name;
-  step.normalizer_arg = parse_expression(prep.args.front(), prep.line);
-  step.source_line = prep.line;
-  return true;
-}
-
-// A single-param rule whose final statement assigns its result variable; the
-// walk uses it to normalize diagonal line coordinates before the leaf call.
-std::optional<std::string> single_param_rule_return_target(const V2Program& program,
-                                                           const std::string& name) {
-  for (const V2Rule& rule : program.rules) {
-    if (rule.name != name)
-      continue;
-    if (rule.params.size() != 1U || rule.body.empty())
-      return std::nullopt;
-    const V2Statement& last = rule.body.back();
-    if (last.kind != "v2_assign" || !last.target.has_value())
-      return std::nullopt;
-    return *last.target;
-  }
-  return std::nullopt;
-}
-
-bool parse_packed_line_bank_walk(const V2Program& program, const std::vector<V2Statement>& body,
-                                 std::size_t start, const std::string& leaf_name,
-                                 const std::string& line_name, const PackedLineBankField& bank,
-                                 std::vector<CanonicalBankWalkStep>& steps,
-                                 std::size_t& consumed) {
-  steps.clear();
-  const std::size_t slot_count = static_cast<std::size_t>(bank.max - bank.min + 1);
-  std::size_t cursor = start;
-  int next_slot = bank.max;
-  while (cursor + 1U < body.size() && steps.size() < slot_count) {
-    CanonicalBankWalkStep step;
-    const V2Statement& prep = body.at(cursor);
-    const V2Statement& call = body.at(cursor + 1U);
-    if (parse_direct_bank_walk_step(prep, call, leaf_name, line_name, step) ||
-        parse_normalized_bank_walk_step(prep, call, leaf_name, step)) {
-      if (step.prep == CanonicalBankWalkStep::PrepKind::NormalizeLine &&
-          single_param_rule_return_target(program, step.normalizer) != line_name) {
-        break;
-      }
-      step.slot = next_slot--;
-      steps.push_back(std::move(step));
-      cursor += 2U;
-      continue;
-    }
-    break;
-  }
-  if (steps.size() != slot_count || steps.size() < 4U)
-    return false;
-  consumed = cursor - start;
-  return true;
-}
-
-int count_invokes_of_rule(const V2Statement& statement, const std::string& name);
-
-int count_invokes_of_rule(const std::vector<V2Statement>& statements, const std::string& name) {
-  int count = 0;
-  for (const V2Statement& statement : statements)
-    count += count_invokes_of_rule(statement, name);
-  return count;
-}
-
-int count_invokes_of_rule(const V2Statement& statement, const std::string& name) {
-  int count = statement.kind == "v2_invoke" && statement.name == name ? 1 : 0;
-  count += count_invokes_of_rule(statement.body, name);
-  count += count_invokes_of_rule(statement.then_body, name);
-  count += count_invokes_of_rule(statement.else_body, name);
-  for (const V2MatchCase& match_case : statement.cases) {
-    if (match_case.action != nullptr)
-      count += count_invokes_of_rule(*match_case.action, name);
-  }
-  if (statement.otherwise != nullptr)
-    count += count_invokes_of_rule(*statement.otherwise, name);
-  return count;
-}
-
-struct MarkWalkRewritePlan {
-  V2Rule* caller = nullptr;
-  std::size_t init_index = 0;
-  std::size_t walk_start = 0;
-  std::size_t consumed = 0;
-  std::vector<CanonicalBankWalkStep> steps;
-};
-
-std::optional<MarkWalkRewritePlan> plan_mark_walk_rewrite(const V2Program& program, V2Rule& caller,
-                                                          const std::string& leaf_name,
-                                                          const std::string& line_name,
-                                                          const std::string& selector,
-                                                          const PackedLineBankField& bank) {
-  for (std::size_t start = 0; start + 8U <= caller.body.size(); ++start) {
-    std::vector<CanonicalBankWalkStep> steps;
-    std::size_t consumed = 0;
-    if (!parse_packed_line_bank_walk(program, caller.body, start, leaf_name, line_name, bank,
-                                     steps, consumed)) {
-      continue;
-    }
-
-    // The walk relies on a single "selector = bank.max + 1" initializer before
-    // it; dropping the initializer is only sound when nothing else touches the
-    // selector until the walk starts.
-    std::optional<std::size_t> init_index;
-    bool pre_walk_safe = true;
-    for (std::size_t index = 0; index < start; ++index) {
-      const V2Statement& statement = caller.body.at(index);
-      if (statement.kind == "v2_assign" && statement.target == selector &&
-          statement.expr.has_value()) {
-        try {
-          const std::optional<int> slot_init =
-              literal_integer_expression(parse_expression(*statement.expr, statement.line));
-          if (slot_init.has_value() && *slot_init == bank.max + 1 && !init_index.has_value()) {
-            init_index = index;
-            continue;
-          }
-        } catch (const std::exception&) {
-        }
-      }
-      if (statement_assigns_identifier_target(statement, selector) ||
-          statements_read_identifier({statement}, selector, false)) {
-        pre_walk_safe = false;
-        break;
-      }
-    }
-    if (!pre_walk_safe || !init_index.has_value())
-      return std::nullopt;
-
-    return MarkWalkRewritePlan{
-        .caller = &caller,
-        .init_index = *init_index,
-        .walk_start = start,
-        .consumed = consumed,
-        .steps = std::move(steps),
-    };
-  }
-  return std::nullopt;
-}
-
-void apply_mark_walk_rewrite(const MarkWalkRewritePlan& plan, const std::string& leaf_name,
-                             const std::string& line_name) {
-  V2Rule& caller = *plan.caller;
-  std::vector<V2Statement> rewritten;
-  rewritten.reserve(caller.body.size() + plan.steps.size());
-  for (std::size_t index = 0; index < plan.walk_start; ++index) {
-    if (index == plan.init_index)
-      continue;
-    rewritten.push_back(caller.body.at(index));
-  }
-  for (const CanonicalBankWalkStep& step : plan.steps) {
-    if (step.prep == CanonicalBankWalkStep::PrepKind::AssignLine) {
-      rewritten.push_back(make_assign_statement(line_name, step.line_expr, step.source_line));
-    } else {
-      rewritten.push_back(make_invoke_statement(
-          step.normalizer, {expression_to_source(step.normalizer_arg)}, step.source_line));
-    }
-    rewritten.push_back(
-        make_invoke_statement(leaf_name, {std::to_string(step.slot)}, step.source_line));
-  }
-  rewritten.insert(rewritten.end(),
-                   caller.body.begin() +
-                       static_cast<std::ptrdiff_t>(plan.walk_start + plan.consumed),
-                   caller.body.end());
-  caller.body = std::move(rewritten);
-}
-
-bool program_declares_name(const V2Program& program, const std::string& name) {
-  for (const V2StateField& field : program.state) {
-    if (field.name == name)
-      return true;
-  }
-  for (const V2Rule& rule : program.rules) {
-    if (rule.name == name)
-      return true;
-    if (std::find(rule.params.begin(), rule.params.end(), name) != rule.params.end())
-      return true;
-  }
-  return false;
-}
-
-void ensure_implicit_param_state_field(V2Program& program, const std::string& name, int line) {
-  for (const V2StateField& field : program.state) {
-    if (field.name == name)
-      return;
-  }
-  V2StateField field;
-  field.name = name;
-  field.type = "packed";
-  field.implicit = true;
-  field.line = line;
-  program.state.push_back(std::move(field));
-}
-
-struct ScoreBankWalkMatch {
-  std::string score;
-  std::string line_name;
-  std::string bank_name;
-  std::string normalizer;
-  std::string score_leaf;
-  std::string slot_param;
-  std::string selector;
-  Expression first_line;
-  Expression second_line;
-  Expression diagonal_add_arg;
-  Expression diagonal_sub_arg;
-  int first_slot = 0;
-  int second_slot = 0;
-  int third_slot = 0;
-  int fourth_slot = 0;
-  int line = 0;
-};
-
-bool detect_score_bank_walk(const V2Program& program, const V2Rule& rule,
-                            const PackedLineBankField& bank, ScoreBankWalkMatch& match) {
-  if (rule.body.size() != 5U)
-    return false;
-  const V2Statement& first = rule.body.at(0);
-  const V2Statement& add_call = rule.body.at(1);
-  const V2Statement& add_score = rule.body.at(2);
-  const V2Statement& sub_call = rule.body.at(3);
-  const V2Statement& sub_score = rule.body.at(4);
-  if (first.kind != "v2_assign" || !first.target.has_value() || !first.expr.has_value())
-    return false;
-
-  const Expression first_expression = parse_expression(*first.expr, first.line);
-  const std::optional<std::pair<PackedScoreTerm, PackedScoreTerm>> first_pair =
-      packed_score_pair(first_expression, first.line);
-  if (!first_pair.has_value())
-    return false;
-
-  const std::optional<int> first_slot =
-      indexed_literal_slot(first_pair->first.line_value, bank);
-  const std::optional<int> second_slot =
-      indexed_literal_slot(first_pair->second.line_value, bank);
-  if (!first_slot.has_value() || !second_slot.has_value() || *first_slot <= *second_slot)
-    return false;
-
-  if (add_call.kind != "v2_invoke" || sub_call.kind != "v2_invoke" ||
-      !add_call.name.has_value() || !sub_call.name.has_value() ||
-      *add_call.name != *sub_call.name || add_call.args.size() != 1U ||
-      sub_call.args.size() != 1U) {
-    return false;
-  }
-
-  const std::optional<std::string> line_name =
-      single_param_rule_return_target(program, *add_call.name);
-  if (!line_name.has_value())
-    return false;
-
-  const std::optional<PackedScoreTerm> add_term =
-      packed_score_accumulator_term(add_score, *first.target, *line_name);
-  const std::optional<PackedScoreTerm> sub_term =
-      packed_score_accumulator_term(sub_score, *first.target, *line_name);
-  if (!add_term.has_value() || !sub_term.has_value())
-    return false;
-
-  const std::optional<int> third_slot = indexed_literal_slot(add_term->line_value, bank);
-  const std::optional<int> fourth_slot = indexed_literal_slot(sub_term->line_value, bank);
-  if (!third_slot.has_value() || !fourth_slot.has_value() || *third_slot <= *fourth_slot)
-    return false;
-
-  const Expression add_arg = parse_expression(add_call.args.front(), add_call.line);
-  const Expression sub_arg = parse_expression(sub_call.args.front(), sub_call.line);
-  const std::optional<std::pair<Expression, Expression>> diagonal =
-      shared_add_sub_operands(add_arg, sub_arg);
-  if (!diagonal.has_value())
-    return false;
-
-  match = ScoreBankWalkMatch{
-      .score = *first.target,
-      .line_name = *line_name,
-      .bank_name = bank.name,
-      .normalizer = *add_call.name,
-      .first_line = first_pair->first.index,
-      .second_line = first_pair->second.index,
-      .diagonal_add_arg = add_arg,
-      .diagonal_sub_arg = sub_arg,
-      .first_slot = *first_slot,
-      .second_slot = *second_slot,
-      .third_slot = *third_slot,
-      .fourth_slot = *fourth_slot,
-      .line = first.line,
-  };
-  return true;
-}
-
-V2Rule make_score_bank_walk_leaf(const ScoreBankWalkMatch& match) {
-  const Expression packed_score_call =
-      call_expression("packed_score", {indexed_bank_slot(match.bank_name,
-                                                         identifier_expression(match.selector)),
-                                       identifier_expression(match.line_name)});
-  V2Rule leaf;
-  leaf.name = match.score_leaf;
-  leaf.params = {match.slot_param};
-  leaf.line = match.line;
-  // Consume the slot from X into a dedicated selector first (the x-param
-  // "copy" shape), so call sites pass the slot literal through the stack
-  // exactly like the mark-side leaf and the two walks stay mergeable.
-  leaf.body.push_back(make_assign_statement(match.selector,
-                                            identifier_expression(match.slot_param), match.line));
-  leaf.body.push_back(make_update_statement(match.score, "+=", packed_score_call, match.line));
-  return leaf;
-}
-
-std::vector<V2Statement> build_explicit_score_walk_body(const ScoreBankWalkMatch& match) {
-  std::vector<V2Statement> body;
-  const auto leaf_call = [&](int slot) {
-    return make_invoke_statement(match.score_leaf, {std::to_string(slot)}, match.line);
-  };
-  body.push_back(make_assign_statement(match.score, number_expression("0"), match.line));
-  body.push_back(make_assign_statement(match.line_name, match.first_line, match.line));
-  body.push_back(leaf_call(match.first_slot));
-  body.push_back(make_assign_statement(match.line_name, match.second_line, match.line));
-  body.push_back(leaf_call(match.second_slot));
-  body.push_back(make_invoke_statement(match.normalizer,
-                                       {expression_to_source(match.diagonal_add_arg)}, match.line));
-  body.push_back(leaf_call(match.third_slot));
-  body.push_back(make_invoke_statement(match.normalizer,
-                                       {expression_to_source(match.diagonal_sub_arg)}, match.line));
-  body.push_back(leaf_call(match.fourth_slot));
-  return body;
-}
-
-void canonicalize_packed_line_bank_walks(V2Program& program, bool rewrite_score_walks,
-                                         std::vector<OptimizationReport>& optimizations) {
-  const std::optional<PackedLineBankField> bank = packed_line_bank_field(program);
-  if (!bank.has_value())
-    return;
-
-  const std::string slot_param = "__bank_slot";
-  const std::string score_selector = "__score_slot";
-  if (program_declares_name(program, slot_param) ||
-      program_declares_name(program, score_selector))
-    return;
-
-  std::vector<std::string> rewritten_markers;
-  std::vector<std::string> rewritten_scorers;
-
-  // Mark side: two-phase. Plan every caller rewrite first and mutate only when
-  // each invocation of the leaf is accounted for by a recognized walk, so a
-  // partial match can never desynchronize the selector protocol.
-  for (V2Rule& leaf : program.rules) {
-    const std::optional<std::pair<std::string, std::string>> shape =
-        self_decrement_mark_leaf_shape(leaf, bank->name);
-    if (!shape.has_value())
-      continue;
-    const auto& [selector, line_name] = *shape;
-
-    const std::set<std::string> leaf_names{lower_ascii(leaf.name)};
-    if (count_invokes_of_rule(program.body, leaf.name) != 0 ||
-        statements_contain_call_named(program.body, leaf_names)) {
-      continue;
-    }
-
-    bool eligible = true;
-    std::vector<MarkWalkRewritePlan> plans;
-    for (V2Rule& caller : program.rules) {
-      if (statements_contain_call_named(caller.body, leaf_names)) {
-        eligible = false;
-        break;
-      }
-      const int invokes = count_invokes_of_rule(caller.body, leaf.name);
-      if (&caller == &leaf) {
-        if (invokes != 0)
-          eligible = false;
-        continue;
-      }
-      if (invokes == 0)
-        continue;
-      std::optional<MarkWalkRewritePlan> plan =
-          plan_mark_walk_rewrite(program, caller, leaf.name, line_name, selector, *bank);
-      if (!plan.has_value() || static_cast<int>(plan->steps.size()) != invokes) {
-        eligible = false;
-        break;
-      }
-      plans.push_back(std::move(*plan));
-    }
-    if (!eligible || plans.empty())
-      continue;
-
-    rewrite_self_decrement_mark_leaf(leaf, selector, slot_param);
-    ensure_implicit_param_state_field(program, slot_param, leaf.line);
-    for (const MarkWalkRewritePlan& plan : plans) {
-      apply_mark_walk_rewrite(plan, leaf.name, line_name);
-      rewritten_markers.push_back(plan.caller->name);
-    }
-  }
-
-  if (rewrite_score_walks) {
-    // Score side: collect new leaf rules separately to avoid invalidating the
-    // rule references being iterated.
-    std::vector<V2Rule> new_leaves;
-    std::set<std::string> used_names = collect_callable_names(program);
-    for (V2Rule& rule : program.rules) {
-      ScoreBankWalkMatch match;
-      if (!detect_score_bank_walk(program, rule, *bank, match))
-        continue;
-      match.score_leaf = fresh_callable_name(used_names, "__score_one", 0);
-      match.slot_param = slot_param;
-      match.selector = score_selector;
-      new_leaves.push_back(make_score_bank_walk_leaf(match));
-      rule.body = build_explicit_score_walk_body(match);
-      rewritten_scorers.push_back(rule.name);
-    }
-    if (!new_leaves.empty()) {
-      ensure_implicit_param_state_field(program, slot_param, new_leaves.front().line);
-      ensure_implicit_param_state_field(program, score_selector, new_leaves.front().line);
-      for (V2Rule& leaf : new_leaves)
-        program.rules.push_back(std::move(leaf));
-    }
-  }
-
-  if (rewritten_markers.empty() && rewritten_scorers.empty())
-    return;
-
-  std::string detail;
-  if (!rewritten_markers.empty()) {
-    detail = "Rewrote self-decrementing mark walks in " + join_strings(rewritten_markers, ", ") +
-             " to explicit bank-slot leaf calls";
-  }
-  if (!rewritten_scorers.empty()) {
-    if (!detail.empty())
-      detail += "; ";
-    detail += "Decomposed score walks in " + join_strings(rewritten_scorers, ", ") +
-              " into explicit bank-slot leaf calls";
-  }
-  optimizations.push_back(OptimizationReport{
-      .name = "canonicalize-packed-line-bank-walk",
-      .detail = detail + ".",
   });
 }
 
@@ -48052,324 +45731,6 @@ void trim_display_edge_whitespace(V2Program& program,
   });
 }
 
-bool is_joint_packed_line_selector_item(const MachineItem& item) {
-  return item.kind == MachineItemKind::Op && item.comment.has_value() &&
-         (item.comment->starts_with("joint-packed-line selector charge;") ||
-          item.comment->starts_with("joint-packed-line leaf dispatch;"));
-}
-
-std::optional<int> machine_opcode_register_index(int opcode) {
-  const int high = opcode & 0xf0;
-  const int low = opcode & 0x0f;
-  if (low > core::k_max_register_index)
-    return std::nullopt;
-  if (high == 0x40 || high == 0x60 || high == 0x70 || high == 0x80 || high == 0x90 ||
-      high == 0xa0 || high == 0xb0 || high == 0xc0 || high == 0xd0 || high == 0xe0) {
-    return low;
-  }
-  return std::nullopt;
-}
-
-struct JointPackedLineSelectorBindingResult {
-  std::vector<MachineItem> items;
-  int applied = 0;
-  std::optional<std::string> selector;
-  std::vector<Diagnostic> diagnostics;
-};
-
-JointPackedLineSelectorBindingResult
-bind_joint_packed_line_selector_register(const std::vector<MachineItem>& items) {
-  JointPackedLineSelectorBindingResult result{.items = items};
-  std::vector<std::size_t> marked;
-  std::set<int> used;
-  int charge_stores = 0;
-  int shared_charge_stores = 0;
-  int calls = 0;
-  int tail_jumps = 0;
-  for (std::size_t index = 0; index < items.size(); ++index) {
-    const MachineItem& item = items.at(index);
-    const bool joint = is_joint_packed_line_selector_item(item);
-    if (joint) {
-      const std::optional<int> register_index = machine_opcode_register_index(item.opcode);
-      if (register_index.has_value()) {
-        marked.push_back(index);
-        if ((item.opcode & 0xf0) == 0x40) {
-          ++charge_stores;
-          if (std::any_of(item.roles.begin(), item.roles.end(), [](const std::string& role) {
-                return role.starts_with("joint-packed-line-shared-selector-store:");
-              })) {
-            ++shared_charge_stores;
-          }
-        } else if ((item.opcode & 0xf0) == 0xa0)
-          ++calls;
-        else if ((item.opcode & 0xf0) == 0x80)
-          ++tail_jumps;
-      }
-      continue;
-    }
-    if (item.kind != MachineItemKind::Op)
-      continue;
-    if (const std::optional<int> register_index = machine_opcode_register_index(item.opcode))
-      used.insert(*register_index);
-  }
-  if (marked.empty())
-    return result;
-  const bool ordinary_shape = charge_stores > 0 && calls == charge_stores &&
-                              tail_jumps == charge_stores / 2 && charge_stores % 2 == 0;
-  const bool shared_entry_shape = charge_stores == 1 && shared_charge_stores == 1 &&
-                                  calls == 2 && tail_jumps == 1;
-  if (!ordinary_shape && !shared_entry_shape) {
-    result.diagnostics.push_back(diagnostic(
-        DiagnosticSeverity::Error, "joint-packed-line-selector-shape",
-        "Joint packed-line selector binding requires two charge stores, two indirect calls, "
-        "and one indirect tail jump per fused walker."));
-    return result;
-  }
-
-  std::optional<int> selected;
-  for (int candidate = core::k_max_register_index; candidate >= 7; --candidate) {
-    if (!used.contains(candidate)) {
-      selected = candidate;
-      break;
-    }
-  }
-  if (!selected.has_value()) {
-    result.diagnostics.push_back(diagnostic(
-        DiagnosticSeverity::Error, "joint-packed-line-selector-unavailable",
-        "Joint packed-line walker needs one stable R7..Re register unused by final emitted code."));
-    return result;
-  }
-
-  const std::string old_selector = "e";
-  const std::string new_selector = core::register_name_for_index(*selected);
-  for (const std::size_t index : marked) {
-    MachineItem& item = result.items.at(index);
-    item.opcode = (item.opcode & 0xf0) | *selected;
-    item.mnemonic = opcode_by_code(item.opcode).name;
-    if (item.comment.has_value()) {
-      const std::string old_text = "selector=" + old_selector;
-      const std::string new_text = "selector=" + new_selector;
-      std::size_t cursor = 0;
-      while ((cursor = item.comment->find(old_text, cursor)) != std::string::npos) {
-        item.comment->replace(cursor, old_text.size(), new_text);
-        cursor += new_text.size();
-      }
-    }
-    for (std::string& role : item.roles) {
-      const std::string old_role = "joint-packed-line-shared-selector-store:" + old_selector;
-      if (role == old_role)
-        role = "joint-packed-line-shared-selector-store:" + new_selector;
-    }
-  }
-  result.applied = static_cast<int>(marked.size());
-  result.selector = new_selector;
-  return result;
-}
-
-constexpr std::string_view kJointPackedLineReportReturnMarker =
-    "joint-packed-line-shared-report-return;";
-constexpr std::string_view kJointPackedLineReportReturnTargetMarker =
-    "joint-packed-line-shared-report-return-target;";
-constexpr std::string_view kJointPackedLineSelectorRehomeMarker =
-    "joint-packed-line-selector-rehome;";
-
-std::optional<std::set<std::string>> joint_packed_line_indirect_memory_targets(
-    const std::optional<std::string>& comment) {
-  if (!comment.has_value())
-    return std::nullopt;
-  constexpr std::string_view kMarker = "indirect-memory-targets=";
-  std::string lowered = *comment;
-  std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char ch) {
-    return static_cast<char>(std::tolower(ch));
-  });
-  const std::size_t marker = lowered.find(kMarker);
-  if (marker == std::string::npos)
-    return std::nullopt;
-  std::size_t cursor = marker + kMarker.size();
-  std::set<std::string> targets;
-  bool expect_register = true;
-  while (cursor < lowered.size()) {
-    const char ch = lowered.at(cursor);
-    const bool valid = (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'e');
-    if (expect_register) {
-      if (!valid)
-        break;
-      targets.insert(std::string(1, ch));
-      expect_register = false;
-      ++cursor;
-      continue;
-    }
-    if (ch != ',')
-      break;
-    expect_register = true;
-    ++cursor;
-  }
-  if (targets.empty() || expect_register)
-    return std::nullopt;
-  return targets;
-}
-
-bool joint_packed_line_indirect_flow_opcode(int opcode) {
-  const int high = opcode & 0xf0;
-  return high == 0x70 || high == 0x80 || high == 0x90 || high == 0xa0 ||
-         high == 0xc0 || high == 0xe0;
-}
-
-std::optional<int> joint_packed_line_item_address(const std::vector<MachineItem>& items,
-                                                  std::size_t wanted) {
-  if (wanted >= items.size())
-    return std::nullopt;
-  int address = 0;
-  for (std::size_t index = 0; index < items.size(); ++index) {
-    if (index == wanted)
-      return address;
-    if (items.at(index).kind != MachineItemKind::Label)
-      ++address;
-  }
-  return std::nullopt;
-}
-
-std::map<std::string, int>
-joint_packed_line_label_addresses(const std::vector<MachineItem>& items) {
-  std::map<std::string, int> labels;
-  int address = 0;
-  for (const MachineItem& item : items) {
-    if (item.kind == MachineItemKind::Label)
-      labels[item.name] = address;
-    else
-      ++address;
-  }
-  return labels;
-}
-
-std::optional<int> joint_packed_line_resolve_target(
-    const IrTarget& target, const std::map<std::string, int>& labels) {
-  if (const auto* numeric = std::get_if<int>(&target))
-    return *numeric;
-  const auto* label = std::get_if<std::string>(&target);
-  if (label == nullptr)
-    return std::nullopt;
-  const auto found = labels.find(*label);
-  return found == labels.end() ? std::nullopt : std::optional<int>(found->second);
-}
-
-std::optional<std::size_t> joint_packed_line_next_cell(
-    const std::vector<MachineItem>& items, std::size_t index) {
-  for (++index; index < items.size(); ++index) {
-    if (items.at(index).kind != MachineItemKind::Label)
-      return index;
-  }
-  return std::nullopt;
-}
-
-std::optional<std::string> joint_packed_line_preload_value(
-    const std::vector<PreloadReport>& preloads, const std::string& register_name) {
-  std::optional<std::string> value;
-  for (const PreloadReport& preload : preloads) {
-    if (preload.register_name != register_name)
-      continue;
-    if (value.has_value() && normalize_number_key(*value) != normalize_number_key(preload.value))
-      return std::nullopt;
-    value = preload.value;
-  }
-  return value;
-}
-
-std::optional<std::string> joint_packed_line_effective_preload_value(
-    const std::vector<PreloadReport>& setup_preloads,
-    const std::vector<PreloadReport>& flow_preloads,
-    const std::vector<PreloadReport>& stop_tail_preloads,
-    const std::string& register_name) {
-  if (const std::optional<std::string> stop =
-          joint_packed_line_preload_value(stop_tail_preloads, register_name)) {
-    return stop;
-  }
-  if (const std::optional<std::string> setup =
-          joint_packed_line_preload_value(setup_preloads, register_name)) {
-    return setup;
-  }
-  return joint_packed_line_preload_value(flow_preloads, register_name);
-}
-
-bool joint_packed_line_selector_unwritten(const std::vector<MachineItem>& items,
-                                          const std::string& register_name) {
-  const int register_index_value = register_index(register_name);
-  if (!core::is_stable_indirect_selector(register_name))
-    return false;
-  for (const MachineItem& item : items) {
-    if (item.kind != MachineItemKind::Op)
-      continue;
-    if (item.opcode == 0x40 + register_index_value)
-      return false;
-    if (item.opcode < 0xb0 || item.opcode > 0xbe)
-      continue;
-    const std::optional<std::set<std::string>> targets =
-        joint_packed_line_indirect_memory_targets(item.comment);
-    if (!targets.has_value() || targets->contains(register_name))
-      return false;
-  }
-  return true;
-}
-
-std::optional<std::string>
-joint_packed_line_score_constant(const MachineItem& recall) {
-  if (!recall.comment.has_value())
-    return std::nullopt;
-  constexpr std::string_view kPrefix = "preload const ";
-  if (!recall.comment->starts_with(kPrefix))
-    return std::nullopt;
-  std::size_t end = kPrefix.size();
-  while (end < recall.comment->size() && recall.comment->at(end) != ';' &&
-         std::isspace(static_cast<unsigned char>(recall.comment->at(end))) == 0) {
-    ++end;
-  }
-  if (end == kPrefix.size())
-    return std::nullopt;
-  return recall.comment->substr(kPrefix.size(), end - kPrefix.size());
-}
-
-void joint_packed_line_append_comment(MachineItem& item, const std::string& suffix) {
-  item.comment = item.comment.has_value() ? *item.comment + "; " + suffix : suffix;
-}
-
-void joint_packed_line_rebind_preloaded_flow_comment(MachineItem& item,
-                                                     const std::string& selector,
-                                                     const std::string& value,
-                                                     int target) {
-  const std::string replacement =
-      "preloaded R" + selector + "=" + value + " indirect-target=" +
-      std::to_string(target) + " indirect flow";
-  if (!item.comment.has_value()) {
-    item.comment = replacement;
-    return;
-  }
-  const std::size_t begin = item.comment->find("preloaded R");
-  if (begin == std::string::npos) {
-    joint_packed_line_append_comment(item, replacement);
-    return;
-  }
-  constexpr std::string_view kEndMarker = "indirect flow";
-  const std::size_t marker = item.comment->find(kEndMarker, begin);
-  if (marker == std::string::npos) {
-    joint_packed_line_append_comment(item, replacement);
-    return;
-  }
-  const std::size_t end = marker + kEndMarker.size();
-  item.comment->replace(begin, end - begin, replacement);
-}
-
-struct JointPackedLineReportReturnFusionResult {
-  std::vector<MachineItem> items;
-  std::vector<PreloadReport> setup_preloads;
-  std::vector<PreloadReport> flow_preloads;
-  std::vector<PreloadReport> stop_tail_preloads;
-  int removed_cells = 0;
-  std::optional<std::string> return_selector;
-  std::optional<std::string> replacement_selector;
-  std::optional<std::string> selector_value;
-  std::optional<int> return_address;
-};
-
 struct ProvedIndirectFlowSet {
   std::map<std::size_t, std::vector<int>> targets;
   // Numeric annotations name a selector value that is already materialized or
@@ -48459,346 +45820,6 @@ bool helper_hoist_preserves_fixed_indirect_targets(
       return false;
   }
   return true;
-}
-
-JointPackedLineReportReturnFusionResult fuse_joint_packed_line_report_return(
-    const std::vector<MachineItem>& input_items,
-    const std::vector<PreloadReport>& input_setup_preloads,
-    const std::vector<PreloadReport>& input_flow_preloads,
-    const std::vector<PreloadReport>& input_stop_tail_preloads,
-    AddressSpaceModel address_model) {
-  JointPackedLineReportReturnFusionResult result{
-      .items = input_items,
-      .setup_preloads = input_setup_preloads,
-      .flow_preloads = input_flow_preloads,
-      .stop_tail_preloads = input_stop_tail_preloads,
-  };
-
-  std::vector<std::size_t> score_cells;
-  std::optional<std::size_t> score_return;
-  for (std::size_t index = 0; index < input_items.size(); ++index) {
-    const MachineItem& item = input_items.at(index);
-    if (item.kind != MachineItemKind::Op || !item.comment.has_value())
-      continue;
-    if (*item.comment == "joint packed-line score leaf pow10") {
-      score_cells.clear();
-      score_cells.push_back(index);
-      continue;
-    }
-    if (!score_cells.empty() && !score_return.has_value())
-      score_cells.push_back(index);
-    if (*item.comment == "joint packed-line score leaf return") {
-      if (score_return.has_value())
-        return result;
-      score_return = index;
-    }
-  }
-  if (!score_return.has_value() || score_cells.size() != 8U ||
-      score_cells.back() != *score_return)
-    return result;
-  const std::array<int, 8> expected_score_opcodes = {0x15, 0x13, 0x35, -1,
-                                                      0x11, 0x22, 0x10, 0x52};
-  for (std::size_t index = 0; index < expected_score_opcodes.size(); ++index) {
-    const MachineItem& item = input_items.at(score_cells.at(index));
-    if (item.kind != MachineItemKind::Op ||
-        (expected_score_opcodes.at(index) >= 0 &&
-         item.opcode != expected_score_opcodes.at(index))) {
-      return result;
-    }
-  }
-  const MachineItem& score_constant_recall = input_items.at(score_cells.at(3));
-  if (score_constant_recall.opcode < 0x67 || score_constant_recall.opcode > 0x6e)
-    return result;
-  const std::string center_selector =
-      core::register_name_for_index(score_constant_recall.opcode - 0x60);
-  if (!joint_packed_line_selector_unwritten(input_items, center_selector))
-    return result;
-  const std::optional<std::string> semantic_center =
-      joint_packed_line_score_constant(score_constant_recall);
-  const std::optional<std::string> old_center_value =
-      joint_packed_line_effective_preload_value(
-          input_setup_preloads, input_flow_preloads, input_stop_tail_preloads,
-          center_selector);
-  if (!semantic_center.has_value() || !old_center_value.has_value())
-    return result;
-
-  double semantic_numeric = 0.0;
-  double old_numeric = 0.0;
-  try {
-    semantic_numeric = std::stod(*semantic_center);
-    old_numeric = std::stod(*old_center_value);
-  } catch (const std::exception&) {
-    return result;
-  }
-  if (!std::isfinite(semantic_numeric) || !std::isfinite(old_numeric) ||
-      std::fabs(semantic_numeric - old_numeric) > 1e-12)
-    return result;
-
-  const std::optional<int> score_return_address =
-      joint_packed_line_item_address(input_items, *score_return);
-  const std::optional<std::pair<std::string, int>> natural_selector =
-      natural_fractional_selector_preload_value(normalize_number_key(*semantic_center));
-  if (!score_return_address.has_value() || !natural_selector.has_value() ||
-      natural_selector->second != *score_return_address)
-    return result;
-  const std::optional<core::IndirectAddressEvaluation> natural_target =
-      core::evaluate_indirect_address(center_selector, natural_selector->first,
-                                      core::IndirectOperationKind::Flow, address_model);
-  if (!natural_target.has_value() ||
-      natural_target->actual_flow_target != *score_return_address)
-    return result;
-
-  std::optional<std::size_t> report_branch;
-  std::optional<std::size_t> report_address_cell;
-  std::optional<std::size_t> local_return;
-  std::optional<std::size_t> restore;
-  std::optional<std::size_t> stop;
-  for (std::size_t index = 0; index < input_items.size(); ++index) {
-    const MachineItem& item = input_items.at(index);
-    if (item.kind != MachineItemKind::Op || item.opcode != 0x5e ||
-        !item.comment.has_value() ||
-        *item.comment != "true branch for packed fractional report !=") {
-      continue;
-    }
-    if (report_branch.has_value())
-      return result;
-    report_branch = index;
-    report_address_cell = joint_packed_line_next_cell(input_items, index);
-    if (!report_address_cell.has_value())
-      return result;
-    local_return = joint_packed_line_next_cell(input_items, *report_address_cell);
-    if (!local_return.has_value())
-      return result;
-    restore = joint_packed_line_next_cell(input_items, *local_return);
-    if (!restore.has_value())
-      return result;
-    stop = joint_packed_line_next_cell(input_items, *restore);
-    if (!stop.has_value())
-      return result;
-  }
-  if (!report_branch.has_value() || !report_address_cell.has_value() ||
-      !local_return.has_value() || !restore.has_value() || !stop.has_value())
-    return result;
-  const MachineItem& branch_address = input_items.at(*report_address_cell);
-  const MachineItem& return_item = input_items.at(*local_return);
-  const MachineItem& restore_item = input_items.at(*restore);
-  const MachineItem& stop_item = input_items.at(*stop);
-  if (branch_address.kind != MachineItemKind::Address ||
-      return_item.kind != MachineItemKind::Op || return_item.opcode != 0x52 ||
-      !return_item.comment.has_value() || *return_item.comment != "packed fractional report return" ||
-      restore_item.kind != MachineItemKind::Op || restore_item.opcode != 0x0a ||
-      !restore_item.comment.has_value() ||
-      *restore_item.comment != "updated packed fractional report X2 restore" ||
-      stop_item.kind != MachineItemKind::Op || stop_item.opcode != 0x50)
-    return result;
-  const std::map<std::string, int> label_addresses =
-      joint_packed_line_label_addresses(input_items);
-  const std::optional<int> old_halt_target =
-      joint_packed_line_resolve_target(branch_address.target, label_addresses);
-  const std::optional<int> restore_address =
-      joint_packed_line_item_address(input_items, *restore);
-  if (!old_halt_target.has_value() || !restore_address.has_value() ||
-      *old_halt_target != *restore_address)
-    return result;
-
-  const std::optional<core::IndirectAddressEvaluation> old_center_target =
-      core::evaluate_indirect_address(center_selector, *old_center_value,
-                                      core::IndirectOperationKind::Flow, address_model);
-  if (!old_center_target.has_value() || !old_center_target->actual_flow_target.has_value())
-    return result;
-  std::vector<std::size_t> center_flow_uses;
-  for (std::size_t index = 0; index < input_items.size(); ++index) {
-    const MachineItem& item = input_items.at(index);
-    if (item.kind != MachineItemKind::Op ||
-        !joint_packed_line_indirect_flow_opcode(item.opcode) ||
-        (item.opcode & 0x0f) != register_index(center_selector)) {
-      continue;
-    }
-    center_flow_uses.push_back(index);
-  }
-
-  std::optional<std::string> replacement_selector;
-  std::optional<std::string> replacement_value;
-  if (!center_flow_uses.empty()) {
-    for (const PreloadReport& preload : input_setup_preloads) {
-      if (preload.register_name == center_selector ||
-          !core::is_stable_indirect_selector(preload.register_name) ||
-          !joint_packed_line_selector_unwritten(input_items, preload.register_name)) {
-        continue;
-      }
-      const std::optional<std::string> effective =
-          joint_packed_line_effective_preload_value(
-              input_setup_preloads, input_flow_preloads, input_stop_tail_preloads,
-              preload.register_name);
-      if (!effective.has_value())
-        continue;
-      const std::optional<core::IndirectAddressEvaluation> evaluated =
-          core::evaluate_indirect_address(preload.register_name, *effective,
-                                          core::IndirectOperationKind::Flow, address_model);
-      if (!evaluated.has_value() ||
-          evaluated->actual_flow_target != old_center_target->actual_flow_target)
-        continue;
-      replacement_selector = preload.register_name;
-      replacement_value = *effective;
-      break;
-    }
-    if (!replacement_selector.has_value() || !replacement_value.has_value())
-      return result;
-  }
-
-  std::vector<MachineItem> rewritten;
-  rewritten.reserve(input_items.size() - 2U);
-  for (std::size_t index = 0; index < input_items.size(); ++index) {
-    if (index == *report_address_cell || index == *local_return)
-      continue;
-    MachineItem item = input_items.at(index);
-    if (index == *report_branch) {
-      item.opcode = 0x70 + register_index(center_selector);
-      item.mnemonic = opcode_by_code(item.opcode).name;
-      item.comment = std::string(kJointPackedLineReportReturnMarker) +
-                     " selector=" + center_selector +
-                     "; target=" + std::to_string(*score_return_address) +
-                     "; semantic-value=" + *semantic_center +
-                     "; selector-value=" + natural_selector->first;
-      item.roles.push_back("joint-packed-line-report-return:" + center_selector + ":" +
-                           std::to_string(*score_return_address));
-    } else if (index == *score_return) {
-      joint_packed_line_append_comment(
-          item, std::string(kJointPackedLineReportReturnTargetMarker) +
-                    " selector=" + center_selector +
-                    "; target=" + std::to_string(*score_return_address));
-      item.roles.push_back("joint-packed-line-report-return-target:" + center_selector + ":" +
-                           std::to_string(*score_return_address));
-    } else if (std::find(center_flow_uses.begin(), center_flow_uses.end(), index) !=
-               center_flow_uses.end()) {
-      item.opcode = (item.opcode & 0xf0) | register_index(*replacement_selector);
-      item.mnemonic = opcode_by_code(item.opcode).name;
-      joint_packed_line_rebind_preloaded_flow_comment(
-          item, *replacement_selector, *replacement_value,
-          *old_center_target->actual_flow_target);
-      joint_packed_line_append_comment(
-          item, std::string(kJointPackedLineSelectorRehomeMarker) +
-                    " from=" + center_selector + "; to=" + *replacement_selector +
-                    "; target=" +
-                    std::to_string(*old_center_target->actual_flow_target) +
-                    "; replacement-value=" + *replacement_value);
-      item.roles.push_back("joint-packed-line-selector-rehome:" + center_selector + ":" +
-                           *replacement_selector + ":" +
-                           std::to_string(*old_center_target->actual_flow_target));
-    }
-    rewritten.push_back(std::move(item));
-  }
-
-  auto retune = [&](std::vector<PreloadReport>& preloads) {
-    for (PreloadReport& preload : preloads) {
-      if (preload.register_name == center_selector)
-        preload.value = natural_selector->first;
-    }
-  };
-  result.items = std::move(rewritten);
-  retune(result.setup_preloads);
-  retune(result.flow_preloads);
-  retune(result.stop_tail_preloads);
-  result.removed_cells = 2;
-  result.return_selector = center_selector;
-  result.replacement_selector = replacement_selector;
-  result.selector_value = natural_selector->first;
-  result.return_address = score_return_address;
-  return result;
-}
-
-JointPackedLineReportReturnFusionResult fuse_joint_packed_line_direct_report_return(
-    const std::vector<MachineItem>& input_items,
-    const std::vector<PreloadReport>& input_setup_preloads,
-    const std::vector<PreloadReport>& input_flow_preloads,
-    const std::vector<PreloadReport>& input_stop_tail_preloads) {
-  JointPackedLineReportReturnFusionResult result{
-      .items = input_items,
-      .setup_preloads = input_setup_preloads,
-      .flow_preloads = input_flow_preloads,
-      .stop_tail_preloads = input_stop_tail_preloads,
-  };
-  std::optional<std::size_t> score_return;
-  std::optional<std::size_t> report_branch;
-  for (std::size_t index = 0; index < input_items.size(); ++index) {
-    const MachineItem& item = input_items.at(index);
-    if (item.kind != MachineItemKind::Op || !item.comment.has_value())
-      continue;
-    if (*item.comment == "joint packed-line score leaf return") {
-      if (score_return.has_value())
-        return result;
-      score_return = index;
-    }
-    if (item.opcode == 0x5e &&
-        *item.comment == "true branch for packed fractional report !=") {
-      if (report_branch.has_value())
-        return result;
-      report_branch = index;
-    }
-  }
-  if (!score_return.has_value() || !report_branch.has_value())
-    return result;
-  const std::optional<std::size_t> address_cell =
-      joint_packed_line_next_cell(input_items, *report_branch);
-  const std::optional<std::size_t> local_return =
-      address_cell.has_value() ? joint_packed_line_next_cell(input_items, *address_cell)
-                               : std::nullopt;
-  const std::optional<std::size_t> restore =
-      local_return.has_value() ? joint_packed_line_next_cell(input_items, *local_return)
-                               : std::nullopt;
-  const std::optional<std::size_t> stop =
-      restore.has_value() ? joint_packed_line_next_cell(input_items, *restore) : std::nullopt;
-  const std::optional<int> score_return_address =
-      joint_packed_line_item_address(input_items, *score_return);
-  if (!address_cell.has_value() || !local_return.has_value() || !restore.has_value() ||
-      !stop.has_value() || !score_return_address.has_value() ||
-      input_items.at(*address_cell).kind != MachineItemKind::Address ||
-      input_items.at(*local_return).kind != MachineItemKind::Op ||
-      input_items.at(*local_return).opcode != 0x52 ||
-      !input_items.at(*local_return).comment.has_value() ||
-      *input_items.at(*local_return).comment != "packed fractional report return" ||
-      input_items.at(*restore).kind != MachineItemKind::Op ||
-      input_items.at(*restore).opcode != 0x0a ||
-      input_items.at(*stop).kind != MachineItemKind::Op ||
-      input_items.at(*stop).opcode != 0x50) {
-    return result;
-  }
-
-  std::vector<MachineItem> rewritten;
-  rewritten.reserve(input_items.size() - 1U);
-  for (std::size_t index = 0; index < input_items.size(); ++index) {
-    if (index == *local_return)
-      continue;
-    MachineItem item = input_items.at(index);
-    if (index == *report_branch) {
-      item.opcode = 0x57;
-      item.mnemonic = opcode_by_code(item.opcode).name;
-      item.comment = std::string(kJointPackedLineReportReturnMarker) +
-                     " mode=direct; target=" +
-                     std::to_string(*score_return_address);
-      item.roles.push_back("joint-packed-line-report-return-direct:" +
-                           std::to_string(*score_return_address));
-    } else if (index == *address_cell) {
-      item.target = *score_return_address;
-      item.comment = std::string(kJointPackedLineReportReturnMarker) +
-                     " mode=direct; target=" +
-                     std::to_string(*score_return_address);
-      item.roles.push_back("joint-packed-line-report-return-direct-address:" +
-                           std::to_string(*score_return_address));
-    } else if (index == *score_return) {
-      joint_packed_line_append_comment(
-          item, std::string(kJointPackedLineReportReturnTargetMarker) +
-                    " mode=direct; target=" +
-                    std::to_string(*score_return_address));
-      item.roles.push_back("joint-packed-line-report-return-target-direct:" +
-                           std::to_string(*score_return_address));
-    }
-    rewritten.push_back(std::move(item));
-  }
-  result.items = std::move(rewritten);
-  result.removed_cells = 1;
-  result.return_address = score_return_address;
-  return result;
 }
 
 std::set<std::string> packed_decimal_zero_run_floor_sources(const V2Program& program) {
@@ -49152,7 +46173,8 @@ std::vector<CandidateReport> build_analysis_opportunity_reports(const ProgramAst
                                                                 const CompileResult& result,
                                                                 const CompileOptions& options);
 
-CompileResult compile_source_once(std::string source, const CompileOptions& requested_options) {
+CompileResult compile_source_once(std::string source, const CompileOptions& requested_options,
+                                  bool source_has_entered) {
   CompileOptions options = requested_options;
   CompileResult result;
   result.implemented = true;
@@ -49223,16 +46245,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   context.setup_only_counted_loop_init = options.setup_only_counted_loop_init;
   context.x_param_value_functions = options.x_param_value_functions;
   context.x_param_y_stack_stored_entry = options.x_param_y_stack_stored_entry;
-  context.canonicalize_packed_line_bank_walks = options.canonicalize_packed_line_bank_walks;
-  context.packed_line_family_update_check_tail = options.packed_line_family_update_check_tail;
-  context.packed_line_family_mutating_selector_update_check_tail =
-      options.packed_line_family_mutating_selector_update_check_tail;
-  context.packed_line_family_borrowed_mutating_selector_update_check_tail =
-      options.packed_line_family_borrowed_mutating_selector_update_check_tail;
-  context.joint_packed_line_family_walk = options.joint_packed_line_family_walk;
   context.packed_score_accumulator_helpers = options.packed_score_accumulator_helpers;
-  context.disable_packed_line_family_score_accumulator =
-      options.disable_packed_line_family_score_accumulator;
   context.shared_bit_mask_helper_calls = options.shared_bit_mask_helper_calls;
   context.compact_bit_mask_helper_body = options.compact_bit_mask_helper_body;
   context.domain_error_guards = options.domain_error_guards;
@@ -49382,13 +46395,6 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
       run_interprocedural_ast_passes(options, *ast.v2, context.optimizations);
       if (options.alternating_sign_toggle_args)
         toggle_alternating_literal_call_args(*ast.v2, context.optimizations);
-      if (options.canonicalize_packed_line_bank_walks) {
-        const bool rewrite_score_walks =
-            !options.packed_line_family_mutating_selector_update_check_tail &&
-            !options.packed_line_family_borrowed_mutating_selector_update_check_tail;
-        canonicalize_packed_line_bank_walks(*ast.v2, rewrite_score_walks,
-                                            context.optimizations);
-      }
       // TS performs dead-source residual temp reuse before common-tail hoisting.
       // Native currently lowers residual-temp reuse later, but the common-tail
       // pass must still run in this candidate so single-use tail inlining can
@@ -49449,6 +46455,10 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
         trace_stage("metadata-registers-preloads");
         trace_stage("metadata-index-program");
         index_program_metadata(context, *ast.v2);
+        if (source_has_entered) {
+          analyze_manual_interaction_protocols(context, *ast.v2);
+          result.interaction_protocols = context.interaction_protocols;
+        }
         trace_stage("metadata-display-counts");
         collect_literal_display_use_counts(context, *ast.v2);
         collect_packed_display_use_counts(context, *ast.v2);
@@ -49477,10 +46487,6 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
         plan_spatial_line_count_preloads(context, *ast.v2);
         trace_stage("metadata-near-any");
         collect_near_any_helper_stats(context, *ast.v2);
-        trace_stage("metadata-plan-packed-line-borrowed-selector");
-        plan_packed_line_family_borrowed_mutating_selectors(context, *ast.v2);
-        trace_stage("metadata-plan-joint-packed-line-family");
-        plan_joint_packed_line_family_walks(context, *ast.v2);
       }
       if (can_attempt_lowering) {
         trace_stage("lower-main-functions-helpers");
@@ -49541,29 +46547,15 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
     pass_options.aggressive_indirect_call_threshold = true;
   merge_planned_preloaded_constant_registers(pass_options, context);
 
-  const JointPackedLineSelectorBindingResult joint_selector_binding =
-      bind_joint_packed_line_selector_register(context.emitter.items);
-  result.diagnostics.insert(result.diagnostics.end(), joint_selector_binding.diagnostics.begin(),
-                            joint_selector_binding.diagnostics.end());
-
   trace_stage("ir-passes");
   const core::passes::RunPassesResult optimized =
-      exact_decimal_series ? core::passes::RunPassesResult{.items = joint_selector_binding.items}
-                           : core::passes::run_ir_passes(joint_selector_binding.items,
-                                                        pass_options);
+      exact_decimal_series ? core::passes::RunPassesResult{.items = context.emitter.items}
+                           : core::passes::run_ir_passes(context.emitter.items, pass_options);
   result.registers = context.registers;
   hide_internal_constant_report_registers(result.registers);
   if (ast.v2.has_value())
     hide_inline_x_param_report_registers(result.registers, context, *ast.v2);
   result.optimizations = context.optimizations;
-  if (joint_selector_binding.applied > 0 && joint_selector_binding.selector.has_value()) {
-    result.optimizations.push_back(OptimizationReport{
-        .name = "joint-packed-line-selector-binding",
-        .detail = "Bound the joint packed-line leaf selector before IR and post-layout flow "
-                  "selection to emitted-code-unused R" +
-                  *joint_selector_binding.selector + ".",
-    });
-  }
   for (const core::passes::AppliedOptimization& optimization : optimized.optimizations) {
     result.optimizations.push_back(OptimizationReport{
         .name = optimization.name,
@@ -50114,44 +47106,6 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
     });
   }
 
-  if (options.joint_packed_line_family_walk) {
-    JointPackedLineReportReturnFusionResult report_return =
-        fuse_joint_packed_line_report_return(
-            post_layout_items, setup_preloads, post_layout_flow_preloads,
-            stop_tail_preloads, address_space_model_for_options(options));
-    if (report_return.removed_cells == 0) {
-      report_return = fuse_joint_packed_line_direct_report_return(
-          post_layout_items, setup_preloads, post_layout_flow_preloads,
-          stop_tail_preloads);
-    }
-    if (report_return.removed_cells > 0 && report_return.return_address.has_value()) {
-      post_layout_items = report_return.items;
-      setup_preloads = report_return.setup_preloads;
-      post_layout_flow_preloads = report_return.flow_preloads;
-      stop_tail_preloads = report_return.stop_tail_preloads;
-      std::string detail = "Shared the joint packed-line score leaf return at address " +
-                           std::to_string(*report_return.return_address) +
-                           " with the update/report leaf";
-      if (report_return.return_selector.has_value() &&
-          report_return.selector_value.has_value()) {
-        detail += " through stable R" + *report_return.return_selector + "=" +
-                  *report_return.selector_value;
-        if (report_return.replacement_selector.has_value()) {
-          detail += " after rehoming the selector's prior flow uses to equivalent stable R" +
-                    *report_return.replacement_selector;
-        }
-      } else {
-        detail += " through an inverted direct no-report branch";
-      }
-      detail += ", removing " + std::to_string(report_return.removed_cells) + " cell" +
-                (report_return.removed_cells == 1 ? "." : "s.");
-      post_layout_optimizations.push_back(core::passes::AppliedOptimization{
-          .name = "joint-packed-line-shared-report-return",
-          .detail = std::move(detail),
-      });
-    }
-  }
-
   // A one-cell-over-limit artifact may use the physical A4 -> 00 wrap as a
   // return only after the generic helper verifier has proved every entry and
   // relocation edge. The pass is deliberately profile- and layout-driven; it
@@ -50363,12 +47317,8 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.packed_score_accumulator_helpers ||
          options.canonicalize_repeated_unary_update_args ||
          options.alternating_sign_toggle_args ||
-         options.canonicalize_packed_line_bank_walks ||
          options.x_param_value_functions ||
-         options.x_param_y_stack_stored_entry || options.packed_line_family_update_check_tail ||
-         options.packed_line_family_mutating_selector_update_check_tail ||
-         options.packed_line_family_borrowed_mutating_selector_update_check_tail ||
-         options.joint_packed_line_family_walk ||
+         options.x_param_y_stack_stored_entry ||
          options.inline_floor_packed_row_expressions || options.unroll_counted_loops ||
          options.setup_only_counted_loop_init || options.domain_error_guards ||
          options.show_read_guarded_transfer || options.comparison_guarded_update_selectors ||
@@ -50429,7 +47379,6 @@ bool candidate_needs_static_proof_gate(const CompileOptions& options) {
          options.forward_indirect_flow || options.aggressive_indirect_call ||
          options.aggressive_indirect_call_threshold ||
          options.callee_hole_straight_line_helper ||
-         options.joint_packed_line_family_walk ||
          options.assume_dead_selector_integer_part ||
          !options.suppress_constant_preloads.empty() ||
          !options.fractional_constant_selectors.empty() ||
@@ -50472,349 +47421,6 @@ bool address_code_overlay_artifacts_proved(const std::vector<OptimizationReport>
                                            const std::vector<ResolvedStep>& steps);
 bool suppressed_preload_static_gate_accepts(const CompileOptions& candidate_options,
                                             const CompileResult& result);
-
-bool joint_packed_line_shared_report_return_proved(const CompileResult& result) {
-  const bool reported = std::any_of(
-      result.optimizations.begin(), result.optimizations.end(), [](const OptimizationReport& item) {
-        return item.name == "joint-packed-line-shared-report-return";
-      });
-  if (!reported)
-    return true;
-
-  const std::map<std::string, int> labels = joint_packed_line_label_addresses(result.items);
-  auto item_address = [&](std::size_t index) {
-    return joint_packed_line_item_address(result.items, index);
-  };
-  auto unique_role = [&](std::string_view prefix)
-      -> std::optional<std::pair<std::size_t, std::string>> {
-    std::optional<std::pair<std::size_t, std::string>> found;
-    for (std::size_t index = 0; index < result.items.size(); ++index) {
-      for (const std::string& role : result.items.at(index).roles) {
-        if (!role.starts_with(prefix))
-          continue;
-        if (found.has_value() || role.size() == prefix.size())
-          return std::nullopt;
-        found = std::pair<std::size_t, std::string>{index, role.substr(prefix.size())};
-      }
-    }
-    return found;
-  };
-  auto parse_int = [](std::string_view text) -> std::optional<int> {
-    if (text.empty())
-      return std::nullopt;
-    int value = 0;
-    const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
-    return error == std::errc{} && end == text.data() + text.size()
-               ? std::optional<int>(value)
-               : std::nullopt;
-  };
-  auto target_item_at = [&](int target, std::string_view required_role) -> bool {
-    int matches = 0;
-    for (std::size_t index = 0; index < result.items.size(); ++index) {
-      const std::optional<int> address = item_address(index);
-      if (!address.has_value() || *address != target)
-        continue;
-      const MachineItem& item = result.items.at(index);
-      if (item.kind != MachineItemKind::Op || item.opcode != 0x52)
-        return false;
-      const bool marked = std::any_of(item.roles.begin(), item.roles.end(), [&](const std::string& role) {
-        return role == required_role;
-      });
-      if (!marked)
-        return false;
-      ++matches;
-    }
-    return matches == 1;
-  };
-
-  if (const auto direct = unique_role("joint-packed-line-report-return-direct:");
-      direct.has_value()) {
-    const std::optional<int> target = parse_int(direct->second);
-    const auto address = unique_role("joint-packed-line-report-return-direct-address:");
-    if (!target.has_value() || !address.has_value() ||
-        parse_int(address->second) != target ||
-        result.items.at(direct->first).kind != MachineItemKind::Op ||
-        result.items.at(direct->first).opcode != 0x57 ||
-        result.items.at(address->first).kind != MachineItemKind::Address ||
-        joint_packed_line_resolve_target(result.items.at(address->first).target, labels) != target) {
-      return false;
-    }
-    const std::optional<std::size_t> next_address =
-        joint_packed_line_next_cell(result.items, direct->first);
-    const std::optional<std::size_t> restore =
-        address.has_value() ? joint_packed_line_next_cell(result.items, address->first)
-                            : std::nullopt;
-    const std::optional<std::size_t> stop =
-        restore.has_value() ? joint_packed_line_next_cell(result.items, *restore) : std::nullopt;
-    if (!next_address.has_value() || *next_address != address->first ||
-        !restore.has_value() || !stop.has_value() ||
-        result.items.at(*restore).kind != MachineItemKind::Op ||
-        result.items.at(*restore).opcode != 0x0a ||
-        result.items.at(*stop).kind != MachineItemKind::Op ||
-        result.items.at(*stop).opcode != 0x50 ||
-        !target_item_at(*target,
-                        "joint-packed-line-report-return-target-direct:" +
-                            std::to_string(*target))) {
-      return false;
-    }
-    return true;
-  }
-
-  const auto indirect = unique_role("joint-packed-line-report-return:");
-  if (!indirect.has_value())
-    return false;
-  const std::size_t separator = indirect->second.find(':');
-  if (separator == std::string::npos)
-    return false;
-  const std::string selector = indirect->second.substr(0, separator);
-  const std::optional<int> target = parse_int(indirect->second.substr(separator + 1U));
-  if (!target.has_value() || selector.size() != 1U ||
-      !core::is_stable_indirect_selector(selector) ||
-      result.items.at(indirect->first).kind != MachineItemKind::Op ||
-      result.items.at(indirect->first).opcode != 0x70 + register_index(selector) ||
-      !target_item_at(*target, "joint-packed-line-report-return-target:" + selector + ":" +
-                                  std::to_string(*target))) {
-    return false;
-  }
-  const std::optional<std::size_t> restore =
-      joint_packed_line_next_cell(result.items, indirect->first);
-  const std::optional<std::size_t> stop =
-      restore.has_value() ? joint_packed_line_next_cell(result.items, *restore) : std::nullopt;
-  if (!restore.has_value() || !stop.has_value() ||
-      result.items.at(*restore).kind != MachineItemKind::Op ||
-      result.items.at(*restore).opcode != 0x0a ||
-      result.items.at(*stop).kind != MachineItemKind::Op ||
-      result.items.at(*stop).opcode != 0x50 ||
-      !joint_packed_line_selector_unwritten(result.items, selector)) {
-    return false;
-  }
-  const std::optional<std::string> selector_value =
-      joint_packed_line_preload_value(result.preloads, selector);
-  const std::optional<core::IndirectAddressEvaluation> evaluated =
-      selector_value.has_value()
-          ? core::evaluate_indirect_address(selector, *selector_value,
-                                            core::IndirectOperationKind::Flow,
-                                            address_space_model_for_feature_profile(
-                                                result.feature_profile))
-          : std::nullopt;
-  if (!evaluated.has_value() || evaluated->actual_flow_target != target)
-    return false;
-
-  bool found_semantic_recall = false;
-  for (const MachineItem& item : result.items) {
-    if (item.kind == MachineItemKind::Op && item.opcode == 0x60 + register_index(selector) &&
-        item.comment.has_value() && item.comment->starts_with("preload const ")) {
-      const std::optional<std::string> semantic = joint_packed_line_score_constant(item);
-      if (!semantic.has_value())
-        return false;
-      try {
-        if (std::fabs(std::stod(*semantic) - std::stod(*selector_value)) > 1e-12)
-          return false;
-      } catch (const std::exception&) {
-        return false;
-      }
-      found_semantic_recall = true;
-    }
-    if (item.kind == MachineItemKind::Op &&
-        joint_packed_line_indirect_flow_opcode(item.opcode) &&
-        (item.opcode & 0x0f) == register_index(selector) &&
-        &item != &result.items.at(indirect->first)) {
-      return false;
-    }
-  }
-  return found_semantic_recall;
-}
-
-bool joint_packed_line_family_artifacts_proved(const CompileResult& result) {
-  const bool reported = std::any_of(
-      result.optimizations.begin(), result.optimizations.end(), [](const OptimizationReport& item) {
-        return item.name == "joint-packed-line-family-walk";
-      });
-  if (!reported)
-    return false;
-
-  constexpr std::string_view kHigh = "late-decimal-selector-high:";
-  constexpr std::string_view kLow = "late-decimal-selector-low:";
-  std::map<std::string, int> label_addresses;
-  std::map<std::string, std::size_t> label_items;
-  int address = 0;
-  for (std::size_t item_index = 0; item_index < result.items.size(); ++item_index) {
-    const MachineItem& item = result.items.at(item_index);
-    if (item.kind == MachineItemKind::Label) {
-      if (label_addresses.contains(item.name))
-        return false;
-      label_addresses[item.name] = address;
-      label_items[item.name] = item_index;
-    } else {
-      ++address;
-    }
-  }
-
-  struct Charge {
-    std::string label;
-    int target = 0;
-    int selector = -1;
-    std::size_t high = 0;
-    std::size_t low = 0;
-    std::size_t store = 0;
-  };
-  std::vector<Charge> charges;
-  auto marked_label = [&](const MachineItem& item,
-                          std::string_view prefix) -> std::optional<std::string> {
-    std::optional<std::string> label;
-    for (const std::string& role : item.roles) {
-      if (!role.starts_with(prefix))
-        continue;
-      if (label.has_value() || role.size() == prefix.size())
-        return std::nullopt;
-      label = role.substr(prefix.size());
-    }
-    return label;
-  };
-  for (std::size_t index = 0; index < result.items.size(); ++index) {
-    const std::optional<std::string> high = marked_label(result.items.at(index), kHigh);
-    if (!high.has_value())
-      continue;
-    if (index + 1U >= result.items.size())
-      return false;
-    const std::optional<std::string> low = marked_label(result.items.at(index + 1U), kLow);
-    if (!low.has_value() || *low != *high)
-      return false;
-
-    const std::optional<std::size_t> next_after_low =
-        joint_packed_line_next_cell(result.items, index + 1U);
-    if (!next_after_low.has_value())
-      return false;
-    std::size_t store_index = *next_after_low;
-    bool shared_store_entry = false;
-    if (store_index < result.items.size() &&
-        result.items.at(store_index).kind == MachineItemKind::Op &&
-        result.items.at(store_index).opcode == 0x53) {
-      const std::optional<std::size_t> operand_index =
-          joint_packed_line_next_cell(result.items, store_index);
-      if (!operand_index.has_value())
-        return false;
-      const MachineItem& call = result.items.at(store_index);
-      const MachineItem& operand = result.items.at(*operand_index);
-      const std::optional<std::string> call_entry =
-          marked_label(call, "joint-packed-line-shared-selector-call:");
-      if (!call_entry.has_value() || operand.kind != MachineItemKind::Address ||
-          !std::holds_alternative<std::string>(operand.target) ||
-          std::get<std::string>(operand.target) != *call_entry) {
-        return false;
-      }
-      const auto entry_item = label_items.find(*call_entry);
-      const auto entry_address = label_addresses.find(*call_entry);
-      if (entry_item == label_items.end() || entry_address == label_addresses.end() ||
-          joint_packed_line_resolve_target(operand.target, label_addresses) !=
-              std::optional<int>(entry_address->second)) {
-        return false;
-      }
-      const std::optional<std::size_t> shared_store =
-          joint_packed_line_next_cell(result.items, entry_item->second);
-      if (!shared_store.has_value())
-        return false;
-      store_index = *shared_store;
-      shared_store_entry = true;
-    }
-    if (store_index >= result.items.size())
-      return false;
-    const MachineItem& store = result.items.at(store_index);
-    const auto target = label_addresses.find(*high);
-    const std::optional<int> selector = machine_opcode_register_index(store.opcode);
-    if (target == label_addresses.end() || target->second < 0 || target->second > 99 ||
-        result.items.at(index).kind != MachineItemKind::Op ||
-        result.items.at(index + 1U).kind != MachineItemKind::Op ||
-        result.items.at(index).opcode != target->second / 10 ||
-        result.items.at(index + 1U).opcode != target->second % 10 ||
-        store.kind != MachineItemKind::Op || (store.opcode & 0xf0) != 0x40 ||
-        !selector.has_value() || *selector < 7 || !is_joint_packed_line_selector_item(store)) {
-      return false;
-    }
-    if (shared_store_entry) {
-      const std::string role = "joint-packed-line-shared-selector-store:" +
-                               core::register_name_for_index(*selector);
-      if (std::find(store.roles.begin(), store.roles.end(), role) == store.roles.end())
-        return false;
-    }
-    const std::string selector_name = core::register_name_for_index(*selector);
-    const std::optional<core::IndirectAddressEvaluation> evaluated =
-        core::evaluate_indirect_address(selector_name, std::to_string(target->second),
-                                        core::IndirectOperationKind::Flow);
-    if (!evaluated.has_value() || evaluated->actual_flow_target != target->second)
-      return false;
-    charges.push_back(Charge{.label = *high,
-                             .target = target->second,
-                             .selector = *selector,
-                             .high = index,
-                             .low = index + 1U,
-                             .store = store_index});
-    index += 1U;
-  }
-  if (charges.size() != 2U || charges.front().label == charges.back().label ||
-      charges.front().target == charges.back().target ||
-      charges.front().selector != charges.back().selector) {
-    return false;
-  }
-
-  const int selector = charges.front().selector;
-  std::set<std::size_t> allowed_selector_uses;
-  for (const Charge& charge : charges)
-    allowed_selector_uses.insert(charge.store);
-  int call_count = 0;
-  int tail_count = 0;
-  for (std::size_t index = 0; index < result.items.size(); ++index) {
-    const MachineItem& item = result.items.at(index);
-    if (item.kind != MachineItemKind::Op || !item.comment.has_value() ||
-        !item.comment->starts_with("joint-packed-line leaf dispatch;")) {
-      continue;
-    }
-    const std::optional<int> dispatch_selector = machine_opcode_register_index(item.opcode);
-    if (!dispatch_selector.has_value() || *dispatch_selector != selector)
-      return false;
-    if ((item.opcode & 0xf0) == 0xa0)
-      ++call_count;
-    else if ((item.opcode & 0xf0) == 0x80)
-      ++tail_count;
-    else
-      return false;
-    for (const Charge& charge : charges) {
-      if (item.comment->find(charge.label) == std::string::npos)
-        return false;
-    }
-    allowed_selector_uses.insert(index);
-  }
-  if (call_count != 2 || tail_count != 1)
-    return false;
-
-  for (std::size_t index = 0; index < result.items.size(); ++index) {
-    const MachineItem& item = result.items.at(index);
-    if (item.kind != MachineItemKind::Op)
-      continue;
-    const std::optional<int> used_register = machine_opcode_register_index(item.opcode);
-    if (used_register == selector && !allowed_selector_uses.contains(index))
-      return false;
-  }
-  return joint_packed_line_shared_report_return_proved(result);
-}
-
-bool joint_packed_line_family_static_gate_accepts(const CompileOptions& candidate_options,
-                                                  const CompileResult& result) {
-  if (!candidate_options.joint_packed_line_family_walk ||
-      candidate_options.aggressive_post_layout_indirect_flow ||
-      candidate_options.dual_use_constant_indirect_flow ||
-      candidate_options.preloaded_indirect_flow || candidate_options.forward_indirect_flow ||
-      candidate_options.runtime_indirect_call_flow ||
-      candidate_options.callee_hole_straight_line_helper ||
-      candidate_options.assume_dead_selector_integer_part ||
-      !candidate_options.synthesized_dispatch_plans.empty() ||
-      !candidate_options.fractional_constant_selectors.empty() ||
-      !candidate_options.force_fractional_constant_selector_preloads.empty()) {
-    return false;
-  }
-  return suppressed_preload_static_gate_accepts(candidate_options, result) &&
-         joint_packed_line_family_artifacts_proved(result);
-}
 
 std::vector<core::AddressConstraint> address_constraints_for_proof(
     const SynthesizedDispatchPlan& plan) {
@@ -51299,28 +47905,12 @@ bool callee_hole_straight_line_helper_static_gate_accepts(const CompileOptions& 
 
 bool optimizer_static_gate_accepts(const CompileOptions& candidate_options,
                                    const CompileResult& result) {
-  // Joint packed-line dispatch is a composable proof obligation: no other
-  // selector/flow family may accept the candidate on its behalf. This keeps a
-  // later dual-use or fractional layout from bypassing the joint leaf proof.
-  if (candidate_options.joint_packed_line_family_walk &&
-      !joint_packed_line_family_artifacts_proved(result)) {
-    return false;
-  }
-  if (candidate_options.joint_packed_line_family_walk &&
-      !candidate_options.fractional_constant_selectors.empty() &&
-      std::any_of(result.optimizations.begin(), result.optimizations.end(),
-                  [](const OptimizationReport& item) {
-                    return item.name == "fractional-constant-selector-use";
-                  })) {
-    return false;
-  }
   return computed_dispatch_static_gate_accepts(candidate_options, result) ||
          suppress_constant_preload_only_static_gate_accepts(candidate_options, result) ||
          preloaded_indirect_flow_static_gate_accepts(candidate_options, result) ||
          aggressive_post_layout_indirect_flow_static_gate_accepts(candidate_options, result) ||
          runtime_indirect_call_flow_static_gate_accepts(candidate_options, result) ||
          callee_hole_straight_line_helper_static_gate_accepts(candidate_options, result) ||
-         joint_packed_line_family_static_gate_accepts(candidate_options, result) ||
          dual_use_constant_indirect_flow_static_gate_accepts(candidate_options, result) ||
          forward_indirect_flow_static_gate_accepts(candidate_options, result);
 }
@@ -51329,15 +47919,6 @@ std::optional<std::string> optimizer_static_gate_rejection_reason(
     const CompileOptions& candidate_options, const CompileResult& result) {
   if (optimizer_static_gate_accepts(candidate_options, result))
     return std::nullopt;
-  if (candidate_options.joint_packed_line_family_walk &&
-      !candidate_options.fractional_constant_selectors.empty() &&
-      std::any_of(result.optimizations.begin(), result.optimizations.end(),
-                  [](const OptimizationReport& item) {
-                    return item.name == "fractional-constant-selector-use";
-                  })) {
-    return "joint packed-line fractional flow requires a natural selector value; recovered "
-           "fractional constants add a stack-affecting K {x} inside the shared score leaf";
-  }
   if (candidate_options.assume_dead_selector_integer_part) {
     if (const std::optional<std::string> reason =
             dead_integer_fractional_selector_uses_rejection_reason(
@@ -51453,21 +48034,12 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";trig_fractional_pack=" << options.trig_fractional_pack
       << ";sign_pack_state=" << options.sign_pack_state
       << ";packed_score_accumulator_helpers=" << options.packed_score_accumulator_helpers
-      << ";disable_packed_line_family_score_accumulator="
-      << options.disable_packed_line_family_score_accumulator
       << ";canonicalize_repeated_unary_update_args="
       << options.canonicalize_repeated_unary_update_args
       << ";alternating_sign_toggle_args=" << options.alternating_sign_toggle_args
-      << ";canonicalize_packed_line_bank_walks=" << options.canonicalize_packed_line_bank_walks
       << ";callee_hole_straight_line_helper=" << options.callee_hole_straight_line_helper
       << ";x_param_value_functions=" << options.x_param_value_functions
       << ";x_param_y_stack_stored_entry=" << options.x_param_y_stack_stored_entry
-      << ";packed_line_family_update_check_tail=" << options.packed_line_family_update_check_tail
-      << ";packed_line_family_mutating_selector_update_check_tail="
-      << options.packed_line_family_mutating_selector_update_check_tail
-      << ";packed_line_family_borrowed_mutating_selector_update_check_tail="
-      << options.packed_line_family_borrowed_mutating_selector_update_check_tail
-      << ";joint_packed_line_family_walk=" << options.joint_packed_line_family_walk
       << ";inline_floor_packed_row_expressions=" << options.inline_floor_packed_row_expressions
       << ";unroll_counted_loops=" << options.unroll_counted_loops
       << ";setup_only_counted_loop_init=" << options.setup_only_counted_loop_init
@@ -51534,10 +48106,6 @@ enum class CandidateGate {
 };
 
 int estimated_candidate_search_cost_ms(std::string_view name) {
-  // The structural joint-family candidates are measured as ordinary lowering
-  // passes even when a candidate name also mentions its component layout.
-  if (name.starts_with("joint-packed-line-family-walk"))
-    return 300;
   if (name == "call-count-proc-layout" || name == "size-desc-proc-layout" ||
       name == "reverse-proc-layout") {
     return 300;
@@ -51887,13 +48455,6 @@ bool should_report_nonwinning_candidate(std::string_view name) {
          name == "packed-score-accumulator-helper" ||
          name == "packed-score-accumulator-aggressive-post-layout" ||
          name == "packed-score-accumulator-stack-helper-entries" ||
-         name == "generic-packed-score-accumulator-fallback" ||
-         name == "generic-packed-score-accumulator-aggressive-fallback" ||
-         name == "generic-packed-score-accumulator-stack-helper-fallback" ||
-         name == "generic-packed-score-accumulator-stack-helper-aggressive-fallback" ||
-         name == "packed-line-family-update-check-tail" ||
-         name == "packed-line-family-mutating-selector-update-check-tail" ||
-         name == "packed-line-family-borrowed-mutating-selector-update-check-tail" ||
          name == "stack-resident-helper-entries" ||
          name == "stack-resident-function-entries";
 }
@@ -55708,7 +52269,6 @@ struct PackedScoreAccumulatorHelperUsage {
   int terms = 0;
   int groups = 0;
   int x_param_terms = 0;
-  int shared_tail_terms = 0;
   int signed_positive_terms = 0;
   int signed_negative_terms = 0;
   int signed_groups = 0;
@@ -55752,10 +52312,6 @@ packed_score_accumulator_terms_from_detail(const OptimizationReport& optimizatio
       return {};
     }
   }
-  if (optimization.name == "packed-line-family-score-accumulator" &&
-      optimization.detail.find("Accumulated four packed_score() terms") != std::string::npos) {
-    return PackedScoreAccumulatorTermBreakdown{.positive_terms = 4};
-  }
   if (optimization.name == "x-param-packed-score-line-stack-accumulate")
     return PackedScoreAccumulatorTermBreakdown{.positive_terms = 1};
   return {};
@@ -55766,7 +52322,7 @@ packed_score_accumulator_helper_usage_by_label(
     const std::vector<OptimizationReport>& optimizations) {
   std::map<std::string, PackedScoreAccumulatorHelperUsage> usage_by_label;
   const auto add_usage = [&](const std::string& label, int terms, bool signed_expression,
-                             bool negative_terms, bool x_param, bool packed_line) {
+                             bool negative_terms, bool x_param) {
     if (terms <= 0)
       return;
     PackedScoreAccumulatorHelperUsage& usage = usage_by_label[label];
@@ -55782,8 +52338,6 @@ packed_score_accumulator_helper_usage_by_label(
     }
     if (x_param)
       usage.x_param_terms += terms;
-    if (packed_line)
-      usage.shared_tail_terms += terms;
   };
   for (const OptimizationReport& optimization : optimizations) {
     if (optimization.name == "packed-score-accumulator-helper" ||
@@ -55793,22 +52347,11 @@ packed_score_accumulator_helper_usage_by_label(
         packed_score_accumulator_terms_from_detail(optimization);
     if (terms.total_terms() <= 0)
       continue;
-    const bool packed_line = optimization.name == "packed-line-family-score-accumulator";
     const bool x_param = optimization.name == "x-param-packed-score-line-stack-accumulate";
-    if (packed_line) {
-      const bool shared_generic_helper =
-          optimization.detail.find("Shared the generic packed_score accumulator helper") !=
-          std::string::npos;
-      add_usage(shared_generic_helper ? "packed_score accumulator helper"
-                                      : "packed-line score accumulator helper",
-                terms.positive_terms, terms.signed_expression,
-                /*negative_terms=*/false, x_param, packed_line);
-      continue;
-    }
     add_usage("packed_score accumulator helper", terms.positive_terms,
-              terms.signed_expression, /*negative_terms=*/false, x_param, packed_line);
+              terms.signed_expression, /*negative_terms=*/false, x_param);
     add_usage("packed_score subtractor helper", terms.negative_terms, terms.signed_expression,
-              /*negative_terms=*/true, x_param, packed_line);
+              /*negative_terms=*/true, x_param);
   }
   return usage_by_label;
 }
@@ -55856,166 +52399,6 @@ void attach_packed_score_accumulator_helper_details(
     }
     if (usage.x_param_terms > 0)
       helper.details["xParamTerms"] = std::to_string(usage.x_param_terms);
-    if (usage.shared_tail_terms > 0) {
-      helper.details["sharedTailTerms"] = std::to_string(usage.shared_tail_terms);
-      helper.details["pipelineShape"] = "packed-line-family-score";
-      helper.details["accumulatorStatePolicy"] = "stack-accumulator-no-score-state-store";
-      helper.details["interleavedPipelineShape"] = "shared-returned-index-tail";
-      helper.details["interleavedPipelineTerms"] = std::to_string(usage.shared_tail_terms);
-      helper.details["interleavedPipelineState"] = "score-carried-in-accumulator-stack";
-      helper.details["interleavedPipelineBlocker"] =
-          "live-inputs-cross-stack-mutating-normalizer-and-score-helper";
-      helper.details["pow10ScaleLineValuePolicy"] = "line-value-carried-under-index";
-      helper.details["pow10ScaleCorrectnessAction"] =
-          "keep-line-value-under-index-before-helper";
-      helper.details["nextPipelineAction"] =
-          "prove-stack-preserving-helper-abi-for-live-inputs";
-      helper.details["nextPipelineProofTarget"] =
-          "x-y-residency-through-normalizer-and-accumulator-helper";
-    }
-  }
-}
-
-const SizeHelperSummaryReport* size_report_helper_by_label(
-    const std::vector<SizeHelperSummaryReport>& helpers, const std::string& label) {
-  const auto it = std::find_if(helpers.begin(), helpers.end(),
-                               [&](const SizeHelperSummaryReport& helper) {
-                                 return helper.label == label;
-                               });
-  return it == helpers.end() ? nullptr : &*it;
-}
-
-std::optional<std::string> packed_line_update_check_tail_mode(std::string_view variant) {
-  if (variant == "packed-line-family-update-check-tail")
-    return "direct-shared-tail";
-  if (variant == "packed-line-family-mutating-selector-update-check-tail")
-    return "mutating-selector-descending-bank";
-  if (variant == "packed-line-family-borrowed-mutating-selector-update-check-tail")
-    return "borrowed-mutating-selector-descending-bank";
-  return std::nullopt;
-}
-
-void attach_packed_line_update_check_tail_details(
-    std::map<std::string, std::string>& details, const CandidateReport& candidate,
-    int current_steps, const std::vector<SizeHelperSummaryReport>& helpers) {
-  const std::optional<std::string> mode =
-      packed_line_update_check_tail_mode(candidate.variant);
-  if (!mode.has_value())
-    return;
-
-  const int delta_cells = candidate.steps - current_steps;
-  details["packedLineUpdateCheckTailFamily"] = "packed-line-family-update-check-tail";
-  details["packedLineUpdateCheckTailMode"] = *mode;
-  details["packedLineUpdateCheckTailComparedAgainst"] =
-      "selected-packed-line-score-accumulator";
-  details["packedLineUpdateCheckTailDeltaCells"] = std::to_string(delta_cells);
-  details["packedLineUpdateCheckTailSharedLayoutGap"] =
-      "multi-entry-layout-sharing-between-update-check-tail-and-score-walker";
-  details["packedLineUpdateCheckTailMeasurementLimit"] =
-      "rejected-candidate-report-retains-size-delta-not-candidate-breakdown";
-  details["packedLineUpdateCheckTailAction"] =
-      "co-design-packed-line-update-check-tail-and-score-walker-layout";
-  details["layoutAction"] =
-      "co-design-packed-line-update-check-tail-and-score-walker-layout";
-  details["layoutActionStatus"] =
-      delta_cells > 0 ? "stalled-nonpositive" : "candidate-can-win-or-break-even";
-  if (delta_cells > 0) {
-    details["packedLineUpdateCheckTailSizeDisposition"] =
-        "larger-than-current-selected-layout";
-    details["packedLineUpdateCheckTailDominantLoss"] =
-        "update-check-tail-without-shared-score-walker-layout-is-larger";
-  } else if (delta_cells == 0) {
-    details["packedLineUpdateCheckTailSizeDisposition"] =
-        "same-size-as-current-selected-layout";
-    details["packedLineUpdateCheckTailDominantLoss"] =
-        "candidate-breaks-even-without-shared-score-walker-layout";
-  } else {
-    details["packedLineUpdateCheckTailSizeDisposition"] =
-        "smaller-than-current-selected-layout";
-    details["packedLineUpdateCheckTailDominantLoss"] =
-        "candidate-smaller-but-not-selected";
-  }
-
-  const SizeHelperSummaryReport* selected =
-      size_report_helper_by_label(helpers, "packed-line score accumulator helper");
-  if (selected == nullptr)
-    return;
-  details["selectedPackedLineScoreHelperTotalCells"] = std::to_string(selected->total_cells);
-  details["selectedPackedLineScoreHelperBodyCells"] = std::to_string(selected->body_cells);
-  details["selectedPackedLineScoreHelperCallSiteCells"] =
-      std::to_string(selected->call_site_cells);
-  details["selectedPackedLineScoreHelperCallOccurrences"] =
-      std::to_string(selected->call_occurrences);
-  for (const std::string key : {"pipelineShape",
-                                "accumulatorTerms",
-                                "sharedTailTerms",
-                                "bodyCellsPerAccumulatorTerm",
-                                "accumulatorStatePolicy",
-                                "interleavedPipelineShape",
-                                "interleavedPipelineBlocker",
-                                "pow10ScaleLineValuePolicy",
-                                "nextPipelineAction",
-                                "nextPipelineProofTarget"}) {
-    const auto detail_it = selected->details.find(key);
-    if (detail_it != selected->details.end())
-      details["selectedPackedLineScoreHelper." + key] = detail_it->second;
-  }
-}
-
-void attach_generic_packed_score_fallback_details(
-    std::map<std::string, std::string>& details, const CandidateReport& candidate,
-    int current_steps, const std::vector<SizeHelperSummaryReport>& helpers) {
-  if (candidate.variant != "generic-packed-score-accumulator-fallback" &&
-      candidate.variant != "generic-packed-score-accumulator-aggressive-fallback" &&
-      candidate.variant != "generic-packed-score-accumulator-stack-helper-fallback" &&
-      candidate.variant != "generic-packed-score-accumulator-stack-helper-aggressive-fallback")
-    return;
-  const SizeHelperSummaryReport* selected =
-      size_report_helper_by_label(helpers, "packed-line score accumulator helper");
-  details["packedScoreFallbackFamily"] = "generic-expression-accumulator";
-  if (candidate.variant == "generic-packed-score-accumulator-stack-helper-fallback" ||
-      candidate.variant == "generic-packed-score-accumulator-stack-helper-aggressive-fallback") {
-    details["packedScoreFallbackCombination"] =
-        "stack-resident-temporaries-and-stack-argument-helper-entries";
-  }
-  if (candidate.variant == "generic-packed-score-accumulator-aggressive-fallback" ||
-      candidate.variant == "generic-packed-score-accumulator-stack-helper-aggressive-fallback") {
-    details["packedScoreFallbackPostLayoutCombination"] =
-        "aggressive-post-layout-indirect-flow";
-  }
-  details["packedScoreFallbackComparedAgainst"] = "packed-line-family-score";
-  details["packedScoreFallbackDeltaCells"] = std::to_string(candidate.steps - current_steps);
-  details["packedScoreFallbackLossModel"] =
-      "measured-generic-candidate-minus-selected-packed-line-pipeline";
-  details["packedScoreFallbackSharedTailCapability"] =
-      "generic-shared-returned-index-tail-available";
-  details["packedScoreFallbackDominantLoss"] =
-      "selected-specialized-packed-line-pipeline-and-layout-still-smaller";
-  details["packedScoreFallbackMeasurementLimit"] =
-      "rejected-candidate-report-retains-size-delta-not-candidate-optimization-breakdown";
-  details["packedScoreFallbackAction"] =
-      "focus-on-value-aware-stack-register-scheduling-and-stack-preserving-helper-abi";
-  if (selected == nullptr)
-    return;
-  details["selectedPackedScoreHelperTotalCells"] = std::to_string(selected->total_cells);
-  details["selectedPackedScoreHelperBodyCells"] = std::to_string(selected->body_cells);
-  details["selectedPackedScoreHelperCallSiteCells"] =
-      std::to_string(selected->call_site_cells);
-  details["selectedPackedScoreHelperCallOccurrences"] =
-      std::to_string(selected->call_occurrences);
-  for (const std::string key : {"pipelineShape",
-                                "accumulatorTerms",
-                                "sharedTailTerms",
-                                "bodyCellsPerAccumulatorTerm",
-                                "accumulatorStatePolicy",
-                                "interleavedPipelineShape",
-                                "interleavedPipelineBlocker",
-                                "pow10ScaleLineValuePolicy",
-                                "nextPipelineAction",
-                                "nextPipelineProofTarget"}) {
-    const auto detail_it = selected->details.find(key);
-    if (detail_it != selected->details.end())
-      details["selectedPackedScoreHelper." + key] = detail_it->second;
   }
 }
 
@@ -62550,10 +58933,6 @@ SizeAttributionReport build_size_attribution_report(
             ? "nonwinning-candidate"
             : size_opportunity_blocker_kind(candidate);
     attach_rejected_candidate_size_details(details, candidate, current_steps, blocker_kind);
-    attach_generic_packed_score_fallback_details(details, candidate, current_steps,
-                                                 report.helpers);
-    attach_packed_line_update_check_tail_details(details, candidate, current_steps,
-                                                 report.helpers);
     attach_stack_resident_entry_candidate_details(details, candidate, current_steps, report);
     int opportunity_savings = current_steps - candidate.steps;
     int opportunity_candidate_steps = candidate.steps;
@@ -64223,15 +60602,48 @@ void write_compile_result_cache(const std::string& source, const CompileOptions&
   cache[key] = result;
 }
 
+std::optional<CompileResult> entered_contract_failure(const std::string& source,
+                                                      const CompileOptions& options) {
+  if (lower_ascii(source).find("entered") == std::string::npos)
+    return std::nullopt;
+  ProgramAst ast;
+  try {
+    ast = parse_program(
+        source, ParseOptions{
+                    .signed_abs_match_pairs = options.signed_abs_match_pairs,
+                    .synthesize_parametric_siblings = options.synthesize_parametric_siblings,
+                    .segmented_bitplanes = options.segmented_bitplanes,
+                });
+  } catch (const ParseError&) {
+    return std::nullopt;
+  }
+  if (!ast.v2.has_value())
+    return std::nullopt;
+
+  CompileResult result;
+  validate_entered_contracts(*ast.v2, result.diagnostics);
+  if (!has_errors(result.diagnostics))
+    return std::nullopt;
+  result.implemented = false;
+  result.feature_profile = options.feature_profile;
+  result.budget = options.budget;
+  return result;
+}
+
 } // namespace
 
 CompileResult compile_source(std::string source, const CompileOptions& requested_options) {
   const CompileOptions options = apply_source_feature_profile_hint(source, requested_options);
   if (const std::optional<CompileResult> cached = read_compile_result_cache(source, options))
     return *cached;
+  if (std::optional<CompileResult> invalid = entered_contract_failure(source, options)) {
+    write_compile_result_cache(source, options, *invalid);
+    return *invalid;
+  }
+  const bool source_has_entered = lower_ascii(source).find("entered") != std::string::npos;
 
   if (has_explicit_lowering_variant(options)) {
-    CompileResult result = compile_source_once(source, options);
+    CompileResult result = compile_source_once(source, options, source_has_entered);
     write_compile_result_cache(source, options, result);
     return result;
   }
@@ -64244,11 +60656,11 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
     if (cached != once_cache.end())
       return cached->second;
     const auto started = std::chrono::steady_clock::now();
-    CompileResult result = compile_source_once(source, compile_options);
+    CompileResult result = compile_source_once(source, compile_options, source_has_entered);
     if (!result.implemented && can_retry_lowering_attempt_in_analysis(result, compile_options)) {
       CompileOptions analysis_options = compile_options;
       analysis_options.analysis = true;
-      result = compile_source_once(source, analysis_options);
+      result = compile_source_once(source, analysis_options, source_has_entered);
     }
     if (trace_candidates) {
       const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -64334,12 +60746,6 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
   const bool may_use_packed_score_accumulator =
       selector_probe_program.has_value() &&
       packed_score_accumulator_helper_has_cost_effective_family(*selector_probe_program);
-  const int packed_score_call_count =
-      selector_probe_program.has_value()
-          ? count_expression_calls_in_program(*selector_probe_program, "packed_score")
-          : 0;
-  const bool may_compare_generic_packed_score_accumulator =
-      packed_score_call_count >= 4;
 
   struct CandidateSpec {
     CompileOptions options;
@@ -65010,80 +61416,6 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
       "shared-call-body-helper",
       "Shared repeated straight-line bodies that contain direct subroutine calls");
   add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.packed_line_family_update_check_tail = true;
-      },
-      "packed-line-family-update-check-tail",
-      "Tried a local shared packed-line update/check tail for source-shaped packed line families",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.canonicalize_packed_line_bank_walks = true;
-        candidate_options.packed_line_family_mutating_selector_update_check_tail = true;
-      },
-      "packed-line-family-mutating-selector-update-check-tail-register-materialized",
-      "Tried a descending R0..R3 mutating-selector packed-line update/check tail while retaining "
-      "register-materialized temporary fallback",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.canonicalize_packed_line_bank_walks = true;
-        candidate_options.packed_line_family_mutating_selector_update_check_tail = true;
-        candidate_options.stack_resident_temps = true;
-      },
-      "packed-line-family-mutating-selector-update-check-tail",
-      "Tried a descending R0..R3 mutating-selector packed-line update/check tail for source-shaped "
-      "packed line families together with stack-resident temporary scheduling",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.canonicalize_packed_line_bank_walks = true;
-        candidate_options.packed_line_family_mutating_selector_update_check_tail = true;
-        candidate_options.stack_resident_temps = true;
-        candidate_options.joint_packed_line_family_walk = true;
-      },
-      "joint-packed-line-family-walk",
-      "Fused structurally identical four-bank score and mutating update walks through one "
-      "late-bound leaf selector",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.canonicalize_packed_line_bank_walks = true;
-        candidate_options.packed_line_family_mutating_selector_update_check_tail = true;
-        candidate_options.stack_resident_temps = true;
-        candidate_options.joint_packed_line_family_walk = true;
-        candidate_options.dual_use_constant_indirect_flow = true;
-        candidate_options.tail_branch_inversion = true;
-        candidate_options.proc_layout_strategy = "reverse";
-      },
-      "joint-packed-line-family-walk-composed-layout",
-      "Combined the joint four-bank walker with dual-use flow, tail inversion, and reverse "
-      "procedure layout",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.alternating_sign_toggle_args = true;
-        candidate_options.canonicalize_packed_line_bank_walks = true;
-        candidate_options.packed_line_family_mutating_selector_update_check_tail = true;
-        candidate_options.stack_resident_temps = true;
-        candidate_options.joint_packed_line_family_walk = true;
-        candidate_options.dual_use_constant_indirect_flow = true;
-        candidate_options.tail_branch_inversion = true;
-        candidate_options.proc_layout_strategy = "reverse";
-      },
-      "joint-packed-line-family-walk-alternating-sign",
-      "Combined the joint four-bank walker with the structurally proved alternating-sign "
-      "callee state and dual-use flow layout",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.canonicalize_packed_line_bank_walks = true;
-        candidate_options.packed_line_family_borrowed_mutating_selector_update_check_tail = true;
-      },
-      "packed-line-family-borrowed-mutating-selector-update-check-tail",
-      "Tried borrowing a dead R0..R3 register for descending packed-line update/check tails",
-      CandidateGate::SizeRescue);
-  add_candidate(
       [](CompileOptions& candidate_options) { candidate_options.tail_branch_inversion = true; },
       "late-layout-tail-branch-inversion", "Selected tail-branch inversion after full layout");
   add_candidate(
@@ -65215,54 +61547,6 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
           "post-layout indirect-flow repacking");
     }
   }
-  if (may_compare_generic_packed_score_accumulator) {
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.packed_score_accumulator_helpers = true;
-          candidate_options.disable_packed_line_family_score_accumulator = true;
-        },
-        "generic-packed-score-accumulator-fallback",
-        "Compared generic packed_score() accumulator lowering against specialized score lowering",
-        CandidateGate::SizeRescue);
-    if (allow_aggressive_post_layout) {
-      add_candidate(
-          [](CompileOptions& candidate_options) {
-            candidate_options.packed_score_accumulator_helpers = true;
-            candidate_options.disable_packed_line_family_score_accumulator = true;
-            candidate_options.aggressive_post_layout_indirect_flow = true;
-          },
-          "generic-packed-score-accumulator-aggressive-fallback",
-          "Compared generic packed_score() accumulator lowering plus proven post-layout "
-          "indirect-flow repacking against specialized score lowering",
-          CandidateGate::SizeRescue);
-    }
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.packed_score_accumulator_helpers = true;
-          candidate_options.disable_packed_line_family_score_accumulator = true;
-          candidate_options.stack_resident_temps = true;
-          candidate_options.stack_argument_helper_entries = true;
-        },
-        "generic-packed-score-accumulator-stack-helper-fallback",
-        "Compared generic packed_score() accumulator lowering plus stack-resident helper entries "
-        "against specialized score lowering",
-        CandidateGate::SizeRescue);
-    if (allow_aggressive_post_layout) {
-      add_candidate(
-          [](CompileOptions& candidate_options) {
-            candidate_options.packed_score_accumulator_helpers = true;
-            candidate_options.disable_packed_line_family_score_accumulator = true;
-            candidate_options.stack_resident_temps = true;
-            candidate_options.stack_argument_helper_entries = true;
-            candidate_options.aggressive_post_layout_indirect_flow = true;
-          },
-          "generic-packed-score-accumulator-stack-helper-aggressive-fallback",
-          "Compared generic packed_score() accumulator lowering plus stack-resident helper "
-          "entries and proven post-layout indirect-flow repacking against specialized score "
-          "lowering",
-          CandidateGate::SizeRescue);
-    }
-  }
   for (const std::vector<std::string>& names :
        discover_packed_counter_stripe_variant_names(source)) {
     add_candidate(
@@ -65363,43 +61647,6 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
       },
       "alternating-sign-toggle-callee-hole-shared-call",
       "Combined the sign toggle, callee-hole skeleton, and shared call-body helpers",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.canonicalize_packed_line_bank_walks = true;
-      },
-      "canonicalize-packed-line-bank-walk",
-      "Rewrote packed-line bank walks into explicit descending slot leaf-call sequences",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.canonicalize_packed_line_bank_walks = true;
-        candidate_options.callee_hole_straight_line_helper = true;
-        candidate_options.shared_straight_line_call_bodies = true;
-        candidate_options.hoist_shared_helpers = true;
-      },
-      "canonicalize-packed-line-bank-walk-callee-hole",
-      "Combined explicit bank-walk canonicalization with callee-hole skeleton merging",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.canonicalize_packed_line_bank_walks = true;
-        candidate_options.callee_hole_straight_line_helper = true;
-        candidate_options.hoist_procs = true;
-      },
-      "canonicalize-packed-line-bank-walk-callee-hole-hoisted",
-      "Combined bank-walk canonicalization and callee-hole merging with hoisted procedures",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.alternating_sign_toggle_args = true;
-        candidate_options.canonicalize_packed_line_bank_walks = true;
-        candidate_options.callee_hole_straight_line_helper = true;
-        candidate_options.shared_straight_line_call_bodies = true;
-        candidate_options.hoist_shared_helpers = true;
-      },
-      "alternating-sign-toggle-bank-walk-callee-hole",
-      "Combined sign toggle, bank-walk canonicalization, and callee-hole skeleton merging",
       CandidateGate::SizeRescue);
   add_candidate(
       [](CompileOptions& candidate_options) { candidate_options.x_param_value_functions = true; },
@@ -66194,39 +62441,6 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
         "Shared a repeated random-coordinate expression and hoisted helpers");
     add_candidate(
         [](CompileOptions& candidate_options) {
-          candidate_options.packed_line_family_update_check_tail = true;
-        },
-        "packed-line-family-update-check-tail",
-        "Tried a local shared packed-line update/check tail", CandidateGate::SizeRescue);
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.canonicalize_packed_line_bank_walks = true;
-          candidate_options.packed_line_family_mutating_selector_update_check_tail = true;
-        },
-        "packed-line-family-mutating-selector-update-check-tail-register-materialized",
-        "Tried a descending R0..R3 mutating-selector packed-line update/check tail while retaining "
-        "register-materialized temporary fallback",
-        CandidateGate::SizeRescue);
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.canonicalize_packed_line_bank_walks = true;
-          candidate_options.packed_line_family_mutating_selector_update_check_tail = true;
-          candidate_options.stack_resident_temps = true;
-        },
-        "packed-line-family-mutating-selector-update-check-tail",
-        "Tried a descending R0..R3 mutating-selector packed-line update/check tail together with "
-        "stack-resident temporary scheduling",
-        CandidateGate::SizeRescue);
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.canonicalize_packed_line_bank_walks = true;
-          candidate_options.packed_line_family_borrowed_mutating_selector_update_check_tail = true;
-        },
-        "packed-line-family-borrowed-mutating-selector-update-check-tail",
-        "Tried borrowing a dead R0..R3 register for descending packed-line update/check tails",
-        CandidateGate::SizeRescue);
-    add_candidate(
-        [](CompileOptions& candidate_options) {
           candidate_options.hoist_shared_helpers = true;
           candidate_options.canonicalize_if_chains = true;
           candidate_options.tail_branch_inversion = true;
@@ -66456,23 +62670,6 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
     });
     add_fractional_base([](CompileOptions& base_options) {
       base_options.dual_use_constant_indirect_flow = true;
-      base_options.tail_branch_inversion = true;
-      base_options.stack_resident_temps = true;
-      base_options.canonicalize_packed_line_bank_walks = true;
-      base_options.packed_line_family_mutating_selector_update_check_tail = true;
-      base_options.proc_layout_strategy = "reverse";
-    });
-    add_fractional_base([](CompileOptions& base_options) {
-      base_options.dual_use_constant_indirect_flow = true;
-      base_options.tail_branch_inversion = true;
-      base_options.stack_resident_temps = true;
-      base_options.canonicalize_packed_line_bank_walks = true;
-      base_options.packed_line_family_mutating_selector_update_check_tail = true;
-      base_options.joint_packed_line_family_walk = true;
-      base_options.proc_layout_strategy = "reverse";
-    });
-    add_fractional_base([](CompileOptions& base_options) {
-      base_options.dual_use_constant_indirect_flow = true;
       base_options.stack_resident_temps = true;
       base_options.order_procs_by_call_count = true;
     });
@@ -66508,7 +62705,7 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
                    " into fractional constant " + plan.value;
           },
           /*emit_plain=*/true, /*emit_rescue_twins=*/false, /*limit=*/12U,
-          base_options.packed_line_family_mutating_selector_update_check_tail ? 4 : 0);
+          /*forced_rescue_limit=*/0);
     }
   }
 
@@ -67024,11 +63221,6 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
           [](CompileOptions& o) { o.canonicalize_repeated_unary_update_args = true; },
           [](CompileOptions& o) { o.x_param_value_functions = true; },
           [](CompileOptions& o) { o.x_param_y_stack_stored_entry = true; },
-          [](CompileOptions& o) { o.packed_line_family_update_check_tail = true; },
-          [](CompileOptions& o) { o.packed_line_family_mutating_selector_update_check_tail = true; },
-          [](CompileOptions& o) {
-            o.packed_line_family_borrowed_mutating_selector_update_check_tail = true;
-          },
           [](CompileOptions& o) { o.inline_floor_packed_row_expressions = true; },
           [](CompileOptions& o) { o.unroll_counted_loops = true; },
           [](CompileOptions& o) { o.setup_only_counted_loop_init = true; },

@@ -726,17 +726,18 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
       });
       return false;
     }
-    api.emitter.emit_op(0x50, "С/П", "read()");
+    api.emitter.emit_stop(StopDisposition::Resumable, "С/П", "read()");
     api.emitter.machine_entry_open = true;
     return true;
   }
 
   if (callee == "entered") {
-    if (!expression.args.empty()) {
+    if (!expression.args.empty() && expression.args.size() != 2U) {
       context.diagnostics.push_back(Diagnostic{
           .severity = DiagnosticSeverity::Error,
           .code = "native-unsupported",
-          .message = "Function " + expression.callee + " expects no arguments",
+          .message = "Function " + expression.callee +
+                     " expects either no arguments or two integer range bounds",
       });
       return false;
     }

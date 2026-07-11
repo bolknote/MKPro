@@ -212,7 +212,7 @@ enum class X2DataflowEdgeKind {
 };
 
 inline bool has_rewrite_barrier(const IrOp& op) {
-  return op.meta.raw;
+  return op.meta.raw || op.meta.manual_interaction.has_value();
 }
 
 // Exact-decimal concrete-evaluation engine (faithful port of the TS BigInt

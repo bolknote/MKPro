@@ -1403,8 +1403,12 @@ program PackedScoreXParamSignedAccumulatorHelper {
   require(count_optimization(signed_x_param_fallback,
                              "x-param-packed-score-line-stack-accumulate") == 0,
           "signed x-param packed_score fallback should not use unavailable accumulator lowering");
-  require(count_steps_with_comment(signed_x_param_fallback, "recall line") == 3,
-          "signed x-param packed_score fallback should keep line register-backed");
+  const int signed_fallback_line_recalls =
+      count_steps_with_comment(signed_x_param_fallback, "recall line");
+  require(signed_fallback_line_recalls == 1,
+          "signed x-param packed_score fallback should reuse returned indexes from X and need "
+          "only one register recall; got " +
+              std::to_string(signed_fallback_line_recalls));
 
   CompileOptions signed_x_param_options = pinned_options();
   signed_x_param_options.stack_resident_temps = true;

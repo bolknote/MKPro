@@ -63,7 +63,7 @@ void emulator_log_selector_premise_matches_typescript_contract();
 void emulator_mk61_execution_matches_typescript_contract();
 void emulator_near_any_helper_matches_typescript_contract();
 void emulator_number_entry_concat_matches_typescript_contract();
-void emulator_packed_line_family_pow10_semantics_match_generic_lowering();
+void emulator_indexed_packed_pow10_y_stack_semantics();
 void emulator_packed_position_facts_match_typescript_contract();
 void emulator_recall_side_effects_match_typescript_contract();
 void emulator_regression_opcode_and_stop_flow_matches_typescript_contract();
@@ -94,7 +94,6 @@ void supported_examples_match_native_oracles();
 void expression_helpers_match_typescript_contract();
 void expression_helper_size_report_counts_entry_y_materialization_coverage();
 void expression_helper_size_report_tracks_selected_stack_carried_pow10_index();
-void expression_helper_size_report_tracks_symbolic_entry_stack();
 void expression_lowering_helpers_match_typescript_contract();
 void flow_structure_passes_match_typescript_contract();
 void flow_x_reuse_matches_typescript_contract();
@@ -118,19 +117,18 @@ void match_blocks_match_typescript_contract();
 void maxmin_zero_lint_matches_typescript_contract();
 void mk61_trig_matches_emulator_contract();
 void mk61_trig_calculate_matches_rom_values();
-void natural_component_layout_rewrites_only_proved_shared_continuations();
 void opcode_catalog_matches_typescript_contract();
 void oracle_index_loads_committed_artifacts();
 void packed_counter_stripes_match_typescript_contract();
 void sentinel_decimal_pack_matches_strategy_contract();
 void packed_display_helpers_match_typescript_contract();
-void packed_line_joint_family_alpha_renamed_fixture_preserves_behavior();
 void packed_score_helpers_match_typescript_contract();
 void parser_matches_initial_v2_source_contract();
 void phase_selector_materializer_requires_proved_raw_phase_and_factor();
 void expression_parser_matches_initial_contract();
 void parser_accepts_all_example_sources();
 void pass_pipeline_matches_initial_typescript_contract();
+void post_layout_control_flow_matches_typed_contract();
 void post_layout_indirect_flow_matches_typescript_contract();
 void raw_bcd_unary_selector_matches_emulator_oracle();
 void r0_fractional_sentinel_matches_typescript_contract();
@@ -145,11 +143,10 @@ void rules_match_typescript_contract();
 void safe_minmax_matches_typescript_contract();
 void alternating_sign_toggle_arg_matches_literal_semantics();
 void callee_hole_helper_matches_direct_call_semantics();
-void canonicalize_packed_line_bank_walk_rewrites_explicit_slot_leaves();
 void segmented_bitplanes_match_typescript_contract();
 void setup_program_matches_typescript_contract();
 void terminal_report_tail_rewrites_only_with_explicit_proofs();
-void terminal_retry_sentinel_plan_discovers_only_local_proved_prefix();
+void terminal_cyclic_layout_derives_complete_proofs_transactionally();
 void setup_only_counted_loop_matches_typescript_contract();
 void store_recall_peephole_matches_typescript_contract();
 void show_read_guarded_transfer_matches_typescript_contract();
@@ -165,8 +162,8 @@ void style_lints_matches_typescript_contract();
 void super_dark_layout_matches_typescript_contract();
 void trig_fractional_pack_matches_strategy_contract();
 void tic_tac_toe_4x4_reference_transcript_matches_original_listing();
+void tic_tac_toe_4x4_reference_ui_normalizes_coordinates();
 void tic_tac_toe_4x4_source_uses_reference_angle_mode();
-void tic_tac_toe_4x4_generic_optimizer_checkpoint_is_name_independent();
 void v2_const_matches_typescript_contract();
 void x2_register_dataflow_matches_typescript_contract();
 void x2_shape_data_model_matches_typescript_contract();
@@ -290,7 +287,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(emulator_mk61_execution_matches_typescript_contract),
       MKPRO_TEST(emulator_near_any_helper_matches_typescript_contract),
       MKPRO_TEST(emulator_number_entry_concat_matches_typescript_contract),
-      MKPRO_TEST(emulator_packed_line_family_pow10_semantics_match_generic_lowering),
+      MKPRO_TEST(emulator_indexed_packed_pow10_y_stack_semantics),
       MKPRO_TEST(emulator_packed_position_facts_match_typescript_contract),
       MKPRO_TEST(emulator_recall_side_effects_match_typescript_contract),
       MKPRO_TEST(emulator_regression_opcode_and_stop_flow_matches_typescript_contract),
@@ -318,7 +315,6 @@ int main(int argc, char** argv) {
       MKPRO_TEST(expression_helpers_match_typescript_contract),
       MKPRO_TEST(expression_helper_size_report_counts_entry_y_materialization_coverage),
       MKPRO_TEST(expression_helper_size_report_tracks_selected_stack_carried_pow10_index),
-      MKPRO_TEST(expression_helper_size_report_tracks_symbolic_entry_stack),
       MKPRO_TEST(expression_lowering_helpers_match_typescript_contract),
       MKPRO_TEST(flow_structure_passes_match_typescript_contract),
       MKPRO_TEST(flow_x_reuse_matches_typescript_contract),
@@ -341,19 +337,18 @@ int main(int argc, char** argv) {
       MKPRO_TEST(maxmin_zero_lint_matches_typescript_contract),
       MKPRO_TEST(mk61_trig_matches_emulator_contract),
       MKPRO_TEST(mk61_trig_calculate_matches_rom_values),
-      MKPRO_TEST(natural_component_layout_rewrites_only_proved_shared_continuations),
       MKPRO_TEST(opcode_catalog_matches_typescript_contract),
       MKPRO_TEST(oracle_index_loads_committed_artifacts),
       MKPRO_TEST(packed_counter_stripes_match_typescript_contract),
       MKPRO_TEST(sentinel_decimal_pack_matches_strategy_contract),
       MKPRO_TEST(packed_display_helpers_match_typescript_contract),
-      MKPRO_TEST(packed_line_joint_family_alpha_renamed_fixture_preserves_behavior),
       MKPRO_TEST(packed_score_helpers_match_typescript_contract),
       MKPRO_TEST(parser_matches_initial_v2_source_contract),
       MKPRO_TEST(phase_selector_materializer_requires_proved_raw_phase_and_factor),
       MKPRO_TEST(expression_parser_matches_initial_contract),
       MKPRO_TEST(parser_accepts_all_example_sources),
       MKPRO_TEST(pass_pipeline_matches_initial_typescript_contract),
+      MKPRO_TEST(post_layout_control_flow_matches_typed_contract),
       MKPRO_TEST(post_layout_indirect_flow_matches_typescript_contract),
       MKPRO_TEST(raw_bcd_unary_selector_matches_emulator_oracle),
       MKPRO_TEST(r0_fractional_sentinel_matches_typescript_contract),
@@ -368,11 +363,10 @@ int main(int argc, char** argv) {
       MKPRO_TEST(safe_minmax_matches_typescript_contract),
       MKPRO_TEST(alternating_sign_toggle_arg_matches_literal_semantics),
       MKPRO_TEST(callee_hole_helper_matches_direct_call_semantics),
-      MKPRO_TEST(canonicalize_packed_line_bank_walk_rewrites_explicit_slot_leaves),
       MKPRO_TEST(segmented_bitplanes_match_typescript_contract),
       MKPRO_TEST(setup_program_matches_typescript_contract),
       MKPRO_TEST(terminal_report_tail_rewrites_only_with_explicit_proofs),
-      MKPRO_TEST(terminal_retry_sentinel_plan_discovers_only_local_proved_prefix),
+      MKPRO_TEST(terminal_cyclic_layout_derives_complete_proofs_transactionally),
       MKPRO_TEST(setup_only_counted_loop_matches_typescript_contract),
       MKPRO_TEST(store_recall_peephole_matches_typescript_contract),
       MKPRO_TEST(show_optimization_strategies_match_typescript_contract),
@@ -389,8 +383,8 @@ int main(int argc, char** argv) {
       MKPRO_TEST(super_dark_layout_matches_typescript_contract),
       MKPRO_TEST(trig_fractional_pack_matches_strategy_contract),
       MKPRO_TEST(tic_tac_toe_4x4_reference_transcript_matches_original_listing),
+      MKPRO_TEST(tic_tac_toe_4x4_reference_ui_normalizes_coordinates),
       MKPRO_TEST(tic_tac_toe_4x4_source_uses_reference_angle_mode),
-      MKPRO_TEST(tic_tac_toe_4x4_generic_optimizer_checkpoint_is_name_independent),
       MKPRO_TEST(v2_const_matches_typescript_contract),
       MKPRO_TEST(x2_register_dataflow_matches_typescript_contract),
       MKPRO_TEST(x2_shape_data_model_matches_typescript_contract),

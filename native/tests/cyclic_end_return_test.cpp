@@ -110,12 +110,18 @@ bool contains_reason(const core::CyclicEndReturnProof& proof, std::string_view n
   });
 }
 
+core::CyclicEndReturnOptions complete_options() {
+  return core::CyclicEndReturnOptions{
+      .external_entry_addresses = std::vector<int>{1},
+  };
+}
+
 } // namespace
 
 void cyclic_end_return_relocates_only_proved_direct_call_helpers() {
   const std::vector<MachineItem> input = fixture(true);
   const core::CyclicEndReturnProof proof =
-      core::verify_cyclic_end_return(input, "square_abs");
+      core::verify_cyclic_end_return(input, "square_abs", complete_options());
   require(proof.proved && proof.reasons.empty(),
           "isolated direct-call helper in a 106-cell artifact should be proved");
   require(proof.input_cells == 106 && proof.original_body_start_address == 40 &&
@@ -134,7 +140,7 @@ void cyclic_end_return_relocates_only_proved_direct_call_helpers() {
           "proof should retain both direct-call entries and their relocated addresses");
 
   const core::CyclicEndReturnResult rewritten =
-      core::rewrite_cyclic_end_return(input, "square_abs");
+      core::rewrite_cyclic_end_return(input, "square_abs", complete_options());
   require(rewritten.applied == 1 && rewritten.proof.proved &&
               rewritten.proof.final_artifact_proved,
           "proved helper should relocate only after a final-artifact recheck");
@@ -159,14 +165,23 @@ void cyclic_end_return_relocates_only_proved_direct_call_helpers() {
               ordinary.r1 == cyclic.r1 && cyclic.r0 == "81," && cyclic.r1 == "4,",
           "A4-to-00 return should preserve both whole-helper and internal-tail calls");
 
-  const core::CyclicEndReturnResult automatic = core::optimize_cyclic_end_return(input);
+  const core::CyclicEndReturnResult automatic =
+      core::optimize_cyclic_end_return(input, complete_options());
   require(automatic.applied == 1 && automatic.proof.helper_label == "square_abs" &&
               automatic.proof.final_artifact_proved,
           "automatic scan should select the same proved helper");
 
   {
+    const core::CyclicEndReturnResult rejected =
+        core::rewrite_cyclic_end_return(input, "square_abs");
+    require(rejected.applied == 0 && contains_reason(rejected.proof, "external-entry set"),
+            "omitting external-entry completeness must fail closed");
+  }
+
+  {
     core::CyclicEndReturnOptions expanded;
     expanded.address_space_model = AddressSpaceModel::Mk61SMiniExpanded;
+    expanded.external_entry_addresses = std::vector<int>{1};
     const core::CyclicEndReturnResult rejected =
         core::rewrite_cyclic_end_return(input, "square_abs", expanded);
     require(rejected.applied == 0 && contains_reason(rejected.proof, "standard"),
@@ -177,7 +192,7 @@ void cyclic_end_return_relocates_only_proved_direct_call_helpers() {
     std::vector<MachineItem> no_return_zero = input;
     no_return_zero.at(item_at_address(no_return_zero, 0)) = MachineItem::op(0x00, "0");
     const core::CyclicEndReturnResult rejected =
-        core::rewrite_cyclic_end_return(no_return_zero, "square_abs");
+        core::rewrite_cyclic_end_return(no_return_zero, "square_abs", complete_options());
     require(rejected.applied == 0 && contains_reason(rejected.proof, "physical 00"),
             "missing В/О at physical00 must fail closed");
   }
@@ -186,7 +201,7 @@ void cyclic_end_return_relocates_only_proved_direct_call_helpers() {
     std::vector<MachineItem> indirect = input;
     indirect.at(item_at_address(indirect, 20)) = MachineItem::op(0x8e, "К БП e");
     const core::CyclicEndReturnResult rejected =
-        core::rewrite_cyclic_end_return(indirect, "square_abs");
+        core::rewrite_cyclic_end_return(indirect, "square_abs", complete_options());
     require(rejected.applied == 0 && contains_reason(rejected.proof, "indirect flow"),
             "unproved indirect flow must reject helper relocation");
   }
@@ -195,7 +210,7 @@ void cyclic_end_return_relocates_only_proved_direct_call_helpers() {
     std::vector<MachineItem> non_call = input;
     non_call.at(item_at_address(non_call, 6)) = MachineItem::op(0x51, "БП");
     const core::CyclicEndReturnResult rejected =
-        core::rewrite_cyclic_end_return(non_call, "square_abs");
+        core::rewrite_cyclic_end_return(non_call, "square_abs", complete_options());
     require(rejected.applied == 0 && contains_reason(rejected.proof, "non-ПП"),
             "jump entry into the helper must fail closed");
   }
@@ -204,7 +219,7 @@ void cyclic_end_return_relocates_only_proved_direct_call_helpers() {
     std::vector<MachineItem> body_flow = input;
     body_flow.at(item_at_address(body_flow, 40)) = MachineItem::op(0x8e, "К БП e");
     const core::CyclicEndReturnResult rejected =
-        core::rewrite_cyclic_end_return(body_flow, "square_abs");
+        core::rewrite_cyclic_end_return(body_flow, "square_abs", complete_options());
     require(rejected.applied == 0 && contains_reason(rejected.proof, "control flow"),
             "helper body control flow must reject cyclic suffix layout");
   }
@@ -213,7 +228,7 @@ void cyclic_end_return_relocates_only_proved_direct_call_helpers() {
     std::vector<MachineItem> old_fallthrough = input;
     old_fallthrough.at(item_at_address(old_fallthrough, 39)) = MachineItem::op(0x01, "1");
     const core::CyclicEndReturnResult rejected =
-        core::rewrite_cyclic_end_return(old_fallthrough, "square_abs");
+        core::rewrite_cyclic_end_return(old_fallthrough, "square_abs", complete_options());
     require(rejected.applied == 0 && contains_reason(rejected.proof, "old site"),
             "fallthrough into the helper's old location must reject relocation");
   }
@@ -222,7 +237,7 @@ void cyclic_end_return_relocates_only_proved_direct_call_helpers() {
     std::vector<MachineItem> new_fallthrough = input;
     new_fallthrough.at(item_at_address(new_fallthrough, 105)) = MachineItem::op(0x01, "1");
     const core::CyclicEndReturnResult rejected =
-        core::rewrite_cyclic_end_return(new_fallthrough, "square_abs");
+        core::rewrite_cyclic_end_return(new_fallthrough, "square_abs", complete_options());
     require(rejected.applied == 0 && contains_reason(rejected.proof, "relocated helper"),
             "fallthrough from the remaining tail into the relocated helper must fail closed");
   }
@@ -231,7 +246,7 @@ void cyclic_end_return_relocates_only_proved_direct_call_helpers() {
     std::vector<MachineItem> fixed_address = input;
     fixed_address.at(item_at_address(fixed_address, 3)).target = 40;
     const core::CyclicEndReturnResult rejected =
-        core::rewrite_cyclic_end_return(fixed_address, "square_abs");
+        core::rewrite_cyclic_end_return(fixed_address, "square_abs", complete_options());
     require(rejected.applied == 0 && contains_reason(rejected.proof, "fixed numeric"),
             "numeric address operands must fail closed across relocation");
   }
@@ -245,7 +260,7 @@ void cyclic_end_return_relocates_only_proved_direct_call_helpers() {
     overlaid.at(item_at_address(overlaid, 21)) =
         MachineItem::address(std::string("operand_overlay"));
     const core::CyclicEndReturnResult rejected =
-        core::rewrite_cyclic_end_return(overlaid, "square_abs");
+        core::rewrite_cyclic_end_return(overlaid, "square_abs", complete_options());
     require(rejected.applied == 0 && contains_reason(rejected.proof, "address/code overlay"),
             "executable address operands must fail closed when relocation would change them: " +
                 (rejected.proof.reasons.empty() ? std::string("no reason")
@@ -253,11 +268,39 @@ void cyclic_end_return_relocates_only_proved_direct_call_helpers() {
   }
 
   {
+    std::vector<MachineItem> eof_target = input;
+    eof_target.at(item_at_address(eof_target, 20)) = MachineItem::op(0x51, "БП");
+    eof_target.at(item_at_address(eof_target, 21)) =
+        MachineItem::address(std::string("past_program"));
+    eof_target.push_back(MachineItem::label("past_program"));
+    const core::CyclicEndReturnResult rejected =
+        core::rewrite_cyclic_end_return(eof_target, "square_abs", complete_options());
+    require(rejected.applied == 0 && contains_reason(rejected.proof, "executable command cell"),
+            "a symbolic EOF label must not pass as an executable direct-flow target");
+  }
+
+  {
+    std::vector<MachineItem> removed_return_target = input;
+    removed_return_target.at(item_at_address(removed_return_target, 20)) =
+        MachineItem::op(0x53, "ПП");
+    removed_return_target.at(item_at_address(removed_return_target, 21)) =
+        MachineItem::address(std::string("removed_return_entry"));
+    removed_return_target.insert(
+        removed_return_target.begin() +
+            static_cast<std::ptrdiff_t>(item_at_address(removed_return_target, 42)),
+        MachineItem::label("removed_return_entry"));
+    const core::CyclicEndReturnResult rejected =
+        core::rewrite_cyclic_end_return(removed_return_target, "square_abs", complete_options());
+    require(rejected.applied == 0 && contains_reason(rejected.proof, "executable command cell"),
+            "the final gate must reject a symbolic label stranded by return removal");
+  }
+
+  {
     std::vector<MachineItem> wrong_size = input;
     wrong_size.erase(wrong_size.begin() +
                      static_cast<std::ptrdiff_t>(item_at_address(wrong_size, 105)));
     const core::CyclicEndReturnResult rejected =
-        core::rewrite_cyclic_end_return(wrong_size, "square_abs");
+        core::rewrite_cyclic_end_return(wrong_size, "square_abs", complete_options());
     require(rejected.applied == 0 && contains_reason(rejected.proof, "exactly one"),
             "artifact without exactly one removable over-limit cell must fail closed");
   }

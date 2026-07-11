@@ -789,32 +789,6 @@ std::vector<std::string> computed_dispatch_target_labels(const IrOp& op) {
       labels.push_back(current);
     return labels;
   }
-  if (op.meta.comment->starts_with("joint-packed-line leaf dispatch;")) {
-    constexpr std::string_view kJointMarker = "target-labels=";
-    const std::string& comment = *op.meta.comment;
-    const std::size_t marker = comment.find(kJointMarker);
-    if (marker == std::string::npos)
-      return labels;
-    std::size_t cursor = marker + kJointMarker.size();
-    std::string current;
-    while (cursor < comment.size()) {
-      const char ch = comment.at(cursor);
-      if (ch == ',') {
-        if (!current.empty()) {
-          labels.push_back(current);
-          current.clear();
-        }
-      } else if (std::isspace(static_cast<unsigned char>(ch)) != 0 || ch == ';') {
-        break;
-      } else {
-        current.push_back(ch);
-      }
-      ++cursor;
-    }
-    if (!current.empty())
-      labels.push_back(current);
-    return labels;
-  }
   if (!op.meta.comment->starts_with("computed dispatch;"))
     return labels;
 

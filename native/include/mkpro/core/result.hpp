@@ -354,25 +354,12 @@ struct CompileOptions {
   bool trig_fractional_pack = false;
   bool sign_pack_state = false;
   bool packed_score_accumulator_helpers = false;
-  bool disable_packed_line_family_score_accumulator = false;
   bool canonicalize_repeated_unary_update_args = false;
   bool alternating_sign_toggle_args = false;
-  // Rewrite self-decrementing packed-line mark walks and monolithic score walks
-  // into the same explicit (line prep; leaf(bank_slot)) sequence so callee-hole
-  // IR merging can unify them.
-  bool canonicalize_packed_line_bank_walks = false;
   bool x_param_value_functions = false;
   bool x_param_y_stack_stored_entry = false;
   bool stack_argument_helper_entries = false;
   bool stack_argument_function_entries = false;
-  bool packed_line_family_update_check_tail = false;
-  bool packed_line_family_mutating_selector_update_check_tail = false;
-  bool packed_line_family_borrowed_mutating_selector_update_check_tail = false;
-  // Fuse a structurally identical four-bank score walk and mutating update
-  // walk into one runtime-selected walker. The selector charge is bound to
-  // the final helper addresses after every layout rewrite and is accepted by
-  // candidate search only with a final-artifact proof.
-  bool joint_packed_line_family_walk = false;
   bool inline_floor_packed_row_expressions = false;
   bool unroll_counted_loops = false;
   bool setup_only_counted_loop_init = false;
@@ -421,6 +408,7 @@ struct CompileResult {
   std::vector<Diagnostic> diagnostics;
   std::vector<std::string> warnings;
   std::vector<MachineItem> items;
+  std::vector<ManualInteractionProtocolFact> interaction_protocols;
   std::vector<ResolvedStep> steps;
   std::map<std::string, std::string> registers;
   std::map<std::string, std::string> labels;

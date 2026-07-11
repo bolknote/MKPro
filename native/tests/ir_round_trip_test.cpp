@@ -120,6 +120,53 @@ void ir_round_trip_matches_typescript_contract() {
   }
 
   {
+    std::vector<MachineItem> typed_stops = {
+        op(0x50, "С/П"),
+        op(0x50, "С/П"),
+        op(0x50, "С/П"),
+    };
+    typed_stops.at(0).stop_disposition = StopDisposition::Resumable;
+    typed_stops.at(0).manual_interaction = ManualInteractionAnchor{
+        .protocol_id = 3,
+        .phase = -1,
+        .kind = ManualInteractionAnchorKind::PromptStop,
+    };
+    typed_stops.at(1).stop_disposition = StopDisposition::Terminal;
+    typed_stops.at(2).raw = true;
+
+    const std::vector<MachineItem> restored =
+        lower_ir_to_machine(raise_machine_to_ir(typed_stops));
+    require(restored.size() == typed_stops.size(),
+            "typed STOP round-trip changed item count");
+    for (std::size_t index = 0; index < typed_stops.size(); ++index) {
+      require(machine_items_equal(typed_stops.at(index), restored.at(index)),
+              "typed STOP round-trip lost compiler-owned provenance");
+    }
+    require(restored.at(2).stop_disposition == StopDisposition::Unknown,
+            "raw STOP without compiler-owned provenance must remain unknown");
+  }
+
+  {
+    std::vector<MachineItem> typed_indirect = {
+        op(0xa7, "К ПП 7"),
+        op(0xb8, "К X->П 8"),
+    };
+    typed_indirect.at(0).indirect_flow_targets =
+        std::vector<IrTarget>{std::string("callee"), 42};
+    typed_indirect.at(1).indirect_memory_targets = std::vector<int>{2, 4, 6};
+    const std::vector<MachineItem> restored =
+        lower_ir_to_machine(raise_machine_to_ir(typed_indirect));
+    require(restored.size() == typed_indirect.size() &&
+                machine_items_equal(restored.at(0), typed_indirect.at(0)) &&
+                machine_items_equal(restored.at(1), typed_indirect.at(1)),
+            "typed complete indirect target sets must survive machine/IR round-trip");
+    const std::string json = machine_items_to_json(restored);
+    require(json.find("\"indirectFlowTargets\":[\"callee\",42]") != std::string::npos &&
+                json.find("\"indirectMemoryTargets\":[2,4,6]") != std::string::npos,
+            "typed complete indirect target sets should be visible in machine JSON");
+  }
+
+  {
     const std::vector<LayoutIrCell> cells = {
         {.address = 0, .opcode = 0x41, .roles = {"exec"}, .tactic = "store"},
         {.address = 1, .opcode = 0x51, .roles = {"exec"}, .tactic = "jump"},

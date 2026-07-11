@@ -10,6 +10,54 @@ namespace mkpro {
 using IrTarget = std::variant<int, std::string>;
 using CellRole = std::string;
 
+// Compiler-owned interaction semantics.  Comments and mnemonic text are
+// deliberately not part of this channel: post-layout proofs must be able to
+// distinguish a resumable prompt from source-level halt() after comments have
+// been stripped.
+enum class StopDisposition {
+  Unknown,
+  Resumable,
+  Terminal,
+};
+
+enum class ManualInteractionAnchorKind {
+  PromptStop,
+  SingleStepCommand,
+  ContinuousResume,
+};
+
+struct ManualInteractionAnchor {
+  int protocol_id = -1;
+  int phase = -1;
+  ManualInteractionAnchorKind kind = ManualInteractionAnchorKind::PromptStop;
+  bool operator==(const ManualInteractionAnchor&) const = default;
+};
+
+struct EnteredInputDomain {
+  std::optional<int> minimum;
+  std::optional<int> maximum;
+
+  bool known() const { return minimum.has_value() && maximum.has_value(); }
+  bool operator==(const EnteredInputDomain&) const = default;
+};
+
+struct ManualInteractionPhaseFact {
+  int phase = -1;
+  std::string target;
+  int source_line = 0;
+  EnteredInputDomain admitted_domain;
+  bool operator==(const ManualInteractionPhaseFact&) const = default;
+};
+
+// Source-derived fact for the general `A PP B PP ... C R/S` entered() UI.
+// It contains no program-, helper-, retry-, or register-layout recognition.
+struct ManualInteractionProtocolFact {
+  int protocol_id = -1;
+  int prompt_source_line = 0;
+  std::vector<ManualInteractionPhaseFact> phases;
+  bool operator==(const ManualInteractionProtocolFact&) const = default;
+};
+
 enum class MachineItemKind {
   Label,
   Op,
@@ -28,6 +76,14 @@ struct MachineItem {
   std::optional<int> source_line;
   bool raw = false;
   std::vector<CellRole> roles;
+  StopDisposition stop_disposition = StopDisposition::Unknown;
+  std::optional<ManualInteractionAnchor> manual_interaction;
+  // Complete runtime target sets for an indirect command. Presence is an
+  // authoritative proof claim; consumers reject a missing or empty set.
+  // Flow integers are current physical command addresses and strings are
+  // opaque exact labels. Memory integers are post-mutation R0..Re indices.
+  std::optional<std::vector<IrTarget>> indirect_flow_targets;
+  std::optional<std::vector<int>> indirect_memory_targets;
   IrTarget target = 0;
   std::optional<int> formal_opcode;
 
@@ -68,6 +124,10 @@ struct IrMeta {
   std::optional<int> source_line;
   bool raw = false;
   std::vector<CellRole> roles;
+  StopDisposition stop_disposition = StopDisposition::Unknown;
+  std::optional<ManualInteractionAnchor> manual_interaction;
+  std::optional<std::vector<IrTarget>> indirect_flow_targets;
+  std::optional<std::vector<int>> indirect_memory_targets;
   std::optional<std::string> tactic;
 };
 

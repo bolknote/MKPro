@@ -42,6 +42,7 @@ public:
   std::map<std::string, std::optional<std::string>> label_edge_x;
   AddressSpaceModel address_space_model = AddressSpaceModel::Standard;
   bool machine_entry_open = false;
+  std::optional<ManualInteractionAnchor> next_op_manual_interaction;
 
   void emit_number(std::string raw);
   void emit_jump(int opcode, std::string mnemonic, IrTarget target,
@@ -54,6 +55,10 @@ public:
   void emit_op(int opcode, std::optional<std::string> mnemonic = std::nullopt,
                std::optional<std::string> comment = std::nullopt,
                std::optional<int> source_line = std::nullopt, bool raw = false);
+  void emit_stop(StopDisposition disposition,
+                 std::optional<std::string> mnemonic = std::nullopt,
+                 std::optional<std::string> comment = std::nullopt,
+                 std::optional<int> source_line = std::nullopt, bool raw = false);
   void record_label_edge(const std::string& label, std::optional<std::string> fact);
   void emit_label(std::string name, MachineEmitterLabelMetadata metadata = {});
   std::string fresh_label(std::string prefix);

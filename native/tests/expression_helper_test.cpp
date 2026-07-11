@@ -3,9 +3,6 @@
 #include "test_support.hpp"
 
 #include <algorithm>
-#include <filesystem>
-#include <fstream>
-#include <sstream>
 #include <string>
 
 namespace mkpro::tests {
@@ -30,15 +27,6 @@ int count_steps_with_opcode_and_comment_prefix(const CompileResult& result, int 
         return step.opcode == opcode && step.comment.has_value() &&
                step.comment->rfind(prefix, 0) == 0;
       }));
-}
-
-std::string read_text(const std::filesystem::path& path) {
-  std::ifstream input(path);
-  if (!input)
-    throw std::runtime_error("cannot read fixture: " + path.string());
-  std::ostringstream buffer;
-  buffer << input.rdbuf();
-  return buffer.str();
 }
 
 const SizeHelperSummaryReport* find_size_helper(const CompileResult& result,
@@ -223,97 +211,6 @@ program SelectedStackCarriedPow10 {
                       .find("action=stack-carried-pow10-index-through-self-decrement") !=
                   std::string::npos,
           "mark_one should report the selected site, stack slot, and action");
-}
-
-void expression_helper_size_report_tracks_symbolic_entry_stack() {
-  CompileOptions options;
-  options.analysis = true;
-  options.budget = 105;
-  options.fast_candidate_search = true;
-  const std::filesystem::path root = std::filesystem::current_path();
-  const std::string source =
-      read_text(root / "examples" / "pending-optimizer" / "tic-tac-toe-4x4.mkpro");
-  const CompileResult result = compile_source(source, options);
-
-  require(result.implemented, "tic-tac-toe-4x4 should compile for size-attribution proof");
-  require(result.steps.size() == 120,
-          "ordinary generic candidate search should keep the current 120-cell checkpoint, got " +
-              std::to_string(result.steps.size()));
-  require(has_optimization(result, "joint-packed-line-family-walk"),
-          "automatic candidate search should select the reusable packed-line family pass");
-
-  CompileOptions mutating_options;
-  mutating_options.analysis = true;
-  mutating_options.budget = 999;
-  mutating_options.disable_candidate_search = true;
-  mutating_options.canonicalize_packed_line_bank_walks = true;
-  mutating_options.packed_line_family_mutating_selector_update_check_tail = true;
-  mutating_options.stack_resident_temps = true;
-  const CompileResult mutating = compile_source(source, mutating_options);
-  require(mutating.implemented && mutating.diagnostics.empty(),
-          "forced mutating packed-line candidate should compile");
-  require(mutating.steps.size() == 140,
-          "the pinned mid-level candidate should stay at its independently tested 140-cell "
-          "layout, got " +
-              std::to_string(mutating.steps.size()));
-  require(!mutating.registers.contains("__bank_slot") &&
-              !mutating.registers.contains("__bank_selector_lines"),
-          "the mutating family rewrite should eliminate its private selector state");
-  require(has_optimization(mutating,
-                           "packed-line-family-mutating-selector-update-check-tail") &&
-              has_optimization(mutating, "packed-line-family-elided-leaf-register-state"),
-          "the pinned candidate should report both the walk rewrite and proved state elision");
-  require(std::any_of(mutating.steps.begin(), mutating.steps.end(),
-                      [](const ResolvedStep& step) {
-                        return step.opcode == 0xb3 && step.comment.has_value() &&
-                               step.comment->find("indirect-memory-targets=4,5,6,7") !=
-                                   std::string::npos;
-                      }),
-          "mutating packed-bank stores should expose their exact target range to static proof");
-
-  const SizeHelperSummaryReport* candidate_score =
-      find_size_helper(mutating, "candidate_score zero-accumulator entry");
-  const SizeHelperSummaryReport* packed_line_score =
-      find_size_helper(mutating, "packed-line score accumulator helper");
-  require(candidate_score != nullptr && packed_line_score != nullptr,
-          "the pinned mid-level candidate should retain both score-helper summaries");
-  require(candidate_score->details.contains("valueAwareSymbolicEntryStackByCallSite") &&
-              candidate_score->details.at("valueAwareSymbolicEntryStackByCallSite")
-                      .find("X=0,Y=occupied,Z=occupied,T=occupied") != std::string::npos,
-          "candidate_score should retain its proved zero-accumulator call-site stack");
-  require(candidate_score->details.contains("valueAwareSymbolicKnownCalleeStackEffects") &&
-              candidate_score->details.at("valueAwareSymbolicKnownCalleeStackEffects")
-                      .find("packed-line score accumulator helper/effect=X:-,Y:T,Z:T,T:T") !=
-                  std::string::npos,
-          "candidate_score should account for the nested score helper's stack effect");
-  require(packed_line_score->details.contains("valueAwareSymbolicEntryStackByCallSite") &&
-              packed_line_score->details.at("valueAwareSymbolicEntryStackByCallSite")
-                      .find("X=x,Y=lines_7") != std::string::npos &&
-              packed_line_score->details.at("valueAwareSymbolicEntryStackByCallSite")
-                      .find("X=y,Y=lines_6") != std::string::npos,
-          "score-helper analysis should describe both orthogonal packed-bank call sites without "
-          "pinning their physical addresses");
-  require(packed_line_score->details.contains("pipelineShape") &&
-              packed_line_score->details.at("pipelineShape") ==
-                  "packed-line-family-score" &&
-              packed_line_score->details.contains("accumulatorStatePolicy") &&
-              packed_line_score->details.at("accumulatorStatePolicy") ==
-                  "stack-accumulator-no-score-state-store",
-          "score-helper analysis should retain its structural pipeline and accumulator policy");
-
-  std::string shared_selector_source = source;
-  const std::string show_best = "show(best_y)";
-  const std::size_t show_best_pos = shared_selector_source.find(show_best);
-  require(show_best_pos != std::string::npos,
-          "4x4 fixture should contain the display insertion point");
-  shared_selector_source.insert(show_best_pos + show_best.size(),
-                                "\n    best_score = lines[slot]");
-  const CompileResult shared_selector =
-      compile_source(shared_selector_source, mutating_options);
-  require(shared_selector.registers.contains("__bank_selector_lines") &&
-              !has_optimization(shared_selector,
-                                "packed-line-family-elided-leaf-register-state"),
-          "a dynamic bank access outside the leaf must make selector-state elision fail closed");
 }
 
 } // namespace mkpro::tests

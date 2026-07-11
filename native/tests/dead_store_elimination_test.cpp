@@ -27,6 +27,16 @@ IrOp store(std::string register_name) {
   return op;
 }
 
+IrOp entered_store(std::string register_name, ManualInteractionAnchorKind kind) {
+  IrOp op = store(std::move(register_name));
+  op.meta.manual_interaction = ManualInteractionAnchor{
+      .protocol_id = 7,
+      .phase = 1,
+      .kind = kind,
+  };
+  return op;
+}
+
 IrOp recall(std::string register_name) {
   IrOp op;
   op.kind = IrKind::Recall;
@@ -214,6 +224,41 @@ void dead_store_elimination_matches_typescript_contract() {
     const core::passes::PassResult result = run_dead_store_elimination(program);
     require(result.applied == 0,
             "dead-store-elimination removed store that provides VP restore context");
+  }
+
+  {
+    const core::passes::PassResult result = run_dead_store_elimination(
+        {entered_store("1", ManualInteractionAnchorKind::ContinuousResume), recall("2"),
+         halt()});
+    require(result.applied == 1 && result.ops.front().kind == IrKind::Recall &&
+                result.ops.front().meta.manual_interaction.has_value() &&
+                result.ops.front().meta.manual_interaction->kind ==
+                    ManualInteractionAnchorKind::ContinuousResume,
+            "dead continuous-resume store should transfer its entry anchor forward");
+  }
+
+  {
+    const core::passes::PassResult result = run_dead_store_elimination(
+        {entered_store("1", ManualInteractionAnchorKind::SingleStepCommand), halt()});
+    require(result.applied == 0 && result.ops.front().kind == IrKind::Store,
+            "PP single-step store is an externally executed command and must remain");
+  }
+
+  {
+    const core::passes::PassResult result = run_dead_store_elimination(
+        {entered_store("1", ManualInteractionAnchorKind::ContinuousResume)});
+    require(result.applied == 0 && result.ops.front().kind == IrKind::Store,
+            "continuous-resume anchor must not wrap at the pre-layout IR boundary");
+  }
+
+  {
+    IrOp address;
+    address.kind = IrKind::OrphanAddress;
+    address.target = 42;
+    const core::passes::PassResult result = run_dead_store_elimination(
+        {entered_store("1", ManualInteractionAnchorKind::ContinuousResume), address, halt()});
+    require(result.applied == 0 && result.ops.front().kind == IrKind::Store,
+            "continuous-resume anchor must not move onto or across an address operand");
   }
 }
 

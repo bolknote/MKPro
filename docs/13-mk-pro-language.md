@@ -733,6 +733,14 @@ is entered as `A ПП B ПП C С/П`, with each `ПП` executing one more store
 the final `С/П` continuing the program. Ordinary turn input should still use
 `read()`, which emits or fuses the visible input stop.
 
+`entered(min, max)` adds an inclusive integer input contract without emitting
+range-checking commands. Both bounds must be finite integer literals, and the
+whole call must be assigned directly to a bounded `counter` whose declared
+range contains them. The compiler records this contract for generic manual-entry
+and post-layout proofs. Plain `entered()` remains valid, but deliberately has an
+unknown input domain and therefore cannot justify optimizations that require an
+exhaustive set of entered values.
+
 If source saves a random seed, updates the same seed with `random()`, and then
 uses both the previous and new seed in one pure expression, the compiler may keep
 the previous seed on the stack instead of storing and recalling it. This matches

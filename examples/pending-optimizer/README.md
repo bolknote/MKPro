@@ -14,7 +14,7 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 120 | 105 | +15 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 181 | 105 | +76 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
@@ -22,14 +22,17 @@ mode may reject over-window programs earlier than the analysis path.
 ## Live Optimization Notes
 
 - Preserve the source UI and behavior: the player retry stop for an occupied
-  cell must still show `-99999999`, wins still report the original fractional
-  packed mask, and the calculator move selection must keep the source-style
-  max/tie behavior.
-- The source uses packed occupied masks and four packed line banks in source
-  register order: `R7=x`, `R6=y`, `R5=x+y`, `R4=x-y`.
+  cell must still expose `X=-99999999`, ordinary answers must expose the stack
+  pair `X:Y`, arbitrary signed/fractional coordinates must normalize like the
+  original, wins must report the original fractional packed mask, and move
+  selection must keep the source-style max/tie behavior.
+- Packed occupied masks and four logical line banks are semantic state. Their
+  physical registers, selector values, initial preload layout, and temporary
+  encodings are compiler decisions and are not part of the UI contract.
 - The main remaining size pressure is helper and ABI traffic around
-  `cell_mask`, `packed_score`, `candidate_score`, and the shared
+  signed modulo, `cell_mask`, `packed_score`, `candidate_score`, and the
   line-update/check path.
-- Keep optimization work generic where possible. Existing tests already track
-  the tic-tac-toe-specific size attribution and should keep exposing the
-  remaining blockers.
+- Optimizer tests must use unrelated synthetic programs and local proof
+  obligations. The tic-tac-toe fixture may lock only its size and observable
+  UI; it must not select or justify an optimization by recognizing this game
+  or its whole-program architecture.

@@ -1,6 +1,5 @@
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/compiler.hpp"
-#include "mkpro/core/compiler_static_proof_gate.hpp"
 #include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
@@ -11,7 +10,6 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
-#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -137,8 +135,17 @@ void run_to_stop(emulator::MK61& calc, std::string_view context) {
   require(run.stopped, std::string(context) + " should stop");
 }
 
+void input_ui_number(emulator::MK61& calc, std::string value) {
+  const bool negative = !value.empty() && value.front() == '-';
+  if (negative)
+    value.erase(value.begin());
+  calc.input_number(value, true);
+  if (negative)
+    calc.press("/-/");
+}
+
 void enter_x(emulator::MK61& calc, const std::string& x, std::string_view context) {
-  calc.input_number(x, true);
+  input_ui_number(calc, x);
   calc.press("ПП");
   run_to_stop(calc, context);
   require(calc.program_counter() == "05",
@@ -148,7 +155,7 @@ void enter_x(emulator::MK61& calc, const std::string& x, std::string_view contex
 }
 
 void enter_y_and_run(emulator::MK61& calc, const std::string& y, std::string_view context) {
-  calc.input_number(y, true);
+  input_ui_number(calc, y);
   calc.press("С/П");
   run_to_stop(calc, context);
   require(calc.program_counter() == "04",
@@ -162,35 +169,6 @@ std::string read_text(const std::filesystem::path& path) {
   return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
 }
 
-std::string replace_identifier_tokens(
-    const std::string& source, const std::map<std::string, std::string>& replacements) {
-  std::string result;
-  for (std::size_t cursor = 0; cursor < source.size();) {
-    const unsigned char ch = static_cast<unsigned char>(source.at(cursor));
-    if (std::isalpha(ch) == 0 && source.at(cursor) != '_') {
-      result.push_back(source.at(cursor++));
-      continue;
-    }
-    std::size_t end = cursor + 1U;
-    while (end < source.size()) {
-      const unsigned char next = static_cast<unsigned char>(source.at(end));
-      if (std::isalnum(next) == 0 && source.at(end) != '_')
-        break;
-      ++end;
-    }
-    const std::string token = source.substr(cursor, end - cursor);
-    const auto replacement = replacements.find(token);
-    result += replacement == replacements.end() ? token : replacement->second;
-    cursor = end;
-  }
-  return result;
-}
-
-bool has_optimization(const CompileResult& result, std::string_view name) {
-  return std::any_of(result.optimizations.begin(), result.optimizations.end(),
-                     [&](const OptimizationReport& item) { return item.name == name; });
-}
-
 std::filesystem::path fixture_root() {
   const std::filesystem::path current = std::filesystem::current_path();
   if (std::filesystem::exists(current / "games" / "tic-tac-toe-4x4.txt"))
@@ -198,6 +176,36 @@ std::filesystem::path fixture_root() {
   if (std::filesystem::exists(current.parent_path() / "games" / "tic-tac-toe-4x4.txt"))
     return current.parent_path();
   throw std::runtime_error("cannot locate the MK-Pro fixture root from " + current.string());
+}
+
+struct UiObservation {
+  std::string display;
+  std::string x;
+  std::string y;
+
+  bool operator==(const UiObservation&) const = default;
+};
+
+emulator::MK61 boot_reference_game(const std::vector<int>& reference) {
+  emulator::MK61 calc({.extended = true, .angle_mode = "deg"});
+  const emulator::ProgramLoadResult loaded = calc.load_program(reference);
+  require(loaded.diagnostics.empty(), "reference UI probe should load without truncation");
+  preload_reference_game(calc);
+  calc.press_sequence({"В/О", "С/П"});
+  run_to_stop(calc, "reference UI probe cold start");
+  return calc;
+}
+
+UiObservation play_reference_first_move(const std::vector<int>& reference, const std::string& x,
+                                        const std::string& y) {
+  emulator::MK61 calc = boot_reference_game(reference);
+  enter_x(calc, x, "reference UI probe X phase");
+  enter_y_and_run(calc, y, "reference UI probe Y phase");
+  return UiObservation{
+      .display = compact(calc.display_text()),
+      .x = compact(calc.read_register("x")),
+      .y = compact(calc.read_register("y")),
+  };
 }
 
 } // namespace
@@ -227,8 +235,9 @@ void tic_tac_toe_4x4_reference_transcript_matches_original_listing() {
 
   calc.press_sequence({"В/О", "С/П"});
   run_to_stop(calc, "cold start");
-  require(calc.program_counter() == "04" && display_integer(calc) == 0,
-          "cold start should show zero and stop at the first coordinate store");
+  require(calc.program_counter() == "04" && display_integer(calc) == 0 &&
+              read_integer(calc, "x") == 0 && read_integer(calc, "y") == 0,
+          "cold start should expose stack pair X=0, Y=0 at the first coordinate store");
 
   enter_x(calc, "1", "first coordinate entry");
   enter_y_and_run(calc, "1", "first move");
@@ -244,8 +253,8 @@ void tic_tac_toe_4x4_reference_transcript_matches_original_listing() {
   enter_x(calc, "1", "occupied coordinate entry");
   enter_y_and_run(calc, "1", "occupied move");
   require(display_integer(calc) == -99999999 && read_integer(calc, "x") == -99999999 &&
-              read_integer(calc, "3") == -99999999,
-          "re-entering occupied cell 1:1 should show the retry sentinel");
+              read_integer(calc, "y") == 1 && read_integer(calc, "3") == -99999999,
+          "re-entering occupied cell 1:1 should expose retry pair X=-99999999, Y=1");
   require(board_signature(calc) == after_first_move,
           "occupied-cell retry should not change line or occupancy banks");
 
@@ -260,85 +269,57 @@ void tic_tac_toe_4x4_reference_transcript_matches_original_listing() {
           "second accepted move should update all affected packed banks");
 }
 
+void tic_tac_toe_4x4_reference_ui_normalizes_coordinates() {
+  const std::filesystem::path root = fixture_root();
+  const std::vector<int> reference =
+      parse_reference_listing(root / "games" / "tic-tac-toe-4x4.txt");
+
+  const UiObservation one_one = play_reference_first_move(reference, "1", "1");
+  for (const std::string& alias : {std::string("5"), std::string("9"), std::string("1.9")}) {
+    require(play_reference_first_move(reference, alias, "1") == one_one,
+            "positive/fractional X alias " + alias + " should normalize to X=1");
+  }
+
+  const UiObservation three_one = play_reference_first_move(reference, "3", "1");
+  for (const std::string& alias : {std::string("-1"), std::string("-5"),
+                                   std::string("-5.9")}) {
+    require(play_reference_first_move(reference, alias, "1") == three_one,
+            "negative X alias " + alias + " should normalize to X=3");
+  }
+  require(play_reference_first_move(reference, "0", "1") ==
+              play_reference_first_move(reference, "4", "1"),
+          "zero X should normalize to X=4");
+  require(play_reference_first_move(reference, "1", "-5") ==
+              play_reference_first_move(reference, "1", "3"),
+          "negative Y should use the same signed modulo normalization");
+
+  emulator::MK61 retry = boot_reference_game(reference);
+  enter_x(retry, "3", "canonical occupied-alias setup X phase");
+  enter_y_and_run(retry, "1", "canonical occupied-alias setup Y phase");
+  enter_x(retry, "-5", "occupied negative-alias X phase");
+  enter_y_and_run(retry, "1", "occupied negative-alias Y phase");
+  require(read_integer(retry, "x") == -99999999 && read_integer(retry, "y") == 1,
+          "an occupied normalized alias should expose retry pair X=-99999999, Y=raw input Y");
+}
+
 void tic_tac_toe_4x4_source_uses_reference_angle_mode() {
   const std::filesystem::path source =
       fixture_root() / "examples" / "pending-optimizer" / "tic-tac-toe-4x4.mkpro";
-  require(read_text(source).find("expected_mode_only(\"deg\")") != std::string::npos,
+  const std::string text = read_text(source);
+  require(text.find("expected_mode_only(\"deg\")") != std::string::npos,
           "the executable 105-cell reference requires switch position Г (DEG), not ГРД");
-}
-void tic_tac_toe_4x4_generic_optimizer_checkpoint_is_name_independent() {
-  const std::filesystem::path root = fixture_root();
-  const std::string source =
-      read_text(root / "examples" / "pending-optimizer" / "tic-tac-toe-4x4.mkpro");
 
   CompileOptions options;
   options.analysis = true;
   options.budget = 999;
   options.disable_candidate_search = true;
-  options.canonicalize_packed_line_bank_walks = true;
-  options.packed_line_family_mutating_selector_update_check_tail = true;
-  options.stack_resident_temps = true;
-  options.joint_packed_line_family_walk = true;
-  const CompileResult compiled = compile_source(source, options);
+  const CompileResult compiled = compile_source(text, options);
   require(compiled.implemented && compiled.diagnostics.empty(),
-          "forced reusable packed-line pipeline should compile the source");
-  require(compiled.steps.size() == 121U,
-          "generic checkpoint after removing the whole-program recognizer should be 121 cells, "
-          "got " +
-              std::to_string(compiled.steps.size()));
-  require(has_optimization(compiled, "joint-packed-line-family-walk"),
-          "checkpoint should expose the reusable joint packed-line walk");
-  const std::optional<std::string> compiled_rejection =
-      optimizer_static_proof_gate_rejection_reason_for_testing(options, compiled);
-  require(!compiled_rejection.has_value(),
-          "basic generic candidate should carry a valid final selector proof: " +
-              compiled_rejection.value_or("accepted"));
-
-  CompileOptions composed_options = options;
-  composed_options.dual_use_constant_indirect_flow = true;
-  composed_options.tail_branch_inversion = true;
-  composed_options.proc_layout_strategy = "reverse";
-  const CompileResult composed = compile_source(source, composed_options);
-  require(composed.implemented && composed.steps.size() == 120U,
-          "generic joint/dual-use/reverse composition should occupy 120 cells, got " +
-              std::to_string(composed.steps.size()));
-  const std::optional<std::string> composed_rejection =
-      optimizer_static_proof_gate_rejection_reason_for_testing(composed_options, composed);
-  require(!composed_rejection.has_value(),
-          "composed generic candidate should carry a valid final selector proof: " +
-              composed_rejection.value_or("accepted"));
-
-  const std::string alpha = replace_identifier_tokens(
-      source,
-      {{"TicTacToe4x4", "QuartetReplyProbe"},
-       {"grid", "arena"},
-       {"occupied", "ledger_mask"},
-       {"lines", "bands"},
-       {"best_y", "answer_row"},
-       {"best_score", "peak"},
-       {"score", "merit"},
-       {"line", "band_index"},
-       {"slot", "cursor"},
-       {"draw", "stalemate"},
-       {"occupied_cell", "reject_taken"},
-       {"mark_one", "touch_band"},
-       {"mark_lines_and_check", "sweep_quartet"},
-       {"choose_calculator_move", "select_reply"},
-       {"candidate_score", "rate_candidate"},
-       {"normalize", "fold_axis"},
-       {"mark_sign", "impulse"},
-       {"raw_line", "raw_axis"},
-       {"report", "alarm"},
-       {"x", "axis_p"},
-       {"y", "axis_q"}});
-  const CompileResult alpha_compiled = compile_source(alpha, options);
-  require(alpha_compiled.implemented && alpha_compiled.steps.size() == 121U &&
-              has_optimization(alpha_compiled, "joint-packed-line-family-walk"),
-          "alpha-renamed source should keep the same checkpoint through reusable passes");
-  const CompileResult alpha_composed = compile_source(alpha, composed_options);
-  require(alpha_composed.implemented && alpha_composed.steps.size() == 120U &&
-              optimizer_static_proof_gate_accepts_for_testing(composed_options, alpha_composed),
-          "alpha-renamed source should keep the same proved composed layout");
+          "entered() source contract should compile through the generic pipeline");
+  require(compiled.interaction_protocols.size() == 1U &&
+              compiled.interaction_protocols.front().phases.size() == 2U &&
+              !compiled.interaction_protocols.front().phases.at(0).admitted_domain.known() &&
+              !compiled.interaction_protocols.front().phases.at(1).admitted_domain.known(),
+          "source should expose two generic manual-input phases with an unknown admitted domain");
 }
-
 } // namespace mkpro::tests

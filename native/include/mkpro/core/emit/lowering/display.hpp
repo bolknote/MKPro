@@ -14,6 +14,7 @@ namespace mkpro::core::emit {
 
 struct DisplayEmitApi {
   MachineEmitter& emitter;
+  StopDisposition stop_disposition = StopDisposition::Resumable;
   std::function<void(const std::string&)> emit_recall;
   std::function<void(const std::string&, std::string)> emit_store;
   std::function<bool(const Expression&)> lower_expression_to_x;

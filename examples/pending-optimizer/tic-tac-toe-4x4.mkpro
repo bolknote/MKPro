@@ -13,14 +13,16 @@ program TicTacToe4x4 {
     occupied: packed = 0
     lines: packed[4..7] = [44444.4, 44444.4, 44444.4, 44444.4]
 
-    x: counter 0..5
-    y: counter 0..5
+    // Player input is deliberately unbounded: the original UI accepts any
+    // calculator number and normalizes its integer part modulo four.
+    x: packed
+    y: packed
 
     best_y: packed
     best_score: packed
     score: packed
     line: packed
-    slot: counter 0..8
+    slot: packed
   }
 
   fn draw() {
@@ -28,15 +30,25 @@ program TicTacToe4x4 {
   }
 
   fn occupied_cell() {
-    best_y = -99999999
+    slot = -99999999
   }
 
   loop {
-    show(best_y)
+    // The documented answer is the stack pair X:Y.  preview(y) prepares Y;
+    // show(slot) leaves the visible X coordinate (or retry sentinel) in X.
+    preview(y)
+    show(slot)
     // Source UI is X ПП Y С/П: ПП executes only the first entered() store,
     // then С/П resumes at the second one with the new X value.
     x = entered()
     y = entered()
+    // Match the original calculator UI for arbitrary numeric coordinates:
+    // discard the fractional part and wrap the integer into 1..4.  Normalize
+    // Y first so the two manual-entry phases retain their original stack flow.
+    normalize(y)
+    y = line
+    normalize(x)
+    x = line
     line = cell_mask(x, y)
 
     if bit_and(occupied, line) != 0 {
@@ -112,6 +124,9 @@ program TicTacToe4x4 {
   }
 
   fn normalize(raw_line) {
-    line = frac((raw_line + 3) / 4) * 4 + 1
+    line = frac(int(raw_line) / 4) * 4
+    if line <= 0 {
+      line += 4
+    }
   }
 }

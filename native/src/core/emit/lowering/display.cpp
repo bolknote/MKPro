@@ -439,7 +439,7 @@ void emit_mantissa_mask_leader_splice(DisplayEmitApi& api, const std::string& sc
   api.emitter.emit_op(0x54, "К НОП", comment_prefix + " leader preserve", source_line, true);
   api.emitter.emit_op(0x0c, "ВП", comment_prefix + " leader restore", source_line);
   emit_display_exponent(api.emitter, width - 1, source_line, comment_prefix + " exponent");
-  api.emitter.emit_op(0x50, "С/П", "show " + display_name, source_line);
+  api.emitter.emit_stop(api.stop_disposition, "С/П", "show " + display_name, source_line);
 }
 
 void emit_variable_leading_tail_digit(DisplayEmitApi& api, const DisplayItem& source, int split,
@@ -868,7 +868,7 @@ bool emit_direct_display_literal_program(MachineEmitter& emitter,
                                          "display literal video bytes")) {
     return false;
   }
-  emitter.emit_op(0x50, "С/П", "show literal", source_line);
+  emitter.emit_stop(StopDisposition::Resumable, "С/П", "show literal", source_line);
   return true;
 }
 
@@ -1015,7 +1015,7 @@ bool lower_decimal_point_display_statement(DisplayEmitApi& api, LoweringContext&
     api.emit_display_scale(std::to_string(decimal_power10(fractional_width)), source_line);
     api.emitter.emit_op(0x13, "/", "display " + display_name + " decimal point", source_line);
   }
-  api.emitter.emit_op(0x50, "С/П", "show " + display_name, source_line);
+  api.emitter.emit_stop(api.stop_disposition, "С/П", "show " + display_name, source_line);
   context.optimizations.push_back(OptimizationReport{
       .name = "decimal-point-display",
       .detail = "Displayed screen " + display_name + " as a fixed-point number with " +
@@ -1048,7 +1048,8 @@ bool lower_dynamic_line_report_display_statement(DisplayEmitApi& api, LoweringCo
   api.emit_number_or_preload("1200", std::nullopt, source_line);
   api.emitter.emit_op(0x14, "<->", "display dynamic line report operand order", source_line);
   api.emitter.emit_op(0x39, "К ⊕", "display dynamic line report video bytes", source_line);
-  api.emitter.emit_op(0x50, "С/П", "show dynamic line report", source_line);
+  api.emitter.emit_stop(api.stop_disposition, "С/П", "show dynamic line report",
+                        source_line);
   context.optimizations.push_back(OptimizationReport{
       .name = "screen-dynamic-line-report-lowering",
       .detail = "Lowered screen at line " + std::to_string(source_line) +
@@ -1122,7 +1123,7 @@ bool lower_floor_packed_row_display_statement(DisplayEmitApi& api, LoweringConte
   }
   api.emitter.emit_op(0x25, "F reverse", "display packed row preserve", source_line);
   api.emitter.emit_op(0x0c, "ВП", "display packed row restore", source_line);
-  api.emitter.emit_op(0x50, "С/П", "show " + display_name, source_line);
+  api.emitter.emit_stop(api.stop_disposition, "С/П", "show " + display_name, source_line);
   context.optimizations.push_back(OptimizationReport{
       .name =
           row.expr.has_value() ? "floor-packed-row-expression-display" : "floor-packed-row-display",
@@ -1201,7 +1202,7 @@ bool lower_mantissa_exponent_display_statement(DisplayEmitApi& api, LoweringCont
   api.emitter.emit_op(0x14, "<->", "display template leader merge", source_line);
   api.emitter.emit_op(0x54, "К НОП", "display template leader preserve", source_line, true);
   api.emitter.emit_op(0x0c, "ВП", "display template leader restore", source_line);
-  api.emitter.emit_op(0x50, "С/П", "show " + display_name, source_line);
+  api.emitter.emit_stop(api.stop_disposition, "С/П", "show " + display_name, source_line);
   context.optimizations.push_back(OptimizationReport{
       .name = "display-byte-x2-lowering",
       .detail = "Built literal-separated screen " + display_name +
@@ -1302,7 +1303,7 @@ bool lower_fixed_display_mask_statement(DisplayEmitApi& api, LoweringContext& co
   api.emitter.emit_op(0x0c, "ВП", "display mask leader restore", source_line);
   emit_display_exponent(api.emitter, template_plan->width - 1, source_line,
                         "display mask exponent");
-  api.emitter.emit_op(0x50, "С/П", "show " + display_name, source_line);
+  api.emitter.emit_stop(api.stop_disposition, "С/П", "show " + display_name, source_line);
   context.optimizations.push_back(OptimizationReport{
       .name = "display-byte-mask-lowering",
       .detail = "Built literal-separated screen " + display_name +
@@ -1338,7 +1339,8 @@ bool lower_formatted_coord_report_display_statement(DisplayEmitApi& api, Lowerin
     api.emitter.emit_op(0x00 + template_plan->video_anchor_exp,
                         std::to_string(template_plan->video_anchor_exp),
                         "display formatted exponent", source_line);
-    api.emitter.emit_op(0x50, "С/П", "show " + display_name, source_line);
+    api.emitter.emit_stop(api.stop_disposition, "С/П", "show " + display_name,
+                          source_line);
     context.optimizations.push_back(OptimizationReport{
         .name = "formatted-coord-report-packed-body",
         .detail = "Reused packed --CC-- N body already in X for formatted coord report.",
@@ -1382,7 +1384,7 @@ bool lower_formatted_coord_report_display_statement(DisplayEmitApi& api, Lowerin
   api.emitter.emit_op(0x00 + template_plan->video_anchor_exp,
                       std::to_string(template_plan->video_anchor_exp), "display formatted exponent",
                       source_line);
-  api.emitter.emit_op(0x50, "С/П", "show " + display_name, source_line);
+  api.emitter.emit_stop(api.stop_disposition, "С/П", "show " + display_name, source_line);
   api.emitter.current_x_variable.reset();
   api.emitter.current_x_aliases.clear();
   context.optimizations.push_back(OptimizationReport{

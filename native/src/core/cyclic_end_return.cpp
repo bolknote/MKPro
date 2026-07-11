@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <exception>
 #include <map>
 #include <optional>
 #include <set>
@@ -117,8 +118,7 @@ bool cell_is_fallthrough_barrier(const std::vector<MachineItem>& items,
          items.at(*flow).opcode == 0x51;
 }
 
-bool has_fallthrough_barrier_before(const std::vector<MachineItem>& items,
-                                    std::size_t item_index) {
+bool has_fallthrough_barrier_before(const std::vector<MachineItem>& items, std::size_t item_index) {
   const std::optional<std::size_t> previous = previous_cell_item(items, item_index);
   return previous.has_value() && cell_is_fallthrough_barrier(items, *previous);
 }
@@ -136,8 +136,7 @@ void append_comment(MachineItem& item, const std::string& suffix) {
 }
 
 bool direct_address_artifact_proved(const std::vector<MachineItem>& items,
-                                    const ArtifactIndex& index,
-                                    std::vector<std::string>& reasons) {
+                                    const ArtifactIndex& index, std::vector<std::string>& reasons) {
   std::set<std::string> referenced_labels;
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
     const MachineItem& item = items.at(item_index);
@@ -163,17 +162,26 @@ bool direct_address_artifact_proved(const std::vector<MachineItem>& items,
 
   for (const std::string& label : referenced_labels) {
     const auto address = index.label_addresses.find(label);
-    if (address == index.label_addresses.end())
+    if (address == index.label_addresses.end()) {
+      reasons.push_back("address operand references unresolved label " + label);
       continue;
+    }
     const auto cell = index.cell_items.find(address->second);
-    if (cell != index.cell_items.end() &&
-        items.at(cell->second).kind == MachineItemKind::Address) {
+    if (cell == index.cell_items.end()) {
+      reasons.push_back("address label " + label + " does not denote an executable command cell");
+      continue;
+    }
+    if (items.at(cell->second).kind == MachineItemKind::Address) {
       reasons.push_back("address/code overlay entry " + label +
                         " is unsafe when relocation changes encoded operands");
       return false;
     }
+    if (items.at(cell->second).kind != MachineItemKind::Op) {
+      reasons.push_back("address label " + label + " does not denote an executable command cell");
+      continue;
+    }
   }
-  return true;
+  return reasons.empty();
 }
 
 std::set<std::string> entry_labels(const CyclicEndReturnProof& proof) {
@@ -192,10 +200,205 @@ std::vector<MachineItem> without_helper_block(const std::vector<MachineItem>& it
                    items.begin() +
                        static_cast<std::ptrdiff_t>(proof.helper_block_begin_item_index));
   remaining.insert(remaining.end(),
-                   items.begin() +
-                       static_cast<std::ptrdiff_t>(proof.helper_block_end_item_index),
+                   items.begin() + static_cast<std::ptrdiff_t>(proof.helper_block_end_item_index),
                    items.end());
   return remaining;
+}
+
+std::optional<int> relocated_identity_address(int original_address,
+                                              const CyclicEndReturnProof& proof) {
+  if (original_address < proof.original_body_start_address)
+    return original_address;
+  if (original_address < proof.original_explicit_return_address) {
+    return proof.relocated_body_start_address + original_address -
+           proof.original_body_start_address;
+  }
+  if (original_address == proof.original_explicit_return_address)
+    return std::nullopt;
+  return original_address - (proof.body_cells + 1);
+}
+
+std::optional<int> modeled_formal_target(const MachineItem& item, AddressSpaceModel model,
+                                         std::vector<std::string>& reasons) {
+  if (!item.formal_opcode.has_value())
+    return std::nullopt;
+  try {
+    const FormalAddressInfo formal = formal_address_info(*item.formal_opcode, model);
+    if (formal.kind == FormalAddressKind::SuperDark || formal.one_command ||
+        formal.extra.has_value()) {
+      reasons.push_back("super-dark one-command operand has no exact cyclic CFG model");
+      return std::nullopt;
+    }
+    return formal.actual;
+  } catch (const std::exception&) {
+    reasons.push_back("formal address operand is invalid for the cyclic address space");
+    return std::nullopt;
+  }
+}
+
+bool formal_operand_survives_relocation(const std::vector<MachineItem>& items,
+                                        const MachineItem& item, const ArtifactIndex& index,
+                                        const CyclicEndReturnProof& proof,
+                                        const CyclicEndReturnOptions& options,
+                                        std::vector<std::string>& reasons) {
+  const std::optional<int> target =
+      modeled_formal_target(item, options.address_space_model, reasons);
+  if (!target.has_value())
+    return false;
+  const auto target_cell = index.cell_items.find(*target);
+  if (target_cell == index.cell_items.end() || item.kind != MachineItemKind::Address ||
+      items.at(target_cell->second).kind != MachineItemKind::Op) {
+    reasons.push_back("formal address target is not an executable command cell");
+    return false;
+  }
+  const std::optional<int> relocated = relocated_identity_address(*target, proof);
+  if (!relocated.has_value() || *relocated != *target) {
+    reasons.push_back("formal address target changes command identity across helper relocation");
+    return false;
+  }
+  if (const auto* label = std::get_if<std::string>(&item.target)) {
+    const auto labeled = index.label_addresses.find(*label);
+    if (labeled == index.label_addresses.end() || labeled->second != *target) {
+      reasons.push_back("formal address operand disagrees with its symbolic target identity");
+      return false;
+    }
+  }
+  return true;
+}
+
+bool validate_complete_indirect_relocation(const std::vector<MachineItem>& items,
+                                           const ArtifactIndex& index,
+                                           const CyclicEndReturnProof& proof,
+                                           const CyclicEndReturnOptions& options,
+                                           std::vector<std::string>& reasons) {
+  std::set<std::size_t> indirect_items;
+  for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
+    const MachineItem& item = items.at(item_index);
+    if (item.kind == MachineItemKind::Op &&
+        is_indirect_flow_kind(basic_kind_for_opcode(item.opcode))) {
+      indirect_items.insert(item_index);
+    }
+  }
+
+  for (const std::size_t item_index : indirect_items) {
+    const auto fact = options.proved_indirect_flow_targets.find(item_index);
+    if (fact == options.proved_indirect_flow_targets.end()) {
+      reasons.push_back("indirect flow at item " + std::to_string(item_index) +
+                        " has no complete relocation proof");
+      continue;
+    }
+    if (fact->second.empty()) {
+      reasons.push_back("indirect flow at item " + std::to_string(item_index) +
+                        " has an empty target set");
+      continue;
+    }
+    const std::set<int> targets(fact->second.begin(), fact->second.end());
+    if (targets.size() != fact->second.size()) {
+      reasons.push_back("indirect flow at item " + std::to_string(item_index) +
+                        " has duplicate targets");
+    }
+    for (const int target : targets) {
+      const auto target_cell = index.cell_items.find(target);
+      if (target_cell == index.cell_items.end() ||
+          items.at(target_cell->second).kind != MachineItemKind::Op) {
+        reasons.push_back("indirect flow target " + std::to_string(target) +
+                          " is not an executable command cell");
+        continue;
+      }
+      if (target >= proof.original_body_start_address &&
+          target <= proof.original_explicit_return_address) {
+        reasons.push_back("indirect flow enters the helper block at physical " +
+                          std::to_string(target));
+        continue;
+      }
+      const std::optional<int> relocated = relocated_identity_address(target, proof);
+      if (!relocated.has_value() || *relocated != target) {
+        reasons.push_back("indirect flow target " + std::to_string(target) +
+                          " changes command identity across helper relocation");
+      }
+    }
+  }
+  for (const auto& [item_index, targets] : options.proved_indirect_flow_targets) {
+    (void)targets;
+    if (!indirect_items.contains(item_index)) {
+      reasons.push_back("complete indirect-flow map contains a non-flow item " +
+                        std::to_string(item_index));
+    }
+  }
+
+  if (!options.external_entry_addresses.has_value()) {
+    reasons.push_back("complete external-entry set was not supplied");
+  } else {
+    std::set<int> external_entries;
+    for (const int entry : *options.external_entry_addresses) {
+      if (!external_entries.insert(entry).second) {
+        reasons.push_back("external entry set contains duplicate physical " +
+                          std::to_string(entry));
+        continue;
+      }
+      const auto entry_cell = index.cell_items.find(entry);
+      if (entry_cell == index.cell_items.end() ||
+          items.at(entry_cell->second).kind != MachineItemKind::Op) {
+        reasons.push_back("external entry " + std::to_string(entry) +
+                          " is not an executable command cell");
+        continue;
+      }
+      const std::optional<int> relocated = relocated_identity_address(entry, proof);
+      if (!relocated.has_value() || *relocated != entry) {
+        reasons.push_back("external entry " + std::to_string(entry) +
+                          " changes command identity across helper relocation");
+      }
+    }
+  }
+  return reasons.empty();
+}
+
+bool validate_final_indirect_and_entries(const std::vector<MachineItem>& items,
+                                         const ArtifactIndex& index,
+                                         const CyclicEndReturnProof& proof,
+                                         std::vector<std::string>& reasons) {
+  std::set<std::size_t> indirect_items;
+  for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
+    const MachineItem& item = items.at(item_index);
+    if (item.kind == MachineItemKind::Op &&
+        is_indirect_flow_kind(basic_kind_for_opcode(item.opcode))) {
+      indirect_items.insert(item_index);
+      const auto fact = proof.final_indirect_flow_targets.find(item_index);
+      if (fact == proof.final_indirect_flow_targets.end() || fact->second.empty()) {
+        reasons.push_back("final indirect flow at item " + std::to_string(item_index) +
+                          " lacks a complete target set");
+        continue;
+      }
+      const std::set<int> targets(fact->second.begin(), fact->second.end());
+      if (targets.size() != fact->second.size()) {
+        reasons.push_back("final indirect flow target set contains duplicates");
+      }
+      for (const int target : targets) {
+        const auto target_cell = index.cell_items.find(target);
+        if (target_cell == index.cell_items.end() ||
+            items.at(target_cell->second).kind != MachineItemKind::Op) {
+          reasons.push_back("final indirect target " + std::to_string(target) +
+                            " is not executable");
+        }
+      }
+    }
+  }
+  for (const auto& [item_index, targets] : proof.final_indirect_flow_targets) {
+    (void)targets;
+    if (!indirect_items.contains(item_index))
+      reasons.push_back("final indirect-flow map contains a non-flow item");
+  }
+  std::set<int> entries;
+  for (const int entry : proof.final_external_entry_addresses) {
+    if (!entries.insert(entry).second) {
+      reasons.push_back("final external entry set contains a duplicate");
+      continue;
+    }
+    const auto cell = index.cell_items.find(entry);
+    if (cell == index.cell_items.end() || items.at(cell->second).kind != MachineItemKind::Op)
+      reasons.push_back("final external entry is not executable");
+  }
+  return reasons.empty();
 }
 
 bool final_artifact_proved(const std::vector<MachineItem>& items,
@@ -217,8 +420,7 @@ bool final_artifact_proved(const std::vector<MachineItem>& items,
   if (!direct_address_artifact_proved(items, index, reasons))
     return false;
   const auto zero = index.cell_items.find(0);
-  if (zero == index.cell_items.end() ||
-      items.at(zero->second).kind != MachineItemKind::Op ||
+  if (zero == index.cell_items.end() || items.at(zero->second).kind != MachineItemKind::Op ||
       basic_kind_for_opcode(items.at(zero->second).opcode) != IrKind::Return) {
     reasons.push_back("final artifact has no В/О at physical 00");
     return false;
@@ -237,11 +439,9 @@ bool final_artifact_proved(const std::vector<MachineItem>& items,
     return false;
   }
 
-  for (int address = original.relocated_body_start_address; address <= last_address;
-       ++address) {
+  for (int address = original.relocated_body_start_address; address <= last_address; ++address) {
     const auto cell = index.cell_items.find(address);
-    if (cell == index.cell_items.end() ||
-        items.at(cell->second).kind != MachineItemKind::Op ||
+    if (cell == index.cell_items.end() || items.at(cell->second).kind != MachineItemKind::Op ||
         !is_straight_line_body_opcode(items.at(cell->second).opcode)) {
       reasons.push_back("relocated helper suffix is not straight-line at physical " +
                         std::to_string(address));
@@ -249,26 +449,45 @@ bool final_artifact_proved(const std::vector<MachineItem>& items,
     }
   }
   const auto last = index.cell_items.find(last_address);
-  if (last == index.cell_items.end() ||
-      !items.at(last->second).comment.has_value() ||
+  if (last == index.cell_items.end() || !items.at(last->second).comment.has_value() ||
       items.at(last->second).comment->find(kBoundaryMarker) == std::string::npos) {
     reasons.push_back("final A4 body cell has no cyclic-return proof marker");
     return false;
   }
 
   const std::set<std::string> entries = entry_labels(original);
+  if (!validate_final_indirect_and_entries(items, index, original, reasons))
+    return false;
   int calls = 0;
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
     const MachineItem& item = items.at(item_index);
-    if (item.kind == MachineItemKind::Op &&
-        is_indirect_flow_kind(basic_kind_for_opcode(item.opcode))) {
-      reasons.push_back("final artifact contains indirect flow without a complete target proof");
-      return false;
-    }
     if (item.kind != MachineItemKind::Address)
       continue;
-    if (item.formal_opcode.has_value() || std::holds_alternative<int>(item.target)) {
-      reasons.push_back("final artifact contains a fixed numeric or formal address operand");
+    if (std::holds_alternative<int>(item.target)) {
+      reasons.push_back("final artifact contains a fixed numeric address operand");
+      return false;
+    }
+    if (item.formal_opcode.has_value()) {
+      const std::optional<int> formal_target =
+          modeled_formal_target(item, options.address_space_model, reasons);
+      if (!formal_target.has_value())
+        return false;
+      const auto target_cell = index.cell_items.find(*formal_target);
+      if (target_cell == index.cell_items.end() ||
+          items.at(target_cell->second).kind != MachineItemKind::Op) {
+        reasons.push_back("final formal address target is not executable");
+        return false;
+      }
+      if (const auto* formal_label = std::get_if<std::string>(&item.target)) {
+        const auto labeled = index.label_addresses.find(*formal_label);
+        if (labeled == index.label_addresses.end() || labeled->second != *formal_target) {
+          reasons.push_back("final formal address disagrees with its symbolic target identity");
+          return false;
+        }
+      }
+    }
+    if (!std::holds_alternative<std::string>(item.target)) {
+      reasons.push_back("final address operand has no symbolic identity");
       return false;
     }
     const std::string& label = std::get<std::string>(item.target);
@@ -284,9 +503,9 @@ bool final_artifact_proved(const std::vector<MachineItem>& items,
       reasons.push_back("relocated helper entry " + label + " has a non-ПП reference");
       return false;
     }
-    const auto expected = std::find_if(
-        original.entries.begin(), original.entries.end(),
-        [&](const CyclicEndReturnEntry& entry) { return entry.label == label; });
+    const auto expected =
+        std::find_if(original.entries.begin(), original.entries.end(),
+                     [&](const CyclicEndReturnEntry& entry) { return entry.label == label; });
     if (expected == original.entries.end() || target->second != expected->relocated_address) {
       reasons.push_back("relocated helper entry " + label + " moved from its proved address");
       return false;
@@ -302,10 +521,9 @@ bool final_artifact_proved(const std::vector<MachineItem>& items,
 
 } // namespace
 
-CyclicEndReturnProof
-verify_cyclic_end_return(const std::vector<MachineItem>& items,
-                         const std::string& helper_label,
-                         const CyclicEndReturnOptions& options) {
+CyclicEndReturnProof verify_cyclic_end_return(const std::vector<MachineItem>& items,
+                                              const std::string& helper_label,
+                                              const CyclicEndReturnOptions& options) {
   CyclicEndReturnProof proof;
   proof.helper_label = helper_label;
   const ArtifactIndex index = index_artifact(items);
@@ -348,8 +566,7 @@ verify_cyclic_end_return(const std::vector<MachineItem>& items,
   }
 
   const auto zero = index.cell_items.find(0);
-  if (zero == index.cell_items.end() ||
-      items.at(zero->second).kind != MachineItemKind::Op ||
+  if (zero == index.cell_items.end() || items.at(zero->second).kind != MachineItemKind::Op ||
       basic_kind_for_opcode(items.at(zero->second).opcode) != IrKind::Return) {
     proof.reasons.push_back("physical 00 is not В/О, so A4 wrap cannot return");
   }
@@ -432,17 +649,21 @@ verify_cyclic_end_return(const std::vector<MachineItem>& items,
 
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
     const MachineItem& item = items.at(item_index);
-    if (item.kind == MachineItemKind::Op &&
-        is_indirect_flow_kind(basic_kind_for_opcode(item.opcode))) {
-      proof.reasons.push_back("indirect flow at item " + std::to_string(item_index) +
-                              " has no complete relocation proof");
+    if (item.kind == MachineItemKind::Op) {
       continue;
     }
     if (item.kind != MachineItemKind::Address)
       continue;
-    if (item.formal_opcode.has_value() || std::holds_alternative<int>(item.target)) {
-      proof.reasons.push_back(
-          "fixed numeric or formal address operands are unsafe across helper relocation");
+    if (std::holds_alternative<int>(item.target)) {
+      proof.reasons.push_back("fixed numeric address operands are unsafe across helper relocation");
+      continue;
+    }
+    if (item.formal_opcode.has_value() &&
+        !formal_operand_survives_relocation(items, item, index, proof, options, proof.reasons)) {
+      continue;
+    }
+    if (!std::holds_alternative<std::string>(item.target)) {
+      proof.reasons.push_back("address operand has no symbolic identity");
       continue;
     }
     const std::string& label = std::get<std::string>(item.target);
@@ -471,6 +692,8 @@ verify_cyclic_end_return(const std::vector<MachineItem>& items,
   if (proof.calls.empty())
     proof.reasons.push_back("helper has no proved direct ПП call sites");
 
+  validate_complete_indirect_relocation(items, index, proof, options, proof.reasons);
+
   if (found_return) {
     const std::vector<MachineItem> remaining = without_helper_block(items, proof);
     if (!has_fallthrough_barrier_at_end(remaining)) {
@@ -490,10 +713,9 @@ verify_cyclic_end_return(const std::vector<MachineItem>& items,
   return proof;
 }
 
-CyclicEndReturnResult
-rewrite_cyclic_end_return(const std::vector<MachineItem>& items,
-                          const std::string& helper_label,
-                          const CyclicEndReturnOptions& options) {
+CyclicEndReturnResult rewrite_cyclic_end_return(const std::vector<MachineItem>& items,
+                                                const std::string& helper_label,
+                                                const CyclicEndReturnOptions& options) {
   CyclicEndReturnResult result;
   result.items = items;
   result.proof = verify_cyclic_end_return(items, helper_label, options);
@@ -501,12 +723,10 @@ rewrite_cyclic_end_return(const std::vector<MachineItem>& items,
     return result;
 
   std::vector<MachineItem> helper(
-      items.begin() +
-          static_cast<std::ptrdiff_t>(result.proof.helper_block_begin_item_index),
-      items.begin() +
-          static_cast<std::ptrdiff_t>(result.proof.helper_block_end_item_index));
-  const std::size_t return_offset = result.proof.original_explicit_return_item_index -
-                                    result.proof.helper_block_begin_item_index;
+      items.begin() + static_cast<std::ptrdiff_t>(result.proof.helper_block_begin_item_index),
+      items.begin() + static_cast<std::ptrdiff_t>(result.proof.helper_block_end_item_index));
+  const std::size_t return_offset =
+      result.proof.original_explicit_return_item_index - result.proof.helper_block_begin_item_index;
   result.items = without_helper_block(items, result.proof);
   const std::size_t relocated_block_begin = result.items.size();
   result.items.insert(result.items.end(), helper.begin(), helper.end());
@@ -522,8 +742,35 @@ rewrite_cyclic_end_return(const std::vector<MachineItem>& items,
   }
   append_comment(result.items.at(*final_body_item), std::string(kBoundaryMarker));
   result.items.at(*final_body_item).roles.push_back("cyclic-end-return:A4-to-00");
-  result.items.erase(result.items.begin() +
-                     static_cast<std::ptrdiff_t>(relocated_return_item));
+  result.items.erase(result.items.begin() + static_cast<std::ptrdiff_t>(relocated_return_item));
+
+  const std::size_t block_size =
+      result.proof.helper_block_end_item_index - result.proof.helper_block_begin_item_index;
+  const std::size_t remaining_item_count = items.size() - block_size;
+  for (const auto& [old_item_index, targets] : options.proved_indirect_flow_targets) {
+    std::optional<std::size_t> new_item_index;
+    if (old_item_index < result.proof.helper_block_begin_item_index) {
+      new_item_index = old_item_index;
+    } else if (old_item_index >= result.proof.helper_block_end_item_index) {
+      new_item_index = old_item_index - block_size;
+    } else if (old_item_index != result.proof.original_explicit_return_item_index) {
+      new_item_index =
+          remaining_item_count + old_item_index - result.proof.helper_block_begin_item_index;
+      if (old_item_index > result.proof.original_explicit_return_item_index)
+        --*new_item_index;
+    }
+    if (!new_item_index.has_value() || *new_item_index >= result.items.size() ||
+        result.items.at(*new_item_index).kind != MachineItemKind::Op ||
+        !is_indirect_flow_kind(basic_kind_for_opcode(result.items.at(*new_item_index).opcode))) {
+      result.proof.proved = false;
+      result.proof.reasons.push_back(
+          "cannot reindex complete indirect-flow proof after helper relocation");
+      result.items = items;
+      return result;
+    }
+    result.proof.final_indirect_flow_targets.emplace(*new_item_index, targets);
+  }
+  result.proof.final_external_entry_addresses = *options.external_entry_addresses;
 
   std::vector<std::string> final_reasons;
   result.proof.output_cells = index_artifact(result.items).cells;
@@ -540,7 +787,8 @@ rewrite_cyclic_end_return(const std::vector<MachineItem>& items,
   result.applied = 1;
   result.optimizations.push_back(passes::AppliedOptimization{
       .name = "cyclic-end-return",
-      .detail = "Relocated straight-line helper " + helper_label + " to end at A4 and removed "
+      .detail = "Relocated straight-line helper " + helper_label +
+                " to end at A4 and removed "
                 "its explicit В/О after proving wrap to В/О at physical 00 for " +
                 std::to_string(result.proof.calls.size()) + " direct call" +
                 (result.proof.calls.size() == 1U ? "." : "s."),
@@ -548,9 +796,8 @@ rewrite_cyclic_end_return(const std::vector<MachineItem>& items,
   return result;
 }
 
-CyclicEndReturnResult
-optimize_cyclic_end_return(const std::vector<MachineItem>& items,
-                           const CyclicEndReturnOptions& options) {
+CyclicEndReturnResult optimize_cyclic_end_return(const std::vector<MachineItem>& items,
+                                                 const CyclicEndReturnOptions& options) {
   std::vector<std::string> labels;
   std::set<std::string> seen;
   for (const MachineItem& item : items) {
