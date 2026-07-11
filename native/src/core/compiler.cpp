@@ -22,11 +22,13 @@
 #include "mkpro/core/interprocedural_value_propagation.hpp"
 #include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/machine_profile.hpp"
+#include "mkpro/core/natural_target_component_layout.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/parser.hpp"
 #include "mkpro/core/passes/index.hpp"
 #include "mkpro/core/passes/register_coalesce.hpp"
 #include "mkpro/core/post_layout_indirect_flow.hpp"
+#include "mkpro/core/post_layout_control_flow.hpp"
 #include "mkpro/core/register_allocator.hpp"
 #include "mkpro/core/return_stack_script.hpp"
 #include "mkpro/core/rules.hpp"
@@ -46225,6 +46227,8 @@ void append_missing_preloaded_indirect_flow_comments(std::vector<MachineItem>& i
                                                      const std::vector<PreloadReport>& preloads,
                                                      const CompileOptions& options);
 
+void remove_preloaded_indirect_flow_comment_annotations(std::vector<MachineItem>& items);
+
 AddressSpaceModel address_space_model_for_options(const CompileOptions& options) {
   return address_space_model_for_feature_profile(options.feature_profile);
 }
@@ -46249,7 +46253,8 @@ std::vector<CandidateReport> build_analysis_opportunity_reports(const ProgramAst
                                                                 const CompileOptions& options);
 
 CompileResult compile_source_once(std::string source, const CompileOptions& requested_options,
-                                  bool source_has_entered) {
+                                  bool source_has_entered,
+                                  bool apply_final_layout_size_rescue = false) {
   CompileOptions options = requested_options;
   CompileResult result;
   result.implemented = true;
@@ -46657,6 +46662,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   std::vector<PreloadReport> setup_preloads;
   std::vector<PreloadReport> post_layout_flow_preloads;
   std::vector<PreloadReport> stop_tail_preloads;
+  std::map<std::string, std::string> post_layout_preload_overrides;
+  std::optional<std::vector<PreloadReport>> final_layout_effective_preloads;
   std::vector<core::passes::AppliedOptimization> post_layout_optimizations;
 
   if (!exact_decimal_series) {
@@ -47214,6 +47221,118 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                                      dark_side_suffix.optimizations.end());
   }
 
+  // A stable internal preload may already encode an address that can become a
+  // shared helper's natural entry.  Reorder only fallthrough-closed components
+  // and replace direct calls after an authoritative identity/return-stack
+  // proof.  This is a size-rescue pass: programs that already fit keep their
+  // established layout and listing.
+  if (apply_final_layout_size_rescue &&
+      address_space_model_for_options(options) == AddressSpaceModel::Standard &&
+      core::machine_cell_count(post_layout_items) > program_step_limit_for_options(options) &&
+      machine_supports(mk61_profile(), "return-empty-stack-jump")) {
+    const auto preload_present = [](const std::vector<PreloadReport>& preloads,
+                                    const std::string& register_name) {
+      return std::any_of(preloads.begin(), preloads.end(), [&](const PreloadReport& preload) {
+        return preload.register_name == register_name;
+      });
+    };
+    const auto build_effective_preloads = [&](bool setup_program) {
+      std::vector<PreloadReport> effective;
+      const auto add_unique = [&](const PreloadReport& preload) {
+        if (!preload_present(effective, preload.register_name))
+          effective.push_back(preload);
+      };
+      for (const PreloadReport& preload : setup_preloads) {
+        const bool selected =
+            setup_program
+                ? (preload_must_reach_generated_setup_program(preload) ||
+                   !preload_present(stop_tail_preloads, preload.register_name))
+                : (!preload_is_internal_collection_setup(preload) &&
+                   !preload_present(stop_tail_preloads, preload.register_name));
+        if (selected)
+          add_unique(preload);
+      }
+      for (const PreloadReport& preload : optimized.preloads)
+        add_unique(preload);
+      for (const PreloadReport& preload : stop_tail_preloads)
+        add_unique(preload);
+      for (const PreloadReport& preload : post_layout_flow_preloads) {
+        if (!preload_present(stop_tail_preloads, preload.register_name))
+          add_unique(preload);
+      }
+      return effective;
+    };
+    const auto same_runtime_preload = [](const PreloadReport& left,
+                                         const PreloadReport& right) {
+      return left.register_name == right.register_name && left.value == right.value &&
+             left.counts_against_program == right.counts_against_program &&
+             left.setup_target_name == right.setup_target_name &&
+             left.setup_expression == right.setup_expression &&
+             left.setup_expression_text == right.setup_expression_text &&
+             left.setup_source_line == right.setup_source_line;
+    };
+    std::vector<PreloadReport> effective_preloads = build_effective_preloads(false);
+    const std::vector<PreloadReport> setup_program_effective_preloads =
+        build_effective_preloads(true);
+    bool compatible_preloads =
+        effective_preloads.size() == setup_program_effective_preloads.size();
+    for (const PreloadReport& preload : effective_preloads) {
+      const auto setup = std::find_if(
+          setup_program_effective_preloads.begin(), setup_program_effective_preloads.end(),
+          [&](const PreloadReport& candidate) {
+            return candidate.register_name == preload.register_name;
+          });
+      if (setup == setup_program_effective_preloads.end() ||
+          !same_runtime_preload(preload, *setup)) {
+        compatible_preloads = false;
+      }
+    }
+
+    if (compatible_preloads) {
+      core::PostLayoutControlFlowOptions control_options;
+      control_options.address_space_model = address_space_model_for_options(options);
+      control_options.empty_return_target = 1;
+      const core::AuthoritativePostLayoutControlFlow control_flow =
+          core::build_post_layout_control_flow(post_layout_items, control_options);
+      if (control_flow.proved) {
+        const core::NaturalTargetComponentLayoutResult natural_layout =
+            core::optimize_natural_target_component_layout(
+                post_layout_items, effective_preloads, control_flow,
+                core::NaturalTargetComponentLayoutOptions{
+                    .address_space_model = address_space_model_for_options(options),
+                });
+        if (natural_layout.applied > 0 && natural_layout.plan.final_artifact_proved &&
+            natural_layout.removed_cells > 0 &&
+            core::machine_cell_count(natural_layout.items) <
+                core::machine_cell_count(post_layout_items)) {
+          post_layout_items = natural_layout.items;
+          final_layout_effective_preloads = natural_layout.preloads;
+          for (const PreloadReport& preload : natural_layout.preloads)
+            post_layout_preload_overrides[preload.register_name] = preload.value;
+          const auto apply_preload_overrides = [&](std::vector<PreloadReport>& preloads) {
+            for (PreloadReport& preload : preloads) {
+              const auto found = post_layout_preload_overrides.find(preload.register_name);
+              if (found != post_layout_preload_overrides.end())
+                preload.value = found->second;
+            }
+          };
+          apply_preload_overrides(setup_preloads);
+          apply_preload_overrides(stop_tail_preloads);
+          apply_preload_overrides(post_layout_flow_preloads);
+          remove_preloaded_indirect_flow_comment_annotations(post_layout_items);
+          post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+              .name = "natural-target-component-layout",
+              .detail = "Placed a proved helper at the natural target of stable R" +
+                        natural_layout.plan.selector_register + " and replaced " +
+                        std::to_string(natural_layout.applied) +
+                        " direct call(s) with one-cell indirect calls after exact final-artifact "
+                        "control/return-stack/stack/X2/runtime-selector proofs.",
+          });
+        }
+      }
+    }
+  }
+
   const std::vector<PreloadReport> comment_flow_preloads =
       preloaded_indirect_flow_comment_preloads(post_layout_items, options);
   for (const PreloadReport& preload : comment_flow_preloads) {
@@ -47225,8 +47344,11 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
     if (!duplicate)
       post_layout_flow_preloads.push_back(preload);
   }
-  append_missing_preloaded_indirect_flow_comments(post_layout_items, post_layout_flow_preloads,
-                                                 options);
+  const std::vector<PreloadReport>& annotation_preloads =
+      final_layout_effective_preloads.has_value() ? *final_layout_effective_preloads
+                                                  : post_layout_flow_preloads;
+  append_missing_preloaded_indirect_flow_comments(post_layout_items, annotation_preloads,
+                                                  options);
 
   trace_stage("resolve");
   result.items = post_layout_items;
@@ -47264,8 +47386,14 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
       add_unique_setup_program_preload(preload);
     }
   }
-  for (const PreloadReport& preload : optimized.preloads)
-    add_unique_setup_program_preload(preload);
+  for (const PreloadReport& preload : optimized.preloads) {
+    PreloadReport final_preload = preload;
+    if (const auto found = post_layout_preload_overrides.find(preload.register_name);
+        found != post_layout_preload_overrides.end()) {
+      final_preload.value = found->second;
+    }
+    add_unique_setup_program_preload(final_preload);
+  }
   for (const PreloadReport& preload : stop_tail_preloads)
     add_unique_setup_program_preload(preload);
   for (const PreloadReport& preload : post_layout_flow_preloads) {
@@ -47279,8 +47407,14 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
       add_unique_preload(preload);
     }
   }
-  for (const PreloadReport& preload : optimized.preloads)
-    add_unique_preload(preload);
+  for (const PreloadReport& preload : optimized.preloads) {
+    PreloadReport final_preload = preload;
+    if (const auto found = post_layout_preload_overrides.find(preload.register_name);
+        found != post_layout_preload_overrides.end()) {
+      final_preload.value = found->second;
+    }
+    add_unique_preload(final_preload);
+  }
   for (const PreloadReport& preload : stop_tail_preloads)
     add_unique_preload(preload);
   for (const PreloadReport& preload : post_layout_flow_preloads) {
@@ -59552,6 +59686,39 @@ std::optional<std::string> store_register_from_opcode(int opcode) {
   return core::register_name_for_index(offset);
 }
 
+void remove_preloaded_indirect_flow_comment_annotations(std::vector<MachineItem>& items) {
+  for (MachineItem& item : items) {
+    if (item.kind != MachineItemKind::Op || !item.comment.has_value())
+      continue;
+    std::vector<std::string> retained;
+    const std::string& comment = *item.comment;
+    std::size_t begin = 0;
+    while (begin <= comment.size()) {
+      const std::size_t end = comment.find("; ", begin);
+      const std::string part =
+          comment.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
+      const bool generated_preload_annotation =
+          part.find("preloaded R") != std::string::npos &&
+          part.find("indirect-target=") != std::string::npos &&
+          (part.find("indirect flow") != std::string::npos ||
+           part.find("direct flow") != std::string::npos);
+      if (!generated_preload_annotation && !part.empty())
+        retained.push_back(part);
+      if (end == std::string::npos)
+        break;
+      begin = end + 2U;
+    }
+    if (retained.empty()) {
+      item.comment.reset();
+      continue;
+    }
+    std::string rebuilt = retained.front();
+    for (std::size_t index = 1; index < retained.size(); ++index)
+      rebuilt += "; " + retained.at(index);
+    item.comment = std::move(rebuilt);
+  }
+}
+
 std::vector<PreloadReport>
 preloaded_indirect_flow_comment_preloads(const std::vector<MachineItem>& items,
                                          const CompileOptions& options) {
@@ -60719,7 +60886,9 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
   const bool source_has_entered = lower_ascii(source).find("entered") != std::string::npos;
 
   if (has_explicit_lowering_variant(options)) {
-    CompileResult result = compile_source_once(source, options, source_has_entered);
+    CompileResult result =
+        compile_source_once(source, options, source_has_entered,
+                            /*apply_final_layout_size_rescue=*/true);
     write_compile_result_cache(source, options, result);
     return result;
   }
@@ -60732,11 +60901,14 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
     if (cached != once_cache.end())
       return cached->second;
     const auto started = std::chrono::steady_clock::now();
-    CompileResult result = compile_source_once(source, compile_options, source_has_entered);
+    CompileResult result =
+        compile_source_once(source, compile_options, source_has_entered,
+                            /*apply_final_layout_size_rescue=*/false);
     if (!result.implemented && can_retry_lowering_attempt_in_analysis(result, compile_options)) {
       CompileOptions analysis_options = compile_options;
       analysis_options.analysis = true;
-      result = compile_source_once(source, analysis_options, source_has_entered);
+      result = compile_source_once(source, analysis_options, source_has_entered,
+                                   /*apply_final_layout_size_rescue=*/false);
     }
     if (trace_candidates) {
       const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -60765,26 +60937,19 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
   // Single-step candidate mutations, retained so the beam pass can replay them
   // on top of arbitrary frontier states rather than just the base options.
   std::vector<std::function<void(CompileOptions&)>> beam_configures;
+  std::optional<CompileResult> completed_return_stack_fallback;
   if (!options.disable_return_stack_script &&
       (!best.implemented || has_return_stack_optimization(best))) {
     CompileOptions fallback_options = options;
     fallback_options.return_stack_script = false;
     fallback_options.disable_return_stack_script = true;
     try {
-      CompileResult fallback = compile_source(source, fallback_options);
-      if (candidate_beats_best(fallback, best, options)) {
-        const std::string comparison = best.implemented
-                                           ? std::to_string(fallback.steps.size()) + " vs " +
-                                                 std::to_string(best.steps.size()) + " cells"
-                                           : "primary lowering failed";
-        fallback.optimizations.push_back(OptimizationReport{
-            .name = "return-stack-safe-fallback",
-            .detail = "Kept the successful no-return-stack baseline candidate because "
-                      "return-stack rewriting is opportunistic (" +
-                      comparison + ").",
-        });
-        best = std::move(fallback);
-      }
+      // This is a complete independent search rooted at the no-return-stack
+      // baseline.  Keep its finalized result aside: feeding a post-layout
+      // artifact back into the ordinary outer probes makes derived candidates
+      // depend on enumeration order.  The two completed searches are compared
+      // only after the outer winner has received its own final layout pass.
+      completed_return_stack_fallback = compile_source(source, fallback_options);
     } catch (const std::exception&) {
     }
   }
@@ -63390,6 +63555,63 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
     }
     std::cerr << "[beam] best_main_cells=" << (best.implemented ? best.steps.size() : 0)
               << " best_key=" << implemented_candidate_key(best_options) << "\n";
+  }
+
+  // Candidate discovery must observe the ordinary layouts it is comparing:
+  // changing helper addresses inside a probe changes the next round's derived
+  // selector candidates and makes the result depend on enumeration order.
+  // Recompile only the selected option set and apply the proof-gated final
+  // component layout once, after search has converged.
+  if (best.implemented && best.steps.size() > official_program_limit) {
+    try {
+      CompileOptions finalized_options = best_options;
+      CompileResult finalized = compile_source_once(
+          source, finalized_options, source_has_entered,
+          /*apply_final_layout_size_rescue=*/true);
+      if (!finalized.implemented &&
+          can_retry_lowering_attempt_in_analysis(finalized, finalized_options)) {
+        finalized_options.analysis = true;
+        finalized = compile_source_once(source, finalized_options, source_has_entered,
+                                        /*apply_final_layout_size_rescue=*/true);
+      }
+      const bool final_static_proof_accepted =
+          !candidate_needs_static_proof_gate(finalized_options) ||
+          !optimizer_static_gate_rejection_reason(finalized_options, finalized).has_value();
+      if (finalized.implemented && final_static_proof_accepted &&
+          finalized.steps.size() <= best.steps.size()) {
+        for (const OptimizationReport& optimization : best.optimizations) {
+          const bool present =
+              std::any_of(finalized.optimizations.begin(), finalized.optimizations.end(),
+                          [&](const OptimizationReport& existing) {
+                            return existing.name == optimization.name &&
+                                   existing.detail == optimization.detail;
+                          });
+          if (!present)
+            finalized.optimizations.push_back(optimization);
+        }
+        for (const CandidateReport& rejected : best.rejected_candidates)
+          append_candidate_report_once(finalized.rejected_candidates, rejected);
+        best = std::move(finalized);
+      }
+    } catch (const std::exception&) {
+      // The already-proved selected candidate remains the safe fallback.
+    }
+  }
+
+  if (completed_return_stack_fallback.has_value() &&
+      candidate_beats_best(*completed_return_stack_fallback, best, options)) {
+    CompileResult fallback = std::move(*completed_return_stack_fallback);
+    const std::string comparison =
+        best.implemented ? std::to_string(fallback.steps.size()) + " vs " +
+                               std::to_string(best.steps.size()) + " cells"
+                         : "primary lowering failed";
+    fallback.optimizations.push_back(OptimizationReport{
+        .name = "return-stack-safe-fallback",
+        .detail = "Kept the successful no-return-stack search result because return-stack "
+                  "rewriting is opportunistic (" +
+                  comparison + ").",
+    });
+    best = std::move(fallback);
   }
 
   attach_search_rejections_to_best();

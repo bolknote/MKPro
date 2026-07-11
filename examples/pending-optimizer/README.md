@@ -14,7 +14,7 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 166 | 105 | +61 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 163 | 105 | +58 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
@@ -36,6 +36,10 @@ mode may reject over-window programs earlier than the analysis path.
   remaining size pressure is helper and ABI traffic around `grid_norm`,
   `cell_mask`, `packed_score`, `candidate_score`, and the
   line-update/check path.
+- The generic natural-target component layout now moves only fallthrough-closed
+  machine regions after an exact CFG/return-stack proof. It places a helper at
+  the address already encoded by a stable internal preload and shortens three
+  direct calls, reducing the proved full-search result from 166 to 163 cells.
 - Optimizer tests must use unrelated synthetic programs and local proof
   obligations. The tic-tac-toe fixture may lock only its size and observable
   UI; it must not select or justify an optimization by recognizing this game

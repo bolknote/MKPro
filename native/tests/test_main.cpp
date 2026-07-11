@@ -111,6 +111,7 @@ void inline_floor_packed_row_matches_typescript_contract();
 void ir_round_trip_matches_typescript_contract();
 void last_x_reuse_matches_typescript_contract();
 void late_bound_decimal_selector_binds_only_proved_pairs();
+void natural_target_component_layout_is_generic_and_proof_gated();
 void liveness_analysis_matches_typescript_contract();
 void lowering_helpers_match_typescript_contract();
 void machine_profile_matches_typescript_contract();
@@ -333,6 +334,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(ir_round_trip_matches_typescript_contract),
       MKPRO_TEST(last_x_reuse_matches_typescript_contract),
       MKPRO_TEST(late_bound_decimal_selector_binds_only_proved_pairs),
+      MKPRO_TEST(natural_target_component_layout_is_generic_and_proof_gated),
       MKPRO_TEST(liveness_analysis_matches_typescript_contract),
       MKPRO_TEST(lowering_helpers_match_typescript_contract),
       MKPRO_TEST(machine_profile_matches_typescript_contract),

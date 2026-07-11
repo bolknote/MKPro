@@ -47,6 +47,7 @@ add_library(mkpro_core STATIC
   src/core/ir.cpp
   src/core/late_bound_decimal_selector.cpp
   src/core/machine_profile.cpp
+  src/core/natural_target_component_layout.cpp
   src/core/mk61_trig.cpp
   src/core/opcodes.cpp
   src/core/parser.cpp
@@ -210,6 +211,7 @@ add_executable(mkpro_tests
   tests/golden_listing_contract_test.cpp
   tests/last_x_reuse_test.cpp
   tests/late_bound_decimal_selector_test.cpp
+  tests/natural_target_component_layout_test.cpp
   tests/liveness_analysis_test.cpp
   tests/lowering_helpers_test.cpp
   tests/machine_profile_test.cpp
@@ -378,6 +380,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   ir_round_trip_matches_typescript_contract
   last_x_reuse_matches_typescript_contract
   late_bound_decimal_selector_binds_only_proved_pairs
+  natural_target_component_layout_is_generic_and_proof_gated
   liveness_analysis_matches_typescript_contract
   lowering_helpers_match_typescript_contract
   machine_profile_matches_typescript_contract
