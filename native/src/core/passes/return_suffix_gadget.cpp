@@ -456,6 +456,30 @@ IrOp gadget_call(const std::string& label, const IrOp& source) {
   return op;
 }
 
+void merge_semantic_call_origins(IrMeta& target, const IrMeta& source) {
+  target.semantic_call_origins.insert(target.semantic_call_origins.end(),
+                                      source.semantic_call_origins.begin(),
+                                      source.semantic_call_origins.end());
+  std::sort(target.semantic_call_origins.begin(), target.semantic_call_origins.end());
+  target.semantic_call_origins.erase(
+      std::unique(target.semantic_call_origins.begin(), target.semantic_call_origins.end()),
+      target.semantic_call_origins.end());
+}
+
+void merge_semantic_call_range(std::vector<IrOp>& ops, int target_start, int source_start,
+                               int source_end) {
+  const int length = source_end - source_start + 1;
+  for (int offset = 0; offset < length; ++offset) {
+    const int target = target_start + offset;
+    const int source = source_start + offset;
+    if (target < 0 || source < 0 || target >= static_cast<int>(ops.size()) ||
+        source >= static_cast<int>(ops.size()))
+      return;
+    merge_semantic_call_origins(ops.at(static_cast<std::size_t>(target)).meta,
+                                ops.at(static_cast<std::size_t>(source)).meta);
+  }
+}
+
 } // namespace
 
 PassResult return_suffix_gadget(const std::vector<IrOp>& ops, const PassContext& context) {
@@ -474,6 +498,21 @@ PassResult return_suffix_gadget(const std::vector<IrOp>& ops, const PassContext&
   const std::vector<SelectedGadget> selected = select_gadgets(candidates, ops);
   if (selected.empty())
     return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
+
+  std::vector<IrOp> merged_ops = ops;
+  for (const SelectedGadget& gadget : selected) {
+    if (gadget.kind == SelectedGadget::Kind::Jump) {
+      for (const OutlineOccurrence& replacement : gadget.suffix_replacements)
+        merge_semantic_call_range(merged_ops, gadget.target_start, replacement.start,
+                                  replacement.end);
+      continue;
+    }
+    if (!gadget.body_target.has_value())
+      continue;
+    for (const BodyOccurrence& replacement : gadget.body_replacements)
+      merge_semantic_call_range(merged_ops, gadget.body_target->start, replacement.start,
+                                replacement.end);
+  }
 
   std::map<int, std::vector<std::string>> target_labels;
   struct Replacement {
@@ -547,15 +586,15 @@ PassResult return_suffix_gadget(const std::vector<IrOp>& ops, const PassContext&
     if (replacement != replacement_by_start.end()) {
       result.push_back(replacement->second.kind == SelectedGadget::Kind::Jump
                            ? gadget_jump(replacement->second.label,
-                                         ops.at(static_cast<std::size_t>(index)))
+                                         merged_ops.at(static_cast<std::size_t>(index)))
                            : gadget_call(replacement->second.label,
-                                         ops.at(static_cast<std::size_t>(index))));
+                                         merged_ops.at(static_cast<std::size_t>(index))));
       index = replacement->second.skip_next_recall ? replacement->second.end + 1
                                                    : replacement->second.end;
       continue;
     }
 
-    result.push_back(ops.at(static_cast<std::size_t>(index)));
+    result.push_back(merged_ops.at(static_cast<std::size_t>(index)));
   }
 
   return PassResult{

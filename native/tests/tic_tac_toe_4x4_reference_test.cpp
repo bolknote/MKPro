@@ -1,5 +1,6 @@
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/compiler.hpp"
+#include "mkpro/core/post_layout_control_flow.hpp"
 #include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
@@ -27,6 +28,36 @@ std::string trim_ascii(std::string value) {
   while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())) != 0)
     value.pop_back();
   return value;
+}
+
+std::string mk61_hex_literal(const std::string& text) {
+  std::string result;
+  for (char ch : text) {
+    switch (static_cast<char>(std::toupper(static_cast<unsigned char>(ch)))) {
+    case 'A':
+      result.push_back('-');
+      break;
+    case 'B':
+      result.push_back('L');
+      break;
+    case 'C':
+      result += "С";
+      break;
+    case 'D':
+      result += "Г";
+      break;
+    case 'E':
+      result += "Е";
+      break;
+    case 'F':
+      result.push_back('_');
+      break;
+    default:
+      result.push_back(ch);
+      break;
+    }
+  }
+  return result;
 }
 
 std::optional<int> compact_register_opcode(std::string_view mnemonic) {
@@ -94,6 +125,14 @@ std::vector<int> parse_reference_listing(const std::filesystem::path& path) {
         parse_listing_opcode(mnemonic, path.string() + ":" + std::to_string(source_line)));
   }
   require(codes.size() == 105U, "reference listing should occupy exactly 105 MK-61 cells");
+  return codes;
+}
+
+std::vector<int> step_opcodes(const std::vector<ResolvedStep>& steps) {
+  std::vector<int> codes;
+  codes.reserve(steps.size());
+  for (const ResolvedStep& step : steps)
+    codes.push_back(step.opcode);
   return codes;
 }
 
@@ -208,6 +247,151 @@ UiObservation play_reference_first_move(const std::vector<int>& reference, const
   };
 }
 
+constexpr std::string_view kManualUiProbe = R"mkpro(
+program ManualUiProbe {
+  state {
+    last_pair: packed = 0
+    x: packed = 0
+    y: packed = 0
+    best_score: packed = 0
+  }
+
+  loop {
+    preview(y)
+    show(x)
+    x = entered()
+    y = entered()
+    y = grid_norm(y)
+    x = grid_norm(x)
+    best_score = x * 10 + y
+    if last_pair == best_score {
+      x = -99999999
+    }
+    else {
+      last_pair = best_score
+    }
+  }
+}
+)mkpro";
+
+struct ManualProbeLayout {
+  std::size_t prompt_item = 0;
+  std::size_t first_phase_item = 0;
+  std::size_t second_phase_item = 0;
+  int prompt_address = -1;
+  int first_phase_address = -1;
+  int second_phase_address = -1;
+};
+
+int machine_item_address(const std::vector<MachineItem>& items, std::size_t target) {
+  return static_cast<int>(
+      std::count_if(items.begin(), items.begin() + static_cast<std::ptrdiff_t>(target),
+                    [](const MachineItem& item) { return item.kind != MachineItemKind::Label; }));
+}
+
+ManualProbeLayout require_two_phase_probe_layout(const CompileResult& compiled) {
+  require(compiled.interaction_protocols.size() == 1U,
+          "manual UI probe should expose exactly one input protocol");
+  const ManualInteractionProtocolFact& protocol = compiled.interaction_protocols.front();
+  require(protocol.phases.size() == 2U && protocol.phases.at(0).target == "x" &&
+              protocol.phases.at(1).target == "y" &&
+              !protocol.phases.at(0).admitted_domain.known() &&
+              !protocol.phases.at(1).admitted_domain.known(),
+          "manual UI probe should retain two unbounded logical input phases");
+
+  std::optional<std::size_t> prompt;
+  std::optional<std::size_t> first;
+  std::optional<std::size_t> second;
+  for (std::size_t item_index = 0; item_index < compiled.items.size(); ++item_index) {
+    const MachineItem& item = compiled.items.at(item_index);
+    if (!item.manual_interaction.has_value() ||
+        item.manual_interaction->protocol_id != protocol.protocol_id) {
+      continue;
+    }
+    const ManualInteractionAnchor& anchor = *item.manual_interaction;
+    if (anchor.kind == ManualInteractionAnchorKind::PromptStop) {
+      require(!prompt.has_value(), "manual UI probe should have one typed prompt");
+      prompt = item_index;
+    } else if (anchor.phase == 0) {
+      require(!first.has_value(), "manual UI probe should have one first input phase");
+      first = item_index;
+    } else if (anchor.phase == 1) {
+      require(!second.has_value(), "manual UI probe should have one second input phase");
+      second = item_index;
+    }
+  }
+  require(prompt.has_value() && first.has_value() && second.has_value(),
+          "manual UI probe should retain prompt and both phase identities after lowering");
+
+  const MachineItem& prompt_item = compiled.items.at(*prompt);
+  const MachineItem& first_item = compiled.items.at(*first);
+  const MachineItem& second_item = compiled.items.at(*second);
+  require(prompt_item.kind == MachineItemKind::Op && prompt_item.opcode == 0x50 &&
+              prompt_item.stop_disposition == StopDisposition::Resumable &&
+              prompt_item.manual_interaction->phase == -1,
+          "manual UI prompt should remain a typed resumable STOP");
+  require(first_item.kind == MachineItemKind::Op &&
+              first_item.manual_interaction->kind == ManualInteractionAnchorKind::SingleStepCommand,
+          "the PP phase should remain one typed single-step command");
+  require(second_item.kind == MachineItemKind::Op &&
+              second_item.manual_interaction->kind == ManualInteractionAnchorKind::ContinuousResume,
+          "the final C/P phase may begin at any proved current-X consumer");
+
+  const ManualProbeLayout layout{
+      .prompt_item = *prompt,
+      .first_phase_item = *first,
+      .second_phase_item = *second,
+      .prompt_address = machine_item_address(compiled.items, *prompt),
+      .first_phase_address = machine_item_address(compiled.items, *first),
+      .second_phase_address = machine_item_address(compiled.items, *second),
+  };
+  require(layout.first_phase_address == layout.prompt_address + 1 &&
+              layout.second_phase_address == layout.first_phase_address + 1,
+          "manual UI prompt and phases should occupy consecutive command cells");
+
+  const core::AuthoritativePostLayoutControlFlow control =
+      core::build_post_layout_control_flow(compiled.items);
+  require(control.proved && control.reasons.empty(),
+          "manual UI probe should retain authoritative post-layout flow");
+  const auto has_phase_entry = [&](core::ExternalEntryKind kind, int phase) {
+    return std::any_of(control.external_entries.begin(), control.external_entries.end(),
+                       [&](const core::PostLayoutExternalEntryState& entry) {
+                         return entry.kind == kind && entry.manual_interaction.has_value() &&
+                                entry.manual_interaction->protocol_id == protocol.protocol_id &&
+                                entry.manual_interaction->phase == phase;
+                       });
+  };
+  require(has_phase_entry(core::ExternalEntryKind::ManualSingleStep, 0) &&
+              has_phase_entry(core::ExternalEntryKind::ManualContinuous, 1),
+          "manual UI probe should admit the exact PP and C/P external entries");
+  return layout;
+}
+
+void require_manual_probe_observation(emulator::MK61& calc, int expected_x, int expected_y,
+                                      std::string_view context) {
+  require(display_integer(calc) == expected_x && read_integer(calc, "x") == expected_x &&
+              read_integer(calc, "y") == expected_y,
+          std::string(context) + " should expose X:Y=" + std::to_string(expected_x) + ":" +
+              std::to_string(expected_y));
+}
+
+void enter_manual_probe_pair(emulator::MK61& calc, const ManualProbeLayout& layout,
+                             const std::string& x, const std::string& y, int expected_x,
+                             int expected_y, std::string_view context) {
+  input_ui_number(calc, x);
+  calc.press("ПП");
+  run_to_stop(calc, std::string(context) + " X phase");
+  require(calc.program_counter() == format_address(layout.second_phase_address),
+          std::string(context) + " PP should execute only the first input command");
+
+  input_ui_number(calc, y);
+  calc.press("С/П");
+  run_to_stop(calc, std::string(context) + " Y phase");
+  require(calc.program_counter() == format_address(layout.first_phase_address),
+          std::string(context) + " C/P should return to the same prompt protocol");
+  require_manual_probe_observation(calc, expected_x, expected_y, context);
+}
+
 } // namespace
 
 void tic_tac_toe_4x4_reference_transcript_matches_original_listing() {
@@ -300,6 +484,101 @@ void tic_tac_toe_4x4_reference_ui_normalizes_coordinates() {
   enter_y_and_run(retry, "1", "occupied negative-alias Y phase");
   require(read_integer(retry, "x") == -99999999 && read_integer(retry, "y") == 1,
           "an occupied normalized alias should expose retry pair X=-99999999, Y=raw input Y");
+
+  emulator::MK61 retry_y_alias = boot_reference_game(reference);
+  enter_x(retry_y_alias, "3", "canonical occupied-Y-alias setup X phase");
+  enter_y_and_run(retry_y_alias, "1", "canonical occupied-Y-alias setup Y phase");
+  enter_x(retry_y_alias, "-5.9", "occupied signed/fractional alias X phase");
+  enter_y_and_run(retry_y_alias, "5.9", "occupied signed/fractional alias Y phase");
+  require(read_integer(retry_y_alias, "x") == -99999999 && read_integer(retry_y_alias, "y") == 1,
+          "occupied signed/fractional aliases should expose the retry sentinel with normalized Y");
+}
+
+void tic_tac_toe_4x4_manual_ui_contract_probe_matches_emulator() {
+  CompileOptions options;
+  options.analysis = true;
+  options.budget = 999;
+  options.disable_candidate_search = true;
+  const CompileResult compiled = compile_source(std::string(kManualUiProbe), options);
+  require(compiled.implemented && compiled.diagnostics.empty(),
+          "generic manual UI contract probe should compile without diagnostics");
+  require(!compiled.steps.empty() && compiled.steps.size() <= 105U,
+          "generic manual UI contract probe should remain loadable in at most 105 cells");
+  const ManualProbeLayout layout = require_two_phase_probe_layout(compiled);
+
+  emulator::MK61 calc;
+  const emulator::ProgramLoadResult loaded = calc.load_program(step_opcodes(compiled.steps));
+  require(loaded.diagnostics.empty(),
+          "generic manual UI contract probe should load without truncation");
+  for (const PreloadReport& preload : compiled.preloads)
+    calc.set_register(preload.register_name, mk61_hex_literal(preload.value));
+
+  calc.press_sequence({"В/О", "С/П"});
+  run_to_stop(calc, "generic manual UI cold prompt");
+  require(calc.program_counter() == format_address(layout.first_phase_address),
+          "cold prompt should wait at the first PP input phase");
+  require_manual_probe_observation(calc, 0, 0, "cold prompt");
+
+  enter_manual_probe_pair(calc, layout, "-1.9", "5.9", 3, 1, "signed fractional pair");
+  enter_manual_probe_pair(calc, layout, "7.8", "1.2", -99999999, 1, "normalized-alias retry");
+  enter_manual_probe_pair(calc, layout, "5.9", "-2.9", 1, 2, "accepted pair after retry");
+  enter_manual_probe_pair(calc, layout, "0", "-4.9", 4, 4,
+                          "zero and negative-multiple boundary pair");
+  enter_manual_probe_pair(calc, layout, "4.8", "0", -99999999, 4,
+                          "zero boundary normalized-alias retry");
+}
+
+void tic_tac_toe_4x4_source_manual_ui_contract_is_explicit() {
+  const std::filesystem::path source =
+      fixture_root() / "examples" / "pending-optimizer" / "tic-tac-toe-4x4.mkpro";
+  const std::string text = read_text(source);
+  CompileOptions options;
+  options.analysis = true;
+  options.budget = 999;
+  options.disable_candidate_search = true;
+  const CompileResult compiled = compile_source(text, options);
+  require(compiled.implemented && compiled.diagnostics.empty(),
+          "full source UI contract should compile through generic lowering");
+  require(compiled.interaction_protocols.size() == 1U &&
+              compiled.interaction_protocols.front().phases.size() == 2U &&
+              !compiled.interaction_protocols.front().phases.at(0).admitted_domain.known() &&
+              !compiled.interaction_protocols.front().phases.at(1).admitted_domain.known(),
+          "full source should retain two unbounded logical input phases without pinning registers");
+
+  const int protocol_id = compiled.interaction_protocols.front().protocol_id;
+  const MachineItem* prompt = nullptr;
+  const MachineItem* first = nullptr;
+  const MachineItem* second = nullptr;
+  int prompt_count = 0;
+  int first_count = 0;
+  int second_count = 0;
+  for (std::size_t item_index = 0; item_index < compiled.items.size(); ++item_index) {
+    const MachineItem& item = compiled.items.at(item_index);
+    if (!item.manual_interaction.has_value() ||
+        item.manual_interaction->protocol_id != protocol_id) {
+      continue;
+    }
+    const ManualInteractionAnchor& anchor = *item.manual_interaction;
+    if (anchor.kind == ManualInteractionAnchorKind::PromptStop) {
+      prompt = &item;
+      ++prompt_count;
+    } else if (anchor.phase == 0) {
+      first = &item;
+      ++first_count;
+    } else if (anchor.phase == 1) {
+      second = &item;
+      ++second_count;
+    }
+  }
+  require(prompt_count == 1 && prompt != nullptr && prompt->kind == MachineItemKind::Op &&
+              prompt->opcode == 0x50 && prompt->stop_disposition == StopDisposition::Resumable,
+          "full source should retain one typed resumable UI prompt");
+  require(first_count == 1 && first != nullptr && first->kind == MachineItemKind::Op &&
+              first->manual_interaction->kind == ManualInteractionAnchorKind::SingleStepCommand,
+          "full source should retain one typed PP single-step phase");
+  require(second_count == 1 && second != nullptr && second->kind == MachineItemKind::Op &&
+              second->manual_interaction->kind == ManualInteractionAnchorKind::ContinuousResume,
+          "full source should retain one typed continuous C/P phase");
 }
 
 void tic_tac_toe_4x4_source_uses_reference_angle_mode() {

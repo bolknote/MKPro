@@ -5,7 +5,9 @@
 #include "mkpro/core/constant_folder.hpp"
 #include "mkpro/core/cyclic_end_return.hpp"
 #include "mkpro/core/dark_side_suffix_helper.hpp"
+#include "mkpro/core/flow_sensitive_call_domains.hpp"
 #include "mkpro/core/helper_invariant_recall_hoist.hpp"
+#include "mkpro/core/helper_semantic_alias.hpp"
 #include "mkpro/core/emit/lowering/coord_list.hpp"
 #include "mkpro/core/emit/lowering/display.hpp"
 #include "mkpro/core/emit/lowering/expr.hpp"
@@ -798,6 +800,18 @@ bool expression_pure_for_substitution(const Expression& expression) {
                      [](const Expression& arg) { return expression_pure_for_substitution(arg); });
 }
 
+bool x_param_grid_norm_call(const Expression& expression, const std::string& parameter) {
+  if (expression.kind != "call")
+    return false;
+  const std::string callee = lower_ascii(expression.callee);
+  if (callee != "grid_norm" && callee != "grid_wrap")
+    return false;
+  if (!grid_norm_call_width(expression.args).has_value())
+    return false;
+  const Expression& value = expression.args.front();
+  return value.kind == "identifier" && value.name == parameter;
+}
+
 bool expression_can_consume_identifier_from_x(const Expression& expression,
                                               const std::string& name) {
   if (!expression_pure_for_substitution(expression))
@@ -821,6 +835,8 @@ bool expression_can_consume_identifier_from_x(const Expression& expression,
            expression_can_consume_identifier_from_x(*expression.right, name) &&
            expression_pure_for_substitution(*expression.left);
   }
+  if (x_param_grid_norm_call(expression, name))
+    return true;
   const std::optional<StackUnaryTransformCall> transform = stack_unary_transform_call(expression);
   return transform.has_value() && transform->arg != nullptr &&
          expression_can_consume_identifier_from_x(*transform->arg, name);
@@ -10221,6 +10237,8 @@ bool x_param_expression_preserves_caller_y_for_stack_analysis(const Expression& 
            x_param_expression_preserves_caller_y_for_stack_analysis(*expression.right, param) &&
            analysis_simple_stack_load(*expression.left);
   }
+  if (x_param_grid_norm_call(expression, param))
+    return true;
   if (const std::optional<StackUnaryTransformCall> transform =
           stack_unary_transform_call(expression)) {
     return transform->arg != nullptr &&
@@ -19199,6 +19217,8 @@ bool compile_x_param_first_expression(LoweringContext& context, const Expression
     context.emitter.current_x_aliases.clear();
     return true;
   }
+  if (x_param_grid_norm_call(expression, param))
+    return lower_expression_to_x(context, expression);
   if (const std::optional<StackUnaryTransformCall> transform =
           stack_unary_transform_call(expression)) {
     if (transform->arg == nullptr)
@@ -22061,7 +22081,8 @@ bool x_param_proc_preserves_caller_y(const LoweringContext& context, const std::
     return false;
   const Expression expression =
       parse_expression(*lowering_it->second.first.expr, lowering_it->second.first.line);
-  return expression_preserves_previous_x_as_y_for_packed_line(expression);
+  return x_param_grid_norm_call(expression, lowering_it->second.param) ||
+         expression_preserves_previous_x_as_y_for_packed_line(expression);
 }
 
 void emit_x_param_indexed_fractional_report_tail(
@@ -32712,6 +32733,436 @@ std::map<std::string, int> collect_rule_call_counts(const V2Program& program) {
       counts[rule.name] = count;
   }
   return counts;
+}
+
+std::optional<std::int64_t> helper_alias_integer_literal(const Expression& expression) {
+  if (expression.kind != "number")
+    return std::nullopt;
+  const std::string& text = expression.raw.empty() ? expression.text : expression.raw;
+  std::int64_t value = 0;
+  const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+  if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size())
+    return std::nullopt;
+  return value;
+}
+
+struct HelperAliasDirectCallFacts {
+  bool valid = true;
+  int count = 0;
+  core::ExactIntegralDomain domain;
+  bool decimal_derivation_exact = false;
+  bool zero_canonical_positive = false;
+};
+
+core::HelperSemanticExprPtr helper_alias_semantic_expression(const Expression& expression,
+                                                             const std::string& parameter) {
+  if (expression.kind == "identifier" && expression.name == parameter)
+    return core::helper_semantic_input();
+  if (const auto literal = helper_alias_integer_literal(expression))
+    return core::helper_semantic_integer(*literal);
+  if (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr) {
+    const auto value = helper_alias_semantic_expression(*expression.expr, parameter);
+    return value ? core::helper_semantic_binary(core::HelperSemanticOp::Subtract,
+                                                core::helper_semantic_integer(0), value)
+                 : nullptr;
+  }
+  if (expression.kind == "binary" && expression.left != nullptr && expression.right != nullptr) {
+    const auto left = helper_alias_semantic_expression(*expression.left, parameter);
+    const auto right = helper_alias_semantic_expression(*expression.right, parameter);
+    if (!left || !right)
+      return nullptr;
+    std::optional<core::HelperSemanticOp> op;
+    if (expression.op == "+")
+      op = core::HelperSemanticOp::Add;
+    if (expression.op == "-")
+      op = core::HelperSemanticOp::Subtract;
+    if (expression.op == "*")
+      op = core::HelperSemanticOp::Multiply;
+    if (expression.op == "/")
+      op = core::HelperSemanticOp::Divide;
+    return op ? core::helper_semantic_binary(*op, left, right) : nullptr;
+  }
+  if (expression.kind == "call" && expression.args.size() == 1U) {
+    const auto value = helper_alias_semantic_expression(expression.args.front(), parameter);
+    if (!value)
+      return nullptr;
+    const std::string callee = lower_ascii(expression.callee);
+    if (callee == "int")
+      return core::helper_semantic_unary(core::HelperSemanticOp::Truncate, value);
+    if (callee == "frac")
+      return core::helper_semantic_unary(core::HelperSemanticOp::Fraction, value);
+  }
+  return nullptr;
+}
+
+struct HelperAliasMachineAbiFacts {
+  bool proved = false;
+  std::string x1_effect_key;
+};
+
+HelperAliasMachineAbiFacts
+helper_alias_balanced_unary_machine_abi(const std::vector<MachineItem>& items,
+                                        const std::string& entry_label,
+                                        bool require_start_boundary = true) {
+  const auto entry = std::find_if(items.begin(), items.end(), [&](const MachineItem& item) {
+    return item.kind == MachineItemKind::Label && item.name == entry_label &&
+           (!require_start_boundary ||
+            (item.procedure_boundary == "start" && item.procedure_name == entry_label));
+  });
+  if (entry == items.end())
+    return {};
+  std::size_t cursor = static_cast<std::size_t>(std::distance(items.begin(), entry)) + 1U;
+  int relative_depth = 0;
+  int number_groups = 0;
+  int binary_ops = 0;
+  bool entering_number = false;
+  bool seen_opcode = false;
+  std::string fingerprint;
+  for (; cursor < items.size(); ++cursor) {
+    const MachineItem& item = items.at(cursor);
+    if (item.kind == MachineItemKind::Label) {
+      if (seen_opcode && item.procedure_boundary == "start")
+        return {};
+      continue;
+    }
+    if (item.kind != MachineItemKind::Op || item.raw || item.manual_interaction.has_value())
+      return {};
+    seen_opcode = true;
+    fingerprint +=
+        fingerprint.empty() ? std::to_string(item.opcode) : "," + std::to_string(item.opcode);
+    if (item.opcode == 0x52) {
+      return relative_depth == 0 && number_groups > 0 && binary_ops == number_groups
+                 ? HelperAliasMachineAbiFacts{.proved = true,
+                                              .x1_effect_key = std::move(fingerprint)}
+                 : HelperAliasMachineAbiFacts{};
+    }
+    if (item.opcode >= 0x00 && item.opcode <= 0x09) {
+      if (!entering_number) {
+        ++relative_depth;
+        ++number_groups;
+        entering_number = true;
+      }
+      continue;
+    }
+    if (item.opcode >= 0x0a && item.opcode <= 0x0c) {
+      if (!entering_number)
+        return {};
+      continue;
+    }
+    entering_number = false;
+    if (item.opcode >= 0x10 && item.opcode <= 0x13) {
+      --relative_depth;
+      ++binary_ops;
+      if (relative_depth < 0)
+        return {};
+      continue;
+    }
+    const OpcodeInfo& opcode = opcode_by_code(item.opcode);
+    const bool register_access = (item.opcode >= 0x40 && item.opcode <= 0x4f) ||
+                                 (item.opcode >= 0x60 && item.opcode <= 0x6f);
+    if (opcode.takes_address || opcode.stack_effect != StackEffect::Preserves ||
+        opcode.x2_effect == X2Effect::Restores || opcode.x2_effect == X2Effect::Unknown ||
+        register_access || (item.opcode & 0xf0) >= 0x70)
+      return {};
+  }
+  return {};
+}
+
+std::optional<std::string> helper_alias_body_fingerprint(const std::vector<MachineItem>& items,
+                                                         const std::string& entry_label) {
+  const auto entry = std::find_if(items.begin(), items.end(), [&](const MachineItem& item) {
+    return item.kind == MachineItemKind::Label && item.name == entry_label;
+  });
+  if (entry == items.end())
+    return std::nullopt;
+  std::string fingerprint;
+  for (auto item = std::next(entry); item != items.end(); ++item) {
+    if (item->kind != MachineItemKind::Op)
+      continue;
+    fingerprint +=
+        fingerprint.empty() ? std::to_string(item->opcode) : "," + std::to_string(item->opcode);
+    if (item->opcode == 0x52)
+      return fingerprint;
+  }
+  return std::nullopt;
+}
+
+struct HelperAliasMachineCallFacts {
+  bool valid = false;
+  std::vector<std::size_t> calls;
+};
+
+HelperAliasMachineCallFacts helper_alias_machine_calls(const std::vector<MachineItem>& items,
+                                                       const std::string& entry_label) {
+  std::map<std::string, int> labels;
+  std::set<std::string> duplicates;
+  int address = 0;
+  for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
+    if (items.at(item_index).kind == MachineItemKind::Label) {
+      if (!labels.emplace(items.at(item_index).name, address).second)
+        duplicates.insert(items.at(item_index).name);
+    } else {
+      ++address;
+    }
+  }
+  const auto entry = labels.find(entry_label);
+  if (entry == labels.end() || duplicates.contains(entry_label))
+    return {};
+  HelperAliasMachineCallFacts result{.valid = true};
+  for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
+    const MachineItem& item = items.at(item_index);
+    if (item.kind == MachineItemKind::Op &&
+        ((item.opcode & 0xf0) == 0x70 || (item.opcode & 0xf0) == 0x80 ||
+         (item.opcode & 0xf0) == 0x90 || (item.opcode & 0xf0) == 0xa0 ||
+         (item.opcode & 0xf0) == 0xc0 || (item.opcode & 0xf0) == 0xe0) &&
+        item.indirect_flow_targets.has_value()) {
+      for (const IrTarget& target : *item.indirect_flow_targets) {
+        const auto* label = std::get_if<std::string>(&target);
+        if (label != nullptr && labels.contains(*label) && labels.at(*label) == entry->second)
+          result.valid = false;
+      }
+    }
+    if (item.kind != MachineItemKind::Address)
+      continue;
+    const auto* label = std::get_if<std::string>(&item.target);
+    if (label == nullptr || !labels.contains(*label) || labels.at(*label) != entry->second)
+      continue;
+    std::size_t command = item_index;
+    while (command > 0) {
+      --command;
+      if (items.at(command).kind != MachineItemKind::Label)
+        break;
+    }
+    if (items.at(command).kind != MachineItemKind::Op || items.at(command).opcode != 0x53) {
+      result.valid = false;
+      continue;
+    }
+    result.calls.push_back(command);
+  }
+  std::sort(result.calls.begin(), result.calls.end());
+  result.calls.erase(std::unique(result.calls.begin(), result.calls.end()), result.calls.end());
+  return result;
+}
+
+std::vector<core::HelperSemanticContract>
+helper_semantic_alias_contracts(const LoweringContext& context, const V2Program& program,
+                                std::vector<MachineItem>& items) {
+  std::vector<core::HelperSemanticContract> contracts;
+  std::set<std::string> rule_names;
+  for (const V2Rule& rule : program.rules)
+    rule_names.insert(rule.name);
+  const std::map<std::string, core::FlowSensitiveCallDomainProof> flow_domains =
+      core::prove_flow_sensitive_call_domains(program, rule_names);
+  std::uint64_t next_origin = 1;
+  for (const MachineItem& item : items)
+    for (const std::uint64_t origin : item.semantic_call_origins)
+      next_origin = std::max(next_origin, origin + 1U);
+  const std::map<std::string, int> robust_counts = collect_rule_call_counts(program);
+  for (const V2Rule& rule : program.rules) {
+    const auto lowering = context.x_param_procs.find(rule.name);
+    if (lowering == context.x_param_procs.end() || lowering->second.kind != "expr" ||
+        rule.params.size() != 1U || rule.body.size() != 1U ||
+        !lowering->second.first.target.has_value() || !lowering->second.first.expr.has_value() ||
+        !context.stack_only_state_fields.contains(*lowering->second.first.target))
+      continue;
+    HelperAliasDirectCallFacts source_calls;
+    if (const auto proof = flow_domains.find(rule.name); proof != flow_domains.end()) {
+      source_calls.valid = proof->second.valid;
+      source_calls.count = proof->second.call_sites;
+      source_calls.domain = proof->second.domain;
+      source_calls.decimal_derivation_exact = proof->second.decimal_derivation_exact;
+      source_calls.zero_canonical_positive = proof->second.zero_canonical_positive;
+    } else {
+      source_calls.valid = false;
+    }
+    const int robust_count = robust_counts.contains(rule.name) ? robust_counts.at(rule.name) : 0;
+    const HelperAliasMachineCallFacts machine_calls =
+        helper_alias_machine_calls(items, function_label(rule.name));
+    const HelperAliasMachineAbiFacts source_abi =
+        helper_alias_balanced_unary_machine_abi(items, function_label(rule.name));
+    const std::optional<std::string> source_body_key =
+        core::helper_semantic_alias_body_key(items, function_label(rule.name));
+    const bool source_domain_contains_zero = source_calls.domain.valid() &&
+                                             source_calls.domain.minimum <= 0 &&
+                                             source_calls.domain.maximum >= 0;
+    if (!source_calls.valid || !source_calls.domain.valid() ||
+        !source_calls.decimal_derivation_exact ||
+        (source_domain_contains_zero && !source_calls.zero_canonical_positive) ||
+        source_calls.count == 0 || source_calls.count != robust_count || !machine_calls.valid ||
+        machine_calls.calls.size() != static_cast<std::size_t>(source_calls.count) ||
+        !source_abi.proved || source_abi.x1_effect_key.empty() || !source_body_key.has_value())
+      continue;
+    Expression expression;
+    try {
+      expression = parse_expression(*lowering->second.first.expr, lowering->second.first.line);
+    } catch (const std::exception&) {
+      continue;
+    }
+    const auto semantic = helper_alias_semantic_expression(expression, rule.params.front());
+    if (!semantic || !core::helper_semantic_decimal_execution_exact(semantic, source_calls.domain))
+      continue;
+
+    core::HelperSemanticContract source;
+    source.entry_label = function_label(rule.name);
+    source.expression = semantic;
+    source.admitted_input = source_calls.domain;
+    source.input_decimal_derivation_exact = source_calls.decimal_derivation_exact;
+    source.input_zero_canonical_positive = source_calls.zero_canonical_positive;
+    source.all_source_entries_accounted = true;
+    source.admitted_call_items = machine_calls.calls;
+    source.procedure_boundary_id = function_label(rule.name);
+    for (const std::size_t call_item : machine_calls.calls) {
+      const std::uint64_t origin = next_origin++;
+      items.at(call_item).semantic_call_origins.push_back(origin);
+      source.admitted_call_origins.push_back(origin);
+    }
+    source.decimal_execution_exact = true;
+    source.hidden_x2_return_sync_proved = true;
+    source.x1_effect_proved = true;
+    source.x1_effect_key = source_abi.x1_effect_key;
+    source.certified_body_key = *source_body_key;
+    contracts.push_back(source);
+
+    for (const auto& [width, target_label] : context.grid_norm_helper_labels) {
+      const auto target_semantic =
+          core::helper_semantic_one_based_modulo(core::helper_semantic_input(), width);
+      if (!core::helper_semantic_decimal_execution_exact(target_semantic, source_calls.domain))
+        continue;
+      const std::optional<std::string> target_fingerprint =
+          helper_alias_body_fingerprint(items, target_label);
+      const std::optional<std::string> target_body_key =
+          core::helper_semantic_alias_body_key(items, target_label);
+      if (!target_fingerprint.has_value() || target_fingerprint->empty() ||
+          !target_body_key.has_value())
+        continue;
+      core::HelperSemanticContract target;
+      target.entry_label = target_label;
+      target.expression = target_semantic;
+      target.admitted_input = source_calls.domain;
+      target.input_decimal_derivation_exact = source_calls.decimal_derivation_exact;
+      target.input_zero_canonical_positive = source_calls.zero_canonical_positive;
+      target.decimal_execution_exact = true;
+      target.hidden_x2_return_sync_proved = true;
+      target.x1_effect_proved = true;
+      target.x1_effect_key = *target_fingerprint;
+      target.certified_body_key = *target_body_key;
+      contracts.push_back(std::move(target));
+    }
+  }
+  return contracts;
+}
+
+std::optional<std::vector<core::HelperSemanticContract>>
+refresh_helper_semantic_alias_contracts(const std::vector<MachineItem>& items,
+                                        std::vector<core::HelperSemanticContract> contracts,
+                                        std::string* rejection = nullptr) {
+  const auto reject =
+      [&](std::string why) -> std::optional<std::vector<core::HelperSemanticContract>> {
+    if (rejection != nullptr)
+      *rejection = std::move(why);
+    return std::nullopt;
+  };
+  std::map<std::string, int> label_addresses;
+  std::set<std::string> duplicate_labels;
+  int address = 0;
+  for (const MachineItem& item : items) {
+    if (item.kind == MachineItemKind::Label) {
+      if (!label_addresses.emplace(item.name, address).second)
+        duplicate_labels.insert(item.name);
+    } else {
+      ++address;
+    }
+  }
+  const auto resolved_label = [&](const std::string& label) -> std::optional<int> {
+    const auto found = label_addresses.find(label);
+    return found == label_addresses.end() || duplicate_labels.contains(label)
+               ? std::nullopt
+               : std::optional<int>{found->second};
+  };
+
+  for (core::HelperSemanticContract& contract : contracts) {
+    const std::optional<std::string> body_key =
+        core::helper_semantic_alias_body_key(items, contract.entry_label);
+    if (contract.certified_body_key.empty() || !body_key.has_value() ||
+        *body_key != contract.certified_body_key)
+      return reject("post-IR helper body differs from its immutable certificate");
+    if (contract.admitted_call_origins.empty()) {
+      const std::optional<std::string> fingerprint =
+          helper_alias_body_fingerprint(items, contract.entry_label);
+      if (!fingerprint.has_value() || fingerprint->empty() ||
+          *fingerprint != contract.x1_effect_key)
+        return reject("post-IR helper X1 effect differs from its immutable certificate");
+      continue;
+    }
+
+    const std::set<std::uint64_t> admitted(contract.admitted_call_origins.begin(),
+                                           contract.admitted_call_origins.end());
+    if (admitted.size() != contract.admitted_call_origins.size())
+      return reject("duplicate admitted origins");
+    std::map<std::uint64_t, int> occurrences;
+    std::vector<std::size_t> call_items;
+    std::optional<int> common_address;
+    std::optional<std::string> common_label;
+    for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
+      const MachineItem& item = items.at(item_index);
+      bool carries_admitted = false;
+      for (const std::uint64_t origin : item.semantic_call_origins) {
+        if (!admitted.contains(origin))
+          continue;
+        carries_admitted = true;
+        ++occurrences[origin];
+      }
+      if (!carries_admitted)
+        continue;
+      if (item.kind != MachineItemKind::Op)
+        return reject("origin reached a non-op item");
+
+      std::optional<std::string> target_label;
+      if (item.opcode == 0x53) {
+        std::size_t operand = item_index + 1U;
+        while (operand < items.size() && items.at(operand).kind == MachineItemKind::Label)
+          ++operand;
+        if (operand >= items.size() || items.at(operand).kind != MachineItemKind::Address)
+          return reject("origin direct call has no operand");
+        if (const auto* label = std::get_if<std::string>(&items.at(operand).target))
+          target_label = *label;
+      } else if ((item.opcode & 0xf0) == 0xa0 && item.indirect_flow_targets.has_value() &&
+                 item.indirect_flow_targets->size() == 1U) {
+        if (const auto* label = std::get_if<std::string>(&item.indirect_flow_targets->front()))
+          target_label = *label;
+      }
+      if (!target_label.has_value())
+        return reject("origin is not on a symbolic direct/indirect call");
+      const std::optional<int> target_address = resolved_label(*target_label);
+      if (!target_address.has_value() ||
+          (common_address.has_value() && *common_address != *target_address))
+        return reject("origin calls do not share one physical entry");
+      common_address = *target_address;
+      if (!common_label.has_value())
+        common_label = *target_label;
+      call_items.push_back(item_index);
+    }
+    for (const std::uint64_t origin : admitted)
+      if (occurrences[origin] != 1)
+        return reject("origin was lost or duplicated by IR passes");
+    if (call_items.empty() || !common_label.has_value())
+      return reject("no physical origin-carrying calls remain");
+    const std::optional<int> certified_entry = resolved_label(contract.procedure_boundary_id);
+    if (!certified_entry.has_value() || !common_address.has_value() ||
+        *certified_entry != *common_address)
+      return reject("physical target is not the certified procedure entry");
+    std::sort(call_items.begin(), call_items.end());
+    call_items.erase(std::unique(call_items.begin(), call_items.end()), call_items.end());
+    contract.entry_label = contract.procedure_boundary_id;
+    contract.admitted_call_items = std::move(call_items);
+    contract.all_source_entries_accounted = true;
+    const HelperAliasMachineAbiFacts source_abi =
+        helper_alias_balanced_unary_machine_abi(items, contract.entry_label, true);
+    if (!source_abi.proved || source_abi.x1_effect_key.empty() ||
+        source_abi.x1_effect_key != contract.x1_effect_key)
+      return reject("post-IR helper no longer has the certified balanced ABI");
+  }
+  return contracts;
 }
 
 std::vector<const V2Rule*> function_rule_emission_order(LoweringContext& context,
@@ -46628,10 +47079,42 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
     pass_options.aggressive_indirect_call_threshold = true;
   merge_planned_preloaded_constant_registers(pass_options, context);
 
+  std::vector<MachineItem> ir_pass_input = context.emitter.items;
+  std::vector<core::HelperSemanticContract> semantic_alias_contracts;
+  if (!exact_decimal_series && ast.v2.has_value()) {
+    semantic_alias_contracts = helper_semantic_alias_contracts(context, *ast.v2, ir_pass_input);
+    if (options.analysis && !semantic_alias_contracts.empty()) {
+      int certified_call_sites = 0;
+      core::ExactIntegralDomain certified_domain;
+      for (const core::HelperSemanticContract& contract : semantic_alias_contracts) {
+        if (contract.admitted_call_origins.empty())
+          continue;
+        certified_call_sites += static_cast<int>(contract.admitted_call_origins.size());
+        if (!certified_domain.valid()) {
+          certified_domain = contract.admitted_input;
+        } else {
+          certified_domain.minimum =
+              std::min(certified_domain.minimum, contract.admitted_input.minimum);
+          certified_domain.maximum =
+              std::max(certified_domain.maximum, contract.admitted_input.maximum);
+        }
+      }
+      context.optimizations.push_back(OptimizationReport{
+          .name = "helper-semantic-alias-domain-proof",
+          .detail = "Certified " + std::to_string(certified_call_sites) +
+                    " direct helper call-site(s) with finite integral union [" +
+                    std::to_string(certified_domain.minimum) + ", " +
+                    std::to_string(certified_domain.maximum) + "]; issued " +
+                    std::to_string(semantic_alias_contracts.size()) +
+                    " typed semantic contract(s) from flow-sensitive interprocedural proof.",
+      });
+    }
+  }
+
   trace_stage("ir-passes");
   const core::passes::RunPassesResult optimized =
-      exact_decimal_series ? core::passes::RunPassesResult{.items = context.emitter.items}
-                           : core::passes::run_ir_passes(context.emitter.items, pass_options);
+      exact_decimal_series ? core::passes::RunPassesResult{.items = ir_pass_input}
+                           : core::passes::run_ir_passes(ir_pass_input, pass_options);
   result.registers = context.registers;
   hide_internal_constant_report_registers(result.registers);
   if (ast.v2.has_value())
@@ -47295,16 +47778,54 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
       const core::AuthoritativePostLayoutControlFlow control_flow =
           core::build_post_layout_control_flow(post_layout_items, control_options);
       if (control_flow.proved) {
-        const core::NaturalTargetComponentLayoutResult natural_layout =
-            core::optimize_natural_target_component_layout(
-                post_layout_items, effective_preloads, control_flow,
-                core::NaturalTargetComponentLayoutOptions{
-                    .address_space_model = address_space_model_for_options(options),
-                });
-        if (natural_layout.applied > 0 && natural_layout.plan.final_artifact_proved &&
-            natural_layout.removed_cells > 0 &&
-            core::machine_cell_count(natural_layout.items) <
-                core::machine_cell_count(post_layout_items)) {
+        const core::NaturalTargetComponentLayoutOptions natural_options{
+            .address_space_model = address_space_model_for_options(options),
+        };
+        std::optional<core::NaturalTargetComponentLayoutResult> chosen_layout;
+        std::optional<core::HelperSemanticAliasProof> chosen_alias;
+        const auto consider_layout = [&](core::NaturalTargetComponentLayoutResult candidate,
+                                         std::optional<core::HelperSemanticAliasProof> alias) {
+          if (candidate.applied <= 0 || !candidate.plan.final_artifact_proved ||
+              candidate.removed_cells <= 0 ||
+              core::machine_cell_count(candidate.items) >=
+                  core::machine_cell_count(post_layout_items))
+            return;
+          if (!chosen_layout.has_value() || core::machine_cell_count(candidate.items) <
+                                                core::machine_cell_count(chosen_layout->items)) {
+            chosen_layout = std::move(candidate);
+            chosen_alias = std::move(alias);
+          }
+        };
+
+        consider_layout(core::optimize_natural_target_component_layout(
+                            post_layout_items, effective_preloads, control_flow, natural_options),
+                        std::nullopt);
+
+        const auto refreshed_contracts =
+            refresh_helper_semantic_alias_contracts(post_layout_items, semantic_alias_contracts);
+        if (refreshed_contracts.has_value()) {
+          core::HelperSemanticAliasOptions alias_options;
+          alias_options.address_space_model = address_space_model_for_options(options);
+          alias_options.main_entry = 0;
+          alias_options.empty_return_target = 1;
+          alias_options.effective_preloads = effective_preloads;
+          alias_options.defer_preload_rebind = true;
+          alias_options.identity_check_numeric_indirect_flow = true;
+          const core::HelperSemanticAliasResult aliased = core::optimize_helper_semantic_alias(
+              post_layout_items, *refreshed_contracts, alias_options);
+          if (aliased.applied > 0 && aliased.proof.rewrite_proved &&
+              aliased.proof.preload_rebind_deferred && aliased.proof.final_control_flow_proved &&
+              core::machine_cell_count(aliased.items) <
+                  core::machine_cell_count(post_layout_items)) {
+            consider_layout(core::optimize_natural_target_component_layout(
+                                aliased.items, effective_preloads, aliased.proof.final_control_flow,
+                                natural_options),
+                            aliased.proof);
+          }
+        }
+
+        if (chosen_layout.has_value()) {
+          core::NaturalTargetComponentLayoutResult& natural_layout = *chosen_layout;
           post_layout_items = natural_layout.items;
           final_layout_effective_preloads = natural_layout.preloads;
           for (const PreloadReport& preload : natural_layout.preloads)
@@ -47320,6 +47841,18 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
           apply_preload_overrides(stop_tail_preloads);
           apply_preload_overrides(post_layout_flow_preloads);
           remove_preloaded_indirect_flow_comment_annotations(post_layout_items);
+          if (chosen_alias.has_value()) {
+            post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+                .name = "helper-semantic-alias",
+                .detail = "Redirected " + std::to_string(chosen_alias->calls.size()) +
+                          " complete physical call edge(s), carrying all " +
+                          std::to_string(chosen_alias->source_call_origins) +
+                          " opaque source-call origin(s), and removed a redundant " +
+                          std::to_string(chosen_alias->removed_body_cells) +
+                          "-cell unary-X helper before atomic downstream preload/layout "
+                          "rebinding and final-artifact proof.",
+            });
+          }
           post_layout_optimizations.push_back(core::passes::AppliedOptimization{
               .name = "natural-target-component-layout",
               .detail = "Placed a proved helper at the natural target of stable R" +
@@ -47332,6 +47865,9 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
       }
     }
   }
+
+  for (MachineItem& item : post_layout_items)
+    item.semantic_call_origins.clear();
 
   const std::vector<PreloadReport> comment_flow_preloads =
       preloaded_indirect_flow_comment_preloads(post_layout_items, options);
@@ -63557,44 +64093,99 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
               << " best_key=" << implemented_candidate_key(best_options) << "\n";
   }
 
-  // Candidate discovery must observe the ordinary layouts it is comparing:
-  // changing helper addresses inside a probe changes the next round's derived
-  // selector candidates and makes the result depend on enumeration order.
-  // Recompile only the selected option set and apply the proof-gated final
-  // component layout once, after search has converged.
-  if (best.implemented && best.steps.size() > official_program_limit) {
-    try {
-      CompileOptions finalized_options = best_options;
-      CompileResult finalized = compile_source_once(
-          source, finalized_options, source_has_entered,
-          /*apply_final_layout_size_rescue=*/true);
-      if (!finalized.implemented &&
-          can_retry_lowering_attempt_in_analysis(finalized, finalized_options)) {
-        finalized_options.analysis = true;
-        finalized = compile_source_once(source, finalized_options, source_has_entered,
-                                        /*apply_final_layout_size_rescue=*/true);
+  // Candidate discovery must observe ordinary layouts: changing helper
+  // addresses inside a probe changes derived selector candidates and makes the
+  // search depend on enumeration order.  Once discovery is complete, however,
+  // rank the proof-gated final layouts of the incumbent, original options, and
+  // every curated candidate. A candidate whose ordinary layout has an
+  // out-of-range direct target can become both valid and smaller only after the
+  // final component layout, so finalizing just the ordinary incumbent would
+  // miss it.
+  if (!best.implemented || best.steps.size() > official_program_limit) {
+    struct FinalLayoutCandidate {
+      CompileOptions options;
+      std::string name;
+      std::string detail;
+    };
+    std::vector<FinalLayoutCandidate> finalists;
+    std::set<std::string> finalist_keys;
+    const auto add_finalist = [&](const CompileOptions& finalist_options, std::string name,
+                                  std::string detail) {
+      if (!finalist_keys.insert(implemented_candidate_key(finalist_options)).second)
+        return;
+      finalists.push_back(FinalLayoutCandidate{
+          .options = finalist_options,
+          .name = std::move(name),
+          .detail = std::move(detail),
+      });
+    };
+    add_finalist(best_options, {}, {});
+    add_finalist(options, {}, {});
+    for (const CandidateSpec& candidate : candidates)
+      add_finalist(candidate.options, candidate.name, candidate.detail);
+
+    std::optional<CompileResult> finalized_best;
+    std::optional<FinalLayoutCandidate> selected_finalist;
+    for (const FinalLayoutCandidate& finalist : finalists) {
+      try {
+        CompileOptions finalized_options = finalist.options;
+        CompileResult finalized = compile_source_once(source, finalized_options, source_has_entered,
+                                                      /*apply_final_layout_size_rescue=*/true);
+        if (!finalized.implemented &&
+            can_retry_lowering_attempt_in_analysis(finalized, finalized_options)) {
+          finalized_options.analysis = true;
+          finalized = compile_source_once(source, finalized_options, source_has_entered,
+                                          /*apply_final_layout_size_rescue=*/true);
+        }
+        const bool final_static_proof_accepted =
+            !candidate_needs_static_proof_gate(finalized_options) ||
+            !optimizer_static_gate_rejection_reason(finalized_options, finalized).has_value();
+        if (!finalized.implemented || !final_static_proof_accepted ||
+            (finalized_best.has_value() &&
+             !candidate_beats_best(finalized, *finalized_best, options))) {
+          continue;
+        }
+        finalized_best = std::move(finalized);
+        selected_finalist = finalist;
+      } catch (const std::exception&) {
+        // An independently finalized candidate is opportunistic; other proved
+        // finalists and the ordinary incumbent remain available.
       }
-      const bool final_static_proof_accepted =
-          !candidate_needs_static_proof_gate(finalized_options) ||
-          !optimizer_static_gate_rejection_reason(finalized_options, finalized).has_value();
-      if (finalized.implemented && final_static_proof_accepted &&
-          finalized.steps.size() <= best.steps.size()) {
+    }
+
+    if (finalized_best.has_value() && selected_finalist.has_value() &&
+        (!best.implemented || finalized_best->steps.size() <= best.steps.size())) {
+      const std::string selected_key = implemented_candidate_key(selected_finalist->options);
+      if (selected_key == implemented_candidate_key(best_options)) {
         for (const OptimizationReport& optimization : best.optimizations) {
-          const bool present =
-              std::any_of(finalized.optimizations.begin(), finalized.optimizations.end(),
-                          [&](const OptimizationReport& existing) {
-                            return existing.name == optimization.name &&
-                                   existing.detail == optimization.detail;
-                          });
+          const bool present = std::any_of(
+              finalized_best->optimizations.begin(), finalized_best->optimizations.end(),
+              [&](const OptimizationReport& existing) {
+                return existing.name == optimization.name && existing.detail == optimization.detail;
+              });
           if (!present)
-            finalized.optimizations.push_back(optimization);
+            finalized_best->optimizations.push_back(optimization);
         }
         for (const CandidateReport& rejected : best.rejected_candidates)
-          append_candidate_report_once(finalized.rejected_candidates, rejected);
-        best = std::move(finalized);
+          append_candidate_report_once(finalized_best->rejected_candidates, rejected);
+      } else if (!selected_finalist->name.empty()) {
+        const std::string comparison =
+            best.implemented ? std::to_string(finalized_best->steps.size()) + " vs " +
+                                   std::to_string(best.steps.size()) + " ordinary cells"
+                             : "ordinary incumbent failed";
+        finalized_best->optimizations.push_back(OptimizationReport{
+            .name = selected_finalist->name,
+            .detail = selected_finalist->detail + " (" + comparison + ").",
+        });
       }
-    } catch (const std::exception&) {
-      // The already-proved selected candidate remains the safe fallback.
+      finalized_best->optimizations.push_back(OptimizationReport{
+          .name = "late-final-layout-candidate-search",
+          .detail = "Compared " + std::to_string(finalists.size()) +
+                    " independently finalized candidate layout(s) and selected " +
+                    std::to_string(finalized_best->steps.size()) + " cells.",
+      });
+      best_options = selected_finalist->options;
+      best = std::move(*finalized_best);
     }
   }
 

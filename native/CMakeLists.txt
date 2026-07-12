@@ -31,7 +31,9 @@ add_library(mkpro_core STATIC
   src/core/constant_folder.cpp
   src/core/cyclic_end_return.cpp
   src/core/dark_side_suffix_helper.cpp
+  src/core/flow_sensitive_call_domains.cpp
   src/core/helper_invariant_recall_hoist.cpp
+  src/core/helper_semantic_alias.cpp
   src/core/emit/lowering/coord_list.cpp
   src/core/emit/lowering/display.cpp
   src/core/emit/lowering/expr.cpp
@@ -155,6 +157,8 @@ add_executable(mkpro_tests
   tests/dangerous_loading_size_report_test.cpp
   tests/dark_side_suffix_helper_test.cpp
   tests/helper_invariant_recall_hoist_test.cpp
+  tests/helper_semantic_alias_compiler_test.cpp
+  tests/helper_semantic_alias_test.cpp
   tests/dead_code_after_halt_test.cpp
   tests/dead_proc_elimination_test.cpp
   tests/dead_store_before_commutative_test.cpp
@@ -302,6 +306,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   bit_mask_quotient_reuse_matches_typescript_contract
   board_width_macros_matches_typescript_contract
   emulator_grid_norm_signed_modulo_matches_language_contract
+  grid_norm_unary_wrapper_uses_generic_x_entry_and_forwarding
   branch_target_x_reuse_matches_typescript_contract
   cfg_matches_typescript_contract
   compiler_coord_list_lowering_matches_typescript_contract
@@ -313,6 +318,17 @@ set(MKPRO_NATIVE_TEST_NAMES
   cyclic_end_return_relocates_only_proved_direct_call_helpers
   dark_side_suffix_helper_rewrites_only_proved_layouts
   helper_invariant_recall_hoist_rewrites_only_proved_calls
+  helper_semantic_alias_compiler_composes_with_natural_target_layout
+  helper_semantic_alias_compiler_rejects_unproved_source_domains
+  helper_semantic_alias_call_origins_survive_return_suffix_merging
+  helper_semantic_alias_emulator_pins_x1_transfer_classes
+  helper_semantic_alias_rebinds_numeric_indirect_targets_by_identity
+  helper_semantic_alias_rejects_extra_entries_and_side_effects
+  helper_semantic_alias_rejects_mutating_indirect_call_selectors
+  helper_semantic_alias_rejects_stale_certified_bodies
+  helper_semantic_alias_rejects_unproved_decimal_or_domain_claims
+  helper_semantic_alias_requires_x1_forgetting_continuations
+  helper_semantic_alias_rewrites_opaque_equivalent_helpers
   dead_code_after_halt_matches_typescript_contract
   dead_proc_elimination_matches_typescript_contract
   dead_store_before_commutative_matches_typescript_contract
@@ -432,8 +448,10 @@ set(MKPRO_NATIVE_TEST_NAMES
   strict_allocation_matches_typescript_contract
   style_lints_matches_typescript_contract
   super_dark_layout_matches_typescript_contract
+  tic_tac_toe_4x4_manual_ui_contract_probe_matches_emulator
   tic_tac_toe_4x4_reference_transcript_matches_original_listing
   tic_tac_toe_4x4_reference_ui_normalizes_coordinates
+  tic_tac_toe_4x4_source_manual_ui_contract_is_explicit
   tic_tac_toe_4x4_source_uses_reference_angle_mode
   v2_const_matches_typescript_contract
   x2_register_dataflow_matches_typescript_contract

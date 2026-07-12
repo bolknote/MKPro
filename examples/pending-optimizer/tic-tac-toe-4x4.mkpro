@@ -13,12 +13,12 @@ program TicTacToe4x4 {
     occupied: packed = 0
     lines: packed[4..7] = [44444.4, 44444.4, 44444.4, 44444.4]
 
-    // Player input is deliberately unbounded: the original UI accepts any
-    // calculator number and normalizes its integer part modulo four.
-    x: packed
-    y: packed
+    // The visible coordinates also carry raw keyboard input and the occupied
+    // retry sentinel. Every coordinate use is normalized explicitly below.
+    x: packed = 0
+    y: packed = 0
 
-    best_y: packed
+    best_y: packed = 0
     best_score: packed
     score: packed
     line: packed
@@ -30,21 +30,22 @@ program TicTacToe4x4 {
   }
 
   fn occupied_cell() {
-    slot = -99999999
+    x = -99999999
   }
 
   loop {
     // The documented answer is the stack pair X:Y.  preview(y) prepares Y;
-    // show(slot) leaves the visible X coordinate (or retry sentinel) in X.
+    // show(x) leaves the selected coordinate (or retry sentinel) visible.
     preview(y)
-    show(slot)
+    show(x)
     // Source UI is X ПП Y С/П: ПП executes only the first entered() store,
     // then С/П resumes at the second one with the new X value.
     x = entered()
     y = entered()
-    // Match the original calculator UI for arbitrary numeric coordinates:
-    // discard the fractional part and wrap the integer into 1..4.  Normalize
-    // Y first so the two manual-entry phases retain their original stack flow.
+    // Use the same calculator primitive as the original listing. It truncates
+    // ordinary fractional aliases into 1..4 and preserves the MK-61's own
+    // eight-digit rounding at extreme inputs. Normalize Y first so the two
+    // manual-entry phases retain their original stack flow.
     y = grid_norm(y)
     x = grid_norm(x)
     line = cell_mask(x, y)
@@ -122,9 +123,9 @@ program TicTacToe4x4 {
   }
 
   fn normalize(raw_line) {
-    // Internal callers pass only x+y or x-y after UI normalization, so the
-    // complete domain is [-3, 8]. On that proved range, shifting by three
-    // gives the shorter one-based modulo form without a signed correction.
-    line = frac((raw_line + 3) / 4) * 4 + 1
+    // Reuse the exact signed width-four primitive here too. In particular,
+    // this preserves the original calculator's eight-digit rounding behavior
+    // when an out-of-range keyboard value produces a fractional remainder.
+    line = grid_norm(raw_line)
   }
 }

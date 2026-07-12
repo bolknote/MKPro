@@ -9,6 +9,7 @@
 #include <cmath>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace mkpro::tests {
@@ -36,12 +37,19 @@ bool has_error(const CompileResult& result) {
 }
 
 double calculator_number(std::string value) {
+  int exponent = 0;
+  const bool scientific = value.size() > 12U;
+  if (scientific) {
+    exponent = std::stoi(value.substr(12));
+    value.resize(12);
+  }
   value.erase(std::remove_if(value.begin(), value.end(), [](unsigned char ch) {
                 return std::isspace(ch) != 0;
               }),
               value.end());
   std::replace(value.begin(), value.end(), ',', '.');
-  return std::stod(value);
+  const double mantissa = std::stod(value);
+  return scientific ? mantissa * std::pow(10.0, exponent) : mantissa;
 }
 
 void input_signed_number(emulator::MK61& calc, std::string value) {
@@ -208,6 +216,22 @@ program GridNormPhasedInput {
   for (const auto& [input, expected] : width4_cases)
     require_probe(shared_width4, input, expected, "grid_norm width 4 input " + input);
 
+  // These deliberately pin the real eight-digit rounding boundary rather
+  // than a mathematical modulo expectation. The fractional results are why
+  // flow analysis cannot treat grid_norm as an unconditional sanitizer.
+  const Observation rounded_positive = run_grid_norm_probe(inline_width4, "9999999");
+  const Observation rounded_next = run_grid_norm_probe(inline_width4, "9999997");
+  const Observation rounded_negative = run_grid_norm_probe(inline_width4, "-9999999");
+  const Observation rounded_negative_next = run_grid_norm_probe(inline_width4, "-9999997");
+  require(std::fabs(rounded_positive.x - 2.8) < 1e-9 &&
+              std::fabs(rounded_next.x - 0.8) < 1e-9 &&
+              std::fabs(rounded_negative.x - 1.2) < 1e-9 &&
+              std::fabs(rounded_negative_next.x - 3.2) < 1e-9,
+          "large width-4 inputs should expose the hardware's fractional rounded remainders, got " +
+              std::to_string(rounded_positive.x) + "/" + std::to_string(rounded_next.x) + "/" +
+              std::to_string(rounded_negative.x) + "/" +
+              std::to_string(rounded_negative_next.x));
+
   const CompileResult shared_width3 = compile_grid_norm_probe(3, true);
   require(shared_width3.implemented && !has_error(shared_width3),
           "repeated width-3 grid_norm probe should compile");
@@ -250,6 +274,124 @@ program DynamicWidth {
 }
 )mkpro", options);
   require(has_error(dynamic_width), "grid_norm should reject a runtime-varying width");
+}
+
+void grid_norm_unary_wrapper_uses_generic_x_entry_and_forwarding() {
+  CompileOptions options;
+  options.analysis = true;
+  options.budget = 999;
+  options.disable_candidate_search = true;
+
+  const CompileResult forwarded = compile_source(R"mkpro(
+program OpaqueGridWrapper {
+  state {
+    seed: packed = 1
+    line: packed = 0
+    total: packed = 0
+  }
+
+  loop {
+    normalize(seed)
+    total += line
+    normalize(seed)
+    total += line
+    total += grid_norm(seed)
+    total += grid_norm(seed)
+    halt(total)
+  }
+
+  fn normalize(value) {
+    line = grid_norm(value)
+  }
+}
+)mkpro",
+                                                 options);
+  require(forwarded.implemented && !has_error(forwarded),
+          "generic unary grid wrapper fixture should compile");
+  require(forwarded.registers.find("value") == forwarded.registers.end() &&
+              forwarded.registers.find("line") == forwarded.registers.end(),
+          "grid wrapper parameter and stack-only result should not allocate registers");
+  require(has_optimization(forwarded, "x-param-proc-entry"),
+          "grid wrapper should consume its one argument from current X");
+  require(has_optimization(forwarded, "jump-thread"),
+          "direct calls should bypass a procedure that only tail-forwards to grid_norm");
+  require(has_optimization(forwarded, "dead-proc-elimination"),
+          "the unreferenced forwarding wrapper should be removed after call threading");
+  require(std::none_of(forwarded.items.begin(), forwarded.items.end(),
+                       [](const MachineItem& item) {
+                         if (item.kind == MachineItemKind::Label && item.name == "__fn_normalize")
+                           return true;
+                         const auto* target = std::get_if<std::string>(&item.target);
+                         return target != nullptr && *target == "__fn_normalize";
+                       }),
+          "the final artifact should contain neither the wrapper nor an incoming edge to it");
+
+  const CompileResult parked_y = compile_source(R"mkpro(
+program OpaqueLedgerNormalizerAccumulator {
+  state {
+    ledger_a: packed = 12345.6
+    ledger_b: packed = 23456.7
+    ledger_c: packed = 34567.8
+    ledger_d: packed = 45678.9
+    column: packed = 2
+    normalized_column: packed = 0
+    checksum: packed = 0
+  }
+
+  loop {
+    checksum = packed_score(ledger_a, column) + packed_score(ledger_b, column)
+    canonicalize(column)
+    checksum += packed_score(ledger_c, normalized_column)
+    canonicalize(column)
+    checksum += packed_score(ledger_d, normalized_column)
+    halt(checksum)
+  }
+
+  fn canonicalize(value) {
+    normalized_column = grid_norm(value)
+  }
+}
+)mkpro",
+                                                options);
+  require(parked_y.implemented && !has_error(parked_y),
+          "grid wrapper should compile while an accumulator is parked in caller Y");
+  require(parked_y.registers.find("normalized_column") == parked_y.registers.end(),
+          "the proved Y-preserving wrapper should keep its result stack-only");
+  require(std::count_if(parked_y.optimizations.begin(), parked_y.optimizations.end(),
+                        [](const OptimizationReport& report) {
+                          return report.name == "x-param-packed-score-line-stack-accumulate";
+                        }) == 2,
+          "both ledger wrapper calls should preserve the packed-score accumulator parked in Y");
+
+  const CompileResult unrelated_call = compile_source(R"mkpro(
+program OpaqueUnaryCall {
+  state {
+    seed: packed = 2
+    out: packed = 0
+  }
+
+  loop {
+    wrapper(seed)
+    wrapper(seed)
+    wrapper(seed)
+    wrapper(seed)
+    halt(out)
+  }
+
+  fn identity(inner) {
+    return inner
+  }
+
+  fn wrapper(argument) {
+    out = identity(argument)
+  }
+}
+)mkpro",
+                                                      options);
+  require(unrelated_call.implemented && !has_error(unrelated_call),
+          "unrelated one-argument user-call wrapper should compile normally");
+  require(unrelated_call.registers.find("argument") != unrelated_call.registers.end(),
+          "only typed grid_norm/grid_wrap calls may use the grid wrapper X-entry lowering");
 }
 
 } // namespace mkpro::tests

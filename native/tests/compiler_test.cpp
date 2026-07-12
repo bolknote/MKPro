@@ -9268,6 +9268,7 @@ program BooleanMultiUpdate {
   // compiler.test.ts "accumulates packed_score with an X-parameter-produced index on the stack"
   CompileOptions packed_score_xparam_options;
   packed_score_xparam_options.analysis = true;
+  packed_score_xparam_options.disable_candidate_search = true;
   const CompileResult packed_score_xparam = compile_source(R"mkpro(
 program PackedScoreXParamAccumulator {
   state {
@@ -9307,6 +9308,7 @@ program PackedScoreXParamAccumulator {
   // compiler.test.ts "accumulates packed_score after affine X-parameter index expressions"
   CompileOptions packed_score_affine_options;
   packed_score_affine_options.analysis = true;
+  packed_score_affine_options.disable_candidate_search = true;
   const CompileResult packed_score_affine = compile_source(R"mkpro(
 program PackedScoreAffineXParamAccumulator {
   state {
@@ -9347,6 +9349,7 @@ program PackedScoreAffineXParamAccumulator {
   // compiler.test.ts "keeps X-parameter packed_score indexes stack-only with initial addends"
   CompileOptions packed_score_initial_addend_options;
   packed_score_initial_addend_options.analysis = true;
+  packed_score_initial_addend_options.disable_candidate_search = true;
   const CompileResult packed_score_initial_addend = compile_source(R"mkpro(
 program PackedScoreXParamInitialAddendAccumulator {
   state {

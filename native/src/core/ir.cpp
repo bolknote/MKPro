@@ -97,6 +97,7 @@ IrMeta meta_from_op(const MachineItem& item) {
   meta.manual_interaction = item.manual_interaction;
   meta.indirect_flow_targets = item.indirect_flow_targets;
   meta.indirect_memory_targets = item.indirect_memory_targets;
+  meta.semantic_call_origins = item.semantic_call_origins;
   return meta;
 }
 
@@ -155,6 +156,7 @@ MachineItem machine_op_from_meta(int opcode, const IrMeta& meta) {
   item.manual_interaction = meta.manual_interaction;
   item.indirect_flow_targets = meta.indirect_flow_targets;
   item.indirect_memory_targets = meta.indirect_memory_targets;
+  item.semantic_call_origins = meta.semantic_call_origins;
   return item;
 }
 
@@ -778,7 +780,8 @@ bool machine_items_equal(const MachineItem& a, const MachineItem& b) {
            a.stop_disposition == b.stop_disposition &&
            a.manual_interaction == b.manual_interaction &&
            a.indirect_flow_targets == b.indirect_flow_targets &&
-           a.indirect_memory_targets == b.indirect_memory_targets;
+           a.indirect_memory_targets == b.indirect_memory_targets &&
+           a.semantic_call_origins == b.semantic_call_origins;
   }
   return targets_equal(a.target, b.target) && a.comment == b.comment &&
          a.source_line == b.source_line && a.formal_opcode == b.formal_opcode;

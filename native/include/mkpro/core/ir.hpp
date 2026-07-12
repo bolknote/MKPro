@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <variant>
@@ -84,6 +85,9 @@ struct MachineItem {
   // opaque exact labels. Memory integers are post-mutation R0..Re indices.
   std::optional<std::vector<IrTarget>> indirect_flow_targets;
   std::optional<std::vector<int>> indirect_memory_targets;
+  // Opaque typed provenance for semantic helper calls. Optimizers may copy or
+  // union these identities, but never infer meaning from their numeric value.
+  std::vector<std::uint64_t> semantic_call_origins;
   IrTarget target = 0;
   std::optional<int> formal_opcode;
 
@@ -128,6 +132,7 @@ struct IrMeta {
   std::optional<ManualInteractionAnchor> manual_interaction;
   std::optional<std::vector<IrTarget>> indirect_flow_targets;
   std::optional<std::vector<int>> indirect_memory_targets;
+  std::vector<std::uint64_t> semantic_call_origins;
   std::optional<std::string> tactic;
 };
 

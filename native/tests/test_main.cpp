@@ -21,6 +21,7 @@ void arithmetic_if_matches_typescript_contract();
 void bit_mask_quotient_reuse_matches_typescript_contract();
 void board_width_macros_matches_typescript_contract();
 void emulator_grid_norm_signed_modulo_matches_language_contract();
+void grid_norm_unary_wrapper_uses_generic_x_entry_and_forwarding();
 void branch_target_x_reuse_matches_typescript_contract();
 void cfg_matches_typescript_contract();
 void compiler_coord_list_lowering_matches_typescript_contract();
@@ -36,6 +37,17 @@ void cse_display_block_matches_typescript_contract();
 void cyclic_end_return_relocates_only_proved_direct_call_helpers();
 void dark_side_suffix_helper_rewrites_only_proved_layouts();
 void helper_invariant_recall_hoist_rewrites_only_proved_calls();
+void helper_semantic_alias_compiler_composes_with_natural_target_layout();
+void helper_semantic_alias_compiler_rejects_unproved_source_domains();
+void helper_semantic_alias_call_origins_survive_return_suffix_merging();
+void helper_semantic_alias_emulator_pins_x1_transfer_classes();
+void helper_semantic_alias_rebinds_numeric_indirect_targets_by_identity();
+void helper_semantic_alias_rejects_extra_entries_and_side_effects();
+void helper_semantic_alias_rejects_mutating_indirect_call_selectors();
+void helper_semantic_alias_rejects_stale_certified_bodies();
+void helper_semantic_alias_rejects_unproved_decimal_or_domain_claims();
+void helper_semantic_alias_requires_x1_forgetting_continuations();
+void helper_semantic_alias_rewrites_opaque_equivalent_helpers();
 void dangerous_loading_size_report_tracks_flow_entry_stack();
 void wumpus_size_report_tracks_split_entry_repeated_argument();
 void dead_code_after_halt_matches_typescript_contract();
@@ -164,8 +176,10 @@ void strict_allocation_matches_typescript_contract();
 void style_lints_matches_typescript_contract();
 void super_dark_layout_matches_typescript_contract();
 void trig_fractional_pack_matches_strategy_contract();
+void tic_tac_toe_4x4_manual_ui_contract_probe_matches_emulator();
 void tic_tac_toe_4x4_reference_transcript_matches_original_listing();
 void tic_tac_toe_4x4_reference_ui_normalizes_coordinates();
+void tic_tac_toe_4x4_source_manual_ui_contract_is_explicit();
 void tic_tac_toe_4x4_source_uses_reference_angle_mode();
 void v2_const_matches_typescript_contract();
 void x2_register_dataflow_matches_typescript_contract();
@@ -248,6 +262,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(bit_mask_quotient_reuse_matches_typescript_contract),
       MKPRO_TEST(board_width_macros_matches_typescript_contract),
       MKPRO_TEST(emulator_grid_norm_signed_modulo_matches_language_contract),
+      MKPRO_TEST(grid_norm_unary_wrapper_uses_generic_x_entry_and_forwarding),
       MKPRO_TEST(branch_target_x_reuse_matches_typescript_contract),
       MKPRO_TEST(cfg_matches_typescript_contract),
       MKPRO_TEST(compiler_coord_list_lowering_matches_typescript_contract),
@@ -263,6 +278,17 @@ int main(int argc, char** argv) {
       MKPRO_TEST(cyclic_end_return_relocates_only_proved_direct_call_helpers),
       MKPRO_TEST(dark_side_suffix_helper_rewrites_only_proved_layouts),
       MKPRO_TEST(helper_invariant_recall_hoist_rewrites_only_proved_calls),
+      MKPRO_TEST(helper_semantic_alias_compiler_composes_with_natural_target_layout),
+      MKPRO_TEST(helper_semantic_alias_compiler_rejects_unproved_source_domains),
+      MKPRO_TEST(helper_semantic_alias_call_origins_survive_return_suffix_merging),
+      MKPRO_TEST(helper_semantic_alias_emulator_pins_x1_transfer_classes),
+      MKPRO_TEST(helper_semantic_alias_rebinds_numeric_indirect_targets_by_identity),
+      MKPRO_TEST(helper_semantic_alias_rejects_extra_entries_and_side_effects),
+      MKPRO_TEST(helper_semantic_alias_rejects_mutating_indirect_call_selectors),
+      MKPRO_TEST(helper_semantic_alias_rejects_stale_certified_bodies),
+      MKPRO_TEST(helper_semantic_alias_rejects_unproved_decimal_or_domain_claims),
+      MKPRO_TEST(helper_semantic_alias_requires_x1_forgetting_continuations),
+      MKPRO_TEST(helper_semantic_alias_rewrites_opaque_equivalent_helpers),
       MKPRO_TEST(dangerous_loading_size_report_tracks_flow_entry_stack),
       MKPRO_TEST(wumpus_size_report_tracks_split_entry_repeated_argument),
       MKPRO_TEST(dead_code_after_halt_matches_typescript_contract),
@@ -388,8 +414,10 @@ int main(int argc, char** argv) {
       MKPRO_TEST(style_lints_matches_typescript_contract),
       MKPRO_TEST(super_dark_layout_matches_typescript_contract),
       MKPRO_TEST(trig_fractional_pack_matches_strategy_contract),
+      MKPRO_TEST(tic_tac_toe_4x4_manual_ui_contract_probe_matches_emulator),
       MKPRO_TEST(tic_tac_toe_4x4_reference_transcript_matches_original_listing),
       MKPRO_TEST(tic_tac_toe_4x4_reference_ui_normalizes_coordinates),
+      MKPRO_TEST(tic_tac_toe_4x4_source_manual_ui_contract_is_explicit),
       MKPRO_TEST(tic_tac_toe_4x4_source_uses_reference_angle_mode),
       MKPRO_TEST(v2_const_matches_typescript_contract),
       MKPRO_TEST(x2_register_dataflow_matches_typescript_contract),

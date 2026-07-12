@@ -93,6 +93,21 @@ void flow_structure_passes_match_typescript_contract() {
     }
     require(found, "jump-thread: a jump remains");
   }
+  {
+    IrOp source_call = call("wrapper");
+    source_call.meta.semantic_call_origins = {17};
+    IrOp forwarding_jump = jump("target");
+    forwarding_jump.meta.semantic_call_origins = {91};
+    const std::vector<IrOp> program = {
+        source_call,          halt(), proc_start("wrapper"), forwarding_jump, proc_end("wrapper"),
+        proc_start("target"), ret(),  proc_end("target")};
+    const auto result = core::passes::jump_thread_pass().run(program, ctx);
+    require_applied(result.applied, 1, "jump-thread: direct call through tail-jump wrapper");
+    require(result.ops.front().kind == IrKind::Call && target_str(result.ops.front()) == "target",
+            "jump-thread: call should target the forwarded procedure directly");
+    require(result.ops.front().meta.semantic_call_origins == std::vector<std::uint64_t>({17, 91}),
+            "jump-thread: call forwarding should preserve the opaque origin union");
+  }
 
   // --- jump-to-next-threading ---------------------------------------------
   {
