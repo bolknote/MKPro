@@ -58,6 +58,10 @@ contexts:
         1: invalid.deprecated.keyword.stop.mkpro
 
   declarations:
+    - match: '^\s*(const)\s+({{ident}})\b'
+      captures:
+        1: storage.modifier.constant.mkpro
+        2: entity.name.constant.mkpro
     - match: '^\s*(reference)\s+({{ident}})\b'
       captures:
         1: keyword.control.toplevel.mkpro
@@ -153,7 +157,9 @@ contexts:
   mk61-commands:
     - match: '(?:С/П|В/О|БП|ПП|В↑|ВП|Сx|Cx|П->X|X->П|Пх|хП|КПП|КБП|КПх|КхП|FL[0-3])'
       scope: support.function.mk61.mkpro
-    - match: '\bF\s*[A-Za-zА-Яа-я0-9^]+'
+    - match: '\bF(?:B[xх]|В[xх]|x(?:=0|!=0|≠0|<0|>=0|≥0))\b'
+      scope: support.function.mk61.mkpro
+    - match: '\bF[ \t]+[A-Za-zА-Яа-я0-9^/<>!=°′"↻√π²-]+'
       scope: support.function.mk61.mkpro
     - match: '\bК\s*[^{}\[\](),:#/\n]+'
       scope: support.function.mk61.mkpro
@@ -171,6 +177,8 @@ contexts:
   constants:
     - match: '\b(true|false|north|south|east|west|up|down)\b'
       scope: constant.language.mkpro
+    - match: '\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b'
+      scope: constant.other.named.mkpro
     - match: '\b[0-9A-Fa-f]{2}(?=\s|$)'
       scope: constant.numeric.hex.mkpro
     - match: '{{number}}'
