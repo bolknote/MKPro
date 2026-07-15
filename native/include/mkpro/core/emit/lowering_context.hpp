@@ -249,6 +249,7 @@ struct LoweringContext {
   std::map<std::string, std::string> preloaded_numbers;
   std::vector<std::string> preloaded_number_order;
   std::set<std::string> suppress_constant_preloads;
+  std::set<std::string> reserve_suppressed_constant_preload_slots;
   std::optional<std::string> negative_zero_degree_register;
   std::vector<FractionalConstantSelectorPlan> fractional_constant_selectors;
   std::map<std::string, Expression> constants;

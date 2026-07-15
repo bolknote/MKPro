@@ -129,21 +129,21 @@ void example_sizes_match_typescript_baselines() {
       {"cave-highlevel-baseline", 104},
       {"cave-sketch", 38},
       {"cave-treasure", 104},
-      {"clock", 33},
+      {"clock", 32},
       {"dangerous-loading", 75},
       {"dungeon", 75},
       {"e-94-digits", 64},
-      {"functions-demo", 16},
-      {"fox-hunt-100", 103},
+      {"functions-demo", 13},
+      {"fox-hunt-100", 102},
       {"fox-hunt-mk61", 65},
       {"game-100-pig", 97},
       {"giants-country", 102},
       {"human", 23},
-      {"jack-pot", 96},
+      {"jack-pot", 94},
       {"labyrinth777", 105},
       {"lunar", 44},
-      {"minesweeper-9x7", 79},
-      {"minesweeper-9x9", 79},
+      {"minesweeper-9x7", 76},
+      {"minesweeper-9x9", 76},
       {"raja-yoga", 77},
       {"rambo-iii", 104},
       {"river-battle", 95},
@@ -153,9 +153,10 @@ void example_sizes_match_typescript_baselines() {
       {"tiny-game", 23},
       {"treasure-hunter-2", 98},
       {"wumpus", 105},
+      {"zagaday-tsifru", 104},
   };
   const std::map<std::string, std::size_t> PENDING_BASELINE{
-      {"tic-tac-toe-4x4", 154},
+      {"tic-tac-toe-4x4", 153},
   };
 
   const std::filesystem::path root = std::filesystem::current_path();
@@ -184,8 +185,19 @@ void example_sizes_match_typescript_baselines() {
           "native pending-optimizer examples list should exactly match TS baseline keys");
 
   const bool progress = std::getenv("MKPRO_NATIVE_EXAMPLE_PROGRESS") != nullptr;
+  const bool size_only = std::getenv("MKPRO_NATIVE_EXAMPLE_SIZE_ONLY") != nullptr;
   std::size_t progress_index = 0;
   const std::size_t progress_total = EXAMPLE_BASELINE.size() + PENDING_BASELINE.size();
+  std::string size_mismatches;
+  const auto record_size_mismatch = [&](const std::string& category, const std::string& name,
+                                        std::size_t expected, std::size_t actual) {
+    if (actual == expected)
+      return;
+    if (!size_mismatches.empty())
+      size_mismatches += "; ";
+    size_mismatches += category + " " + name + " expected=" + std::to_string(expected) +
+                       " actual=" + std::to_string(actual);
+  };
   for (const auto& [name, expected] : EXAMPLE_BASELINE) {
     if (progress) {
       ++progress_index;
@@ -194,7 +206,9 @@ void example_sizes_match_typescript_baselines() {
     }
     const std::filesystem::path path = examples_root / (name + ".mkpro");
     const std::size_t actual = example_steps(path, /*analysis_budgeted=*/false);
-    require(actual == expected, "top-level example " + name + " step count should match TS baseline");
+    record_size_mismatch("top-level example", name, expected, actual);
+    if (size_only)
+      continue;
     if (name == "fox-hunt-mk61") {
       const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
       require(std::any_of(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
@@ -627,9 +641,9 @@ void example_sizes_match_typescript_baselines() {
     }
     const std::filesystem::path path = pending_root / (name + ".mkpro");
     const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
-    require(result.steps.size() == expected,
-            "pending example " + name + " step count should match TS baseline");
+    record_size_mismatch("pending example", name, expected, result.steps.size());
   }
+  require(size_mismatches.empty(), "example size mismatches: " + size_mismatches);
 }
 
 } // namespace mkpro::tests

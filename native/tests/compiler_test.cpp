@@ -475,6 +475,45 @@ program GenericPackedBcdPopcount {
   require(has_optimization(packed_bcd_popcount, "packed-bcd-popcount-fold"),
           "masked digit loop should report the generic packed BCD fold");
 
+  const CompileResult packed_bcd_popcount_folded_scale = compile_source(R"mkpro(
+program GenericPackedBcdPopcountFoldedScale {
+  const OCTAL_DIGITS = 7.7777777
+  state {
+    source: packed = 0
+    total: counter 0..21 = 0
+    remaining: counter 0..7 = 0
+    digit: counter 0..7 = 0
+    half: counter 0..3 = 0
+  }
+  loop {
+    source = read()
+    source = frac(bit_and(source, OCTAL_DIGITS))
+    total = 0
+    remaining = 7
+    while remaining >= 1 {
+      source *= pow10(1)
+      digit = int(source)
+      half = int(digit / 2)
+      total += digit - half - int(half / 2)
+      source = frac(source)
+      remaining--
+    }
+    halt(total)
+  }
+}
+)mkpro");
+  require(packed_bcd_popcount_folded_scale.implemented,
+          "constant-folded decimal scale should lower as a proved packed BCD popcount fold");
+  require(packed_bcd_popcount_folded_scale.diagnostics.empty(),
+          "constant-folded decimal scale should not report diagnostics");
+  require(has_optimization(packed_bcd_popcount_folded_scale,
+                           "early-decimal-power-constant-folder"),
+          "constant decimal scale should fold before structural optimization");
+  require(has_optimization(packed_bcd_popcount_folded_scale, "packed-bcd-popcount-fold"),
+          "constant-folded decimal scale should preserve the generic packed BCD fold");
+  require(packed_bcd_popcount_folded_scale.steps.size() == packed_bcd_popcount.steps.size(),
+          "equivalent literal and constant-folded decimal scales should have the same size");
+
   const CompileResult unproved_packed_bcd_popcount = compile_source(R"mkpro(
 program UnprovedPackedBcdPopcount {
   state {

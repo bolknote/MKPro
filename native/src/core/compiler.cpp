@@ -14520,7 +14520,7 @@ void plan_general_constant_preloads(LoweringContext& context, const V2Program& p
     baseline_preloads.insert(normalize_number_key(value));
   }
   int reserved_demoted_slots = 0;
-  for (const std::string& value : context.suppress_constant_preloads) {
+  for (const std::string& value : context.reserve_suppressed_constant_preload_slots) {
     if (baseline_preloads.contains(normalize_number_key(value)))
       ++reserved_demoted_slots;
   }
@@ -47547,6 +47547,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
     reserve_preloaded_number_at(context, register_name, value);
   for (const std::string& value : options.suppress_constant_preloads)
     context.suppress_constant_preloads.insert(normalize_number_key(value));
+  for (const std::string& value : options.reserve_suppressed_constant_preload_slots)
+    context.reserve_suppressed_constant_preload_slots.insert(normalize_number_key(value));
   if (options.strict) {
     const std::set<std::string> no_ignored_targets;
     warn_undeclared_allocations(*ast.v2, true, no_ignored_targets, context.diagnostics);
@@ -47554,6 +47556,25 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   bool exact_decimal_series = false;
   try {
     trace_stage("ast-passes");
+    const core::ConstantFoldResult early_folded_constants =
+        core::fold_program_constants(*ast.v2, {}, core::ConstantFoldMode::DecimalPowersOnly);
+    if (early_folded_constants.applied > 0) {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "early-decimal-power-constant-folder",
+          .detail = "Folded " + std::to_string(early_folded_constants.applied) +
+                    " constant expression node" +
+                    (early_folded_constants.applied == 1 ? "" : "s") +
+                    " before structural optimization.",
+      });
+    }
+    if (early_folded_constants.grd_angle_assumptions > 0) {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "grd-angle-mode-assumption",
+          .detail = "Folded " +
+                    std::to_string(early_folded_constants.grd_angle_assumptions) +
+                    " ГРД-only trigonometric identity node(s) under expected_mode(\"grd\").",
+      });
+    }
     if (const std::optional<core::emit::lowering::DecimalSeriesProgram> decimal_series =
             core::emit::lowering::match_decimal_series_program(*ast.v2)) {
       exact_decimal_series = true;
@@ -49573,6 +49594,8 @@ std::string implemented_candidate_key(const CompileOptions& options) {
     out << ";preloaded_constant=" << value << ":" << reg;
   for (const std::string& value : options.suppress_constant_preloads)
     out << ";suppress_constant=" << value;
+  for (const std::string& value : options.reserve_suppressed_constant_preload_slots)
+    out << ";reserve_suppressed_constant_slot=" << value;
   for (const FractionalConstantSelectorPlan& plan : options.fractional_constant_selectors)
     out << ";fractional_selector=" << normalize_number_key(plan.value) << ":" << plan.target;
   for (const SynthesizedDispatchPlan& plan : options.synthesized_dispatch_plans)
@@ -60914,7 +60937,7 @@ std::optional<std::string> demotable_indirect_flow_preload_value(const PreloadRe
 std::vector<std::string>
 demotable_indirect_flow_preload_values(const CompileResult& result,
                                        const std::set<std::string>& suppressed = {}) {
-  constexpr std::size_t kMaxDemotedIndirectFlowValues = 4;
+  constexpr std::size_t kMaxDemotedIndirectFlowValues = 12;
   std::set<std::string> unique;
   for (const PreloadReport& preload : result.preloads) {
     const std::optional<std::string> value = demotable_indirect_flow_preload_value(preload);
@@ -62331,6 +62354,7 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
       !options.suppress_constant_preloads.contains("1111111.1")) {
     CompileOptions candidate_options = options;
     candidate_options.suppress_constant_preloads.insert("1111111.1");
+    candidate_options.reserve_suppressed_constant_preload_slots.insert("1111111.1");
     add_configured_candidate(
         std::move(candidate_options), "cheap-constant-materialization",
         "Synthesized a repeated-one BCD mask to free its preload register for final layout");
@@ -64961,6 +64985,70 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
       });
       best_options = selected_finalist->options;
       best = std::move(*finalized_best);
+    }
+  }
+
+  // Final layout can expose a profitable preload tradeoff that was not present
+  // in any ordinary-layout probe. Reconsider each setup constant on top of the
+  // selected finalized options: inlining one constant may free a register for
+  // several indirect calls and reduce the total program size.
+  if (needs_size_rescue && best.implemented && best.steps.size() > official_program_limit &&
+      fast_candidate_allowed("demote-constant-indirect-flow")) {
+    const CompileOptions demote_base_options = best_options;
+    const std::vector<std::string> values = demotable_indirect_flow_preload_values(
+        best, demote_base_options.suppress_constant_preloads);
+    std::optional<CompileResult> demoted_best;
+    std::optional<CompileOptions> demoted_best_options;
+    std::string demoted_value;
+    for (const std::string& value : values) {
+      try {
+        CompileOptions candidate_options = demote_base_options;
+        candidate_options.suppress_constant_preloads.insert(value);
+        CompileOptions compile_options = candidate_options;
+        CompileResult candidate = compile_source_once(source, compile_options, source_has_entered,
+                                                      /*apply_final_layout_size_rescue=*/true);
+        if (!candidate.implemented &&
+            can_retry_lowering_attempt_in_analysis(candidate, compile_options)) {
+          compile_options.analysis = true;
+          candidate = compile_source_once(source, compile_options, source_has_entered,
+                                          /*apply_final_layout_size_rescue=*/true);
+        }
+        const bool static_proof_accepted =
+            !candidate_needs_static_proof_gate(compile_options) ||
+            !optimizer_static_gate_rejection_reason(compile_options, candidate).has_value();
+        if (!candidate.implemented || !static_proof_accepted ||
+            candidate.steps.size() >= best.steps.size() ||
+            (demoted_best.has_value() &&
+             !candidate_beats_best(candidate, *demoted_best, options))) {
+          continue;
+        }
+        demoted_value = value;
+        demoted_best_options = std::move(candidate_options);
+        demoted_best = std::move(candidate);
+      } catch (const std::exception&) {
+        // Final preload demotion is opportunistic; retain the proved incumbent.
+      }
+    }
+    if (demoted_best.has_value() && demoted_best_options.has_value()) {
+      for (const OptimizationReport& optimization : best.optimizations) {
+        const bool present = std::any_of(
+            demoted_best->optimizations.begin(), demoted_best->optimizations.end(),
+            [&](const OptimizationReport& existing) {
+              return existing.name == optimization.name && existing.detail == optimization.detail;
+            });
+        if (!present)
+          demoted_best->optimizations.push_back(optimization);
+      }
+      for (const CandidateReport& rejected : best.rejected_candidates)
+        append_candidate_report_once(demoted_best->rejected_candidates, rejected);
+      demoted_best->optimizations.push_back(OptimizationReport{
+          .name = "final-layout-constant-demotion",
+          .detail = "Inlined setup constant " + demoted_value +
+                    " after final layout to free a register for indirect flow and selected " +
+                    std::to_string(demoted_best->steps.size()) + " cells.",
+      });
+      best_options = std::move(*demoted_best_options);
+      best = std::move(*demoted_best);
     }
   }
 

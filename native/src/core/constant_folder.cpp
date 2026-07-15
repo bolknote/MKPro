@@ -1071,8 +1071,9 @@ std::optional<Expression> fold_pure_constant_call(const std::string& callee,
 
 class ConstantFolder {
  public:
-  ConstantFolder(bool grd_angle_mode, const std::map<std::string, Expression>& constants)
-      : grd_angle_mode_(grd_angle_mode), constants_(constants) {}
+  ConstantFolder(bool grd_angle_mode, const std::map<std::string, Expression>& constants,
+                 ConstantFoldMode mode)
+      : grd_angle_mode_(grd_angle_mode), constants_(constants), mode_(mode) {}
 
   ConstantFoldResult fold_program(V2Program& program) {
     for (V2StateField& field : program.state) {
@@ -1091,6 +1092,7 @@ class ConstantFolder {
  private:
   bool grd_angle_mode_ = false;
   const std::map<std::string, Expression>& constants_;
+  ConstantFoldMode mode_ = ConstantFoldMode::Full;
   ConstantFoldResult result_;
 
   Expression folded(Expression expression) {
@@ -1103,6 +1105,8 @@ class ConstantFolder {
       return expression;
     }
     if (expression.kind == "identifier") {
+      if (mode_ != ConstantFoldMode::Full)
+        return expression;
       const auto constant = constants_.find(expression.name);
       return constant == constants_.end() ? expression : constant->second;
     }
@@ -1113,6 +1117,10 @@ class ConstantFolder {
     }
     if (expression.kind == "unary" && expression.expr != nullptr) {
       Expression inner = fold_expression(*expression.expr);
+      if (mode_ != ConstantFoldMode::Full) {
+        expression.expr = std::make_shared<Expression>(std::move(inner));
+        return expression;
+      }
       if (inner.kind == "number") {
         if (std::optional<Expression> negated = negate_number_expression(inner))
           return folded(*negated);
@@ -1125,6 +1133,13 @@ class ConstantFolder {
     if (expression.kind == "call") {
       for (Expression& arg : expression.args)
         arg = fold_expression(arg);
+      const std::string callee = lower_ascii(expression.callee);
+      const bool decimal_power =
+          callee == "pow10" ||
+          (callee == "pow" && expression.args.size() == 2U &&
+           is_numeric_value(expression.args.front(), 10));
+      if (mode_ == ConstantFoldMode::DecimalPowersOnly && !decimal_power)
+        return expression;
       int grd_assumptions = 0;
       if (std::optional<Expression> constant =
               fold_pure_constant_call(expression.callee, expression.args, grd_angle_mode_,
@@ -1137,6 +1152,11 @@ class ConstantFolder {
     if (expression.kind == "binary" && expression.left != nullptr && expression.right != nullptr) {
       Expression left = fold_expression(*expression.left);
       Expression right = fold_expression(*expression.right);
+      if (mode_ != ConstantFoldMode::Full) {
+        expression.left = std::make_shared<Expression>(std::move(left));
+        expression.right = std::make_shared<Expression>(std::move(right));
+        return expression;
+      }
       if (std::optional<Expression> folded_binary = fold_binary(expression.op, left, right))
         return folded(*folded_binary);
       expression.left = std::make_shared<Expression>(std::move(left));
@@ -1300,9 +1320,10 @@ class ConstantFolder {
 }  // namespace
 
 ConstantFoldResult fold_program_constants(V2Program& program,
-                                          const std::map<std::string, Expression>& constants) {
+                                          const std::map<std::string, Expression>& constants,
+                                          ConstantFoldMode mode) {
   return ConstantFolder(program.expected_mode.has_value() && program.expected_mode->mode == "grd",
-                        constants)
+                        constants, mode)
       .fold_program(program);
 }
 

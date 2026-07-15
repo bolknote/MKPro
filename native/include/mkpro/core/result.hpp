@@ -382,6 +382,9 @@ struct CompileOptions {
   // final PreloadReport entries rather than trusting this map.
   std::map<std::string, std::string> preloaded_constant_registers;
   std::set<std::string> suppress_constant_preloads;
+  // Suppressed values whose former preload slots must remain free for later
+  // layout-owned uses instead of being backfilled by lower-ranked constants.
+  std::set<std::string> reserve_suppressed_constant_preload_slots;
   std::vector<FractionalConstantSelectorPlan> fractional_constant_selectors;
   // When true, the lowering omits the `К {x}` fractional-recovery op that
   // normally restores a dual-use register's data value after its integer part
