@@ -326,6 +326,7 @@ struct CompileOptions {
   bool aggressive_post_layout_indirect_flow = false;
   bool return_stack_script = false;
   bool disable_return_stack_script = false;
+  bool disable_return_suffix_gadget = false;
   // Opt-out used by focused unit tests that pin a specific mid-level lowering
   // (e.g. shared-helper / direct-ПП structure). The aggressive post-layout
   // indirect-flow rescue is enabled by default for every program; setting this

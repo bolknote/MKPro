@@ -188,6 +188,27 @@ std::optional<int> direct_target_address(const MachineItem& operand,
                                          AddressSpaceModel model) {
   if (operand.kind != MachineItemKind::Address)
     return std::nullopt;
+  const std::string* label = std::get_if<std::string>(&operand.target);
+  if (label != nullptr) {
+    // A resolved over-window label carries a wrapped formal opcode for listing
+    // purposes. The label is the authoritative command identity; the wrapped
+    // byte cannot denote its current physical address. Still fail closed when
+    // that byte carries a genuine multi-command/extra formal contract.
+    if (operand.formal_opcode.has_value()) {
+      try {
+        const FormalAddressInfo formal = formal_address_info(*operand.formal_opcode, model);
+        if (formal.kind == FormalAddressKind::SuperDark || formal.one_command ||
+            formal.extra.has_value()) {
+          return std::nullopt;
+        }
+      } catch (const std::exception&) {
+        return std::nullopt;
+      }
+    }
+    const auto found = index.label_addresses.find(*label);
+    return found == index.label_addresses.end() ? std::nullopt
+                                                 : std::optional<int>(found->second);
+  }
   if (operand.formal_opcode.has_value()) {
     try {
       const FormalAddressInfo formal = formal_address_info(*operand.formal_opcode, model);
@@ -202,12 +223,51 @@ std::optional<int> direct_target_address(const MachineItem& operand,
   }
   if (const int* target = std::get_if<int>(&operand.target))
     return *target;
-  const std::string* label = std::get_if<std::string>(&operand.target);
-  if (label == nullptr)
-    return std::nullopt;
-  const auto found = index.label_addresses.find(*label);
-  return found == index.label_addresses.end() ? std::nullopt
-                                               : std::optional<int>(found->second);
+  return std::nullopt;
+}
+
+struct OverflowTargetNormalization {
+  std::vector<MachineItem> items;
+  bool changed = false;
+};
+
+std::optional<OverflowTargetNormalization> normalize_overflow_formals(
+    const std::vector<MachineItem>& items, AddressSpaceModel model) {
+  OverflowTargetNormalization normalized{.items = items};
+  const ArtifactIndex index = index_artifact(items);
+  const int official_last = official_program_last_address(model);
+  for (MachineItem& item : normalized.items) {
+    if (item.kind != MachineItemKind::Address || !item.formal_opcode.has_value())
+      continue;
+    std::optional<int> intended_target;
+    if (const std::string* label = std::get_if<std::string>(&item.target)) {
+      const auto target = index.label_addresses.find(*label);
+      if (target == index.label_addresses.end())
+        return std::nullopt;
+      intended_target = target->second;
+    } else if (const int* target = std::get_if<int>(&item.target)) {
+      intended_target = *target;
+    }
+    if (!intended_target.has_value() || *intended_target <= official_last)
+      continue;
+    if (item.raw || !item.roles.empty())
+      return std::nullopt;
+    try {
+      const FormalAddressInfo formal = formal_address_info(*item.formal_opcode, model);
+      if (formal.kind == FormalAddressKind::SuperDark || formal.one_command ||
+          formal.extra.has_value()) {
+        return std::nullopt;
+      }
+    } catch (const std::exception&) {
+      return std::nullopt;
+    }
+    // The byte is only the resolver's wrapped representation of an invalid
+    // over-window address. Preserve the authoritative label identity for the
+    // size-rescue proof; every surviving address is rebound after layout.
+    item.formal_opcode.reset();
+    normalized.changed = true;
+  }
+  return normalized;
 }
 
 std::optional<std::vector<DirectReference>> collect_direct_references(
@@ -220,13 +280,12 @@ std::optional<std::vector<DirectReference>> collect_direct_references(
     const std::optional<std::size_t> operand = next_cell_item(items, item_index);
     if (!operand.has_value() || items.at(*operand).kind != MachineItemKind::Address)
       return std::nullopt;
-    // A formal operand can be an executable address-code overlay, a dark-side
-    // entry, or a super-dark two-command object.  Relocating it as an ordinary
-    // numeric operand would preserve only the target identity, not its byte or
-    // secondary execution semantics.  Roles/raw metadata are likewise treated
-    // as an opaque indication that the operand has another contract.
-    if (items.at(*operand).formal_opcode.has_value() || items.at(*operand).raw ||
-        !items.at(*operand).roles.empty()) {
+    // Raw/role-bearing operands have an opaque secondary contract. Ordinary
+    // formal operands are still admissible: direct_target_address below
+    // decodes them and rejects super-dark, one-command, and extra-semantics
+    // forms before this pass reasons about command identity. This matters for
+    // over-window helpers that can become official only after component layout.
+    if (items.at(*operand).raw || !items.at(*operand).roles.empty()) {
       return std::nullopt;
     }
     const std::optional<int> address = direct_target_address(items.at(*operand), index, model);
@@ -384,6 +443,79 @@ bool has_exact_plain_decimal_address_projection(std::string_view value) {
          (dot == std::string_view::npos || (!fraction.empty() && decimal(fraction)));
 }
 
+struct NaturalFractionalSelectorEncoding {
+  std::string delivered_value;
+  int target = -1;
+};
+
+std::optional<NaturalFractionalSelectorEncoding>
+natural_fractional_selector_encoding(std::string_view value) {
+  if (!value.starts_with("0.") || value.size() <= 2U)
+    return std::nullopt;
+  const std::string_view fraction = value.substr(2U);
+  if (!std::all_of(fraction.begin(), fraction.end(),
+                   [](char ch) { return ch >= '0' && ch <= '9'; })) {
+    return std::nullopt;
+  }
+  const auto first = std::find_if(fraction.begin(), fraction.end(),
+                                  [](char ch) { return ch >= '1' && ch <= '9'; });
+  if (first == fraction.end())
+    return std::nullopt;
+  const std::size_t leading_zeroes =
+      static_cast<std::size_t>(std::distance(fraction.begin(), first));
+  const std::string_view significant = fraction.substr(leading_zeroes);
+  if (significant.size() > 8U &&
+      std::any_of(significant.begin() + 8, significant.end(),
+                  [](char ch) { return ch != '0'; })) {
+    return std::nullopt;
+  }
+  std::string mantissa(significant.substr(0, std::min<std::size_t>(8U, significant.size())));
+  mantissa.resize(8U, '0');
+  const int target = std::stoi(mantissa.substr(6U, 2U));
+  if (target <= 0)
+    return std::nullopt;
+  return NaturalFractionalSelectorEncoding{
+      .delivered_value = mantissa.substr(0U, 1U) + "." + mantissa.substr(1U) + "E-" +
+                         std::to_string(leading_zeroes + 1U),
+      .target = target,
+  };
+}
+
+bool is_canonical_natural_fractional_selector_encoding(std::string_view value) {
+  if (value.size() < 12U || value.at(0) < '1' || value.at(0) > '9' ||
+      value.at(1) != '.' || value.substr(9U, 2U) != "E-") {
+    return false;
+  }
+  if (!std::all_of(value.begin() + 2, value.begin() + 9,
+                   [](char ch) { return ch >= '0' && ch <= '9'; })) {
+    return false;
+  }
+  const std::string_view exponent = value.substr(11U);
+  return !exponent.empty() && exponent.front() >= '1' && exponent.front() <= '9' &&
+         std::all_of(exponent.begin(), exponent.end(),
+                     [](char ch) { return ch >= '0' && ch <= '9'; });
+}
+
+bool is_canonical_raw_address_selector(std::string_view value) {
+  if (value.size() != 2U)
+    return false;
+  bool has_raw_digit = false;
+  for (const char ch : value) {
+    if (ch >= '0' && ch <= '9')
+      continue;
+    if (ch < 'A' || ch > 'F')
+      return false;
+    has_raw_digit = true;
+  }
+  return has_raw_digit;
+}
+
+bool has_proved_address_projection(std::string_view value) {
+  return has_exact_plain_decimal_address_projection(value) ||
+         is_canonical_natural_fractional_selector_encoding(value) ||
+         is_canonical_raw_address_selector(value);
+}
+
 bool register_is_written(const std::vector<MachineItem>& items,
                          const AuthoritativePostLayoutControlFlow& flow,
                          int register_index_value) {
@@ -449,24 +581,36 @@ std::vector<SelectorCandidate> selector_candidates(
       if (!is_literal_runtime_preload(report))
         continue;
       const std::string& value = report.value;
-      if (!has_exact_plain_decimal_address_projection(value))
-        continue;
-      std::optional<IndirectAddressEvaluation> evaluated;
-      try {
-        evaluated = evaluate_indirect_address(
-            name, value, IndirectOperationKind::Flow, options.address_space_model);
-      } catch (const std::exception&) {
-        continue;
-      }
-      if (evaluated.has_value() && evaluated->actual_flow_target.has_value()) {
+      const auto append = [&](const std::string& delivered_value) {
+        if (!has_proved_address_projection(delivered_value))
+          return;
+        std::optional<IndirectAddressEvaluation> evaluated;
+        try {
+          evaluated = evaluate_indirect_address(
+              name, delivered_value, IndirectOperationKind::Flow,
+              options.address_space_model);
+        } catch (const std::exception&) {
+          return;
+        }
+        if (!evaluated.has_value() || !evaluated->actual_flow_target.has_value())
+          return;
+        const int target = *evaluated->actual_flow_target;
+        if (std::any_of(result.begin(), result.end(), [&](const SelectorCandidate& candidate) {
+              return candidate.register_index == index && candidate.fixed_target == target;
+            })) {
+          return;
+        }
         result.push_back(SelectorCandidate{
             .register_index = index,
             .register_name = name,
             .origin = NaturalTargetSelectorOrigin::ExistingPreload,
-            .value = value,
-            .fixed_target = *evaluated->actual_flow_target,
+            .value = delivered_value,
+            .fixed_target = target,
         });
-      }
+      };
+      append(value);
+      if (const auto natural = natural_fractional_selector_encoding(value))
+        append(natural->delivered_value);
     }
 
   }
@@ -781,6 +925,28 @@ NonFlowUseProjection prove_fractional_nonflow_projection(
   return result;
 }
 
+bool prove_numeric_nonflow_projection(const std::vector<MachineItem>& items,
+                                      int register_index_value) {
+  for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
+    const MachineItem& item = items.at(item_index);
+    if (item.kind != MachineItemKind::Op)
+      continue;
+    if (is_indirect_flow(item.opcode) && encoded_register(item.opcode) == register_index_value)
+      continue;
+    if (is_indirect_memory(item.opcode) && encoded_register(item.opcode) == register_index_value)
+      return false;
+    if (!direct_recall_of(item, register_index_value))
+      continue;
+    const std::optional<std::size_t> next = next_cell_item(items, item_index);
+    if (!next.has_value() || items.at(*next).kind != MachineItemKind::Op ||
+        items.at(*next).opcode < 0x10 || items.at(*next).opcode > 0x13 ||
+        items.at(*next).manual_interaction.has_value()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::optional<std::size_t> target_origin_for_flow_use(
     const AuthoritativePostLayoutControlFlow& flow, std::size_t use) {
   const auto targets = flow.indirect_flow_targets.find(use);
@@ -792,7 +958,7 @@ std::optional<std::size_t> target_origin_for_flow_use(
 bool preload_value_targets(const std::string& register_name_value,
                            const std::string& value, int target,
                            AddressSpaceModel model) {
-  if (!has_exact_plain_decimal_address_projection(value))
+  if (!has_proved_address_projection(value))
     return false;
   try {
     const std::optional<IndirectAddressEvaluation> evaluated = evaluate_indirect_address(
@@ -863,6 +1029,24 @@ bool rebind_preloads(
     }
     if (preload_value_targets(name, old_value, new_target->second, model))
       continue;
+
+    if (reg == candidate.register_index && candidate.value.has_value()) {
+      const std::optional<NaturalFractionalSelectorEncoding> natural =
+          natural_fractional_selector_encoding(old_value);
+      if (natural.has_value() && natural->target == new_target->second &&
+          natural->delivered_value == *candidate.value &&
+          preload_value_targets(name, *candidate.value, new_target->second, model) &&
+          prove_numeric_nonflow_projection(original_items, reg)) {
+        preloads.at(preload->second).value = *candidate.value;
+        rewrites.push_back(NaturalTargetPreloadRewrite{
+            .register_name = name,
+            .old_value = old_value,
+            .new_value = *candidate.value,
+            .fractional_projection_only = false,
+        });
+        continue;
+      }
+    }
 
     const NonFlowUseProjection projection =
         prove_fractional_nonflow_projection(original_items, reg);
@@ -1177,7 +1361,7 @@ std::optional<std::vector<NaturalTargetRuntimeSelectorProof>> prove_runtime_sele
     if (!stable || !unwritten)
       return std::nullopt;
     const std::string& value = preloads.at(preload->second).value;
-    if (!has_exact_plain_decimal_address_projection(value))
+    if (!has_proved_address_projection(value))
       return std::nullopt;
     std::optional<IndirectAddressEvaluation> decoded;
     try {
@@ -1254,37 +1438,50 @@ std::optional<CandidateArtifact> try_candidate(
     const std::vector<DirectCallSite>& calls,
     const SelectorCandidate& selector, std::size_t target_origin,
     const TraceGraph& original_trace,
-    const std::vector<ExternalIdentity>& original_external) {
+    const std::vector<ExternalIdentity>& original_external,
+    std::vector<std::string>* rejection_reasons) {
+  const auto reject = [&](std::string reason) -> std::optional<CandidateArtifact> {
+    if (rejection_reasons != nullptr) {
+      const std::string detail = "R" + selector.register_name + "->" +
+                                 std::to_string(selector.fixed_target) + " target-item=" +
+                                 std::to_string(target_origin) + ": " + reason;
+      if (std::find(rejection_reasons->begin(), rejection_reasons->end(), detail) ==
+          rejection_reasons->end()) {
+        rejection_reasons->push_back(detail);
+      }
+    }
+    return std::nullopt;
+  };
   std::vector<NaturalTargetCallRewrite> rewrites;
   const std::optional<std::vector<Cell>> converted = convert_direct_calls(
       items, calls, target_origin, selector, rewrites);
   if (!converted.has_value() || rewrites.empty())
-    return std::nullopt;
+    return reject("direct-call conversion failed");
   std::vector<Segment> segments = make_segments(*converted);
 
   const std::optional<std::size_t> main = main_origin(control_flow);
   if (!main.has_value())
-    return std::nullopt;
+    return reject("main entry identity is ambiguous");
   const ArtifactIndex original_index = index_artifact(items);
   if (*main >= original_index.item_addresses.size() ||
       original_index.item_addresses.at(*main) != 0)
-    return std::nullopt;
+    return reject("main entry is not physical cell 00");
   const std::optional<std::pair<std::size_t, int>> main_location =
       locate_origin(segments, *main);
   const std::optional<std::pair<std::size_t, int>> target_location =
       locate_origin(segments, target_origin);
   if (!main_location.has_value() || !target_location.has_value() ||
       main_location->second != 0)
-    return std::nullopt;
+    return reject("main or target component identity cannot be located");
 
   if (selector.origin != NaturalTargetSelectorOrigin::ExistingPreload)
-    return std::nullopt;
+    return reject("selector is not an existing stable preload");
   const int natural_target = selector.fixed_target;
   const std::optional<std::vector<std::size_t>> order = layout_order_for_target(
       segments, main_location->first, target_location->first,
       target_location->second, natural_target, options.maximum_subset_states);
   if (!order.has_value())
-    return std::nullopt;
+    return reject("no fallthrough-closed component subset reaches the natural target");
 
   CandidateArtifact candidate;
   candidate.items = flatten_segments(segments, *order, candidate.new_item_by_origin);
@@ -1292,7 +1489,7 @@ std::optional<CandidateArtifact> try_candidate(
       origin_addresses(candidate.items, candidate.new_item_by_origin);
   const auto target_address = new_address_by_origin.find(target_origin);
   if (target_address == new_address_by_origin.end() || target_address->second != natural_target)
-    return std::nullopt;
+    return reject("flattened component order missed the natural target");
   for (NaturalTargetCallRewrite& rewrite : rewrites)
     rewrite.target_address = natural_target;
 
@@ -1306,7 +1503,7 @@ std::optional<CandidateArtifact> try_candidate(
       !retarget_indirect_facts(candidate.items, control_flow,
                                candidate.new_item_by_origin, new_address_by_origin,
                                rewrites)) {
-    return std::nullopt;
+    return reject("direct or indirect target rebinding failed");
   }
 
   std::map<std::size_t, int> original_address_by_origin;
@@ -1318,7 +1515,7 @@ std::optional<CandidateArtifact> try_candidate(
                        new_address_by_origin, selector, rewrites,
                        options.address_space_model, candidate.preloads,
                        preload_rewrites)) {
-    return std::nullopt;
+    return reject("runtime preload rebinding proof failed");
   }
 
   PostLayoutControlFlowOptions final_options;
@@ -1330,13 +1527,16 @@ std::optional<CandidateArtifact> try_candidate(
     const auto rebound =
         new_address_by_origin.find(control_flow.empty_return_target->item_index);
     if (rebound == new_address_by_origin.end())
-      return std::nullopt;
+      return reject("empty-return target identity was lost");
     final_options.empty_return_target = rebound->second;
   }
   const AuthoritativePostLayoutControlFlow final_flow =
       build_post_layout_control_flow(candidate.items, final_options);
-  if (!final_flow.proved)
-    return std::nullopt;
+  if (!final_flow.proved) {
+    return reject("final control-flow proof failed" +
+                  (final_flow.reasons.empty() ? std::string{}
+                                              : ": " + final_flow.reasons.front()));
+  }
 
   std::map<std::size_t, std::size_t> original_origin_by_item;
   for (std::size_t index = 0; index < items.size(); ++index)
@@ -1353,10 +1553,16 @@ std::optional<CandidateArtifact> try_candidate(
       prove_runtime_selectors(items, control_flow, candidate.items, final_flow,
                               rewritten_origin_by_item, candidate.preloads,
                               options.address_space_model);
-  if (!rewritten_trace.has_value() || !rewritten_external.has_value() ||
-      !runtime_selectors.has_value() || *rewritten_trace != original_trace ||
-      *rewritten_external != original_external)
-    return std::nullopt;
+  if (!rewritten_trace.has_value())
+    return reject("rewritten identity trace is incomplete");
+  if (!rewritten_external.has_value())
+    return reject("rewritten external-entry ledger is incomplete");
+  if (!runtime_selectors.has_value())
+    return reject("runtime selector proof failed");
+  if (*rewritten_trace != original_trace)
+    return reject("rewritten identity trace differs from the logical input");
+  if (*rewritten_external != original_external)
+    return reject("rewritten external-entry ledger differs from the logical input");
 
   NaturalTargetComponentLayoutPlan& plan = candidate.plan;
   plan.selector_origin = selector.origin;
@@ -1386,7 +1592,7 @@ std::optional<CandidateArtifact> try_candidate(
                 plan.indirect_memory_equivalent && plan.data_projection_equivalent &&
                 plan.final_artifact_proved;
   if (!plan.proved)
-    return std::nullopt;
+    return reject("final stack/X2, indirect-memory, or size proof failed");
   return candidate;
 }
 
@@ -1401,6 +1607,15 @@ bool better_candidate(const CandidateArtifact& left, const CandidateArtifact& ri
 }
 
 } // namespace
+
+std::optional<std::vector<MachineItem>> normalize_natural_target_overflow_formals(
+    const std::vector<MachineItem>& items, AddressSpaceModel model) {
+  const std::optional<OverflowTargetNormalization> normalized =
+      normalize_overflow_formals(items, model);
+  if (!normalized.has_value())
+    return std::nullopt;
+  return normalized->items;
+}
 
 NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     const std::vector<MachineItem>& items,
@@ -1418,18 +1633,42 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     add_reason(result.plan, "input post-layout control flow is not authoritative");
     return result;
   }
+  const std::optional<OverflowTargetNormalization> normalized =
+      normalize_overflow_formals(items, options.address_space_model);
+  if (!normalized.has_value()) {
+    add_reason(result.plan, "overflow label formal operands cannot be normalized safely");
+    return result;
+  }
+  const std::vector<MachineItem>& logical_items = normalized->items;
+  const AuthoritativePostLayoutControlFlow* logical_flow = &control_flow;
+  std::optional<AuthoritativePostLayoutControlFlow> rebuilt_logical_flow;
+  if (normalized->changed) {
+    PostLayoutControlFlowOptions logical_flow_options;
+    logical_flow_options.address_space_model = options.address_space_model;
+    logical_flow_options.maximum_execution_states =
+        static_cast<std::size_t>(options.maximum_execution_states);
+    if (control_flow.empty_return_target.has_value())
+      logical_flow_options.empty_return_target = control_flow.empty_return_target->address;
+    rebuilt_logical_flow =
+        build_post_layout_control_flow(logical_items, logical_flow_options);
+    if (!rebuilt_logical_flow->proved) {
+      add_reason(result.plan, "logical overflow-label control flow is not authoritative");
+      return result;
+    }
+    logical_flow = &*rebuilt_logical_flow;
+  }
   if (options.maximum_execution_states <= 0 || options.maximum_subset_states == 0U) {
     add_reason(result.plan, "proof search cap is not positive");
     return result;
   }
-  const ArtifactIndex index = index_artifact(items);
+  const ArtifactIndex index = index_artifact(logical_items);
   const std::optional<std::vector<DirectReference>> references =
-      collect_direct_references(items, index, options.address_space_model);
+      collect_direct_references(logical_items, index, options.address_space_model);
   if (!references.has_value()) {
     add_reason(result.plan, "direct command identities cannot be resolved exactly");
     return result;
   }
-  const std::vector<DirectCallSite> calls = direct_calls(*references, items);
+  const std::vector<DirectCallSite> calls = direct_calls(*references, logical_items);
   if (calls.empty()) {
     add_reason(result.plan, "artifact contains no direct call to shorten");
     return result;
@@ -1439,17 +1678,17 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index)
     original_origin_by_item.emplace(item_index, item_index);
   const std::optional<TraceGraph> original_trace = build_trace_graph(
-      items, control_flow, original_origin_by_item, options.address_space_model,
+      logical_items, *logical_flow, original_origin_by_item, options.address_space_model,
       options.maximum_execution_states);
   const std::optional<std::vector<ExternalIdentity>> original_external =
-      external_identities(control_flow, original_origin_by_item);
+      external_identities(*logical_flow, original_origin_by_item);
   if (!original_trace.has_value() || !original_external.has_value()) {
     add_reason(result.plan, "input identity trace or external-entry ledger is incomplete");
     return result;
   }
 
   const std::vector<SelectorCandidate> selectors = selector_candidates(
-      items, preloads, control_flow, options);
+      logical_items, preloads, *logical_flow, options);
 
   std::set<std::size_t> call_targets;
   for (const DirectCallSite& call : calls)
@@ -1457,11 +1696,11 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   std::optional<CandidateArtifact> best;
   for (const SelectorCandidate& selector : selectors) {
     for (const std::size_t target : call_targets) {
-      if (!selector_existing_uses_match_target(selector, target, items, control_flow))
+      if (!selector_existing_uses_match_target(selector, target, logical_items, *logical_flow))
         continue;
       const std::optional<CandidateArtifact> candidate = try_candidate(
-          items, preloads, control_flow, options, *references, calls, selector,
-          target, *original_trace, *original_external);
+          logical_items, preloads, *logical_flow, options, *references, calls, selector,
+          target, *original_trace, *original_external, &result.plan.reasons);
       if (candidate.has_value() &&
           (!best.has_value() || better_candidate(*candidate, *best))) {
         best = candidate;

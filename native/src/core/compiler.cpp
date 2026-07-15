@@ -48550,9 +48550,15 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
       core::PostLayoutControlFlowOptions control_options;
       control_options.address_space_model = address_space_model_for_options(options);
       control_options.empty_return_target = 1;
-      const core::AuthoritativePostLayoutControlFlow control_flow =
-          core::build_post_layout_control_flow(post_layout_items, control_options);
-      if (control_flow.proved) {
+      const std::optional<std::vector<MachineItem>> natural_layout_input =
+          core::normalize_natural_target_overflow_formals(
+              post_layout_items, address_space_model_for_options(options));
+      core::AuthoritativePostLayoutControlFlow control_flow;
+      if (natural_layout_input.has_value()) {
+        control_flow =
+            core::build_post_layout_control_flow(*natural_layout_input, control_options);
+      }
+      if (natural_layout_input.has_value() && control_flow.proved) {
         const core::NaturalTargetComponentLayoutOptions natural_options{
             .address_space_model = address_space_model_for_options(options),
         };
@@ -48573,11 +48579,13 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
         };
 
         consider_layout(core::optimize_natural_target_component_layout(
-                            post_layout_items, effective_preloads, control_flow, natural_options),
+                            *natural_layout_input, effective_preloads, control_flow,
+                            natural_options),
                         std::nullopt);
 
         const auto refreshed_contracts =
-            refresh_helper_semantic_alias_contracts(post_layout_items, semantic_alias_contracts);
+            refresh_helper_semantic_alias_contracts(*natural_layout_input,
+                                                    semantic_alias_contracts);
         if (refreshed_contracts.has_value()) {
           core::HelperSemanticAliasOptions alias_options;
           alias_options.address_space_model = address_space_model_for_options(options);
@@ -48587,11 +48595,11 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
           alias_options.defer_preload_rebind = true;
           alias_options.identity_check_numeric_indirect_flow = true;
           const core::HelperSemanticAliasResult aliased = core::optimize_helper_semantic_alias(
-              post_layout_items, *refreshed_contracts, alias_options);
+              *natural_layout_input, *refreshed_contracts, alias_options);
           if (aliased.applied > 0 && aliased.proof.rewrite_proved &&
               aliased.proof.preload_rebind_deferred && aliased.proof.final_control_flow_proved &&
               core::machine_cell_count(aliased.items) <
-                  core::machine_cell_count(post_layout_items)) {
+                  core::machine_cell_count(*natural_layout_input)) {
             consider_layout(core::optimize_natural_target_component_layout(
                                 aliased.items, effective_preloads, aliased.proof.final_control_flow,
                                 natural_options),
@@ -48824,6 +48832,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.conditional_branch_trampoline || options.shared_straight_line_call_bodies ||
          options.callee_hole_straight_line_helper ||
          options.disable_interprocedural_opts || options.coalesce_copies ||
+         options.disable_return_suffix_gadget ||
          options.aggressive_indirect_call_threshold || options.aggressive_indirect_call ||
          options.dual_use_constant_indirect_flow || options.aggressive_post_layout_indirect_flow ||
          options.preloaded_indirect_flow || options.forward_indirect_flow ||
@@ -49535,6 +49544,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";disable_aggressive_post_layout=" << options.disable_aggressive_post_layout
       << ";return_stack_script=" << options.return_stack_script
       << ";disable_return_stack_script=" << options.disable_return_stack_script
+      << ";disable_return_suffix_gadget=" << options.disable_return_suffix_gadget
       << ";preloaded_indirect_flow=" << options.preloaded_indirect_flow
       << ";forward_indirect_flow=" << options.forward_indirect_flow
       << ";runtime_indirect_call_flow=" << options.runtime_indirect_call_flow
@@ -64985,6 +64995,59 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
       });
       best_options = selected_finalist->options;
       best = std::move(*finalized_best);
+    }
+  }
+
+  // Return-suffix outlining and natural-target component layout optimize
+  // different representations of the same call graph.  A suffix-free option
+  // considered near the start of candidate search cannot inherit the lowering
+  // choices that eventually win.  Compose the alternative once with the exact
+  // selected option bundle, then accept it only when the independently proved
+  // final artifact is strictly smaller.
+  if (needs_size_rescue && best.implemented && best.steps.size() > official_program_limit &&
+      !best_options.disable_return_suffix_gadget) {
+    try {
+      CompileOptions candidate_options = best_options;
+      candidate_options.disable_return_suffix_gadget = true;
+      CompileOptions compile_options = candidate_options;
+      CompileResult candidate = compile_source_once(source, compile_options, source_has_entered,
+                                                    /*apply_final_layout_size_rescue=*/true);
+      if (!candidate.implemented &&
+          can_retry_lowering_attempt_in_analysis(candidate, compile_options)) {
+        compile_options.analysis = true;
+        candidate = compile_source_once(source, compile_options, source_has_entered,
+                                        /*apply_final_layout_size_rescue=*/true);
+      }
+      const bool static_proof_accepted =
+          !candidate_needs_static_proof_gate(compile_options) ||
+          !optimizer_static_gate_rejection_reason(compile_options, candidate).has_value();
+      if (candidate.implemented && static_proof_accepted &&
+          candidate.steps.size() < best.steps.size()) {
+        for (const OptimizationReport& optimization : best.optimizations) {
+          const bool present = std::any_of(
+              candidate.optimizations.begin(), candidate.optimizations.end(),
+              [&](const OptimizationReport& existing) {
+                return existing.name == optimization.name &&
+                       existing.detail == optimization.detail;
+              });
+          if (!present)
+            candidate.optimizations.push_back(optimization);
+        }
+        for (const CandidateReport& rejected : best.rejected_candidates)
+          append_candidate_report_once(candidate.rejected_candidates, rejected);
+        candidate.optimizations.push_back(OptimizationReport{
+            .name = "return-suffix-free-final-layout",
+            .detail = "Recompiled the selected lowering without return-suffix outlining so the "
+                      "exact final component-layout proof could compare an independent call "
+                      "graph and selected " + std::to_string(candidate.steps.size()) +
+                      " cells instead of " + std::to_string(best.steps.size()) + ".",
+        });
+        best_options = std::move(candidate_options);
+        best = std::move(candidate);
+      }
+    } catch (const std::exception&) {
+      // This composition is opportunistic; retain the proved selected layout
+      // when the suffix-free alternative cannot be lowered.
     }
   }
 

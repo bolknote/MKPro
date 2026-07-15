@@ -273,6 +273,42 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
   }
 
   {
+    Fixture input = fixture(2, 5, true, 76);
+    for (PreloadReport& preload : input.preloads) {
+      if (preload.register_name == "8")
+        preload.value = "0.41200076";
+    }
+    const auto selector_recall =
+        std::find_if(input.items.begin(), input.items.end(), [](const MachineItem& item) {
+          return item.kind == MachineItemKind::Op && item.opcode == 0x68;
+        });
+    require(selector_recall != input.items.end(),
+            "fractional-selector fixture should contain an ordinary data recall");
+    const std::size_t recall_index =
+        static_cast<std::size_t>(std::distance(input.items.begin(), selector_recall));
+    require(recall_index + 1U < input.items.size() &&
+                input.items.at(recall_index + 1U).opcode == 0x35,
+            "fractional-selector fixture should expose the expected projection use");
+    input.items.at(recall_index + 1U) = op(0x12);
+
+    const core::AuthoritativePostLayoutControlFlow input_flow = flow(input);
+    require(input_flow.proved,
+            "fractional-selector fixture should have an exact original CFG");
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, input_flow);
+    const std::map<std::string, std::string> final_preloads =
+        preload_map(rewritten.preloads);
+    require(rewritten.plan.proved && rewritten.applied == 2 &&
+                rewritten.plan.selector_register == "8" &&
+                rewritten.plan.natural_target == 76 &&
+                final_preloads.at("8") == "4.1200076E-1",
+            "a hidden fractional constant should retain its numeric value while its canonical "
+            "BCD entry supplies a proved natural call target: " +
+                (rewritten.plan.reasons.empty() ? std::string("no reason")
+                                                : rewritten.plan.reasons.front()));
+  }
+
+  {
     Fixture input = fixture(2, 3, true);
     for (PreloadReport& preload : input.preloads) {
       if (preload.register_name == "8")
@@ -307,12 +343,62 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
     }
     const core::AuthoritativePostLayoutControlFlow input_flow = flow(input);
     require(input_flow.proved,
-            "formal-address negative should still have a valid original CFG");
-    const auto rejected = core::optimize_natural_target_component_layout(
+            "ordinary formal-address fixture should have a valid original CFG");
+    const auto rewritten = core::optimize_natural_target_component_layout(
         input.items, input.preloads, input_flow);
-    require(!rejected.plan.proved && rejected.applied == 0 &&
-                reason_contains(rejected.plan, "direct command identities"),
-            "formal address operands must fail closed instead of losing byte semantics");
+    require(rewritten.plan.proved && rewritten.applied == 2 &&
+                rewritten.removed_cells == 2,
+            "wrapped ordinary formal address operands should follow their proved label identity");
+  }
+
+  {
+    Fixture input = fixture(2, 3, true);
+    const auto helper = std::find_if(input.items.begin(), input.items.end(),
+                                     [](const MachineItem& item) {
+                                       return item.kind == MachineItemKind::Label &&
+                                              item.name.starts_with("opaque_leaf_");
+                                     });
+    require(helper != input.items.end(), "overflow fixture should contain its helper label");
+    const std::size_t helper_index =
+        static_cast<std::size_t>(std::distance(input.items.begin(), helper));
+    require(helper_index + 2U < input.items.size(),
+            "overflow fixture helper should contain a command and return");
+    std::vector<MachineItem> moved_helper(
+        input.items.begin() + static_cast<std::ptrdiff_t>(helper_index),
+        input.items.begin() + static_cast<std::ptrdiff_t>(helper_index + 3U));
+    input.items.erase(input.items.begin() + static_cast<std::ptrdiff_t>(helper_index),
+                      input.items.begin() + static_cast<std::ptrdiff_t>(helper_index + 3U));
+    const std::vector<MachineItem> old_helper_replacement{
+        MachineItem::label("old_helper_replacement"), op(0x0d), stop()};
+    input.items.insert(input.items.begin() + static_cast<std::ptrdiff_t>(helper_index),
+                       old_helper_replacement.begin(), old_helper_replacement.end());
+    std::vector<MachineItem> overflow_padding;
+    overflow_padding.push_back(MachineItem::label("overflow_padding"));
+    for (int cell = 0; cell < 69; ++cell)
+      overflow_padding.push_back(op(0x0d));
+    overflow_padding.push_back(stop());
+    input.items.insert(input.items.end(), overflow_padding.begin(), overflow_padding.end());
+    input.items.insert(input.items.end(), moved_helper.begin(), moved_helper.end());
+    const int moved_helper_address = cell_count(input.items) - 2;
+    for (MachineItem& item : input.items) {
+      if (item.kind == MachineItemKind::Address &&
+          std::holds_alternative<std::string>(item.target) &&
+          std::get<std::string>(item.target).starts_with("opaque_leaf_")) {
+        item.target = moved_helper_address;
+        item.formal_opcode = 0x85;
+      }
+    }
+    const core::AuthoritativePostLayoutControlFlow input_flow = flow(input);
+    require(input_flow.proved,
+            "wrapped over-window fixture should still have a physical input CFG");
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, input_flow);
+    require(rewritten.plan.proved && rewritten.applied == 2 &&
+                rewritten.removed_cells == 2 && rewritten.plan.natural_target == 34,
+            "over-window calls should follow normalized label identities into proved layout: " +
+                (rewritten.plan.reasons.empty() ? std::string("no reason")
+                                                : rewritten.plan.reasons.front()) +
+                "; applied=" + std::to_string(rewritten.applied));
   }
 
   {

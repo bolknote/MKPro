@@ -6,6 +6,7 @@
 #include "mkpro/core/result.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -86,6 +87,13 @@ struct NaturalTargetComponentLayoutResult {
   int removed_cells = 0;
 };
 
+// Recover authoritative label or numeric identities from resolver-generated
+// wrapped formal operands whose targets currently lie beyond the official
+// window. Opaque/raw and super-dark multi-command operands fail closed.
+std::optional<std::vector<MachineItem>> normalize_natural_target_overflow_formals(
+    const std::vector<MachineItem>& items,
+    AddressSpaceModel model = AddressSpaceModel::Standard);
+
 // Reorder generic fallthrough-closed machine segments so a called command
 // identity lands on an address already represented by a stable internal
 // register.  Every converted direct PP keeps its continuation identity and is
@@ -107,6 +115,13 @@ struct NaturalTargetComponentLayoutResult {
 // Computed/generated setup preloads are not literals: any setup expression or
 // setup target metadata makes the candidate fail closed because changing only
 // PreloadReport::value would not prove the value delivered by the setup code.
+// A positive fractional literal may also be re-entered in its canonical
+// eight-digit scientific form when that representation exposes a useful BCD
+// flow target. This is accepted only when every non-flow recall is consumed
+// immediately by ordinary arithmetic; raw-sensitive uses fail closed.
+// Existing two-digit raw BCD selectors are retained only when the authoritative
+// machine decoder maps them back to the same command identity before and after
+// layout.
 NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     const std::vector<MachineItem>& items,
     const std::vector<PreloadReport>& preloads,

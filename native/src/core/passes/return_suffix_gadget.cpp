@@ -483,7 +483,8 @@ void merge_semantic_call_range(std::vector<IrOp>& ops, int target_start, int sou
 } // namespace
 
 PassResult return_suffix_gadget(const std::vector<IrOp>& ops, const PassContext& context) {
-  (void)context;
+  if (context.options.disable_return_suffix_gadget)
+    return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
   if (has_numeric_outline_flow_target(ops))
     return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
   if (has_shared_straight_line_helper_label(ops))
