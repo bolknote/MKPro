@@ -14,7 +14,7 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 154 | 105 | +49 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 153 | 105 | +48 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
@@ -60,6 +60,9 @@ mode may reject over-window programs earlier than the analysis path.
   overflow. For this source that selects the general stack-resident option,
   places the shared normalizer at the existing stable R8 target, shortens five
   calls, and reduces the fully verified result from 163 to 154 cells.
+- A later generic optimizer pass reduced the fully verified result from 154 to
+  153 cells without source-specific recognition. The remaining gap to the
+  MK-61 program window is 48 cells.
 - Optimizer tests must use unrelated synthetic programs and local proof
   obligations. The tic-tac-toe fixture may lock only its size and observable
   UI; it must not select or justify an optimization by recognizing this game
