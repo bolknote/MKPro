@@ -94,6 +94,8 @@ IR and lowering optimizer switches:
   --setup-only-counted-loop-init  Move counted-loop initialization into setup.
   --show-read-guarded-transfer    Guard read-driven transfers for display safety.
   --stack-resident-temps          Keep eligible temporaries on the stack.
+  --pack-counter-stripes         Pack compatible counters into decimal stripes.
+  --sentinel-decimal-pack        Pack compatible counters with a leading sentinel.
   --stack-argument-helper-entries Add stack-argument entries for eligible shared helpers.
   --stack-argument-function-entries
                                   Add stack-argument entries for eligible value functions.
@@ -1266,6 +1268,10 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       options.show_read_guarded_transfer = true;
     } else if (arg == "--stack-resident-temps") {
       options.stack_resident_temps = true;
+    } else if (arg == "--pack-counter-stripes") {
+      options.pack_counter_stripes = true;
+    } else if (arg == "--sentinel-decimal-pack") {
+      options.sentinel_decimal_pack = true;
     } else if (arg == "--stack-argument-helper-entries") {
       options.stack_argument_helper_entries = true;
     } else if (arg == "--stack-argument-function-entries") {

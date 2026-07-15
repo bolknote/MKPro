@@ -411,6 +411,36 @@ void compiler_lowers_initial_v2_subset() {
   require(basic.listing.find("loop back") != std::string::npos,
           "basic listing should include loop back");
 
+  const CompileResult compound_arithmetic_updates = compile_source(R"mkpro(
+program CompoundArithmeticUpdates {
+  state {
+    value: packed = 1
+    factor: packed = 2
+  }
+  loop {
+    value = read()
+    factor = read()
+    value *= factor
+    value /= (
+      factor + 1
+    )
+    halt(value)
+  }
+}
+)mkpro");
+  require(compound_arithmetic_updates.implemented,
+          "native compiler should lower multiply and divide assignments");
+  require(compound_arithmetic_updates.diagnostics.empty(),
+          "multiply and divide assignments should not report diagnostics");
+  require(std::any_of(compound_arithmetic_updates.steps.begin(),
+                      compound_arithmetic_updates.steps.end(),
+                      [](const ResolvedStep& step) { return step.opcode == 0x12; }),
+          "multiply assignment should emit multiplication");
+  require(std::any_of(compound_arithmetic_updates.steps.begin(),
+                      compound_arithmetic_updates.steps.end(),
+                      [](const ResolvedStep& step) { return step.opcode == 0x13; }),
+          "divide assignment should emit division");
+
   const CompileResult invoked = compile_source(R"mkpro(
 program InvokeProcedure {
   state {

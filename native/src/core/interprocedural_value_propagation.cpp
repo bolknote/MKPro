@@ -307,6 +307,10 @@ std::optional<Expression> effective_assignment_expression(const V2Statement& sta
     op = "+";
   else if (*statement.op == "-=")
     op = "-";
+  else if (*statement.op == "*=")
+    op = "*";
+  else if (*statement.op == "/=")
+    op = "/";
   else
     return std::nullopt;
   Expression target;

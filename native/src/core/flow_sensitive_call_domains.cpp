@@ -714,10 +714,12 @@ private:
       if (statement.kind == "v2_update" && value.has_value()) {
         const auto previous = input.domains.find(target);
         if (previous == input.domains.end() || !statement.op.has_value() ||
-            (*statement.op != "+=" && *statement.op != "-=")) {
+            (*statement.op != "+=" && *statement.op != "-=" && *statement.op != "*=")) {
           value.reset();
         } else {
-          value = arithmetic_value(previous->second, *value, *statement.op == "+=" ? "+" : "-");
+          const std::string op =
+              *statement.op == "+=" ? "+" : (*statement.op == "-=" ? "-" : "*");
+          value = arithmetic_value(previous->second, *value, op);
         }
       }
       if (value.has_value())

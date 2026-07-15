@@ -1010,6 +1010,11 @@ report tied to proof-backed optimizer behavior rather than to template paths.
 
 The parser keeps these high-level statements as typed source nodes:
 
+An expression may continue on following physical lines while `(` or `[` is
+open, or after an unfinished operator such as `+`, `*`, `=`, or `,`. The whole
+expression remains one source statement and keeps the line number of its first
+physical line.
+
 - `show(...)`
 - `preview(expr)`
 - `name = read()`
@@ -1017,6 +1022,8 @@ The parser keeps these high-level statements as typed source nodes:
 - `name = expr`
 - `name += expr`
 - `name -= expr`
+- `name *= expr`
+- `name /= expr`
 - `name++`
 - `name--`
 - `if predicate { ... }`, `unless predicate { ... }`,

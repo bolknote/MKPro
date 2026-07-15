@@ -3,6 +3,7 @@
 - Автор и публикатор: `Hs On`
 - Опубликовано: 14 июля 2026 года в Telegram-чате «МК61 / МК52 / МК85»
 - Программа: [zagaday-tsifru-hs-on.txt](zagaday-tsifru-hs-on.txt)
+- Исходник MKPro: [zagaday-tsifru.mkpro](../examples/zagaday-tsifru.mkpro)
 
 ## Описание
 

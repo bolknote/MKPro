@@ -221,6 +221,42 @@ program StackZT {
   require(rich_program.v2->rules.at(0).params == std::vector<std::string>{"delta"},
           "function params should parse");
 
+  const ProgramAst multiline_updates = parse_program(R"mkpro(
+program MultilineUpdates {
+  state {
+    value: packed = 8
+    factor: counter 1..9 = 2
+  }
+  loop {
+    value *= (
+      factor +
+      1
+    )
+    value /=
+      factor
+    value = value *
+      (
+        factor + 1
+      )
+    halt(
+      value
+    )
+  }
+}
+)mkpro");
+  const auto& multiline_body = multiline_updates.v2->body.at(0).body;
+  require(multiline_body.size() == 4, "continued expressions should remain four statements");
+  require(multiline_body.at(0).kind == "v2_update" && multiline_body.at(0).op == "*=",
+          "multiply assignment should parse as an update");
+  require(multiline_body.at(1).kind == "v2_update" && multiline_body.at(1).op == "/=",
+          "divide assignment should parse as an update");
+  require(parse_expression(*multiline_body.at(0).expr, multiline_body.at(0).line).kind == "binary",
+          "parenthesized multiline update expression should parse");
+  require(parse_expression(*multiline_body.at(2).expr, multiline_body.at(2).line).kind == "binary",
+          "operator-continued assignment expression should parse");
+  require(multiline_body.at(3).kind == "v2_stop",
+          "multiline call expression should parse as its original statement");
+
   const ProgramAst spatial_program = parse_program(R"mkpro(
 program Queries {
   cave: board(row_scan)

@@ -63,11 +63,11 @@ AddressSpaceModel address_space_model_for_options(const CompileOptions& options)
 }
 
 int safe_address_to_opcode(int address, std::vector<Diagnostic>& diagnostics,
-                           const CompileOptions& options) {
+                           const CompileOptions& options, bool provisional_over_budget) {
   try {
     return official_address_to_opcode(address, address_space_model_for_options(options));
   } catch (const std::exception& error) {
-    if (options.analysis && address >= 0)
+    if ((options.analysis || provisional_over_budget) && address >= 0 && address <= 0xff)
       return address & 0xff;
     append_diagnostic(diagnostics, DiagnosticSeverity::Error, "address-out-of-range", error.what());
     return -1;
@@ -264,6 +264,9 @@ ResolvedProgram resolve_machine_items(const std::vector<MachineItem>& items,
     }
   }
 
+  const bool provisional_over_budget =
+      address > official_program_step_limit(address_space_model_for_options(options));
+
   ResolvedProgram result;
   address = 0;
   for (const MachineItem& item : items) {
@@ -297,7 +300,8 @@ ResolvedProgram resolve_machine_items(const std::vector<MachineItem>& items,
 
     const int opcode = item.formal_opcode.has_value()
                            ? *item.formal_opcode
-                           : safe_address_to_opcode(target_address, result.diagnostics, options);
+                           : safe_address_to_opcode(target_address, result.diagnostics, options,
+                                                    provisional_over_budget);
     if (opcode < 0) {
       ++address;
       continue;

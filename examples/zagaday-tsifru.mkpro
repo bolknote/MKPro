@@ -1,0 +1,91 @@
+// Neural number-guessing game published by Hs On in the Telegram chat
+// "МК61 / МК52 / МК85" on 2026-07-14.
+//
+// Seven previous octal digits form 21 binary inputs. Three binary threshold
+// neurons predict bits 4, 2, and 1. Their bipolar weights are packed as seven
+// octal digits; the leading 8 keeps every BCD nibble aligned on the MK-61.
+
+program ZagadayTsifru {
+  const FULL_BITS = 7.7777777
+  const HISTORY_DIVISOR = 10000000
+
+  state {
+    expected_mode_only("grd")
+
+    weights: packed[1..3] = [8, 8, 8]
+    history: packed = 8.0123456
+
+    score: counter -999..999 = 0
+    prediction: counter 0..7 = 0
+    player: counter 0..7 = 0
+
+    ones: counter 0..21 = 0
+    remaining: counter 0..7 = 0
+    neuron_index: counter 1..3 = 1
+    digit: counter 0..7 = 0
+    half: counter 0..3 = 0
+  }
+
+  // Count differing bits in the seven octal digits. Each decimal digit is in
+  // 0..7, where popcount(d) = d - floor(d / 2) - floor(d / 4).
+  fn hamming_distance(weight) {
+    weight = frac(bit_xor(history, weight))
+    ones = 0
+    remaining = 7
+
+    while remaining >= 1 {
+      weight *= 10
+      digit = int(weight)
+      half = int(digit / 2)
+      ones += digit - half - int(half / 2)
+      weight = frac(weight)
+
+      remaining--
+    }
+
+    return int(ones / 11)
+  }
+
+  loop {
+    prediction = 0
+    neuron_index = 3
+    while neuron_index >= 1 {
+      prediction = prediction * 2 + hamming_distance(weights[neuron_index])
+      neuron_index--
+    }
+
+    // Input protocol: show the score; enter 0..7 and press ПП; then the
+    // calculator shows its already-computed prediction with a minus sign.
+    show(score)
+    player = entered(0, 7)
+    show(-prediction)
+
+    score += 8 * abs(sign(player - prediction)) - 7
+
+    // Correct only neurons whose output bit was wrong. For a desired zero the
+    // selected weights move toward the input; for a desired one they move
+    // toward its inverse. The random mask makes the update stochastic.
+    ones = 4
+    neuron_index = 3
+    while neuron_index >= 1 {
+      if bit_and(bit_xor(player, prediction), ones) != 0 {
+        weights[neuron_index] = bit_xor(
+          weights[neuron_index],
+          bit_and(
+            bit_xor(
+              bit_xor(history, weights[neuron_index]),
+              bit_and(player, ones) / ones * FULL_BITS
+            ),
+            8 + random()
+          )
+        )
+      }
+      ones /= 2
+      neuron_index--
+    }
+
+    // Keep the same seven inputs in chronological order: discard the oldest
+    // left digit and append the newest digit on the right.
+    history = 8 + frac(history * 10 + player / HISTORY_DIVISOR)
+  }
+}

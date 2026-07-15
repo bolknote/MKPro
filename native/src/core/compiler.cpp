@@ -7776,14 +7776,16 @@ void collect_locals_from_expression(LoweringContext& context, RegisterCollection
 }
 
 void collect_locals_from_display_item(LoweringContext& context, RegisterCollection& collection,
-                                      const DisplayItem& item) {
+                                      const DisplayItem& item,
+                                      const std::set<std::string>& excluded = {}) {
   if (item.kind != "source")
     return;
   if (item.expr.has_value()) {
-    collect_locals_from_expression(context, collection, *item.expr);
+    collect_locals_from_expression_excluding(context, collection, *item.expr, excluded);
     return;
   }
-  if (context.constants.contains(item.name) || context.loop_prompt_initials.contains(item.name))
+  if (excluded.contains(item.name) || context.constants.contains(item.name) ||
+      context.loop_prompt_initials.contains(item.name))
     return;
   add_register_variable(collection, item.name);
 }
@@ -8110,7 +8112,7 @@ void collect_locals_from_statement(LoweringContext& context, RegisterCollection&
                                              parse_expression(arg, statement.line), excluded);
   if (statement.items.has_value()) {
     for (const DisplayItem& item : *statement.items)
-      collect_locals_from_display_item(context, collection, item);
+      collect_locals_from_display_item(context, collection, item, excluded);
   }
   for (std::size_t index = 0; index < statement.body.size(); ++index) {
     collect_locals_from_statement(
@@ -8285,9 +8287,12 @@ void collect_locals_from_x_param_first_statement(LoweringContext& context,
   collect_locals_from_expression_excluding(context, collection, expression, excluded);
 }
 
-void collect_display_scratch_registers(RegisterCollection& collection, const V2Program& program) {
-  for (const std::string& name : core::emit::display_scratch_register_names_for_program(program))
-    add_register_variable(collection, name);
+void collect_display_scratch_registers(RegisterCollection& collection, const V2Program& program,
+                                       const std::set<std::string>& excluded) {
+  for (const std::string& name : core::emit::display_scratch_register_names_for_program(program)) {
+    if (!excluded.contains(name))
+      add_register_variable(collection, name);
+  }
 }
 
 void add_spatial_count_scratch_registers(RegisterCollection& collection) {
@@ -10524,6 +10529,19 @@ int stack_only_covered_run(
   const V2Statement* fourth =
       index + 3U < statements.size() ? &statements.at(index + 3U) : nullptr;
 
+  if (context.stack_resident_temps) {
+    const std::optional<core::emit::StackResidentFusionSite> fusion =
+        core::emit::find_stack_resident_fusion_site(statements, index);
+    if (fusion.has_value()) {
+      const bool carries_name =
+          std::any_of(fusion->temps.begin(), fusion->temps.end(), [&](const auto& segment) {
+            return segment.assign.target == name;
+          });
+      if (carries_name)
+        return static_cast<int>(fusion->consumer_index - index + 1U);
+    }
+  }
+
   if (allow_stack_carried_show_read_local) {
     const int show_read = stack_only_stack_carried_show_read_run(context, statements, index, name);
     if (show_read > 0)
@@ -10679,7 +10697,9 @@ void collect_stack_only_assignment_candidates_from_statement(const V2Statement& 
                                                              std::set<std::string>& candidates) {
   if (statement.kind == "v2_assign" || statement.kind == "v2_read") {
     if (const std::optional<std::string> target = scalar_statement_target_name(statement);
-        target.has_value() && !target->starts_with("__")) {
+        target.has_value() &&
+        (!target->starts_with("__") || target->starts_with("__display_expr_") ||
+         target->starts_with("__mkpro_call_"))) {
       candidates.insert(*target);
     }
   }
@@ -10700,7 +10720,8 @@ void collect_stack_only_assignment_candidates_from_statement(const V2Statement& 
 std::set<std::string> collect_stack_only_candidate_names(const V2Program& program) {
   std::set<std::string> candidates;
   for (const V2StateField& field : program.state) {
-    if (!field.implicit)
+    if (!field.implicit || field.name.starts_with("__display_expr_") ||
+        field.name.starts_with("__mkpro_call_"))
       candidates.insert(field.name);
   }
   for (const V2Statement& statement : program.body)
@@ -11016,7 +11037,7 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   if (context.uses_formatted_coord_report)
     add_register_variable(collection, std::string(kCoordListDx));
 
-  collect_display_scratch_registers(collection, program);
+  collect_display_scratch_registers(collection, program, context.stack_only_state_fields);
 
   int state_bank_cursor = 1;
   const auto next_state_bank_register = [&hints, &state_bank_cursor]() -> std::optional<int> {
@@ -13636,10 +13657,8 @@ void collect_domain_random_preload_literals_from_statements(
       collect_domain_random_preload_literals_from_statements(context, {*statement.otherwise},
                                                              values, occurrences);
     }
-    if (statement.kind != "v2_while") {
-      collect_domain_random_preload_literals_from_statements(context, statement.body, values,
-                                                             occurrences);
-    }
+    collect_domain_random_preload_literals_from_statements(context, statement.body, values,
+                                                           occurrences);
     collect_domain_random_preload_literals_from_statements(context, statement.then_body, values,
                                                            occurrences);
     collect_domain_random_preload_literals_from_statements(context, statement.else_body, values,
@@ -13704,8 +13723,7 @@ void collect_preload_number_literals_from_statements(const std::vector<V2Stateme
     }
     if (statement.otherwise != nullptr)
       collect_preload_number_literals_from_statements({*statement.otherwise}, values, occurrences);
-    if (statement.kind != "v2_while")
-      collect_preload_number_literals_from_statements(statement.body, values, occurrences);
+    collect_preload_number_literals_from_statements(statement.body, values, occurrences);
     collect_preload_number_literals_from_statements(statement.then_body, values, occurrences);
     collect_preload_number_literals_from_statements(statement.else_body, values, occurrences);
   }
@@ -14347,6 +14365,22 @@ std::vector<std::string> collect_preload_constant_values(const LoweringContext& 
                                                      occurrences);
   }
 
+  // Constants have already been folded into context.constants, but source-level
+  // uses still appear as identifiers here. Include their resolved numeric cost
+  // so a long literal behind `const` competes fairly with an inline literal.
+  for (const auto& [name, expression] : context.constants) {
+    const int uses = count_identifier_reads_in_program(program, name);
+    if (uses <= 0)
+      continue;
+    OrderedStringSet resolved_values;
+    std::map<std::string, int> resolved_occurrences;
+    collect_preload_number_literals(expression, resolved_values, resolved_occurrences);
+    for (const std::string& value : resolved_values.ordered) {
+      values.insert(value);
+      occurrences[value] += uses * resolved_occurrences[value];
+    }
+  }
+
   collect_preload_number_literals_from_statements(program.body, values, occurrences);
   collect_domain_random_preload_literals_from_statements(context, program.body, values,
                                                          occurrences);
@@ -14397,7 +14431,8 @@ std::vector<std::string> collect_preload_constant_values(const LoweringContext& 
                ranked.end());
 
   const auto savings = [&](const std::string& value) {
-    const int weight = weights.contains(value) ? weights.at(value) : 1;
+    const int weight = std::max(weights.contains(value) ? weights.at(value) : 1,
+                                occurrences.contains(value) ? occurrences.at(value) : 1);
     const int bonus = bonuses.contains(value) ? bonuses.at(value) : 0;
     return weight * (guarded_estimate_number_cost(value) - 1) + bonus +
            dual_use_address_constant_preload_bonus(value, context.feature_profile);
@@ -20665,6 +20700,22 @@ bool statement_directly_consumes_current_x_identifier(LoweringContext& context,
     };
 
     if ((statement.kind == "v2_stop" || statement.kind == "v2_show") &&
+        statement.items.has_value()) {
+      int target_sources = 0;
+      int other_sources = 0;
+      for (const DisplayItem& item : *statement.items) {
+        if (item.kind != "source")
+          continue;
+        if (item.name == target && !item.expr.has_value())
+          ++target_sources;
+        else
+          ++other_sources;
+      }
+      if (target_sources == 1 && other_sources == 0)
+        return true;
+    }
+
+    if ((statement.kind == "v2_stop" || statement.kind == "v2_show") &&
         statement.target.has_value()) {
       const Expression expression = parse_expression(*statement.target, statement.line);
       return expression_is_shared_bit_mask_current_x_consumer(context, expression, target) ||
@@ -25696,6 +25747,18 @@ std::optional<double> numeric_self_update_delta(const std::string& target,
   return std::nullopt;
 }
 
+std::optional<std::string> arithmetic_operator_for_update(const std::string& op) {
+  if (op == "+=")
+    return "+";
+  if (op == "-=")
+    return "-";
+  if (op == "*=")
+    return "*";
+  if (op == "/=")
+    return "/";
+  return std::nullopt;
+}
+
 Expression one_based_modulo_expression(const std::string& target, int width) {
   const std::string width_text = std::to_string(width);
   Expression shifted = add_expression(int_expression(identifier_expression(target)),
@@ -27386,11 +27449,10 @@ std::optional<Expression> arithmetic_if_assignment_expression(const LoweringCont
     return std::nullopt;
   const Expression current = identifier_expression(target_expression.name);
   const Expression delta = parse_expression(*statement.expr, statement.line);
-  if (*statement.op == "+=")
-    return add_expression(current, delta);
-  if (*statement.op == "-=")
-    return subtract_expression(current, delta);
-  return std::nullopt;
+  const std::optional<std::string> op = arithmetic_operator_for_update(*statement.op);
+  return op.has_value()
+             ? std::optional<Expression>{binary_expression(current, *op, delta)}
+             : std::nullopt;
 }
 
 std::optional<std::pair<std::string, Expression>>
@@ -30488,6 +30550,10 @@ bool lower_update_statement(LoweringContext& context, const V2Statement& stateme
 
   if (!statement.target.has_value() || !statement.expr.has_value() || !statement.op.has_value())
     return false;
+  const std::optional<std::string> arithmetic_operator =
+      arithmetic_operator_for_update(*statement.op);
+  if (!arithmetic_operator.has_value())
+    return false;
   if (context.constants.contains(*statement.target)) {
     context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "parse-error",
                                              "Cannot assign to const '" + *statement.target + "'"));
@@ -30571,16 +30637,16 @@ bool lower_update_statement(LoweringContext& context, const V2Statement& stateme
 
   if (target_expression.kind == "indexed") {
     int opcode = 0;
-    std::string mnemonic;
-    if (statement.op == "+=") {
+    if (*arithmetic_operator == "+") {
       opcode = 0x10;
-      mnemonic = "+";
-    } else if (statement.op == "-=") {
+    } else if (*arithmetic_operator == "-") {
       opcode = 0x11;
-      mnemonic = "-";
-    } else {
-      return false;
+    } else if (*arithmetic_operator == "*") {
+      opcode = 0x12;
+    } else if (*arithmetic_operator == "/") {
+      opcode = 0x13;
     }
+    const std::string& mnemonic = *arithmetic_operator;
     const Expression expression = parse_expression(*statement.expr, statement.line);
     const std::optional<PreparedIndexedSelector> prepared_selector =
         prepare_indirect_index_selector(context, target_expression, statement.line);
@@ -30618,9 +30684,6 @@ bool lower_update_statement(LoweringContext& context, const V2Statement& stateme
     return true;
   if (statement.op == "-=" && statement.expr == "1")
     return lower_decrement_update(context, *statement.target, "set ", statement.line);
-
-  if (statement.op != "+=" && statement.op != "-=")
-    return false;
 
   Expression target = identifier_expression(*statement.target);
   Expression delta = parse_expression(*statement.expr, statement.line);
@@ -30672,9 +30735,7 @@ bool lower_update_statement(LoweringContext& context, const V2Statement& stateme
     emit_store(context, *statement.target, "set " + *statement.target);
     return true;
   }
-  Expression update = statement.op == "+="
-                          ? add_expression(std::move(target), std::move(delta))
-                          : subtract_expression(std::move(target), std::move(delta));
+  Expression update = binary_expression(std::move(target), *arithmetic_operator, std::move(delta));
   if (!lower_expression_to_x(context, update))
     return false;
   emit_store(context, *statement.target, "set " + *statement.target);
@@ -36153,10 +36214,6 @@ std::optional<std::string> unit_decrement_counted_while_target(LoweringContext& 
   if (!target.has_value() || *target != *decrement.target)
     return std::nullopt;
 
-  const auto register_it = context.register_index_by_name.find(*target);
-  if (register_it == context.register_index_by_name.end() ||
-      !fl_loop_opcode_for_register(register_it->second).has_value())
-    return std::nullopt;
   return target;
 }
 
@@ -36180,6 +36237,31 @@ bool emit_counted_while_body(LoweringContext& context, const V2Statement& loop,
   if (!lower_statement_block(context, body_tail))
     return false;
   context.emitter.emit_jump(fl.first, fl.second, start_label, jump_comment, loop.line);
+  return true;
+}
+
+bool emit_post_test_counted_while_body(LoweringContext& context, const V2Statement& loop,
+                                       const std::string& target) {
+  std::vector<V2Statement> body_tail(loop.body.begin(), loop.body.end() - 1);
+  if (statements_always_stop(context, body_tail))
+    return false;
+  std::set<std::string> writes;
+  std::set<std::string> seen_rules;
+  collect_scalar_writes(body_tail, context.rules, writes, seen_rules);
+  if (writes.contains(target))
+    return false;
+
+  const std::string start_label = context.emitter.fresh_label("post_test_counted_while");
+  context.emitter.emit_label(start_label, {.hidden = true});
+  clear_current_x_facts(context);
+  if (!lower_statement_block(context, body_tail))
+    return false;
+  emit_recall(context, target);
+  emit_number_or_preload(context, "1", std::nullopt, loop.line);
+  context.emitter.emit_op(0x11, "-", "counted while decrement", loop.line);
+  emit_store(context, target, "set " + target);
+  context.emitter.emit_jump(0x57, "F x!=0", start_label, "post-test counted while " + target,
+                            loop.line);
   return true;
 }
 
@@ -36262,8 +36344,6 @@ bool lower_initialized_counted_while_run(LoweringContext& context,
         return false;
       const std::optional<std::pair<int, std::string>> fl =
           fl_loop_opcode_for_register(register_it->second);
-      if (!fl.has_value())
-        return false;
 
       if (!lower_statement(context, initializer, nullptr))
         return false;
@@ -36275,14 +36355,25 @@ bool lower_initialized_counted_while_run(LoweringContext& context,
           return false;
       }
 
-      if (!emit_counted_while_body(context, statement, *fl, "counted_while",
-                                   "counted while " + *counted_target))
-        return false;
-      context.optimizations.push_back(OptimizationReport{
-          .name = "initialized-counted-while-loop",
-          .detail = "Lowered initialized while " + *counted_target + " >= 1 through " + fl->second +
-                    " at line " + std::to_string(statement.line) + ".",
-      });
+      if (fl.has_value()) {
+        if (!emit_counted_while_body(context, statement, *fl, "counted_while",
+                                     "counted while " + *counted_target))
+          return false;
+        context.optimizations.push_back(OptimizationReport{
+            .name = "initialized-counted-while-loop",
+            .detail = "Lowered initialized while " + *counted_target + " >= 1 through " +
+                      fl->second + " at line " + std::to_string(statement.line) + ".",
+        });
+      } else {
+        if (!emit_post_test_counted_while_body(context, statement, *counted_target))
+          return false;
+        context.optimizations.push_back(OptimizationReport{
+            .name = "initialized-post-test-counted-while-loop",
+            .detail = "Lowered positive initialized while " + *counted_target +
+                      " >= 1 through a post-decrement F x!=0 test at line " +
+                      std::to_string(statement.line) + ".",
+        });
+      }
       consumed = cursor - index + 1;
       return true;
     }
@@ -37802,6 +37893,33 @@ bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expres
   if (expression.kind != "binary" || expression.left == nullptr || expression.right == nullptr)
     return false;
 
+  // With X=b and Y=a, duplicate b and evaluate f(b) from the duplicate:
+  //   a - b - f(b) => B^; f; +; -
+  // This is a general shared-subexpression schedule for the four-level stack.
+  if (temps.size() == 2U && expression.op == "-" &&
+      expression.left->kind == "binary" && expression.left->op == "-" &&
+      expression.left->left != nullptr && expression.left->right != nullptr &&
+      expression.left->left->kind == "identifier" &&
+      expression.left->right->kind == "identifier" &&
+      expression.left->left->name == temps.at(0) &&
+      expression.left->right->name == temps.at(1) &&
+      core::emit::count_identifier_reads(*expression.right, temps.at(0)) == 0 &&
+      core::emit::count_identifier_reads(*expression.right, temps.at(1)) == 1 &&
+      core::emit::can_lower_stack_resident_expression(*expression.right, {temps.at(1)})) {
+    context.emitter.emit_op(0x0e, "В↑", "duplicate shared stack operand", line);
+    if (!lower_stack_resident_expression_to_x(context, *expression.right, {temps.at(1)}, line))
+      return false;
+    context.emitter.emit_op(0x10, "+", "combine shared stack operand", line);
+    context.emitter.emit_op(0x11, "-", "expr -", line);
+    clear_current_x_facts(context);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "stack-shared-subexpression",
+        .detail = "Kept a repeated expression operand on the calculator stack at line " +
+                  std::to_string(line) + ".",
+    });
+    return true;
+  }
+
   const bool left_refs = stack_expression_references_any_temp(*expression.left, temps);
   const bool right_refs = stack_expression_references_any_temp(*expression.right, temps);
   const std::optional<std::pair<int, std::string>> opcode = binary_opcode(expression.op);
@@ -38122,17 +38240,11 @@ std::optional<IndexedAssignmentConsumer> indexed_assignment_consumer(const V2Sta
   }
   if (statement.kind == "v2_update" && statement.expr.has_value() && statement.op.has_value()) {
     Expression delta = parse_expression(*statement.expr, statement.line);
-    if (*statement.op == "+=") {
+    const std::optional<std::string> op = arithmetic_operator_for_update(*statement.op);
+    if (op.has_value()) {
       return IndexedAssignmentConsumer{
           .target = target,
-          .expression = add_expression(std::move(target), std::move(delta)),
-          .line = statement.line,
-      };
-    }
-    if (*statement.op == "-=") {
-      return IndexedAssignmentConsumer{
-          .target = target,
-          .expression = subtract_expression(std::move(target), std::move(delta)),
+          .expression = binary_expression(std::move(target), *op, std::move(delta)),
           .line = statement.line,
       };
     }
@@ -38886,8 +38998,20 @@ bool lower_stack_resident_temps(LoweringContext& context,
                               segment.assign.line);
     }
     const Expression expression = parse_expression(*segment.assign.expr, segment.assign.line);
-    if (!lower_expression_to_x(context, expression))
+    const std::vector<std::string> prior_temps(temp_names.begin(),
+                                               temp_names.begin() +
+                                                   static_cast<std::ptrdiff_t>(index));
+    const bool depends_on_prior = std::any_of(
+        prior_temps.begin(), prior_temps.end(), [&](const std::string& prior) {
+          return core::emit::count_identifier_reads(expression, prior) > 0;
+        });
+    if (depends_on_prior) {
+      if (!lower_stack_resident_expression_to_x(context, expression, prior_temps,
+                                                segment.assign.line))
+        return false;
+    } else if (!lower_expression_to_x(context, expression)) {
       return false;
+    }
     mark_current_x(context, *segment.assign.target);
     if (!segment.preserve_after.empty()) {
       if (!lower_statement_block(context, segment.preserve_after))
@@ -45152,17 +45276,11 @@ generic_assignment_statement(const std::map<std::string, std::string>& state_typ
     return std::nullopt;
   const Expression current = identifier_expression(*statement.target);
   const Expression delta = parse_expression(*statement.expr, statement.line);
-  if (*statement.op == "+=") {
+  const std::optional<std::string> op = arithmetic_operator_for_update(*statement.op);
+  if (op.has_value()) {
     return GenericAssignmentStatement{
         .target = *statement.target,
-        .expression = add_expression(current, delta),
-        .line = statement.line,
-    };
-  }
-  if (*statement.op == "-=") {
-    return GenericAssignmentStatement{
-        .target = *statement.target,
-        .expression = subtract_expression(current, delta),
+        .expression = binary_expression(current, *op, delta),
         .line = statement.line,
     };
   }
@@ -46703,6 +46821,146 @@ std::vector<CandidateReport> build_analysis_opportunity_reports(const ProgramAst
                                                                 const CompileResult& result,
                                                                 const CompileOptions& options);
 
+struct SingleUseProcedureInlineResult {
+  std::vector<MachineItem> items;
+  int inlined = 0;
+};
+
+SingleUseProcedureInlineResult
+inline_single_use_procedures(std::vector<MachineItem> items) {
+  SingleUseProcedureInlineResult result{.items = std::move(items)};
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (std::size_t start = 0; start < result.items.size(); ++start) {
+      const MachineItem& boundary = result.items.at(start);
+      if (boundary.kind != MachineItemKind::Label || boundary.procedure_boundary != "start" ||
+          !boundary.procedure_name.has_value()) {
+        continue;
+      }
+      const std::string entry = *boundary.procedure_name;
+      std::size_t end = start + 1U;
+      while (end < result.items.size() &&
+             !(result.items.at(end).kind == MachineItemKind::Label &&
+               result.items.at(end).procedure_boundary == "end" &&
+               result.items.at(end).procedure_name == entry)) {
+        if (result.items.at(end).procedure_boundary == "start")
+          break;
+        ++end;
+      }
+      if (end >= result.items.size() || result.items.at(end).procedure_boundary != "end")
+        continue;
+
+      std::set<std::string> local_labels{entry, result.items.at(end).name};
+      bool body_safe = true;
+      std::optional<std::size_t> terminal_return;
+      for (std::size_t index = start + 1U; index < end; ++index) {
+        const MachineItem& item = result.items.at(index);
+        if (item.kind == MachineItemKind::Label) {
+          local_labels.insert(item.name);
+          continue;
+        }
+        if (item.raw || item.manual_interaction.has_value()) {
+          body_safe = false;
+          break;
+        }
+        if (item.kind == MachineItemKind::Op && item.opcode == 0x52) {
+          if (terminal_return.has_value()) {
+            body_safe = false;
+            break;
+          }
+          terminal_return = index;
+        }
+      }
+      if (!body_safe || !terminal_return.has_value())
+        continue;
+      for (std::size_t index = *terminal_return + 1U; index < end; ++index) {
+        if (result.items.at(index).kind != MachineItemKind::Label) {
+          body_safe = false;
+          break;
+        }
+      }
+      if (!body_safe)
+        continue;
+
+      std::optional<std::size_t> call_op;
+      int entry_references = 0;
+      for (std::size_t index = 0; index < result.items.size(); ++index) {
+        const MachineItem& item = result.items.at(index);
+        if (item.kind == MachineItemKind::Address) {
+          if (const auto* target = std::get_if<std::string>(&item.target);
+              target != nullptr && *target == entry) {
+            ++entry_references;
+            if (index > 0U && result.items.at(index - 1U).kind == MachineItemKind::Op &&
+                result.items.at(index - 1U).opcode == 0x53 &&
+                result.items.at(index - 1U).semantic_call_origins.empty()) {
+              call_op = index - 1U;
+            }
+          }
+        }
+      }
+      if (entry_references != 1 || !call_op.has_value() ||
+          (*call_op >= start && *call_op <= end)) {
+        continue;
+      }
+
+      for (std::size_t index = 0; index < result.items.size() && body_safe; ++index) {
+        if (index >= start && index <= end)
+          continue;
+        const MachineItem& item = result.items.at(index);
+        if (item.kind == MachineItemKind::Address) {
+          if (const auto* target = std::get_if<std::string>(&item.target);
+              target != nullptr && local_labels.contains(*target) && *target != entry) {
+            body_safe = false;
+          }
+        }
+        if (item.indirect_flow_targets.has_value()) {
+          for (const IrTarget& target : *item.indirect_flow_targets) {
+            if (const auto* label = std::get_if<std::string>(&target);
+                label != nullptr && local_labels.contains(*label)) {
+              body_safe = false;
+              break;
+            }
+          }
+        }
+      }
+      if (!body_safe)
+        continue;
+
+      std::vector<MachineItem> body;
+      body.reserve(end - start);
+      for (std::size_t index = start + 1U; index < end; ++index) {
+        if (index == *terminal_return)
+          continue;
+        MachineItem item = result.items.at(index);
+        item.procedure_boundary.reset();
+        item.procedure_name.reset();
+        body.push_back(std::move(item));
+      }
+
+      std::vector<MachineItem> rewritten;
+      rewritten.reserve(result.items.size() + body.size() - (end - start + 1U) - 2U);
+      for (std::size_t index = 0; index < result.items.size(); ++index) {
+        if (index == *call_op) {
+          rewritten.insert(rewritten.end(), body.begin(), body.end());
+          ++index;
+          continue;
+        }
+        if (index == start) {
+          index = end;
+          continue;
+        }
+        rewritten.push_back(std::move(result.items.at(index)));
+      }
+      result.items = std::move(rewritten);
+      ++result.inlined;
+      changed = true;
+      break;
+    }
+  }
+  return result;
+}
+
 CompileResult compile_source_once(std::string source, const CompileOptions& requested_options,
                                   bool source_has_entered,
                                   bool apply_final_layout_size_rescue = false) {
@@ -47141,13 +47399,23 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   }
 
   trace_stage("post-layout");
-  std::vector<MachineItem> post_layout_items = optimized.items;
+  SingleUseProcedureInlineResult single_use_inline =
+      inline_single_use_procedures(optimized.items);
+  std::vector<MachineItem> post_layout_items = std::move(single_use_inline.items);
   std::vector<PreloadReport> setup_preloads;
   std::vector<PreloadReport> post_layout_flow_preloads;
   std::vector<PreloadReport> stop_tail_preloads;
   std::map<std::string, std::string> post_layout_preload_overrides;
   std::optional<std::vector<PreloadReport>> final_layout_effective_preloads;
   std::vector<core::passes::AppliedOptimization> post_layout_optimizations;
+  if (single_use_inline.inlined > 0) {
+    post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+        .name = "single-use-procedure-inline",
+        .detail = "Inlined " + std::to_string(single_use_inline.inlined) +
+                  " single-use procedure" + (single_use_inline.inlined == 1 ? "" : "s") +
+                  " after proving a unique direct call and terminal return.",
+    });
+  }
 
   if (!exact_decimal_series) {
     const int indirect_flow_rescue_above =
@@ -63353,6 +63621,15 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
     });
   };
   add_reclaim_candidate(options);
+  {
+    CompileOptions general_preload_base = options;
+    general_preload_base.general_constant_preloads = true;
+    add_reclaim_candidate(general_preload_base);
+
+    CompileOptions stack_general_preload_base = general_preload_base;
+    stack_general_preload_base.stack_resident_temps = true;
+    add_reclaim_candidate(stack_general_preload_base);
+  }
   if (allow_aggressive_post_layout) {
     CompileOptions aggressive_base = options;
     aggressive_base.aggressive_post_layout_indirect_flow = true;

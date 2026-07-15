@@ -180,16 +180,94 @@ std::vector<SourceLine> normalize_source_line(const std::string& text, int line)
   return result;
 }
 
+void update_expression_nesting(const std::string& text, int& paren_depth, int& bracket_depth) {
+  bool quoted = false;
+  bool escaped = false;
+  for (const char ch : text) {
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quoted && ch == '\\') {
+      escaped = true;
+      continue;
+    }
+    if (ch == '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (quoted)
+      continue;
+    if (ch == '(')
+      ++paren_depth;
+    else if (ch == ')' && paren_depth > 0)
+      --paren_depth;
+    else if (ch == '[')
+      ++bracket_depth;
+    else if (ch == ']' && bracket_depth > 0)
+      --bracket_depth;
+  }
+}
+
+bool ends_with_expression_continuation(const std::string& text) {
+  const std::string value = trim(text);
+  if (value.empty())
+    return false;
+
+  // Raw code may use an arithmetic mnemonic as a complete physical line.
+  static const std::regex addressed_raw_operator(R"(^[0-9A-Fa-f]{2}:\s*[+*/-]\s*$)");
+  if (value == "+" || value == "-" || value == "*" || value == "/" ||
+      std::regex_match(value, addressed_raw_operator)) {
+    return false;
+  }
+  if (ends_with(value, "++") || ends_with(value, "--"))
+    return false;
+
+  const char last = value.back();
+  if (last == ',' || last == '=' || last == '<' || last == '>' || last == '!' || last == '+' ||
+      last == '-' || last == '*' || last == '/') {
+    return true;
+  }
+  return ends_with(value, " in");
+}
+
 std::vector<SourceLine> normalize_source(const std::string& source) {
   std::vector<SourceLine> result;
   std::istringstream input(source);
   std::string line;
+  std::string pending;
+  int pending_line = 0;
+  int paren_depth = 0;
+  int bracket_depth = 0;
+
+  auto flush_pending = [&]() {
+    auto lines = normalize_source_line(pending, pending_line);
+    result.insert(result.end(), lines.begin(), lines.end());
+    pending.clear();
+    pending_line = 0;
+    paren_depth = 0;
+    bracket_depth = 0;
+  };
+
   int line_number = 1;
   while (std::getline(input, line)) {
-    auto lines = normalize_source_line(line, line_number);
-    result.insert(result.end(), lines.begin(), lines.end());
+    const std::string stripped = trim(strip_comment(line));
+    if (!stripped.empty()) {
+      if (pending.empty())
+        pending_line = line_number;
+      else
+        pending.push_back(' ');
+      pending += stripped;
+      update_expression_nesting(stripped, paren_depth, bracket_depth);
+      if (paren_depth == 0 && bracket_depth == 0 &&
+          !ends_with_expression_continuation(stripped)) {
+        flush_pending();
+      }
+    }
     ++line_number;
   }
+  if (!pending.empty())
+    flush_pending();
   return result;
 }
 
@@ -1962,7 +2040,7 @@ private:
           .line = line,
       };
     }
-    static const std::regex update_regex(R"(^(.+?)\s*(\+=|-=)\s*(.+)$)");
+    static const std::regex update_regex(R"(^(.+?)\s*(\+=|-=|\*=|/=)\s*(.+)$)");
     std::smatch update_match;
     if (std::regex_match(text, update_match, update_regex)) {
       const std::string target = trim(update_match[1].str());

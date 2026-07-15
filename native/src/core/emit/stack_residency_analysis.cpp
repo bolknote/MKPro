@@ -41,7 +41,22 @@ bool expression_pure_for_substitution(const Expression& expression) {
 }
 
 bool stack_temp_source_is_safe(const Expression& expression) {
-  return expression.kind != "call" && expression_pure_for_substitution(expression);
+  if (!expression_pure_for_substitution(expression))
+    return false;
+  if (expression.kind != "call")
+    return true;
+
+  // User rules may mutate state, so calls are not generally substitutable.  These
+  // builtins are pure unary transforms, however, and computing one into a
+  // short-lived temporary is no different from computing an arithmetic expression.
+  static const std::set<std::string> kPureUnaryBuiltins = {
+      "abs",      "acos",     "asin", "atg",  "cos",      "exp",
+      "frac",     "from_min", "from_sec", "int", "inv",  "lg",
+      "ln",       "sign",     "sin",  "sqr",  "sqrt",     "tg",
+      "to_min",   "to_sec",
+  };
+  return expression.args.size() == 1U &&
+         kPureUnaryBuiltins.contains(lower_ascii(expression.callee));
 }
 
 std::optional<Expression> parse_expression_or_none(const std::optional<std::string>& text,
@@ -306,12 +321,30 @@ bool expression_repeats_single_stack_temp_sum(const Expression& expression,
          count <= 4;
 }
 
-bool assign_temp_is_safe(const V2Statement& statement, const std::set<std::string>& targets) {
+bool two_temp_shared_rhs_shape(const Expression& expression,
+                               const std::vector<std::string>& temps) {
+  if (temps.size() != 2U || expression.kind != "binary" || expression.op != "-" ||
+      expression.left == nullptr || expression.right == nullptr ||
+      expression.left->kind != "binary" || expression.left->op != "-" ||
+      expression.left->left == nullptr || expression.left->right == nullptr ||
+      expression.left->left->kind != "identifier" ||
+      expression.left->right->kind != "identifier" ||
+      expression.left->left->name != temps.at(0) ||
+      expression.left->right->name != temps.at(1)) {
+    return false;
+  }
+  return count_identifier_reads(*expression.right, temps.at(0)) == 0 &&
+         count_identifier_reads(*expression.right, temps.at(1)) == 1 &&
+         validate_stack_resident_expression(*expression.right, {temps.at(1)});
+}
+
+bool assign_temp_is_safe(const V2Statement& statement,
+                         const std::vector<std::string>& targets) {
   if (statement.kind != "v2_assign" || !statement.target.has_value() ||
       !statement.expr.has_value()) {
     return false;
   }
-  if (targets.contains(*statement.target))
+  if (std::find(targets.begin(), targets.end(), *statement.target) != targets.end())
     return false;
   const std::optional<Expression> expression =
       parse_expression_or_none(*statement.expr, statement.line);
@@ -319,11 +352,13 @@ bool assign_temp_is_safe(const V2Statement& statement, const std::set<std::strin
     return false;
   if (expression_references_identifier(*expression, *statement.target))
     return false;
-  for (const std::string& target : targets) {
-    if (expression_references_identifier(*expression, target))
-      return false;
-  }
-  return true;
+  if (targets.empty())
+    return true;
+  const bool references_prior = std::any_of(
+      targets.begin(), targets.end(), [&](const std::string& target) {
+        return expression_references_identifier(*expression, target);
+      });
+  return !references_prior || can_lower_stack_resident_expression(*expression, targets);
 }
 
 int count_indexed_consumer(const std::vector<V2Statement>& statements, std::size_t start) {
@@ -428,6 +463,27 @@ int count_identifier_reads(const Expression& expression, const std::string& name
 
 bool can_lower_stack_resident_expression(const Expression& expression,
                                          const std::vector<std::string>& temps) {
+  if (two_temp_shared_rhs_shape(expression, temps))
+    return true;
+  if (expression.kind == "binary" && expression.left != nullptr && expression.right != nullptr) {
+    const bool left_refs = std::any_of(temps.begin(), temps.end(), [&](const std::string& temp) {
+      return count_identifier_reads(*expression.left, temp) > 0;
+    });
+    const bool right_refs = std::any_of(temps.begin(), temps.end(), [&](const std::string& temp) {
+      return count_identifier_reads(*expression.right, temp) > 0;
+    });
+    if (left_refs && !right_refs &&
+        can_lower_stack_resident_expression(*expression.left, temps) &&
+        stack_temp_other_operand_is_safe(*expression.right)) {
+      return true;
+    }
+    if (!left_refs && right_refs &&
+        can_lower_stack_resident_expression(*expression.right, temps) &&
+        stack_temp_other_operand_is_safe(*expression.left) &&
+        (expression.op == "+" || expression.op == "*")) {
+      return true;
+    }
+  }
   if (expression_duplicates_single_stack_temp(expression, temps))
     return true;
   if (expression_repeats_single_stack_temp_sum(expression, temps))
@@ -503,18 +559,19 @@ bool statement_preserves_stack_residency(const V2Statement& statement,
 std::optional<StackResidentFusionSite>
 find_stack_resident_fusion_site(const std::vector<V2Statement>& statements, std::size_t start) {
   std::vector<StackResidentTempSegment> segments;
-  std::set<std::string> targets;
+  std::vector<std::string> targets;
   std::size_t index = start;
 
   while (index < statements.size() && segments.size() < 4U) {
     const V2Statement& statement = statements.at(index);
     if (!assign_temp_is_safe(statement, targets) || !statement.target.has_value())
       break;
-    targets.insert(*statement.target);
+    targets.push_back(*statement.target);
     ++index;
     const std::size_t preserve_start = index;
     while (index < statements.size() &&
-           statement_preserves_stack_residency(statements.at(index), targets)) {
+           statement_preserves_stack_residency(
+               statements.at(index), std::set<std::string>(targets.begin(), targets.end()))) {
       ++index;
     }
     segments.push_back(StackResidentTempSegment{
@@ -567,7 +624,10 @@ find_stack_resident_fusion_site(const std::vector<V2Statement>& statements, std:
       std::any_of(segments.begin(), segments.end(), [](const StackResidentTempSegment& segment) {
         return !segment.preserve_after.empty();
       });
-  if (segments.size() == 1U && !crosses_control_flow)
+  // Plain assignments already have a dedicated single-use X scheduler. Updates
+  // do not, so let the general stack-resident lowering handle an adjacent pure
+  // temporary consumed by += or -= as well.
+  if (segments.size() == 1U && !crosses_control_flow && consumer.kind == "v2_assign")
     return std::nullopt;
 
   return StackResidentFusionSite{
