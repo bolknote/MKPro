@@ -42,19 +42,6 @@ std::optional<Rational> rational(std::int64_t numerator, std::int64_t denominato
 }
 
 std::optional<std::int64_t> checked_binary(std::int64_t left, std::int64_t right, char op) {
-#if defined(__SIZEOF_INT128__)
-  __int128 value = 0;
-  if (op == '+')
-    value = static_cast<__int128>(left) + right;
-  if (op == '-')
-    value = static_cast<__int128>(left) - right;
-  if (op == '*')
-    value = static_cast<__int128>(left) * right;
-  if (value < std::numeric_limits<std::int64_t>::min() ||
-      value > std::numeric_limits<std::int64_t>::max())
-    return std::nullopt;
-  return static_cast<std::int64_t>(value);
-#else
   if (op == '+') {
     if ((right > 0 && left > std::numeric_limits<std::int64_t>::max() - right) ||
         (right < 0 && left < std::numeric_limits<std::int64_t>::min() - right))
@@ -80,7 +67,6 @@ std::optional<std::int64_t> checked_binary(std::int64_t left, std::int64_t right
     }
   }
   return left * right;
-#endif
 }
 
 std::optional<Rational> add(Rational left, Rational right, bool subtract) {
@@ -770,12 +756,6 @@ struct AliasCandidate {
 std::uint64_t ExactIntegralDomain::cardinality() const {
   if (!valid())
     return 0;
-#if defined(__SIZEOF_INT128__)
-  const __int128 span = static_cast<__int128>(maximum) - minimum + 1;
-  return span > std::numeric_limits<std::uint64_t>::max()
-             ? std::numeric_limits<std::uint64_t>::max()
-             : static_cast<std::uint64_t>(span);
-#else
   if (minimum < 0 && maximum >= 0) {
     const std::uint64_t negative = static_cast<std::uint64_t>(-(minimum + 1)) + 1U;
     const std::uint64_t positive = static_cast<std::uint64_t>(maximum) + 1U;
@@ -784,7 +764,6 @@ std::uint64_t ExactIntegralDomain::cardinality() const {
     return negative + positive;
   }
   return static_cast<std::uint64_t>(maximum - minimum) + 1U;
-#endif
 }
 
 HelperSemanticExprPtr helper_semantic_input() {
