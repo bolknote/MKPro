@@ -29,7 +29,7 @@ program ZagadayTsifru {
   // Count differing bits in the seven octal digits. Each decimal digit is in
   // 0..7, where popcount(d) = d - floor(d / 2) - floor(d / 4).
   fn hamming_distance(weight) {
-    weight = frac(bit_xor(history, weight))
+    weight = frac(bit_and(bit_xor(history, weight), FULL_BITS))
     ones = 0
     remaining = 7
 

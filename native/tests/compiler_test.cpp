@@ -441,6 +441,69 @@ program CompoundArithmeticUpdates {
                       [](const ResolvedStep& step) { return step.opcode == 0x13; }),
           "divide assignment should emit division");
 
+  const CompileResult packed_bcd_popcount = compile_source(R"mkpro(
+program GenericPackedBcdPopcount {
+  const OCTAL_DIGITS = 7.7777777
+  state {
+    source: packed = 0
+    total: counter 0..21 = 0
+    remaining: counter 0..7 = 0
+    digit: counter 0..7 = 0
+    half: counter 0..3 = 0
+  }
+  loop {
+    source = read()
+    source = frac(bit_and(source, OCTAL_DIGITS))
+    total = 0
+    remaining = 7
+    while remaining >= 1 {
+      source *= 10
+      digit = int(source)
+      half = int(digit / 2)
+      total += digit - half - int(half / 2)
+      source = frac(source)
+      remaining--
+    }
+    halt(total)
+  }
+}
+)mkpro");
+  require(packed_bcd_popcount.implemented,
+          "native compiler should lower a proved packed BCD popcount fold");
+  require(packed_bcd_popcount.diagnostics.empty(),
+          "proved packed BCD popcount fold should not report diagnostics");
+  require(has_optimization(packed_bcd_popcount, "packed-bcd-popcount-fold"),
+          "masked digit loop should report the generic packed BCD fold");
+
+  const CompileResult unproved_packed_bcd_popcount = compile_source(R"mkpro(
+program UnprovedPackedBcdPopcount {
+  state {
+    source: packed = 0
+    total: counter 0..21 = 0
+    remaining: counter 0..7 = 0
+    digit: counter 0..9 = 0
+    half: counter 0..4 = 0
+  }
+  loop {
+    source = read()
+    source = frac(source)
+    total = 0
+    remaining = 7
+    while remaining >= 1 {
+      source *= 10
+      digit = int(source)
+      half = int(digit / 2)
+      total += digit - half - int(half / 2)
+      source = frac(source)
+      remaining--
+    }
+    halt(total)
+  }
+}
+)mkpro");
+  require(!has_optimization(unproved_packed_bcd_popcount, "packed-bcd-popcount-fold"),
+          "unmasked digit loop must not use the packed BCD fold without a digit proof");
+
   const CompileResult invoked = compile_source(R"mkpro(
 program InvokeProcedure {
   state {

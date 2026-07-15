@@ -26,6 +26,7 @@
 #include "mkpro/core/machine_profile.hpp"
 #include "mkpro/core/natural_target_component_layout.hpp"
 #include "mkpro/core/opcodes.hpp"
+#include "mkpro/core/packed_bcd_popcount.hpp"
 #include "mkpro/core/parser.hpp"
 #include "mkpro/core/passes/index.hpp"
 #include "mkpro/core/passes/register_coalesce.hpp"
@@ -47084,6 +47085,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                                 context.emitter.items.size(), options.hoist_shared_helpers,
                                 options.hoist_procs);
     } else {
+      (void)core::fold_proved_packed_bcd_popcount_loops(*ast.v2, context.optimizations);
       pack_counter_stripes(*ast.v2, context.optimizations, false, std::nullopt);
       if (options.pack_counter_stripes) {
         const std::optional<std::vector<std::string>> requested_names =

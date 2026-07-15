@@ -52,6 +52,7 @@ add_library(mkpro_core STATIC
   src/core/natural_target_component_layout.cpp
   src/core/mk61_trig.cpp
   src/core/opcodes.cpp
+  src/core/packed_bcd_popcount.cpp
   src/core/parser.cpp
   src/core/phase_selector_materializer.cpp
   src/core/passes/arithmetic_if.cpp

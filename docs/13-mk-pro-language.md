@@ -1001,6 +1001,14 @@ allocator decisions for ephemeral input and dispatch scratch are made against
 the same chosen ordering mode as lowering, so speculative layout candidates do
 not lose required selector storage.
 
+`packed-bcd-popcount-fold` is a generic, proof-gated source rewrite. It replaces
+a counted per-digit popcount loop with three parallel BCD bit planes and a
+base-100 horizontal reduction only when the source is explicitly masked to
+digits `0..7`, the loop shape is exact, decimal spill and mantissa bounds are
+proved, and the discarded scratch results have no reads outside the fold. It
+does not depend on program, function, state, or register names and does not use
+dark-side placement.
+
 Documented capabilities such as `branch-removal`, `arithmetic-if-*`,
 `zero-condition-test`, `dispatch-compare-chain`, and `fl-decrement-branch` are
 reported `active` when their literal rewrite fires. This keeps the capability
