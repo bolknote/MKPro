@@ -676,6 +676,24 @@ std::optional<std::string> known_indirect_memory_target(const IrOp& op) {
 }
 
 std::optional<std::set<std::string>> known_indirect_memory_targets(const IrOp& op) {
+  if (op.meta.indirect_memory_targets.has_value()) {
+    const auto& indices = *op.meta.indirect_memory_targets;
+    if (indices.empty())
+      return std::nullopt;
+
+    std::set<std::string> targets;
+    for (const int index : indices) {
+      if (index < 0 || index > 14)
+        return std::nullopt;
+      if (index < 10) {
+        targets.insert(std::to_string(index));
+      } else {
+        targets.insert(std::string(1, static_cast<char>('a' + index - 10)));
+      }
+    }
+    return targets;
+  }
+
   if (const std::optional<std::string> single = known_indirect_memory_target(op))
     return std::set<std::string>{*single};
   if (op.kind != IrKind::IndirectRecall && op.kind != IrKind::IndirectStore)

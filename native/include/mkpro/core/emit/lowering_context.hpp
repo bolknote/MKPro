@@ -196,6 +196,13 @@ struct LoweringContext {
   std::map<std::string, std::string> bit_mask_helper_labels;
   std::vector<std::string> bit_mask_helper_order;
   std::optional<std::string> bit_mask_helper_scratch;
+  std::optional<std::string> packed_bcd_split_helper_label;
+  std::optional<std::string> packed_bcd_full_helper_label;
+  std::optional<std::string> packed_bcd_low_mask;
+  std::optional<std::string> packed_bcd_full_mask;
+  std::optional<std::string> packed_bcd_full_selector;
+  std::vector<int> packed_bcd_full_store_targets;
+  std::optional<std::string> packed_bcd_loop_back_selector;
   int bit_mask_helper_calls = 0;
   int bit_mask_condition_helper_calls = 0;
   std::optional<std::string> packed_score_helper;

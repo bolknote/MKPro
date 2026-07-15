@@ -7083,6 +7083,21 @@ std::optional<int> available_constant_register_index(const LoweringContext& cont
   return core::pick_constant_register_index(used, context.feature_profile);
 }
 
+int available_constant_register_count(const LoweringContext& context) {
+  std::set<int> used;
+  for (const auto& [unused_name, index] : context.register_index_by_name) {
+    (void)unused_name;
+    used.insert(index);
+  }
+  int count = 0;
+  while (const std::optional<int> index =
+             core::pick_constant_register_index(used, context.feature_profile)) {
+    used.insert(*index);
+    ++count;
+  }
+  return count;
+}
+
 bool can_reserve_negative_zero_degree_register(const LoweringContext& context) {
   return context.negative_zero_degree_register.has_value() ||
          available_constant_register_index(context).has_value();
@@ -8423,6 +8438,43 @@ void apply_packed_grid_register_hints(const V2Program& program,
   for (const auto& [name, index] : preferences) {
     if (collection.variables.contains(name) && !hints.contains(name))
       hints[name] = RegisterHint{.mode = RegisterHintMode::Prefer, .index = index};
+  }
+}
+
+void apply_packed_bcd_kernel_register_hints_from_statement(const V2Statement& statement,
+                                                           RegisterHints& hints) {
+  if (statement.kind == core::kPackedBcdHornerThresholdStatement &&
+      statement.args.size() == 11U) {
+    hints[statement.args.at(1)] = RegisterHint{.mode = RegisterHintMode::Fixed, .index = 0x0};
+    hints[statement.args.at(7)] = RegisterHint{.mode = RegisterHintMode::Fixed, .index = 0xe};
+  } else if (statement.kind == core::kPackedBcdBinaryPrepareStatement &&
+             statement.args.size() == 8U) {
+    hints[statement.args.at(0)] = RegisterHint{.mode = RegisterHintMode::Fixed, .index = 0x9};
+    hints[statement.args.at(1)] = RegisterHint{.mode = RegisterHintMode::Fixed, .index = 0xa};
+  } else if (statement.kind == core::kPackedBcdOneHotUpdateStatement &&
+             statement.args.size() == 10U) {
+    hints[statement.args.at(1)] = RegisterHint{.mode = RegisterHintMode::Fixed, .index = 0x0};
+    hints[statement.args.at(3)] = RegisterHint{.mode = RegisterHintMode::Fixed, .index = 0x9};
+    hints[statement.args.at(4)] = RegisterHint{.mode = RegisterHintMode::Fixed, .index = 0xa};
+    hints[statement.args.at(6)] = RegisterHint{.mode = RegisterHintMode::Fixed, .index = 0x4};
+    hints[statement.args.at(7)] = RegisterHint{.mode = RegisterHintMode::Fixed, .index = 0xe};
+  }
+  for (const V2Statement* child : {&statement}) {
+    for (const V2Statement& item : child->body)
+      apply_packed_bcd_kernel_register_hints_from_statement(item, hints);
+    for (const V2Statement& item : child->then_body)
+      apply_packed_bcd_kernel_register_hints_from_statement(item, hints);
+    for (const V2Statement& item : child->else_body)
+      apply_packed_bcd_kernel_register_hints_from_statement(item, hints);
+  }
+}
+
+void apply_packed_bcd_kernel_register_hints(const V2Program& program, RegisterHints& hints) {
+  for (const V2Statement& statement : program.body)
+    apply_packed_bcd_kernel_register_hints_from_statement(statement, hints);
+  for (const V2Rule& rule : program.rules) {
+    for (const V2Statement& statement : rule.body)
+      apply_packed_bcd_kernel_register_hints_from_statement(statement, hints);
   }
 }
 
@@ -11151,6 +11203,7 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   apply_coord_list_item_register_hints(collection, hints);
   apply_segmented_bitplane_register_hints(context, collection, hints);
   apply_packed_grid_register_hints(program, collection, hints);
+  apply_packed_bcd_kernel_register_hints(program, hints);
   apply_unit_update_hints(context, program, collection, hints);
   apply_coord_list_register_hints(collection, hints);
   apply_packed_counter_register_hints(collection, hints);
@@ -14459,11 +14512,25 @@ void plan_general_constant_preloads(LoweringContext& context, const V2Program& p
   const std::vector<std::string> ranked_values =
       collect_preload_constant_values(context, program, startup_aware);
   values.insert(values.end(), ranked_values.begin(), ranked_values.end());
+  const int initial_capacity = available_constant_register_count(context);
+  std::set<std::string> baseline_preloads;
+  for (const std::string& value : values) {
+    if (static_cast<int>(baseline_preloads.size()) >= initial_capacity)
+      break;
+    baseline_preloads.insert(normalize_number_key(value));
+  }
+  int reserved_demoted_slots = 0;
+  for (const std::string& value : context.suppress_constant_preloads) {
+    if (baseline_preloads.contains(normalize_number_key(value)))
+      ++reserved_demoted_slots;
+  }
   for (const std::string& value : values) {
     if (!available_constant_register_index(context).has_value())
       return;
     if (context.suppress_constant_preloads.contains(normalize_number_key(value)))
       continue;
+    if (available_constant_register_count(context) <= reserved_demoted_slots)
+      return;
     const std::optional<FractionalConstantSelectorPlan> selector =
         fractional_constant_selector_for_value(context, normalize_number_key(value));
     const std::optional<std::string> selector_value =
@@ -31893,9 +31960,371 @@ bool attach_manual_interaction_anchor(LoweringContext& context,
   return true;
 }
 
+bool configure_packed_bcd_split_helper(LoweringContext& context, const std::string& low_mask) {
+  if (context.packed_bcd_low_mask.has_value() && *context.packed_bcd_low_mask != low_mask) {
+    context.diagnostics.push_back(diagnostic(
+        DiagnosticSeverity::Error, "native-unsupported",
+        "Internal packed-BCD split requested with incompatible low-bit masks."));
+    return false;
+  }
+  context.packed_bcd_low_mask = low_mask;
+  if (!context.packed_bcd_split_helper_label.has_value())
+    context.packed_bcd_split_helper_label = context.emitter.fresh_label("packed_bcd_split");
+  return true;
+}
+
+bool configure_packed_bcd_full_helper(LoweringContext& context, const std::string& low_mask,
+                                      const std::string& full_mask,
+                                      const std::string& selector) {
+  if (!configure_packed_bcd_split_helper(context, low_mask))
+    return false;
+  if ((context.packed_bcd_full_mask.has_value() &&
+       *context.packed_bcd_full_mask != full_mask) ||
+      (context.packed_bcd_full_selector.has_value() &&
+       *context.packed_bcd_full_selector != selector)) {
+    context.diagnostics.push_back(diagnostic(
+        DiagnosticSeverity::Error, "native-unsupported",
+        "Internal packed-BCD broadcast requested with incompatible mask or selector."));
+    return false;
+  }
+  context.packed_bcd_full_mask = full_mask;
+  context.packed_bcd_full_selector = selector;
+  if (!context.packed_bcd_full_helper_label.has_value())
+    context.packed_bcd_full_helper_label = context.emitter.fresh_label("packed_bcd_broadcast");
+  return true;
+}
+
+bool packed_bcd_internal_arity(LoweringContext& context, const V2Statement& statement,
+                               std::size_t expected) {
+  if (statement.args.size() == expected)
+    return true;
+  context.diagnostics.push_back(diagnostic(
+      DiagnosticSeverity::Error, "native-unsupported",
+      "Internal packed-BCD statement has " + std::to_string(statement.args.size()) +
+          " arguments; expected " + std::to_string(expected) + "."));
+  return false;
+}
+
+std::optional<int> packed_bcd_internal_integer(const std::string& text) {
+  try {
+    std::size_t consumed = 0;
+    const int value = std::stoi(text, &consumed);
+    if (consumed == text.size())
+      return value;
+  } catch (const std::exception&) {
+  }
+  return std::nullopt;
+}
+
+bool lower_packed_bcd_argument(LoweringContext& context, const std::string& text, int line) {
+  return lower_expression_to_x(context, parse_expression(text, line));
+}
+
+void emit_packed_bcd_indirect_recall(LoweringContext& context, const std::string& selector,
+                                     int line, const std::string& comment,
+                                     const std::vector<int>& targets) {
+  const int index = register_index_for(context, selector);
+  context.emitter.emit_op(0xd0 + index, "К П->X " + register_text_for(context, selector),
+                          comment, line);
+  context.emitter.items.back().indirect_memory_targets = targets;
+  clear_current_x_facts(context);
+}
+
+void emit_packed_bcd_indirect_store(LoweringContext& context, const std::string& selector,
+                                    int line, const std::string& comment,
+                                    const std::vector<int>& targets) {
+  const int index = register_index_for(context, selector);
+  context.emitter.emit_op(0xb0 + index, "К X->П " + register_text_for(context, selector),
+                          comment, line);
+  context.emitter.items.back().indirect_memory_targets = targets;
+  clear_current_x_facts(context);
+}
+
+void emit_packed_bcd_horizontal_threshold(LoweringContext& context,
+                                          const std::string& divisor,
+                                          const std::string& decade_register, int line) {
+  context.emitter.emit_op(0x35, "К {x}", "packed BCD high bit plane", line);
+  context.emitter.emit_op(0x10, "+", "packed BCD add middle bit plane", line);
+  context.emitter.emit_op(0x35, "К {x}", "packed BCD merged high planes", line);
+  context.emitter.emit_op(0x10, "+", "packed BCD add low bit plane", line);
+  const std::string fold = context.emitter.fresh_label("packed_bcd_horizontal_fold");
+  context.emitter.emit_label(fold, {.hidden = true});
+  context.emitter.emit_op(0x34, "К [x]", "packed BCD horizontal pair", line);
+  context.emitter.emit_op(0x0f, "F Вx", "packed BCD expose remaining pairs", line);
+  context.emitter.emit_op(0x35, "К {x}", "packed BCD remaining pairs", line);
+  emit_recall(context, decade_register);
+  context.emitter.emit_op(0x12, "*", "packed BCD shift next pair", line);
+  context.emitter.emit_jump(0x5e, "F x=0", fold, "packed BCD horizontal fold", line);
+  context.emitter.emit_op(0x10, "+", "packed BCD finish horizontal sum", line);
+  context.emitter.emit_number("8");
+  context.emitter.emit_op(0x11, "-", "packed BCD remove anchor", line);
+  emit_number_or_preload(context, divisor);
+  context.emitter.emit_op(0x13, "/", "packed BCD threshold quotient", line);
+  context.emitter.emit_op(0x34, "К [x]", "packed BCD threshold bit", line);
+  clear_current_x_facts(context);
+}
+
+bool lower_packed_bcd_horner_threshold(LoweringContext& context,
+                                       const V2Statement& statement) {
+  if (!packed_bcd_internal_arity(context, statement, 11U))
+    return false;
+  const std::optional<int> digits = packed_bcd_internal_integer(statement.args.at(4));
+  const std::optional<int> iterations = packed_bcd_internal_integer(statement.args.at(8));
+  if (!digits.has_value() || !iterations.has_value() || *digits < 1 || *digits > 7 ||
+      *iterations < 1 || *iterations > 3 ||
+      !configure_packed_bcd_split_helper(context, statement.args.at(6))) {
+    return false;
+  }
+  const std::string& target = statement.args.at(0);
+  const std::string& counter = statement.args.at(1);
+  const std::string& sample = statement.args.at(3);
+  const std::string& bank_selector = statement.args.at(7);
+  if (register_index_for(context, counter) != 0x0 ||
+      register_index_for(context, bank_selector) != 0xe) {
+    context.diagnostics.push_back(diagnostic(
+        DiagnosticSeverity::Error, "native-unsupported",
+        "Packed-BCD Horner lowering requires its counter in R0 and bank selector in RE."));
+    return false;
+  }
+
+  if (statement.args.at(10) != "1") {
+    context.emitter.emit_number("0");
+    emit_store(context, target, "packed BCD Horner accumulator");
+  }
+  context.emitter.emit_number(std::to_string(*iterations));
+  emit_store(context, counter, "packed BCD Horner counter");
+  const std::string loop = context.emitter.fresh_label("packed_bcd_horner_loop");
+  context.emitter.emit_label(loop, {.hidden = true});
+  emit_recall(context, counter);
+  emit_store(context, bank_selector, "packed BCD bank selector");
+  std::vector<int> bank_targets;
+  for (int index = 1; index <= *iterations; ++index)
+    bank_targets.push_back(index);
+  emit_packed_bcd_indirect_recall(context, bank_selector, statement.line,
+                                  "packed BCD indexed value", bank_targets);
+  if (!lower_packed_bcd_argument(context, sample, statement.line))
+    return false;
+  context.emitter.emit_op(0x39, "К ⊕", "packed BCD difference", statement.line);
+  context.emitter.emit_jump(0x53, "ПП", *context.packed_bcd_split_helper_label,
+                            "packed BCD first split", statement.line);
+  context.emitter.emit_jump(0x53, "ПП", *context.packed_bcd_split_helper_label,
+                            "packed BCD second split", statement.line);
+  emit_packed_bcd_horizontal_threshold(context, statement.args.at(5), statement.args.at(9),
+                                       statement.line);
+  context.emitter.emit_number("2");
+  emit_recall(context, target);
+  context.emitter.emit_op(0x12, "*", "packed BCD Horner shift", statement.line);
+  context.emitter.emit_op(0x10, "+", "packed BCD Horner append", statement.line);
+  emit_store(context, target, "packed BCD Horner accumulator");
+  const std::optional<std::pair<int, std::string>> fl = fl_loop_opcode_for_register(0x0);
+  context.emitter.emit_jump(fl->first, fl->second, loop, "packed BCD Horner loop",
+                            statement.line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-bcd-horner-threshold-lowering",
+      .detail = "Emitted a shared packed-BCD split and horizontal threshold fold.",
+  });
+  clear_current_x_facts(context);
+  return true;
+}
+
+bool lower_packed_bcd_binary_prepare(LoweringContext& context,
+                                     const V2Statement& statement) {
+  if (!packed_bcd_internal_arity(context, statement, 8U))
+    return false;
+  const std::string& work_value = statement.args.at(0);
+  const std::string& work_mismatch = statement.args.at(1);
+  const std::string& left = statement.args.at(2);
+  const std::string& right = statement.args.at(3);
+  if (register_index_for(context, work_value) != 0x9 ||
+      register_index_for(context, work_mismatch) != 0xa ||
+      !lower_packed_bcd_argument(context, left, statement.line)) {
+    return false;
+  }
+  emit_recall(context, statement.args.at(4));
+  context.emitter.emit_op(0x10, "+", "encode packed binary value", statement.line);
+  emit_store(context, work_value, "packed binary value");
+  if (statement.args.at(7) == "1") {
+    if (!lower_packed_bcd_argument(context, statement.args.at(5), statement.line) ||
+        !lower_packed_bcd_argument(context, statement.args.at(6), statement.line)) {
+      return false;
+    }
+    context.emitter.emit_op(0x35, "К {x}", "packed history digit mask", statement.line);
+    context.emitter.emit_op(0x37, "К ∧", "drop oldest packed history digit", statement.line);
+    context.emitter.emit_number("2");
+    context.emitter.emit_op(0x10, "+", "packed history anchor", statement.line);
+    context.emitter.emit_op(0x38, "К ∨", "prepend packed history digit", statement.line);
+    emit_store(context, statement.args.at(5), "packed history");
+  }
+  if (!lower_packed_bcd_argument(context, right, statement.line))
+    return false;
+  emit_recall(context, statement.args.at(4));
+  context.emitter.emit_op(0x10, "+", "encode packed binary prediction", statement.line);
+  if (statement.args.at(7) == "1")
+    emit_recall(context, work_value);
+  context.emitter.emit_op(0x39, "К ⊕", "packed binary mismatch", statement.line);
+  emit_store(context, work_mismatch, "packed binary mismatch");
+  return true;
+}
+
+bool lower_packed_bcd_nonzero_score(LoweringContext& context,
+                                    const V2Statement& statement) {
+  if (!packed_bcd_internal_arity(context, statement, 4U))
+    return false;
+  const std::string& score = statement.args.at(0);
+  const std::string& mismatch = statement.args.at(1);
+  if (!context.emitter.current_x_variable.has_value() ||
+      *context.emitter.current_x_variable != mismatch)
+    emit_recall(context, mismatch);
+  context.emitter.emit_op(0x35, "К {x}", "packed mismatch nonzero fraction", statement.line);
+  emit_number_or_preload(context, statement.args.at(2));
+  context.emitter.emit_op(0x36, "К max", "packed mismatch binary delta", statement.line);
+  emit_number_or_preload(context, statement.args.at(3));
+  context.emitter.emit_op(0x11, "-", "packed mismatch score delta", statement.line);
+  emit_recall(context, score);
+  context.emitter.emit_op(0x10, "+", "packed mismatch score update", statement.line);
+  emit_store(context, score, "packed mismatch score");
+  return true;
+}
+
+bool lower_packed_bcd_one_hot_update(LoweringContext& context,
+                                     const V2Statement& statement) {
+  if (!packed_bcd_internal_arity(context, statement, 10U))
+    return false;
+  const std::optional<int> iterations = packed_bcd_internal_integer(statement.args.at(9));
+  if (!iterations.has_value() || *iterations < 1 || *iterations > 3 ||
+      !configure_packed_bcd_full_helper(context, statement.args.at(8), statement.args.at(5),
+                                        statement.args.at(6))) {
+    return false;
+  }
+  const std::string& counter = statement.args.at(1);
+  const std::string& sample = statement.args.at(2);
+  const std::string& work_value = statement.args.at(3);
+  const std::string& work_mismatch = statement.args.at(4);
+  const std::string& helper_selector = statement.args.at(6);
+  const std::string& bank_selector = statement.args.at(7);
+  if (register_index_for(context, counter) != 0x0 ||
+      register_index_for(context, work_value) != 0x9 ||
+      register_index_for(context, work_mismatch) != 0xa ||
+      register_index_for(context, helper_selector) != 0x4 ||
+      register_index_for(context, bank_selector) != 0xe) {
+    context.diagnostics.push_back(diagnostic(
+        DiagnosticSeverity::Error, "native-unsupported",
+        "Packed-BCD one-hot lowering did not receive its proved register layout."));
+    return false;
+  }
+  const std::vector<int> full_store_targets = {
+      register_index_for(context, work_value), register_index_for(context, work_mismatch)};
+  if (!context.packed_bcd_full_store_targets.empty() &&
+      context.packed_bcd_full_store_targets != full_store_targets) {
+    context.diagnostics.push_back(diagnostic(
+        DiagnosticSeverity::Error, "native-unsupported",
+        "Packed-BCD broadcast helper received incompatible indirect store targets."));
+    return false;
+  }
+  context.packed_bcd_full_store_targets = full_store_targets;
+  std::vector<int> bank_targets;
+  for (int index = 1; index <= *iterations; ++index)
+    bank_targets.push_back(index);
+
+  context.emitter.emit_number(std::to_string(*iterations));
+  emit_store(context, counter, "packed one-hot counter");
+  const std::string loop = context.emitter.fresh_label("packed_bcd_one_hot_loop");
+  context.emitter.emit_label(loop, {.hidden = true});
+  emit_store(context, bank_selector, "packed BCD indexed bank selector");
+  context.emitter.emit_number("8");
+  emit_store(context, helper_selector, "packed BCD advancing work selector");
+  emit_packed_bcd_indirect_recall(context, bank_selector, statement.line,
+                                  "packed BCD current indexed value", bank_targets);
+  if (!lower_packed_bcd_argument(context, sample, statement.line))
+    return false;
+  context.emitter.emit_op(0x39, "К ⊕", "packed BCD input/value difference", statement.line);
+  emit_recall(context, work_value);
+  context.emitter.emit_jump(0x53, "ПП", *context.packed_bcd_full_helper_label,
+                            "packed desired bit mask", statement.line);
+  context.emitter.emit_op(0x39, "К ⊕", "apply packed desired bit", statement.line);
+  emit_recall(context, work_mismatch);
+  context.emitter.emit_jump(0x53, "ПП", *context.packed_bcd_full_helper_label,
+                            "packed mismatch bit mask", statement.line);
+  context.emitter.emit_op(0x37, "К ∧", "gate packed mismatch", statement.line);
+  context.emitter.emit_op(0x0e, "В↑", "preserve packed correction", statement.line);
+  context.emitter.emit_op(0x3b, "К СЧ", "packed stochastic update", statement.line);
+  context.emitter.emit_number("8");
+  context.emitter.emit_op(0x10, "+", "packed random mask anchor", statement.line);
+  context.emitter.emit_op(0x37, "К ∧", "apply packed random mask", statement.line);
+  emit_packed_bcd_indirect_recall(context, bank_selector, statement.line,
+                                  "packed BCD current indexed value", bank_targets);
+  context.emitter.emit_op(0x39, "К ⊕", "update packed indexed value", statement.line);
+  emit_packed_bcd_indirect_store(context, bank_selector, statement.line,
+                                 "store packed indexed value", bank_targets);
+  const std::optional<std::pair<int, std::string>> fl = fl_loop_opcode_for_register(0x0);
+  context.emitter.emit_jump(fl->first, fl->second, loop, "packed one-hot loop", statement.line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-bcd-one-hot-lowering",
+      .detail = "Emitted a generic indexed one-hot update through two shared packed bit masks.",
+  });
+  return true;
+}
+
+bool lower_packed_bcd_history_prepend(LoweringContext& context,
+                                      const V2Statement& statement) {
+  if (!packed_bcd_internal_arity(context, statement, 3U) ||
+      !lower_packed_bcd_argument(context, statement.args.at(0), statement.line) ||
+      !lower_packed_bcd_argument(context, statement.args.at(2), statement.line)) {
+    return false;
+  }
+  context.emitter.emit_op(0x35, "К {x}", "packed history digit mask", statement.line);
+  context.emitter.emit_op(0x37, "К ∧", "drop oldest packed history digit", statement.line);
+  context.emitter.emit_number("2");
+  context.emitter.emit_op(0x10, "+", "packed history anchor", statement.line);
+  if (!lower_packed_bcd_argument(context, statement.args.at(1), statement.line))
+    return false;
+  context.emitter.emit_op(0x38, "К ∨", "prepend packed history digit", statement.line);
+  emit_store(context, statement.args.at(0), "packed history");
+  return true;
+}
+
+bool lower_packed_bcd_loop_reset(LoweringContext& context, const V2Statement& statement) {
+  if (!packed_bcd_internal_arity(context, statement, 2U) ||
+      register_index_for(context, statement.args.at(1)) != 0x0)
+    return false;
+  emit_store(context, statement.args.at(0), "rotate packed loop zero initialization");
+  context.packed_bcd_loop_back_selector = statement.args.at(0);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-bcd-fl0-zero-reuse",
+      .detail = "Reused the proven zero left in X when the packed FL0 loop terminated.",
+  });
+  return true;
+}
+
+bool lower_packed_bcd_internal_statement(LoweringContext& context,
+                                         const V2Statement& statement) {
+  if (statement.kind == core::kPackedBcdHornerThresholdStatement)
+    return lower_packed_bcd_horner_threshold(context, statement);
+  if (statement.kind == core::kPackedBcdBinaryPrepareStatement)
+    return lower_packed_bcd_binary_prepare(context, statement);
+  if (statement.kind == core::kPackedBcdNonzeroScoreStatement)
+    return lower_packed_bcd_nonzero_score(context, statement);
+  if (statement.kind == core::kPackedBcdOneHotUpdateStatement)
+    return lower_packed_bcd_one_hot_update(context, statement);
+  if (statement.kind == core::kPackedBcdHistoryPrependStatement)
+    return lower_packed_bcd_history_prepend(context, statement);
+  if (statement.kind == core::kPackedBcdLoopResetStatement)
+    return lower_packed_bcd_loop_reset(context, statement);
+  return false;
+}
+
 bool lower_statement(LoweringContext& context, const V2Statement& statement,
                      const V2Statement* next_statement) {
   const bool entered_with_errors = has_errors(context.diagnostics);
+
+  if (statement.kind == core::kPackedBcdHornerThresholdStatement ||
+      statement.kind == core::kPackedBcdBinaryPrepareStatement ||
+      statement.kind == core::kPackedBcdNonzeroScoreStatement ||
+      statement.kind == core::kPackedBcdOneHotUpdateStatement ||
+      statement.kind == core::kPackedBcdHistoryPrependStatement ||
+      statement.kind == core::kPackedBcdLoopResetStatement) {
+    return lower_packed_bcd_internal_statement(context, statement);
+  }
 
   if (statement.kind == "v2_block") {
     return lower_statement_block(context, statement.body);
@@ -31920,6 +32349,15 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
       return false;
     }
     context.current_loop_label = previous_loop_label;
+    if (context.packed_bcd_loop_back_selector.has_value()) {
+      const std::string selector = *context.packed_bcd_loop_back_selector;
+      context.packed_bcd_loop_back_selector.reset();
+      const int register_index = register_index_for(context, selector);
+      context.emitter.emit_op(0x80 + register_index,
+                              "К БП " + register_text_for(context, selector),
+                              "proved loop-rotated zero-address back edge", statement.line);
+      return true;
+    }
     if (context.lunar_shape) {
       context.emitter.emit_op(0x87, "К БП 7",
                               "loop back; preloaded R7=B2 indirect-target=0 indirect flow",
@@ -40512,6 +40950,51 @@ bool lower_bit_mask_helper(LoweringContext& context) {
   return true;
 }
 
+bool lower_packed_bcd_helpers(LoweringContext& context) {
+  if (context.packed_bcd_split_helper_label.has_value()) {
+    const std::string& label = *context.packed_bcd_split_helper_label;
+    context.emitter.emit_label(
+        label, {.procedure_boundary = "start", .procedure_name = label, .hidden = true});
+    const std::string low_mask = normalize_number_key(*context.packed_bcd_low_mask);
+    if (low_mask == "1111111.1" && context.suppress_constant_preloads.contains(low_mask)) {
+      context.emitter.emit_number("9");
+      context.emitter.emit_op(0x23, "F 1/x", "packed BCD repeated-one mask", std::nullopt);
+      context.optimizations.push_back(OptimizationReport{
+          .name = "packed-bcd-reciprocal-one-mask",
+          .detail = "Synthesized the repeated-one BCD bit mask as 9, F 1/x to free its "
+                    "preload register.",
+      });
+    } else {
+      emit_number_or_preload(context, *context.packed_bcd_low_mask);
+    }
+    context.emitter.emit_op(0x37, "К ∧", "packed BCD low bit plane");
+    context.emitter.emit_op(0x14, "X↔Y", "packed BCD preserve low bit plane");
+    context.emitter.emit_op(0x39, "К ⊕", "packed BCD clear low bit plane");
+    context.emitter.emit_number("2");
+    context.emitter.emit_op(0x13, "/", "packed BCD shift right");
+    context.emitter.emit_op(0x52, "В/О", "packed BCD split return");
+  }
+  if (context.packed_bcd_full_helper_label.has_value()) {
+    const std::string& label = *context.packed_bcd_full_helper_label;
+    context.emitter.emit_label(
+        label, {.procedure_boundary = "start", .procedure_name = label, .hidden = true});
+    context.emitter.emit_jump(0x53, "ПП", *context.packed_bcd_split_helper_label,
+                              "packed BCD split");
+    const int selector = register_index_for(context, *context.packed_bcd_full_selector);
+    context.emitter.emit_op(0xb0 + selector,
+                            "К X->П " + register_text_for(context,
+                                                           *context.packed_bcd_full_selector),
+                            "store packed BCD quotient through advancing selector");
+    context.emitter.items.back().indirect_memory_targets =
+        context.packed_bcd_full_store_targets;
+    context.emitter.emit_op(0x25, "F reverse", "expose packed BCD low bit plane");
+    emit_number_or_preload(context, *context.packed_bcd_full_mask);
+    context.emitter.emit_op(0x37, "К ∧", "broadcast anchored packed BCD bit");
+    context.emitter.emit_op(0x52, "В/О", "packed BCD broadcast return");
+  }
+  return true;
+}
+
 bool lower_packed_score_helper(LoweringContext& context) {
   if (context.packed_score_helper.has_value()) {
     context.emitter.emit_label(*context.packed_score_helper,
@@ -47295,6 +47778,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
               lower_near_any_helpers(context) && lower_line_count_helpers(context) &&
               lower_spatial_line_progression_helpers(context) &&
               lower_spatial_sum_helpers(context) && lower_bit_mask_helper(context) &&
+              lower_packed_bcd_helpers(context) &&
               lower_spatial_hit_helpers(context) && lower_packed_score_helper(context)) {
             emitted_tail = lower_segmented_bitplane_helpers(context);
           }
@@ -61839,6 +62323,18 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
     add_configured_candidate(std::move(candidate_options), std::move(name), std::move(detail),
                              gate);
   };
+  const bool has_repeated_one_mask_preload =
+      std::any_of(best.preloads.begin(), best.preloads.end(), [](const PreloadReport& preload) {
+        return normalize_number_key(preload.value) == "1111111.1";
+      });
+  if (has_repeated_one_mask_preload &&
+      !options.suppress_constant_preloads.contains("1111111.1")) {
+    CompileOptions candidate_options = options;
+    candidate_options.suppress_constant_preloads.insert("1111111.1");
+    add_configured_candidate(
+        std::move(candidate_options), "cheap-constant-materialization",
+        "Synthesized a repeated-one BCD mask to free its preload register for final layout");
+  }
   auto add_fractional_selector_candidates_for_base =
       [&](const CompileOptions& base_options, std::set<std::string>& tried, std::string name,
           const std::function<std::string(const FractionalConstantSelectorPlan&)>& detail,
