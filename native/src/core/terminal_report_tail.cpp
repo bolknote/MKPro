@@ -313,6 +313,23 @@ bool locally_verify_final_artifact(const std::vector<MachineItem>& items,
 
 } // namespace
 
+bool raw_selector_targets_physical_zero(const std::string& selector_register,
+                                        const std::string& raw_value,
+                                        AddressSpaceModel model) {
+  return raw_selector_physical_target(selector_register, raw_value, model) == 0;
+}
+
+std::optional<int> raw_selector_physical_target(const std::string& selector_register,
+                                                const std::string& raw_value,
+                                                AddressSpaceModel model) {
+  const std::optional<std::string> selector = normalized_register(selector_register);
+  if (!selector.has_value())
+    return std::nullopt;
+  const std::optional<IndirectAddressEvaluation> evaluated =
+      evaluate_raw_selector_flow(*selector, raw_value, model);
+  return evaluated.has_value() ? evaluated->actual_flow_target : std::nullopt;
+}
+
 TerminalReportTailVerification verify_terminal_report_tail(
     const std::vector<MachineItem>& items, const RawZeroReturnSelectorProof& raw_selector,
     const TerminalContinuationLivenessProof& continuation,

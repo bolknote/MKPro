@@ -216,6 +216,69 @@ bool contains_reason(const core::TerminalCyclicLayoutPlan& plan, std::string_vie
 
 void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
   {
+    const auto terminal_stop = [] {
+      MachineItem item = MachineItem::op(0x50, "С/П");
+      item.stop_disposition = StopDisposition::Terminal;
+      return item;
+    };
+    const std::vector<MachineItem> inverted_layout = {
+        MachineItem::op(0x52, "В/О"),
+        MachineItem::op(0x53, "ПП"),
+        MachineItem::address(5),
+        MachineItem::op(0x63, "П->X 3"),
+        terminal_stop(),
+        MachineItem::op(0x37, "К AND"),
+        MachineItem::op(0x35, "К frac"),
+        MachineItem::op(0x5e, "F x=0"),
+        MachineItem::address(11),
+        MachineItem::op(0x52, "В/О"),
+        MachineItem::op(0x52, "В/О"),
+        MachineItem::op(0x0a, "."),
+        terminal_stop(),
+    };
+    core::PostLayoutControlFlowOptions flow_options;
+    flow_options.main_entry = 1;
+    const core::AuthoritativePostLayoutControlFlow inverted_flow =
+        core::build_post_layout_control_flow(inverted_layout, flow_options);
+    require(inverted_flow.proved,
+            "inverted terminal fixture should have an authoritative input CFG");
+    const std::vector<PreloadReport> inverted_preloads = {
+        PreloadReport{.register_name = "a", .value = "ГE-2"}};
+    const core::TerminalCyclicLayoutResult inverted =
+        core::optimize_terminal_cyclic_layout(inverted_layout, inverted_preloads, inverted_flow);
+    std::string inverted_reasons;
+    for (const std::string& reason : inverted.plan.reasons)
+      inverted_reasons += (inverted_reasons.empty() ? "" : "; ") + reason;
+    require(inverted.applied == 1 && inverted.removed_cells == 2 &&
+                inverted.plan.final_artifact_proved &&
+                cell_count(inverted.items) == cell_count(inverted_layout) - 2,
+            "generic branch inversion and terminal-block placement should expose a proved tail: " +
+                inverted_reasons);
+
+    std::vector<MachineItem> nonrecall_continuation = inverted_layout;
+    nonrecall_continuation.front() = MachineItem::op(0x54, "К НОП");
+    nonrecall_continuation.at(item_at_address(nonrecall_continuation, 3)) =
+        MachineItem::op(0x01, "1");
+    const core::AuthoritativePostLayoutControlFlow nonrecall_flow =
+        core::build_post_layout_control_flow(nonrecall_continuation, flow_options);
+    require(nonrecall_flow.proved,
+            "return-alias fixture should have an authoritative non-recall continuation CFG");
+    const std::vector<PreloadReport> nonzero_alias_preloads = {
+        PreloadReport{.register_name = "e", .value = "10"}};
+    const core::TerminalCyclicLayoutResult alias = core::optimize_terminal_cyclic_layout(
+        nonrecall_continuation, nonzero_alias_preloads, nonrecall_flow,
+        core::TerminalCyclicLayoutOptions{.enable_return_alias = true});
+    std::string alias_reasons;
+    for (const std::string& reason : alias.plan.reasons)
+      alias_reasons += (alias_reasons.empty() ? "" : "; ") + reason;
+    require(alias.applied == 1 && alias.removed_cells == 1 &&
+                alias.plan.return_alias_proved && alias.plan.final_artifact_proved &&
+                cell_count(alias.items) == cell_count(nonrecall_continuation) - 1,
+            "equivalent nonzero return should shorten a direct conditional even when the "
+            "full terminal continuation proof is unavailable: " + alias_reasons);
+  }
+
+  {
     const std::vector<MachineItem> moving_entry = relocated_main_fixture();
     const core::AuthoritativePostLayoutControlFlow moving_flow =
         relocated_main_flow(moving_entry);

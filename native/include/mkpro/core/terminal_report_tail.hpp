@@ -4,6 +4,7 @@
 #include "mkpro/core/ir.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -101,6 +102,14 @@ struct TerminalReportTailResult {
 // after KAND; Kfrac, plus the caller-supplied raw-selector, continuation, and
 // relocation obligations.  A local mismatch or any missing proof bit fails
 // closed.
+bool raw_selector_targets_physical_zero(
+    const std::string& selector_register, const std::string& raw_value,
+    AddressSpaceModel model = AddressSpaceModel::Standard);
+
+std::optional<int> raw_selector_physical_target(
+    const std::string& selector_register, const std::string& raw_value,
+    AddressSpaceModel model = AddressSpaceModel::Standard);
+
 TerminalReportTailVerification
 verify_terminal_report_tail(const std::vector<MachineItem>& items,
                             const RawZeroReturnSelectorProof& raw_selector,

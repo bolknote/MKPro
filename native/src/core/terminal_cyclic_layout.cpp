@@ -176,6 +176,13 @@ std::string register_text(int index) {
 
 std::optional<int> resolved_target(const MachineItem& operand, const ArtifactIndex& index,
                                    AddressSpaceModel model) {
+  if (operand.kind == MachineItemKind::Op) {
+    try {
+      return formal_address_info(operand.opcode, model).actual;
+    } catch (const std::exception&) {
+      return std::nullopt;
+    }
+  }
   if (operand.kind != MachineItemKind::Address)
     return std::nullopt;
   if (operand.formal_opcode.has_value()) {
@@ -192,6 +199,38 @@ std::optional<int> resolved_target(const MachineItem& operand, const ArtifactInd
     return std::nullopt;
   const auto found = index.label_addresses.find(*label);
   return found == index.label_addresses.end() ? std::nullopt : std::optional<int>(found->second);
+}
+
+bool rewrite_direct_operand(MachineItem& operand, int target) {
+  if (operand.kind == MachineItemKind::Address) {
+    operand.target = target;
+    operand.formal_opcode.reset();
+    return true;
+  }
+  if (operand.kind != MachineItemKind::Op)
+    return false;
+  const std::optional<std::string> comment = operand.comment;
+  const std::vector<std::string> roles = operand.roles;
+  operand = MachineItem::address(target);
+  operand.comment = comment;
+  operand.roles = roles;
+  return true;
+}
+
+std::optional<std::string> label_for_address(const ArtifactIndex& index, int address) {
+  for (const auto& [label, label_address] : index.label_addresses) {
+    if (label_address == address)
+      return label;
+  }
+  return std::nullopt;
+}
+
+void rewrite_direct_operand_to_label(MachineItem& operand, const std::string& label) {
+  const std::optional<std::string> comment = operand.comment;
+  const std::vector<std::string> roles = operand.roles;
+  operand = MachineItem::address(label);
+  operand.comment = comment;
+  operand.roles = roles;
 }
 
 bool executable_address(const std::vector<MachineItem>& items, const ArtifactIndex& index,
@@ -282,8 +321,13 @@ state_successors(const std::vector<MachineItem>& items, const ArtifactIndex& ind
   if (opcode == kStopOpcode)
     return {};
   if (opcode == kReturnOpcode) {
-    if (state.returns.empty())
-      return {};
+    if (state.returns.empty()) {
+      if (!control.empty_return_target.has_value()) {
+        add_reason(reasons, "empty return has no authoritative physical target");
+        return {};
+      }
+      return {ExecutionState{.pc = control.empty_return_target->address, .returns = {}}};
+    }
     ExecutionState next = state;
     next.pc = next.returns.back();
     next.returns.pop_back();
@@ -493,7 +537,8 @@ ContinuationAnalysis analyze_continuation(const std::vector<MachineItem>& items,
       }
       continue;
     }
-    if (item.opcode == kReturnOpcode && state.returns.empty()) {
+    if (item.opcode == kReturnOpcode && state.returns.empty() &&
+        !control.empty_return_target.has_value()) {
       add_reason(analysis.reasons, "report continuation returns outside the proved callers");
       return analysis;
     }
@@ -503,7 +548,9 @@ ContinuationAnalysis analyze_continuation(const std::vector<MachineItem>& items,
     for (const std::string& reason : successor_reasons)
       add_reason(analysis.reasons, reason);
     if (successors.empty()) {
-      add_reason(analysis.reasons, "report continuation has a non-terminal exit");
+      add_reason(analysis.reasons,
+                 "report continuation has a non-terminal exit at " +
+                     std::to_string(state.pc) + " (" + item.name + ")");
       return analysis;
     }
     for (const ExecutionState& successor : successors) {
@@ -664,10 +711,13 @@ bool relocation_facts_proved(const std::vector<MachineItem>& items, const Artifa
 
 std::vector<TailCandidate> discover_tail_candidates(const std::vector<MachineItem>& items,
                                                     const ArtifactIndex& index,
-                                                    AddressSpaceModel model) {
+                                                    AddressSpaceModel model,
+                                                    bool require_zero_return = true) {
   std::vector<TailCandidate> result;
   const auto zero = index.cell_items.find(0);
-  if (zero == index.cell_items.end() || !is_op(items, zero->second, kReturnOpcode))
+  const bool has_zero_return =
+      zero != index.cell_items.end() && is_op(items, zero->second, kReturnOpcode);
+  if (require_zero_return && !has_zero_return)
     return result;
   for (std::size_t mask = 0; mask < items.size(); ++mask) {
     if (!is_op(items, mask, 0x37))
@@ -702,7 +752,7 @@ std::vector<TailCandidate> discover_tail_candidates(const std::vector<MachineIte
         .stop = *stop,
         .continuation = *continuation,
         .direct_return = direct_return->second,
-        .zero_return = zero->second,
+        .zero_return = has_zero_return ? zero->second : direct_return->second,
     });
   }
   return result;
@@ -747,7 +797,8 @@ bool selector_is_unwritten(const std::vector<MachineItem>& items, int selector,
 }
 
 RawZeroReturnSelectorProof build_raw_selector(int selector, std::string raw_value,
-                                              bool selector_unwritten) {
+                                              bool selector_unwritten,
+                                              int actual_flow_target = 0) {
   const OpcodeInfo& conditional = opcode_by_code(0x70 + selector);
   const bool stack_preserved = conditional.stack_effect == StackEffect::Preserves;
   const bool x2_preserved = conditional.conditional_x2_effect.has_value() &&
@@ -756,7 +807,7 @@ RawZeroReturnSelectorProof build_raw_selector(int selector, std::string raw_valu
   return RawZeroReturnSelectorProof{
       .selector_register = register_text(selector),
       .facts = {{.raw_value = std::move(raw_value),
-                 .actual_flow_target = 0,
+                 .actual_flow_target = actual_flow_target,
                  .conditional_preserves_selector = true,
                  .conditional_preserves_x_y_z_t = stack_preserved,
                  .conditional_preserves_x2 = x2_preserved}},
@@ -867,6 +918,18 @@ struct ReboundArtifact {
   bool proved = false;
   std::vector<std::string> reasons;
 };
+
+bool is_direct_flow_opcode(int opcode) {
+  return opcode == kJumpOpcode || opcode == kCallOpcode ||
+         (opcode >= kDirectConditionFirst && opcode <= kDirectConditionLast);
+}
+
+bool is_non_fallthrough_command(const MachineItem& item) {
+  if (item.kind != MachineItemKind::Op)
+    return false;
+  return item.opcode == kReturnOpcode || item.opcode == kStopOpcode ||
+         item.opcode == kJumpOpcode || (item.opcode & 0xf0) == 0x80;
+}
 
 std::vector<std::size_t>
 identity_items(const std::vector<PostLayoutCommandIdentity>& identities) {
@@ -986,11 +1049,25 @@ ReboundArtifact rebind_control_flow_after_relocation(
     add_reason(result.reasons, "relocation removed the exact main command identity");
     return result;
   }
+  std::optional<IrTarget> empty_return_target;
+  if (input_control.empty_return_target.has_value()) {
+    const std::optional<std::size_t> relocated_empty =
+        relocate(input_control.empty_return_target->item_index);
+    if (!relocated_empty.has_value() || *relocated_empty >= result.items.size() ||
+        output_index.item_addresses.at(*relocated_empty) !=
+            input_control.empty_return_target->address) {
+      add_reason(result.reasons,
+                 "relocation moved the exact physical empty-return target identity");
+      return result;
+    }
+    empty_return_target = input_control.empty_return_target->address;
+  }
   const PostLayoutControlFlowOptions cfg_options{
       .address_space_model = options.address_space_model,
       .maximum_return_depth = options.maximum_return_depth,
       .maximum_execution_states = static_cast<std::size_t>(options.maximum_execution_states),
       .main_entry = output_index.item_addresses.at(*new_main),
+      .empty_return_target = empty_return_target,
   };
   result.control_flow = build_post_layout_control_flow(result.items, cfg_options);
   if (!result.control_flow.proved) {
@@ -1069,12 +1146,685 @@ fixed_protocol_addresses(const std::vector<PostLayoutExternalEntryState>& entrie
   return std::vector<int>(addresses.begin(), addresses.end());
 }
 
+std::optional<TerminalCyclicLayoutResult> rewrite_terminal_return_alias(
+    const std::vector<MachineItem>& items, const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const TerminalCyclicLayoutOptions& options,
+    std::vector<std::string>* rejection_reasons) {
+  const auto reject = [&](std::string reason) {
+    if (rejection_reasons != nullptr)
+      add_reason(*rejection_reasons, "return alias: " + std::move(reason));
+  };
+  const ArtifactIndex index = index_artifact(items);
+  const std::vector<TailCandidate> tails =
+      discover_tail_candidates(items, index, options.address_space_model, false);
+  const std::map<int, std::string> selectors = unique_stable_preloads(preloads);
+  if (tails.empty())
+    reject("no structural tail with equivalent returns");
+  if (selectors.empty())
+    reject("no unique stable selector preload");
+  for (const TailCandidate& tail : tails) {
+    if (items.at(tail.stop).stop_disposition != StopDisposition::Terminal) {
+      reject("provisional stop is not terminal");
+      continue;
+    }
+    for (const auto& [selector, raw_value] : selectors) {
+      if (!selector_is_unwritten(items, selector, control_flow)) {
+        reject("selector is not stable until the conditional");
+        continue;
+      }
+      const std::string selector_name = register_text(selector);
+      const int post_alias_return_address =
+          index.item_addresses.at(tail.direct_return) -
+          (tail.direct_return > tail.operand ? 1 : 0);
+      const std::optional<int> selector_target = raw_selector_physical_target(
+          selector_name, raw_value, options.address_space_model);
+      if (!selector_target.has_value() || *selector_target != post_alias_return_address) {
+        reject("selector preload does not decode to the relocated direct return");
+        continue;
+      }
+      const int indirect_opcode = 0x70 + selector;
+      const OpcodeInfo& direct = opcode_by_code(items.at(tail.condition).opcode);
+      const OpcodeInfo& indirect = opcode_by_code(indirect_opcode);
+      if (direct.stack_effect != indirect.stack_effect ||
+          !direct.conditional_x2_effect.has_value() ||
+          indirect.stack_effect != StackEffect::Preserves ||
+          !indirect.conditional_x2_effect.has_value() ||
+          direct.conditional_x2_effect->jump != indirect.conditional_x2_effect->jump ||
+          indirect.conditional_x2_effect->jump != X2Effect::Preserves) {
+        reject("direct and indirect conditionals have different stack/X2 contracts");
+        continue;
+      }
+
+      bool existing_selector_flows_match = true;
+      for (const auto& [source, targets] : control_flow.indirect_flow_targets) {
+        if (source >= items.size() || items.at(source).kind != MachineItemKind::Op ||
+            encoded_register(items.at(source).opcode) != selector)
+          continue;
+        if (post_alias_return_address != index.item_addresses.at(tail.direct_return) ||
+            targets.empty() ||
+            std::any_of(targets.begin(), targets.end(),
+                        [&](const PostLayoutCommandIdentity& target) {
+                          return target.item_index != tail.direct_return;
+                        })) {
+          existing_selector_flows_match = false;
+          break;
+        }
+      }
+      if (!existing_selector_flows_match) {
+        reject("existing uses of the selector target a different command identity");
+        continue;
+      }
+
+      std::vector<std::optional<std::size_t>> relocation(items.size());
+      std::vector<MachineItem> rewritten;
+      rewritten.reserve(items.size() - 1U);
+      for (std::size_t old_item = 0; old_item < items.size(); ++old_item) {
+        if (old_item == tail.operand)
+          continue;
+        relocation.at(old_item) = rewritten.size();
+        MachineItem item = items.at(old_item);
+        if (old_item == tail.condition) {
+          item.opcode = indirect_opcode;
+          item.name = indirect.name;
+          item.comment = "proved equivalent-return alias";
+        }
+        rewritten.push_back(std::move(item));
+      }
+      const ItemRelocation relocate = [relocation](std::size_t old_item)
+          -> std::optional<std::size_t> {
+        return old_item < relocation.size() ? relocation.at(old_item) : std::nullopt;
+      };
+      if (!relocation.at(tail.condition).has_value() ||
+          !relocation.at(tail.direct_return).has_value())
+        continue;
+      const std::size_t new_condition = *relocation.at(tail.condition);
+      const std::size_t new_direct_return = *relocation.at(tail.direct_return);
+      ReboundArtifact rebound = rebind_control_flow_after_relocation(
+          items, std::move(rewritten), control_flow, relocate, {tail.operand},
+          {tail.condition},
+          {{.source_item = new_condition, .target_items = {new_direct_return}}}, options);
+      if (!rebound.proved) {
+        if (rebound.reasons.empty())
+          reject("final CFG relocation proof failed");
+        else
+          for (const std::string& reason : rebound.reasons)
+            reject(reason);
+        continue;
+      }
+
+      TerminalCyclicLayoutResult result;
+      result.items = std::move(rebound.items);
+      result.plan.return_alias_proved = true;
+      result.plan.final_artifact_proved = true;
+      result.plan.input_cells = index.cells;
+      result.plan.output_cells = index.cells - 1;
+      result.plan.removed_cells = 1;
+      result.plan.raw_selector =
+          build_raw_selector(selector, raw_value, true, post_alias_return_address);
+      result.plan.final_control_flow = std::move(rebound.control_flow);
+      result.applied = 1;
+      result.removed_cells = 1;
+      result.optimizations.push_back(passes::AppliedOptimization{
+          .name = "terminal-return-alias",
+          .detail = "Replaced one direct conditional operand with a proved one-cell indirect "
+                    "branch to the same relocated return command.",
+      });
+      return result;
+    }
+  }
+  return std::nullopt;
+}
+
+std::vector<ReboundArtifact> normalize_inverted_terminal_tail_layouts(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const TerminalCyclicLayoutOptions& options) {
+  const ArtifactIndex input_index = index_artifact(items);
+  std::vector<ReboundArtifact> candidates;
+
+  for (std::size_t mask = 0; mask < items.size(); ++mask) {
+    if (!is_op(items, mask, 0x37))
+      continue;
+    const std::optional<std::size_t> fraction = next_cell_item(items, mask);
+    const std::optional<std::size_t> condition =
+        fraction.has_value() ? next_cell_item(items, *fraction) : std::nullopt;
+    const std::optional<std::size_t> operand =
+        condition.has_value() ? next_cell_item(items, *condition) : std::nullopt;
+    const std::optional<std::size_t> direct_return =
+        operand.has_value() ? next_cell_item(items, *operand) : std::nullopt;
+    if (!fraction.has_value() || !condition.has_value() || !operand.has_value() ||
+        !direct_return.has_value() || !is_op(items, *fraction, 0x35) ||
+        !is_op(items, *condition, 0x5e) ||
+        items.at(*condition).raw || !resolved_target(items.at(*operand), input_index,
+                                                     options.address_space_model)
+                                            .has_value() ||
+        !is_op(items, *direct_return, kReturnOpcode)) {
+      continue;
+    }
+
+    const std::optional<int> terminal_address =
+        resolved_target(items.at(*operand), input_index, options.address_space_model);
+    if (!terminal_address.has_value())
+      continue;
+    const auto terminal_cell = input_index.cell_items.find(*terminal_address);
+    if (terminal_cell == input_index.cell_items.end())
+      continue;
+    const std::size_t dot = terminal_cell->second;
+    const std::optional<std::size_t> stop = next_cell_item(items, dot);
+    if (!is_op(items, dot, 0x0a) || !stop.has_value() ||
+        !is_op(items, *stop, kStopOpcode) ||
+        items.at(*stop).stop_disposition != StopDisposition::Terminal) {
+      continue;
+    }
+
+    std::size_t terminal_block_begin = dot;
+    while (terminal_block_begin > 0U &&
+           items.at(terminal_block_begin - 1U).kind == MachineItemKind::Label) {
+      --terminal_block_begin;
+    }
+    const std::size_t terminal_block_end = *stop + 1U;
+    if (terminal_block_begin <= *direct_return || terminal_block_end > items.size())
+      continue;
+
+    std::optional<std::size_t> predecessor =
+        previous_cell_item(items, terminal_block_begin);
+    if (predecessor.has_value() &&
+        items.at(*predecessor).kind == MachineItemKind::Address) {
+      predecessor = previous_cell_item(items, *predecessor);
+    }
+    if (!predecessor.has_value() ||
+        !is_non_fallthrough_command(items.at(*predecessor))) {
+      continue;
+    }
+
+    bool exclusive_terminal_entry = true;
+    for (std::size_t source = 0; source < items.size(); ++source) {
+      if (items.at(source).kind != MachineItemKind::Op ||
+          !is_direct_flow_opcode(items.at(source).opcode)) {
+        continue;
+      }
+      const std::optional<std::size_t> source_operand = next_cell_item(items, source);
+      if (!source_operand.has_value()) {
+        exclusive_terminal_entry = false;
+        break;
+      }
+      const std::optional<int> target = resolved_target(
+          items.at(*source_operand), input_index, options.address_space_model);
+      if (!target.has_value()) {
+        exclusive_terminal_entry = false;
+        break;
+      }
+      const auto target_cell = input_index.cell_items.find(*target);
+      if (target_cell == input_index.cell_items.end()) {
+        exclusive_terminal_entry = false;
+        break;
+      }
+      if ((target_cell->second == dot || target_cell->second == *stop) &&
+          !(source == *condition && target_cell->second == dot)) {
+        exclusive_terminal_entry = false;
+        break;
+      }
+    }
+    for (const auto& [source, targets] : control_flow.indirect_flow_targets) {
+      (void)source;
+      for (const PostLayoutCommandIdentity& target : targets) {
+        if (target.item_index == dot || target.item_index == *stop)
+          exclusive_terminal_entry = false;
+      }
+    }
+    for (const PostLayoutExternalEntryState& entry : control_flow.external_entries) {
+      if (entry.entry.item_index == dot || entry.entry.item_index == *stop)
+        exclusive_terminal_entry = false;
+      for (const PostLayoutCommandIdentity& return_slot : entry.return_stack) {
+        if (return_slot.item_index == dot || return_slot.item_index == *stop)
+          exclusive_terminal_entry = false;
+      }
+    }
+    if (!exclusive_terminal_entry)
+      continue;
+
+    std::vector<std::optional<std::size_t>> relocation(items.size());
+    std::vector<MachineItem> reordered;
+    reordered.reserve(items.size());
+    const auto append_old_item = [&](std::size_t old_item) {
+      relocation.at(old_item) = reordered.size();
+      reordered.push_back(items.at(old_item));
+    };
+    for (std::size_t old_item = 0; old_item < items.size(); ++old_item) {
+      if (old_item == *direct_return) {
+        for (std::size_t moved = terminal_block_begin; moved < terminal_block_end; ++moved)
+          append_old_item(moved);
+      }
+      if (old_item >= terminal_block_begin && old_item < terminal_block_end)
+        continue;
+      append_old_item(old_item);
+    }
+    if (reordered.size() != items.size())
+      continue;
+
+    const ItemRelocation relocate = [relocation](std::size_t old_item)
+        -> std::optional<std::size_t> {
+      return old_item < relocation.size() ? relocation.at(old_item) : std::nullopt;
+    };
+    const ArtifactIndex output_index = index_artifact(reordered);
+    const std::size_t new_condition = *relocation.at(*condition);
+    reordered.at(new_condition).opcode = 0x57;
+    reordered.at(new_condition).name = "F x!=0";
+
+    std::set<std::size_t> changed_items = {*condition};
+    bool direct_edges_rebound = true;
+    for (std::size_t source = 0; source < items.size(); ++source) {
+      if (items.at(source).kind != MachineItemKind::Op ||
+          !is_direct_flow_opcode(items.at(source).opcode)) {
+        continue;
+      }
+      const std::optional<std::size_t> old_operand = next_cell_item(items, source);
+      if (!old_operand.has_value()) {
+        direct_edges_rebound = false;
+        break;
+      }
+      const std::optional<int> old_target = resolved_target(
+          items.at(*old_operand), input_index, options.address_space_model);
+      if (!old_target.has_value()) {
+        direct_edges_rebound = false;
+        break;
+      }
+      const auto old_target_cell = input_index.cell_items.find(*old_target);
+      if (old_target_cell == input_index.cell_items.end()) {
+        direct_edges_rebound = false;
+        break;
+      }
+      const std::size_t target_item =
+          source == *condition ? *direct_return : old_target_cell->second;
+      if (!relocation.at(source).has_value() || !relocation.at(*old_operand).has_value() ||
+          !relocation.at(target_item).has_value()) {
+        direct_edges_rebound = false;
+        break;
+      }
+      MachineItem& new_operand = reordered.at(*relocation.at(*old_operand));
+      if (source == *condition) {
+        const std::optional<std::string> target_label = label_for_address(
+            input_index, input_index.item_addresses.at(target_item));
+        if (target_label.has_value()) {
+          rewrite_direct_operand_to_label(new_operand, *target_label);
+        } else if (!rewrite_direct_operand(
+                       new_operand,
+                       output_index.item_addresses.at(*relocation.at(target_item)))) {
+          direct_edges_rebound = false;
+          break;
+        }
+        changed_items.insert(*old_operand);
+      } else if (!(items.at(*old_operand).kind == MachineItemKind::Address &&
+                   std::holds_alternative<std::string>(items.at(*old_operand).target))) {
+        if (!rewrite_direct_operand(
+                new_operand,
+                output_index.item_addresses.at(*relocation.at(target_item)))) {
+          direct_edges_rebound = false;
+          break;
+        }
+        changed_items.insert(*old_operand);
+      }
+    }
+    if (!direct_edges_rebound)
+      continue;
+
+    bool fixed_indirect_targets = true;
+    for (const auto& [source, targets] : control_flow.indirect_flow_targets) {
+      (void)source;
+      for (const PostLayoutCommandIdentity& target : targets) {
+        if (!relocation.at(target.item_index).has_value() ||
+            output_index.item_addresses.at(*relocation.at(target.item_index)) != target.address) {
+          fixed_indirect_targets = false;
+        }
+      }
+    }
+    if (!fixed_indirect_targets)
+      continue;
+
+    ReboundArtifact rebound = rebind_control_flow_after_relocation(
+        items, std::move(reordered), control_flow, relocate, {}, changed_items, {}, options);
+    if (rebound.proved)
+      candidates.push_back(std::move(rebound));
+  }
+  return candidates;
+}
+
+std::vector<ReboundArtifact> normalize_empty_return_startup_layouts(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const TerminalCyclicLayoutOptions& options,
+    std::vector<std::string>* rejection_reasons) {
+  const ArtifactIndex input_index = index_artifact(items);
+  std::vector<ReboundArtifact> candidates;
+  const auto reject = [&](std::string reason) {
+    if (rejection_reasons != nullptr)
+      add_reason(*rejection_reasons, std::move(reason));
+  };
+  const auto zero = input_index.cell_items.find(0);
+  if (zero == input_index.cell_items.end() || is_op(items, zero->second, kReturnOpcode) ||
+      !control_flow.empty_return_target.has_value() ||
+      control_flow.empty_return_target->address != 1) {
+    reject("physical-00 startup is already a return or the empty-return-to-01 fact is absent");
+    return candidates;
+  }
+  const auto input_main = std::find_if(
+      control_flow.external_entries.begin(), control_flow.external_entries.end(),
+      [](const PostLayoutExternalEntryState& entry) {
+        return entry.kind == ExternalEntryKind::Main;
+      });
+  if (input_main == control_flow.external_entries.end() ||
+      input_main->entry.item_index != zero->second || !input_main->return_stack.empty()) {
+    reject("main entry is not the physical-00 command with an empty return stack");
+    return candidates;
+  }
+
+  bool found_zero_jump = false;
+  for (std::size_t jump = 0; jump < items.size(); ++jump) {
+    if (!is_op(items, jump, kJumpOpcode))
+      continue;
+    const std::optional<std::size_t> operand = next_cell_item(items, jump);
+    if (!operand.has_value() ||
+        !resolved_target(items.at(*operand), input_index, options.address_space_model)
+             .has_value()) {
+      continue;
+    }
+    const std::optional<int> target =
+        resolved_target(items.at(*operand), input_index, options.address_space_model);
+    if (!target.has_value() || *target != 0) {
+      continue;
+    }
+    found_zero_jump = true;
+
+    std::vector<std::string> stack_reasons;
+    const std::vector<std::vector<int>> stacks = reachable_return_stacks(
+        items, input_index, control_flow, input_index.item_addresses.at(jump), options,
+        stack_reasons);
+    if (!stack_reasons.empty() || stacks.empty() ||
+        std::any_of(stacks.begin(), stacks.end(),
+                    [](const std::vector<int>& stack) { return !stack.empty(); })) {
+      reject("direct BP 00 is not proved reachable only with an empty return stack");
+      continue;
+    }
+
+    std::vector<std::optional<std::size_t>> relocation(items.size());
+    std::vector<MachineItem> rewritten;
+    rewritten.reserve(items.size());
+    MachineItem startup_return = MachineItem::op(kReturnOpcode, "В/О");
+    startup_return.comment = "transparent empty-stack startup return to physical 01";
+    rewritten.push_back(std::move(startup_return));
+    for (std::size_t old_item = 0; old_item < items.size(); ++old_item) {
+      if (old_item == *operand)
+        continue;
+      relocation.at(old_item) = rewritten.size();
+      MachineItem item = items.at(old_item);
+      if (old_item == jump) {
+        item.opcode = kReturnOpcode;
+        item.name = "В/О";
+        item.comment = "empty-stack loop return to physical 01";
+      }
+      rewritten.push_back(std::move(item));
+    }
+    const ArtifactIndex output_index = index_artifact(rewritten);
+
+    bool direct_edges_rebound = true;
+    for (std::size_t source = 0; source < items.size(); ++source) {
+      if (source == jump || items.at(source).kind != MachineItemKind::Op ||
+          !is_direct_flow_opcode(items.at(source).opcode)) {
+        continue;
+      }
+      const std::optional<std::size_t> old_operand = next_cell_item(items, source);
+      if (!old_operand.has_value() || !relocation.at(source).has_value() ||
+          !relocation.at(*old_operand).has_value()) {
+        direct_edges_rebound = false;
+        break;
+      }
+      const std::optional<int> old_target = resolved_target(
+          items.at(*old_operand), input_index, options.address_space_model);
+      if (!old_target.has_value()) {
+        direct_edges_rebound = false;
+        break;
+      }
+      const auto old_target_cell = input_index.cell_items.find(*old_target);
+      if (old_target_cell == input_index.cell_items.end() ||
+          !relocation.at(old_target_cell->second).has_value()) {
+        direct_edges_rebound = false;
+        break;
+      }
+      MachineItem& new_operand = rewritten.at(*relocation.at(*old_operand));
+      if (!(items.at(*old_operand).kind == MachineItemKind::Address &&
+            std::holds_alternative<std::string>(items.at(*old_operand).target))) {
+        if (!rewrite_direct_operand(
+                new_operand,
+                output_index.item_addresses.at(*relocation.at(old_target_cell->second)))) {
+          direct_edges_rebound = false;
+          break;
+        }
+      }
+    }
+    if (!direct_edges_rebound)
+      reject("startup layout could not rebind every direct target identity");
+    if (!direct_edges_rebound)
+      continue;
+
+    for (MachineItem& item : rewritten) {
+      item.indirect_flow_targets.reset();
+      item.indirect_memory_targets.reset();
+    }
+    bool indirect_facts_rebound = true;
+    for (const auto& [old_source, old_targets] : control_flow.indirect_flow_targets) {
+      if (!relocation.at(old_source).has_value()) {
+        indirect_facts_rebound = false;
+        break;
+      }
+      std::vector<IrTarget> rebound_targets;
+      for (const PostLayoutCommandIdentity& old_target : old_targets) {
+        if (!relocation.at(old_target.item_index).has_value()) {
+          indirect_facts_rebound = false;
+          break;
+        }
+        const int new_address =
+            output_index.item_addresses.at(*relocation.at(old_target.item_index));
+        if (new_address != old_target.address) {
+          indirect_facts_rebound = false;
+          break;
+        }
+        rebound_targets.emplace_back(new_address);
+      }
+      if (!indirect_facts_rebound)
+        break;
+      rewritten.at(*relocation.at(old_source)).indirect_flow_targets =
+          std::move(rebound_targets);
+    }
+    for (const auto& [old_source, targets] : control_flow.indirect_memory_targets) {
+      if (!relocation.at(old_source).has_value()) {
+        indirect_facts_rebound = false;
+        break;
+      }
+      rewritten.at(*relocation.at(old_source)).indirect_memory_targets = targets;
+    }
+    if (!indirect_facts_rebound)
+      reject("startup layout moved an indirect target or lost typed indirect metadata");
+    if (!indirect_facts_rebound)
+      continue;
+
+    const PostLayoutControlFlowOptions flow_options{
+        .address_space_model = options.address_space_model,
+        .maximum_return_depth = options.maximum_return_depth,
+        .maximum_execution_states =
+            static_cast<std::size_t>(options.maximum_execution_states),
+        .main_entry = 0,
+        .empty_return_target = 1,
+    };
+    AuthoritativePostLayoutControlFlow rewritten_flow =
+        build_post_layout_control_flow(rewritten, flow_options);
+    if (!rewritten_flow.proved || !rewritten_flow.empty_return_target.has_value() ||
+        rewritten_flow.empty_return_target->address != 1 ||
+        rewritten_flow.empty_return_target->item_index != *relocation.at(zero->second) ||
+        rewritten_flow.external_entries.size() != control_flow.external_entries.size()) {
+      reject("startup layout did not rebuild an equivalent authoritative CFG");
+      continue;
+    }
+
+    bool external_entries_rebound = true;
+    for (const PostLayoutExternalEntryState& old_entry : control_flow.external_entries) {
+      if (old_entry.kind == ExternalEntryKind::Main) {
+        const auto new_main = std::find_if(
+            rewritten_flow.external_entries.begin(), rewritten_flow.external_entries.end(),
+            [](const PostLayoutExternalEntryState& entry) {
+              return entry.kind == ExternalEntryKind::Main;
+            });
+        if (new_main == rewritten_flow.external_entries.end() ||
+            new_main->entry.address != 0 || !new_main->return_stack.empty()) {
+          external_entries_rebound = false;
+        }
+        continue;
+      }
+      if (!relocation.at(old_entry.entry.item_index).has_value()) {
+        external_entries_rebound = false;
+        break;
+      }
+      std::vector<std::size_t> expected_stack;
+      for (const PostLayoutCommandIdentity& slot : old_entry.return_stack) {
+        if (!relocation.at(slot.item_index).has_value()) {
+          external_entries_rebound = false;
+          break;
+        }
+        expected_stack.push_back(*relocation.at(slot.item_index));
+      }
+      if (!external_entries_rebound)
+        break;
+      const bool found = std::any_of(
+          rewritten_flow.external_entries.begin(), rewritten_flow.external_entries.end(),
+          [&](const PostLayoutExternalEntryState& candidate) {
+            std::vector<std::size_t> candidate_stack;
+            for (const PostLayoutCommandIdentity& slot : candidate.return_stack)
+              candidate_stack.push_back(slot.item_index);
+            return candidate.kind == old_entry.kind &&
+                   candidate.manual_interaction == old_entry.manual_interaction &&
+                   candidate.entry.item_index == *relocation.at(old_entry.entry.item_index) &&
+                   candidate_stack == expected_stack;
+          });
+      if (!found) {
+        external_entries_rebound = false;
+        break;
+      }
+    }
+    if (!external_entries_rebound)
+      reject("startup layout changed a resumable external entry or return-stack identity");
+    if (!external_entries_rebound)
+      continue;
+
+    bool indirect_identities_match =
+        rewritten_flow.indirect_flow_targets.size() ==
+            control_flow.indirect_flow_targets.size() &&
+        rewritten_flow.indirect_memory_targets.size() ==
+            control_flow.indirect_memory_targets.size();
+    for (const auto& [old_source, old_targets] : control_flow.indirect_flow_targets) {
+      if (!indirect_identities_match || !relocation.at(old_source).has_value()) {
+        indirect_identities_match = false;
+        break;
+      }
+      const auto found = rewritten_flow.indirect_flow_targets.find(*relocation.at(old_source));
+      if (found == rewritten_flow.indirect_flow_targets.end() ||
+          found->second.size() != old_targets.size()) {
+        indirect_identities_match = false;
+        break;
+      }
+      for (std::size_t index = 0; index < old_targets.size(); ++index) {
+        if (!relocation.at(old_targets.at(index).item_index).has_value() ||
+            found->second.at(index).item_index !=
+                *relocation.at(old_targets.at(index).item_index)) {
+          indirect_identities_match = false;
+          break;
+        }
+      }
+    }
+    if (!indirect_identities_match)
+      reject("startup layout changed an authoritative indirect command identity");
+    if (!indirect_identities_match)
+      continue;
+
+    candidates.push_back(ReboundArtifact{
+        .items = std::move(rewritten),
+        .control_flow = std::move(rewritten_flow),
+        .proved = true,
+    });
+  }
+  if (!found_zero_jump)
+    reject("artifact contains no direct BP 00 startup loop candidate");
+  return candidates;
+}
+
 void append_reasons(std::vector<std::string>& destination, const std::vector<std::string>& source) {
   for (const std::string& reason : source)
     add_reason(destination, reason);
 }
 
 } // namespace
+
+std::optional<std::vector<MachineItem>>
+symbolize_terminal_layout_direct_targets(const std::vector<MachineItem>& items,
+                                         AddressSpaceModel model) {
+  const ArtifactIndex index = index_artifact(items);
+  std::map<std::size_t, std::size_t> target_by_operand;
+  for (std::size_t source = 0; source < items.size(); ++source) {
+    if (items.at(source).kind != MachineItemKind::Op ||
+        !is_direct_flow_opcode(items.at(source).opcode)) {
+      continue;
+    }
+    const std::optional<std::size_t> operand = next_cell_item(items, source);
+    if (!operand.has_value())
+      return std::nullopt;
+    const std::optional<int> target = resolved_target(items.at(*operand), index, model);
+    if (!target.has_value())
+      return std::nullopt;
+    const auto target_item = index.cell_items.find(*target);
+    if (target_item == index.cell_items.end() ||
+        items.at(target_item->second).kind != MachineItemKind::Op) {
+      return std::nullopt;
+    }
+    target_by_operand.emplace(*operand, target_item->second);
+  }
+
+  std::set<std::string> names;
+  for (const MachineItem& item : items) {
+    if (item.kind == MachineItemKind::Label)
+      names.insert(item.name);
+  }
+  std::map<std::size_t, std::string> label_by_target;
+  int ordinal = 0;
+  for (const auto& [operand, target] : target_by_operand) {
+    (void)operand;
+    if (label_by_target.contains(target))
+      continue;
+    std::string label;
+    do {
+      label = "__terminal_direct_identity_" + std::to_string(ordinal++);
+    } while (names.contains(label));
+    names.insert(label);
+    label_by_target.emplace(target, std::move(label));
+  }
+
+  std::vector<MachineItem> symbolized;
+  symbolized.reserve(items.size() + label_by_target.size());
+  for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
+    if (const auto label = label_by_target.find(item_index); label != label_by_target.end())
+      symbolized.push_back(MachineItem::label(label->second));
+    const auto operand = target_by_operand.find(item_index);
+    if (operand == target_by_operand.end()) {
+      symbolized.push_back(items.at(item_index));
+      continue;
+    }
+    const std::optional<std::string> comment = items.at(item_index).comment;
+    const std::vector<std::string> roles = items.at(item_index).roles;
+    MachineItem address = MachineItem::address(label_by_target.at(operand->second));
+    address.comment = comment;
+    address.roles = roles;
+    symbolized.push_back(std::move(address));
+  }
+  return symbolized;
+}
 
 TerminalCyclicLayoutPlan
 verify_terminal_cyclic_layout(const std::vector<MachineItem>& items,
@@ -1246,8 +1996,56 @@ optimize_terminal_cyclic_layout(const std::vector<MachineItem>& items,
   TerminalCyclicLayoutResult result;
   result.items = items;
   result.plan = verify_terminal_cyclic_layout(items, preloads, control_flow, options);
-  if (!result.plan.terminal_proved)
+  if (!result.plan.terminal_proved) {
+    if (options.enable_return_alias) {
+      if (const std::optional<TerminalCyclicLayoutResult> alias =
+              rewrite_terminal_return_alias(items, preloads, control_flow, options,
+                                            &result.plan.reasons);
+          alias.has_value()) {
+        return *alias;
+      }
+    }
+    for (ReboundArtifact& normalized :
+         normalize_inverted_terminal_tail_layouts(items, control_flow, options)) {
+      TerminalCyclicLayoutResult candidate = optimize_terminal_cyclic_layout(
+          normalized.items, preloads, normalized.control_flow, options);
+      if (candidate.applied > 0 && candidate.plan.final_artifact_proved)
+        return candidate;
+      for (auto reason = candidate.plan.reasons.rbegin();
+           reason != candidate.plan.reasons.rend(); ++reason) {
+        const std::string prefixed = "normalized terminal layout: " + *reason;
+        if (std::find(result.plan.reasons.begin(), result.plan.reasons.end(), prefixed) ==
+            result.plan.reasons.end()) {
+          result.plan.reasons.insert(result.plan.reasons.begin(), prefixed);
+        }
+      }
+    }
+    std::vector<std::string> startup_rejections;
+    for (ReboundArtifact& startup : normalize_empty_return_startup_layouts(
+             items, control_flow, options, &startup_rejections)) {
+      TerminalCyclicLayoutResult candidate = optimize_terminal_cyclic_layout(
+          startup.items, preloads, startup.control_flow, options);
+      if (candidate.applied > 0 && candidate.plan.final_artifact_proved)
+        return candidate;
+      for (auto reason = candidate.plan.reasons.rbegin();
+           reason != candidate.plan.reasons.rend(); ++reason) {
+        const std::string prefixed = "empty-return startup layout: " + *reason;
+        if (std::find(result.plan.reasons.begin(), result.plan.reasons.end(), prefixed) ==
+            result.plan.reasons.end()) {
+          result.plan.reasons.insert(result.plan.reasons.begin(), prefixed);
+        }
+      }
+    }
+    for (auto reason = startup_rejections.rbegin();
+         reason != startup_rejections.rend(); ++reason) {
+      const std::string prefixed = "empty-return startup layout: " + *reason;
+      if (std::find(result.plan.reasons.begin(), result.plan.reasons.end(), prefixed) ==
+          result.plan.reasons.end()) {
+        result.plan.reasons.insert(result.plan.reasons.begin(), prefixed);
+      }
+    }
     return result;
+  }
 
   const TerminalReportTailResult terminal = rewrite_terminal_report_tail(
       items, result.plan.raw_selector, result.plan.continuation, result.plan.relocation,

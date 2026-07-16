@@ -9,6 +9,7 @@
 #include "mkpro/core/terminal_report_tail.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,7 @@ struct TerminalCyclicLayoutOptions {
   AddressSpaceModel address_space_model = AddressSpaceModel::Standard;
   int maximum_return_depth = 5;
   int maximum_execution_states = 20000;
+  bool enable_return_alias = false;
 };
 
 // Audit record produced entirely by the verifier.  The three legacy proof
@@ -26,6 +28,7 @@ struct TerminalCyclicLayoutOptions {
 // entries, relocation identity ledger, opcode effects, and complete indirect
 // maps.
 struct TerminalCyclicLayoutPlan {
+  bool return_alias_proved = false;
   bool terminal_proved = false;
   bool cyclic_proved = false;
   bool final_artifact_proved = false;
@@ -54,6 +57,15 @@ struct TerminalCyclicLayoutResult {
   int applied = 0;
   int removed_cells = 0;
 };
+
+// Canonicalize every resolved direct-flow operand to a unique symbolic command
+// identity without changing cell count or control flow. This lets subsequent
+// cell-removing layout proofs rebind fixed targets instead of relying on stale
+// physical addresses. Malformed, unresolved, or non-command targets fail closed.
+std::optional<std::vector<MachineItem>>
+symbolize_terminal_layout_direct_targets(
+    const std::vector<MachineItem>& items,
+    AddressSpaceModel model = AddressSpaceModel::Standard);
 
 // Discover and verify one generic KAND/Kfrac/direct-condition/dot/STOP report
 // tail.  Stable raw-zero selectors are derived from delivered preloads and

@@ -32,6 +32,7 @@
 #include "mkpro/core/passes/register_coalesce.hpp"
 #include "mkpro/core/post_layout_indirect_flow.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
+#include "mkpro/core/terminal_cyclic_layout.hpp"
 #include "mkpro/core/register_allocator.hpp"
 #include "mkpro/core/return_stack_script.hpp"
 #include "mkpro/core/rules.hpp"
@@ -49322,6 +49323,171 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
             });
           }
         }
+      }
+    }
+  }
+
+  if (!exact_decimal_series) {
+    std::vector<PreloadReport> terminal_layout_preloads;
+    std::set<std::string> conflicting_terminal_preloads;
+    const auto merge_terminal_preloads = [&](const std::vector<PreloadReport>& preloads) {
+      for (const PreloadReport& preload : preloads) {
+        if (conflicting_terminal_preloads.contains(preload.register_name))
+          continue;
+        const auto existing = std::find_if(
+            terminal_layout_preloads.begin(), terminal_layout_preloads.end(),
+            [&](const PreloadReport& candidate) {
+              return candidate.register_name == preload.register_name;
+            });
+        if (existing == terminal_layout_preloads.end()) {
+          terminal_layout_preloads.push_back(preload);
+        } else if (existing->value != preload.value) {
+          terminal_layout_preloads.erase(existing);
+          conflicting_terminal_preloads.insert(preload.register_name);
+        }
+      }
+    };
+    merge_terminal_preloads(setup_preloads);
+    merge_terminal_preloads(stop_tail_preloads);
+    merge_terminal_preloads(final_layout_effective_preloads.has_value()
+                                ? *final_layout_effective_preloads
+                                : post_layout_flow_preloads);
+
+    core::PostLayoutControlFlowOptions terminal_flow_options;
+    terminal_flow_options.address_space_model = address_space_model_for_options(options);
+    terminal_flow_options.empty_return_target = 1;
+    const std::optional<std::vector<MachineItem>> normalized_terminal_input =
+        core::normalize_natural_target_overflow_formals(
+            post_layout_items, address_space_model_for_options(options));
+    const std::vector<MachineItem>& normalized_terminal_items =
+        normalized_terminal_input.has_value() ? *normalized_terminal_input : post_layout_items;
+    const std::optional<std::vector<MachineItem>> symbolized_terminal_input =
+        core::symbolize_terminal_layout_direct_targets(
+            normalized_terminal_items, address_space_model_for_options(options));
+    const std::vector<MachineItem>& terminal_input_items =
+        symbolized_terminal_input.has_value() ? *symbolized_terminal_input
+                                              : normalized_terminal_items;
+    const core::AuthoritativePostLayoutControlFlow terminal_input_flow =
+        core::build_post_layout_control_flow(terminal_input_items, terminal_flow_options);
+    if (terminal_input_flow.proved) {
+      const core::TerminalCyclicLayoutResult terminal_layout =
+          core::optimize_terminal_cyclic_layout(
+              terminal_input_items, terminal_layout_preloads, terminal_input_flow,
+              core::TerminalCyclicLayoutOptions{
+                  .address_space_model = address_space_model_for_options(options),
+                  .enable_return_alias = true});
+      if (terminal_layout.applied > 0 && terminal_layout.plan.final_artifact_proved) {
+        auto terminal_rebind_options = pass_options;
+        for (const PreloadReport& preload : terminal_layout_preloads)
+          terminal_rebind_options.preloaded_constant_registers[preload.register_name] =
+              preload.value;
+        const core::PostLayoutIndirectFlowResult rebound_flow =
+            core::optimize_post_layout_indirect_flow(terminal_layout.items,
+                                                     terminal_rebind_options, 0);
+        std::vector<PreloadReport> rebound_preloads = terminal_layout_preloads;
+        for (const PreloadReport& preload : rebound_flow.preloads) {
+          const auto existing = std::find_if(
+              rebound_preloads.begin(), rebound_preloads.end(),
+              [&](const PreloadReport& candidate) {
+                return candidate.register_name == preload.register_name;
+              });
+          if (existing == rebound_preloads.end())
+            rebound_preloads.push_back(preload);
+          else
+            *existing = preload;
+        }
+        const core::AuthoritativePostLayoutControlFlow rebound_control =
+            core::build_post_layout_control_flow(rebound_flow.items, terminal_flow_options);
+        bool selectors_rebound = rebound_control.proved;
+        constexpr std::string_view register_names = "0123456789abcde";
+        for (const auto& [flow_source, targets] : rebound_control.indirect_flow_targets) {
+          if (!selectors_rebound || flow_source >= rebound_flow.items.size() ||
+              targets.size() != 1U) {
+            selectors_rebound = false;
+            break;
+          }
+          const int opcode = rebound_flow.items.at(flow_source).opcode;
+          int register_index = opcode & 0x0f;
+          if (register_index == 0x0f)
+            register_index = 0;
+          if (register_index < 0 ||
+              register_index >= static_cast<int>(register_names.size())) {
+            selectors_rebound = false;
+            break;
+          }
+          const std::string register_name(
+              1, register_names.at(static_cast<std::size_t>(register_index)));
+          const auto preload = std::find_if(
+              rebound_preloads.begin(), rebound_preloads.end(),
+              [&](const PreloadReport& candidate) {
+                return candidate.register_name == register_name;
+              });
+          if (preload == rebound_preloads.end()) {
+            selectors_rebound = false;
+            break;
+          }
+          const std::optional<core::IndirectAddressEvaluation> decoded =
+              core::evaluate_indirect_address(
+                  register_name, preload->value, core::IndirectOperationKind::Flow,
+                  address_space_model_for_options(options));
+          if (!decoded.has_value() || !decoded->actual_flow_target.has_value() ||
+              *decoded->actual_flow_target != targets.front().address) {
+            selectors_rebound = false;
+            break;
+          }
+        }
+        if (selectors_rebound &&
+            core::machine_cell_count(rebound_flow.items) <
+                core::machine_cell_count(post_layout_items)) {
+          post_layout_items = rebound_flow.items;
+          post_layout_flow_preloads = rebound_flow.preloads;
+          final_layout_effective_preloads = rebound_flow.preloads;
+          std::map<std::string, std::string> rebound_by_register;
+          for (const PreloadReport& preload : rebound_flow.preloads)
+            rebound_by_register[preload.register_name] = preload.value;
+          const auto apply_rebound_preloads = [&](std::vector<PreloadReport>& preloads) {
+            for (PreloadReport& preload : preloads) {
+              const auto rebound = rebound_by_register.find(preload.register_name);
+              if (rebound != rebound_by_register.end())
+                preload.value = rebound->second;
+            }
+          };
+          apply_rebound_preloads(setup_preloads);
+          apply_rebound_preloads(stop_tail_preloads);
+          apply_rebound_preloads(post_layout_flow_preloads);
+          for (const auto& [register_name, value] : rebound_by_register)
+            post_layout_preload_overrides[register_name] = value;
+          post_layout_optimizations.insert(post_layout_optimizations.end(),
+                                           rebound_flow.optimizations.begin(),
+                                           rebound_flow.optimizations.end());
+          post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+              .name = terminal_layout.plan.return_alias_proved
+                          ? "terminal-return-alias"
+                          : "terminal-cyclic-layout",
+              .detail = terminal_layout.plan.return_alias_proved
+                            ? "Removed one direct conditional address cell after proving an "
+                              "equivalent relocated return target."
+                            : "Removed " +
+                                  std::to_string(terminal_layout.removed_cells) +
+                                  " cell(s) after proving a generic terminal report tail" +
+                                  (terminal_layout.plan.cyclic_proved
+                                       ? " and its physical A4-to-00 cyclic return."
+                                       : "."),
+          });
+        }
+      } else if (options.analysis && !terminal_layout.plan.reasons.empty()) {
+        std::string rejection_detail;
+        const std::size_t reason_count =
+            std::min<std::size_t>(terminal_layout.plan.reasons.size(), 8U);
+        for (std::size_t reason = 0; reason < reason_count; ++reason) {
+          if (!rejection_detail.empty())
+            rejection_detail += " | ";
+          rejection_detail += terminal_layout.plan.reasons.at(reason);
+        }
+        post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+            .name = "terminal-cyclic-layout-rejected",
+            .detail = std::move(rejection_detail),
+        });
       }
     }
   }
