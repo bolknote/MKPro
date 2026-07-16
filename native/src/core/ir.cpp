@@ -109,6 +109,7 @@ IrTargetMeta target_meta_from_address(const MachineItem& item) {
     meta.source_line = item.source_line;
   if (item.formal_opcode.has_value())
     meta.formal_opcode = item.formal_opcode;
+  meta.roles = item.roles;
   return meta;
 }
 
@@ -168,6 +169,7 @@ MachineItem machine_address_from_meta(const IrTarget& target, const IrTargetMeta
     item.source_line = meta.source_line;
   if (meta.formal_opcode.has_value())
     item.formal_opcode = meta.formal_opcode;
+  item.roles = meta.roles;
   return item;
 }
 
@@ -784,7 +786,8 @@ bool machine_items_equal(const MachineItem& a, const MachineItem& b) {
            a.semantic_call_origins == b.semantic_call_origins;
   }
   return targets_equal(a.target, b.target) && a.comment == b.comment &&
-         a.source_line == b.source_line && a.formal_opcode == b.formal_opcode;
+         a.source_line == b.source_line && a.formal_opcode == b.formal_opcode &&
+         a.roles == b.roles;
 }
 
 std::string ir_kind_name(IrKind kind) {

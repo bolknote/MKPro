@@ -1485,6 +1485,55 @@ void x2_hidden_temp_restore_matches_typescript_contract() {
   }
 
   {
+    // A direct conditional writes X into X2 only on fallthrough.  A preceding
+    // recall has already synchronized X2, so the jump path preserves the same
+    // flag and both paths may materialize it in the same scratch register.
+    const std::vector<IrOp> program = {
+        recall("1", "preload const 2"),
+        cjump("nonzero"),
+        store("2"),
+        jump("join"),
+        label("nonzero"),
+        store("2"),
+        label("join"),
+        plain(0x20, "F pi"),
+        recall("2"),
+        halt(),
+    };
+    const auto restored = run(program);
+    const auto dse = run_dse(restored.ops);
+    check_applied(restored.applied, 1,
+                  "x2-hidden-temp-restore keeps a branch-merged flag in X2");
+    check_plain_at(restored.ops, 8, 0x0a,
+                   "x2-hidden-temp-restore keeps a branch-merged flag in X2");
+    check_no_store(dse.ops, "2",
+                   "x2-hidden-temp-restore keeps a branch-merged flag in X2");
+    check_cell_delta(dse.ops, program, 2,
+                     "x2-hidden-temp-restore keeps a branch-merged flag in X2");
+    bool reported = false;
+    for (const core::passes::AppliedOptimization& optimization : restored.optimizations)
+      reported = reported || optimization.name == "x2-conditional-flag-restore";
+    if (!reported)
+      fail("x2-hidden-temp-restore reports a branch-merged X2 flag");
+  }
+
+  {
+    // If one branch stores a visible value that is not synchronized with X2,
+    // the relational reg:flag fact disappears at the join and the rewrite is
+    // rejected.
+    const std::vector<IrOp> program = {
+        plain(0x0d, "Cx"), plain(0x20, "F pi"), cjump("nonzero"), store("2"),
+        jump("join"),      label("nonzero"),    store("2"),  label("join"),
+        plain(0x20, "F pi"), recall("2"), halt(),
+    };
+    const auto restored = run(program);
+    check_applied(restored.applied, 0,
+                  "x2-hidden-temp-restore rejects an unsynchronized branch flag");
+    check_ops_equal(restored.ops, program,
+                    "x2-hidden-temp-restore rejects an unsynchronized branch flag");
+  }
+
+  {
     // x2-hidden-temp-restore crosses direct conditional fallthrough X2 sync
     const std::vector<IrOp> program = {
         recall("1"),

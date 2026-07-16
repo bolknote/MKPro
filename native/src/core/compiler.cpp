@@ -5232,11 +5232,10 @@ void hoist_one_shot_loop_initializers(V2Program& program,
   int hoisted = 0;
   if (program.body.size() == 1U) {
     const V2Statement loop = program.body.front();
-    if (loop.kind == "v2_loop" && loop.body.size() == 1U) {
+    if (loop.kind == "v2_loop" && !loop.body.empty()) {
       const V2Statement branch = loop.body.front();
-      if (branch.kind == "v2_if" && branch.has_else_body && branch.predicate.has_value() &&
-          !branch.then_body.empty() && !statements_contain_exact_machine_code(branch.then_body) &&
-          !statements_contain_exact_machine_code(branch.else_body)) {
+      if (branch.kind == "v2_if" && branch.predicate.has_value() &&
+          !branch.then_body.empty() && !statements_contain_exact_machine_code(loop.body)) {
         const std::optional<std::string> guard =
             zero_equality_identifier(*branch.predicate, branch.negated, branch.line);
         const V2Statement& first = branch.then_body.front();
@@ -5251,6 +5250,8 @@ void hoist_one_shot_loop_initializers(V2Program& program,
           rewritten.insert(rewritten.end(), branch.then_body.begin() + 1, branch.then_body.end());
           V2Statement rewritten_loop = loop;
           rewritten_loop.body = branch.else_body;
+          rewritten_loop.body.insert(rewritten_loop.body.end(), loop.body.begin() + 1,
+                                     loop.body.end());
           rewritten.push_back(std::move(rewritten_loop));
           program.body = std::move(rewritten);
           hoisted += 1;
@@ -49049,8 +49050,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
     }
 
     const core::PostLayoutIndirectFlowResult post_layout_flow =
-        core::optimize_post_layout_indirect_flow(post_layout_items, pass_options,
-                                                 indirect_flow_rescue_above);
+        core::optimize_post_layout_super_dark_address_overlay(
+            post_layout_items, pass_options, indirect_flow_rescue_above);
     post_layout_items = post_layout_flow.items;
     post_layout_flow_preloads = post_layout_flow.preloads;
     post_layout_optimizations.insert(post_layout_optimizations.end(),

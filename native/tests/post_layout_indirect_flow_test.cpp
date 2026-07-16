@@ -1,9 +1,11 @@
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/post_layout_indirect_flow.hpp"
+#include "mkpro/core/super_dark_layout.hpp"
 
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <map>
 #include <optional>
 #include <string>
 #include <variant>
@@ -51,6 +53,34 @@ std::vector<MachineItem> program_with_backward_jump(int filler_cells) {
     items.push_back(digit());
   const std::vector<MachineItem> branch = jump("top");
   items.insert(items.end(), branch.begin(), branch.end());
+  return items;
+}
+
+std::vector<MachineItem> super_dark_address_overlay_program() {
+  std::vector<MachineItem> items = jump("site");
+  items.push_back(MachineItem::label("continuation"));
+  const std::vector<MachineItem> continuation = jump("done");
+  items.insert(items.end(), continuation.begin(), continuation.end());
+  for (int index = 0; index < 45; ++index) {
+    if (index < 7) {
+      const std::string name =
+          index == 0 ? "8" : index == 1 ? "9"
+                                          : std::string(1, static_cast<char>('a' + index - 2));
+      items.push_back(MachineItem::op(0x48 + index, "X->П " + name));
+    } else {
+      items.push_back(MachineItem::op(0x0d, "Cx"));
+    }
+  }
+  items.push_back(MachineItem::label("entry"));
+  items.push_back(MachineItem::op(0x07, "7"));
+  std::vector<MachineItem> return_to_continuation = jump("continuation");
+  return_to_continuation.front().raw = true;
+  items.insert(items.end(), return_to_continuation.begin(), return_to_continuation.end());
+  items.push_back(MachineItem::label("site"));
+  const std::vector<MachineItem> enter = jump("entry");
+  items.insert(items.end(), enter.begin(), enter.end());
+  items.push_back(MachineItem::label("done"));
+  items.push_back(MachineItem::op(0x50, "С/П"));
   return items;
 }
 
@@ -127,6 +157,117 @@ void post_layout_indirect_flow_matches_typescript_contract() {
             "post-layout indirect flow should never grow a program");
     require(core::machine_cell_count(result.items) <= 105,
             "post-layout indirect flow should stop once the official window is reached");
+  }
+
+  {
+    const std::vector<MachineItem> program = super_dark_address_overlay_program();
+    const core::PostLayoutIndirectFlowResult baseline =
+        core::optimize_post_layout_indirect_flow(program, options, 0);
+    const core::PostLayoutIndirectFlowResult result =
+        core::optimize_post_layout_super_dark_address_overlay(program, options, 0);
+
+    require(core::machine_cell_count(program) == 55 &&
+                core::machine_cell_count(baseline.items) == 54 &&
+                core::machine_cell_count(result.items) == 53,
+            "joint super-dark/address overlay fixture should measure 55 -> 54 -> 53 cells");
+    require(core::machine_cell_count(result.items) < core::machine_cell_count(baseline.items),
+            "joint super-dark/address overlay should beat indirect flow alone");
+    require(std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                        [](const core::passes::AppliedOptimization& optimization) {
+                          return optimization.name == "address-code-overlay";
+                        }),
+            "joint super-dark/address overlay should report the address-byte packing");
+    require(std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                        [](const core::passes::AppliedOptimization& optimization) {
+                          return optimization.name == "preloaded-super-dark-flow";
+                        }),
+            "joint super-dark/address overlay should select FA..FF dispatch");
+    require(std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                        [](const core::passes::AppliedOptimization& optimization) {
+                          return optimization.name == "super-dark-address-code-overlay";
+                        }),
+            "joint super-dark/address overlay should report the combined tactic");
+
+    std::map<std::string, int> label_addresses;
+    int address = 0;
+    for (const MachineItem& item : result.items) {
+      if (item.kind == MachineItemKind::Label)
+        label_addresses[item.name] = address;
+      else
+        ++address;
+    }
+
+    address = 0;
+    bool continuation_on_address_operand = false;
+    for (std::size_t index = 0; index < result.items.size(); ++index) {
+      const MachineItem& item = result.items.at(index);
+      if (item.kind == MachineItemKind::Label) {
+        if (item.name == "continuation" && index + 1U < result.items.size()) {
+          const MachineItem& next = result.items.at(index + 1U);
+          const auto* target = std::get_if<std::string>(&next.target);
+          const bool physical_jump_opcode =
+              (next.formal_opcode.has_value() && *next.formal_opcode == 0x51) ||
+              (target != nullptr && label_addresses.contains(*target) &&
+               label_addresses.at(*target) == 51);
+          continuation_on_address_operand =
+              address == 1 && next.kind == MachineItemKind::Address &&
+              physical_jump_opcode &&
+              std::find(next.roles.begin(), next.roles.end(), "exec") != next.roles.end();
+        }
+        continue;
+      }
+      ++address;
+    }
+    require(continuation_on_address_operand,
+            "FA continuation 01 should execute the direct-jump operand as code");
+
+    std::map<std::string, std::string> selector_values;
+    for (const PreloadReport& preload : result.preloads)
+      selector_values[preload.register_name] = preload.value;
+    const LowerLayoutResult lowered =
+        lower_ir_to_layout(raise_machine_to_ir(result.items));
+    const SuperDarkLayoutProof proof = verify_super_dark_suffix_layout(
+        lowered.cells, {.selector_values = std::move(selector_values)});
+    require(proof.proved,
+            "joint super-dark/address overlay should pass the final physical-layout proof");
+    require(std::any_of(proof.pairs.begin(), proof.pairs.end(),
+                        [](const SuperDarkLayoutPair& pair) {
+                          return pair.formal == 0xfa && pair.continuation_address == 1;
+                        }),
+            "final FA proof should identify the overlaid address byte as continuation 01");
+  }
+
+  {
+    // Without the protected direct continuation and with another free selector,
+    // indirect flow can shift the overlaid target from 51 to 50.  That trial is
+    // smaller, but the address byte would no longer execute the overlaid БП.
+    std::vector<MachineItem> program = super_dark_address_overlay_program();
+    for (MachineItem& item : program) {
+      if (item.kind == MachineItemKind::Op && item.opcode == 0x51 && item.raw)
+        item.raw = false;
+      if (item.kind == MachineItemKind::Op && item.opcode == 0x48)
+        item = MachineItem::op(0x0d, "Cx");
+    }
+    const core::PostLayoutIndirectFlowResult baseline =
+        core::optimize_post_layout_indirect_flow(program, options, 0);
+    const core::PostLayoutIndirectFlowResult overlay =
+        core::optimize_post_layout_address_code_overlay(program, {}, options);
+    const core::PostLayoutIndirectFlowResult unverified_trial =
+        core::optimize_post_layout_indirect_flow(overlay.items, options, 0);
+    require(core::machine_cell_count(unverified_trial.items) <
+                core::machine_cell_count(baseline.items),
+            "shifted-opcode trial should be tempting on size before final verification");
+
+    const core::PostLayoutIndirectFlowResult result =
+        core::optimize_post_layout_super_dark_address_overlay(program, options, 0);
+    require(core::machine_cell_count(result.items) ==
+                core::machine_cell_count(baseline.items),
+            "joint packing should reject an address byte whose final opcode changed");
+    require(std::none_of(result.optimizations.begin(), result.optimizations.end(),
+                         [](const core::passes::AppliedOptimization& optimization) {
+                           return optimization.name == "super-dark-address-code-overlay";
+                         }),
+            "rejected shifted-opcode trial must not report joint packing");
   }
 
   {

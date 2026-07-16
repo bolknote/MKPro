@@ -18,6 +18,10 @@ struct PostLayoutIndirectFlowResult {
 PostLayoutIndirectFlowResult
 optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
                                    const CompileOptions& options, int rescue_above = 105);
+PostLayoutIndirectFlowResult
+optimize_post_layout_super_dark_address_overlay(const std::vector<MachineItem>& items,
+                                                const CompileOptions& options,
+                                                int rescue_above = 105);
 PostLayoutIndirectFlowResult optimize_post_layout_fractional_r0_flow(
     const std::vector<MachineItem>& items,
     const std::vector<PreloadReport>& existing_flow_preloads = {});

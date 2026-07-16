@@ -432,7 +432,16 @@ These transformations run on source constructs before machine lowering:
 - `repeated-x-param-self-assignment` — for consecutive `x = f(x)` / `x = f(x)` (or indexed equivalents) on the same target, emits two x-param calls in one X-based chain and stores once.
 - `single-use-guard-substitution` — removes a one-shot assignment if it can be substituted directly into a following condition and the lowered cost is strictly lower.
 - `compact-dispatch-simplification` — compresses small dispatches to a minimal jump tree.
-- `one-shot-loop-init-hoist` — hoists loop initialization that runs once out of repeated body.
+- `one-shot-loop-init-hoist` — hoists a proved one-shot prefix out of the turn
+  loop. The first loop statement may be `if guard == 0 { guard = nonzero;
+  init... }` with an optional `else`; the rest of the loop may contain an
+  arbitrary steady-state suffix. The `then` initializer is emitted once before
+  the loop, while the rewritten loop contains `else...` followed by the original
+  suffix. The guard must start at zero, have exactly one read and one write in
+  the whole program, and the loop may not contain exact machine-code statements.
+  Dead-state elimination then removes the guard register. On the focused
+  `PrefixedOneShotInit` probe this composes with downstream scheduling to reduce
+  the listing from 13 to 6 cells and frees one register.
 - `if-branch-order-inversion` — reorders condition branches so profitable paths are checked earlier.
 - `guarded-prologue-gadget` — creates one guarded prologue for multiple branches where logic is equivalent.
 - `dead-state-elimination` — removes state fields that do not affect outcomes.
@@ -794,6 +803,17 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `post-layout-stop-tail-reuse` — after preloaded indirect-flow has proved a reusable stop tail, replaces repeated `С/П; loop` tails and direct branches to those shims with one-cell indirect jumps/conditionals to the existing stop tail, retargeting generated selector preloads when deleted cells shift later targets.
 - `runtime-indirect-call-flow` — for repeated backward helper calls with legal numeric targets, initializes a dead stable register once at runtime and replaces direct `ПП addr` pairs with one-cell `К ПП r` calls.
 - `preloaded-super-dark-flow` — super-dark path with a preloaded indirect target.
+- `super-dark-address-code-overlay` — compares ordinary post-layout indirect
+  flow with the composed candidate `address-code-overlay` followed by
+  super-dark flow. The composed layout is selected only when it contains a
+  proved `preloaded-super-dark-flow` rewrite and is strictly smaller than the
+  ordinary candidate. An overlaid address operand carries both `address` and
+  `exec` roles through the MachineItem→IR→layout round trip, allowing the final
+  FA..FF verifier to prove that continuation cells 01..06 really execute that
+  physical byte. After indirect-flow relayout, every overlay artifact is checked
+  again: the final address byte must still decode to the exact mnemonic that was
+  removed, not merely remain executable. The regression fixture measures 55→54
+  cells with ordinary indirect flow and 55→53 with the composed packing.
 - `computed-dispatch` — for eligible exhaustive match trees, emits one computed `К БП r` path using the solved affine mapping between selector value and case target instead of full branch chains.
 - `indirect-incdec-counter` — lowers a unit `x++`/`x--` through the indirect pre-increment (R4..R6) or pre-decrement (R0..R3) side effect of `К П->X r`. Unit increments are allowed for any proved nonnegative counter because the incidental recalled `X` value is discarded. Unit decrements are allowed when the source range proves the pre-decrement input is positive; the speculative `indirect-underflow-decrement` candidate also allows them when backward control-flow proves the possible zero-underflow sentinel reaches a terminal nonpositive guard before any observable read/write of the decremented value. That proof scans loop bodies and single-use procedure bodies, but a read of the counter before the guard remains a barrier.
 - `indirect-underflow-decrement` — extends the same R0..R3 pre-decrement fact to fused underflow guards by using `К П->X r` for the mutation and a direct `П->X r` for the observable `< 0` test; stored-input show/read variants restore the input from its register afterward.
@@ -1131,6 +1151,18 @@ Display rewrites are separated into strategy selection + body lowering.
   requiring a membership-specific lowering; repeated reads of loop/state
   registers are left unchanged because `.` and `П->X r` are both one cell and a
   no-net rewrite can perturb layout.
+- `x2-conditional-flag-restore` — extends the hidden-temp rewrite to a scratch
+  flag written on mutually exclusive predecessors and recalled after their CFG
+  merge. A direct conditional synchronizes visible X into X2 on fallthrough but
+  preserves the previous X2 on its jump edge. The rewrite is therefore admitted
+  only when relational dataflow proves `X2 == scratch` on every incoming path,
+  every reaching store sees the same normalized dot-safe decimal in X and X2,
+  and no path can read or overwrite the scratch before the merge. The final
+  `П->X scratch` becomes `.`, after which ordinary DSE removes all reaching
+  stores. The emulator-pinned two-branch fixture changes
+  `61 5E 06 42 51 07 42 20 62 50` into
+  `61 5E 05 51 05 20 0A 50`: two program cells and the scratch register are
+  saved for both zero and nonzero inputs.
 - `x2-dead-restore-before-overwrite` — removes a proved-safe X2 restore whose
   visible `X` result is immediately overwritten by a hard X/X2 replacement
   command. Consecutive same-segment restores and free-standing separators are
@@ -2434,7 +2466,11 @@ The IR pipeline defined in `native/src/core/passes/index.cpp` runs repeatedly:
     numeric/formal branch operands are rejected when shrinking would move their
     real target. The same verifier can move the branch target label onto the
     branch's own address byte, allowing that operand byte to be the first
-    executed opcode.
+    executed opcode. `super-dark-address-code-overlay` additionally tries this
+    verified overlay before post-layout indirect-flow selection. It keeps the
+    result only when a final super-dark proof succeeds and the composition beats
+    flow-only layout, so the address byte may simultaneously be direct-flow data
+    and the executable 01..06 continuation of an FA..FF indirect transition.
 28. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) only
     when the first `ВП` is entered from a proved active number-entry context
     (`active-mantissa`, decimal exponent-entry, or structural exponent-entry);

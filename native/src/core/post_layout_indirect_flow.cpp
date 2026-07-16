@@ -489,6 +489,10 @@ bool can_move_overlay_opcode_to(const std::vector<MachineItem>& source_items, in
 }
 
 MachineItem overlay_address_item(MachineItem address, const std::string& overlaid) {
+  if (std::find(address.roles.begin(), address.roles.end(), "address") == address.roles.end())
+    address.roles.push_back("address");
+  if (std::find(address.roles.begin(), address.roles.end(), "exec") == address.roles.end())
+    address.roles.push_back("exec");
   const std::string overlay_comment = "address/code overlay for " + overlaid;
   if (address.comment.has_value() && !address.comment->empty()) {
     address.comment = *address.comment + "; " + overlay_comment;
@@ -500,6 +504,10 @@ MachineItem overlay_address_item(MachineItem address, const std::string& overlai
 
 MachineItem overlay_address_item_with_formal_opcode(MachineItem address, int formal_opcode,
                                                     const std::string& overlaid) {
+  if (std::find(address.roles.begin(), address.roles.end(), "address") == address.roles.end())
+    address.roles.push_back("address");
+  if (std::find(address.roles.begin(), address.roles.end(), "exec") == address.roles.end())
+    address.roles.push_back("exec");
   address.formal_opcode = formal_opcode;
   const std::string overlay_comment = "formal address/code overlay for " + overlaid;
   if (address.comment.has_value() && !address.comment->empty()) {
@@ -508,6 +516,64 @@ MachineItem overlay_address_item_with_formal_opcode(MachineItem address, int for
     address.comment = overlay_comment;
   }
   return address;
+}
+
+std::optional<std::string>
+address_code_overlay_mnemonic(const std::optional<std::string>& comment) {
+  if (!comment.has_value())
+    return std::nullopt;
+  constexpr std::string_view kPrefix = "address/code overlay for ";
+  const std::size_t marker = comment->rfind(kPrefix);
+  if (marker == std::string::npos)
+    return std::nullopt;
+  std::string mnemonic = comment->substr(marker + kPrefix.size());
+  if (const std::size_t separator = mnemonic.find(';'); separator != std::string::npos)
+    mnemonic.erase(separator);
+  while (!mnemonic.empty() && std::isspace(static_cast<unsigned char>(mnemonic.front())) != 0)
+    mnemonic.erase(mnemonic.begin());
+  while (!mnemonic.empty() && std::isspace(static_cast<unsigned char>(mnemonic.back())) != 0)
+    mnemonic.pop_back();
+  return mnemonic.empty() ? std::nullopt : std::optional<std::string>{std::move(mnemonic)};
+}
+
+bool final_address_code_overlay_artifacts_match(const std::vector<MachineItem>& items,
+                                                int expected, AddressSpaceModel model) {
+  int matched = 0;
+  for (const MachineItem& item : items) {
+    if (item.kind != MachineItemKind::Address)
+      continue;
+    const std::optional<std::string> mnemonic =
+        address_code_overlay_mnemonic(item.comment);
+    if (!mnemonic.has_value())
+      continue;
+    const bool has_address_role =
+        std::find(item.roles.begin(), item.roles.end(), "address") != item.roles.end();
+    const bool has_exec_role =
+        std::find(item.roles.begin(), item.roles.end(), "exec") != item.roles.end();
+    const std::optional<int> opcode = address_opcode_for_item(items, item, model);
+    if (!has_address_role || !has_exec_role || !opcode.has_value() ||
+        opcode_by_code(*opcode).name != *mnemonic) {
+      return false;
+    }
+    ++matched;
+  }
+  return matched == expected;
+}
+
+bool has_super_dark_overlay_continuation(const std::vector<MachineItem>& items) {
+  int address = 0;
+  for (const MachineItem& item : items) {
+    if (item.kind == MachineItemKind::Label)
+      continue;
+    const bool executable_overlay =
+        item.kind == MachineItemKind::Address && address >= 1 && address <= 6 &&
+        address_code_overlay_mnemonic(item.comment).has_value() &&
+        std::find(item.roles.begin(), item.roles.end(), "exec") != item.roles.end();
+    if (executable_overlay)
+      return true;
+    ++address;
+  }
+  return false;
 }
 
 std::optional<int> resolved_address_target(const std::vector<MachineItem>& items,
@@ -2926,6 +2992,45 @@ optimize_post_layout_address_code_overlay(const std::vector<MachineItem>& items,
           },
       .applied = applied,
   };
+}
+
+PostLayoutIndirectFlowResult
+optimize_post_layout_super_dark_address_overlay(const std::vector<MachineItem>& items,
+                                                const CompileOptions& options,
+                                                int rescue_above) {
+  PostLayoutIndirectFlowResult baseline =
+      optimize_post_layout_indirect_flow(items, options, rescue_above);
+  const PostLayoutIndirectFlowResult overlay =
+      optimize_post_layout_address_code_overlay(items, {}, options);
+  if (overlay.applied == 0 || !has_super_dark_overlay_continuation(overlay.items))
+    return baseline;
+
+  PostLayoutIndirectFlowResult combined =
+      optimize_post_layout_indirect_flow(overlay.items, options, rescue_above);
+  const AddressSpaceModel model = address_space_model_for_options(options);
+  const bool selected_super_dark =
+      std::any_of(combined.optimizations.begin(), combined.optimizations.end(),
+                  [](const passes::AppliedOptimization& optimization) {
+                    return optimization.name == "preloaded-super-dark-flow";
+                  });
+  if (!selected_super_dark ||
+      !final_address_code_overlay_artifacts_match(combined.items, overlay.applied, model) ||
+      machine_cell_count(combined.items) >= machine_cell_count(baseline.items)) {
+    return baseline;
+  }
+
+  std::vector<passes::AppliedOptimization> optimizations = overlay.optimizations;
+  optimizations.insert(optimizations.end(), combined.optimizations.begin(),
+                       combined.optimizations.end());
+  optimizations.push_back(passes::AppliedOptimization{
+      .name = "super-dark-address-code-overlay",
+      .detail = "Packed " + std::to_string(overlay.applied) +
+                " super-dark continuation cell" + (overlay.applied == 1 ? "" : "s") +
+                " into a direct-flow address byte before selecting FA..FF dispatch.",
+  });
+  combined.applied += overlay.applied;
+  combined.optimizations = std::move(optimizations);
+  return combined;
 }
 
 PostLayoutIndirectFlowResult

@@ -38,8 +38,12 @@ PassResult x2_hidden_temp_restore(const std::vector<IrOp>& ops, const PassContex
     return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
 
   std::map<int, std::string> replacement_registers;
-  for (const X2HiddenTempReplacement& replacement : replacements)
+  std::size_t branch_merged = 0;
+  for (const X2HiddenTempReplacement& replacement : replacements) {
     replacement_registers.emplace(replacement.index, replacement.register_name);
+    if (replacement.branch_merged)
+      ++branch_merged;
+  }
 
   std::vector<IrOp> result;
   result.reserve(ops.size());
@@ -56,10 +60,22 @@ PassResult x2_hidden_temp_restore(const std::vector<IrOp>& ops, const PassContex
                              (applied == 1U ? std::string{} : std::string{"s"}) +
                              " with . after proving the value already lives in X2 and the recall "
                              "stack lift is unused.";
+  std::vector<AppliedOptimization> optimizations = {
+      AppliedOptimization{.name = "x2-hidden-temp-restore", .detail = detail},
+  };
+  if (branch_merged > 0U) {
+    optimizations.push_back(AppliedOptimization{
+        .name = "x2-conditional-flag-restore",
+        .detail = "Kept " + std::to_string(branch_merged) + " branch-merged flag" +
+                  (branch_merged == 1U ? std::string{} : std::string{"s"}) +
+                  " in hidden X2 and exposed the mutually exclusive stores to dead-store "
+                  "elimination.",
+    });
+  }
   return PassResult{
       .ops = std::move(result),
       .applied = static_cast<int>(applied),
-      .optimizations = {AppliedOptimization{.name = "x2-hidden-temp-restore", .detail = detail}},
+      .optimizations = std::move(optimizations),
   };
 }
 

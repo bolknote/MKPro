@@ -387,6 +387,34 @@ void emulator_x2_restore_context_matches_typescript_contract() {
   }
 
   {
+    // P->X synchronizes X2 before the conditional.  The direct jump preserves
+    // it, while fallthrough synchronizes the same visible X again.  Therefore
+    // both mutually exclusive stores and the final recall can be replaced by
+    // one dot restore.
+    const std::vector<int> stored_flag = {
+        0x61, 0x5e, 0x06, 0x42, 0x51, 0x07, 0x42, 0x20, 0x62, 0x50,
+    };
+    const std::vector<int> hidden_flag = {
+        0x61, 0x5e, 0x05, 0x51, 0x05, 0x20, 0x0a, 0x50,
+    };
+    const auto compare = [&](const std::string& value, const std::string& context) {
+      const std::map<std::string, std::string> registers = {{"1", value}};
+      const std::string hidden = run_x_with_registers(hidden_flag, registers);
+      const std::string stored = run_x_with_registers(stored_flag, registers);
+      require(hidden == stored, context + " expected equal X values, got " + hidden +
+                                    " vs " + stored);
+      return hidden;
+    };
+    const std::string nonzero_result =
+        compare("3", "conditional jump keeps a nonzero flag in X2");
+    const std::string zero_result =
+        compare("0", "conditional fallthrough keeps a zero flag in X2");
+    require(nonzero_result != zero_result,
+            "branch-merged hidden X2 flag should preserve both boolean outcomes, got " +
+                nonzero_result + " and " + zero_result);
+  }
+
+  {
     expect_x({0x00, 0x02, 0xf0, 0x0b, 0x50}, "-2,",
              "closed sign should update proved decimal X2");
     expect_x({0x00, 0x02, 0xf0, 0x0b, 0x0a, 0x50}, "-2,",

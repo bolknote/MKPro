@@ -9654,4 +9654,67 @@ program PackedScoreXParamInitialAddendAccumulator {
           "initial-addend X-param packed_score index should not be recalled");
 }
 
+void compiler_hoists_prefixed_one_shot_loop_initializers() {
+  const CompileResult without_else = compile_source(R"mkpro(
+program PrefixedOneShotInitFocused {
+  state {
+    entered: flag = 0
+    value: counter 0..99 = 0
+  }
+
+  loop {
+    if entered == 0 {
+      entered = 1
+      value++
+    }
+    key = read()
+    value += key
+    show(value)
+  }
+}
+)mkpro");
+  require(without_else.implemented,
+          "native compiler should hoist a one-shot prefix from a longer loop body");
+  require(without_else.diagnostics.empty(),
+          "focused prefixed one-shot compile should not report diagnostics");
+  require(has_optimization(without_else, "one-shot-loop-init-hoist"),
+          "focused prefixed one-shot compile should report the hoist");
+  require(has_optimization(without_else, "dead-state-elimination"),
+          "focused prefixed one-shot hoist should expose dead guard state");
+  require(without_else.registers.find("entered") == without_else.registers.end(),
+          "focused prefixed one-shot hoist should remove the guard register");
+  require(without_else.steps.size() == 6U,
+          "focused prefixed one-shot hoist should keep the measured six-cell listing");
+
+  const CompileResult with_else = compile_source(R"mkpro(
+program PrefixedOneShotWithElseFocused {
+  state {
+    entered: flag = 0
+    value: counter 0..99 = 0
+  }
+
+  loop {
+    if entered == 0 {
+      entered = 1
+      value++
+    }
+    else {
+      value += 2
+    }
+    key = read()
+    value += key
+    show(value)
+  }
+}
+)mkpro");
+  require(with_else.implemented,
+          "native compiler should hoist a one-shot branch before a steady-state suffix");
+  require(with_else.diagnostics.empty(),
+          "focused one-shot branch compile should not report diagnostics");
+  require(has_optimization(with_else, "one-shot-loop-init-hoist"),
+          "focused one-shot branch compile should report the hoist");
+  require(with_else.registers.find("entered") == with_else.registers.end(),
+          "focused one-shot branch hoist should remove the guard register");
+}
+
 } // namespace mkpro::tests

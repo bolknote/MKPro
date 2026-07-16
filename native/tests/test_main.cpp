@@ -31,6 +31,7 @@ void compiler_feature_profile_raw_rf_contract();
 void compiler_feature_profile_rf_extends_optimizer_preloads_contract();
 void compiler_feature_profile_rf_extends_state_allocator_contract();
 void compiler_feature_profile_rf_optimizer_is_size_monotonic_contract();
+void compiler_hoists_prefixed_one_shot_loop_initializers();
 void compiler_lowers_initial_v2_subset();
 void counted_loop_unroll_matches_typescript_contract();
 void constant_folding_matches_typescript_contract();
@@ -275,6 +276,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(compiler_feature_profile_rf_extends_optimizer_preloads_contract),
       MKPRO_TEST(compiler_feature_profile_rf_extends_state_allocator_contract),
       MKPRO_TEST(compiler_feature_profile_rf_optimizer_is_size_monotonic_contract),
+      MKPRO_TEST(compiler_hoists_prefixed_one_shot_loop_initializers),
       MKPRO_TEST(compiler_lowers_initial_v2_subset),
       MKPRO_TEST(counted_loop_unroll_matches_typescript_contract),
       MKPRO_TEST(constant_folding_matches_typescript_contract),

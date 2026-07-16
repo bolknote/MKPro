@@ -45,6 +45,38 @@ std::vector<MachineItem> super_dark_program() {
   return items;
 }
 
+std::vector<MachineItem> super_dark_address_overlay_program() {
+  std::vector<MachineItem> items = {op(0x51, "БП"), address("site")};
+  items.push_back(label("continuation"));
+  items.push_back(op(0x51, "БП"));
+  items.push_back(address("done"));
+  for (int index = 0; index < 45; ++index) {
+    if (index < 7) {
+      const std::string name =
+          index == 0 ? "8" : index == 1 ? "9"
+                                          : std::string(1, static_cast<char>('a' + index - 2));
+      items.push_back(op(0x48 + index, "X->П " + name));
+    } else {
+      items.push_back(op(0x0d, "Cx"));
+    }
+  }
+  items.push_back(label("entry"));
+  items.push_back(op(0x07, "7"));
+  items.push_back(op(0x51, "БП"));
+  items.back().raw = true;
+  items.push_back(address("continuation"));
+  items.push_back(label("site"));
+  items.push_back(op(0x51, "БП"));
+  items.push_back(address("entry"));
+  items.push_back(label("done"));
+  items.push_back(op(0x50, "С/П"));
+  return items;
+}
+
+int address_opcode(int address) {
+  return ((address / 10) << 4) | (address % 10);
+}
+
 std::vector<int> lower_items(const std::vector<MachineItem>& items) {
   std::map<std::string, int> address_of;
   int address = 0;
@@ -65,9 +97,10 @@ std::vector<int> lower_items(const std::vector<MachineItem>& items) {
       continue;
     }
     if (std::holds_alternative<int>(item.target)) {
-      codes.push_back(std::get<int>(item.target));
+      codes.push_back(item.formal_opcode.value_or(address_opcode(std::get<int>(item.target))));
     } else {
-      codes.push_back(address_of.at(std::get<std::string>(item.target)));
+      codes.push_back(item.formal_opcode.value_or(
+          address_opcode(address_of.at(std::get<std::string>(item.target)))));
     }
   }
   return codes;
@@ -157,6 +190,31 @@ void emulator_super_dark_matches_typescript_contract() {
           "super-dark optimized program should preserve stopped state");
   require(after.display == before.display,
           "super-dark optimized program should preserve display output");
+
+  const std::vector<MachineItem> overlay_program = super_dark_address_overlay_program();
+  const core::PostLayoutIndirectFlowResult flow_only =
+      core::optimize_post_layout_indirect_flow(overlay_program, options, 0);
+  const core::PostLayoutIndirectFlowResult packed =
+      core::optimize_post_layout_super_dark_address_overlay(overlay_program, options, 0);
+  require(core::machine_cell_count(packed.items) < core::machine_cell_count(flow_only.items),
+          "joint super-dark/address overlay should save a cell beyond flow-only lowering");
+  require(std::any_of(packed.optimizations.begin(), packed.optimizations.end(),
+                      [](const core::passes::AppliedOptimization& optimization) {
+                        return optimization.name == "super-dark-address-code-overlay";
+                      }),
+          "joint super-dark/address overlay should report its combined proof");
+  require(std::any_of(packed.preloads.begin(), packed.preloads.end(),
+                      [](const PreloadReport& preload) { return preload.value == "FA"; }),
+          "joint super-dark/address overlay should preload the FA selector");
+
+  const Observation overlay_before = run(lower_items(overlay_program));
+  const Observation overlay_after = run(lower_items(packed.items), packed.preloads);
+  require(overlay_before.stopped && overlay_after.stopped,
+          "joint super-dark/address overlay baseline and result should stop");
+  require(overlay_before.display.find("7") != std::string::npos,
+          "joint super-dark/address overlay baseline should display marker 7");
+  require(overlay_after.display == overlay_before.display,
+          "joint super-dark/address overlay should preserve emulator-visible output");
 }
 
 } // namespace mkpro::tests

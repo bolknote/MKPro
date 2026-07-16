@@ -14826,6 +14826,87 @@ std::optional<int> htr_find_dead_scratch_store(const std::vector<IrOp>& ops, int
   return std::nullopt;
 }
 
+struct HtrBranchMergedScratchStores {
+  std::set<int> indexes;
+};
+
+std::optional<HtrBranchMergedScratchStores>
+htr_find_branch_merged_scratch_stores(const std::vector<IrOp>& ops, int recall_index,
+                                      const std::string& register_name) {
+  if (recall_index <= 0 || recall_index >= static_cast<int>(ops.size()))
+    return std::nullopt;
+
+  const std::vector<std::vector<RegisterValueEdge>> successors =
+      build_register_value_graph(ops);
+  std::vector<std::vector<int>> predecessors(ops.size());
+  for (int source = 0; source < static_cast<int>(successors.size()); ++source) {
+    for (const RegisterValueEdge& edge : successors.at(static_cast<std::size_t>(source))) {
+      if (edge.target >= 0 && edge.target < static_cast<int>(ops.size()))
+        predecessors.at(static_cast<std::size_t>(edge.target)).push_back(source);
+    }
+  }
+
+  std::vector<int> pending = predecessors.at(static_cast<std::size_t>(recall_index));
+  std::set<int> visited;
+  std::set<int> stores;
+  bool saw_control_flow_merge = pending.size() > 1U;
+  while (!pending.empty()) {
+    const int index = pending.back();
+    pending.pop_back();
+    if (index < 0 || index >= recall_index)
+      return std::nullopt;
+    if (!visited.insert(index).second)
+      continue;
+
+    const IrOp& op = ops.at(static_cast<std::size_t>(index));
+    if (op.kind == IrKind::Store && op.register_name == register_name) {
+      if (has_rewrite_barrier(op) || is_display_focus_sensitive(op))
+        return std::nullopt;
+      stores.insert(index);
+      continue;
+    }
+    if (index == 0)
+      return std::nullopt;
+    if (has_rewrite_barrier(op) || is_display_focus_sensitive(op) ||
+        htr_mentions_register(op, register_name) ||
+        htr_memory_access_may_overwrite_register(op, register_name)) {
+      return std::nullopt;
+    }
+
+    switch (op.kind) {
+    case IrKind::Call:
+    case IrKind::IndirectJump:
+    case IrKind::IndirectCall:
+    case IrKind::IndirectCondJump:
+    case IrKind::Return:
+      return std::nullopt;
+    case IrKind::CondJump:
+      break;
+    case IrKind::Label:
+    case IrKind::Store:
+    case IrKind::Recall:
+    case IrKind::IndirectStore:
+    case IrKind::IndirectRecall:
+    case IrKind::Jump:
+    case IrKind::Loop:
+    case IrKind::Stop:
+    case IrKind::Plain:
+    case IrKind::OrphanAddress:
+      break;
+    }
+
+    const std::vector<int>& incoming = predecessors.at(static_cast<std::size_t>(index));
+    if (incoming.empty())
+      return std::nullopt;
+    saw_control_flow_merge = saw_control_flow_merge || incoming.size() > 1U;
+    pending.insert(pending.end(), incoming.begin(), incoming.end());
+  }
+
+  if (!saw_control_flow_merge || stores.size() < 2U)
+    return std::nullopt;
+  return HtrBranchMergedScratchStores{.indexes = std::move(stores)};
+}
+
 bool htr_is_stable_stored_source_fact(const std::vector<IrOp>& ops, int store_index, int recall_index,
                                       const X2ValueFact& fact,
                                       const DirectReturnAnalysisContext& context) {
@@ -15331,7 +15412,11 @@ std::vector<X2HiddenTempReplacement> compute_x2_hidden_temp_restore(const std::v
       continue;
     const std::optional<int> store_index =
         htr_find_dead_scratch_store(ops, index, register_name, context);
-    if (!store_index.has_value())
+    const std::optional<HtrBranchMergedScratchStores> branch_stores =
+        store_index.has_value()
+            ? std::nullopt
+            : htr_find_branch_merged_scratch_stores(ops, index, register_name);
+    if (!store_index.has_value() && !branch_stores.has_value())
       continue;
     if (liveness.live_out.at(static_cast<std::size_t>(index)).count(register_name) > 0)
       continue;
@@ -15341,17 +15426,42 @@ std::vector<X2HiddenTempReplacement> compute_x2_hidden_temp_restore(const std::v
     if (!removal.has_value())
       continue;
 
-    const X2ValueDataflowState* store_state = state_at(*store_index);
+    const bool branch_merged =
+        branch_stores.has_value() && removal->value_proof.has_value() &&
+        removal->value_proof->x2_sync_register == register_name;
+    if (branch_stores.has_value() && !branch_merged)
+      continue;
+
+    bool branch_sources_are_dot_safe = branch_merged;
+    if (branch_stores.has_value()) {
+      for (const int branch_store_index : branch_stores->indexes) {
+        const X2ValueDataflowState* branch_store_state = state_at(branch_store_index);
+        if (x2_restore_safety(branch_store_state) != X2ShapeSafety::DotSafeDecimal ||
+            !x2_state_has_same_normalized_decimal_in_x_and_x2(branch_store_state)) {
+          branch_sources_are_dot_safe = false;
+          break;
+        }
+      }
+      if (!branch_sources_are_dot_safe)
+        continue;
+    }
+
+    const X2ValueDataflowState* store_state =
+        store_index.has_value() ? state_at(*store_index) : nullptr;
     const X2ValueDataflowState* recall_state = state_at(index);
 
-    const bool source_already_synced = htr_source_already_synced_in_x2(
-        ops, *store_index, index, store_state, recall_state, context);
+    const bool source_already_synced =
+        branch_merged ||
+        (store_index.has_value() && htr_source_already_synced_in_x2(
+                                        ops, *store_index, index, store_state, recall_state, context));
     const bool source_already_dot_safe =
+        branch_sources_are_dot_safe ||
         htr_source_already_dot_safe_in_x2(store_state, recall_state);
     const bool source_restores_same_visible_decimal =
         htr_source_restores_same_visible_decimal_from_x2(store_state, recall_state);
-    const bool source_restores_same_visible_shape = htr_source_restores_same_visible_shape_from_x2(
-        ops, *store_index, index, store_state, recall_state, context);
+    const bool source_restores_same_visible_shape =
+        store_index.has_value() && htr_source_restores_same_visible_shape_from_x2(
+                                       ops, *store_index, index, store_state, recall_state, context);
     const bool source_restores_same_dot_safe_decimal_shape =
         htr_source_restores_same_dot_safe_decimal_shape_from_x2(store_state, recall_state);
     const bool source_restores_same_dot_safe_structural_shape =
@@ -15420,7 +15530,11 @@ std::vector<X2HiddenTempReplacement> compute_x2_hidden_temp_restore(const std::v
 
     if (analyze_x2_stack_effect(op).stack_lift_and_x2_sync)
       replaced_stack_lift_producer_indexes.insert(index);
-    replacements.push_back(X2HiddenTempReplacement{.index = index, .register_name = register_name});
+    replacements.push_back(X2HiddenTempReplacement{
+        .index = index,
+        .register_name = register_name,
+        .branch_merged = branch_merged,
+    });
   }
   return replacements;
 }

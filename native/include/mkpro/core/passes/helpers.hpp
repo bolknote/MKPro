@@ -197,6 +197,7 @@ struct X2ReplacementStackLiftPlan {
 struct X2HiddenTempReplacement {
   int index = 0;
   std::string register_name;
+  bool branch_merged = false;
 };
 
 struct X2LiteralReplacement {
