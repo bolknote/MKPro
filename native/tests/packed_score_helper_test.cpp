@@ -102,6 +102,37 @@ CompileOptions pinned_options() {
 } // namespace
 
 void packed_score_helpers_match_typescript_contract() {
+  const CompileResult single_use_aggregate = compile_source(R"mkpro(
+program SingleUsePackedScoreAggregate {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    d: packed = 44447.4
+    x: counter 0..4 = 1
+    y: counter 0..4 = 2
+    line: counter 0..4 = 3
+    score: packed = 0
+  }
+  fn score_move() {
+    score = packed_score(a, x) + packed_score(b, y)
+    score += packed_score(c, line)
+    score += packed_score(d, line)
+  }
+  loop {
+    score_move()
+    halt(score)
+  }
+}
+)mkpro",
+                                                           pinned_options());
+  require(single_use_aggregate.implemented,
+          "single-use packed_score aggregate rule should compile");
+  require(single_use_aggregate.diagnostics.empty(),
+          "single-use packed_score aggregate rule should not report diagnostics");
+  require(has_optimization(single_use_aggregate, "single-use-rule-inline"),
+          "single-use packed_score aggregate rule should inline instead of keeping call/return overhead");
+
   const CompileResult direct_expression_sum = compile_source(R"mkpro(
 program PackedScoreDirectExpressionAccumulator {
   state {

@@ -164,7 +164,7 @@ void example_sizes_match_typescript_baselines() {
       {"zagaday-tsifru", 100},
   };
   const std::map<std::string, std::size_t> PENDING_BASELINE{
-      {"tic-tac-toe-4x4", 145},
+      {"tic-tac-toe-4x4", 144},
   };
 
   const std::filesystem::path root = std::filesystem::current_path();

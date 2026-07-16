@@ -2787,7 +2787,9 @@ void validate_startup_stack_input_contracts(const V2Program& program,
 
 void suppress_packed_score_inline_rules(LoweringContext& context, const V2Program& program) {
   for (const V2Rule& rule : program.rules) {
-    if (count_expression_calls_in_statements(rule.body, "packed_score") >= 4)
+    const auto calls = context.proc_call_counts.find(rule.name);
+    const int uses = calls == context.proc_call_counts.end() ? 0 : calls->second;
+    if (uses > 1 && count_expression_calls_in_statements(rule.body, "packed_score") >= 4)
       context.inline_statement_rules.erase(rule.name);
   }
 }
