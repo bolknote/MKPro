@@ -22,16 +22,15 @@ DefUse defs_and_uses(const IrOp& op) {
   case IrKind::Recall:
     return DefUse{.defs = {}, .uses = RegisterValueSet{op.register_name}};
   case IrKind::IndirectRecall: {
-    const std::optional<std::string> target = known_indirect_memory_target(op);
+    const std::optional<std::set<std::string>> targets = known_indirect_memory_targets(op);
     RegisterValueSet uses{op.register_name};
-    if (target.has_value())
-      uses.insert(*target);
+    if (targets.has_value())
+      uses.insert(targets->begin(), targets->end());
     return DefUse{.defs = {}, .uses = std::move(uses)};
   }
   case IrKind::IndirectStore: {
-    const std::optional<std::string> target = known_indirect_memory_target(op);
     return DefUse{
-        .defs = target.has_value() ? RegisterValueSet{*target} : RegisterValueSet{},
+        .defs = known_indirect_memory_targets(op).value_or(RegisterValueSet{}),
         .uses = RegisterValueSet{op.register_name},
     };
   }

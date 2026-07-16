@@ -47,8 +47,10 @@ RegisterSet gather_used_registers(const std::vector<IrOp>& ops) {
       registers.insert(op.register_name);
     if (is_indirect_access(op)) {
       registers.insert(op.register_name);
-      if (const std::optional<std::string> memory_target = known_indirect_memory_target(op))
-        registers.insert(*memory_target);
+      if (const std::optional<std::set<std::string>> memory_targets =
+              known_indirect_memory_targets(op)) {
+        registers.insert(memory_targets->begin(), memory_targets->end());
+      }
     }
     if (op.kind == IrKind::Loop) {
       if (const std::optional<std::string> counter = loop_counter_register(op.counter))
@@ -79,9 +81,17 @@ RegisterRangeMap live_range_per_register(const std::vector<IrOp>& ops, const Reg
 
     if (def_aware) {
       const IrOp& op = ops.at(index);
-      if (op.kind == IrKind::Store || op.kind == IrKind::IndirectStore) {
+      if (op.kind == IrKind::Store) {
         if (const auto found = ranges.find(op.register_name); found != ranges.end())
           found->second.insert(position);
+      } else if (op.kind == IrKind::IndirectStore) {
+        if (const std::optional<std::set<std::string>> targets =
+                known_indirect_memory_targets(op)) {
+          for (const std::string& target : *targets) {
+            if (const auto found = ranges.find(target); found != ranges.end())
+              found->second.insert(position);
+          }
+        }
       }
     }
   }
@@ -102,12 +112,20 @@ bool uses_indirect_access(const std::vector<IrOp>& ops, const std::string& regis
       continue;
     if (op.register_name == register_name)
       return true;
-    if (const std::optional<std::string> memory_target = known_indirect_memory_target(op);
-        memory_target == register_name) {
+    if (const std::optional<std::set<std::string>> memory_targets =
+            known_indirect_memory_targets(op);
+        memory_targets.has_value() && memory_targets->contains(register_name)) {
       return true;
     }
   }
   return false;
+}
+
+bool has_unknown_indirect_memory_targets(const std::vector<IrOp>& ops) {
+  return std::any_of(ops.begin(), ops.end(), [](const IrOp& op) {
+    return (op.kind == IrKind::IndirectStore || op.kind == IrKind::IndirectRecall) &&
+           !known_indirect_memory_targets(op).has_value();
+  });
 }
 
 bool uses_display_focus_sensitive_access(const std::vector<IrOp>& ops,
@@ -268,7 +286,7 @@ compute_non_overlapping_register_mapping(const std::vector<IrOp>& ops,
                                          RegisterCoalesceMappingOptions options) {
   const RegisterSet registers = gather_used_registers(ops);
   std::map<std::string, std::string> mapping;
-  if (registers.size() <= 1U)
+  if (registers.size() <= 1U || has_unknown_indirect_memory_targets(ops))
     return mapping;
 
   const LivenessInfo liveness = compute_liveness(ops);
@@ -283,11 +301,11 @@ compute_non_overlapping_register_mapping(const std::vector<IrOp>& ops,
       continue;
     if (live_at_entry.contains(a))
       continue;
-    if (uses_indirect_access(ops, a))
+    if (!options.def_aware && uses_indirect_access(ops, a))
       continue;
     if (uses_display_focus_sensitive_access(ops, a))
       continue;
-    if (uses_loop_counter(ops, a))
+    if (!options.def_aware && uses_loop_counter(ops, a))
       continue;
 
     for (std::size_t right = left + 1U; right < ordered.size(); ++right) {

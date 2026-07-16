@@ -330,6 +330,34 @@ Fixture shared_call_and_tail_jump_fixture() {
   return result;
 }
 
+Fixture shared_conditional_fixture() {
+  Fixture result;
+  const std::string guard_sink = "unrelated_shared_conditional_guard_sink";
+  const std::string sink = "unrelated_shared_conditional_sink";
+
+  result.items.push_back(MachineItem::label("unrelated_shared_conditional_entry"));
+  result.items.push_back(op(0x59));
+  result.items.push_back(MachineItem::address(guard_sink));
+  result.items.push_back(op(0x5e));
+  result.items.push_back(MachineItem::address(sink));
+  result.visible_stop = result.items.size();
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label(guard_sink));
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label(sink));
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label("unrelated_shared_conditional_padding"));
+  for (int cell = 1; cell < 16; ++cell)
+    result.items.push_back(op(0x0d));
+  result.items.push_back(stop());
+
+  result.preloads.push_back(PreloadReport{.register_name = "8", .value = "20"});
+  return result;
+}
+
 Fixture address_selector_rebind_fixture() {
   Fixture result;
   const std::string helper = "unrelated_rebound_address_helper";
@@ -441,6 +469,34 @@ bool reason_contains(const core::NaturalTargetComponentLayoutPlan& plan,
 } // namespace
 
 void natural_target_component_layout_is_generic_and_proof_gated() {
+  {
+    const Fixture input = shared_conditional_fixture();
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    const int converted_conditionals = static_cast<int>(std::count_if(
+        rewritten.plan.flows.begin(), rewritten.plan.flows.end(), [](const auto& flow) {
+          return flow.original_opcode == 0x5e;
+        }));
+    std::string rejection;
+    for (const std::string& reason : rewritten.plan.reasons) {
+      if (!rejection.empty())
+        rejection += " | ";
+      rejection += reason;
+    }
+    require(rewritten.plan.proved && rewritten.applied == 1 &&
+                rewritten.removed_cells == 1 && converted_conditionals == 1 &&
+                rewritten.items.at(item_at_address(rewritten.items, 2)).opcode == 0xe8 &&
+                rewritten.items.at(item_at_address(rewritten.items, 20)).opcode == 0x50,
+            "compatible conditionals should share one proved natural-target selector: applied=" +
+                std::to_string(rewritten.applied) +
+                ", removed=" + std::to_string(rewritten.removed_cells) +
+                ", reasons=" + rejection);
+    const Observation before = observe(input.items, input.preloads);
+    const Observation after = observe(rewritten.items, rewritten.preloads);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "conditional flow conversion must preserve observable machine state");
+  }
+
   {
     const Fixture input = shared_call_and_tail_jump_fixture();
     const auto rewritten = core::optimize_natural_target_component_layout(

@@ -214,6 +214,25 @@ std::optional<int> direct_opcode_for_indirect_flow(int opcode) {
   }
 }
 
+std::optional<int> indirect_family_for_direct_flow(int opcode) {
+  switch (opcode) {
+  case 0x57:
+    return 0x70;
+  case kJumpOpcode:
+    return 0x80;
+  case 0x59:
+    return 0x90;
+  case kCallOpcode:
+    return 0xa0;
+  case 0x5c:
+    return 0xc0;
+  case 0x5e:
+    return 0xe0;
+  default:
+    return std::nullopt;
+  }
+}
+
 bool takes_address(const MachineItem& item) {
   return item.kind == MachineItemKind::Op && item.opcode >= 0 && item.opcode <= 0xff &&
          opcode_by_code(item.opcode).takes_address;
@@ -391,7 +410,7 @@ std::vector<DirectFlowSite> shortenable_direct_flows(
   std::vector<DirectFlowSite> result;
   for (const DirectReference& reference : references) {
     const int opcode = items.at(reference.command).opcode;
-    if (opcode != kCallOpcode && opcode != kJumpOpcode)
+    if (!indirect_family_for_direct_flow(opcode).has_value())
       continue;
     result.push_back(DirectFlowSite{
         .command = reference.command,
@@ -936,8 +955,11 @@ std::optional<std::vector<Cell>> convert_direct_flows(
       const auto selected = selector_by_target.find(original_flow->target);
       if (selected == selector_by_target.end())
         return std::nullopt;
-      const int family = original_flow->direct_opcode == kCallOpcode ? 0xa0 : 0x80;
-      command.opcode = family + selected->second->register_index;
+      const std::optional<int> family =
+          indirect_family_for_direct_flow(original_flow->direct_opcode);
+      if (!family.has_value())
+        return std::nullopt;
+      command.opcode = *family + selected->second->register_index;
       command.mnemonic = opcode_by_code(command.opcode).name;
       command.indirect_flow_targets =
           std::vector<IrTarget>{static_cast<int>(original_flow->target)};
@@ -1939,27 +1961,76 @@ bool indirect_memory_facts_equivalent(
 bool converted_flow_effects_equivalent(
     const std::vector<MachineItem>& original_items,
     const std::vector<NaturalTargetAnchorCandidate>& anchors,
-    const std::vector<NaturalTargetFlowRewrite>& flows) {
+    const std::vector<NaturalTargetFlowRewrite>& flows,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const TraceGraph& trace) {
   if (std::any_of(anchors.begin(), anchors.end(), [](const auto& anchor) {
         return indirect_selector_mutation(anchor.selector.register_name) !=
                IndirectSelectorMutation::Stable;
       })) {
     return false;
   }
+  std::set<std::size_t> converted_commands;
+  for (const NaturalTargetFlowRewrite& flow : flows)
+    converted_commands.insert(flow.original_command_item);
+  const auto entry_has_x2_equal_x = [&](std::size_t command) {
+    if (std::any_of(control_flow.external_entries.begin(), control_flow.external_entries.end(),
+                    [&](const PostLayoutExternalEntryState& entry) {
+                      return entry.entry.item_index == command;
+                    })) {
+      return false;
+    }
+    bool has_incoming = false;
+    for (const auto& [source, edges] : trace) {
+      for (const TraceEdge& edge : edges) {
+        if (edge.target.command != command)
+          continue;
+        has_incoming = true;
+        if (edge.kind != TraceEdgeKind::Fallthrough ||
+            converted_commands.contains(source.command) ||
+            source.command >= original_items.size()) {
+          return false;
+        }
+        const MachineItem& predecessor = original_items.at(source.command);
+        if (predecessor.kind != MachineItemKind::Op ||
+            !is_direct_conditional(predecessor.opcode)) {
+          return false;
+        }
+        const OpcodeInfo& predecessor_info = opcode_by_code(predecessor.opcode);
+        if (predecessor_info.stack_effect != StackEffect::Preserves ||
+            !predecessor_info.conditional_x2_effect.has_value() ||
+            predecessor_info.conditional_x2_effect->fallthrough != X2Effect::Affects) {
+          return false;
+        }
+      }
+    }
+    return has_incoming;
+  };
+
   return std::all_of(flows.begin(), flows.end(), [&](const NaturalTargetFlowRewrite& flow) {
     const auto anchor = std::find_if(anchors.begin(), anchors.end(), [&](const auto& candidate) {
       return candidate.selector.register_name == flow.selector_register;
     });
     if (anchor == anchors.end())
       return false;
-    if (flow.original_opcode != kCallOpcode && flow.original_opcode != kJumpOpcode)
+    const std::optional<int> indirect_family =
+        indirect_family_for_direct_flow(flow.original_opcode);
+    if (!indirect_family.has_value())
       return false;
     const OpcodeInfo& direct = opcode_by_code(flow.original_opcode);
-    const int indirect_family = flow.original_opcode == kCallOpcode ? 0xa0 : 0x80;
     const OpcodeInfo& indirect =
-        opcode_by_code(indirect_family + anchor->selector.register_index);
-    return direct.stack_effect == indirect.stack_effect &&
-           direct.x2_effect == indirect.x2_effect &&
+        opcode_by_code(*indirect_family + anchor->selector.register_index);
+    bool x2_equivalent = direct.x2_effect == indirect.x2_effect;
+    if (is_direct_conditional(flow.original_opcode)) {
+      x2_equivalent = direct.conditional_x2_effect.has_value() &&
+                      indirect.conditional_x2_effect.has_value() &&
+                      direct.conditional_x2_effect->jump ==
+                          indirect.conditional_x2_effect->jump &&
+                      (direct.conditional_x2_effect->fallthrough ==
+                           indirect.conditional_x2_effect->fallthrough ||
+                       entry_has_x2_equal_x(flow.original_command_item));
+    }
+    return direct.stack_effect == indirect.stack_effect && x2_equivalent &&
            direct.takes_address != indirect.takes_address &&
            flow.original_command_item < original_items.size() &&
            original_items.at(flow.original_command_item).kind == MachineItemKind::Op &&
@@ -2503,7 +2574,8 @@ std::optional<CandidateArtifact> try_candidate(
   plan.call_return_equivalent = true;
   plan.stack_and_x2_equivalent =
       trampolines_proved && split_bridges_proved &&
-      converted_flow_effects_equivalent(items, anchors, plan.flows) &&
+      converted_flow_effects_equivalent(items, anchors, plan.flows, control_flow,
+                                        original_trace) &&
       unchanged_command_effects_preserved(items, candidate.items,
                                           candidate.new_item_by_origin, plan.flows,
                                           displaced_flows);
@@ -2606,7 +2678,7 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   const std::vector<DirectFlowSite> flows =
       shortenable_direct_flows(*references, logical_items);
   if (flows.empty()) {
-    add_reason(result.plan, "artifact contains no direct call or jump to shorten");
+    add_reason(result.plan, "artifact contains no direct flow to shorten");
     return result;
   }
 

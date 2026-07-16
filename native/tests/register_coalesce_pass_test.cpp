@@ -1,9 +1,11 @@
 #include "mkpro/core/passes/register_coalesce.hpp"
+#include "mkpro/core/opcodes.hpp"
 
 #include "test_support.hpp"
 
 #include <algorithm>
 #include <map>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -18,6 +20,17 @@ IrOp store(std::string register_name) {
 
 IrOp recall(std::string register_name) {
   return make_recall(std::move(register_name));
+}
+
+IrOp indirect_store(std::string selector, std::optional<std::string> targets = std::nullopt) {
+  IrOp op;
+  op.kind = IrKind::IndirectStore;
+  op.register_name = std::move(selector);
+  op.opcode = 0xb0 + register_index(op.register_name);
+  op.meta.mnemonic = "К X->П " + op.register_name;
+  if (targets.has_value())
+    op.meta.comment = "indirect-memory-targets=" + *targets;
+  return op;
 }
 
 IrOp halt() {
@@ -76,6 +89,29 @@ void register_coalesce_matches_typescript_contract() {
 
     require(result.applied == 0, "register-coalesce ignored live-at-entry exclusion");
     require(result.ops.size() == program.size(), "register-coalesce changed live-at-entry program");
+  }
+
+  {
+    const std::vector<IrOp> program = {
+        store("0"), indirect_store("0", "4,5,6,7"), halt(), store("3"), recall("3")};
+    const std::map<std::string, std::string> mapping =
+        core::passes::compute_non_overlapping_register_mapping(
+            program, core::passes::RegisterCoalesceMappingOptions{.def_aware = true});
+
+    require(mapping.contains("3") && mapping.at("3") == "0",
+            "def-aware register mapping did not reuse an indirect keep register with proved "
+            "disjoint targets and live ranges");
+  }
+
+  {
+    const std::vector<IrOp> program = {
+        store("0"), indirect_store("0"), halt(), store("3"), recall("3")};
+    const std::map<std::string, std::string> mapping =
+        core::passes::compute_non_overlapping_register_mapping(
+            program, core::passes::RegisterCoalesceMappingOptions{.def_aware = true});
+
+    require(mapping.empty(),
+            "def-aware register mapping accepted an unknown indirect-memory target set");
   }
 
   {

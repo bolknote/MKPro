@@ -49261,12 +49261,19 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
               [](const core::NaturalTargetFlowRewrite& flow) {
                 return flow.original_opcode == 0x53;
               }));
-          const int natural_jumps = natural_layout.applied - natural_calls;
+          const int natural_jumps = static_cast<int>(std::count_if(
+              natural_layout.plan.flows.begin(), natural_layout.plan.flows.end(),
+              [](const core::NaturalTargetFlowRewrite& flow) {
+                return flow.original_opcode == 0x51;
+              }));
+          const int natural_conditionals =
+              natural_layout.applied - natural_calls - natural_jumps;
           natural_layout_detail +=
               " and replaced " + std::to_string(natural_layout.applied) +
               " direct flow command(s) with one-cell indirect flow (" +
               std::to_string(natural_calls) + " call(s), " +
-              std::to_string(natural_jumps) + " jump(s))";
+              std::to_string(natural_jumps) + " jump(s), " +
+              std::to_string(natural_conditionals) + " conditional(s))";
           const int alignment_cells =
               natural_layout.applied -
               natural_layout.plan.rebound_indirect_flows -
@@ -64812,9 +64819,6 @@ CompileResult compile_source_for_optimizer_profile(
     } catch (const std::exception&) {
       return;
     }
-    if (!probe.implemented || probe.coalesce_shares.empty())
-      return;
-
     std::vector<RegisterShare> shares = probe.coalesce_shares;
     std::sort(shares.begin(), shares.end(),
               [](const RegisterShare& left, const RegisterShare& right) {
@@ -64822,6 +64826,8 @@ CompileResult compile_source_for_optimizer_profile(
                   return left.free_register < right.free_register;
                 return left.keep_register < right.keep_register;
               });
+    if (!probe.implemented || shares.empty())
+      return;
 
     std::string key = reclaim_base_key(base_options);
     for (const RegisterShare& share : shares) {

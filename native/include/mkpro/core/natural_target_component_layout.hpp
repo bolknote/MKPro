@@ -100,10 +100,13 @@ std::optional<std::vector<MachineItem>> normalize_natural_target_overflow_formal
     const std::vector<MachineItem>& items,
     AddressSpaceModel model = AddressSpaceModel::Standard);
 
-// Reorder generic fallthrough-closed machine segments so a called command
-// identity lands on an address already represented by a stable internal
-// register. Every converted direct PP or BP keeps its flow identity and is
-// replaced by the corresponding one-cell indirect K PP or K BP opcode. Numeric direct targets,
+// Reorder generic fallthrough-closed machine segments so a direct flow target
+// lands on an address already represented by a stable internal register. Every
+// converted direct PP, BP, or compatible conditional keeps its flow identity
+// and is replaced by the corresponding one-cell indirect opcode. Only direct
+// x!=0, x>=0, x<0, and x=0 conditionals with exact indirect counterparts are
+// eligible. Their entry must also prove X2=X on every path when direct and
+// indirect fallthrough effects differ; FL0..FL3 are not rewritten. Numeric direct targets,
 // complete indirect facts, external entries, and return-stack slots are rebound
 // by command identity and the final artifact is independently reconstructed.
 //
