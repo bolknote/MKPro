@@ -45,6 +45,8 @@ Output and execution model:
   --feature mk61|mk61s-mini-expand
                                   Override the source feature profile:
                                   RF register and 112 real program cells A5..B1.
+                                  Expanded search retains the smaller proved result
+                                  from the full mk61 and expanded optimizer roots.
   --analysis                      Include optimizer analysis/report data. With
                                   --out all, also print a human-readable report.
   --strict                        Treat undeclared allocation as an error.

@@ -37,7 +37,7 @@ bool trace_post_layout_enabled() {
 }
 
 AddressSpaceModel address_space_model_for_options(const CompileOptions& options) {
-  return address_space_model_for_feature_profile(options.feature_profile);
+  return address_space_model_for_feature_profile(effective_optimizer_feature_profile(options));
 }
 
 struct OverlayExecutable {

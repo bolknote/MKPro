@@ -1286,7 +1286,8 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
 
   const std::map<std::string, int> labels = calculate_label_addresses(ops);
   const AddressSpaceModel address_model =
-      address_space_model_for_feature_profile(context.options.feature_profile);
+      address_space_model_for_feature_profile(
+          effective_optimizer_feature_profile(context.options));
   const int official_last = official_program_last_address(address_model);
   const std::vector<SelectedHoleHelper> selected =
       select_hole_helpers(ops, labels, official_last, address_model);

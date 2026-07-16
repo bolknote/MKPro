@@ -47667,8 +47667,12 @@ void append_missing_preloaded_indirect_flow_comments(std::vector<MachineItem>& i
 
 void remove_preloaded_indirect_flow_comment_annotations(std::vector<MachineItem>& items);
 
+FeatureProfile optimizer_feature_profile_for_options(const CompileOptions& options) {
+  return effective_optimizer_feature_profile(options);
+}
+
 AddressSpaceModel address_space_model_for_options(const CompileOptions& options) {
-  return address_space_model_for_feature_profile(options.feature_profile);
+  return address_space_model_for_feature_profile(optimizer_feature_profile_for_options(options));
 }
 
 int program_step_limit_for_options(const CompileOptions& options) {
@@ -47892,7 +47896,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
 
   LoweringContext context;
   context.program = &*ast.v2;
-  context.feature_profile = options.feature_profile;
+  context.feature_profile = optimizer_feature_profile_for_options(options);
   context.emitter.address_space_model = address_space_model_for_options(options);
   context.cave_sketch_shape = false;
   context.segmented_bitplanes = options.segmented_bitplanes;
@@ -48329,7 +48333,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
               raise_machine_to_ir(post_layout_items),
               core::ReturnStackStartupLayoutOptions{
                   .size_rescue = return_stack_needs_size_rescue,
-                  .feature_profile = options.feature_profile,
+                  .feature_profile = optimizer_feature_profile_for_options(options),
               });
       const bool profitable_tail_layout_signal =
           return_stack_tail_layout_scan.materialized &&
@@ -48344,7 +48348,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
               raise_machine_to_ir(post_layout_items), post_layout_items, pass_options,
               core::ReturnStackStartupLayoutOptions{
                   .size_rescue = return_stack_needs_size_rescue,
-                  .feature_profile = options.feature_profile,
+                  .feature_profile = optimizer_feature_profile_for_options(options),
               },
               indirect_flow_rescue_above);
       if (tail_layout.materialized) {
@@ -48581,7 +48585,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
               core::allocate_dirty_return_stack_dispatch_layouts(
                   post_layout_items,
                   core::DirtyReturnStackDispatchOptions{
-                      .feature_profile = options.feature_profile,
+                      .feature_profile = optimizer_feature_profile_for_options(options),
                       .size_rescue = true,
                   });
           auto overlay_flow_cell_count = [&](const std::vector<MachineItem>& items) {
@@ -50029,6 +50033,10 @@ std::string implemented_candidate_key(const CompileOptions& options) {
   std::ostringstream out;
   out << reclaim_base_key(options)
       << ";feature_profile=" << feature_profile_id(options.feature_profile)
+      << ";optimizer_feature_profile=";
+  if (options.optimizer_feature_profile_override.has_value())
+    out << feature_profile_id(*options.optimizer_feature_profile_override);
+  out
       << ";collect_coalesce_shares=" << options.collect_coalesce_shares;
   for (const auto& [value, reg] : options.preloaded_constant_registers)
     out << ";preloaded_constant=" << value << ":" << reg;
@@ -62628,7 +62636,10 @@ std::optional<CompileResult> entered_contract_failure(const std::string& source,
 
 } // namespace
 
-CompileResult compile_source(std::string source, const CompileOptions& requested_options) {
+namespace {
+
+CompileResult compile_source_for_optimizer_profile(
+    std::string source, const CompileOptions& requested_options) {
   const CompileOptions options = apply_source_feature_profile_hint(source, requested_options);
   if (const std::optional<CompileResult> cached = read_compile_result_cache(source, options))
     return *cached;
@@ -65588,6 +65599,84 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
   refresh_rejection_dependent_reports(best, options);
   write_compile_result_cache(source, options, best);
   return best;
+}
+
+void reformat_result_for_target_profile(CompileResult& result, FeatureProfile profile) {
+  const AddressSpaceModel model = address_space_model_for_feature_profile(profile);
+  result.feature_profile = profile;
+  result.hex = format_hex_steps(result.steps, model);
+  if (result.setup_program.has_value()) {
+    result.setup_hex = format_hex_steps(result.setup_program->steps, model);
+    result.setup_listing = format_listing_steps(result.setup_program->steps, model);
+  }
+  result.listing = combine_listing(result, model);
+}
+
+void append_feature_profile_search_report(CompileResult& selected,
+                                          const CompileResult& standard,
+                                          const CompileResult& expanded,
+                                          bool selected_standard,
+                                          const CompileOptions& target_options) {
+  const std::string standard_size =
+      standard.implemented ? std::to_string(standard.steps.size()) : "failed";
+  const std::string expanded_size =
+      expanded.implemented ? std::to_string(expanded.steps.size()) : "failed";
+  const std::string selected_root = selected_standard ? "standard" : "expanded";
+  selected.optimizations.push_back(OptimizationReport{
+      .name = "rf-allocation-policy-search",
+      .detail = "Ran the complete mk61 and mk61s-mini-expand optimizer roots and selected the " +
+                selected_root + " root (mk61=" + standard_size +
+                " cells, mk61s-mini-expand=" + expanded_size + " cells).",
+  });
+
+  const auto append_root = [&](std::string variant, const CompileResult& result,
+                               bool is_selected) {
+    append_candidate_report_once(
+        selected.candidates,
+        CandidateReport{
+            .site = "feature-profile-search",
+            .variant = std::move(variant),
+            .steps = static_cast<int>(result.steps.size()),
+            .selected = is_selected,
+            .reason = is_selected ? "selected as the smaller proved full optimizer root"
+                                  : result.implemented
+                                        ? "not selected because the other proved root is smaller"
+                                        : "not selected because this optimizer root failed",
+        });
+  };
+  append_root("mk61-root", standard, selected_standard);
+  append_root("mk61s-mini-expand-root", expanded, !selected_standard);
+  refresh_rejection_dependent_reports(selected, target_options);
+}
+
+} // namespace
+
+CompileResult compile_source(std::string source, const CompileOptions& requested_options) {
+  const CompileOptions options = apply_source_feature_profile_hint(source, requested_options);
+  CompileResult expanded = compile_source_for_optimizer_profile(source, options);
+  if (!feature_profile_has_rf_register(options.feature_profile) ||
+      options.optimizer_feature_profile_override.has_value() ||
+      has_explicit_lowering_variant(options)) {
+    return expanded;
+  }
+
+  CompileOptions standard_options = options;
+  standard_options.optimizer_feature_profile_override = FeatureProfile::Standard;
+  const int standard_limit = feature_profile_program_step_limit(FeatureProfile::Standard);
+  if (standard_options.budget.has_value() && *standard_options.budget > 0)
+    standard_options.budget = std::min(*standard_options.budget, standard_limit);
+  CompileResult standard = compile_source_for_optimizer_profile(source, standard_options);
+  if (!candidate_beats_best(standard, expanded, options)) {
+    append_feature_profile_search_report(expanded, standard, expanded,
+                                         /*selected_standard=*/false, options);
+    return expanded;
+  }
+
+  standard.budget = options.budget;
+  reformat_result_for_target_profile(standard, options.feature_profile);
+  append_feature_profile_search_report(standard, standard, expanded,
+                                       /*selected_standard=*/true, options);
+  return standard;
 }
 
 } // namespace mkpro
