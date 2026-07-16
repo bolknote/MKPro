@@ -436,6 +436,47 @@ bool safe_cut_after(const std::vector<Cell>& cells, std::size_t cell_index) {
   return (item.opcode & 0xf0) == 0x80;
 }
 
+bool split_segment_with_bridge(
+    std::vector<Segment>& segments, std::size_t segment_index,
+    std::size_t prefix_cells, std::size_t command_origin,
+    std::size_t operand_origin, TransparentSplitBridge& bridge) {
+  if (segment_index >= segments.size() || prefix_cells == 0U ||
+      prefix_cells >= segments.at(segment_index).cells.size() ||
+      safe_cut_after(segments.at(segment_index).cells, prefix_cells - 1U)) {
+    return false;
+  }
+
+  Segment suffix;
+  suffix.ordinal = segments.size();
+  Segment& prefix = segments.at(segment_index);
+  while (prefix.cells.size() > prefix_cells) {
+    suffix.cells.push_back(std::move(prefix.cells.at(prefix_cells)));
+    prefix.cells.erase(prefix.cells.begin() +
+                       static_cast<std::ptrdiff_t>(prefix_cells));
+  }
+  if (suffix.cells.empty())
+    return false;
+  bridge = TransparentSplitBridge{
+      .command_origin = command_origin,
+      .operand_origin = operand_origin,
+      .target_origin = suffix.cells.front().value.origin,
+  };
+  prefix.cells.push_back(Cell{
+      .value = OwnedItem{
+          .item = MachineItem::op(kJumpOpcode, opcode_by_code(kJumpOpcode).name),
+          .origin = bridge.command_origin,
+      },
+  });
+  prefix.cells.push_back(Cell{
+      .value = OwnedItem{
+          .item = MachineItem::address(static_cast<int>(bridge.target_origin)),
+          .origin = bridge.operand_origin,
+      },
+  });
+  segments.push_back(std::move(suffix));
+  return true;
+}
+
 std::vector<Segment> make_segments(std::vector<Cell> cells) {
   std::vector<Segment> segments;
   Segment current;
@@ -469,11 +510,6 @@ bool apply_transparent_segment_splits(
     const std::size_t segment_index = location->first;
     const std::size_t prefix_cells =
         static_cast<std::size_t>(anchor.split_prefix_cells);
-    if (segment_index >= segments.size() || prefix_cells == 0U ||
-        prefix_cells >= segments.at(segment_index).cells.size() ||
-        safe_cut_after(segments.at(segment_index).cells, prefix_cells - 1U)) {
-      return false;
-    }
     for (const NaturalTargetAnchorCandidate& other : anchors) {
       if (other.target_origin == anchor.target_origin)
         continue;
@@ -482,34 +518,13 @@ bool apply_transparent_segment_splits(
         return false;
     }
 
-    Segment suffix;
-    suffix.ordinal = segments.size();
-    Segment& prefix = segments.at(segment_index);
-    while (prefix.cells.size() > prefix_cells) {
-      suffix.cells.push_back(std::move(prefix.cells.at(prefix_cells)));
-      prefix.cells.erase(prefix.cells.begin() +
-                         static_cast<std::ptrdiff_t>(prefix_cells));
-    }
-    if (suffix.cells.empty())
+    TransparentSplitBridge bridge;
+    if (!split_segment_with_bridge(
+            segments, segment_index, prefix_cells, next_synthetic_origin,
+            next_synthetic_origin + 1U, bridge)) {
       return false;
-    TransparentSplitBridge bridge{
-        .command_origin = next_synthetic_origin++,
-        .operand_origin = next_synthetic_origin++,
-        .target_origin = suffix.cells.front().value.origin,
-    };
-    prefix.cells.push_back(Cell{
-        .value = OwnedItem{
-            .item = MachineItem::op(kJumpOpcode, opcode_by_code(kJumpOpcode).name),
-            .origin = bridge.command_origin,
-        },
-    });
-    prefix.cells.push_back(Cell{
-        .value = OwnedItem{
-            .item = MachineItem::address(static_cast<int>(bridge.target_origin)),
-            .origin = bridge.operand_origin,
-        },
-    });
-    segments.push_back(std::move(suffix));
+    }
+    next_synthetic_origin += 2U;
     bridges.push_back(bridge);
   }
   return true;
@@ -1085,6 +1100,107 @@ std::optional<NaturalTargetLayoutOrder> layout_order_for_targets(
   return layout.segments.size() == segments.size()
              ? std::optional<NaturalTargetLayoutOrder>(std::move(layout))
              : std::nullopt;
+}
+
+struct NaturalTargetLayoutVariant {
+  std::vector<Segment> segments;
+  NaturalTargetLayoutOrder order;
+  std::optional<TransparentSplitBridge> bridge;
+  int layout_cost = 0;
+};
+
+std::optional<NaturalTargetLayoutVariant>
+layout_order_with_optional_split(
+    const std::vector<Segment>& segments, std::size_t main_segment,
+    const std::vector<NaturalTargetPlacement>& placements,
+    std::size_t maximum_states, int maximum_padding,
+    std::size_t bridge_command_origin) {
+  std::optional<NaturalTargetLayoutVariant> best;
+  auto consider = [&](std::vector<Segment> trial_segments,
+                      NaturalTargetLayoutOrder trial_order,
+                      std::optional<TransparentSplitBridge> bridge) {
+    const int cost = trial_order.padding_cells + (bridge.has_value() ? 2 : 0);
+    if (best.has_value() &&
+        std::tie(best->layout_cost, best->order.padding_cells) <=
+            std::tie(cost, trial_order.padding_cells)) {
+      return;
+    }
+    best = NaturalTargetLayoutVariant{
+        .segments = std::move(trial_segments),
+        .order = std::move(trial_order),
+        .bridge = bridge,
+        .layout_cost = cost,
+    };
+  };
+
+  if (const auto ordinary = layout_order_for_targets(
+          segments, main_segment, placements, maximum_states, maximum_padding)) {
+    consider(segments, *ordinary, std::nullopt);
+  }
+  if (maximum_padding < 2 || placements.size() < 2U ||
+      main_segment >= segments.size()) {
+    return best;
+  }
+
+  std::map<std::size_t, int> base_by_segment;
+  for (const NaturalTargetPlacement& placement : placements) {
+    if (placement.target_segment >= segments.size() ||
+        placement.target_segment == main_segment || placement.target_offset < 0 ||
+        placement.natural_target < placement.target_offset) {
+      return best;
+    }
+    const int base = placement.natural_target - placement.target_offset;
+    const auto [found, inserted] =
+        base_by_segment.emplace(placement.target_segment, base);
+    if (!inserted && found->second != base)
+      return best;
+  }
+
+  std::vector<std::pair<int, std::size_t>> fixed_segments;
+  fixed_segments.reserve(base_by_segment.size());
+  for (const auto& [segment, base] : base_by_segment)
+    fixed_segments.emplace_back(base, segment);
+  std::sort(fixed_segments.begin(), fixed_segments.end());
+
+  std::set<std::pair<std::size_t, std::size_t>> split_candidates;
+  for (std::size_t index = 1; index < fixed_segments.size(); ++index) {
+    const auto [base, segment] = fixed_segments.at(index - 1U);
+    const int next_base = fixed_segments.at(index).first;
+    const int prefix_cells = next_base - base - 2;
+    if (base + segment_cells(segments.at(segment)) > next_base &&
+        prefix_cells > 0 &&
+        prefix_cells < segment_cells(segments.at(segment))) {
+      split_candidates.emplace(segment,
+                               static_cast<std::size_t>(prefix_cells));
+    }
+  }
+
+  for (const auto& [segment, prefix_cells] : split_candidates) {
+    std::vector<Segment> trial_segments = segments;
+    TransparentSplitBridge bridge;
+    if (!split_segment_with_bridge(
+            trial_segments, segment, prefix_cells, bridge_command_origin,
+            bridge_command_origin + 1U, bridge)) {
+      continue;
+    }
+
+    std::vector<NaturalTargetPlacement> trial_placements = placements;
+    const std::size_t suffix_segment = trial_segments.size() - 1U;
+    for (NaturalTargetPlacement& placement : trial_placements) {
+      if (placement.target_segment != segment ||
+          placement.target_offset < static_cast<int>(prefix_cells)) {
+        continue;
+      }
+      placement.target_segment = suffix_segment;
+      placement.target_offset -= static_cast<int>(prefix_cells);
+    }
+    const auto trial_order = layout_order_for_targets(
+        trial_segments, main_segment, trial_placements, maximum_states,
+        maximum_padding - 2);
+    if (trial_order.has_value())
+      consider(std::move(trial_segments), *trial_order, bridge);
+  }
+  return best;
 }
 
 std::vector<MachineItem> flatten_segments(
@@ -2167,7 +2283,7 @@ std::optional<CandidateArtifact> try_candidate(
                               2 * static_cast<int>(split_bridges.size()) - 1;
   if (maximum_padding < 0)
     return reject("address-selector displacement cannot produce a smaller artifact");
-  std::optional<NaturalTargetLayoutOrder> order;
+  std::optional<NaturalTargetLayoutVariant> selected_layout;
   int flexible_target = -1;
   if (flexible_placement.has_value()) {
     for (int target = 1;
@@ -2177,26 +2293,30 @@ std::optional<CandidateArtifact> try_candidate(
       NaturalTargetPlacement trial = *flexible_placement;
       trial.natural_target = target;
       trial_placements.push_back(trial);
-      std::optional<NaturalTargetLayoutOrder> trial_order =
-          layout_order_for_targets(segments, main_location->first,
-                                   trial_placements,
-                                   options.maximum_subset_states,
-                                   maximum_padding);
-      if (!trial_order.has_value())
+      std::optional<NaturalTargetLayoutVariant> trial_layout =
+          layout_order_with_optional_split(
+              segments, main_location->first, trial_placements,
+              options.maximum_subset_states, maximum_padding,
+              next_synthetic_origin);
+      if (!trial_layout.has_value())
         continue;
-      if (!order.has_value() ||
-          std::tie(trial_order->padding_cells, target) <
-              std::tie(order->padding_cells, flexible_target)) {
-        order = std::move(trial_order);
+      if (!selected_layout.has_value() ||
+          std::tie(trial_layout->layout_cost,
+                   trial_layout->order.padding_cells, target) <
+              std::tie(selected_layout->layout_cost,
+                       selected_layout->order.padding_cells,
+                       flexible_target)) {
+        selected_layout = std::move(trial_layout);
         flexible_target = target;
       }
     }
   } else {
-    order = layout_order_for_targets(
+    selected_layout = layout_order_with_optional_split(
         segments, main_location->first, placements,
-        options.maximum_subset_states, maximum_padding);
+        options.maximum_subset_states, maximum_padding,
+        next_synthetic_origin);
   }
-  if (!order.has_value()) {
+  if (!selected_layout.has_value()) {
     std::string geometry =
         "no fallthrough-closed component assignment reaches every natural target; main=" +
         std::to_string(segment_cells(segments.at(main_location->first))) +
@@ -2230,9 +2350,15 @@ std::optional<CandidateArtifact> try_candidate(
     return reject(std::move(geometry));
   }
 
+  segments = std::move(selected_layout->segments);
+  if (selected_layout->bridge.has_value()) {
+    split_bridges.push_back(*selected_layout->bridge);
+    next_synthetic_origin += 2U;
+  }
+
   CandidateArtifact candidate;
-  candidate.items = flatten_segments(segments, order->segments,
-                                     order->padding_before_segment,
+  candidate.items = flatten_segments(segments, selected_layout->order.segments,
+                                     selected_layout->order.padding_before_segment,
                                      candidate.new_item_by_origin);
   const std::map<std::size_t, int> new_address_by_origin =
       origin_addresses(candidate.items, candidate.new_item_by_origin);
@@ -2355,7 +2481,8 @@ std::optional<CandidateArtifact> try_candidate(
   plan.input_cells = original_index.cells;
   plan.output_cells = index_artifact(candidate.items).cells;
   plan.removed_cells = plan.input_cells - plan.output_cells;
-  plan.moved_segments = count_moved_segments(order->segments);
+  plan.moved_segments =
+      count_moved_segments(selected_layout->order.segments);
   plan.rebound_indirect_flows = static_cast<int>(displaced_flows.size());
   plan.transparent_trampolines = static_cast<int>(trampolines.size());
   plan.transparent_split_bridges = static_cast<int>(split_bridges.size());
@@ -2381,7 +2508,7 @@ std::optional<CandidateArtifact> try_candidate(
                         static_cast<int>(displaced_flows.size()) -
                         2 * static_cast<int>(trampolines.size()) -
                         2 * static_cast<int>(split_bridges.size()) -
-                        order->padding_cells &&
+                        selected_layout->order.padding_cells &&
                 plan.removed_cells > 0 && plan.control_flow_equivalent &&
                 plan.call_return_equivalent && plan.stack_and_x2_equivalent &&
                 plan.indirect_memory_equivalent && plan.data_projection_equivalent &&

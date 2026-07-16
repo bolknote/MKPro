@@ -263,6 +263,44 @@ Fixture split_overlapping_fixed_targets_fixture() {
   return result;
 }
 
+Fixture split_internal_fixed_target_fixture() {
+  Fixture result;
+  const std::string helper_a = "unrelated_internal_split_helper_a";
+  const std::string helper_b = "unrelated_internal_split_helper_b";
+
+  result.items.push_back(MachineItem::label("unrelated_internal_split_entry"));
+  for (int call = 0; call < 3; ++call) {
+    result.items.push_back(op(0x53));
+    result.items.push_back(MachineItem::address(helper_a));
+  }
+  for (int call = 0; call < 4; ++call) {
+    result.items.push_back(op(0x53));
+    result.items.push_back(MachineItem::address(helper_b));
+  }
+  for (int cell = 0; cell < 12; ++cell)
+    result.items.push_back(op(0x54));
+  result.visible_stop = result.items.size();
+  result.items.push_back(stop());
+
+  result.items.push_back(op(0x54));
+  result.items.push_back(op(0x54));
+  result.items.push_back(MachineItem::label(helper_a));
+  result.items.push_back(op(0x22));
+  for (int cell = 2; cell < 10; ++cell)
+    result.items.push_back(op(0x54));
+  result.items.push_back(op(0x52));
+
+  result.items.push_back(MachineItem::label(helper_b));
+  result.items.push_back(op(0x23));
+  for (int cell = 2; cell < 7; ++cell)
+    result.items.push_back(op(0x54));
+  result.items.push_back(op(0x52));
+
+  result.preloads.push_back(PreloadReport{.register_name = "8", .value = "29"});
+  result.preloads.push_back(PreloadReport{.register_name = "9", .value = "34"});
+  return result;
+}
+
 Fixture address_selector_rebind_fixture() {
   Fixture result;
   const std::string helper = "unrelated_rebound_address_helper";
@@ -374,6 +412,26 @@ bool reason_contains(const core::NaturalTargetComponentLayoutPlan& plan,
 } // namespace
 
 void natural_target_component_layout_is_generic_and_proof_gated() {
+  {
+    const Fixture input = split_internal_fixed_target_fixture();
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    require(rewritten.plan.proved && rewritten.applied == 7 &&
+                rewritten.removed_cells == 5 &&
+                rewritten.plan.transparent_trampolines == 0 &&
+                rewritten.plan.transparent_split_bridges == 1 &&
+                rewritten.items.at(item_at_address(rewritten.items, 32)).opcode == 0x51 &&
+                rewritten.items.at(item_at_address(rewritten.items, 33)).kind ==
+                    MachineItemKind::Address &&
+                rewritten.items.at(item_at_address(rewritten.items, 34)).kind ==
+                    MachineItemKind::Op,
+            "a fixed target inside a fallthrough component should admit a proved split");
+    const Observation before = observe(input.items, input.preloads);
+    const Observation after = observe(rewritten.items, rewritten.preloads);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "an internal-target split must preserve observable machine state");
+  }
+
   {
     const Fixture input = split_overlapping_fixed_targets_fixture();
     const auto rewritten = core::optimize_natural_target_component_layout(
