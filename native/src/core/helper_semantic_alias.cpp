@@ -753,6 +753,14 @@ struct AliasCandidate {
 
 } // namespace
 
+bool helper_semantic_physical_x1_reconverges_from_equal_visible_state(int opcode) {
+  return x1_reconverges_from_equal_visible_state(opcode);
+}
+
+bool helper_semantic_physical_x1_preserves_equal_visible_state(int opcode) {
+  return x1_preserves_equal_visible_state(opcode);
+}
+
 std::uint64_t ExactIntegralDomain::cardinality() const {
   if (!valid())
     return 0;

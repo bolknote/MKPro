@@ -279,6 +279,86 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
   }
 
   {
+    const std::string helper = "semantic_zero_helper";
+    const std::string update = "semantic_update";
+    const std::string direct_return = "semantic_direct_return";
+    std::vector<MachineItem> semantic;
+    semantic.push_back(MachineItem::op(0x52, "V/O"));                    // 00
+    semantic.push_back(MachineItem::label("semantic_main"));
+    semantic.push_back(MachineItem::op(0x53, "PP"));                     // 01
+    semantic.push_back(MachineItem::address(update));                     // 02
+    semantic.push_back(MachineItem::op(0x67, "P->X 7"));                 // 03
+    semantic.push_back(MachineItem::op(0x68, "P->X 8"));                 // 04
+    semantic.push_back(MachineItem::op(0x69, "P->X 9"));                 // 05
+    semantic.push_back(MachineItem::op(0x6a, "P->X a"));                 // 06
+    semantic.push_back(MachineItem::op(0x15, "F 10^x"));                 // 07
+    semantic.push_back(stop(StopDisposition::Terminal));                 // 08
+    pad_to(semantic, 12);
+    MachineItem helper_start = MachineItem::label(helper);
+    helper_start.procedure_boundary = "start";
+    helper_start.procedure_name = helper;
+    semantic.push_back(std::move(helper_start));
+    semantic.push_back(MachineItem::op(0x04, "4"));                      // 12
+    semantic.push_back(MachineItem::op(0x13, "/"));                      // 13
+    semantic.push_back(MachineItem::op(0x52, "V/O"));                    // 14
+    MachineItem helper_end = MachineItem::label("end_" + helper);
+    helper_end.procedure_boundary = "end";
+    helper_end.procedure_name = helper;
+    semantic.push_back(std::move(helper_end));
+    pad_to(semantic, 20);
+    semantic.push_back(MachineItem::label(update));
+    semantic.push_back(MachineItem::op(0x12, "*"));                      // 20
+    semantic.push_back(MachineItem::op(0x10, "+"));                      // 21
+    semantic.push_back(MachineItem::op(0x37, "K AND"));                  // 22
+    semantic.push_back(MachineItem::op(0x35, "K frac"));                 // 23
+    semantic.push_back(MachineItem::op(0x57, "F x!=0"));                 // 24
+    semantic.push_back(MachineItem::address(direct_return));              // 25
+    semantic.push_back(MachineItem::op(0x0a, "."));                      // 26
+    semantic.push_back(stop(StopDisposition::Terminal));                 // 27
+    semantic.push_back(MachineItem::label(direct_return));
+    semantic.push_back(MachineItem::op(0x52, "V/O"));                    // 28
+
+    const std::optional<std::string> body_key =
+        core::helper_semantic_alias_body_key(semantic, helper);
+    require(body_key.has_value(), "semantic return fixture helper should certify its body");
+    core::HelperSemanticContract contract;
+    contract.entry_label = helper;
+    contract.expression = core::helper_semantic_binary(
+        core::HelperSemanticOp::Divide, core::helper_semantic_input(),
+        core::helper_semantic_integer(4));
+    contract.admitted_input =
+        core::ExactIntegralDomain{.minimum = 0, .maximum = 0, .proved_integral = true};
+    contract.input_decimal_derivation_exact = true;
+    contract.input_zero_canonical_positive = true;
+    contract.decimal_execution_exact = true;
+    contract.hidden_x2_return_sync_proved = true;
+    contract.x1_effect_proved = true;
+    contract.x1_effect_key = "fixture";
+    contract.certified_body_key = *body_key;
+    const std::vector<core::HelperSemanticContract> contracts = {contract};
+    const std::vector<PreloadReport> semantic_preloads = {
+        PreloadReport{.register_name = "e", .value = "12"}};
+    core::PostLayoutControlFlowOptions flow_options;
+    flow_options.main_entry = 1;
+    const core::AuthoritativePostLayoutControlFlow semantic_flow =
+        core::build_post_layout_control_flow(semantic, flow_options);
+    require(semantic_flow.proved, "semantic return fixture should have an authoritative CFG");
+    const core::TerminalCyclicLayoutResult rewritten =
+        core::optimize_terminal_cyclic_layout(
+            semantic, semantic_preloads, semantic_flow,
+            core::TerminalCyclicLayoutOptions{
+                .enable_return_alias = true, .helper_semantic_contracts = &contracts});
+    std::string reasons;
+    for (const std::string& reason : rewritten.plan.reasons)
+      reasons += (reasons.empty() ? "" : "; ") + reason;
+    require(rewritten.applied == 1 && rewritten.removed_cells == 1 &&
+                rewritten.plan.semantic_return_alias_proved &&
+                rewritten.plan.final_artifact_proved &&
+                cell_count(rewritten.items) == cell_count(semantic) - 1,
+            "typed semantic return alias should remove one address cell: " + reasons);
+  }
+
+  {
     const std::vector<MachineItem> moving_entry = relocated_main_fixture();
     const core::AuthoritativePostLayoutControlFlow moving_flow =
         relocated_main_flow(moving_entry);

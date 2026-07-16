@@ -170,6 +170,8 @@ bool helper_semantic_decimal_execution_exact(const HelperSemanticExprPtr& expres
 std::optional<std::string> helper_semantic_alias_body_key(const std::vector<MachineItem>& items,
                                                           const std::string& entry_label,
                                                           std::size_t maximum_helper_cells = 32);
+bool helper_semantic_physical_x1_reconverges_from_equal_visible_state(int opcode);
+bool helper_semantic_physical_x1_preserves_equal_visible_state(int opcode);
 
 // Scan all ordered contract pairs, choose the most profitable completely
 // proved alias, redirect the complete call set, and erase the redundant body.

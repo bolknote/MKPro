@@ -34086,6 +34086,40 @@ helper_semantic_alias_contracts(const LoweringContext& context, const V2Program&
       contracts.push_back(std::move(target));
     }
   }
+  const core::ExactIntegralDomain exact_zero_domain{
+      .minimum = 0, .maximum = 0, .proved_integral = true};
+  for (const auto& [width, target_label] : context.grid_norm_helper_labels) {
+    const bool already_present = std::any_of(
+        contracts.begin(), contracts.end(), [&](const core::HelperSemanticContract& contract) {
+          return contract.entry_label == target_label && contract.admitted_input.valid() &&
+                 contract.admitted_input.minimum == 0 && contract.admitted_input.maximum == 0;
+        });
+    if (already_present)
+      continue;
+    const auto semantic =
+        core::helper_semantic_one_based_modulo(core::helper_semantic_input(), width);
+    const std::optional<std::string> fingerprint =
+        helper_alias_body_fingerprint(items, target_label);
+    const std::optional<std::string> body_key =
+        core::helper_semantic_alias_body_key(items, target_label);
+    if (!semantic || !fingerprint.has_value() || fingerprint->empty() ||
+        !body_key.has_value() ||
+        !core::helper_semantic_decimal_execution_exact(semantic, exact_zero_domain)) {
+      continue;
+    }
+    core::HelperSemanticContract target;
+    target.entry_label = target_label;
+    target.expression = semantic;
+    target.admitted_input = exact_zero_domain;
+    target.input_decimal_derivation_exact = true;
+    target.input_zero_canonical_positive = true;
+    target.decimal_execution_exact = true;
+    target.hidden_x2_return_sync_proved = true;
+    target.x1_effect_proved = true;
+    target.x1_effect_key = *fingerprint;
+    target.certified_body_key = *body_key;
+    contracts.push_back(std::move(target));
+  }
   return contracts;
 }
 
@@ -48438,15 +48472,21 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
               std::max(certified_domain.maximum, contract.admitted_input.maximum);
         }
       }
+      const std::string detail = certified_call_sites > 0 && certified_domain.valid()
+                                     ? "Certified " + std::to_string(certified_call_sites) +
+                                           " direct helper call-site(s) with finite integral "
+                                           "union [" +
+                                           std::to_string(certified_domain.minimum) + ", " +
+                                           std::to_string(certified_domain.maximum) +
+                                           "]; issued " +
+                                           std::to_string(semantic_alias_contracts.size()) +
+                                           " typed semantic contract(s)."
+                                     : "Issued " +
+                                           std::to_string(semantic_alias_contracts.size()) +
+                                           " typed generated-helper contract(s) on exact "
+                                           "compiler-proved domains.";
       context.optimizations.push_back(OptimizationReport{
-          .name = "helper-semantic-alias-domain-proof",
-          .detail = "Certified " + std::to_string(certified_call_sites) +
-                    " direct helper call-site(s) with finite integral union [" +
-                    std::to_string(certified_domain.minimum) + ", " +
-                    std::to_string(certified_domain.maximum) + "]; issued " +
-                    std::to_string(semantic_alias_contracts.size()) +
-                    " typed semantic contract(s) from flow-sensitive interprocedural proof.",
-      });
+          .name = "helper-semantic-alias-domain-proof", .detail = detail});
     }
   }
 
@@ -49367,6 +49407,13 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
     const std::vector<MachineItem>& terminal_input_items =
         symbolized_terminal_input.has_value() ? *symbolized_terminal_input
                                               : normalized_terminal_items;
+    std::vector<core::HelperSemanticContract> terminal_semantic_contracts;
+    for (const core::HelperSemanticContract& contract : semantic_alias_contracts) {
+      const auto refreshed =
+          refresh_helper_semantic_alias_contracts(terminal_input_items, {contract});
+      if (refreshed.has_value() && refreshed->size() == 1U)
+        terminal_semantic_contracts.push_back(refreshed->front());
+    }
     const core::AuthoritativePostLayoutControlFlow terminal_input_flow =
         core::build_post_layout_control_flow(terminal_input_items, terminal_flow_options);
     if (terminal_input_flow.proved) {
@@ -49375,7 +49422,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
               terminal_input_items, terminal_layout_preloads, terminal_input_flow,
               core::TerminalCyclicLayoutOptions{
                   .address_space_model = address_space_model_for_options(options),
-                  .enable_return_alias = true});
+                  .enable_return_alias = true,
+                  .helper_semantic_contracts = &terminal_semantic_contracts});
       if (terminal_layout.applied > 0 && terminal_layout.plan.final_artifact_proved) {
         auto terminal_rebind_options = pass_options;
         for (const PreloadReport& preload : terminal_layout_preloads)
@@ -49461,13 +49509,19 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                                            rebound_flow.optimizations.begin(),
                                            rebound_flow.optimizations.end());
           post_layout_optimizations.push_back(core::passes::AppliedOptimization{
-              .name = terminal_layout.plan.return_alias_proved
-                          ? "terminal-return-alias"
-                          : "terminal-cyclic-layout",
-              .detail = terminal_layout.plan.return_alias_proved
-                            ? "Removed one direct conditional address cell after proving an "
-                              "equivalent relocated return target."
-                            : "Removed " +
+              .name = terminal_layout.plan.semantic_return_alias_proved
+                          ? "terminal-semantic-return-alias"
+                          : terminal_layout.plan.return_alias_proved
+                                ? "terminal-return-alias"
+                                : "terminal-cyclic-layout",
+              .detail = terminal_layout.plan.semantic_return_alias_proved
+                            ? "Removed one direct conditional address cell after proving a "
+                              "typed zero-domain helper return, stack ABI compatibility, and "
+                              "complete continuation convergence."
+                            : terminal_layout.plan.return_alias_proved
+                                  ? "Removed one direct conditional address cell after proving "
+                                    "an equivalent relocated return target."
+                                  : "Removed " +
                                   std::to_string(terminal_layout.removed_cells) +
                                   " cell(s) after proving a generic terminal report tail" +
                                   (terminal_layout.plan.cyclic_proved

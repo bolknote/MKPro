@@ -1,9 +1,12 @@
 #include "mkpro/core/terminal_cyclic_layout.hpp"
 
+#include "mkpro/core/stack_value_equivalence.hpp"
+
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/opcodes.hpp"
 
 #include <algorithm>
+#include <array>
 #include <compare>
 #include <deque>
 #include <exception>
@@ -1146,6 +1149,487 @@ fixed_protocol_addresses(const std::vector<PostLayoutExternalEntryState>& entrie
   return std::vector<int>(addresses.begin(), addresses.end());
 }
 
+struct StackRelation {
+  std::array<std::array<bool, 4>, 4> equal{};
+
+  static StackRelation unknown() {
+    StackRelation result;
+    for (std::size_t index = 0; index < result.equal.size(); ++index)
+      result.equal.at(index).at(index) = true;
+    return result;
+  }
+
+  bool operator==(const StackRelation&) const = default;
+};
+
+StackRelation remap_stack_relation(const StackRelation& input,
+                                   const std::array<int, 4>& sources) {
+  StackRelation result;
+  for (std::size_t left = 0; left < sources.size(); ++left) {
+    for (std::size_t right = 0; right < sources.size(); ++right) {
+      result.equal.at(left).at(right) =
+          left == right ||
+          (sources.at(left) >= 0 && sources.at(right) >= 0 &&
+           input.equal.at(static_cast<std::size_t>(sources.at(left)))
+               .at(static_cast<std::size_t>(sources.at(right))));
+    }
+  }
+  return result;
+}
+
+bool relation_transfer(StackRelation& relation, const MachineItem& item) {
+  if (direct_recall_register(item).has_value()) {
+    relation = remap_stack_relation(relation, {-1, 0, 1, 2});
+    return true;
+  }
+  const OpcodeInfo& info = opcode_by_code(item.opcode);
+  switch (info.stack_effect) {
+    case StackEffect::Preserves:
+      for (std::size_t index = 1; index < 4; ++index) {
+        relation.equal.at(0).at(index) = false;
+        relation.equal.at(index).at(0) = false;
+      }
+      return true;
+    case StackEffect::Shifts:
+      relation = remap_stack_relation(relation, {-1, 0, 1, 2});
+      return true;
+    case StackEffect::ConsumeYDrop:
+      relation = remap_stack_relation(relation, {-1, 2, 3, 3});
+      return true;
+    case StackEffect::ConsumeYKeep:
+      relation = remap_stack_relation(relation, {-1, 1, 2, 3});
+      return true;
+    case StackEffect::Exposes:
+      relation = remap_stack_relation(relation, {1, 2, 3, 3});
+      return true;
+    case StackEffect::Barrier:
+    case StackEffect::Unknown:
+      relation = StackRelation::unknown();
+      return true;
+  }
+  return false;
+}
+
+bool meet_stack_relation(StackRelation& destination, const StackRelation& source) {
+  bool changed = false;
+  for (std::size_t left = 0; left < 4; ++left) {
+    for (std::size_t right = 0; right < 4; ++right) {
+      const bool merged = destination.equal.at(left).at(right) &&
+                          source.equal.at(left).at(right);
+      changed = changed || merged != destination.equal.at(left).at(right);
+      destination.equal.at(left).at(right) = merged;
+    }
+  }
+  return changed;
+}
+
+bool semantic_flow_opcode(int opcode) {
+  return opcode == kJumpOpcode || opcode == kCallOpcode || opcode == kReturnOpcode ||
+         (opcode >= kDirectConditionFirst && opcode <= kDirectConditionLast) ||
+         is_indirect_flow_opcode(opcode);
+}
+
+bool condition_stack_has_equal_z_t(
+    const std::vector<MachineItem>& items, const ArtifactIndex& index,
+    const AuthoritativePostLayoutControlFlow& control, int condition_address,
+    const TerminalCyclicLayoutOptions& options, std::vector<std::string>& reasons) {
+  std::deque<ExecutionState> pending;
+  for (const PostLayoutExternalEntryState& entry : control.external_entries) {
+    std::vector<int> returns;
+    for (const PostLayoutCommandIdentity& slot : entry.return_stack)
+      returns.push_back(slot.address);
+    pending.push_back(ExecutionState{.pc = entry.entry.address, .returns = std::move(returns)});
+  }
+
+  std::set<ExecutionState> states;
+  std::map<ExecutionState, std::set<ExecutionState>> edges;
+  std::map<ExecutionState, std::set<ExecutionState>> predecessors;
+  std::set<ExecutionState> targets;
+  while (!pending.empty()) {
+    ExecutionState state = std::move(pending.front());
+    pending.pop_front();
+    if (!states.insert(state).second)
+      continue;
+    if (static_cast<int>(states.size()) > options.maximum_execution_states) {
+      add_reason(reasons, "semantic return stack proof exceeds the execution-state budget");
+      return false;
+    }
+    if (state.pc == condition_address)
+      targets.insert(state);
+    std::vector<std::string> ignored;
+    for (ExecutionState successor :
+         state_successors(items, index, control, state, options, ignored)) {
+      edges[state].insert(successor);
+      predecessors[successor].insert(state);
+      pending.push_back(std::move(successor));
+    }
+  }
+  if (targets.empty()) {
+    add_reason(reasons, "semantic return condition is unreachable");
+    return false;
+  }
+
+  std::set<ExecutionState> relevant = targets;
+  pending = std::deque<ExecutionState>(targets.begin(), targets.end());
+  while (!pending.empty()) {
+    const ExecutionState state = pending.front();
+    pending.pop_front();
+    for (const ExecutionState& predecessor : predecessors[state]) {
+      if (relevant.insert(predecessor).second)
+        pending.push_back(predecessor);
+    }
+  }
+
+  std::map<ExecutionState, StackRelation> facts;
+  const auto merge = [&](const ExecutionState& state, const StackRelation& relation,
+                         std::deque<ExecutionState>& work) {
+    const auto [found, inserted] = facts.emplace(state, relation);
+    if (inserted || meet_stack_relation(found->second, relation))
+      work.push_back(state);
+  };
+  std::deque<ExecutionState> work;
+  for (const PostLayoutExternalEntryState& entry : control.external_entries) {
+    std::vector<int> returns;
+    for (const PostLayoutCommandIdentity& slot : entry.return_stack)
+      returns.push_back(slot.address);
+    const ExecutionState state{.pc = entry.entry.address, .returns = std::move(returns)};
+    if (relevant.contains(state))
+      merge(state, StackRelation::unknown(), work);
+  }
+  while (!work.empty()) {
+    const ExecutionState state = work.front();
+    work.pop_front();
+    const auto cell = index.cell_items.find(state.pc);
+    if (cell == index.cell_items.end() || items.at(cell->second).kind != MachineItemKind::Op) {
+      add_reason(reasons, "semantic return stack proof reaches a non-command cell");
+      return false;
+    }
+    StackRelation output = facts.at(state);
+    const MachineItem& item = items.at(cell->second);
+    const bool stack_preserving_store =
+        (item.opcode >= kDirectStoreFirst && item.opcode <= kDirectStoreLast) ||
+        item.opcode == 0x4f || is_indirect_store_opcode(item.opcode);
+    if (!semantic_flow_opcode(item.opcode) && !stack_preserving_store &&
+        !relation_transfer(output, item)) {
+      add_reason(reasons, "semantic return stack proof reaches an unknown stack effect");
+      return false;
+    }
+    for (const ExecutionState& successor : edges[state]) {
+      if (relevant.contains(successor))
+        merge(successor, output, work);
+    }
+  }
+
+  for (const ExecutionState& target : targets) {
+    const auto fact = facts.find(target);
+    if (fact == facts.end() || !fact->second.equal.at(2).at(3)) {
+      add_reason(reasons, "semantic helper sticky-T ABI requires an unproved Z=T precondition");
+      return false;
+    }
+  }
+  return true;
+}
+
+struct SemanticContinuationState {
+  ExecutionState execution;
+  StackValueEqualityState equality;
+  bool x1_equal = false;
+
+  bool operator<(const SemanticContinuationState& other) const {
+    return std::tie(execution, equality.stack_equal, equality.x2_equal, x1_equal) <
+           std::tie(other.execution, other.equality.stack_equal, other.equality.x2_equal,
+                    other.x1_equal);
+  }
+};
+
+bool semantic_continuations_converge(
+    const std::vector<MachineItem>& items, const ArtifactIndex& index,
+    const AuthoritativePostLayoutControlFlow& control,
+    const std::vector<std::vector<int>>& return_stacks,
+    const TerminalCyclicLayoutOptions& options, std::vector<std::string>& reasons) {
+  std::map<SemanticContinuationState, int> status;
+  std::size_t visited = 0;
+  std::function<bool(SemanticContinuationState)> prove =
+      [&](SemanticContinuationState state) -> bool {
+    if (stack_values_fully_equal(state.equality) && state.x1_equal)
+      return true;
+    const auto known = status.find(state);
+    if (known != status.end())
+      return known->second == 2;
+    if (++visited > static_cast<std::size_t>(options.maximum_execution_states)) {
+      add_reason(reasons, "semantic return convergence exceeds the execution-state budget");
+      return false;
+    }
+    status.emplace(state, 1);
+    const auto cell = index.cell_items.find(state.execution.pc);
+    if (cell == index.cell_items.end() || items.at(cell->second).kind != MachineItemKind::Op) {
+      add_reason(reasons, "semantic return continuation reaches a non-command cell");
+      return false;
+    }
+    const MachineItem& item = items.at(cell->second);
+    if (item.manual_interaction.has_value() || item.opcode == kStopOpcode) {
+      add_reason(reasons, "semantic return difference reaches an observable interaction");
+      return false;
+    }
+
+    const bool flow = semantic_flow_opcode(item.opcode);
+    const bool conditional =
+        (item.opcode >= kDirectConditionFirst && item.opcode <= kDirectConditionLast) ||
+        is_indirect_conditional_opcode(item.opcode);
+    if (conditional && !state.equality.stack_equal.at(0)) {
+      add_reason(reasons, "semantic return difference reaches a conditional predicate");
+      return false;
+    }
+    if (flow && (item.opcode == kCallOpcode || item.opcode == kReturnOpcode ||
+                 is_indirect_call_opcode(item.opcode))) {
+      add_reason(reasons, "semantic return difference crosses an unproved call/return");
+      return false;
+    }
+
+    const bool direct_store =
+        (item.opcode >= kDirectStoreFirst && item.opcode <= kDirectStoreLast) ||
+        item.opcode == 0x4f;
+    if (!state.x1_equal) {
+      const bool visible_equal = std::all_of(state.equality.stack_equal.begin(),
+                                             state.equality.stack_equal.end(),
+                                             [](bool value) { return value; });
+      if (visible_equal &&
+          helper_semantic_physical_x1_reconverges_from_equal_visible_state(item.opcode)) {
+        state.x1_equal = true;
+      } else if (!flow && !direct_store &&
+                 !helper_semantic_physical_x1_preserves_equal_visible_state(item.opcode)) {
+        add_reason(reasons, "semantic return physical X1 difference is observed before convergence");
+        return false;
+      }
+    }
+
+    if (!flow) {
+      StackValueEqualityStepKind kind = StackValueEqualityStepKind::Plain;
+      if (direct_recall_register(item).has_value())
+        kind = StackValueEqualityStepKind::Recall;
+      else if (direct_store)
+        kind = StackValueEqualityStepKind::Store;
+      if (transfer_stack_value_equality(state.equality, item.opcode, kind) ==
+          StackValueEqualityTransfer::Rejected) {
+        add_reason(reasons, "semantic return stack difference is consumed before convergence");
+        return false;
+      }
+    }
+    if (stack_values_fully_equal(state.equality) && state.x1_equal) {
+      status[state] = 2;
+      return true;
+    }
+
+    std::vector<std::string> successor_reasons;
+    const std::vector<ExecutionState> successors =
+        state_successors(items, index, control, state.execution, options, successor_reasons);
+    if (successors.empty()) {
+      add_reason(reasons, "semantic return continuation exits before convergence");
+      return false;
+    }
+    for (const ExecutionState& successor : successors) {
+      SemanticContinuationState next = state;
+      next.execution = successor;
+      const auto active = status.find(next);
+      if (active != status.end() && active->second == 1) {
+        add_reason(reasons, "semantic return continuation cycles before convergence");
+        return false;
+      }
+      if (!prove(std::move(next)))
+        return false;
+    }
+    status[state] = 2;
+    return true;
+  };
+
+  for (const std::vector<int>& stack : return_stacks) {
+    ExecutionState continuation;
+    continuation.returns = stack;
+    if (!continuation.returns.empty()) {
+      continuation.pc = continuation.returns.back();
+      continuation.returns.pop_back();
+    } else if (control.empty_return_target.has_value()) {
+      continuation.pc = control.empty_return_target->address;
+    } else {
+      add_reason(reasons, "semantic return has no proved caller continuation");
+      return false;
+    }
+    if (!prove(SemanticContinuationState{.execution = std::move(continuation)}))
+      return false;
+  }
+  return true;
+}
+
+std::optional<std::size_t> helper_contract_entry_item(
+    const std::vector<MachineItem>& items, const std::string& label) {
+  std::optional<std::size_t> label_item;
+  for (std::size_t item = 0; item < items.size(); ++item) {
+    if (items.at(item).kind != MachineItemKind::Label || items.at(item).name != label)
+      continue;
+    if (label_item.has_value())
+      return std::nullopt;
+    label_item = item;
+  }
+  if (!label_item.has_value())
+    return std::nullopt;
+  const std::optional<std::size_t> entry = next_cell_item(items, *label_item);
+  return entry.has_value() && items.at(*entry).kind == MachineItemKind::Op ? entry
+                                                                          : std::nullopt;
+}
+
+bool exact_zero_helper_contract(const std::vector<MachineItem>& items,
+                                const HelperSemanticContract& contract) {
+  if (!contract.expression || !contract.admitted_input.valid() ||
+      contract.admitted_input.minimum != 0 || contract.admitted_input.maximum != 0 ||
+      !contract.input_decimal_derivation_exact || !contract.input_zero_canonical_positive ||
+      !contract.decimal_execution_exact || !contract.hidden_x2_return_sync_proved ||
+      !contract.x1_effect_proved || contract.certified_body_key.empty() ||
+      contract.abi != HelperMachineAbi::UnaryXPreserveYZStickyZReturnSync ||
+      !helper_semantic_decimal_execution_exact(contract.expression, contract.admitted_input)) {
+    return false;
+  }
+  const std::optional<std::string> body_key =
+      helper_semantic_alias_body_key(items, contract.entry_label);
+  return body_key.has_value() && *body_key == contract.certified_body_key;
+}
+
+std::optional<TerminalCyclicLayoutResult> rewrite_terminal_semantic_return_alias(
+    const std::vector<MachineItem>& items, const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const TerminalCyclicLayoutOptions& options,
+    std::vector<std::string>* rejection_reasons) {
+  const auto reject = [&](std::string reason) {
+    if (rejection_reasons != nullptr)
+      add_reason(*rejection_reasons, "semantic return alias: " + std::move(reason));
+  };
+  if (options.helper_semantic_contracts == nullptr ||
+      options.helper_semantic_contracts->empty()) {
+    reject("no typed helper contracts are available");
+    return std::nullopt;
+  }
+  const ArtifactIndex index = index_artifact(items);
+  const std::vector<TailCandidate> tails =
+      discover_tail_candidates(items, index, options.address_space_model, false);
+  const std::map<int, std::string> selectors = unique_stable_preloads(preloads);
+  for (const TailCandidate& tail : tails) {
+    if (items.at(tail.stop).stop_disposition != StopDisposition::Terminal)
+      continue;
+    std::vector<std::string> local_reasons;
+    const int condition_address = index.item_addresses.at(tail.condition);
+    const std::vector<std::vector<int>> return_stacks = reachable_return_stacks(
+        items, index, control_flow, condition_address, options, local_reasons);
+    if (!local_reasons.empty() || return_stacks.empty() ||
+        !condition_stack_has_equal_z_t(items, index, control_flow, condition_address, options,
+                                       local_reasons) ||
+        !semantic_continuations_converge(items, index, control_flow, return_stacks, options,
+                                         local_reasons)) {
+      for (const std::string& reason : local_reasons)
+        reject(reason);
+      continue;
+    }
+
+    for (const auto& [selector, raw_value] : selectors) {
+      if (!selector_is_unwritten(items, selector, control_flow))
+        continue;
+      const std::optional<int> selector_target = raw_selector_physical_target(
+          register_text(selector), raw_value, options.address_space_model);
+      if (!selector_target.has_value())
+        continue;
+      for (const HelperSemanticContract& contract : *options.helper_semantic_contracts) {
+        if (!exact_zero_helper_contract(items, contract))
+          continue;
+        const std::optional<std::size_t> helper =
+            helper_contract_entry_item(items, contract.entry_label);
+        if (!helper.has_value() || *helper >= tail.operand ||
+            index.item_addresses.at(*helper) != *selector_target) {
+          continue;
+        }
+
+        const int indirect_opcode = 0x70 + selector;
+        const OpcodeInfo& direct = opcode_by_code(items.at(tail.condition).opcode);
+        const OpcodeInfo& indirect = opcode_by_code(indirect_opcode);
+        if (direct.stack_effect != indirect.stack_effect ||
+            !direct.conditional_x2_effect.has_value() ||
+            !indirect.conditional_x2_effect.has_value() ||
+            direct.conditional_x2_effect->jump != indirect.conditional_x2_effect->jump ||
+            indirect.conditional_x2_effect->jump != X2Effect::Preserves) {
+          continue;
+        }
+
+        bool selector_flows_match = true;
+        for (const auto& [source, targets] : control_flow.indirect_flow_targets) {
+          if (source >= items.size() || items.at(source).kind != MachineItemKind::Op ||
+              encoded_register(items.at(source).opcode) != selector)
+            continue;
+          if (targets.empty() ||
+              std::any_of(targets.begin(), targets.end(),
+                          [&](const PostLayoutCommandIdentity& target) {
+                            return target.item_index != *helper;
+                          })) {
+            selector_flows_match = false;
+            break;
+          }
+        }
+        if (!selector_flows_match)
+          continue;
+
+        std::vector<std::optional<std::size_t>> relocation(items.size());
+        std::vector<MachineItem> rewritten;
+        rewritten.reserve(items.size() - 1U);
+        for (std::size_t old_item = 0; old_item < items.size(); ++old_item) {
+          if (old_item == tail.operand)
+            continue;
+          relocation.at(old_item) = rewritten.size();
+          MachineItem item = items.at(old_item);
+          if (old_item == tail.condition) {
+            item.opcode = indirect_opcode;
+            item.name = indirect.name;
+            item.comment = "proved semantic-return alias";
+          }
+          rewritten.push_back(std::move(item));
+        }
+        const ItemRelocation relocate = [relocation](std::size_t old_item)
+            -> std::optional<std::size_t> {
+          return old_item < relocation.size() ? relocation.at(old_item) : std::nullopt;
+        };
+        const std::size_t new_condition = *relocation.at(tail.condition);
+        const std::size_t new_helper = *relocation.at(*helper);
+        ReboundArtifact rebound = rebind_control_flow_after_relocation(
+            items, std::move(rewritten), control_flow, relocate, {tail.operand},
+            {tail.condition},
+            {{.source_item = new_condition, .target_items = {new_helper}}}, options);
+        if (!rebound.proved) {
+          for (const std::string& reason : rebound.reasons)
+            reject(reason);
+          continue;
+        }
+
+        TerminalCyclicLayoutResult result;
+        result.items = std::move(rebound.items);
+        result.plan.return_alias_proved = true;
+        result.plan.semantic_return_alias_proved = true;
+        result.plan.final_artifact_proved = true;
+        result.plan.input_cells = index.cells;
+        result.plan.output_cells = index.cells - 1;
+        result.plan.removed_cells = 1;
+        result.plan.raw_selector =
+            build_raw_selector(selector, raw_value, true, *selector_target);
+        result.plan.final_control_flow = std::move(rebound.control_flow);
+        result.applied = 1;
+        result.removed_cells = 1;
+        result.optimizations.push_back(passes::AppliedOptimization{
+            .name = "terminal-semantic-return-alias",
+            .detail = "Replaced a direct return operand with a typed zero-domain helper "
+                      "after proving stack ABI compatibility and continuation convergence.",
+        });
+        return result;
+      }
+    }
+  }
+  reject("no selector/helper pair satisfies every semantic return proof");
+  return std::nullopt;
+}
+
 std::optional<TerminalCyclicLayoutResult> rewrite_terminal_return_alias(
     const std::vector<MachineItem>& items, const std::vector<PreloadReport>& preloads,
     const AuthoritativePostLayoutControlFlow& control_flow,
@@ -2001,6 +2485,12 @@ optimize_terminal_cyclic_layout(const std::vector<MachineItem>& items,
       if (const std::optional<TerminalCyclicLayoutResult> alias =
               rewrite_terminal_return_alias(items, preloads, control_flow, options,
                                             &result.plan.reasons);
+          alias.has_value()) {
+        return *alias;
+      }
+      if (const std::optional<TerminalCyclicLayoutResult> alias =
+              rewrite_terminal_semantic_return_alias(items, preloads, control_flow, options,
+                                                     &result.plan.reasons);
           alias.has_value()) {
         return *alias;
       }

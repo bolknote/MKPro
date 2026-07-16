@@ -2,6 +2,7 @@
 
 #include "mkpro/core/cyclic_end_return.hpp"
 #include "mkpro/core/formal_address.hpp"
+#include "mkpro/core/helper_semantic_alias.hpp"
 #include "mkpro/core/ir.hpp"
 #include "mkpro/core/passes/helpers.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
@@ -20,6 +21,7 @@ struct TerminalCyclicLayoutOptions {
   int maximum_return_depth = 5;
   int maximum_execution_states = 20000;
   bool enable_return_alias = false;
+  const std::vector<HelperSemanticContract>* helper_semantic_contracts = nullptr;
 };
 
 // Audit record produced entirely by the verifier.  The three legacy proof
@@ -29,6 +31,7 @@ struct TerminalCyclicLayoutOptions {
 // maps.
 struct TerminalCyclicLayoutPlan {
   bool return_alias_proved = false;
+  bool semantic_return_alias_proved = false;
   bool terminal_proved = false;
   bool cyclic_proved = false;
   bool final_artifact_proved = false;
