@@ -443,6 +443,7 @@ struct PackedHammingKernel {
   std::string half;
   int digits = 0;
   int divisor = 0;
+  int bias = 0;
   int line = 0;
 };
 
@@ -464,12 +465,33 @@ std::optional<PackedHammingKernel> match_hamming_kernel(const V2Program& program
     return std::nullopt;
   }
   const Expression& quotient = return_expression->args.front();
-  if (!expression_is_identifier(*quotient.left, fold->accumulator))
-    return std::nullopt;
+  const Expression* numerator = quotient.left.get();
+  double bias_value = 0.0;
+  if (!expression_is_identifier(*numerator, fold->accumulator)) {
+    if (!binary_named(*numerator, "+"))
+      return std::nullopt;
+    const Expression* bias_expression = nullptr;
+    if (expression_is_identifier(*numerator->left, fold->accumulator))
+      bias_expression = numerator->right.get();
+    else if (expression_is_identifier(*numerator->right, fold->accumulator))
+      bias_expression = numerator->left.get();
+    if (bias_expression == nullptr)
+      return std::nullopt;
+    const std::optional<double> matched_bias = number_value(*bias_expression);
+    if (!matched_bias.has_value())
+      return std::nullopt;
+    bias_value = *matched_bias;
+  }
   const std::optional<double> divisor_value = number_value(*quotient.right);
+  const double bit_count = 3.0 * fold->digits;
+  const double effective_divisor = divisor_value.value_or(0.0) - bias_value;
+  // The final K[x] lowering is a single bit only when the quotient cannot
+  // reach two.  Requiring the effective threshold (divisor - bias) to be a
+  // strict majority of all reachable bits proves that bound as well as the
+  // original packed-Hamming threshold interpretation.
   if (!divisor_value.has_value() || std::floor(*divisor_value) != *divisor_value ||
-      *divisor_value <= 3.0 * fold->digits / 2.0 ||
-      *divisor_value > 3.0 * fold->digits) {
+      std::floor(bias_value) != bias_value || bias_value < 0.0 || bias_value > bit_count ||
+      effective_divisor <= bit_count / 2.0 || effective_divisor > bit_count) {
     return std::nullopt;
   }
 
@@ -517,6 +539,7 @@ std::optional<PackedHammingKernel> match_hamming_kernel(const V2Program& program
       .half = fold->half,
       .digits = fold->digits,
       .divisor = static_cast<int>(*divisor_value),
+      .bias = static_cast<int>(bias_value),
       .line = fold->line,
   };
 }
@@ -593,7 +616,8 @@ bool rewrite_horner_block(V2Program& program, std::vector<V2Statement>& statemen
                        kernel.counter,
                        std::to_string(*iterations),
                        kernel.accumulator,
-                       "0"},
+                       "0",
+                       std::to_string(kernel.bias)},
               .line = loop.line,
           };
           statements.at(index) = std::move(packed);
@@ -1033,16 +1057,19 @@ std::optional<std::size_t> match_dead_entered_value_for_packed_register(
   return entered_index;
 }
 
-bool match_history_prepend(const V2Program&, const V2Statement& statement,
-                           const OneHotUpdateMatch& update) {
+enum class HistoryPrependKind { MaskedFraction, DirectFraction };
+
+std::optional<HistoryPrependKind>
+match_history_prepend(const V2Program&, const V2Statement& statement,
+                      const OneHotUpdateMatch& update) {
   if (statement.kind != "v2_assign" || !statement.target.has_value() ||
       !statement.expr.has_value())
-    return false;
+    return std::nullopt;
   const std::optional<Expression> target = parse_expression_safe(*statement.target, statement.line);
   const std::optional<Expression> expression = parse_expression_safe(*statement.expr, statement.line);
   if (!target.has_value() || !expression.has_value() || target->kind != "identifier" ||
       target->name != update.sample || !call_named(*expression, "bit_or", 2U))
-    return false;
+    return std::nullopt;
   const Expression* shifted = nullptr;
   const Expression* encoded = nullptr;
   for (int order = 0; order < 2; ++order) {
@@ -1055,26 +1082,40 @@ bool match_history_prepend(const V2Program&, const V2Statement& statement,
     }
   }
   if (shifted == nullptr || encoded == nullptr)
-    return false;
-  const Expression* mask_call = nullptr;
+    return std::nullopt;
+  const Expression* fractional_history = nullptr;
   if (expression_is_number(*shifted->left, 2.0))
-    mask_call = shifted->right.get();
+    fractional_history = shifted->right.get();
   else if (expression_is_number(*shifted->right, 2.0))
-    mask_call = shifted->left.get();
-  if (mask_call == nullptr || !call_named(*mask_call, "bit_and", 2U))
-    return false;
-  const Expression* frac_mask = nullptr;
-  if (expression_is_identifier(mask_call->args.at(0), update.sample))
-    frac_mask = &mask_call->args.at(1);
-  else if (expression_is_identifier(mask_call->args.at(1), update.sample))
-    frac_mask = &mask_call->args.at(0);
-  if (frac_mask == nullptr || !call_named(*frac_mask, "frac", 1U) ||
-      !expression_same(frac_mask->args.front(), parse_expression_safe(update.full, statement.line).value()))
-    return false;
-  return (expression_is_number(*encoded->left, 10.0) &&
-          expression_is_identifier(*encoded->right, update.desired)) ||
-         (expression_is_number(*encoded->right, 10.0) &&
-          expression_is_identifier(*encoded->left, update.desired));
+    fractional_history = shifted->left.get();
+  if (fractional_history == nullptr)
+    return std::nullopt;
+
+  std::optional<HistoryPrependKind> kind;
+  if (call_named(*fractional_history, "frac", 1U) &&
+      expression_is_identifier(fractional_history->args.front(), update.sample)) {
+    kind = HistoryPrependKind::DirectFraction;
+  } else if (call_named(*fractional_history, "bit_and", 2U)) {
+    const Expression* frac_mask = nullptr;
+    if (expression_is_identifier(fractional_history->args.at(0), update.sample))
+      frac_mask = &fractional_history->args.at(1);
+    else if (expression_is_identifier(fractional_history->args.at(1), update.sample))
+      frac_mask = &fractional_history->args.at(0);
+    const std::optional<Expression> full = parse_expression_safe(update.full, statement.line);
+    if (frac_mask != nullptr && full.has_value() && call_named(*frac_mask, "frac", 1U) &&
+        expression_same(frac_mask->args.front(), *full)) {
+      kind = HistoryPrependKind::MaskedFraction;
+    }
+  }
+  if (!kind.has_value())
+    return std::nullopt;
+
+  const bool encoded_desired =
+      (expression_is_number(*encoded->left, 10.0) &&
+       expression_is_identifier(*encoded->right, update.desired)) ||
+      (expression_is_number(*encoded->right, 10.0) &&
+       expression_is_identifier(*encoded->left, update.desired));
+  return encoded_desired ? kind : std::nullopt;
 }
 
 bool rewrite_one_hot_block(V2Program& program, std::vector<V2Statement>& statements,
@@ -1089,8 +1130,11 @@ bool rewrite_one_hot_block(V2Program& program, std::vector<V2Statement>& stateme
       if (update.has_value()) {
         const std::optional<std::string> score =
             index > 0 ? match_binary_score(statements.at(index - 1U), *update) : std::nullopt;
-        const bool history = index + 3U < statements.size() &&
-                             match_history_prepend(program, statements.at(index + 3U), *update);
+        const std::optional<HistoryPrependKind> history_kind =
+            index + 3U < statements.size()
+                ? match_history_prepend(program, statements.at(index + 3U), *update)
+                : std::nullopt;
+        const bool history = history_kind.has_value();
         const std::optional<std::size_t> coalesced_entered =
             score.has_value()
                 ? match_dead_entered_value_for_packed_register(program, statements, index,
@@ -1113,6 +1157,8 @@ bool rewrite_one_hot_block(V2Program& program, std::vector<V2Statement>& stateme
                      kernel.accumulator, update->sample, update->full, history ? "1" : "0"},
             .line = statements.at(index).line,
         };
+        if (history_kind == HistoryPrependKind::DirectFraction)
+          prepare.args.back() = "2";
         V2Statement packed_update{
             .kind = kPackedBcdOneHotUpdateStatement,
             .target = indexed_text(update->bank, update->index),
@@ -1140,7 +1186,7 @@ bool rewrite_one_hot_block(V2Program& program, std::vector<V2Statement>& stateme
             for (std::size_t candidate = 0; candidate < begin; ++candidate) {
               V2Statement& possible = statements.at(candidate);
               if (possible.kind == kPackedBcdHornerThresholdStatement &&
-                  possible.args.size() == 11U && possible.args.at(0) == update->observed &&
+                  possible.args.size() == 12U && possible.args.at(0) == update->observed &&
                   possible.args.at(1) == update->index) {
                 possible.args.at(10) = "1";
                 rotated_horner = candidate;

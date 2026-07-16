@@ -43,7 +43,7 @@ program ZagadayTsifru {
       remaining--
     }
 
-    return int(ones / 11)
+    return int((ones + 8) / 19)
   }
 
   loop {
@@ -54,7 +54,7 @@ program ZagadayTsifru {
       neuron_index--
     }
 
-    // Input protocol: show the score; enter 0..7 and press ПП; then the
+    // Input protocol: show the score; enter 0..7 and press С/П; then the
     // calculator shows its already-computed prediction with a minus sign.
     show(score)
     player = entered(0, 7)
@@ -87,6 +87,6 @@ program ZagadayTsifru {
 
     // Keep seven inputs from newest to oldest: insert the new digit at the
     // left and discard the oldest right digit.
-    history = bit_or(2 + bit_and(history, frac(FULL_BITS)), 10 + player)
+    history = bit_or(2 + frac(history), 10 + player)
   }
 }

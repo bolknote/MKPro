@@ -8445,7 +8445,7 @@ void apply_packed_grid_register_hints(const V2Program& program,
 void apply_packed_bcd_kernel_register_hints_from_statement(const V2Statement& statement,
                                                            RegisterHints& hints) {
   if (statement.kind == core::kPackedBcdHornerThresholdStatement &&
-      statement.args.size() == 11U) {
+      statement.args.size() == 12U) {
     hints[statement.args.at(1)] = RegisterHint{.mode = RegisterHintMode::Fixed, .index = 0x0};
     hints[statement.args.at(7)] = RegisterHint{.mode = RegisterHintMode::Fixed, .index = 0xe};
   } else if (statement.kind == core::kPackedBcdBinaryPrepareStatement &&
@@ -32508,12 +32508,27 @@ bool lower_packed_bcd_argument(LoweringContext& context, const std::string& text
   return lower_expression_to_x(context, parse_expression(text, line));
 }
 
+std::string packed_bcd_indirect_memory_comment(const LoweringContext& context,
+                                               const std::string& comment,
+                                               const std::vector<int>& targets) {
+  if (targets.empty())
+    return comment;
+  std::ostringstream out;
+  out << comment << "; indirect-memory-targets=";
+  for (std::size_t index = 0; index < targets.size(); ++index) {
+    if (index > 0)
+      out << ",";
+    out << core::register_name_for_index(targets.at(index), context.feature_profile);
+  }
+  return out.str();
+}
+
 void emit_packed_bcd_indirect_recall(LoweringContext& context, const std::string& selector,
                                      int line, const std::string& comment,
                                      const std::vector<int>& targets) {
   const int index = register_index_for(context, selector);
   context.emitter.emit_op(0xd0 + index, "К П->X " + register_text_for(context, selector),
-                          comment, line);
+                          packed_bcd_indirect_memory_comment(context, comment, targets), line);
   context.emitter.items.back().indirect_memory_targets = targets;
   clear_current_x_facts(context);
 }
@@ -32523,14 +32538,15 @@ void emit_packed_bcd_indirect_store(LoweringContext& context, const std::string&
                                     const std::vector<int>& targets) {
   const int index = register_index_for(context, selector);
   context.emitter.emit_op(0xb0 + index, "К X->П " + register_text_for(context, selector),
-                          comment, line);
+                          packed_bcd_indirect_memory_comment(context, comment, targets), line);
   context.emitter.items.back().indirect_memory_targets = targets;
   clear_current_x_facts(context);
 }
 
 void emit_packed_bcd_horizontal_threshold(LoweringContext& context,
                                           const std::string& divisor,
-                                          const std::string& decade_register, int line) {
+                                          const std::string& decade_register, int bias,
+                                          int line) {
   context.emitter.emit_op(0x35, "К {x}", "packed BCD high bit plane", line);
   context.emitter.emit_op(0x10, "+", "packed BCD add middle bit plane", line);
   context.emitter.emit_op(0x35, "К {x}", "packed BCD merged high planes", line);
@@ -32544,8 +32560,19 @@ void emit_packed_bcd_horizontal_threshold(LoweringContext& context,
   context.emitter.emit_op(0x12, "*", "packed BCD shift next pair", line);
   context.emitter.emit_jump(0x5e, "F x=0", fold, "packed BCD horizontal fold", line);
   context.emitter.emit_op(0x10, "+", "packed BCD finish horizontal sum", line);
-  context.emitter.emit_number("8");
-  context.emitter.emit_op(0x11, "-", "packed BCD remove anchor", line);
+  // The horizontal fold leaves ones + 8.  Apply the source numerator bias
+  // relative to that built-in anchor before dividing.
+  constexpr int anchor = 8;
+  if (bias < anchor) {
+    context.emitter.emit_number(std::to_string(anchor - bias));
+    context.emitter.emit_op(0x11, "-",
+                            bias == 0 ? "packed BCD remove anchor"
+                                      : "packed BCD apply threshold bias",
+                            line);
+  } else if (bias > anchor) {
+    context.emitter.emit_number(std::to_string(bias - anchor));
+    context.emitter.emit_op(0x10, "+", "packed BCD apply threshold bias", line);
+  }
   emit_number_or_preload(context, divisor);
   context.emitter.emit_op(0x13, "/", "packed BCD threshold quotient", line);
   context.emitter.emit_op(0x34, "К [x]", "packed BCD threshold bit", line);
@@ -32554,12 +32581,16 @@ void emit_packed_bcd_horizontal_threshold(LoweringContext& context,
 
 bool lower_packed_bcd_horner_threshold(LoweringContext& context,
                                        const V2Statement& statement) {
-  if (!packed_bcd_internal_arity(context, statement, 11U))
+  if (!packed_bcd_internal_arity(context, statement, 12U))
     return false;
   const std::optional<int> digits = packed_bcd_internal_integer(statement.args.at(4));
+  const std::optional<int> divisor = packed_bcd_internal_integer(statement.args.at(5));
   const std::optional<int> iterations = packed_bcd_internal_integer(statement.args.at(8));
-  if (!digits.has_value() || !iterations.has_value() || *digits < 1 || *digits > 7 ||
-      *iterations < 1 || *iterations > 3 ||
+  const std::optional<int> bias = packed_bcd_internal_integer(statement.args.at(11));
+  if (!digits.has_value() || !divisor.has_value() || !iterations.has_value() ||
+      !bias.has_value() || *digits < 1 || *digits > 7 || *bias < 0 ||
+      *bias > 3 * *digits || *divisor - *bias <= 3 * *digits / 2 ||
+      *divisor - *bias > 3 * *digits || *iterations < 1 || *iterations > 3 ||
       !configure_packed_bcd_split_helper(context, statement.args.at(6))) {
     return false;
   }
@@ -32598,7 +32629,7 @@ bool lower_packed_bcd_horner_threshold(LoweringContext& context,
   context.emitter.emit_jump(0x53, "ПП", *context.packed_bcd_split_helper_label,
                             "packed BCD second split", statement.line);
   emit_packed_bcd_horizontal_threshold(context, statement.args.at(5), statement.args.at(9),
-                                       statement.line);
+                                       *bias, statement.line);
   context.emitter.emit_number("2");
   emit_recall(context, target);
   context.emitter.emit_op(0x12, "*", "packed BCD Horner shift", statement.line);
@@ -32631,13 +32662,19 @@ bool lower_packed_bcd_binary_prepare(LoweringContext& context,
   emit_recall(context, statement.args.at(4));
   context.emitter.emit_op(0x10, "+", "encode packed binary value", statement.line);
   emit_store(context, work_value, "packed binary value");
-  if (statement.args.at(7) == "1") {
-    if (!lower_packed_bcd_argument(context, statement.args.at(5), statement.line) ||
-        !lower_packed_bcd_argument(context, statement.args.at(6), statement.line)) {
+  if (statement.args.at(7) != "0") {
+    if (!lower_packed_bcd_argument(context, statement.args.at(5), statement.line))
+      return false;
+    if (statement.args.at(7) == "1") {
+      if (!lower_packed_bcd_argument(context, statement.args.at(6), statement.line))
+        return false;
+      context.emitter.emit_op(0x35, "К {x}", "packed history digit mask", statement.line);
+      context.emitter.emit_op(0x37, "К ∧", "drop oldest packed history digit", statement.line);
+    } else if (statement.args.at(7) == "2") {
+      context.emitter.emit_op(0x35, "К {x}", "drop packed history anchor", statement.line);
+    } else {
       return false;
     }
-    context.emitter.emit_op(0x35, "К {x}", "packed history digit mask", statement.line);
-    context.emitter.emit_op(0x37, "К ∧", "drop oldest packed history digit", statement.line);
     context.emitter.emit_number("2");
     context.emitter.emit_op(0x10, "+", "packed history anchor", statement.line);
     context.emitter.emit_op(0x38, "К ∨", "prepend packed history digit", statement.line);
@@ -32647,7 +32684,7 @@ bool lower_packed_bcd_binary_prepare(LoweringContext& context,
     return false;
   emit_recall(context, statement.args.at(4));
   context.emitter.emit_op(0x10, "+", "encode packed binary prediction", statement.line);
-  if (statement.args.at(7) == "1")
+  if (statement.args.at(7) != "0")
     emit_recall(context, work_value);
   context.emitter.emit_op(0x39, "К ⊕", "packed binary mismatch", statement.line);
   emit_store(context, work_mismatch, "packed binary mismatch");
@@ -41554,7 +41591,10 @@ bool lower_packed_bcd_helpers(LoweringContext& context) {
     context.emitter.emit_op(0xb0 + selector,
                             "К X->П " + register_text_for(context,
                                                            *context.packed_bcd_full_selector),
-                            "store packed BCD quotient through advancing selector");
+                            packed_bcd_indirect_memory_comment(
+                                context,
+                                "store packed BCD quotient through advancing selector",
+                                context.packed_bcd_full_store_targets));
     context.emitter.items.back().indirect_memory_targets =
         context.packed_bcd_full_store_targets;
     context.emitter.emit_op(0x25, "F reverse", "expose packed BCD low bit plane");
@@ -63222,6 +63262,17 @@ CompileResult compile_source_for_optimizer_profile(
     add_configured_candidate(
         std::move(candidate_options), "cheap-constant-materialization",
         "Synthesized a repeated-one BCD mask to free its preload register for final layout");
+    if (allow_aggressive_post_layout) {
+      CompileOptions aggressive_candidate_options = options;
+      aggressive_candidate_options.suppress_constant_preloads.insert("1111111.1");
+      aggressive_candidate_options.reserve_suppressed_constant_preload_slots.insert(
+          "1111111.1");
+      aggressive_candidate_options.aggressive_post_layout_indirect_flow = true;
+      add_configured_candidate(
+          std::move(aggressive_candidate_options),
+          "cheap-constant-materialization-aggressive-post-layout",
+          "Combined a synthesized repeated-one BCD mask with proven post-layout indirect flow");
+    }
   }
   auto add_fractional_selector_candidates_for_base =
       [&](const CompileOptions& base_options, std::set<std::string>& tried, std::string name,
