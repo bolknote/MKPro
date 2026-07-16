@@ -160,6 +160,30 @@ Fixture multi_anchor_fixture() {
 
   result.preloads.push_back(PreloadReport{.register_name = "8", .value = "20"});
   result.preloads.push_back(PreloadReport{.register_name = "9", .value = "30"});
+  result.preloads.push_back(PreloadReport{.register_name = "a", .value = "40"});
+  return result;
+}
+
+Fixture selector_omission_frontier_fixture() {
+  Fixture result;
+  result.items.push_back(MachineItem::label("selector_omission_entry"));
+  result.visible_stop = result.items.size();
+  result.items.push_back(stop());
+
+  for (int index = 0; index < 16; ++index) {
+    const std::string suffix = std::to_string(index);
+    const std::string helper = "selector_omission_helper_" + suffix;
+    result.items.push_back(MachineItem::label("selector_omission_caller_" + suffix));
+    result.items.push_back(op(0x53));
+    result.items.push_back(MachineItem::address(helper));
+    result.items.push_back(stop());
+    result.items.push_back(MachineItem::label(helper));
+    result.items.push_back(op(index % 10));
+    result.items.push_back(op(0x52));
+  }
+
+  result.preloads.push_back(PreloadReport{.register_name = "8", .value = "20"});
+  result.preloads.push_back(PreloadReport{.register_name = "9", .value = "30"});
   return result;
 }
 
@@ -657,6 +681,30 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
     const Observation after = observe(rewritten.items, rewritten.preloads);
     require(before.stopped && after.stopped && before.state == after.state,
             "joint natural-target layout must preserve the observable machine state");
+  }
+
+  {
+    const Fixture input = selector_omission_frontier_fixture();
+    const core::NaturalTargetComponentLayoutOptions options{
+        .maximum_subset_states = 20000,
+        .maximum_combination_states = 1,
+        .maximum_anchors = 2,
+    };
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input), options);
+    std::string reasons;
+    for (const std::string& reason : rewritten.plan.reasons) {
+      if (!reasons.empty())
+        reasons += " | ";
+      reasons += reason;
+    }
+    require(rewritten.plan.proved && rewritten.applied == 2 &&
+                rewritten.removed_cells == 2,
+            "a bounded best-first search should cover the greedy plan obtained by "
+            "omitting each conflicting selector: applied=" +
+                std::to_string(rewritten.applied) +
+                ", removed=" + std::to_string(rewritten.removed_cells) +
+                ", reason=" + (reasons.empty() ? std::string("none") : reasons));
   }
 
   for (const auto [calls, components] :

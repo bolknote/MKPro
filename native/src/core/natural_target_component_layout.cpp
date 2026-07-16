@@ -2809,35 +2809,112 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   visited.insert(initial.choices);
 
   std::vector<std::vector<NaturalTargetAnchorCandidate>> combinations;
-  std::size_t expanded_states = 0;
-  const std::size_t maximum_expanded_states =
-      options.maximum_subset_states >
-              std::numeric_limits<std::size_t>::max() / 32U
-          ? std::numeric_limits<std::size_t>::max()
-          : options.maximum_subset_states * 32U;
-  while (!pending.empty() && combinations.size() < options.maximum_subset_states &&
-         expanded_states < maximum_expanded_states) {
-    CombinationSearchState state = pending.top();
-    pending.pop();
-    ++expanded_states;
+  std::set<std::vector<std::size_t>> emitted_choice_states;
+  const auto append_combination = [&](const CombinationSearchState& state) {
     std::vector<NaturalTargetAnchorCandidate> anchors;
     std::set<std::size_t> used_targets;
-    bool valid = true;
     for (std::size_t group = 0; group < state.choices.size(); ++group) {
       const CombinationChoice& choice =
           choices_by_selector.at(group).at(state.choices.at(group));
       if (!choice.anchor.has_value())
         continue;
-      if (!used_targets.insert(choice.anchor->target_origin).second) {
-        valid = false;
-        break;
-      }
+      if (!used_targets.insert(choice.anchor->target_origin).second)
+        return false;
       anchors.push_back(*choice.anchor);
     }
     if (options.maximum_anchors > 0U && anchors.size() > options.maximum_anchors)
-      valid = false;
-    if (valid && !anchors.empty())
-      combinations.push_back(std::move(anchors));
+      return false;
+    if (anchors.empty() || !emitted_choice_states.insert(state.choices).second)
+      return false;
+    combinations.push_back(std::move(anchors));
+    return true;
+  };
+
+  const std::size_t maximum_expanded_states =
+      (options.maximum_combination_states == 0U
+           ? options.maximum_subset_states
+           : options.maximum_combination_states) >
+              std::numeric_limits<std::size_t>::max() / 32U
+          ? std::numeric_limits<std::size_t>::max()
+          : (options.maximum_combination_states == 0U
+                 ? options.maximum_subset_states
+                 : options.maximum_combination_states) *
+                32U;
+  const std::size_t maximum_combinations =
+      options.maximum_combination_states == 0U
+          ? options.maximum_subset_states
+          : options.maximum_combination_states;
+
+  // A high-scoring selector can make every jointly anchored layout impossible,
+  // while the best compatible plan excludes only that selector.  The ordinary
+  // score-first lattice may exhaust its bounded frontier before reaching the
+  // final `none` choice for a selector with many equally profitable targets.
+  // Preserve the exhaustive frontier below, but also cover each one-selector
+  // omission of its greedy state independently of that cap.
+  for (std::size_t omitted_group = 0; omitted_group < choices_by_selector.size();
+       ++omitted_group) {
+    const auto none = std::find_if(
+        choices_by_selector.at(omitted_group).begin(),
+        choices_by_selector.at(omitted_group).end(),
+        [](const CombinationChoice& choice) { return !choice.anchor.has_value(); });
+    if (none == choices_by_selector.at(omitted_group).end())
+      continue;
+    CombinationSearchState coverage_initial = initial;
+    coverage_initial.score -= choices_by_selector.at(omitted_group)
+                                  .at(coverage_initial.choices.at(omitted_group))
+                                  .score;
+    coverage_initial.choices.at(omitted_group) = static_cast<std::size_t>(
+        std::distance(choices_by_selector.at(omitted_group).begin(), none));
+
+    std::priority_queue<CombinationSearchState,
+                        std::vector<CombinationSearchState>,
+                        decltype(lower_priority)>
+        coverage_pending(lower_priority);
+    coverage_pending.push(coverage_initial);
+    std::set<std::vector<std::size_t>> coverage_visited;
+    coverage_visited.insert(coverage_initial.choices);
+    const std::size_t coverage_state_cap = std::max<std::size_t>(
+        1U, maximum_expanded_states /
+                std::max<std::size_t>(1U, choices_by_selector.size()));
+    const std::size_t selector_count = choices_by_selector.size();
+    const std::size_t coverage_combination_cap = std::max<std::size_t>(
+        1U, std::min(maximum_combinations /
+                         std::max<std::size_t>(1U, selector_count),
+                     selector_count * selector_count * selector_count));
+    std::size_t coverage_states = 0;
+    std::size_t coverage_combinations = 0;
+    while (!coverage_pending.empty() && coverage_states < coverage_state_cap &&
+           coverage_combinations < coverage_combination_cap) {
+      CombinationSearchState coverage = coverage_pending.top();
+      coverage_pending.pop();
+      ++coverage_states;
+      if (append_combination(coverage))
+        ++coverage_combinations;
+      for (std::size_t group = 0; group < coverage.choices.size(); ++group) {
+        if (group == omitted_group)
+          continue;
+        const std::size_t current = coverage.choices.at(group);
+        if (current + 1U >= choices_by_selector.at(group).size())
+          continue;
+        CombinationSearchState next = coverage;
+        next.score -= choices_by_selector.at(group).at(current).score;
+        ++next.choices.at(group);
+        next.score += choices_by_selector.at(group).at(next.choices.at(group)).score;
+        if (coverage_visited.insert(next.choices).second)
+          coverage_pending.push(std::move(next));
+      }
+    }
+  }
+
+  std::size_t expanded_states = 0;
+  std::size_t searched_combinations = 0;
+  while (!pending.empty() && searched_combinations < maximum_combinations &&
+         expanded_states < maximum_expanded_states) {
+    CombinationSearchState state = pending.top();
+    pending.pop();
+    ++expanded_states;
+    if (append_combination(state))
+      ++searched_combinations;
 
     for (std::size_t group = 0; group < state.choices.size(); ++group) {
       const std::size_t current = state.choices.at(group);
@@ -2863,17 +2940,20 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
       return left_score > right_score;
     if (left.size() != right.size())
       return left.size() > right.size();
-    for (std::size_t index = 0; index < left.size(); ++index) {
-      const auto left_key = std::tie(left.at(index).selector.register_index,
-                                     left.at(index).selector.fixed_target,
-                                     left.at(index).via_trampoline,
-                                     left.at(index).split_prefix_cells,
-                                     left.at(index).target_origin);
-      const auto right_key = std::tie(right.at(index).selector.register_index,
-                                      right.at(index).selector.fixed_target,
-                                      right.at(index).via_trampoline,
-                                      right.at(index).split_prefix_cells,
-                                      right.at(index).target_origin);
+    for (std::size_t candidate_index = 0; candidate_index < left.size();
+         ++candidate_index) {
+      const auto left_key =
+          std::tie(left.at(candidate_index).selector.register_index,
+                   left.at(candidate_index).selector.fixed_target,
+                   left.at(candidate_index).via_trampoline,
+                   left.at(candidate_index).split_prefix_cells,
+                   left.at(candidate_index).target_origin);
+      const auto right_key =
+          std::tie(right.at(candidate_index).selector.register_index,
+                   right.at(candidate_index).selector.fixed_target,
+                   right.at(candidate_index).via_trampoline,
+                   right.at(candidate_index).split_prefix_cells,
+                   right.at(candidate_index).target_origin);
       if (left_key != right_key)
         return left_key < right_key;
     }
