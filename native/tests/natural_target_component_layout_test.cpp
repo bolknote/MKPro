@@ -959,6 +959,29 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
             "runtime selector proof must reject decimal preload text whose MK-61 mantissa "
             "canonicalization changes the indirect target");
   }
+
+  {
+    Fixture input = fixture(2, 5, true, 99);
+    for (PreloadReport& preload : input.preloads) {
+      if (preload.register_name == "8")
+        preload.value = "-99999999";
+    }
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    require(rewritten.plan.proved && rewritten.applied == 2 &&
+                rewritten.plan.selector_register == "8" &&
+                rewritten.plan.natural_target == 99 &&
+                std::all_of(rewritten.plan.runtime_selectors.begin(),
+                            rewritten.plan.runtime_selectors.end(),
+                            [](const core::NaturalTargetRuntimeSelectorProof& proof) {
+                              return proof.register_name != "8" ||
+                                     (proof.delivered_preload == "-99999999" &&
+                                      proof.decoded_target == 99 &&
+                                      proof.typed_target_matches_runtime_decode);
+                            }),
+            "an exact signed eight-digit preload should retain its sign while serving as a "
+            "proved natural-target selector");
+  }
 }
 
 } // namespace mkpro::tests

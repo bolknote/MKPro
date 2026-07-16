@@ -605,9 +605,12 @@ bool is_literal_runtime_preload(const PreloadReport& preload) {
 bool has_exact_plain_decimal_address_projection(std::string_view value) {
   // The emulator/hardware stores only the first eight mantissa digits.  A raw
   // decimal decoder is authoritative only while every integer digit survives
-  // that delivery step.  Exotic/negative/exponent/hex spellings remain useful
-  // to programs, but need a separate canonical machine-value proof before a
-  // layout pass may trust them as addresses.
+  // that delivery step.  A leading minus is not a mantissa digit and therefore
+  // does not change that proof.  Exponent/hex spellings remain useful to
+  // programs, but need a separate canonical machine-value proof before a layout
+  // pass may trust them as addresses.
+  if (value.starts_with('-'))
+    value.remove_prefix(1U);
   const std::size_t dot = value.find('.');
   if (dot != std::string_view::npos && value.find('.', dot + 1U) != std::string_view::npos)
     return false;

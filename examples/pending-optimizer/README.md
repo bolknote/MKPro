@@ -81,6 +81,12 @@ mode may reject over-window programs earlier than the analysis path.
   fails exact CFG, return-stack, stack, X2, runtime-selector, or size proofs.
   Here it jointly shortens twelve calls while restoring one old flow, reducing
   the verified result from 149 to 144 cells; the remaining gap is 39 cells.
+- Exact signed decimal preloads whose complete integer mantissa survives the
+  MK-61 eight-digit delivery step can now serve as natural-target selectors.
+  The final machine decoder and runtime-selector proof remain authoritative;
+  exotic, truncated, mutable, or generated values still fail closed. The
+  current selected layout remains 145 cells because its five-anchor assignment
+  does not pass the bounded component geometry search.
 - Optimizer tests must use unrelated synthetic programs and local proof
   obligations. The tic-tac-toe fixture may lock only its size and observable
   UI; it must not select or justify an optimization by recognizing this game
