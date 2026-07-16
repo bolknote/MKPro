@@ -2427,6 +2427,16 @@ program GenericPackedScoreSharedReturnedIndexTail {
                            "x-param-packed-score-shared-returned-index-tail"),
           "generic packed_score lowering should share a returned-index tail for paired X-param "
           "score terms");
+  require(has_optimization(generic_packed_score_tail,
+                           "x-param-packed-score-shared-fallthrough-tail"),
+          "stack-only packed_score result should enter the shared tail once by call and once by "
+          "fallthrough");
+  require(count_steps_with_comment(generic_packed_score_tail,
+                                   "x-param packed_score shared returned-index tail") == 1,
+          "fallthrough lowering should retain only the first explicit shared-tail call");
+  require(count_steps_with_comment(generic_packed_score_tail,
+                                   "packed_score accumulator helper fallthrough tail call") == 1,
+          "fallthrough lowering should tail-call the accumulator helper exactly once");
   require(optimization_count(generic_packed_score_tail,
                              "x-param-packed-score-line-stack-accumulate") == 2,
           "generic packed_score shared tail should still report both line-first X-param score "
@@ -2434,6 +2444,56 @@ program GenericPackedScoreSharedReturnedIndexTail {
   require(generic_packed_score_tail.listing.find(
               "x-param packed_score shared returned-index tail") != std::string::npos,
           "generic packed_score shared tail should emit a shared returned-index helper call");
+
+  CompileOptions known_zero_packed_score_tail_options;
+  known_zero_packed_score_tail_options.analysis = true;
+  known_zero_packed_score_tail_options.disable_candidate_search = true;
+  known_zero_packed_score_tail_options.packed_score_accumulator_helpers = true;
+  const CompileResult known_zero_packed_score_tail = compile_source(R"mkpro(
+program KnownZeroPackedScoreSharedReturnedIndexTail {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    d: packed = 44447.4
+    gate: packed = 0
+    x: counter 0..5 = 4
+    y: counter 0..5 = 4
+    line: packed = 0
+    score: packed
+  }
+
+  fn score_move() {
+    score = sum(packed_score(a, x), packed_score(b, y))
+    normalize(x + y)
+    score += packed_score(c, line)
+    normalize(x - y)
+    score += packed_score(d, line)
+  }
+
+  fn normalize(raw_line) {
+    line = frac((raw_line + 3) / 4) * 4 + 1
+  }
+
+  loop {
+    unless bit_and(gate, 1) {
+      score_move()
+      halt(score)
+    }
+    halt(1)
+  }
+}
+)mkpro",
+                                                                    known_zero_packed_score_tail_options);
+  require(known_zero_packed_score_tail.implemented,
+          "known-zero packed_score shared-tail program should compile");
+  require(has_optimization(known_zero_packed_score_tail, "known-zero-proc-entry"),
+          "all-zero call sites should preserve zero through the procedure entry ABI");
+  require(has_optimization(known_zero_packed_score_tail, "known-zero-reuse"),
+          "packed_score accumulator should reuse the proved entry zero");
+  require(count_steps_with_comment(known_zero_packed_score_tail,
+                                   "packed_score accumulator zero") == 0,
+          "proved zero-X entry should eliminate the accumulator zero literal");
 
   const CompileResult packed_line_update_proc = compile_source(R"mkpro(
 program PackedLineUpdateProc {

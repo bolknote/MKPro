@@ -177,6 +177,7 @@ struct LoweringContext {
   std::map<std::string, int> register_index_by_name;
   std::map<std::string, const V2Rule*> rules;
   std::map<std::string, int> proc_call_counts;
+  std::map<std::string, int> known_zero_proc_call_counts;
   std::set<std::string> inline_statement_rules;
   std::set<std::pair<std::string, int>> terminal_underflow_unit_decrements;
   std::map<std::string, XParamProcLowering> x_param_procs;

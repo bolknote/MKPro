@@ -20958,6 +20958,10 @@ bool lower_packed_score_sequence_accumulator_run(LoweringContext& context,
         const auto emit_initial = [&]() {
           if (sequence_start->initial.has_value())
             return lower_expression_to_x(context, *sequence_start->initial);
+          if (emit_zero(context, std::string("packed_score accumulator zero"),
+                        statements.at(start).line)) {
+            return true;
+          }
           context.emitter.emit_number("0");
           if (!context.emitter.items.empty())
             context.emitter.items.back().comment = "packed_score accumulator zero";
@@ -26951,8 +26955,18 @@ bool simple_equality_operand(const Expression& expression) {
   return expression.kind == "identifier" || expression.kind == "number";
 }
 
-bool equality_true_fallthrough_leaves_zero(LoweringContext&, const V2Predicate& predicate,
+bool equality_true_fallthrough_leaves_zero(LoweringContext& context, const V2Predicate& predicate,
                                            bool negated, int line) {
+  const std::optional<NormalizedZeroComparison> normalized =
+      normalize_zero_comparison(context, predicate, negated, line);
+  if (normalized.has_value() && normalized->op == "==") {
+    if (normalized->expression.kind == "call") {
+      const std::string callee = lower_ascii(normalized->expression.callee);
+      if (callee == "coord_list_has" || callee == "__mkpro_negative_zero_ge")
+        return false;
+    }
+    return true;
+  }
   if (predicate.kind != "v2_compare")
     return false;
   const std::string effective_op = negated ? invert_comparison_op(predicate.op) : predicate.op;
@@ -30206,6 +30220,11 @@ bool lower_clock_wait_tick(LoweringContext& context, const V2Statement& statemen
   return true;
 }
 
+void record_known_zero_proc_call(LoweringContext& context, const V2Rule& rule) {
+  if (rule.params.empty() && context.emitter.current_x_known_zero)
+    ++context.known_zero_proc_call_counts[rule.name];
+}
+
 bool lower_invoke_statement(LoweringContext& context, const V2Statement& statement) {
   if (statement.kind != "v2_invoke" || !statement.name.has_value())
     return false;
@@ -30288,6 +30307,7 @@ bool lower_invoke_statement(LoweringContext& context, const V2Statement& stateme
     return true;
   }
 
+  record_known_zero_proc_call(context, rule);
   context.emitter.emit_jump(0x53, "ПП", function_label(rule.name), "proc call " + rule.name,
                             statement.line);
   context.optimizations.push_back(OptimizationReport{
@@ -30356,6 +30376,7 @@ void compile_block_call(LoweringContext& context, const std::string& block_name,
     });
     return;
   }
+  record_known_zero_proc_call(context, rule);
   context.emitter.emit_jump(0x53, "ПП", function_label(rule.name), "proc call " + rule.name, line);
   context.optimizations.push_back(OptimizationReport{
       .name = "proc-call-lowering",
@@ -30730,6 +30751,8 @@ bool lower_x_param_packed_score_shared_tail_rule(LoweringContext& context, const
   const auto emit_initial = [&]() {
     if (match->initial.has_value())
       return lower_expression_to_x(context, *match->initial);
+    if (emit_zero(context, std::string("packed_score accumulator zero"), match->line))
+      return true;
     context.emitter.emit_number("0");
     if (!context.emitter.items.empty())
       context.emitter.items.back().comment = "packed_score accumulator zero";
@@ -30746,8 +30769,8 @@ bool lower_x_param_packed_score_shared_tail_rule(LoweringContext& context, const
   context.emitter.current_x_known_zero = false;
 
   const std::string tail = context.emitter.fresh_label("x_param_packed_score_shared_tail");
-  const auto emit_tail_call = [&](const XParamPackedScoreAccumulationPlan& plan, int line,
-                                  bool negate_partial) -> bool {
+  const auto emit_tail_prefix = [&](const XParamPackedScoreAccumulationPlan& plan, int line,
+                                    bool negate_partial) -> bool {
     if (!lower_expression_preserving_previous_x_as_y(context, plan.line, line))
       return false;
     if (!lower_expression_preserving_previous_x_as_y(context, match->partial, line))
@@ -30755,6 +30778,12 @@ bool lower_x_param_packed_score_shared_tail_rule(LoweringContext& context, const
     if (negate_partial)
       context.emitter.emit_op(0x0b, "/-/", "x-param packed_score negative shared-tail partial",
                               line);
+    return true;
+  };
+  const auto emit_tail_call = [&](const XParamPackedScoreAccumulationPlan& plan, int line,
+                                  bool negate_partial) -> bool {
+    if (!emit_tail_prefix(plan, line, negate_partial))
+      return false;
     context.emitter.emit_jump(0x53, "ПП", tail, "x-param packed_score shared returned-index tail",
                               line);
     mark_current_x(context, match->target);
@@ -30764,10 +30793,19 @@ bool lower_x_param_packed_score_shared_tail_rule(LoweringContext& context, const
 
   if (!emit_tail_call(match->first, match->first_argument_line, match->first_negates_partial))
     return false;
-  if (!emit_tail_call(match->second, match->second_argument_line, match->second_negates_partial))
-    return false;
-
-  context.emitter.emit_op(0x52, "В/О", "x-param packed_score shared-tail return", match->line);
+  const bool stack_only_target = context.stack_only_state_fields.contains(match->target);
+  if (stack_only_target) {
+    if (!emit_tail_prefix(match->second, match->second_argument_line,
+                          match->second_negates_partial)) {
+      return false;
+    }
+  } else {
+    if (!emit_tail_call(match->second, match->second_argument_line,
+                        match->second_negates_partial)) {
+      return false;
+    }
+    context.emitter.emit_op(0x52, "В/О", "x-param packed_score shared-tail return", match->line);
+  }
   context.emitter.emit_label(tail);
   if (!lower_expression_preserving_previous_x_as_y(context, match->shared, match->line))
     return false;
@@ -30778,16 +30816,25 @@ bool lower_x_param_packed_score_shared_tail_rule(LoweringContext& context, const
     return false;
   if (!match->first.helper_label.has_value())
     return false;
-  context.emitter.emit_jump(0x53, "ПП", *match->first.helper_label,
-                            "packed_score accumulator helper", match->line);
-  if (context.stack_only_state_fields.contains(match->target)) {
+  if (stack_only_target) {
+    context.emitter.emit_jump(0x51, "БП", *match->first.helper_label,
+                              "packed_score accumulator helper fallthrough tail call",
+                              match->line);
     mark_current_x(context, match->target);
     context.emitter.current_x_known_zero = false;
+    context.optimizations.push_back(OptimizationReport{
+        .name = "x-param-packed-score-shared-fallthrough-tail",
+        .detail = "Entered the shared returned-index tail once by call and once by fallthrough, "
+                  "then tail-called the accumulator helper for stack-only result " +
+                  match->target + " in " + rule.name + ".",
+    });
   } else {
+    context.emitter.emit_jump(0x53, "ПП", *match->first.helper_label,
+                              "packed_score accumulator helper", match->line);
     emit_store(context, match->target, "set " + match->target);
+    context.emitter.emit_op(0x52, "В/О", "x-param packed_score shared-tail helper return",
+                            match->line);
   }
-  context.emitter.emit_op(0x52, "В/О", "x-param packed_score shared-tail helper return",
-                          match->line);
   context.optimizations.push_back(OptimizationReport{
       .name = "x-param-packed-score-shared-returned-index-tail",
       .detail = "Shared the returned-index packed_score() tail for " +
@@ -33485,6 +33532,20 @@ bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
 
   clear_current_x_facts(context);
   ProcedureBoundaryScope procedure_scope{context, function_label(rule.name)};
+  const int total_call_sites =
+      context.proc_call_counts.contains(rule.name) ? context.proc_call_counts.at(rule.name) : 0;
+  const int known_zero_call_sites = context.known_zero_proc_call_counts.contains(rule.name)
+                                        ? context.known_zero_proc_call_counts.at(rule.name)
+                                        : 0;
+  if (rule.params.empty() && total_call_sites > 0 &&
+      known_zero_call_sites == total_call_sites) {
+    context.emitter.current_x_known_zero = true;
+    context.optimizations.push_back(OptimizationReport{
+        .name = "known-zero-proc-entry",
+        .detail = "Preserved zero in X across all " + std::to_string(total_call_sites) +
+                  " call site(s) of " + rule.name + ".",
+    });
+  }
   if (!emit_stack_argument_function_entry_prefix(context, rule))
     return false;
   if (stack_argument_function_entry_is_primary(context, rule))
@@ -50253,6 +50314,8 @@ enum class CandidateGate {
 };
 
 int estimated_candidate_search_cost_ms(std::string_view name) {
+  if (name == "packed-score-accumulator-reverse-suffix-free-layout")
+    return 300;
   if (name == "call-count-proc-layout" || name == "size-desc-proc-layout" ||
       name == "reverse-proc-layout") {
     return 300;
@@ -50600,6 +50663,7 @@ void append_candidate_report_once(std::vector<CandidateReport>& reports,
 bool should_report_nonwinning_candidate(std::string_view name) {
   return name.find("callee-hole") != std::string_view::npos ||
          name == "packed-score-accumulator-helper" ||
+         name == "packed-score-accumulator-reverse-suffix-free-layout" ||
          name == "packed-score-accumulator-aggressive-post-layout" ||
          name == "packed-score-accumulator-stack-helper-entries" ||
          name == "stack-resident-helper-entries" ||
@@ -63730,6 +63794,15 @@ CompileResult compile_source_for_optimizer_profile(
         },
         "packed-score-accumulator-helper",
         "Tried stack-accumulator helpers for repeated packed_score() sum groups");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.packed_score_accumulator_helpers = true;
+          candidate_options.disable_return_suffix_gadget = true;
+          candidate_options.proc_layout_strategy = "reverse";
+        },
+        "packed-score-accumulator-reverse-suffix-free-layout",
+        "Combined packed_score stack accumulation with reverse procedure layout while keeping "
+        "the generic return-suffix outliner disabled");
     if (allow_aggressive_post_layout) {
       add_candidate(
           [](CompileOptions& candidate_options) {
