@@ -104,6 +104,8 @@ add_library(mkpro_core STATIC
   src/core/return_stack_script.cpp
   src/core/rule_cfg.cpp
   src/core/rules.cpp
+  src/core/shared_helper_continuation.cpp
+  src/core/shared_helper_wrapper.cpp
   src/core/state_banks.cpp
   src/core/super_dark_layout.cpp
   src/core/terminal_report_tail.cpp
@@ -218,6 +220,7 @@ add_executable(mkpro_tests
   tests/last_x_reuse_test.cpp
   tests/late_bound_decimal_selector_test.cpp
   tests/natural_target_component_layout_test.cpp
+  tests/shared_helper_wrapper_test.cpp
   tests/liveness_analysis_test.cpp
   tests/lowering_helpers_test.cpp
   tests/machine_profile_test.cpp
@@ -399,6 +402,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   last_x_reuse_matches_typescript_contract
   late_bound_decimal_selector_binds_only_proved_pairs
   natural_target_component_layout_is_generic_and_proof_gated
+  shared_helper_wrapper_rewrites_only_proved_continuations
   liveness_analysis_matches_typescript_contract
   lowering_helpers_match_typescript_contract
   machine_profile_matches_typescript_contract

@@ -32,6 +32,7 @@
 #include "mkpro/core/passes/register_coalesce.hpp"
 #include "mkpro/core/post_layout_indirect_flow.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
+#include "mkpro/core/shared_helper_wrapper.hpp"
 #include "mkpro/core/terminal_cyclic_layout.hpp"
 #include "mkpro/core/register_allocator.hpp"
 #include "mkpro/core/return_stack_script.hpp"
@@ -47596,6 +47597,55 @@ bool helper_hoist_preserves_fixed_indirect_targets(
   return true;
 }
 
+bool shared_wrapper_preserves_fixed_indirect_targets(
+    const std::vector<MachineItem>& before_items,
+    const ProvedIndirectFlowSet& before,
+    const core::SharedHelperWrapperProof& after) {
+  std::map<int, std::size_t> old_command_items;
+  int address = 0;
+  for (std::size_t item_index = 0; item_index < before_items.size(); ++item_index) {
+    const MachineItem& item = before_items.at(item_index);
+    if (item.kind == MachineItemKind::Label)
+      continue;
+    if (item.kind == MachineItemKind::Op)
+      old_command_items.emplace(address, item_index);
+    ++address;
+  }
+
+  const auto& old_to_new = after.old_to_new_item_indices;
+  for (const auto& [old_flow_item, targets] : before.fixed_numeric_targets) {
+    if (old_flow_item >= old_to_new.size() ||
+        !old_to_new.at(old_flow_item).has_value()) {
+      return false;
+    }
+    const std::size_t new_flow_item = *old_to_new.at(old_flow_item);
+    const auto final_targets =
+        after.final_control_flow.indirect_flow_targets.find(new_flow_item);
+    if (final_targets == after.final_control_flow.indirect_flow_targets.end() ||
+        final_targets->second.size() != targets.size()) {
+      return false;
+    }
+    for (int target : targets) {
+      const auto old_target = old_command_items.find(target);
+      if (old_target == old_command_items.end() ||
+          old_target->second >= old_to_new.size() ||
+          !old_to_new.at(old_target->second).has_value()) {
+        return false;
+      }
+      const std::size_t new_target_item = *old_to_new.at(old_target->second);
+      const bool preserved = std::any_of(
+          final_targets->second.begin(), final_targets->second.end(),
+          [&](const core::PostLayoutCommandIdentity& identity) {
+            return identity.item_index == new_target_item &&
+                   identity.address == target;
+          });
+      if (!preserved)
+        return false;
+    }
+  }
+  return true;
+}
+
 std::set<std::string> packed_decimal_zero_run_floor_sources(const V2Program& program) {
   std::set<std::string> domains;
   for (const V2World& world : program.worlds) {
@@ -48968,6 +49018,34 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                                        post_layout_overlay.optimizations.end());
     }
 
+    // Expose identical call continuations before indirect-flow selectors make
+    // cell deletion require preload retargeting. The ordinary late hoist below
+    // remains the fallback for artifacts that already contain indirect flow.
+    for (;;) {
+      const std::optional<ProvedIndirectFlowSet> early_indirect_flow_proof =
+          collect_proved_indirect_flow_set(
+              post_layout_items, address_space_model_for_options(options));
+      if (!early_indirect_flow_proof.has_value())
+        break;
+      const core::HelperInvariantRecallHoistResult early_recall_hoist =
+          core::optimize_helper_invariant_recall_hoist(
+              post_layout_items,
+              core::HelperInvariantRecallHoistOptions{
+                  .proved_indirect_flow_targets =
+                      early_indirect_flow_proof->targets,
+              });
+      if (early_recall_hoist.applied <= 0 ||
+          !early_recall_hoist.proof.final_artifact_proved ||
+          !helper_hoist_preserves_fixed_indirect_targets(
+              *early_indirect_flow_proof, early_recall_hoist.proof)) {
+        break;
+      }
+      post_layout_items = early_recall_hoist.items;
+      post_layout_optimizations.insert(post_layout_optimizations.end(),
+                                       early_recall_hoist.optimizations.begin(),
+                                       early_recall_hoist.optimizations.end());
+    }
+
     const core::PostLayoutIndirectFlowResult post_layout_flow =
         core::optimize_post_layout_indirect_flow(post_layout_items, pass_options,
                                                  indirect_flow_rescue_above);
@@ -49067,6 +49145,52 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
             .name = "helper-invariant-recall-hoist-rejected",
             .detail = recall_hoist.proof.helper_label + ": " +
                       recall_hoist.proof.reasons.front(),
+        });
+      }
+    }
+
+    const std::optional<ProvedIndirectFlowSet> wrapper_indirect_flow_proof =
+        collect_proved_indirect_flow_set(post_layout_items,
+                                         address_space_model_for_options(options));
+    if (wrapper_indirect_flow_proof.has_value()) {
+      const std::vector<MachineItem> before_shared_helper_wrapper =
+          post_layout_items;
+      const core::SharedHelperWrapperResult shared_helper_wrapper =
+          core::optimize_shared_helper_wrapper(
+              post_layout_items,
+              core::SharedHelperWrapperOptions{
+                  .address_space_model = address_space_model_for_options(options),
+                  .empty_return_target = 1,
+                  .proved_indirect_flow_targets =
+                      wrapper_indirect_flow_proof->targets,
+              });
+      const bool fixed_targets_preserved =
+          shared_helper_wrapper.applied > 0 &&
+          shared_helper_wrapper.proof.final_control_flow_proved &&
+          shared_wrapper_preserves_fixed_indirect_targets(
+              before_shared_helper_wrapper, *wrapper_indirect_flow_proof,
+              shared_helper_wrapper.proof);
+      if (fixed_targets_preserved) {
+        post_layout_items = shared_helper_wrapper.items;
+        post_layout_optimizations.insert(
+            post_layout_optimizations.end(),
+            shared_helper_wrapper.optimizations.begin(),
+            shared_helper_wrapper.optimizations.end());
+      } else if (options.analysis &&
+                 !shared_helper_wrapper.proof.helper_label.empty() &&
+                 (!shared_helper_wrapper.proof.reasons.empty() ||
+                  shared_helper_wrapper.applied > 0)) {
+        post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+            .name = "shared-helper-terminal-wrapper-rejected",
+            .detail = [&] {
+              std::string detail = shared_helper_wrapper.proof.helper_label + ": ";
+              if (shared_helper_wrapper.applied > 0) {
+                detail += "fixed numeric indirect-flow target changed identity or address";
+              } else {
+                detail += shared_helper_wrapper.proof.reasons.front();
+              }
+              return detail;
+            }(),
         });
       }
     }
