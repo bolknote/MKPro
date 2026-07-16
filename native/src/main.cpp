@@ -85,6 +85,7 @@ IR and lowering optimizer switches:
                                   Enable aggressive post-layout indirect-flow pass.
   --return-stack-script           Enable return-stack script post-layout rewrite.
   --no-return-stack-script        Disable return-stack script rewrite.
+  --no-return-suffix-gadget       Disable return-suffix IR gadget sharing.
   --dead-source-residual-temp-reuse
                                   Reuse residual temporaries with dead sources.
   --free-residual-dispatch-scratch
@@ -94,6 +95,10 @@ IR and lowering optimizer switches:
   --setup-only-counted-loop-init  Move counted-loop initialization into setup.
   --show-read-guarded-transfer    Guard read-driven transfers for display safety.
   --stack-resident-temps          Keep eligible temporaries on the stack.
+  --packed-score-accumulator-helpers
+                                  Use stack-accumulator helpers for packed_score sums.
+  --maximum-natural-target-anchors N
+                                  Limit simultaneously selected natural-target anchors.
   --pack-counter-stripes         Pack compatible counters into decimal stripes.
   --sentinel-decimal-pack        Pack compatible counters with a leading sentinel.
   --stack-argument-helper-entries Add stack-argument entries for eligible shared helpers.
@@ -1254,6 +1259,8 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       options.disable_return_stack_script = false;
     } else if (arg == "--no-return-stack-script") {
       options.disable_return_stack_script = true;
+    } else if (arg == "--no-return-suffix-gadget") {
+      options.disable_return_suffix_gadget = true;
     } else if (arg == "--dead-source-residual-temp-reuse") {
       options.dead_source_residual_temp_reuse = true;
     } else if (arg == "--free-residual-dispatch-scratch") {
@@ -1268,6 +1275,20 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       options.show_read_guarded_transfer = true;
     } else if (arg == "--stack-resident-temps") {
       options.stack_resident_temps = true;
+    } else if (arg == "--packed-score-accumulator-helpers") {
+      options.packed_score_accumulator_helpers = true;
+    } else if (arg == "--maximum-natural-target-anchors") {
+      if (index + 1 >= args.size()) {
+        std::cerr << "missing value for --maximum-natural-target-anchors\n";
+        return 64;
+      }
+      try {
+        options.maximum_natural_target_anchors =
+            static_cast<std::size_t>(std::stoul(args[++index]));
+      } catch (const std::exception&) {
+        std::cerr << "invalid --maximum-natural-target-anchors value: " << args[index] << "\n";
+        return 64;
+      }
     } else if (arg == "--pack-counter-stripes") {
       options.pack_counter_stripes = true;
     } else if (arg == "--sentinel-decimal-pack") {

@@ -48793,6 +48793,12 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
         post_layout_optimizations.insert(post_layout_optimizations.end(),
                                          recall_hoist.optimizations.begin(),
                                          recall_hoist.optimizations.end());
+      } else if (options.analysis && !recall_hoist.proof.reasons.empty()) {
+        post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+            .name = "helper-invariant-recall-hoist-rejected",
+            .detail = recall_hoist.proof.helper_label + ": " +
+                      recall_hoist.proof.reasons.front(),
+        });
       }
     }
 
@@ -65510,6 +65516,10 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
     if (finalized_best.has_value() && selected_finalist.has_value() &&
         (!best.implemented || finalized_best->steps.size() <= best.steps.size())) {
       const std::string selected_key = implemented_candidate_key(selected_finalist->options);
+      if (trace_candidates) {
+        std::cerr << "[candidate-trace] final-selected steps="
+                  << finalized_best->steps.size() << " key=" << selected_key << "\n";
+      }
       if (selected_key == implemented_candidate_key(best_options)) {
         for (const OptimizationReport& optimization : best.optimizations) {
           const bool present = std::any_of(

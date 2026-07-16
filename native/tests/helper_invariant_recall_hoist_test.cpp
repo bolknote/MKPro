@@ -167,6 +167,25 @@ std::vector<MachineItem> noncommutative_after_return_fixture() {
   throw std::runtime_error("after-return fixture site is absent");
 }
 
+std::vector<MachineItem> forward_jump_continuation_fixture() {
+  std::vector<MachineItem> items = alpha_fixture();
+  for (std::size_t index = 0; index + 4U < items.size(); ++index) {
+    if (items.at(index).kind == MachineItemKind::Op && items.at(index).opcode == 0x53 &&
+        items.at(index + 1U).kind == MachineItemKind::Address &&
+        items.at(index + 2U).kind == MachineItemKind::Op &&
+        items.at(index + 2U).opcode == 0x68 &&
+        items.at(index + 3U).kind == MachineItemKind::Op &&
+        items.at(index + 3U).opcode == 0x38) {
+      items.insert(items.begin() + static_cast<std::ptrdiff_t>(index + 4U),
+                   {MachineItem::op(0x51, "БП"),
+                    MachineItem::address("after_forward_join"),
+                    MachineItem::label("after_forward_join")});
+      return items;
+    }
+  }
+  throw std::runtime_error("forward-jump continuation fixture site is absent");
+}
+
 std::vector<MachineItem> x2_live_fixture() {
   std::vector<MachineItem> items = alpha_fixture();
   for (std::size_t index = 0; index + 6U < items.size(); ++index) {
@@ -220,6 +239,16 @@ void helper_invariant_recall_hoist_rewrites_only_proved_calls() {
           "the retained recall should be the first helper command");
   require(run(baseline) == run(rewritten.items),
           "baseline and hoisted alpha fixtures should be emulator-equivalent");
+
+  {
+    const std::vector<MachineItem> forward = forward_jump_continuation_fixture();
+    const auto accepted =
+        core::rewrite_helper_invariant_recall_hoist(forward, std::string(kRoot));
+    require(accepted.applied == 1 && accepted.proof.final_artifact_proved,
+            "bounded symbolic continuation should follow a proved forward direct jump");
+    require(run(forward) == run(accepted.items),
+            "forward-jump recall hoist should remain emulator-equivalent");
+  }
 
   {
     std::vector<MachineItem> second_entry = alpha_fixture();

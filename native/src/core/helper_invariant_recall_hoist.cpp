@@ -366,6 +366,41 @@ ContinuationProof prove_continuation(const std::vector<MachineItem>& items,
     }
     numeric_entry_active = false;
 
+    if (item.opcode == kDirectJumpOpcode) {
+      if (item_index + 1U >= items.size() ||
+          items.at(item_index + 1U).kind != MachineItemKind::Address ||
+          items.at(item_index + 1U).formal_opcode.has_value() ||
+          !std::holds_alternative<std::string>(items.at(item_index + 1U).target)) {
+        proof.reason = "symbolic continuation reached an unresolved direct jump";
+        return proof;
+      }
+      if (proof.cells >= options.max_continuation_cells) {
+        proof.reason = "symbolic continuation exceeds the configured bound";
+        return proof;
+      }
+      ++proof.cells;
+      const ArtifactIndex index = index_artifact(items);
+      const std::string& label =
+          std::get<std::string>(items.at(item_index + 1U).target);
+      const auto target = index.label_items.find(label);
+      if (target == index.label_items.end() || index.duplicate_labels.contains(label)) {
+        proof.reason = "symbolic continuation reached a missing or duplicate jump label";
+        return proof;
+      }
+      if (target->second <= item_index + 1U) {
+        proof.reason = "symbolic continuation does not follow backward or cyclic jumps";
+        return proof;
+      }
+      HelperInvariantRecallHoistOptions tail_options = options;
+      tail_options.max_continuation_cells -= proof.cells;
+      ContinuationProof tail = prove_continuation(items, target->second, std::move(original),
+                                                  std::move(rewritten), tail_options);
+      proof.cells += tail.cells;
+      proof.proved = tail.proved;
+      proof.reason = std::move(tail.reason);
+      return proof;
+    }
+
     if (is_flow_opcode(item.opcode) || is_any_indirect_opcode(item.opcode)) {
       if ((item.opcode == kStopOpcode || item.opcode == kReturnOpcode) &&
           observable_values_equal(original, rewritten) &&
@@ -840,8 +875,11 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
   if (proof.reasons.empty()) {
     for (HelperInvariantRecallCall& call : proof.calls) {
       std::string rejection;
-      if (!prove_call_transfer(items, proof, call, options, rejection))
-        add_reason(proof, "call-site symbolic proof failed: " + rejection);
+      if (!prove_call_transfer(items, proof, call, options, rejection)) {
+        add_reason(proof, "call-site " +
+                              std::to_string(index.item_addresses.at(call.call_item_index)) +
+                              " symbolic proof failed: " + rejection);
+      }
     }
   }
 
