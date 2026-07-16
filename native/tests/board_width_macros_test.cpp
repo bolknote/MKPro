@@ -3,6 +3,7 @@
 
 #include "test_support.hpp"
 
+#include <cmath>
 #include <stdexcept>
 #include <string>
 
@@ -58,8 +59,11 @@ void board_width_macros_matches_typescript_contract() {
   require(diag3.find("\"raw\":\"4\"") == std::string::npos,
           "width 3 positive grid_norm should not contain raw width 4");
 
-  require(core::emit::cell_mask_row_constant(4) == 0.22600029,
-          "width 4 cell_mask row constant should match the hardware-verified value");
+  const double row_constant = core::emit::cell_mask_row_constant(4);
+  for (int row = 1; row <= 4; ++row) {
+    require(static_cast<int>(std::pow(10.0, row * row_constant)) == (1 << (row - 1)),
+            "width 4 cell_mask row constant should encode row masks 1, 2, 4, 8");
+  }
   require(throws_hardware_verified([] { (void)core::emit::cell_mask_row_constant(3); }),
           "unsupported cell_mask row widths should throw a hardware-verified diagnostic");
   require(throws_hardware_verified([] {

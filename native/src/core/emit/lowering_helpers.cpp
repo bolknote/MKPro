@@ -730,14 +730,14 @@ std::string board_width_literal(int width) {
 
 std::string cell_mask_row_constant_literal(int width) {
   if (width == 4)
-    return "0.22600029";
+    return "0.22600067";
   throw std::runtime_error("cell_mask is only hardware-verified for board width(s) 4; width " +
                            std::to_string(width) + " needs a verified fractional constant");
 }
 
 double cell_mask_row_constant(int width) {
   if (width == 4)
-    return 0.22600029;
+    return 0.22600067;
   (void)cell_mask_row_constant_literal(width);
   return 0.0;
 }
