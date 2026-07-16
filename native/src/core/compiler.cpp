@@ -10569,6 +10569,9 @@ bool no_arg_invoke_consumes_stack_carried_packed_digit_index(
   return false;
 }
 
+bool stack_resident_fusion_requires_register_materialization(
+    LoweringContext& context, const core::emit::StackResidentFusionSite& fusion);
+
 int stack_only_covered_run(
     LoweringContext& context, const V2Program& program,
     const std::vector<V2Statement>& statements, std::size_t index, const std::string& name,
@@ -10590,8 +10593,10 @@ int stack_only_covered_run(
           std::any_of(fusion->temps.begin(), fusion->temps.end(), [&](const auto& segment) {
             return segment.assign.target == name;
           });
-      if (carries_name)
+      if (carries_name &&
+          !stack_resident_fusion_requires_register_materialization(context, *fusion)) {
         return static_cast<int>(fusion->consumer_index - index + 1U);
+      }
     }
   }
 
@@ -11913,7 +11918,8 @@ bool lower_expression_to_x(LoweringContext& context, const Expression& expressio
                            bool allow_constant_fold = true);
 bool lower_call_to_x(LoweringContext& context, const Expression& expression);
 bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expression& expression,
-                                          const std::vector<std::string>& temps, int line);
+                                          const std::vector<std::string>& temps, int line,
+                                          bool temps_materialized = false);
 bool packed_score_stack_argument_shape_safe(const Expression& expression,
                                             const std::vector<std::string>& temps);
 bool lower_stack_argument_packed_score_inline(LoweringContext& context,
@@ -23065,6 +23071,90 @@ cell_mask_stack_entry_arg0_index(const Expression& expression,
 bool expression_is_cell_mask_of_stack_temps(const Expression& expression,
                                             const std::vector<std::string>& temps) {
   return cell_mask_stack_entry_arg0_index(expression, temps).has_value();
+}
+
+bool stack_resident_expression_requires_register_materialization(
+    LoweringContext& context, const Expression& expression,
+    const std::vector<std::string>& temps) {
+  const bool references_temp =
+      std::any_of(temps.begin(), temps.end(), [&](const std::string& temp) {
+        return core::emit::count_identifier_reads(expression, temp) > 0;
+      });
+  if (!references_temp)
+    return false;
+
+  if (expression.kind == "unary" && expression.expr != nullptr) {
+    return stack_resident_expression_requires_register_materialization(
+        context, *expression.expr, temps);
+  }
+  if (expression.kind == "binary" && expression.left != nullptr &&
+      expression.right != nullptr) {
+    return stack_resident_expression_requires_register_materialization(
+               context, *expression.left, temps) ||
+           stack_resident_expression_requires_register_materialization(
+               context, *expression.right, temps);
+  }
+  if (expression.kind != "call")
+    return false;
+
+  const std::string callee = lower_ascii(expression.callee);
+  if (callee == "sum") {
+    return std::any_of(expression.args.begin(), expression.args.end(),
+                       [&](const Expression& arg) {
+                         return stack_resident_expression_requires_register_materialization(
+                             context, arg, temps);
+                       });
+  }
+  if (const std::optional<StackUnaryTransformCall> transform =
+          stack_unary_transform_call(expression);
+      transform.has_value() && transform->arg != nullptr) {
+    return stack_resident_expression_requires_register_materialization(
+        context, *transform->arg, temps);
+  }
+  if (callee == "packed_score" &&
+      packed_score_stack_argument_shape_safe(expression, temps)) {
+    return false;
+  }
+  if (callee == "bit_mask" && context.shared_bit_mask_helper_calls &&
+      expression.args.size() == 1U && expression.args.front().kind == "identifier" &&
+      std::find(temps.begin(), temps.end(), expression.args.front().name) != temps.end()) {
+    return false;
+  }
+  if (context.stack_argument_helper_entries &&
+      expression_is_cell_mask_of_stack_temps(expression, temps) &&
+      shared_expression_helper(context, expression) != nullptr) {
+    return false;
+  }
+  if (expression.args.size() == 1U) {
+    const auto rule_it = context.rules.find(expression.callee);
+    if (rule_it != context.rules.end() && rule_it->second != nullptr &&
+        current_x_value_function_rule_eligible(context, *rule_it->second)) {
+      return stack_resident_expression_requires_register_materialization(
+          context, expression.args.front(), temps);
+    }
+  }
+  return true;
+}
+
+bool stack_resident_fusion_requires_register_materialization(
+    LoweringContext& context, const core::emit::StackResidentFusionSite& fusion) {
+  std::vector<std::string> temps;
+  temps.reserve(fusion.temps.size());
+  for (const core::emit::StackResidentTempSegment& segment : fusion.temps) {
+    if (!segment.assign.target.has_value() || !segment.assign.expr.has_value())
+      return true;
+    if (!temps.empty() && stack_resident_expression_requires_register_materialization(
+                              context,
+                              parse_expression(*segment.assign.expr, segment.assign.line),
+                              temps)) {
+      return true;
+    }
+    temps.push_back(*segment.assign.target);
+  }
+  if (!fusion.consumer.expr.has_value())
+    return false;
+  return stack_resident_expression_requires_register_materialization(
+      context, parse_expression(*fusion.consumer.expr, fusion.consumer.line), temps);
 }
 
 std::string expression_helper_stack_entry_label(const ExpressionHelperRequest& helper) {
@@ -38612,7 +38702,8 @@ bool lower_stack_resident_packed_score_sum_accumulator_to_x(
 }
 
 bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expression& expression,
-                                          const std::vector<std::string>& temps, int line) {
+                                          const std::vector<std::string>& temps, int line,
+                                          bool temps_materialized) {
   if (lower_repeated_stack_temp_sum_to_x(context, expression, temps, line))
     return true;
   if (lower_stack_resident_packed_score_sum_accumulator_to_x(context, expression, temps, line))
@@ -38628,7 +38719,7 @@ bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expres
   }
   if (expression.kind == "call" && lower_ascii(expression.callee) == "sum") {
     if (!lower_stack_resident_expression_to_x(context, sum_expressions(expression.args), temps,
-                                              line))
+                                              line, temps_materialized))
       return false;
     context.optimizations.push_back(OptimizationReport{
         .name = "sum-primitive-lowering",
@@ -38640,7 +38731,8 @@ bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expres
           stack_unary_transform_call(expression);
       transform.has_value() && transform->arg != nullptr &&
       stack_expression_references_any_temp(*transform->arg, temps)) {
-    if (!lower_stack_resident_expression_to_x(context, *transform->arg, temps, line))
+    if (!lower_stack_resident_expression_to_x(context, *transform->arg, temps, line,
+                                              temps_materialized))
       return false;
     context.emitter.emit_op(transform->opcode, transform->mnemonic,
                             "stack-resident " + transform->comment_name, line);
@@ -38654,7 +38746,8 @@ bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expres
       if (rule_it != context.rules.end() && rule_it->second != nullptr &&
           current_x_value_function_rule_eligible(context, *rule_it->second) &&
           stack_expression_references_any_temp(expression.args.front(), temps)) {
-        if (!lower_stack_resident_expression_to_x(context, expression.args.front(), temps, line))
+        if (!lower_stack_resident_expression_to_x(context, expression.args.front(), temps, line,
+                                                  temps_materialized))
           return false;
         if (!lower_current_x_value_function_body(context, *rule_it->second, line))
           return false;
@@ -38684,6 +38777,22 @@ bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expres
     }
     const bool stack_temp_call =
         expression.kind == "call" && stack_expression_references_any_temp(expression, temps);
+    if (stack_temp_call && !temps_materialized) {
+      // The generic call path uses the function's register ABI. The stack-only
+      // assignments above have not populated those registers, so materialize
+      // every fused temporary before entering that path. Proven stack-aware
+      // entries return earlier and do not pay this fallback cost.
+      for (std::size_t offset = 0; offset < temps.size(); ++offset) {
+        if (offset != 0U) {
+          context.emitter.emit_op(0x25, "F reverse",
+                                  "stack-resident register-ABI materialization", line);
+        }
+        const std::string& temp = temps.at(temps.size() - 1U - offset);
+        emit_store(context, temp, "materialize stack-resident " + temp +
+                                      " before register-entry call");
+      }
+      clear_current_x_facts(context);
+    }
     const std::size_t before = context.emitter.items.size();
     const bool lowered = lower_expression_to_x(context, expression);
     if (lowered && stack_temp_call) {
@@ -38707,7 +38816,8 @@ bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expres
     return lowered;
   }
   if (expression.kind == "unary" && expression.expr != nullptr) {
-    if (!lower_stack_resident_expression_to_x(context, *expression.expr, temps, line))
+    if (!lower_stack_resident_expression_to_x(context, *expression.expr, temps, line,
+                                              temps_materialized))
       return false;
     context.emitter.emit_op(0x0b, "/-/", "stack-resident unary minus", line);
     context.emitter.current_x_variable.reset();
@@ -38731,7 +38841,8 @@ bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expres
       core::emit::count_identifier_reads(*expression.right, temps.at(1)) == 1 &&
       core::emit::can_lower_stack_resident_expression(*expression.right, {temps.at(1)})) {
     context.emitter.emit_op(0x0e, "В↑", "duplicate shared stack operand", line);
-    if (!lower_stack_resident_expression_to_x(context, *expression.right, {temps.at(1)}, line))
+    if (!lower_stack_resident_expression_to_x(context, *expression.right, {temps.at(1)}, line,
+                                              temps_materialized))
       return false;
     context.emitter.emit_op(0x10, "+", "combine shared stack operand", line);
     context.emitter.emit_op(0x11, "-", "expr -", line);
@@ -38751,7 +38862,8 @@ bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expres
     return false;
 
   if (left_refs && right_refs && expression_equals(*expression.left, *expression.right)) {
-    if (!lower_stack_resident_expression_to_x(context, *expression.left, temps, line))
+    if (!lower_stack_resident_expression_to_x(context, *expression.left, temps, line,
+                                              temps_materialized))
       return false;
     if (expression.op == "*") {
       context.emitter.emit_op(0x22, "F x^2", "square repeated operand", line);
@@ -38839,7 +38951,8 @@ bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expres
   }
 
   if (left_refs) {
-    if (!lower_stack_resident_expression_to_x(context, *expression.left, temps, line))
+    if (!lower_stack_resident_expression_to_x(context, *expression.left, temps, line,
+                                              temps_materialized))
       return false;
     if (!lower_expression_to_x(context, *expression.right))
       return false;
@@ -38849,7 +38962,8 @@ bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expres
     return true;
   }
 
-  if (!lower_stack_resident_expression_to_x(context, *expression.right, temps, line))
+  if (!lower_stack_resident_expression_to_x(context, *expression.right, temps, line,
+                                            temps_materialized))
     return false;
   if (!lower_expression_to_x(context, *expression.left))
     return false;
@@ -39799,6 +39913,8 @@ bool lower_stack_resident_temps(LoweringContext& context,
       core::emit::find_stack_resident_fusion_site(statements, start);
   if (!site.has_value())
     return false;
+  const bool materialize_for_register_abi =
+      stack_resident_fusion_requires_register_materialization(context, *site);
 
   std::vector<std::string> temp_names;
   temp_names.reserve(site->temps.size());
@@ -39831,12 +39947,18 @@ bool lower_stack_resident_temps(LoweringContext& context,
         });
     if (depends_on_prior) {
       if (!lower_stack_resident_expression_to_x(context, expression, prior_temps,
-                                                segment.assign.line))
+                                                segment.assign.line,
+                                                materialize_for_register_abi))
         return false;
     } else if (!lower_expression_to_x(context, expression)) {
       return false;
     }
     mark_current_x(context, *segment.assign.target);
+    if (materialize_for_register_abi) {
+      emit_store(context, *segment.assign.target,
+                 "materialize stack-resident " + *segment.assign.target +
+                     " before register-entry call");
+    }
     if (!segment.preserve_after.empty()) {
       if (!lower_statement_block(context, segment.preserve_after))
         return false;
@@ -39858,7 +39980,8 @@ bool lower_stack_resident_temps(LoweringContext& context,
   }
 
   if (!lower_stack_resident_expression_to_x(context, consumer_expression, temp_names,
-                                            site->consumer.line))
+                                            site->consumer.line,
+                                            materialize_for_register_abi))
     return false;
   if (!lower_stack_resident_consumer(context, site->consumer))
     return false;

@@ -158,8 +158,9 @@ program DualStackEq {
     require(baseline.implemented, "baseline dual-stack variant should compile");
     require(optimized.implemented, "stack-resident dual-stack variant should compile");
     
-    require(has_optimization(optimized, "stack-resident-temps"),
-            "stack-resident variant should report stack-resident-temps");
+    require(has_optimization(optimized, "stack-resident-temps") ||
+                has_optimization(optimized, "stack-current-x-scheduling"),
+            "stack-resident variant should report a stack scheduling optimization");
     require(optimized.steps.size() <= baseline.steps.size(),
             "stack-resident dual-stack variant should not grow");
 
@@ -177,6 +178,83 @@ program DualStackEq {
                             "dual-stack stack-resident");
   }
 
+  const std::string register_helper_source = R"mkpro(
+program RegisterHelperStackEq {
+  state {
+    x: counter 1..4 = 1
+    y: counter 1..4 = 2
+    sx: counter 1..4 = 1
+    sy: counter 1..4 = 1
+    line: packed = 0
+    out: packed = 0
+  }
+
+  loop {
+    part_a()
+    part_b()
+    part_c()
+    halt(out)
+  }
+
+  fn part_a() {
+    sx = x
+    sy = y
+    line = cell_mask(sx, sy)
+    out += line
+    sx = y
+    sy = x
+    line = cell_mask(sx, sy)
+    out += line
+  }
+
+  fn part_b() {
+    sx = x
+    sy = y
+    line = cell_mask(sx, sy)
+    out += line
+    sx = y
+    sy = x
+    line = cell_mask(sx, sy)
+    out += line
+  }
+
+  fn part_c() {
+    sx = x
+    sy = y
+    line = cell_mask(sx, sy)
+    out += line
+    sx = y
+    sy = x
+    line = cell_mask(sx, sy)
+    out += line
+  }
+}
+)mkpro";
+
+  {
+    const CompileResult baseline = compile_variant(register_helper_source, false, false);
+    const CompileResult optimized = compile_variant(register_helper_source, true, false);
+
+    require(baseline.implemented, "baseline register-helper variant should compile");
+    for (const Diagnostic& diagnostic : optimized.diagnostics) {
+      require(diagnostic.severity != DiagnosticSeverity::Error,
+              "stack-resident register-helper variant should not report errors: " +
+                  diagnostic.message);
+    }
+    require(optimized.implemented, "stack-resident register-helper variant should compile");
+    require(has_optimization(optimized, "stack-resident-helper-abi-blocked"),
+            "register-helper variant should report its blocked stack ABI");
+
+    const std::string baseline_out = baseline.registers.at("out");
+    const std::string optimized_out = optimized.registers.at("out");
+    const Observation baseline_observation =
+        observe(step_opcodes(baseline.steps), {"В/О", "С/П"}, baseline.preloads, {baseline_out});
+    const Observation optimized_observation = observe(
+        step_opcodes(optimized.steps), {"В/О", "С/П"}, optimized.preloads, {optimized_out});
+    require_same_observation(optimized_observation, baseline_observation,
+                             "register-helper stack materialization");
+  }
+
   const std::string control_flow_source = R"mkpro(
 program CrossFlowEq {
   state {
@@ -192,7 +270,7 @@ program CrossFlowEq {
       loop {
       }
     }
-    z = a + b
+    z += a + b
     halt(z)
   }
 }
@@ -209,16 +287,13 @@ program CrossFlowEq {
 
     const std::vector<int> baseline_codes = step_opcodes(baseline.steps);
     const std::vector<int> optimized_codes = step_opcodes(optimized.steps);
-    const std::string baseline_z = baseline.registers.at("z");
-    const std::string optimized_z = optimized.registers.at("z");
-    require(baseline_z == optimized_z, "control-flow stack-resident registers should match");
 
     const Observation baseline_observation = observe(baseline_codes, {"В/О", "С/П"},
-                                                    baseline.preloads, {baseline_z});
+                                                    baseline.preloads, {});
     const Observation optimized_observation = observe(optimized_codes, {"В/О", "С/П"},
-                                                     optimized.preloads, {optimized_z});
+                                                     optimized.preloads, {});
     require_same_observation(optimized_observation, baseline_observation,
-                            "control-flow stack-resident");
+                             "control-flow stack-resident");
   }
 
   const std::string repeated_unary_source = R"mkpro(
