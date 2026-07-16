@@ -64842,7 +64842,7 @@ CompileResult compile_source_for_optimizer_profile(
   // the first evaluate_queued_candidates) can reuse the same bases.
   std::set<std::string> tried_fractional_selectors;
   std::vector<CompileOptions> fractional_bases;
-  if (needs_size_rescue) {
+  if (needs_size_rescue && fast_candidate_allowed("fractional-constant-selector")) {
     auto add_fractional_base = [&](const std::function<void(CompileOptions&)>& configure) {
       CompileOptions base_options = options;
       configure(base_options);
