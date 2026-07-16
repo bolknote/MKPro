@@ -3,6 +3,7 @@
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -29,6 +30,13 @@ bool has_error_diagnostic(const CompileResult& result) {
   return std::any_of(result.diagnostics.begin(), result.diagnostics.end(),
                      [](const Diagnostic& diagnostic) {
                        return diagnostic.severity == DiagnosticSeverity::Error;
+                     });
+}
+
+bool has_optimization(const CompileResult& result, const std::string& name) {
+  return std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                     [&](const OptimizationReport& optimization) {
+                       return optimization.name == name;
                      });
 }
 
@@ -153,7 +161,7 @@ void example_sizes_match_typescript_baselines() {
       {"tiny-game", 23},
       {"treasure-hunter-2", 98},
       {"wumpus", 105},
-      {"zagaday-tsifru", 104},
+      {"zagaday-tsifru", 100},
   };
   const std::map<std::string, std::size_t> PENDING_BASELINE{
       {"tic-tac-toe-4x4", 145},
@@ -209,6 +217,98 @@ void example_sizes_match_typescript_baselines() {
     record_size_mismatch("top-level example", name, expected, actual);
     if (size_only)
       continue;
+    if (name == "zagaday-tsifru") {
+      const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
+      require(result.steps.size() == 100U,
+              "zagaday-tsifru should fit in addresses 00..99");
+      require(has_optimization(result, "packed-bcd-horner-threshold-loop") &&
+                  has_optimization(result, "packed-bcd-history-prepend") &&
+                  has_optimization(
+                      result,
+                      "cheap-constant-materialization-aggressive-post-layout"),
+              "zagaday-tsifru should select the proved biased-threshold, direct-history, and "
+              "combined final-layout optimizations");
+      require(std::any_of(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
+                return step.comment == "preload const 19";
+              }) &&
+                  std::none_of(result.steps.begin(), result.steps.end(),
+                               [](const ResolvedStep& step) {
+                                 return step.comment == "packed BCD remove anchor";
+                               }),
+              "biased threshold lowering should divide its anchored fold by 19 without an "
+              "extra anchor-removal pair");
+      require(std::any_of(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
+                return step.comment == "drop packed history anchor";
+              }),
+              "direct fractional history should lower without recalling and ANDing FULL_BITS");
+      require(std::any_of(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
+                return step.opcode == 0xbe && step.comment.has_value() &&
+                       step.comment->find("indirect-memory-targets=1,2,3") !=
+                           std::string::npos;
+              }) &&
+                  std::any_of(result.steps.begin(), result.steps.end(),
+                              [](const ResolvedStep& step) {
+                                return step.opcode == 0xb4 && step.comment.has_value() &&
+                                       step.comment->find("indirect-memory-targets=9,a") !=
+                                           std::string::npos;
+                              }),
+              "packed BCD indirect stores should retain exact memory-target proof facts");
+
+      int resumable_stops = 0;
+      int prompt_anchors = 0;
+      int single_step_anchors = 0;
+      int continuous_resume_anchors = 0;
+      for (const MachineItem& item : result.items) {
+        if (item.kind != MachineItemKind::Op)
+          continue;
+        if (item.opcode == 0x50 && item.stop_disposition == StopDisposition::Resumable)
+          ++resumable_stops;
+        if (!item.manual_interaction.has_value())
+          continue;
+        switch (item.manual_interaction->kind) {
+        case ManualInteractionAnchorKind::PromptStop:
+          ++prompt_anchors;
+          break;
+        case ManualInteractionAnchorKind::SingleStepCommand:
+          ++single_step_anchors;
+          break;
+        case ManualInteractionAnchorKind::ContinuousResume:
+          ++continuous_resume_anchors;
+          break;
+        }
+      }
+      const std::array<int, 6> expected_ui_opcodes{0x67, 0x50, 0x49, 0x66, 0x0b, 0x50};
+      const bool expected_ui_sequence =
+          std::equal(expected_ui_opcodes.begin(), expected_ui_opcodes.end(),
+                     result.steps.begin() + 30,
+                     [](int opcode, const ResolvedStep& step) { return opcode == step.opcode; });
+      require(resumable_stops == 2 && prompt_anchors == 1 && single_step_anchors == 0 &&
+                  continuous_resume_anchors == 1 && expected_ui_sequence &&
+                  result.interaction_protocols.size() == 1U &&
+                  result.interaction_protocols.front().phases.size() == 1U &&
+                  result.interaction_protocols.front().phases.front().admitted_domain.minimum ==
+                      0 &&
+                  result.interaction_protocols.front().phases.front().admitted_domain.maximum ==
+                      7,
+              "zagaday-tsifru should preserve its score/input/prediction UI protocol");
+
+      std::string unsafe_source = read_file(path);
+      const std::string proved_threshold = "return int((ones + 8) / 19)";
+      const std::size_t threshold = unsafe_source.find(proved_threshold);
+      require(threshold != std::string::npos,
+              "zagaday-tsifru fixture should contain the biased threshold under test");
+      unsafe_source.replace(threshold, proved_threshold.size(),
+                            "return int((ones + 12) / 19)");
+      CompileOptions unsafe_options;
+      unsafe_options.analysis = true;
+      unsafe_options.budget = 999999;
+      unsafe_options.disable_candidate_search = true;
+      const CompileResult unsafe_bias = compile_source(unsafe_source, unsafe_options);
+      require(unsafe_bias.implemented && !has_error_diagnostic(unsafe_bias) &&
+                  !has_optimization(unsafe_bias, "packed-bcd-horner-threshold-loop"),
+              "packed BCD threshold recognition should reject a bias whose effective threshold "
+              "is not a proved majority bit");
+    }
     if (name == "fox-hunt-mk61") {
       const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
       require(std::any_of(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {

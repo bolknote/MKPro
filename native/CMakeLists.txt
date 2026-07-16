@@ -182,6 +182,7 @@ add_executable(mkpro_tests
   tests/emulator_indirect_incdec_test.cpp
   tests/emulator_int_frac_shared_tail_test.cpp
   tests/emulator_interprocedural_equivalence_test.cpp
+  tests/emulator_zagaday_tsifru_test.cpp
   tests/emulator_log_selector_premise_test.cpp
   tests/emulator_mk61_test.cpp
   tests/emulator_near_any_helper_test.cpp
