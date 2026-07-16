@@ -327,6 +327,10 @@ struct CompileOptions {
   bool return_stack_script = false;
   bool disable_return_stack_script = false;
   bool disable_return_suffix_gadget = false;
+  // Internal final-layout frontier control. Zero keeps every jointly proved
+  // natural target; a positive value bounds simultaneous helper anchors so
+  // downstream layout composition can compare locally non-dominating forms.
+  std::size_t maximum_natural_target_anchors = 0;
   // Opt-out used by focused unit tests that pin a specific mid-level lowering
   // (e.g. shared-helper / direct-ПП structure). The aggressive post-layout
   // indirect-flow rescue is enabled by default for every program; setting this

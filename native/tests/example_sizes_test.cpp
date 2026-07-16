@@ -156,7 +156,7 @@ void example_sizes_match_typescript_baselines() {
       {"zagaday-tsifru", 104},
   };
   const std::map<std::string, std::size_t> PENDING_BASELINE{
-      {"tic-tac-toe-4x4", 151},
+      {"tic-tac-toe-4x4", 144},
   };
 
   const std::filesystem::path root = std::filesystem::current_path();
@@ -478,15 +478,13 @@ void example_sizes_match_typescript_baselines() {
       const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
       const SizeHelperSummaryReport* sum_of_squares_stack_entry =
           find_size_helper(result, "sum_of_squares stack entry");
-      require(sum_of_squares_stack_entry != nullptr && sum_of_squares_stack_entry->body_cells == 5 &&
-                  sum_of_squares_stack_entry->call_site_cells == 2 &&
-                  sum_of_squares_stack_entry->call_occurrences == 1,
-              "functions-demo stack-entry helper should account for the selected compact "
-              "sum_of_squares body and call site");
+      require(sum_of_squares_stack_entry == nullptr,
+              "functions-demo should not attribute a fully inlined sum_of_squares body as a "
+              "remaining helper");
       const SizeSelectedOptimizationReport* stack_entry =
           find_size_selected_optimization(result, "stack-resident-function-entries");
-      require(stack_entry != nullptr && stack_entry->current_steps == 16 &&
-                  stack_entry->baseline_steps == 21 && stack_entry->savings == 5 &&
+      require(stack_entry != nullptr && stack_entry->current_steps == 13 &&
+                  stack_entry->baseline_steps == 19 && stack_entry->savings == 6 &&
                   stack_entry->details.contains("estimateKind") &&
                   stack_entry->details.at("estimateKind") == "measured-selected-candidate-delta",
               "functions-demo value-aware attribution should report the selected stack-entry "

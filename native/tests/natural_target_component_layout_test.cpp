@@ -1,6 +1,7 @@
 #include "mkpro/core/natural_target_component_layout.hpp"
 
 #include "mkpro/core/emit/machine_emitter.hpp"
+#include "mkpro/core/emit/lowering/proc_raw_setup.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/emulator/mk61.hpp"
 
@@ -122,6 +123,96 @@ Fixture fixture(int calls, int padding_components, bool fixed_call_selector,
   return result;
 }
 
+Fixture multi_anchor_fixture() {
+  Fixture result;
+  const std::string helper_a = "unrelated_multi_helper_a";
+  const std::string helper_b = "unrelated_multi_helper_b";
+
+  result.items.push_back(MachineItem::label("unrelated_multi_entry"));
+  for (int call = 0; call < 2; ++call) {
+    result.items.push_back(op(0x53));
+    result.items.push_back(MachineItem::address(helper_a));
+  }
+  for (int call = 0; call < 3; ++call) {
+    result.items.push_back(op(0x53));
+    result.items.push_back(MachineItem::address(helper_b));
+  }
+  result.visible_stop = result.items.size();
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label(helper_a));
+  result.items.push_back(op(0x22));
+  result.items.push_back(op(0x52));
+
+  result.items.push_back(MachineItem::label(helper_b));
+  result.items.push_back(op(0x23));
+  result.items.push_back(op(0x24));
+  result.items.push_back(op(0x52));
+
+  const auto append_padding = [&](const std::string& name, int length) {
+    result.items.push_back(MachineItem::label(name));
+    for (int cell = 1; cell < length; ++cell)
+      result.items.push_back(op(0x0d));
+    result.items.push_back(stop());
+  };
+  append_padding("unrelated_multi_padding_14", 14);
+  append_padding("unrelated_multi_padding_8", 8);
+
+  result.preloads.push_back(PreloadReport{.register_name = "8", .value = "20"});
+  result.preloads.push_back(PreloadReport{.register_name = "9", .value = "30"});
+  return result;
+}
+
+Fixture paid_alignment_fixture() {
+  Fixture result;
+  const std::string helper = "unrelated_paid_alignment_helper";
+
+  result.items.push_back(MachineItem::label("unrelated_paid_alignment_entry"));
+  for (int call = 0; call < 3; ++call) {
+    result.items.push_back(op(0x53));
+    result.items.push_back(MachineItem::address(helper));
+  }
+  result.visible_stop = result.items.size();
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label(helper));
+  result.items.push_back(op(0x22));
+  result.items.push_back(op(0x52));
+
+  result.items.push_back(MachineItem::label("unrelated_paid_alignment_padding"));
+  for (int cell = 1; cell < 15; ++cell)
+    result.items.push_back(op(0x0d));
+  result.items.push_back(stop());
+
+  result.preloads.push_back(PreloadReport{.register_name = "8", .value = "20"});
+  return result;
+}
+
+Fixture address_selector_rebind_fixture() {
+  Fixture result;
+  const std::string helper = "unrelated_rebound_address_helper";
+  const std::string sink = "unrelated_rebound_address_sink";
+
+  result.items.push_back(MachineItem::label("unrelated_rebound_address_entry"));
+  for (int call = 0; call < 3; ++call) {
+    result.items.push_back(op(0x53));
+    result.items.push_back(MachineItem::address(helper));
+  }
+  MachineItem old_indirect_jump = op(0x8e);
+  old_indirect_jump.indirect_flow_targets = std::vector<IrTarget>{sink};
+  result.items.push_back(std::move(old_indirect_jump));
+
+  result.items.push_back(MachineItem::label(helper));
+  result.items.push_back(op(0x22));
+  result.items.push_back(op(0x52));
+
+  result.items.push_back(MachineItem::label(sink));
+  result.visible_stop = result.items.size();
+  result.items.push_back(stop());
+  result.preloads.push_back(PreloadReport{.register_name = "e", .value = "9"});
+  return result;
+}
+
 core::AuthoritativePostLayoutControlFlow flow(const Fixture& fixture_value) {
   return core::build_post_layout_control_flow(fixture_value.items);
 }
@@ -157,22 +248,43 @@ struct Observation {
 };
 
 Observation observe(const std::vector<MachineItem>& items,
-                    const std::vector<PreloadReport>& preloads) {
+                    const std::vector<PreloadReport>& preloads,
+                    bool generated_setup = false) {
   const ResolvedProgram resolved = resolve_machine_items(items, {});
   require(resolved.diagnostics.empty(), "synthetic layout should resolve to official opcodes");
   std::vector<int> codes;
   for (const ResolvedStep& step : resolved.steps)
     codes.push_back(step.opcode);
   emulator::MK61 calc;
+  if (generated_setup) {
+    const SetupProgramReport setup =
+        core::emit::lowering::compile_setup_program_with_preloads(
+            {}, {}, preloads, CompileOptions{});
+    std::vector<int> setup_codes;
+    for (const ResolvedStep& step : setup.steps)
+      setup_codes.push_back(step.opcode);
+    require(calc.load_program(setup_codes).diagnostics.empty(),
+            "generated synthetic setup should load in the emulator");
+    calc.press_sequence({"В/О", "С/П"});
+    require(calc.run_until_stable(1000, 6).stopped,
+            "generated synthetic setup should stop");
+  }
   require(calc.load_program(codes).diagnostics.empty(),
           "synthetic layout should load in the emulator");
   calc.set_register("x", "2");
-  for (const PreloadReport& preload : preloads)
+  calc.set_register("y", "0");
+  calc.set_register("z", "0");
+  calc.set_register("t", "0");
+  calc.set_register("x1", "0");
+  for (const PreloadReport& preload : preloads) {
+    if (generated_setup)
+      continue;
     calc.set_register(preload.register_name, preload.value);
+  }
   calc.press_sequence({"В/О", "С/П"});
   const emulator::RunResult run = calc.run_until_stable(1000, 6);
   Observation result{.stopped = run.stopped};
-  for (const std::string& slot : {"x", "y", "z", "t", "x1", "8"})
+  for (const std::string& slot : {"x", "y", "z", "t", "x1", "8", "9"})
     result.state.emplace(slot, canonical_register(calc.read_register(slot)));
   return result;
 }
@@ -187,6 +299,83 @@ bool reason_contains(const core::NaturalTargetComponentLayoutPlan& plan,
 } // namespace
 
 void natural_target_component_layout_is_generic_and_proof_gated() {
+  {
+    const Fixture input = address_selector_rebind_fixture();
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    const std::map<std::string, std::string> final_preloads =
+        preload_map(rewritten.preloads);
+    require(rewritten.plan.proved && rewritten.applied == 3 &&
+                rewritten.removed_cells == 2 &&
+                rewritten.plan.rebound_indirect_flows == 1 &&
+                final_preloads.at("e") == "5" &&
+                rewritten.items.at(item_at_address(rewritten.items, 3)).opcode == 0x51 &&
+                rewritten.items.at(item_at_address(rewritten.items, 4)).kind ==
+                    MachineItemKind::Address &&
+                rewritten.items.at(item_at_address(rewritten.items, 5)).opcode == 0x22,
+            "a stable address-only selector should move from one flow to three calls");
+    const Observation before = observe(input.items, input.preloads);
+    const Observation after = observe(rewritten.items, rewritten.preloads);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "address-only selector reassignment must preserve observable machine state");
+
+    Fixture data_visible = address_selector_rebind_fixture();
+    const auto old_jump = std::find_if(
+        data_visible.items.begin(), data_visible.items.end(), [](const MachineItem& item) {
+          return item.kind == MachineItemKind::Op && item.opcode == 0x8e;
+        });
+    require(old_jump != data_visible.items.end(),
+            "address-only fixture should expose its old indirect jump");
+    data_visible.items.insert(old_jump, op(0x6e));
+    data_visible.preloads.front().value = "10";
+    const auto rejected = core::optimize_natural_target_component_layout(
+        data_visible.items, data_visible.preloads, flow(data_visible));
+    require(rejected.plan.rebound_indirect_flows == 0,
+            "a selector with an ordinary data recall must not be reassigned");
+  }
+
+  {
+    const Fixture input = paid_alignment_fixture();
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    require(rewritten.plan.proved && rewritten.applied == 3 &&
+                rewritten.removed_cells == 2 &&
+                cell_count(rewritten.items) == cell_count(input.items) - 2 &&
+                rewritten.items.at(item_at_address(rewritten.items, 19)).opcode == 0x54 &&
+                rewritten.items.at(item_at_address(rewritten.items, 20)).opcode == 0x22,
+            "a profitable natural target may spend one unreachable alignment cell");
+    const Observation before = observe(input.items, input.preloads);
+    const Observation after = observe(rewritten.items, rewritten.preloads);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "paid natural-target alignment must preserve observable machine state");
+  }
+
+  {
+    const Fixture input = multi_anchor_fixture();
+    const core::AuthoritativePostLayoutControlFlow input_flow = flow(input);
+    require(input_flow.proved, "multi-anchor synthetic fixture should have an exact CFG");
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, input_flow);
+    const int calls_through_8 = static_cast<int>(std::count_if(
+        rewritten.plan.calls.begin(), rewritten.plan.calls.end(), [](const auto& call) {
+          return call.selector_register == "8" && call.target_address == 20;
+        }));
+    const int calls_through_9 = static_cast<int>(std::count_if(
+        rewritten.plan.calls.begin(), rewritten.plan.calls.end(), [](const auto& call) {
+          return call.selector_register == "9" && call.target_address == 30;
+        }));
+    require(rewritten.plan.proved && rewritten.applied == 5 &&
+                rewritten.removed_cells == 5 && calls_through_8 == 2 &&
+                calls_through_9 == 3 &&
+                rewritten.items.at(item_at_address(rewritten.items, 20)).opcode == 0x22 &&
+                rewritten.items.at(item_at_address(rewritten.items, 30)).opcode == 0x23,
+            "independent constants should place and prove two unrelated helpers jointly");
+    const Observation before = observe(input.items, input.preloads);
+    const Observation after = observe(rewritten.items, rewritten.preloads);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "joint natural-target layout must preserve the observable machine state");
+  }
+
   for (const auto [calls, components] :
        {std::pair{2, 3}, std::pair{3, 5}, std::pair{5, 6}}) {
     const Fixture input = fixture(calls, components, true);
@@ -306,6 +495,12 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
             "BCD entry supplies a proved natural call target: " +
                 (rewritten.plan.reasons.empty() ? std::string("no reason")
                                                 : rewritten.plan.reasons.front()));
+    const Observation before = observe(input.items, input.preloads, true);
+    const Observation after = observe(rewritten.items, rewritten.preloads, true);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "fractional exponent selector must preserve its numeric data projection: before=" +
+                before.state.at("x") + "/R8=" + before.state.at("8") + " after=" +
+                after.state.at("x") + "/R8=" + after.state.at("8"));
   }
 
   {

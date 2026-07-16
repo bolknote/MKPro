@@ -162,6 +162,7 @@ program SelectedStackCarriedPow10 {
   }
 
   loop {
+    slot = 8
     line = x
     mark_one()
     line = y
@@ -178,8 +179,10 @@ program SelectedStackCarriedPow10 {
             "stack-carried pow10 fixture should not report errors: " +
                 diagnostic.message);
   }
-  require(has_optimization(result, "indexed-packed-y-stack-pow10-delta"),
-          "fixture should select the Y-stack pow10 delta lowering");
+  require(has_optimization(result, "predecrement-indexed-stacked-value-update"),
+          "fixture should select the proved predecrement stacked-value lowering");
+  require(count_optimization(result, "predecrement-indexed-stacked-value-preload") == 2,
+          "every proved call site should emit its indexed-value preload");
   require(has_optimization(result, "selected-stack-carried-pow10-index"),
           "selected stack-carried pow10 path should be reported as an optimization");
 
@@ -205,10 +208,10 @@ program SelectedStackCarriedPow10 {
           "mark_one should report the packed bank target");
   require(mark_one->details.contains("valueAwareSelectedStackCarriedSites") &&
               mark_one->details.at("valueAwareSelectedStackCarriedSites")
-                      .find("input=line,selector=slot,target=lines,slot=Y") !=
+                      .find("input=line,selector=slot,target=lines,slot=X/Y") !=
                   std::string::npos &&
               mark_one->details.at("valueAwareSelectedStackCarriedSites")
-                      .find("action=stack-carried-pow10-index-through-self-decrement") !=
+                      .find("action=stacked-old-value-through-predecrement-store") !=
                   std::string::npos,
           "mark_one should report the selected site, stack slot, and action");
 }

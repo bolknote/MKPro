@@ -20,6 +20,7 @@ struct NaturalTargetComponentLayoutOptions {
   AddressSpaceModel address_space_model = AddressSpaceModel::Standard;
   std::size_t maximum_subset_states = 20000;
   int maximum_execution_states = 20000;
+  std::size_t maximum_anchors = 0;
 };
 
 struct NaturalTargetCallRewrite {
@@ -72,6 +73,7 @@ struct NaturalTargetComponentLayoutPlan {
   int output_cells = 0;
   int removed_cells = 0;
   int moved_segments = 0;
+  int rebound_indirect_flows = 0;
   std::vector<NaturalTargetCallRewrite> calls;
   std::vector<NaturalTargetPreloadRewrite> preloads;
   std::vector<NaturalTargetRuntimeSelectorProof> runtime_selectors;

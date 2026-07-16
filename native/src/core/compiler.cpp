@@ -10943,6 +10943,11 @@ void collect_guarded_update_scratch_registers(LoweringContext& context,
                                               RegisterCollection& collection,
                                               const V2Program& program);
 bool lower_guarded_update_selector(LoweringContext& context, const V2Statement& statement);
+void plan_predecrement_indexed_stack_rules(LoweringContext& context,
+                                           const V2Program& program);
+void apply_predecrement_indexed_stack_rule_hints(LoweringContext& context,
+                                                 RegisterHints& hints);
+void finalize_predecrement_indexed_stack_rules(LoweringContext& context);
 
 void collect_registers(LoweringContext& context, const V2Program& program) {
   context.tiny_game_shape = is_tiny_game_shape(program);
@@ -11198,6 +11203,7 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   }
   collect_spatial_count_scratch_registers(collection);
   collect_guarded_update_scratch_registers(context, collection, program);
+  plan_predecrement_indexed_stack_rules(context, program);
   apply_direct_state_bank_selector_hints(context, program, collection, hints);
   apply_state_bank_selector_hints(collection, hints);
   apply_coord_list_item_register_hints(collection, hints);
@@ -11211,7 +11217,9 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   apply_coord_list_cell_register_hints(context, program, collection, hints);
   apply_scaled_coord_register_hints(context, collection, hints);
   apply_segmented_bitplane_register_hints(context, collection, hints);
+  apply_predecrement_indexed_stack_rule_hints(context, hints);
   allocate_collected_registers(context, collection, hints);
+  finalize_predecrement_indexed_stack_rules(context);
 }
 
 void index_rules(LoweringContext& context, const V2Program& program) {
@@ -21159,6 +21167,28 @@ bool expression_has_target_aware_assignment_lowering(const LoweringContext& cont
           is_x_param_value_function_call(context, expression));
 }
 
+bool emit_predecrement_indexed_stack_producer_preload(LoweringContext& context,
+                                                      const V2Statement& producer) {
+  const auto plan_it = context.predecrement_indexed_stack_producers.find(producer.line);
+  if (plan_it == context.predecrement_indexed_stack_producers.end())
+    return true;
+  const std::size_t before = context.emitter.items.size();
+  emit_recall(context, plan_it->second.bank_element);
+  if (context.emitter.items.size() > before) {
+    context.emitter.items.back().comment =
+        "preload indexed value " + plan_it->second.bank_element + " for " +
+        plan_it->second.rule;
+    context.emitter.items.back().source_line = producer.line;
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = "predecrement-indexed-stacked-value-preload",
+      .detail = "Preloaded " + plan_it->second.bank_element + " below " +
+                plan_it->second.input + " for " + plan_it->second.rule + " at line " +
+                std::to_string(producer.line) + ".",
+  });
+  return !has_errors(context.diagnostics);
+}
+
 bool stack_carried_consumer_requires_stored_state_after_entry(
     LoweringContext& context, const V2Statement& consumer, const std::string& target);
 
@@ -21200,6 +21230,8 @@ bool lower_stack_carried_assignment_run(LoweringContext& context,
   if (!stack_carried_assignment_future_safe(context, statements, start, start + 1U, target.name))
     return false;
 
+  if (!emit_predecrement_indexed_stack_producer_preload(context, assignment))
+    return false;
   if (!lower_expression_to_x(context, expression))
     return false;
   mark_current_x(context, target.name);
@@ -21657,6 +21689,20 @@ std::optional<int> direct_physical_indexed_selector_register(const LoweringConte
   return selector_register;
 }
 
+std::optional<int>
+predecrement_physical_indexed_selector_register(const LoweringContext& context,
+                                                const Expression& target,
+                                                const std::string& selector) {
+  const std::optional<int> selector_register =
+      physical_indexed_selector_register(context, target, selector);
+  if (!selector_register.has_value() ||
+      core::indirect_selector_mutation(*selector_register) !=
+          core::IndirectSelectorMutation::PreDecrement) {
+    return std::nullopt;
+  }
+  return selector_register;
+}
+
 std::optional<Expression> bit_and_mask_for_target(const Expression& expression,
                                                   const Expression& target) {
   if (expression.kind != "call" || lower_ascii(expression.callee) != "bit_and" ||
@@ -21850,6 +21896,29 @@ bool emit_indexed_packed_pow10_delta_from_stack_index(LoweringContext& context,
     return false;
   context.emitter.emit_op(opcode->first, opcode->second, "indexed packed digit update", line);
   emit_prepared_indirect_indexed_store(context, target, prepared_selector, line);
+  return true;
+}
+
+bool emit_predecrement_indexed_packed_pow10_delta_from_stacked_value(
+    LoweringContext& context, const Expression& target, const std::string& selector,
+    int selector_register, const std::string& op, const Expression& factor, int line) {
+  context.emitter.emit_op(0x15, "F 10^x", "stack-carried packed digit pow10", line);
+  if (!lower_expression_to_x(context, factor))
+    return false;
+  context.emitter.emit_op(0x12, "*", "stack-carried packed digit delta", line);
+  const std::optional<std::pair<int, std::string>> opcode = binary_opcode(op);
+  if (!opcode.has_value())
+    return false;
+  context.emitter.emit_op(opcode->first, opcode->second,
+                          "add stacked indexed value to packed digit delta", line);
+  clear_current_x_facts(context);
+  const PreparedIndexedSelector prepared_selector{.selector = selector};
+  emit_prepared_indirect_indexed_store(context, target, prepared_selector, line);
+  if (!context.emitter.items.empty()) {
+    context.emitter.items.back().comment =
+        "predecrement indexed packed digit update store through " +
+        core::register_name_for_index(selector_register);
+  }
   return true;
 }
 
@@ -22119,6 +22188,32 @@ bool lower_indexed_packed_pow10_delta_report_branch(LoweringContext& context,
   return true;
 }
 
+bool lower_predecrement_indexed_packed_fractional_report_tail_after_update(
+    LoweringContext& context, const IndexedPackedReportBranch& report,
+    const V2Statement& branch) {
+  if (!report.fractional || !lower_expression_to_x(context, report.mask))
+    return false;
+  context.emitter.emit_op(0x37, "К ∧", "updated packed fractional report mask", branch.line);
+  context.emitter.emit_op(0x35, "К {x}", "updated packed fractional report predicate",
+                          branch.line);
+  const std::string halt_label = context.emitter.fresh_label("packed_frac_report_x2_halt");
+  context.emitter.emit_jump(0x5e, "F x=0", halt_label,
+                            "true branch for packed fractional report !=", branch.line);
+  context.emitter.emit_op(0x52, "В/О", "packed fractional report return", branch.line);
+  context.emitter.emit_label(halt_label);
+  context.emitter.emit_op(0x0a, ".", "updated packed fractional report X2 restore",
+                          branch.line);
+  context.emitter.emit_stop(StopDisposition::Terminal, "С/П", "halt", report.halt_line);
+  clear_current_x_facts(context);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "indexed-packed-fractional-report-x2-tail",
+      .detail = "Restored the terminal fractional packed report through X2 after branching "
+                "directly to the halt path at line " +
+                std::to_string(branch.line) + ".",
+  });
+  return true;
+}
+
 std::optional<IndexedPackedUpdateTailRule> x_param_indexed_fractional_report_tail_rule(
     const LoweringContext& context, const V2Rule& rule) {
   const auto lowering_it = context.x_param_procs.find(rule.name);
@@ -22202,6 +22297,259 @@ bool x_param_proc_preserves_caller_y(const LoweringContext& context, const std::
       parse_expression(*lowering_it->second.first.expr, lowering_it->second.first.line);
   return x_param_grid_norm_call(expression, lowering_it->second.param) ||
          expression_preserves_previous_x_as_y_for_packed_line(expression);
+}
+
+std::optional<PredecrementIndexedStackRulePlan>
+predecrement_indexed_stack_rule_candidate(const LoweringContext& context,
+                                          const V2Rule& rule) {
+  if (!rule.params.empty() || rule.body.size() != 3U)
+    return std::nullopt;
+  const V2Statement& decrement = rule.body.at(0);
+  const V2Statement& assign = rule.body.at(1);
+  const V2Statement& branch = rule.body.at(2);
+  if (!statement_is_unit_decrement(decrement) || !decrement.target.has_value() ||
+      !assign.target.has_value() || !assign.expr.has_value()) {
+    return std::nullopt;
+  }
+  const std::optional<IndexedPackedReportBranch> report =
+      indexed_packed_pow10_delta_report_branch(context, assign, branch);
+  if (!report.has_value() || !report->fractional)
+    return std::nullopt;
+  const Expression target = parse_expression(*assign.target, assign.line);
+  const std::optional<std::string> selector = direct_indexed_selector_name(target);
+  if (!selector.has_value() || *selector != *decrement.target)
+    return std::nullopt;
+  const std::optional<std::tuple<std::string, std::string, Expression>> delta =
+      indexed_packed_pow10_delta_update(target, parse_expression(*assign.expr, assign.line));
+  if (!delta.has_value())
+    return std::nullopt;
+  const std::string& input = std::get<1>(*delta);
+  if (context.register_index_by_name.contains(input) ||
+      !context.stack_only_state_fields.contains(input)) {
+    return std::nullopt;
+  }
+  const std::string key = bank_member_key(target.base, target.field);
+  const auto bank_it = context.state_banks.find(key);
+  if (bank_it == context.state_banks.end() || !bank_it->second->bank.has_value())
+    return std::nullopt;
+  return PredecrementIndexedStackRulePlan{
+      .input = input,
+      .selector = *selector,
+      .bank_key = key,
+  };
+}
+
+bool producer_preserves_preloaded_indexed_value(const LoweringContext& context,
+                                                const V2Program& program,
+                                                const V2Statement& producer,
+                                                const std::string& input) {
+  if (producer.kind == "v2_assign" && producer.target == input && producer.expr.has_value()) {
+    const Expression expression = parse_expression(*producer.expr, producer.line);
+    return !expression_contains_identifier(expression, input) &&
+           expression_preserves_previous_x_as_y_for_packed_line(expression);
+  }
+  if (producer.kind != "v2_invoke" || !producer.name.has_value() ||
+      producer.args.size() != 1U || !context.x_param_procs.contains(*producer.name)) {
+    return false;
+  }
+  const auto rule_it = std::find_if(program.rules.begin(), program.rules.end(),
+                                    [&](const V2Rule& candidate) {
+                                      return candidate.name == *producer.name;
+                                    });
+  if (rule_it == program.rules.end() ||
+      proc_return_x_variable_for_analysis(*rule_it) != input ||
+      !x_param_proc_preserves_caller_y(context, rule_it->name)) {
+    return false;
+  }
+  return expression_preserves_previous_x_as_y_for_packed_line(
+      parse_expression(producer.args.front(), producer.line));
+}
+
+std::optional<int> direct_integer_assignment(const LoweringContext& context,
+                                             const V2Statement& statement,
+                                             const std::string& target_name) {
+  if (statement.kind != "v2_assign" || !statement.target.has_value() ||
+      !statement.expr.has_value()) {
+    return std::nullopt;
+  }
+  const Expression target = parse_expression(*statement.target, statement.line);
+  if (target.kind != "identifier" || target.name != target_name)
+    return std::nullopt;
+  return integer_value_of_expression(context,
+                                     parse_expression(*statement.expr, statement.line));
+}
+
+struct PredecrementIndexedStackCallCollection {
+  std::map<int, PredecrementIndexedStackProducerPlan> producers;
+  int call_sites = 0;
+  bool proved = true;
+};
+
+void collect_predecrement_indexed_stack_calls(
+    const LoweringContext& context, const V2Program& program, const V2Rule& candidate_rule,
+    const PredecrementIndexedStackRulePlan& candidate,
+    PredecrementIndexedStackCallCollection& collection) {
+  const V2StateField& bank = *context.state_banks.at(candidate.bank_key);
+  std::function<void(const std::vector<V2Statement>&)> scan_block;
+  std::function<void(const V2Statement&)> scan_detached;
+
+  const auto is_candidate_call = [&](const V2Statement& statement) {
+    return statement.kind == "v2_invoke" && statement.name == candidate_rule.name;
+  };
+  const auto scan_nested = [&](const V2Statement& statement) {
+    scan_block(statement.body);
+    scan_block(statement.then_body);
+    scan_block(statement.else_body);
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.action != nullptr)
+        scan_detached(*match_case.action);
+    }
+    if (statement.otherwise != nullptr)
+      scan_detached(*statement.otherwise);
+  };
+
+  scan_detached = [&](const V2Statement& statement) {
+    if (statement.kind == "v2_block") {
+      scan_block(statement.body);
+      return;
+    }
+    if (is_candidate_call(statement)) {
+      ++collection.call_sites;
+      collection.proved = false;
+    }
+    scan_nested(statement);
+  };
+
+  scan_block = [&](const std::vector<V2Statement>& statements) {
+    std::optional<int> selector_value;
+    for (std::size_t index = 0; index < statements.size(); ++index) {
+      const V2Statement& statement = statements.at(index);
+      if (const std::optional<int> assigned =
+              direct_integer_assignment(context, statement, candidate.selector)) {
+        selector_value = assigned;
+      } else if (is_candidate_call(statement)) {
+        ++collection.call_sites;
+        if (!statement.args.empty() || !selector_value.has_value() || index == 0U) {
+          collection.proved = false;
+        } else {
+          const V2Statement& producer = statements.at(index - 1U);
+          const int bank_index = *selector_value - 1;
+          if (producer.line <= 0 || bank_index < bank.bank->min ||
+              bank_index > bank.bank->max ||
+              !producer_preserves_preloaded_indexed_value(context, program, producer,
+                                                          candidate.input) ||
+              collection.producers.contains(producer.line)) {
+            collection.proved = false;
+          } else {
+            collection.producers.emplace(
+                producer.line,
+                PredecrementIndexedStackProducerPlan{
+                    .rule = candidate_rule.name,
+                    .input = candidate.input,
+                    .bank_element = state_bank_element_name(bank, bank_index),
+                    .bank_index = bank_index,
+                });
+          }
+          selector_value = bank_index;
+        }
+      } else if (statement_reads_or_writes_identifier_for_stack_analysis(
+                     program, statement, candidate.selector)) {
+        selector_value.reset();
+      }
+      scan_nested(statement);
+    }
+  };
+
+  scan_block(program.body);
+  for (const V2Rule& rule : program.rules)
+    scan_block(rule.body);
+}
+
+void plan_predecrement_indexed_stack_rules(LoweringContext& context,
+                                           const V2Program& program) {
+  context.predecrement_indexed_stack_rules.clear();
+  context.predecrement_indexed_stack_producers.clear();
+  for (const V2Rule& rule : program.rules) {
+    std::optional<PredecrementIndexedStackRulePlan> candidate =
+        predecrement_indexed_stack_rule_candidate(context, rule);
+    if (!candidate.has_value())
+      continue;
+    PredecrementIndexedStackCallCollection calls;
+    collect_predecrement_indexed_stack_calls(context, program, rule, *candidate, calls);
+    constexpr int kHelperCellSavings = 6;
+    if (!calls.proved || calls.call_sites <= 0 ||
+        calls.call_sites != static_cast<int>(calls.producers.size()) ||
+        calls.call_sites >= kHelperCellSavings) {
+      continue;
+    }
+    const bool producer_conflict = std::any_of(
+        calls.producers.begin(), calls.producers.end(), [&](const auto& entry) {
+          return context.predecrement_indexed_stack_producers.contains(entry.first);
+        });
+    if (producer_conflict)
+      continue;
+    candidate->call_sites = calls.call_sites;
+    candidate->estimated_savings = kHelperCellSavings - calls.call_sites;
+    context.predecrement_indexed_stack_rules.emplace(rule.name, *candidate);
+    context.predecrement_indexed_stack_producers.insert(calls.producers.begin(),
+                                                        calls.producers.end());
+  }
+}
+
+void apply_predecrement_indexed_stack_rule_hints(LoweringContext& context,
+                                                 RegisterHints& hints) {
+  for (const auto& [unused_rule, plan] : context.predecrement_indexed_stack_rules) {
+    (void)unused_rule;
+    const auto existing = hints.find(plan.selector);
+    if (existing != hints.end()) {
+      if (existing->second.mode == RegisterHintMode::Fixed)
+        continue;
+      if (core::indirect_selector_mutation(existing->second.index) ==
+          core::IndirectSelectorMutation::PreDecrement) {
+        continue;
+      }
+    }
+    for (int index = 0; index <= 3; ++index) {
+      if (hint_register_is_used(hints, index))
+        continue;
+      hints[plan.selector] = RegisterHint{.mode = RegisterHintMode::Prefer, .index = index};
+      break;
+    }
+  }
+}
+
+void finalize_predecrement_indexed_stack_rules(LoweringContext& context) {
+  std::set<std::string> rejected;
+  for (const auto& [rule, plan] : context.predecrement_indexed_stack_rules) {
+    const auto bank_it = context.state_banks.find(plan.bank_key);
+    const auto selector_it = context.register_index_by_name.find(plan.selector);
+    bool proved = bank_it != context.state_banks.end() && bank_it->second->bank.has_value() &&
+                  selector_it != context.register_index_by_name.end() &&
+                  core::indirect_selector_mutation(selector_it->second) ==
+                      core::IndirectSelectorMutation::PreDecrement;
+    if (proved) {
+      const V2StateField& bank = *bank_it->second;
+      for (int index = bank.bank->min; index <= bank.bank->max; ++index) {
+        const auto element_it =
+            context.register_index_by_name.find(state_bank_element_name(bank, index));
+        if (element_it == context.register_index_by_name.end() || element_it->second != index) {
+          proved = false;
+          break;
+        }
+      }
+    }
+    if (!proved)
+      rejected.insert(rule);
+  }
+  for (const std::string& rule : rejected)
+    context.predecrement_indexed_stack_rules.erase(rule);
+  for (auto it = context.predecrement_indexed_stack_producers.begin();
+       it != context.predecrement_indexed_stack_producers.end();) {
+    if (!context.predecrement_indexed_stack_rules.contains(it->second.rule))
+      it = context.predecrement_indexed_stack_producers.erase(it);
+    else
+      ++it;
+  }
 }
 
 void emit_x_param_indexed_fractional_report_tail(
@@ -29815,6 +30163,8 @@ bool lower_invoke_statement(LoweringContext& context, const V2Statement& stateme
     });
     return true;
   }
+  if (!emit_predecrement_indexed_stack_producer_preload(context, statement))
+    return false;
 
   std::vector<Expression> args;
   args.reserve(statement.args.size());
@@ -32560,6 +32910,8 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
       return true;
     if (has_errors(context.diagnostics))
       return false;
+    if (!emit_predecrement_indexed_stack_producer_preload(context, statement))
+      return false;
     const std::size_t assignment_begin = context.emitter.items.size();
     if (!lower_expression_to_x(context, expression))
       return false;
@@ -32892,6 +33244,39 @@ bool lower_self_decrement_indexed_fractional_report_tail_rule(LoweringContext& c
                                    context.stack_only_state_fields.contains(index_name);
   if (!stack_carried_index && !context.register_index_by_name.contains(index_name))
     return false;
+
+  const auto stacked_value_plan = context.predecrement_indexed_stack_rules.find(rule.name);
+  if (stack_carried_index &&
+      stacked_value_plan != context.predecrement_indexed_stack_rules.end()) {
+    const std::optional<int> selector_register =
+        predecrement_physical_indexed_selector_register(context, target, selector);
+    if (!selector_register.has_value())
+      return false;
+    if (!emit_predecrement_indexed_packed_pow10_delta_from_stacked_value(
+            context, target, selector, *selector_register, std::get<0>(*delta),
+            std::get<2>(*delta), assign.line)) {
+      return false;
+    }
+    const bool lowered =
+        lower_predecrement_indexed_packed_fractional_report_tail_after_update(context, *report,
+                                                                              branch);
+    if (lowered) {
+      report_selected_stack_carried_pow10_index(
+          context, rule.name, index_name, selector, target, assign.line, "X/Y",
+          "predecrement-indexed-stacked-value",
+          "stacked-old-value-through-predecrement-store");
+      context.optimizations.push_back(OptimizationReport{
+          .name = "predecrement-indexed-stacked-value-update",
+          .detail = "Updated " + stacked_value_plan->second.bank_key +
+                    " through predecrement " + selector +
+                    " with the old element supplied below " + index_name + " by all " +
+                    std::to_string(stacked_value_plan->second.call_sites) +
+                    " proved call sites; estimated saving " +
+                    std::to_string(stacked_value_plan->second.estimated_savings) + " cells.",
+      });
+    }
+    return lowered;
+  }
   if (stack_carried_index &&
       !direct_physical_indexed_selector_register(context, target, selector).has_value())
     return false;
@@ -48561,6 +48946,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
       if (natural_layout_input.has_value() && control_flow.proved) {
         const core::NaturalTargetComponentLayoutOptions natural_options{
             .address_space_model = address_space_model_for_options(options),
+            .maximum_anchors = options.maximum_natural_target_anchors,
         };
         std::optional<core::NaturalTargetComponentLayoutResult> chosen_layout;
         std::optional<core::HelperSemanticAliasProof> chosen_alias;
@@ -48636,13 +49022,56 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                           "rebinding and final-artifact proof.",
             });
           }
+          std::vector<std::pair<std::string, int>> natural_placements;
+          for (const core::NaturalTargetCallRewrite& call : natural_layout.plan.calls) {
+            const std::pair<std::string, int> placement{
+                call.selector_register, call.target_address};
+            if (std::find(natural_placements.begin(), natural_placements.end(), placement) ==
+                natural_placements.end()) {
+              natural_placements.push_back(placement);
+            }
+          }
+          std::string natural_layout_detail;
+          if (natural_placements.size() == 1U) {
+            natural_layout_detail =
+                "Placed a proved helper at stable natural target " +
+                format_address(natural_placements.front().second) + " through R" +
+                natural_placements.front().first;
+          } else {
+            natural_layout_detail = "Placed " +
+                                    std::to_string(natural_placements.size()) +
+                                    " proved helpers at stable natural targets (";
+            for (std::size_t index = 0; index < natural_placements.size(); ++index) {
+              if (index != 0U)
+                natural_layout_detail += ", ";
+              natural_layout_detail += "R" + natural_placements.at(index).first + "->" +
+                                       format_address(natural_placements.at(index).second);
+            }
+            natural_layout_detail += ")";
+          }
+          natural_layout_detail +=
+              " and replaced " + std::to_string(natural_layout.applied) +
+              " direct call(s) with one-cell indirect calls";
+          const int alignment_cells =
+              natural_layout.applied -
+              natural_layout.plan.rebound_indirect_flows -
+              natural_layout.removed_cells;
+          if (natural_layout.plan.rebound_indirect_flows > 0) {
+            natural_layout_detail += " after reassigning " +
+                                     std::to_string(
+                                         natural_layout.plan.rebound_indirect_flows) +
+                                     " address-only selector flow(s) back to direct form";
+          }
+          if (alignment_cells > 0) {
+            natural_layout_detail += " while spending " +
+                                     std::to_string(alignment_cells) +
+                                     " proof-isolated unreachable alignment cell(s)";
+          }
+          natural_layout_detail += " after exact final-artifact "
+              "control/return-stack/stack/X2/runtime-selector proofs.";
           post_layout_optimizations.push_back(core::passes::AppliedOptimization{
               .name = "natural-target-component-layout",
-              .detail = "Placed a proved helper at the natural target of stable R" +
-                        natural_layout.plan.selector_register + " and replaced " +
-                        std::to_string(natural_layout.applied) +
-                        " direct call(s) with one-cell indirect calls after exact final-artifact "
-                        "control/return-stack/stack/X2/runtime-selector proofs.",
+              .detail = std::move(natural_layout_detail),
           });
         }
       }
@@ -49545,6 +49974,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";return_stack_script=" << options.return_stack_script
       << ";disable_return_stack_script=" << options.disable_return_stack_script
       << ";disable_return_suffix_gadget=" << options.disable_return_suffix_gadget
+      << ";maximum_natural_target_anchors=" << options.maximum_natural_target_anchors
       << ";preloaded_indirect_flow=" << options.preloaded_indirect_flow
       << ";forward_indirect_flow=" << options.forward_indirect_flow
       << ";runtime_indirect_call_flow=" << options.runtime_indirect_call_flow
@@ -64935,8 +65365,15 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
 
     std::optional<CompileResult> finalized_best;
     std::optional<FinalLayoutCandidate> selected_finalist;
+    struct RankedFinalist {
+      std::size_t cells = 0;
+      FinalLayoutCandidate candidate;
+    };
+    std::vector<RankedFinalist> ranked_finalists;
+    std::size_t finalized_layout_attempts = 0;
     for (const FinalLayoutCandidate& finalist : finalists) {
       try {
+        ++finalized_layout_attempts;
         CompileOptions finalized_options = finalist.options;
         CompileResult finalized = compile_source_once(source, finalized_options, source_has_entered,
                                                       /*apply_final_layout_size_rescue=*/true);
@@ -64949,16 +65386,85 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
         const bool final_static_proof_accepted =
             !candidate_needs_static_proof_gate(finalized_options) ||
             !optimizer_static_gate_rejection_reason(finalized_options, finalized).has_value();
-        if (!finalized.implemented || !final_static_proof_accepted ||
-            (finalized_best.has_value() &&
-             !candidate_beats_best(finalized, *finalized_best, options))) {
+        if (!finalized.implemented || !final_static_proof_accepted) {
           continue;
         }
+        ranked_finalists.push_back(RankedFinalist{
+            .cells = finalized.steps.size(),
+            .candidate = finalist,
+        });
+        if (finalized_best.has_value() &&
+            !candidate_beats_best(finalized, *finalized_best, options))
+          continue;
         finalized_best = std::move(finalized);
         selected_finalist = finalist;
       } catch (const std::exception&) {
         // An independently finalized candidate is opportunistic; other proved
         // finalists and the ordinary incumbent remain available.
+      }
+    }
+
+    // Return-suffix outlining and natural-target component layout can reverse
+    // a local size ordering. Preserve a small, general Pareto frontier of the
+    // best independently finalized call graphs and compose each with both the
+    // unrestricted joint layout and the best one-anchor layout. This is much
+    // cheaper than doubling every finalist while still avoiding winner-only
+    // composition.
+    std::stable_sort(ranked_finalists.begin(), ranked_finalists.end(),
+                     [](const RankedFinalist& left, const RankedFinalist& right) {
+      if (left.cells != right.cells)
+        return left.cells < right.cells;
+      return implemented_candidate_key(left.candidate.options) <
+             implemented_candidate_key(right.candidate.options);
+    });
+    constexpr std::size_t kFinalLayoutCompositionWidth = 12;
+    const std::size_t composition_count =
+        std::min(kFinalLayoutCompositionWidth, ranked_finalists.size());
+    std::set<std::string> composed_keys = finalist_keys;
+    for (std::size_t finalist_index = 0; finalist_index < composition_count;
+         ++finalist_index) {
+      const FinalLayoutCandidate& base = ranked_finalists.at(finalist_index).candidate;
+      for (const std::size_t maximum_anchors : {std::size_t{0}, std::size_t{1}}) {
+        FinalLayoutCandidate composed = base;
+        composed.options.disable_return_suffix_gadget = true;
+        composed.options.maximum_natural_target_anchors = maximum_anchors;
+        const std::string key = implemented_candidate_key(composed.options);
+        if (!composed_keys.insert(key).second)
+          continue;
+        try {
+          ++finalized_layout_attempts;
+          CompileOptions finalized_options = composed.options;
+          CompileResult finalized = compile_source_once(
+              source, finalized_options, source_has_entered,
+              /*apply_final_layout_size_rescue=*/true);
+          if (!finalized.implemented &&
+              can_retry_lowering_attempt_in_analysis(finalized, finalized_options)) {
+            finalized_options.analysis = true;
+            finalized = compile_source_once(source, finalized_options, source_has_entered,
+                                            /*apply_final_layout_size_rescue=*/true);
+          }
+          const bool final_static_proof_accepted =
+              !candidate_needs_static_proof_gate(finalized_options) ||
+              !optimizer_static_gate_rejection_reason(finalized_options, finalized).has_value();
+          if (!finalized.implemented || !final_static_proof_accepted ||
+              (finalized_best.has_value() &&
+               !candidate_beats_best(finalized, *finalized_best, options))) {
+            continue;
+          }
+          finalized.optimizations.push_back(OptimizationReport{
+              .name = "return-suffix-free-final-layout",
+              .detail =
+                  "Finalized a competitive call graph without return-suffix outlining" +
+                  std::string(maximum_anchors == 1U
+                                  ? " on the one-anchor natural-target frontier."
+                                  : " on the joint natural-target frontier."),
+          });
+          finalized_best = std::move(finalized);
+          selected_finalist = std::move(composed);
+        } catch (const std::exception&) {
+          // Pareto-frontier composition is opportunistic; every retained
+          // artifact still passed the ordinary independent proof pipeline.
+        }
       }
     }
 
@@ -64989,65 +65495,12 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
       }
       finalized_best->optimizations.push_back(OptimizationReport{
           .name = "late-final-layout-candidate-search",
-          .detail = "Compared " + std::to_string(finalists.size()) +
+          .detail = "Compared " + std::to_string(finalized_layout_attempts) +
                     " independently finalized candidate layout(s) and selected " +
                     std::to_string(finalized_best->steps.size()) + " cells.",
       });
       best_options = selected_finalist->options;
       best = std::move(*finalized_best);
-    }
-  }
-
-  // Return-suffix outlining and natural-target component layout optimize
-  // different representations of the same call graph.  A suffix-free option
-  // considered near the start of candidate search cannot inherit the lowering
-  // choices that eventually win.  Compose the alternative once with the exact
-  // selected option bundle, then accept it only when the independently proved
-  // final artifact is strictly smaller.
-  if (needs_size_rescue && best.implemented && best.steps.size() > official_program_limit &&
-      !best_options.disable_return_suffix_gadget) {
-    try {
-      CompileOptions candidate_options = best_options;
-      candidate_options.disable_return_suffix_gadget = true;
-      CompileOptions compile_options = candidate_options;
-      CompileResult candidate = compile_source_once(source, compile_options, source_has_entered,
-                                                    /*apply_final_layout_size_rescue=*/true);
-      if (!candidate.implemented &&
-          can_retry_lowering_attempt_in_analysis(candidate, compile_options)) {
-        compile_options.analysis = true;
-        candidate = compile_source_once(source, compile_options, source_has_entered,
-                                        /*apply_final_layout_size_rescue=*/true);
-      }
-      const bool static_proof_accepted =
-          !candidate_needs_static_proof_gate(compile_options) ||
-          !optimizer_static_gate_rejection_reason(compile_options, candidate).has_value();
-      if (candidate.implemented && static_proof_accepted &&
-          candidate.steps.size() < best.steps.size()) {
-        for (const OptimizationReport& optimization : best.optimizations) {
-          const bool present = std::any_of(
-              candidate.optimizations.begin(), candidate.optimizations.end(),
-              [&](const OptimizationReport& existing) {
-                return existing.name == optimization.name &&
-                       existing.detail == optimization.detail;
-              });
-          if (!present)
-            candidate.optimizations.push_back(optimization);
-        }
-        for (const CandidateReport& rejected : best.rejected_candidates)
-          append_candidate_report_once(candidate.rejected_candidates, rejected);
-        candidate.optimizations.push_back(OptimizationReport{
-            .name = "return-suffix-free-final-layout",
-            .detail = "Recompiled the selected lowering without return-suffix outlining so the "
-                      "exact final component-layout proof could compare an independent call "
-                      "graph and selected " + std::to_string(candidate.steps.size()) +
-                      " cells instead of " + std::to_string(best.steps.size()) + ".",
-        });
-        best_options = std::move(candidate_options);
-        best = std::move(candidate);
-      }
-    } catch (const std::exception&) {
-      // This composition is opportunistic; retain the proved selected layout
-      // when the suffix-free alternative cannot be lowered.
     }
   }
 

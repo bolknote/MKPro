@@ -117,6 +117,21 @@ struct RuleStackInputEntryPlan {
   bool primary = false;
 };
 
+struct PredecrementIndexedStackRulePlan {
+  std::string input;
+  std::string selector;
+  std::string bank_key;
+  int call_sites = 0;
+  int estimated_savings = 0;
+};
+
+struct PredecrementIndexedStackProducerPlan {
+  std::string rule;
+  std::string input;
+  std::string bank_element;
+  int bank_index = 0;
+};
+
 struct NearAnyHelperRequest {
   std::string key;
   std::string label;
@@ -240,6 +255,10 @@ struct LoweringContext {
   std::vector<int> grid_norm_helper_order;
   std::map<std::string, FunctionStackEntryPlan> stack_entry_functions;
   std::map<std::string, RuleStackInputEntryPlan> stack_input_rule_entries;
+  std::map<std::string, PredecrementIndexedStackRulePlan>
+      predecrement_indexed_stack_rules;
+  std::map<int, PredecrementIndexedStackProducerPlan>
+      predecrement_indexed_stack_producers;
   std::map<std::string, NearAnyHelperStats> near_any_helper_stats;
   std::map<std::string, std::string> near_any_helper_labels;
   std::vector<NearAnyHelperRequest> near_any_helpers;

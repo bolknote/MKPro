@@ -72,6 +72,33 @@ struct SelectorCandidate {
   NaturalTargetSelectorOrigin origin = NaturalTargetSelectorOrigin::ExistingPreload;
   std::optional<std::string> value;
   int fixed_target = -1;
+  bool rebindable_address = false;
+  int displaced_flow_uses = 0;
+};
+
+struct NaturalTargetAnchorCandidate {
+  SelectorCandidate selector;
+  std::size_t target_origin = 0;
+  int call_sites = 0;
+};
+
+struct NaturalTargetPlacement {
+  std::size_t target_segment = 0;
+  int target_offset = 0;
+  int natural_target = -1;
+};
+
+struct NaturalTargetLayoutOrder {
+  std::vector<std::size_t> segments;
+  std::map<std::size_t, int> padding_before_segment;
+  int padding_cells = 0;
+};
+
+struct DisplacedIndirectFlowRewrite {
+  std::size_t command_origin = 0;
+  std::size_t operand_origin = 0;
+  std::size_t target_origin = 0;
+  int direct_opcode = -1;
 };
 
 struct CandidateArtifact {
@@ -130,6 +157,25 @@ bool is_indirect_memory(int opcode) {
 
 bool is_direct_conditional(int opcode) {
   return opcode >= 0x57 && opcode <= 0x5e;
+}
+
+std::optional<int> direct_opcode_for_indirect_flow(int opcode) {
+  switch (opcode & 0xf0) {
+  case 0x70:
+    return 0x57;
+  case 0x80:
+    return kJumpOpcode;
+  case 0x90:
+    return 0x59;
+  case 0xa0:
+    return kCallOpcode;
+  case 0xc0:
+    return 0x5c;
+  case 0xe0:
+    return 0x5e;
+  default:
+    return std::nullopt;
+  }
 }
 
 bool takes_address(const MachineItem& item) {
@@ -560,6 +606,24 @@ std::vector<std::size_t> indirect_flow_uses(const std::vector<MachineItem>& item
   return result;
 }
 
+bool register_has_nonflow_use(const std::vector<MachineItem>& items,
+                              int register_index_value) {
+  return std::any_of(items.begin(), items.end(), [&](const MachineItem& item) {
+    if (item.kind != MachineItemKind::Op)
+      return false;
+    if (item.opcode >= 0x40 && item.opcode <= 0x4e &&
+        item.opcode - 0x40 == register_index_value) {
+      return true;
+    }
+    if (item.opcode >= 0x60 && item.opcode <= 0x6e &&
+        item.opcode - 0x60 == register_index_value) {
+      return true;
+    }
+    return is_indirect_memory(item.opcode) &&
+           encoded_register(item.opcode) == register_index_value;
+  });
+}
+
 std::vector<SelectorCandidate> selector_candidates(
     const std::vector<MachineItem>& items, const std::vector<PreloadReport>& preloads,
     const AuthoritativePostLayoutControlFlow& flow,
@@ -611,6 +675,37 @@ std::vector<SelectorCandidate> selector_candidates(
       append(value);
       if (const auto natural = natural_fractional_selector_encoding(value))
         append(natural->delivered_value);
+
+      const std::vector<std::size_t> uses = indirect_flow_uses(items, index);
+      if (!uses.empty() && !register_has_nonflow_use(items, index) &&
+          has_proved_address_projection(value)) {
+        std::optional<IndirectAddressEvaluation> decoded;
+        try {
+          decoded = evaluate_indirect_address(name, value,
+                                              IndirectOperationKind::Flow,
+                                              options.address_space_model);
+        } catch (const std::exception&) {
+          decoded.reset();
+        }
+        const bool exact_existing_uses =
+            decoded.has_value() && decoded->actual_flow_target.has_value() &&
+            std::all_of(uses.begin(), uses.end(), [&](std::size_t use) {
+              const auto targets = flow.indirect_flow_targets.find(use);
+              return targets != flow.indirect_flow_targets.end() &&
+                     targets->second.size() == 1U &&
+                     targets->second.front().address ==
+                         *decoded->actual_flow_target;
+            });
+        if (exact_existing_uses) {
+          result.push_back(SelectorCandidate{
+              .register_index = index,
+              .register_name = name,
+              .origin = NaturalTargetSelectorOrigin::ExistingPreload,
+              .rebindable_address = true,
+              .displaced_flow_uses = static_cast<int>(uses.size()),
+          });
+        }
+      }
     }
 
   }
@@ -621,6 +716,8 @@ bool selector_existing_uses_match_target(
     const SelectorCandidate& selector, std::size_t target_origin,
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow) {
+  if (selector.rebindable_address)
+    return true;
   for (const std::size_t use : indirect_flow_uses(items, selector.register_index)) {
     const auto targets = flow.indirect_flow_targets.find(use);
     if (targets == flow.indirect_flow_targets.end() || targets->second.size() != 1U ||
@@ -633,30 +730,77 @@ bool selector_existing_uses_match_target(
 
 std::optional<std::vector<Cell>> convert_direct_calls(
     const std::vector<MachineItem>& items, const std::vector<DirectCallSite>& calls,
-    std::size_t target_origin, const SelectorCandidate& selector,
-    std::vector<NaturalTargetCallRewrite>& rewrites) {
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<NaturalTargetAnchorCandidate>& anchors,
+    std::vector<NaturalTargetCallRewrite>& rewrites,
+    std::vector<DisplacedIndirectFlowRewrite>& displaced_flows) {
   const std::optional<std::vector<Cell>> original_cells = make_cells(items);
   if (!original_cells.has_value())
     return std::nullopt;
 
+  std::map<std::size_t, const SelectorCandidate*> selector_by_target;
+  std::set<int> selected_registers;
+  for (const NaturalTargetAnchorCandidate& anchor : anchors) {
+    if (!selector_by_target.emplace(anchor.target_origin, &anchor.selector).second ||
+        !selected_registers.insert(anchor.selector.register_index).second) {
+      return std::nullopt;
+    }
+  }
+
   std::set<std::size_t> converted_commands;
   std::set<std::size_t> removed_operands;
   for (const DirectCallSite& call : calls) {
-    if (call.target != target_origin)
+    const auto selected = selector_by_target.find(call.target);
+    if (selected == selector_by_target.end())
       continue;
     converted_commands.insert(call.command);
     removed_operands.insert(call.operand);
     rewrites.push_back(NaturalTargetCallRewrite{
         .original_call_item = call.command,
         .original_target_item = call.target,
-        .selector_register = selector.register_name,
+        .selector_register = selected->second->register_name,
     });
   }
-  if (converted_commands.empty())
+  if (converted_commands.empty() ||
+      std::any_of(anchors.begin(), anchors.end(), [&](const auto& anchor) {
+        return std::none_of(rewrites.begin(), rewrites.end(), [&](const auto& rewrite) {
+          return rewrite.original_target_item == anchor.target_origin;
+        });
+      })) {
     return std::nullopt;
+  }
+
+  std::map<std::size_t, DisplacedIndirectFlowRewrite> displaced_by_command;
+  std::size_t next_synthetic_origin = items.size();
+  for (const NaturalTargetAnchorCandidate& anchor : anchors) {
+    if (!anchor.selector.rebindable_address)
+      continue;
+    for (const std::size_t command :
+         indirect_flow_uses(items, anchor.selector.register_index)) {
+      const auto targets = flow.indirect_flow_targets.find(command);
+      const std::optional<int> direct =
+          command < items.size()
+              ? direct_opcode_for_indirect_flow(items.at(command).opcode)
+              : std::nullopt;
+      if (targets == flow.indirect_flow_targets.end() ||
+          targets->second.size() != 1U || !direct.has_value()) {
+        return std::nullopt;
+      }
+      DisplacedIndirectFlowRewrite rewrite{
+          .command_origin = command,
+          .operand_origin = next_synthetic_origin++,
+          .target_origin = targets->second.front().item_index,
+          .direct_opcode = *direct,
+      };
+      if (!displaced_by_command.emplace(command, rewrite).second)
+        return std::nullopt;
+      displaced_flows.push_back(rewrite);
+    }
+  }
 
   std::vector<Cell> cells;
-  cells.reserve(original_cells->size() - removed_operands.size());
+  cells.reserve(original_cells->size() - removed_operands.size() +
+                displaced_flows.size());
   for (Cell cell : *original_cells) {
     if (removed_operands.contains(cell.value.origin)) {
       if (!cell.labels.empty())
@@ -667,85 +811,173 @@ std::optional<std::vector<Cell>> convert_direct_calls(
       MachineItem& call = cell.value.item;
       if (call.kind != MachineItemKind::Op || call.opcode != kCallOpcode)
         return std::nullopt;
-      call.opcode = 0xa0 + selector.register_index;
+      const auto original_call = std::find_if(
+          calls.begin(), calls.end(), [&](const DirectCallSite& candidate) {
+            return candidate.command == cell.value.origin;
+          });
+      if (original_call == calls.end())
+        return std::nullopt;
+      const auto selected = selector_by_target.find(original_call->target);
+      if (selected == selector_by_target.end())
+        return std::nullopt;
+      call.opcode = 0xa0 + selected->second->register_index;
       call.mnemonic = opcode_by_code(call.opcode).name;
-      call.indirect_flow_targets = std::vector<IrTarget>{static_cast<int>(target_origin)};
+      call.indirect_flow_targets =
+          std::vector<IrTarget>{static_cast<int>(original_call->target)};
+    }
+    const auto displaced = displaced_by_command.find(cell.value.origin);
+    if (displaced != displaced_by_command.end()) {
+      MachineItem& command = cell.value.item;
+      command.opcode = displaced->second.direct_opcode;
+      command.mnemonic = opcode_by_code(command.opcode).name;
+      command.indirect_flow_targets.reset();
+      cells.push_back(std::move(cell));
+      cells.push_back(Cell{
+          .value = OwnedItem{
+              .item = MachineItem::address(
+                  static_cast<int>(displaced->second.target_origin)),
+              .origin = displaced->second.operand_origin,
+          },
+      });
+      continue;
     }
     cells.push_back(std::move(cell));
   }
   return cells;
 }
 
-std::optional<std::vector<std::size_t>> subset_with_sum(
-    const std::vector<Segment>& segments, const std::vector<std::size_t>& eligible,
-    int required, std::size_t maximum_states) {
-  if (required < 0)
+std::optional<NaturalTargetLayoutOrder> layout_order_for_targets(
+    const std::vector<Segment>& segments, std::size_t main_segment,
+    const std::vector<NaturalTargetPlacement>& placements,
+    std::size_t maximum_states, int maximum_padding) {
+  if (main_segment >= segments.size())
     return std::nullopt;
-  std::map<int, std::vector<std::size_t>> states;
-  states.emplace(0, std::vector<std::size_t>{});
-  for (const std::size_t segment : eligible) {
-    const int length = segment_cells(segments.at(segment));
-    std::vector<std::pair<int, std::vector<std::size_t>>> additions;
-    for (const auto& [sum, selected] : states) {
-      const int next = sum + length;
-      if (next > required || states.contains(next))
-        continue;
-      std::vector<std::size_t> extended = selected;
-      extended.push_back(segment);
-      additions.emplace_back(next, std::move(extended));
+  if (placements.empty()) {
+    NaturalTargetLayoutOrder layout;
+    layout.segments.reserve(segments.size());
+    layout.segments.push_back(main_segment);
+    for (std::size_t index = 0; index < segments.size(); ++index) {
+      if (index != main_segment)
+        layout.segments.push_back(index);
     }
-    for (auto& [sum, selected] : additions)
-      states.emplace(sum, std::move(selected));
-    if (states.size() > maximum_states)
+    return layout;
+  }
+
+  std::map<std::size_t, int> base_by_segment;
+  for (const NaturalTargetPlacement& placement : placements) {
+    if (placement.target_segment >= segments.size() ||
+        placement.target_segment == main_segment || placement.target_offset < 0 ||
+        placement.natural_target < placement.target_offset) {
+      return std::nullopt;
+    }
+    const int base = placement.natural_target - placement.target_offset;
+    const auto [found, inserted] =
+        base_by_segment.emplace(placement.target_segment, base);
+    if (!inserted && found->second != base)
       return std::nullopt;
   }
-  const auto found = states.find(required);
-  return found == states.end() ? std::nullopt
-                               : std::optional<std::vector<std::size_t>>(found->second);
-}
 
-std::optional<std::vector<std::size_t>> layout_order_for_target(
-    const std::vector<Segment>& segments, std::size_t main_segment,
-    std::size_t target_segment, int target_offset, int natural_target,
-    std::size_t maximum_states) {
-  if (main_segment == target_segment || target_offset < 0 || natural_target < target_offset)
-    return std::nullopt;
-  if (main_segment >= segments.size() || target_segment >= segments.size())
-    return std::nullopt;
+  std::vector<std::pair<int, std::size_t>> fixed_segments;
+  for (const auto& [segment, base] : base_by_segment)
+    fixed_segments.emplace_back(base, segment);
+  std::sort(fixed_segments.begin(), fixed_segments.end());
 
-  const int target_base = natural_target - target_offset;
-  const int required_between = target_base - segment_cells(segments.at(main_segment));
+  int cursor = segment_cells(segments.at(main_segment));
+  std::vector<int> gap_capacities;
+  gap_capacities.reserve(fixed_segments.size());
+  for (const auto& [base, segment] : fixed_segments) {
+    if (base < cursor)
+      return std::nullopt;
+    gap_capacities.push_back(base - cursor);
+    cursor = base + segment_cells(segments.at(segment));
+  }
+
   std::vector<std::size_t> eligible;
   for (std::size_t index = 0; index < segments.size(); ++index) {
-    if (index != main_segment && index != target_segment)
+    if (index != main_segment && !base_by_segment.contains(index))
       eligible.push_back(index);
   }
-  const std::optional<std::vector<std::size_t>> selected =
-      subset_with_sum(segments, eligible, required_between, maximum_states);
-  if (!selected.has_value())
+
+  using GapTotals = std::vector<int>;
+  using GapAssignment = std::vector<int>;
+  std::map<GapTotals, GapAssignment> states;
+  states.emplace(GapTotals(gap_capacities.size(), 0),
+                 GapAssignment(eligible.size(), -1));
+  for (std::size_t eligible_index = 0; eligible_index < eligible.size();
+       ++eligible_index) {
+    std::map<GapTotals, GapAssignment> next = states;
+    const int length = segment_cells(segments.at(eligible.at(eligible_index)));
+    for (const auto& [totals, assignment] : states) {
+      for (std::size_t gap = 0; gap < gap_capacities.size(); ++gap) {
+        if (totals.at(gap) + length > gap_capacities.at(gap))
+          continue;
+        GapTotals extended_totals = totals;
+        extended_totals.at(gap) += length;
+        if (next.contains(extended_totals))
+          continue;
+        GapAssignment extended_assignment = assignment;
+        extended_assignment.at(eligible_index) = static_cast<int>(gap);
+        next.emplace(std::move(extended_totals), std::move(extended_assignment));
+        if (next.size() > maximum_states)
+          return std::nullopt;
+      }
+    }
+    states = std::move(next);
+  }
+
+  auto solution = states.end();
+  int best_filled = -1;
+  for (auto state = states.begin(); state != states.end(); ++state) {
+    int filled = 0;
+    for (const int total : state->first)
+      filled += total;
+    if (filled > best_filled) {
+      best_filled = filled;
+      solution = state;
+    }
+  }
+  int total_capacity = 0;
+  for (const int capacity : gap_capacities)
+    total_capacity += capacity;
+  const int padding_cells = total_capacity - best_filled;
+  if (solution == states.end() || padding_cells < 0 || padding_cells > maximum_padding)
     return std::nullopt;
 
-  const std::set<std::size_t> before(selected->begin(), selected->end());
-  std::vector<std::size_t> order;
-  order.reserve(segments.size());
-  order.push_back(main_segment);
-  for (const std::size_t index : eligible) {
-    if (before.contains(index))
-      order.push_back(index);
+  NaturalTargetLayoutOrder layout;
+  layout.padding_cells = padding_cells;
+  layout.segments.reserve(segments.size());
+  layout.segments.push_back(main_segment);
+  for (std::size_t gap = 0; gap < fixed_segments.size(); ++gap) {
+    for (std::size_t index = 0; index < eligible.size(); ++index) {
+      if (solution->second.at(index) == static_cast<int>(gap))
+        layout.segments.push_back(eligible.at(index));
+    }
+    const std::size_t fixed_segment = fixed_segments.at(gap).second;
+    const int padding = gap_capacities.at(gap) - solution->first.at(gap);
+    if (padding > 0)
+      layout.padding_before_segment.emplace(fixed_segment, padding);
+    layout.segments.push_back(fixed_segment);
   }
-  order.push_back(target_segment);
-  for (const std::size_t index : eligible) {
-    if (!before.contains(index))
-      order.push_back(index);
+  for (std::size_t index = 0; index < eligible.size(); ++index) {
+    if (solution->second.at(index) < 0)
+      layout.segments.push_back(eligible.at(index));
   }
-  return order;
+  return layout.segments.size() == segments.size()
+             ? std::optional<NaturalTargetLayoutOrder>(std::move(layout))
+             : std::nullopt;
 }
 
 std::vector<MachineItem> flatten_segments(
     const std::vector<Segment>& segments, const std::vector<std::size_t>& order,
+    const std::map<std::size_t, int>& padding_before_segment,
     std::map<std::size_t, std::size_t>& new_item_by_origin) {
   std::vector<MachineItem> result;
   for (const std::size_t segment_index : order) {
+    const auto padding = padding_before_segment.find(segment_index);
+    if (padding != padding_before_segment.end()) {
+      for (int cell = 0; cell < padding->second; ++cell)
+        result.push_back(MachineItem::op(0x54, opcode_by_code(0x54).name));
+    }
     for (const Cell& cell : segments.at(segment_index).cells) {
       for (const OwnedItem& label : cell.labels) {
         new_item_by_origin.emplace(label.origin, result.size());
@@ -796,8 +1028,14 @@ bool retarget_indirect_facts(
     const AuthoritativePostLayoutControlFlow& original_flow,
     const std::map<std::size_t, std::size_t>& new_item_by_origin,
     const std::map<std::size_t, int>& new_address_by_origin,
-    const std::vector<NaturalTargetCallRewrite>& converted_calls) {
+    const std::vector<NaturalTargetCallRewrite>& converted_calls,
+    const std::vector<DisplacedIndirectFlowRewrite>& displaced_flows) {
+  std::set<std::size_t> displaced_commands;
+  for (const DisplacedIndirectFlowRewrite& rewrite : displaced_flows)
+    displaced_commands.insert(rewrite.command_origin);
   for (const auto& [flow_origin, targets] : original_flow.indirect_flow_targets) {
+    if (displaced_commands.contains(flow_origin))
+      continue;
     const auto command = new_item_by_origin.find(flow_origin);
     if (command == new_item_by_origin.end())
       return false;
@@ -810,6 +1048,19 @@ bool retarget_indirect_facts(
       rebound.emplace_back(address->second);
     }
     items.at(command->second).indirect_flow_targets = std::move(rebound);
+  }
+  for (const DisplacedIndirectFlowRewrite& rewrite : displaced_flows) {
+    const auto operand = new_item_by_origin.find(rewrite.operand_origin);
+    const auto target = new_address_by_origin.find(rewrite.target_origin);
+    if (operand == new_item_by_origin.end() ||
+        target == new_address_by_origin.end()) {
+      return false;
+    }
+    MachineItem& address = items.at(operand->second);
+    if (address.kind != MachineItemKind::Address)
+      return false;
+    address.target = target->second;
+    address.formal_opcode.reset();
   }
   for (const NaturalTargetCallRewrite& rewrite : converted_calls) {
     const auto command = new_item_by_origin.find(rewrite.original_call_item);
@@ -974,8 +1225,8 @@ bool rebind_preloads(
     const AuthoritativePostLayoutControlFlow& original_flow,
     const std::map<std::size_t, int>& original_address_by_origin,
     const std::map<std::size_t, int>& new_address_by_origin,
-    const SelectorCandidate& candidate,
-    const std::vector<NaturalTargetCallRewrite>& calls,
+    const std::vector<NaturalTargetAnchorCandidate>& anchors,
+    const std::vector<DisplacedIndirectFlowRewrite>& displaced_flows,
     AddressSpaceModel model, std::vector<PreloadReport>& preloads,
     std::vector<NaturalTargetPreloadRewrite>& rewrites) {
   bool unique = false;
@@ -984,10 +1235,25 @@ bool rebind_preloads(
   if (!unique)
     return false;
 
+  std::map<int, const SelectorCandidate*> selected_by_register;
+  for (const NaturalTargetAnchorCandidate& anchor : anchors) {
+    if (!selected_by_register
+             .emplace(anchor.selector.register_index, &anchor.selector)
+             .second) {
+      return false;
+    }
+  }
+
+  std::set<std::size_t> displaced_commands;
+  for (const DisplacedIndirectFlowRewrite& rewrite : displaced_flows)
+    displaced_commands.insert(rewrite.command_origin);
+
   std::map<int, std::set<std::size_t>> required_targets;
   for (std::size_t item_index = 0; item_index < original_items.size(); ++item_index) {
     const MachineItem& item = original_items.at(item_index);
     if (item.kind != MachineItemKind::Op || !is_indirect_flow(item.opcode))
+      continue;
+    if (displaced_commands.contains(item_index))
       continue;
     const int reg = encoded_register(item.opcode);
     const std::optional<std::size_t> target =
@@ -996,8 +1262,8 @@ bool rebind_preloads(
       return false;
     required_targets[reg].insert(*target);
   }
-  for (const NaturalTargetCallRewrite& call : calls)
-    required_targets[candidate.register_index].insert(call.original_target_item);
+  for (const NaturalTargetAnchorCandidate& anchor : anchors)
+    required_targets[anchor.selector.register_index].insert(anchor.target_origin);
 
   for (const auto& [reg, target_origins] : required_targets) {
     if (reg < 7 || reg > 0x0e || target_origins.size() != 1U)
@@ -1021,8 +1287,13 @@ bool rebind_preloads(
 
     // Existing typed facts must describe the exact delivered selector before
     // relocation; otherwise a preload report cannot be elevated into a proof.
+    const std::vector<std::size_t> original_uses =
+        indirect_flow_uses(original_items, reg);
     const bool had_original_flow_use =
-        !indirect_flow_uses(original_items, reg).empty();
+        std::any_of(original_uses.begin(), original_uses.end(),
+                    [&](std::size_t use) {
+                      return !displaced_commands.contains(use);
+                    });
     if (had_original_flow_use) {
       if (!preload_value_targets(name, old_value, old_target->second, model))
         return false;
@@ -1030,18 +1301,36 @@ bool rebind_preloads(
     if (preload_value_targets(name, old_value, new_target->second, model))
       continue;
 
-    if (reg == candidate.register_index && candidate.value.has_value()) {
+    const auto selected = selected_by_register.find(reg);
+    if (selected != selected_by_register.end() &&
+        selected->second->rebindable_address) {
+      if (register_has_nonflow_use(original_items, reg))
+        return false;
+      const std::string rebound = std::to_string(new_target->second);
+      if (!preload_value_targets(name, rebound, new_target->second, model))
+        return false;
+      preloads.at(preload->second).value = rebound;
+      rewrites.push_back(NaturalTargetPreloadRewrite{
+          .register_name = name,
+          .old_value = old_value,
+          .new_value = rebound,
+          .fractional_projection_only = false,
+      });
+      continue;
+    }
+    if (selected != selected_by_register.end() && selected->second->value.has_value()) {
       const std::optional<NaturalFractionalSelectorEncoding> natural =
           natural_fractional_selector_encoding(old_value);
       if (natural.has_value() && natural->target == new_target->second &&
-          natural->delivered_value == *candidate.value &&
-          preload_value_targets(name, *candidate.value, new_target->second, model) &&
+          natural->delivered_value == *selected->second->value &&
+          preload_value_targets(name, *selected->second->value,
+                                new_target->second, model) &&
           prove_numeric_nonflow_projection(original_items, reg)) {
-        preloads.at(preload->second).value = *candidate.value;
+        preloads.at(preload->second).value = *selected->second->value;
         rewrites.push_back(NaturalTargetPreloadRewrite{
             .register_name = name,
             .old_value = old_value,
-            .new_value = *candidate.value,
+            .new_value = *selected->second->value,
             .fractional_projection_only = false,
         });
         continue;
@@ -1304,19 +1593,27 @@ bool indirect_memory_facts_equivalent(
 }
 
 bool converted_call_effects_equivalent(const std::vector<MachineItem>& original_items,
-                                       const SelectorCandidate& selector,
+                                       const std::vector<NaturalTargetAnchorCandidate>& anchors,
                                        const std::vector<NaturalTargetCallRewrite>& calls) {
-  if (indirect_selector_mutation(selector.register_name) !=
-      IndirectSelectorMutation::Stable) {
+  if (std::any_of(anchors.begin(), anchors.end(), [](const auto& anchor) {
+        return indirect_selector_mutation(anchor.selector.register_name) !=
+               IndirectSelectorMutation::Stable;
+      })) {
     return false;
   }
   const OpcodeInfo& direct = opcode_by_code(kCallOpcode);
-  const OpcodeInfo& indirect = opcode_by_code(0xa0 + selector.register_index);
-  if (direct.stack_effect != indirect.stack_effect ||
-      direct.x2_effect != indirect.x2_effect || direct.takes_address == indirect.takes_address)
-    return false;
   return std::all_of(calls.begin(), calls.end(), [&](const NaturalTargetCallRewrite& call) {
-    return call.original_call_item < original_items.size() &&
+    const auto anchor = std::find_if(anchors.begin(), anchors.end(), [&](const auto& candidate) {
+      return candidate.selector.register_name == call.selector_register;
+    });
+    if (anchor == anchors.end())
+      return false;
+    const OpcodeInfo& indirect =
+        opcode_by_code(0xa0 + anchor->selector.register_index);
+    return direct.stack_effect == indirect.stack_effect &&
+           direct.x2_effect == indirect.x2_effect &&
+           direct.takes_address != indirect.takes_address &&
+           call.original_call_item < original_items.size() &&
            original_items.at(call.original_call_item).kind == MachineItemKind::Op &&
            original_items.at(call.original_call_item).opcode == kCallOpcode;
   });
@@ -1408,10 +1705,14 @@ bool unchanged_command_effects_preserved(
     const std::vector<MachineItem>& original_items,
     const std::vector<MachineItem>& rewritten_items,
     const std::map<std::size_t, std::size_t>& new_item_by_origin,
-    const std::vector<NaturalTargetCallRewrite>& calls) {
+    const std::vector<NaturalTargetCallRewrite>& calls,
+    const std::vector<DisplacedIndirectFlowRewrite>& displaced_flows) {
   std::set<std::size_t> converted;
   for (const NaturalTargetCallRewrite& call : calls)
     converted.insert(call.original_call_item);
+  std::map<std::size_t, int> displaced;
+  for (const DisplacedIndirectFlowRewrite& rewrite : displaced_flows)
+    displaced.emplace(rewrite.command_origin, rewrite.direct_opcode);
   for (std::size_t origin = 0; origin < original_items.size(); ++origin) {
     const MachineItem& before = original_items.at(origin);
     if (before.kind != MachineItemKind::Op)
@@ -1423,8 +1724,19 @@ bool unchanged_command_effects_preserved(
     if (after.kind != MachineItemKind::Op || before.stop_disposition != after.stop_disposition ||
         before.manual_interaction != after.manual_interaction)
       return false;
-    if (!converted.contains(origin) && before.opcode != after.opcode)
+    const auto displaced_command = displaced.find(origin);
+    if (displaced_command != displaced.end()) {
+      const OpcodeInfo& before_info = opcode_by_code(before.opcode);
+      const OpcodeInfo& after_info = opcode_by_code(after.opcode);
+      if (after.opcode != displaced_command->second ||
+          before_info.stack_effect != after_info.stack_effect ||
+          before_info.x2_effect != after_info.x2_effect ||
+          before_info.takes_address == after_info.takes_address) {
+        return false;
+      }
+    } else if (!converted.contains(origin) && before.opcode != after.opcode) {
       return false;
+    }
   }
   return true;
 }
@@ -1436,15 +1748,24 @@ std::optional<CandidateArtifact> try_candidate(
     const NaturalTargetComponentLayoutOptions& options,
     const std::vector<DirectReference>& references,
     const std::vector<DirectCallSite>& calls,
-    const SelectorCandidate& selector, std::size_t target_origin,
+    const std::vector<NaturalTargetAnchorCandidate>& anchors,
     const TraceGraph& original_trace,
     const std::vector<ExternalIdentity>& original_external,
     std::vector<std::string>* rejection_reasons) {
   const auto reject = [&](std::string reason) -> std::optional<CandidateArtifact> {
-    if (rejection_reasons != nullptr) {
-      const std::string detail = "R" + selector.register_name + "->" +
-                                 std::to_string(selector.fixed_target) + " target-item=" +
-                                 std::to_string(target_origin) + ": " + reason;
+    if (rejection_reasons != nullptr && rejection_reasons->size() < 64U) {
+      std::string detail;
+      for (const NaturalTargetAnchorCandidate& anchor : anchors) {
+        if (!detail.empty())
+          detail += ",";
+        detail += "R" + anchor.selector.register_name + "->" +
+                  (anchor.selector.rebindable_address
+                       ? std::string("rebind")
+                       : std::to_string(anchor.selector.fixed_target)) +
+                  " target-item=" +
+                  std::to_string(anchor.target_origin);
+      }
+      detail += ": " + reason;
       if (std::find(rejection_reasons->begin(), rejection_reasons->end(), detail) ==
           rejection_reasons->end()) {
         rejection_reasons->push_back(detail);
@@ -1452,9 +1773,12 @@ std::optional<CandidateArtifact> try_candidate(
     }
     return std::nullopt;
   };
+  if (anchors.empty())
+    return reject("candidate has no natural-target anchors");
   std::vector<NaturalTargetCallRewrite> rewrites;
+  std::vector<DisplacedIndirectFlowRewrite> displaced_flows;
   const std::optional<std::vector<Cell>> converted = convert_direct_calls(
-      items, calls, target_origin, selector, rewrites);
+      items, calls, control_flow, anchors, rewrites, displaced_flows);
   if (!converted.has_value() || rewrites.empty())
     return reject("direct-call conversion failed");
   std::vector<Segment> segments = make_segments(*converted);
@@ -1468,41 +1792,108 @@ std::optional<CandidateArtifact> try_candidate(
     return reject("main entry is not physical cell 00");
   const std::optional<std::pair<std::size_t, int>> main_location =
       locate_origin(segments, *main);
-  const std::optional<std::pair<std::size_t, int>> target_location =
-      locate_origin(segments, target_origin);
-  if (!main_location.has_value() || !target_location.has_value() ||
-      main_location->second != 0)
-    return reject("main or target component identity cannot be located");
+  if (!main_location.has_value() || main_location->second != 0)
+    return reject("main component identity cannot be located");
 
-  if (selector.origin != NaturalTargetSelectorOrigin::ExistingPreload)
-    return reject("selector is not an existing stable preload");
-  const int natural_target = selector.fixed_target;
-  const std::optional<std::vector<std::size_t>> order = layout_order_for_target(
-      segments, main_location->first, target_location->first,
-      target_location->second, natural_target, options.maximum_subset_states);
+  std::vector<NaturalTargetPlacement> placements;
+  std::optional<NaturalTargetPlacement> flexible_placement;
+  std::map<std::size_t, const SelectorCandidate*> selector_by_target_origin;
+  for (const NaturalTargetAnchorCandidate& anchor : anchors) {
+    if (anchor.selector.origin != NaturalTargetSelectorOrigin::ExistingPreload)
+      return reject("selector is not an existing stable preload");
+    const auto target_location = locate_origin(segments, anchor.target_origin);
+    if (!target_location.has_value())
+      return reject("target component identity cannot be located");
+    if (!selector_by_target_origin
+             .emplace(anchor.target_origin, &anchor.selector)
+             .second) {
+      return reject("multiple selectors claim the same target identity");
+    }
+    NaturalTargetPlacement placement{
+        .target_segment = target_location->first,
+        .target_offset = target_location->second,
+        .natural_target = anchor.selector.fixed_target,
+    };
+    if (anchor.selector.rebindable_address) {
+      if (flexible_placement.has_value())
+        return reject("multiple address-only selector rebinds are not bounded");
+      flexible_placement = placement;
+    } else {
+      placements.push_back(placement);
+    }
+  }
+  const int maximum_padding = static_cast<int>(rewrites.size()) -
+                              static_cast<int>(displaced_flows.size()) - 1;
+  if (maximum_padding < 0)
+    return reject("address-selector displacement cannot produce a smaller artifact");
+  std::optional<NaturalTargetLayoutOrder> order;
+  int flexible_target = -1;
+  if (flexible_placement.has_value()) {
+    for (int target = 1;
+         target <= official_program_last_address(options.address_space_model);
+         ++target) {
+      std::vector<NaturalTargetPlacement> trial_placements = placements;
+      NaturalTargetPlacement trial = *flexible_placement;
+      trial.natural_target = target;
+      trial_placements.push_back(trial);
+      std::optional<NaturalTargetLayoutOrder> trial_order =
+          layout_order_for_targets(segments, main_location->first,
+                                   trial_placements,
+                                   options.maximum_subset_states,
+                                   maximum_padding);
+      if (!trial_order.has_value())
+        continue;
+      if (!order.has_value() ||
+          std::tie(trial_order->padding_cells, target) <
+              std::tie(order->padding_cells, flexible_target)) {
+        order = std::move(trial_order);
+        flexible_target = target;
+      }
+    }
+  } else {
+    order = layout_order_for_targets(
+        segments, main_location->first, placements,
+        options.maximum_subset_states, maximum_padding);
+  }
   if (!order.has_value())
-    return reject("no fallthrough-closed component subset reaches the natural target");
+    return reject("no fallthrough-closed component assignment reaches every natural target");
 
   CandidateArtifact candidate;
-  candidate.items = flatten_segments(segments, *order, candidate.new_item_by_origin);
+  candidate.items = flatten_segments(segments, order->segments,
+                                     order->padding_before_segment,
+                                     candidate.new_item_by_origin);
   const std::map<std::size_t, int> new_address_by_origin =
       origin_addresses(candidate.items, candidate.new_item_by_origin);
-  const auto target_address = new_address_by_origin.find(target_origin);
-  if (target_address == new_address_by_origin.end() || target_address->second != natural_target)
-    return reject("flattened component order missed the natural target");
+  std::map<std::size_t, int> target_address_by_origin;
+  for (const auto& [target_origin, selector] : selector_by_target_origin) {
+    const auto target_address = new_address_by_origin.find(target_origin);
+    if (target_address == new_address_by_origin.end())
+      return reject("flattened component order lost a selected target");
+    if (!selector->rebindable_address &&
+        target_address->second != selector->fixed_target) {
+      return reject("flattened component order missed a natural target");
+    }
+    if (selector->rebindable_address &&
+        (target_address->second <= 0 ||
+         target_address->second >
+             official_program_last_address(options.address_space_model))) {
+      return reject("rebound address selector target is outside the official window");
+    }
+    target_address_by_origin.emplace(target_origin, target_address->second);
+  }
   for (NaturalTargetCallRewrite& rewrite : rewrites)
-    rewrite.target_address = natural_target;
+    rewrite.target_address = target_address_by_origin.at(rewrite.original_target_item);
 
   std::set<std::size_t> removed_operands;
   for (const DirectCallSite& call : calls) {
-    if (call.target == target_origin)
+    if (target_address_by_origin.contains(call.target))
       removed_operands.insert(call.operand);
   }
   if (!retarget_direct_references(candidate.items, references, removed_operands,
                                   candidate.new_item_by_origin, new_address_by_origin) ||
       !retarget_indirect_facts(candidate.items, control_flow,
                                candidate.new_item_by_origin, new_address_by_origin,
-                               rewrites)) {
+                               rewrites, displaced_flows)) {
     return reject("direct or indirect target rebinding failed");
   }
 
@@ -1512,7 +1903,8 @@ std::optional<CandidateArtifact> try_candidate(
   candidate.preloads = preloads;
   std::vector<NaturalTargetPreloadRewrite> preload_rewrites;
   if (!rebind_preloads(items, control_flow, original_address_by_origin,
-                       new_address_by_origin, selector, rewrites,
+                       new_address_by_origin, anchors,
+                       displaced_flows,
                        options.address_space_model, candidate.preloads,
                        preload_rewrites)) {
     return reject("runtime preload rebinding proof failed");
@@ -1565,13 +1957,14 @@ std::optional<CandidateArtifact> try_candidate(
     return reject("rewritten external-entry ledger differs from the logical input");
 
   NaturalTargetComponentLayoutPlan& plan = candidate.plan;
-  plan.selector_origin = selector.origin;
-  plan.selector_register = selector.register_name;
-  plan.natural_target = natural_target;
+  plan.selector_origin = anchors.front().selector.origin;
+  plan.selector_register = anchors.front().selector.register_name;
+  plan.natural_target = target_address_by_origin.at(anchors.front().target_origin);
   plan.input_cells = original_index.cells;
   plan.output_cells = index_artifact(candidate.items).cells;
   plan.removed_cells = plan.input_cells - plan.output_cells;
-  plan.moved_segments = count_moved_segments(*order);
+  plan.moved_segments = count_moved_segments(order->segments);
+  plan.rebound_indirect_flows = static_cast<int>(displaced_flows.size());
   plan.calls = std::move(rewrites);
   plan.preloads = std::move(preload_rewrites);
   plan.runtime_selectors = *runtime_selectors;
@@ -1579,14 +1972,19 @@ std::optional<CandidateArtifact> try_candidate(
   plan.control_flow_equivalent = true;
   plan.call_return_equivalent = true;
   plan.stack_and_x2_equivalent =
-      converted_call_effects_equivalent(items, selector, plan.calls) &&
+      converted_call_effects_equivalent(items, anchors, plan.calls) &&
       unchanged_command_effects_preserved(items, candidate.items,
-                                          candidate.new_item_by_origin, plan.calls);
+                                          candidate.new_item_by_origin, plan.calls,
+                                          displaced_flows);
   plan.indirect_memory_equivalent = indirect_memory_facts_equivalent(
       control_flow, final_flow, rewritten_origin_by_item);
   plan.data_projection_equivalent = true;
   plan.final_artifact_proved = final_flow.proved;
-  plan.proved = plan.removed_cells == static_cast<int>(plan.calls.size()) &&
+  plan.proved =
+                plan.removed_cells ==
+                    static_cast<int>(plan.calls.size()) -
+                        static_cast<int>(displaced_flows.size()) -
+                        order->padding_cells &&
                 plan.removed_cells > 0 && plan.control_flow_equivalent &&
                 plan.call_return_equivalent && plan.stack_and_x2_equivalent &&
                 plan.indirect_memory_equivalent && plan.data_projection_equivalent &&
@@ -1687,24 +2085,121 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     return result;
   }
 
-  const std::vector<SelectorCandidate> selectors = selector_candidates(
+  std::vector<SelectorCandidate> selectors = selector_candidates(
       logical_items, preloads, *logical_flow, options);
 
   std::set<std::size_t> call_targets;
+  std::map<std::size_t, int> call_sites_by_target;
   for (const DirectCallSite& call : calls)
-    call_targets.insert(call.target);
-  std::optional<CandidateArtifact> best;
+    ++call_sites_by_target[call.target];
+  for (const auto& [target, count] : call_sites_by_target) {
+    (void)count;
+    call_targets.insert(target);
+  }
+
+  std::map<int, std::vector<NaturalTargetAnchorCandidate>> options_by_selector;
   for (const SelectorCandidate& selector : selectors) {
     for (const std::size_t target : call_targets) {
       if (!selector_existing_uses_match_target(selector, target, logical_items, *logical_flow))
         continue;
-      const std::optional<CandidateArtifact> candidate = try_candidate(
-          logical_items, preloads, *logical_flow, options, *references, calls, selector,
-          target, *original_trace, *original_external, &result.plan.reasons);
-      if (candidate.has_value() &&
-          (!best.has_value() || better_candidate(*candidate, *best))) {
-        best = candidate;
+      if (selector.rebindable_address &&
+          call_sites_by_target.at(target) <= selector.displaced_flow_uses) {
+        continue;
       }
+      options_by_selector[selector.register_index].push_back(
+          NaturalTargetAnchorCandidate{
+              .selector = selector,
+              .target_origin = target,
+              .call_sites = call_sites_by_target.at(target),
+          });
+    }
+  }
+
+  std::vector<std::vector<NaturalTargetAnchorCandidate>> selector_groups;
+  for (auto& [register_index, group] : options_by_selector) {
+    (void)register_index;
+    std::sort(group.begin(), group.end(), [](const auto& left, const auto& right) {
+      const int left_savings =
+          left.call_sites - left.selector.displaced_flow_uses;
+      const int right_savings =
+          right.call_sites - right.selector.displaced_flow_uses;
+      if (left_savings != right_savings)
+        return left_savings > right_savings;
+      return std::tie(left.selector.fixed_target, left.target_origin) <
+             std::tie(right.selector.fixed_target, right.target_origin);
+    });
+    selector_groups.push_back(std::move(group));
+  }
+
+  std::vector<std::vector<NaturalTargetAnchorCandidate>> combinations;
+  std::vector<NaturalTargetAnchorCandidate> current;
+  std::set<std::size_t> used_targets;
+  bool combination_search_capped = false;
+  const auto enumerate = [&](auto&& self, std::size_t group_index) -> void {
+    if (combinations.size() >= options.maximum_subset_states) {
+      combination_search_capped = true;
+      return;
+    }
+    if (group_index == selector_groups.size()) {
+      if (!current.empty())
+        combinations.push_back(current);
+      return;
+    }
+    for (const NaturalTargetAnchorCandidate& choice : selector_groups.at(group_index)) {
+      if (options.maximum_anchors > 0U && current.size() >= options.maximum_anchors)
+        break;
+      if (!used_targets.insert(choice.target_origin).second)
+        continue;
+      current.push_back(choice);
+      self(self, group_index + 1U);
+      current.pop_back();
+      used_targets.erase(choice.target_origin);
+      if (combination_search_capped)
+        return;
+    }
+    self(self, group_index + 1U);
+  };
+  enumerate(enumerate, 0);
+  if (combination_search_capped)
+    add_reason(result.plan, "multi-anchor candidate enumeration reached its proof-search cap");
+
+  const auto score = [](const std::vector<NaturalTargetAnchorCandidate>& anchors) {
+    int total = 0;
+    for (const NaturalTargetAnchorCandidate& anchor : anchors)
+      total += anchor.call_sites - anchor.selector.displaced_flow_uses;
+    return total;
+  };
+  std::stable_sort(combinations.begin(), combinations.end(), [&](const auto& left,
+                                                                  const auto& right) {
+    const int left_score = score(left);
+    const int right_score = score(right);
+    if (left_score != right_score)
+      return left_score > right_score;
+    if (left.size() != right.size())
+      return left.size() > right.size();
+    for (std::size_t index = 0; index < left.size(); ++index) {
+      const auto left_key = std::tie(left.at(index).selector.register_index,
+                                     left.at(index).selector.fixed_target,
+                                     left.at(index).target_origin);
+      const auto right_key = std::tie(right.at(index).selector.register_index,
+                                      right.at(index).selector.fixed_target,
+                                      right.at(index).target_origin);
+      if (left_key != right_key)
+        return left_key < right_key;
+    }
+    return false;
+  });
+
+  std::optional<CandidateArtifact> best;
+  for (const auto& anchors : combinations) {
+    if (best.has_value() && score(anchors) < best->plan.removed_cells)
+      break;
+    const std::optional<CandidateArtifact> candidate = try_candidate(
+        logical_items, preloads, *logical_flow, options, *references, calls, anchors,
+        *original_trace, *original_external, &result.plan.reasons);
+    if (candidate.has_value() &&
+        (!best.has_value() || better_candidate(*candidate, *best))) {
+      best = candidate;
     }
   }
   if (!best.has_value()) {

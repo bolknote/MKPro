@@ -48,6 +48,7 @@ std::string lower_ascii(std::string value) {
   return value;
 }
 
+std::string exact_setup_number_entry(const std::string& value);
 int setup_number_entry_cost(const std::string& value);
 std::string js_number_string(double value);
 
@@ -715,8 +716,57 @@ struct SetupNumericPreloadAction {
 
 int setup_number_entry_cost(const std::string& value) {
   MachineEmitter estimator;
-  estimator.emit_number(value);
+  estimator.emit_number(exact_setup_number_entry(value));
   return static_cast<int>(estimator.items.size());
+}
+
+std::string exact_setup_number_entry(const std::string& raw) {
+  const std::string normalized = lower_ascii(trim_ascii(raw));
+  const std::size_t sign_size =
+      !normalized.empty() && (normalized.front() == '-' || normalized.front() == '+') ? 1U : 0U;
+  const std::string_view unsigned_value(normalized.data() + sign_size,
+                                        normalized.size() - sign_size);
+  if (unsigned_value.find_first_of("eE") != std::string_view::npos)
+    return normalized;
+
+  const std::size_t point = unsigned_value.find('.');
+  if (point == std::string_view::npos)
+    return normalized;
+  const std::string_view integer = unsigned_value.substr(0, point);
+  const std::string_view fraction = unsigned_value.substr(point + 1U);
+  if (integer.empty() ||
+      !std::all_of(integer.begin(), integer.end(), [](char ch) { return ch == '0'; }) ||
+      !std::all_of(fraction.begin(), fraction.end(), [](unsigned char ch) {
+        return std::isdigit(ch) != 0;
+      }) ||
+      fraction.size() <= 7U ||
+      std::all_of(fraction.begin() + 7, fraction.end(), [](char ch) { return ch == '0'; })) {
+    return normalized;
+  }
+
+  const std::size_t first_nonzero = fraction.find_first_not_of('0');
+  if (first_nonzero == std::string_view::npos)
+    return normalized;
+  std::string significant(fraction.substr(first_nonzero));
+  while (significant.size() > 8U && significant.back() == '0')
+    significant.pop_back();
+  if (significant.size() > 8U)
+    return normalized;
+
+  std::string result;
+  if (sign_size != 0U && normalized.front() == '-')
+    result.push_back('-');
+  result.push_back(significant.front());
+  if (significant.size() > 1U) {
+    result.push_back('.');
+    result += significant.substr(1U);
+  }
+  result += "e-" + std::to_string(first_nonzero + 1U);
+  return result;
+}
+
+void emit_exact_setup_number(MachineEmitter& setup, const std::string& value) {
+  setup.emit_number(exact_setup_number_entry(value));
 }
 
 std::string js_number_string(double value) {
@@ -798,12 +848,12 @@ void emit_setup_number_or_pow10(MachineEmitter& setup, const std::string& value,
   if (const std::optional<int> exponent = positive_integer_power_of_ten_exponent(value)) {
     const std::string exponent_text = std::to_string(*exponent);
     if (setup_number_entry_cost(exponent_text) + 1 < setup_number_entry_cost(value)) {
-      setup.emit_number(exponent_text);
+      emit_exact_setup_number(setup, exponent_text);
       setup.emit_op(0x15, "F 10^x", std::move(comment), std::nullopt, true);
       return;
     }
   }
-  setup.emit_number(value);
+  emit_exact_setup_number(setup, value);
 }
 
 std::vector<int> setup_numeric_action_target_indexes(const SetupNumericPreloadAction& action) {
@@ -1125,11 +1175,11 @@ void emit_setup_numeric_preload_action(MachineEmitter& setup,
   const NumericSetupPreload& target = preloads.at(static_cast<std::size_t>(action.target_index));
   const std::string target_value = normalize_setup_constant_text(target.value);
   if (action.kind == "direct") {
-    setup.emit_number(target.value);
+    emit_exact_setup_number(setup, target.value);
     return;
   }
   if (action.kind == "pow10") {
-    setup.emit_number(action.exponent);
+    emit_exact_setup_number(setup, action.exponent);
     setup.emit_op(0x15, "F 10^x", "setup constant " + target_value, std::nullopt, true);
   } else if (action.kind == "unary") {
     const NumericSetupPreload& source = preloads.at(static_cast<std::size_t>(action.source_index));
@@ -1238,7 +1288,7 @@ bool emit_setup_number_or_negated_preload(MachineEmitter& setup,
       return true;
     }
   }
-  setup.emit_number(raw);
+  emit_exact_setup_number(setup, raw);
   return false;
 }
 
@@ -1508,7 +1558,7 @@ bool emit_restore_setup_pointer_r0(MachineEmitter& setup,
       normalize_setup_constant_text(value) == normalize_setup_constant_text(*current_value)) {
     return true;
   }
-  setup.emit_number(preload->value);
+  emit_exact_setup_number(setup, preload->value);
   emit_setup_store(setup, "0", "restore setup R0");
   return true;
 }
@@ -2227,7 +2277,7 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
         }
         if (source_index.has_value()) {
           const PreloadReport& source = preloads.at(*source_index);
-          setup.emit_number(normalize_setup_constant_text(source.value));
+          emit_exact_setup_number(setup, normalize_setup_constant_text(source.value));
           emit_setup_store(setup, source.register_name, setup_store_comment(source));
           emit_setup_recall(setup, source.register_name,
                             "setup constant " + normalize_setup_constant_text(preload.value) +
@@ -2398,7 +2448,8 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
       setup.emit_op(0x0a, ".", "setup " + setup_target_name(preload) + " from stack.X2",
                     std::nullopt, true);
     if (!from_stack)
-      setup.emit_number(executable_setup_value(preload.value).value_or(preload.value));
+      emit_exact_setup_number(setup,
+                              executable_setup_value(preload.value).value_or(preload.value));
     std::vector<std::string> stored_registers;
     std::set<std::string> seen_registers;
     std::size_t target_count = 0;

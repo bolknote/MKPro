@@ -14,7 +14,7 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 151 | 105 | +46 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 144 | 105 | +39 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
@@ -61,8 +61,26 @@ mode may reject over-window programs earlier than the analysis path.
   places the shared normalizer at the existing stable R8 target, shortens five
   calls, and reduces the fully verified result from 163 to 154 cells.
 - Later generic optimizer passes reduced the fully verified result from 154 to
-  151 cells without source-specific recognition. The remaining gap to the
-  MK-61 program window is 46 cells.
+  151 cells without source-specific recognition.
+- A proved predecrement indexed-update ABI now carries each old bank element
+  below the helper input on the stack. For linear selector sequences it folds
+  the explicit decrement, indexed recall, and swap into `КхП0..3`; this reduces
+  the intermediate result from 151 to 149 cells.
+- Joint natural-target component layout treats several unrelated stable
+  preload constants as simultaneous helper addresses, solves all component
+  positions together, and proves the final CFG, return stack, X2, and runtime
+  selectors in one artifact. Final candidate search retains both its joint and
+  one-anchor Pareto forms so a locally shorter layout cannot regress the global
+  result. At this stage the selected program remained 149 cells.
+- Generic address-only selector reassignment compares the total benefit of all
+  candidate call targets against the one-cell flows already using a stable
+  preload. It may restore lower-value indirect flows to their equivalent direct
+  commands, rebind the selector, and solve its new position jointly with fixed
+  natural targets. The pass rejects written selectors, ordinary data recalls,
+  indirect-memory projections, ambiguous targets, and any final artifact that
+  fails exact CFG, return-stack, stack, X2, runtime-selector, or size proofs.
+  Here it jointly shortens twelve calls while restoring one old flow, reducing
+  the verified result from 149 to 144 cells; the remaining gap is 39 cells.
 - Optimizer tests must use unrelated synthetic programs and local proof
   obligations. The tic-tac-toe fixture may lock only its size and observable
   UI; it must not select or justify an optimization by recognizing this game
