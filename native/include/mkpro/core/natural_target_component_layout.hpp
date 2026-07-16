@@ -21,6 +21,7 @@ struct NaturalTargetComponentLayoutOptions {
   std::size_t maximum_subset_states = 20000;
   int maximum_execution_states = 20000;
   std::size_t maximum_anchors = 0;
+  std::size_t maximum_rejection_reasons = 64;
 };
 
 struct NaturalTargetCallRewrite {
@@ -74,6 +75,8 @@ struct NaturalTargetComponentLayoutPlan {
   int removed_cells = 0;
   int moved_segments = 0;
   int rebound_indirect_flows = 0;
+  int transparent_trampolines = 0;
+  int transparent_split_bridges = 0;
   std::vector<NaturalTargetCallRewrite> calls;
   std::vector<NaturalTargetPreloadRewrite> preloads;
   std::vector<NaturalTargetRuntimeSelectorProof> runtime_selectors;
@@ -123,7 +126,13 @@ std::optional<std::vector<MachineItem>> normalize_natural_target_overflow_formal
 // immediately by ordinary arithmetic; raw-sensitive uses fail closed.
 // Existing two-digit raw BCD selectors are retained only when the authoritative
 // machine decoder maps them back to the same command identity before and after
-// layout.
+// layout. When two fixed natural targets would overlap, a profitable selector
+// may instead land on a two-cell direct-jump trampoline. Such a trampoline is
+// accepted only after its exact structure is proved and collapsed from the
+// identity trace without changing the incoming flow kind or return stack.
+// A fallthrough-closed helper may likewise be split before a later fixed target:
+// its prefix receives a proved direct-jump bridge and its suffix remains freely
+// placeable. Candidate cuts are derived only from target geometry.
 NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     const std::vector<MachineItem>& items,
     const std::vector<PreloadReport>& preloads,

@@ -48947,11 +48947,24 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
         const core::NaturalTargetComponentLayoutOptions natural_options{
             .address_space_model = address_space_model_for_options(options),
             .maximum_anchors = options.maximum_natural_target_anchors,
+            .maximum_rejection_reasons = options.analysis ? 512U : 0U,
         };
         std::optional<core::NaturalTargetComponentLayoutResult> chosen_layout;
         std::optional<core::HelperSemanticAliasProof> chosen_alias;
+        std::vector<std::string> natural_layout_search_rejections;
         const auto consider_layout = [&](core::NaturalTargetComponentLayoutResult candidate,
                                          std::optional<core::HelperSemanticAliasProof> alias) {
+          if (options.analysis) {
+            for (const std::string& reason : candidate.plan.reasons) {
+              if (natural_layout_search_rejections.size() >= 512U)
+                break;
+              if (std::find(natural_layout_search_rejections.begin(),
+                            natural_layout_search_rejections.end(), reason) ==
+                  natural_layout_search_rejections.end()) {
+                natural_layout_search_rejections.push_back(reason);
+              }
+            }
+          }
           if (candidate.applied <= 0 || !candidate.plan.final_artifact_proved ||
               candidate.removed_cells <= 0 ||
               core::machine_cell_count(candidate.items) >=
@@ -49055,6 +49068,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
           const int alignment_cells =
               natural_layout.applied -
               natural_layout.plan.rebound_indirect_flows -
+              2 * natural_layout.plan.transparent_trampolines -
+              2 * natural_layout.plan.transparent_split_bridges -
               natural_layout.removed_cells;
           if (natural_layout.plan.rebound_indirect_flows > 0) {
             natural_layout_detail += " after reassigning " +
@@ -49067,12 +49082,36 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                                      std::to_string(alignment_cells) +
                                      " proof-isolated unreachable alignment cell(s)";
           }
+          if (natural_layout.plan.transparent_trampolines > 0) {
+            natural_layout_detail += " through " +
+                                     std::to_string(
+                                         natural_layout.plan.transparent_trampolines) +
+                                     " proved two-cell call trampoline(s)";
+          }
+          if (natural_layout.plan.transparent_split_bridges > 0) {
+            natural_layout_detail += " with " +
+                                     std::to_string(
+                                         natural_layout.plan.transparent_split_bridges) +
+                                     " proved fallthrough split bridge(s)";
+          }
           natural_layout_detail += " after exact final-artifact "
               "control/return-stack/stack/X2/runtime-selector proofs.";
           post_layout_optimizations.push_back(core::passes::AppliedOptimization{
               .name = "natural-target-component-layout",
               .detail = std::move(natural_layout_detail),
           });
+          if (options.analysis && !natural_layout_search_rejections.empty()) {
+            std::string rejection_detail;
+            for (const std::string& reason : natural_layout_search_rejections) {
+              if (!rejection_detail.empty())
+                rejection_detail += " | ";
+              rejection_detail += reason;
+            }
+            post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+                .name = "natural-target-layout-rejections",
+                .detail = std::move(rejection_detail),
+            });
+          }
         }
       }
     }

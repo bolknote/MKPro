@@ -8,8 +8,10 @@
 #include <compare>
 #include <deque>
 #include <exception>
+#include <limits>
 #include <map>
 #include <optional>
+#include <queue>
 #include <set>
 #include <string>
 #include <tuple>
@@ -80,6 +82,21 @@ struct NaturalTargetAnchorCandidate {
   SelectorCandidate selector;
   std::size_t target_origin = 0;
   int call_sites = 0;
+  bool via_trampoline = false;
+  int split_prefix_cells = 0;
+};
+
+struct TransparentTrampoline {
+  int selector_register = -1;
+  std::size_t command_origin = 0;
+  std::size_t operand_origin = 0;
+  std::size_t target_origin = 0;
+};
+
+struct TransparentSplitBridge {
+  std::size_t command_origin = 0;
+  std::size_t operand_origin = 0;
+  std::size_t target_origin = 0;
 };
 
 struct NaturalTargetPlacement {
@@ -107,6 +124,24 @@ struct CandidateArtifact {
   std::map<std::size_t, std::size_t> new_item_by_origin;
   NaturalTargetComponentLayoutPlan plan;
 };
+
+std::optional<std::pair<std::size_t, int>> locate_origin(
+    const std::vector<Segment>& segments, std::size_t origin);
+
+std::optional<std::size_t> physical_target_origin(
+    const NaturalTargetAnchorCandidate& anchor,
+    const std::vector<TransparentTrampoline>& trampolines) {
+  if (!anchor.via_trampoline)
+    return anchor.target_origin;
+  const auto trampoline = std::find_if(
+      trampolines.begin(), trampolines.end(), [&](const TransparentTrampoline& candidate) {
+        return candidate.selector_register == anchor.selector.register_index &&
+               candidate.target_origin == anchor.target_origin;
+      });
+  return trampoline == trampolines.end()
+             ? std::nullopt
+             : std::optional<std::size_t>(trampoline->command_origin);
+}
 
 enum class TraceEdgeKind {
   Next,
@@ -417,6 +452,67 @@ std::vector<Segment> make_segments(std::vector<Cell> cells) {
   if (!current.cells.empty())
     segments.push_back(std::move(current));
   return segments;
+}
+
+bool apply_transparent_segment_splits(
+    std::vector<Segment>& segments,
+    const std::vector<NaturalTargetAnchorCandidate>& anchors,
+    std::size_t& next_synthetic_origin,
+    std::vector<TransparentSplitBridge>& bridges) {
+  for (const NaturalTargetAnchorCandidate& anchor : anchors) {
+    if (anchor.split_prefix_cells <= 0)
+      continue;
+    const std::optional<std::pair<std::size_t, int>> location =
+        locate_origin(segments, anchor.target_origin);
+    if (!location.has_value() || location->second != 0)
+      return false;
+    const std::size_t segment_index = location->first;
+    const std::size_t prefix_cells =
+        static_cast<std::size_t>(anchor.split_prefix_cells);
+    if (segment_index >= segments.size() || prefix_cells == 0U ||
+        prefix_cells >= segments.at(segment_index).cells.size() ||
+        safe_cut_after(segments.at(segment_index).cells, prefix_cells - 1U)) {
+      return false;
+    }
+    for (const NaturalTargetAnchorCandidate& other : anchors) {
+      if (other.target_origin == anchor.target_origin)
+        continue;
+      const auto other_location = locate_origin(segments, other.target_origin);
+      if (other_location.has_value() && other_location->first == segment_index)
+        return false;
+    }
+
+    Segment suffix;
+    suffix.ordinal = segments.size();
+    Segment& prefix = segments.at(segment_index);
+    while (prefix.cells.size() > prefix_cells) {
+      suffix.cells.push_back(std::move(prefix.cells.at(prefix_cells)));
+      prefix.cells.erase(prefix.cells.begin() +
+                         static_cast<std::ptrdiff_t>(prefix_cells));
+    }
+    if (suffix.cells.empty())
+      return false;
+    TransparentSplitBridge bridge{
+        .command_origin = next_synthetic_origin++,
+        .operand_origin = next_synthetic_origin++,
+        .target_origin = suffix.cells.front().value.origin,
+    };
+    prefix.cells.push_back(Cell{
+        .value = OwnedItem{
+            .item = MachineItem::op(kJumpOpcode, opcode_by_code(kJumpOpcode).name),
+            .origin = bridge.command_origin,
+        },
+    });
+    prefix.cells.push_back(Cell{
+        .value = OwnedItem{
+            .item = MachineItem::address(static_cast<int>(bridge.target_origin)),
+            .origin = bridge.operand_origin,
+        },
+    });
+    segments.push_back(std::move(suffix));
+    bridges.push_back(bridge);
+  }
+  return true;
 }
 
 int segment_cells(const Segment& segment) {
@@ -733,7 +829,8 @@ std::optional<std::vector<Cell>> convert_direct_calls(
     const AuthoritativePostLayoutControlFlow& flow,
     const std::vector<NaturalTargetAnchorCandidate>& anchors,
     std::vector<NaturalTargetCallRewrite>& rewrites,
-    std::vector<DisplacedIndirectFlowRewrite>& displaced_flows) {
+    std::vector<DisplacedIndirectFlowRewrite>& displaced_flows,
+    std::vector<TransparentTrampoline>& trampolines) {
   const std::optional<std::vector<Cell>> original_cells = make_cells(items);
   if (!original_cells.has_value())
     return std::nullopt;
@@ -842,6 +939,29 @@ std::optional<std::vector<Cell>> convert_direct_calls(
       continue;
     }
     cells.push_back(std::move(cell));
+  }
+  for (const NaturalTargetAnchorCandidate& anchor : anchors) {
+    if (!anchor.via_trampoline)
+      continue;
+    TransparentTrampoline trampoline{
+        .selector_register = anchor.selector.register_index,
+        .command_origin = next_synthetic_origin++,
+        .operand_origin = next_synthetic_origin++,
+        .target_origin = anchor.target_origin,
+    };
+    cells.push_back(Cell{
+        .value = OwnedItem{
+            .item = MachineItem::op(kJumpOpcode, opcode_by_code(kJumpOpcode).name),
+            .origin = trampoline.command_origin,
+        },
+    });
+    cells.push_back(Cell{
+        .value = OwnedItem{
+            .item = MachineItem::address(static_cast<int>(trampoline.target_origin)),
+            .origin = trampoline.operand_origin,
+        },
+    });
+    trampolines.push_back(trampoline);
   }
   return cells;
 }
@@ -1029,7 +1149,20 @@ bool retarget_indirect_facts(
     const std::map<std::size_t, std::size_t>& new_item_by_origin,
     const std::map<std::size_t, int>& new_address_by_origin,
     const std::vector<NaturalTargetCallRewrite>& converted_calls,
-    const std::vector<DisplacedIndirectFlowRewrite>& displaced_flows) {
+    const std::vector<DisplacedIndirectFlowRewrite>& displaced_flows,
+    const std::vector<NaturalTargetAnchorCandidate>& anchors,
+    const std::vector<TransparentTrampoline>& trampolines) {
+  std::map<int, std::size_t> selected_physical_targets;
+  for (const NaturalTargetAnchorCandidate& anchor : anchors) {
+    const std::optional<std::size_t> physical =
+        physical_target_origin(anchor, trampolines);
+    if (!physical.has_value() ||
+        !selected_physical_targets
+             .emplace(anchor.selector.register_index, *physical)
+             .second) {
+      return false;
+    }
+  }
   std::set<std::size_t> displaced_commands;
   for (const DisplacedIndirectFlowRewrite& rewrite : displaced_flows)
     displaced_commands.insert(rewrite.command_origin);
@@ -1039,10 +1172,20 @@ bool retarget_indirect_facts(
     const auto command = new_item_by_origin.find(flow_origin);
     if (command == new_item_by_origin.end())
       return false;
+    const MachineItem& rewritten_command = items.at(command->second);
+    if (rewritten_command.kind != MachineItemKind::Op ||
+        !is_indirect_flow(rewritten_command.opcode)) {
+      return false;
+    }
+    const auto selected =
+        selected_physical_targets.find(encoded_register(rewritten_command.opcode));
     std::vector<IrTarget> rebound;
     rebound.reserve(targets.size());
     for (const PostLayoutCommandIdentity& target : targets) {
-      const auto address = new_address_by_origin.find(target.item_index);
+      const std::size_t target_origin =
+          selected == selected_physical_targets.end() ? target.item_index
+                                                      : selected->second;
+      const auto address = new_address_by_origin.find(target_origin);
       if (address == new_address_by_origin.end())
         return false;
       rebound.emplace_back(address->second);
@@ -1064,11 +1207,60 @@ bool retarget_indirect_facts(
   }
   for (const NaturalTargetCallRewrite& rewrite : converted_calls) {
     const auto command = new_item_by_origin.find(rewrite.original_call_item);
-    const auto target = new_address_by_origin.find(rewrite.original_target_item);
+    const auto anchor = std::find_if(
+        anchors.begin(), anchors.end(), [&](const NaturalTargetAnchorCandidate& candidate) {
+          return candidate.selector.register_name == rewrite.selector_register &&
+                 candidate.target_origin == rewrite.original_target_item;
+        });
+    if (anchor == anchors.end())
+      return false;
+    const std::optional<std::size_t> physical =
+        physical_target_origin(*anchor, trampolines);
+    if (!physical.has_value())
+      return false;
+    const auto target = new_address_by_origin.find(*physical);
     if (command == new_item_by_origin.end() || target == new_address_by_origin.end())
       return false;
     items.at(command->second).indirect_flow_targets =
         std::vector<IrTarget>{target->second};
+  }
+  return true;
+}
+
+bool retarget_trampolines(
+    std::vector<MachineItem>& items,
+    const std::map<std::size_t, std::size_t>& new_item_by_origin,
+    const std::map<std::size_t, int>& new_address_by_origin,
+    const std::vector<TransparentTrampoline>& trampolines) {
+  for (const TransparentTrampoline& trampoline : trampolines) {
+    const auto operand = new_item_by_origin.find(trampoline.operand_origin);
+    const auto target = new_address_by_origin.find(trampoline.target_origin);
+    if (operand == new_item_by_origin.end() || target == new_address_by_origin.end())
+      return false;
+    MachineItem& address = items.at(operand->second);
+    if (address.kind != MachineItemKind::Address)
+      return false;
+    address.target = target->second;
+    address.formal_opcode.reset();
+  }
+  return true;
+}
+
+bool retarget_split_bridges(
+    std::vector<MachineItem>& items,
+    const std::map<std::size_t, std::size_t>& new_item_by_origin,
+    const std::map<std::size_t, int>& new_address_by_origin,
+    const std::vector<TransparentSplitBridge>& bridges) {
+  for (const TransparentSplitBridge& bridge : bridges) {
+    const auto operand = new_item_by_origin.find(bridge.operand_origin);
+    const auto target = new_address_by_origin.find(bridge.target_origin);
+    if (operand == new_item_by_origin.end() || target == new_address_by_origin.end())
+      return false;
+    MachineItem& address = items.at(operand->second);
+    if (address.kind != MachineItemKind::Address)
+      return false;
+    address.target = target->second;
+    address.formal_opcode.reset();
   }
   return true;
 }
@@ -1227,6 +1419,7 @@ bool rebind_preloads(
     const std::map<std::size_t, int>& new_address_by_origin,
     const std::vector<NaturalTargetAnchorCandidate>& anchors,
     const std::vector<DisplacedIndirectFlowRewrite>& displaced_flows,
+    const std::vector<TransparentTrampoline>& trampolines,
     AddressSpaceModel model, std::vector<PreloadReport>& preloads,
     std::vector<NaturalTargetPreloadRewrite>& rewrites) {
   bool unique = false;
@@ -1235,10 +1428,10 @@ bool rebind_preloads(
   if (!unique)
     return false;
 
-  std::map<int, const SelectorCandidate*> selected_by_register;
+  std::map<int, const NaturalTargetAnchorCandidate*> selected_by_register;
   for (const NaturalTargetAnchorCandidate& anchor : anchors) {
     if (!selected_by_register
-             .emplace(anchor.selector.register_index, &anchor.selector)
+             .emplace(anchor.selector.register_index, &anchor)
              .second) {
       return false;
     }
@@ -1260,10 +1453,24 @@ bool rebind_preloads(
         target_origin_for_flow_use(original_flow, item_index);
     if (!target.has_value())
       return false;
-    required_targets[reg].insert(*target);
+    const auto selected = selected_by_register.find(reg);
+    if (selected != selected_by_register.end()) {
+      const std::optional<std::size_t> physical =
+          physical_target_origin(*selected->second, trampolines);
+      if (!physical.has_value())
+        return false;
+      required_targets[reg].insert(*physical);
+    } else {
+      required_targets[reg].insert(*target);
+    }
   }
-  for (const NaturalTargetAnchorCandidate& anchor : anchors)
-    required_targets[anchor.selector.register_index].insert(anchor.target_origin);
+  for (const NaturalTargetAnchorCandidate& anchor : anchors) {
+    const std::optional<std::size_t> physical =
+        physical_target_origin(anchor, trampolines);
+    if (!physical.has_value())
+      return false;
+    required_targets[anchor.selector.register_index].insert(*physical);
+  }
 
   for (const auto& [reg, target_origins] : required_targets) {
     if (reg < 7 || reg > 0x0e || target_origins.size() != 1U)
@@ -1277,7 +1484,13 @@ bool rebind_preloads(
     if (!is_literal_runtime_preload(preloads.at(preload->second)))
       return false;
     const std::size_t target_origin = *target_origins.begin();
-    const auto old_target = original_address_by_origin.find(target_origin);
+    std::size_t original_target_origin = target_origin;
+    const auto selected = selected_by_register.find(reg);
+    if (selected != selected_by_register.end() &&
+        selected->second->via_trampoline) {
+      original_target_origin = selected->second->target_origin;
+    }
+    const auto old_target = original_address_by_origin.find(original_target_origin);
     const auto new_target = new_address_by_origin.find(target_origin);
     if (old_target == original_address_by_origin.end() ||
         new_target == new_address_by_origin.end()) {
@@ -1301,9 +1514,8 @@ bool rebind_preloads(
     if (preload_value_targets(name, old_value, new_target->second, model))
       continue;
 
-    const auto selected = selected_by_register.find(reg);
     if (selected != selected_by_register.end() &&
-        selected->second->rebindable_address) {
+        selected->second->selector.rebindable_address) {
       if (register_has_nonflow_use(original_items, reg))
         return false;
       const std::string rebound = std::to_string(new_target->second);
@@ -1318,19 +1530,20 @@ bool rebind_preloads(
       });
       continue;
     }
-    if (selected != selected_by_register.end() && selected->second->value.has_value()) {
+    if (selected != selected_by_register.end() &&
+        selected->second->selector.value.has_value()) {
       const std::optional<NaturalFractionalSelectorEncoding> natural =
           natural_fractional_selector_encoding(old_value);
       if (natural.has_value() && natural->target == new_target->second &&
-          natural->delivered_value == *selected->second->value &&
-          preload_value_targets(name, *selected->second->value,
+          natural->delivered_value == *selected->second->selector.value &&
+          preload_value_targets(name, *selected->second->selector.value,
                                 new_target->second, model) &&
           prove_numeric_nonflow_projection(original_items, reg)) {
-        preloads.at(preload->second).value = *selected->second->value;
+        preloads.at(preload->second).value = *selected->second->selector.value;
         rewrites.push_back(NaturalTargetPreloadRewrite{
             .register_name = name,
             .old_value = old_value,
-            .new_value = *selected->second->value,
+            .new_value = *selected->second->selector.value,
             .fractional_projection_only = false,
         });
         continue;
@@ -1393,7 +1606,8 @@ std::optional<TraceGraph> build_trace_graph(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow,
     const std::map<std::size_t, std::size_t>& origin_by_item,
-    AddressSpaceModel model, int maximum_states) {
+    AddressSpaceModel model, int maximum_states,
+    const std::map<std::size_t, std::size_t>* transparent_aliases = nullptr) {
   if (!flow.proved || maximum_states <= 0)
     return std::nullopt;
   const ArtifactIndex index = index_artifact(items);
@@ -1411,11 +1625,15 @@ std::optional<TraceGraph> build_trace_graph(
         origin_for_item(origin_by_item, entry.entry.item_index);
     if (!command.has_value())
       return std::nullopt;
+    if (transparent_aliases != nullptr && transparent_aliases->contains(*command))
+      return std::nullopt;
     TraceState state{.command = *command};
     for (const PostLayoutCommandIdentity& slot : entry.return_stack) {
       const std::optional<std::size_t> origin =
           origin_for_item(origin_by_item, slot.item_index);
       if (!origin.has_value())
+        return std::nullopt;
+      if (transparent_aliases != nullptr && transparent_aliases->contains(*origin))
         return std::nullopt;
       state.returns.push_back(*origin);
     }
@@ -1451,6 +1669,11 @@ std::optional<TraceGraph> build_trace_graph(
 
     const auto enqueue = [&](TraceEdgeKind kind, std::size_t command,
                              std::vector<std::size_t> returns) {
+      if (transparent_aliases != nullptr) {
+        const auto alias = transparent_aliases->find(command);
+        if (alias != transparent_aliases->end())
+          command = alias->second;
+      }
       TraceEdge edge{
           .kind = kind,
           .target = TraceState{.command = command, .returns = std::move(returns)},
@@ -1625,7 +1848,8 @@ std::optional<std::vector<NaturalTargetRuntimeSelectorProof>> prove_runtime_sele
     const std::vector<MachineItem>& final_items,
     const AuthoritativePostLayoutControlFlow& final_flow,
     const std::map<std::size_t, std::size_t>& final_origin_by_item,
-    const std::vector<PreloadReport>& preloads, AddressSpaceModel model) {
+    const std::vector<PreloadReport>& preloads, AddressSpaceModel model,
+    const std::map<std::size_t, std::size_t>& transparent_aliases) {
   bool unique = false;
   const std::map<std::string, std::size_t> preload_by_register =
       preload_index(preloads, unique);
@@ -1645,6 +1869,11 @@ std::optional<std::vector<NaturalTargetRuntimeSelectorProof>> prove_runtime_sele
         origin_for_item(final_origin_by_item, targets.front().item_index);
     if (!command_origin.has_value() || !target_origin.has_value())
       return std::nullopt;
+    std::size_t logical_target_origin = *target_origin;
+    if (const auto alias = transparent_aliases.find(logical_target_origin);
+        alias != transparent_aliases.end()) {
+      logical_target_origin = alias->second;
+    }
     const int reg = encoded_register(command.opcode);
     const std::string name = register_name(reg);
     const auto preload = preload_by_register.find(name);
@@ -1676,13 +1905,13 @@ std::optional<std::vector<NaturalTargetRuntimeSelectorProof>> prove_runtime_sele
     const auto original_targets = original_flow.indirect_flow_targets.find(*command_origin);
     if (original_targets != original_flow.indirect_flow_targets.end()) {
       if (original_targets->second.size() != 1U ||
-          original_targets->second.front().item_index != *target_origin)
+          original_targets->second.front().item_index != logical_target_origin)
         return std::nullopt;
     }
     result.push_back(NaturalTargetRuntimeSelectorProof{
         .original_command_item = *command_origin,
         .final_command_item = final_command,
-        .original_target_item = *target_origin,
+        .original_target_item = logical_target_origin,
         .register_name = name,
         .delivered_preload = value,
         .decoded_target = *decoded->actual_flow_target,
@@ -1741,6 +1970,98 @@ bool unchanged_command_effects_preserved(
   return true;
 }
 
+bool transparent_trampolines_proved(
+    const std::vector<MachineItem>& items,
+    const std::map<std::size_t, std::size_t>& new_item_by_origin,
+    const std::map<std::size_t, int>& new_address_by_origin,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<TransparentTrampoline>& trampolines) {
+  const ArtifactIndex index = index_artifact(items);
+  const OpcodeInfo& jump = opcode_by_code(kJumpOpcode);
+  if (jump.stack_effect != StackEffect::Preserves ||
+      jump.x2_effect != X2Effect::Preserves)
+    return false;
+  std::set<std::size_t> trampoline_commands;
+  for (const TransparentTrampoline& trampoline : trampolines) {
+    const auto command = new_item_by_origin.find(trampoline.command_origin);
+    const auto operand = new_item_by_origin.find(trampoline.operand_origin);
+    const auto target = new_address_by_origin.find(trampoline.target_origin);
+    if (command == new_item_by_origin.end() || operand == new_item_by_origin.end() ||
+        target == new_address_by_origin.end()) {
+      return false;
+    }
+    const MachineItem& jump_item = items.at(command->second);
+    const MachineItem& address_item = items.at(operand->second);
+    const int* encoded_target = std::get_if<int>(&address_item.target);
+    if (jump_item.kind != MachineItemKind::Op || jump_item.opcode != kJumpOpcode ||
+        jump_item.manual_interaction.has_value() ||
+        address_item.kind != MachineItemKind::Address || address_item.raw ||
+        !address_item.roles.empty() || encoded_target == nullptr ||
+        *encoded_target != target->second ||
+        index.item_addresses.at(operand->second) !=
+            index.item_addresses.at(command->second) + 1) {
+      return false;
+    }
+    trampoline_commands.insert(command->second);
+  }
+  for (const PostLayoutExternalEntryState& entry : flow.external_entries) {
+    if (trampoline_commands.contains(entry.entry.item_index))
+      return false;
+    for (const PostLayoutCommandIdentity& slot : entry.return_stack) {
+      if (trampoline_commands.contains(slot.item_index))
+        return false;
+    }
+  }
+  return !flow.empty_return_target.has_value() ||
+         !trampoline_commands.contains(flow.empty_return_target->item_index);
+}
+
+bool transparent_split_bridges_proved(
+    const std::vector<MachineItem>& items,
+    const std::map<std::size_t, std::size_t>& new_item_by_origin,
+    const std::map<std::size_t, int>& new_address_by_origin,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<TransparentSplitBridge>& bridges) {
+  const ArtifactIndex index = index_artifact(items);
+  const OpcodeInfo& jump = opcode_by_code(kJumpOpcode);
+  if (jump.stack_effect != StackEffect::Preserves ||
+      jump.x2_effect != X2Effect::Preserves)
+    return false;
+  std::set<std::size_t> bridge_commands;
+  for (const TransparentSplitBridge& bridge : bridges) {
+    const auto command = new_item_by_origin.find(bridge.command_origin);
+    const auto operand = new_item_by_origin.find(bridge.operand_origin);
+    const auto target = new_address_by_origin.find(bridge.target_origin);
+    if (command == new_item_by_origin.end() || operand == new_item_by_origin.end() ||
+        target == new_address_by_origin.end()) {
+      return false;
+    }
+    const MachineItem& jump_item = items.at(command->second);
+    const MachineItem& address_item = items.at(operand->second);
+    const int* encoded_target = std::get_if<int>(&address_item.target);
+    if (jump_item.kind != MachineItemKind::Op || jump_item.opcode != kJumpOpcode ||
+        jump_item.manual_interaction.has_value() ||
+        address_item.kind != MachineItemKind::Address || address_item.raw ||
+        !address_item.roles.empty() || encoded_target == nullptr ||
+        *encoded_target != target->second ||
+        index.item_addresses.at(operand->second) !=
+            index.item_addresses.at(command->second) + 1) {
+      return false;
+    }
+    bridge_commands.insert(command->second);
+  }
+  for (const PostLayoutExternalEntryState& entry : flow.external_entries) {
+    if (bridge_commands.contains(entry.entry.item_index))
+      return false;
+    for (const PostLayoutCommandIdentity& slot : entry.return_stack) {
+      if (bridge_commands.contains(slot.item_index))
+        return false;
+    }
+  }
+  return !flow.empty_return_target.has_value() ||
+         !bridge_commands.contains(flow.empty_return_target->item_index);
+}
+
 std::optional<CandidateArtifact> try_candidate(
     const std::vector<MachineItem>& items,
     const std::vector<PreloadReport>& preloads,
@@ -1753,7 +2074,8 @@ std::optional<CandidateArtifact> try_candidate(
     const std::vector<ExternalIdentity>& original_external,
     std::vector<std::string>* rejection_reasons) {
   const auto reject = [&](std::string reason) -> std::optional<CandidateArtifact> {
-    if (rejection_reasons != nullptr && rejection_reasons->size() < 64U) {
+    if (rejection_reasons != nullptr &&
+        rejection_reasons->size() < options.maximum_rejection_reasons) {
       std::string detail;
       for (const NaturalTargetAnchorCandidate& anchor : anchors) {
         if (!detail.empty())
@@ -1762,6 +2084,11 @@ std::optional<CandidateArtifact> try_candidate(
                   (anchor.selector.rebindable_address
                        ? std::string("rebind")
                        : std::to_string(anchor.selector.fixed_target)) +
+                  (anchor.via_trampoline ? std::string("/trampoline")
+                                         : std::string{}) +
+                  (anchor.split_prefix_cells > 0
+                       ? "/split-" + std::to_string(anchor.split_prefix_cells)
+                       : std::string{}) +
                   " target-item=" +
                   std::to_string(anchor.target_origin);
       }
@@ -1777,11 +2104,19 @@ std::optional<CandidateArtifact> try_candidate(
     return reject("candidate has no natural-target anchors");
   std::vector<NaturalTargetCallRewrite> rewrites;
   std::vector<DisplacedIndirectFlowRewrite> displaced_flows;
+  std::vector<TransparentTrampoline> trampolines;
   const std::optional<std::vector<Cell>> converted = convert_direct_calls(
-      items, calls, control_flow, anchors, rewrites, displaced_flows);
+      items, calls, control_flow, anchors, rewrites, displaced_flows, trampolines);
   if (!converted.has_value() || rewrites.empty())
     return reject("direct-call conversion failed");
   std::vector<Segment> segments = make_segments(*converted);
+  std::size_t next_synthetic_origin =
+      items.size() + displaced_flows.size() + 2U * trampolines.size();
+  std::vector<TransparentSplitBridge> split_bridges;
+  if (!apply_transparent_segment_splits(segments, anchors, next_synthetic_origin,
+                                        split_bridges)) {
+    return reject("fallthrough segment split could not be proved");
+  }
 
   const std::optional<std::size_t> main = main_origin(control_flow);
   if (!main.has_value())
@@ -1797,15 +2132,19 @@ std::optional<CandidateArtifact> try_candidate(
 
   std::vector<NaturalTargetPlacement> placements;
   std::optional<NaturalTargetPlacement> flexible_placement;
-  std::map<std::size_t, const SelectorCandidate*> selector_by_target_origin;
+  std::map<std::size_t, const NaturalTargetAnchorCandidate*> anchor_by_target_origin;
   for (const NaturalTargetAnchorCandidate& anchor : anchors) {
     if (anchor.selector.origin != NaturalTargetSelectorOrigin::ExistingPreload)
       return reject("selector is not an existing stable preload");
-    const auto target_location = locate_origin(segments, anchor.target_origin);
+    const std::optional<std::size_t> placement_origin =
+        physical_target_origin(anchor, trampolines);
+    if (!placement_origin.has_value())
+      return reject("trampoline target identity cannot be located");
+    const auto target_location = locate_origin(segments, *placement_origin);
     if (!target_location.has_value())
       return reject("target component identity cannot be located");
-    if (!selector_by_target_origin
-             .emplace(anchor.target_origin, &anchor.selector)
+    if (!anchor_by_target_origin
+             .emplace(anchor.target_origin, &anchor)
              .second) {
       return reject("multiple selectors claim the same target identity");
     }
@@ -1823,7 +2162,9 @@ std::optional<CandidateArtifact> try_candidate(
     }
   }
   const int maximum_padding = static_cast<int>(rewrites.size()) -
-                              static_cast<int>(displaced_flows.size()) - 1;
+                              static_cast<int>(displaced_flows.size()) -
+                              2 * static_cast<int>(trampolines.size()) -
+                              2 * static_cast<int>(split_bridges.size()) - 1;
   if (maximum_padding < 0)
     return reject("address-selector displacement cannot produce a smaller artifact");
   std::optional<NaturalTargetLayoutOrder> order;
@@ -1855,8 +2196,39 @@ std::optional<CandidateArtifact> try_candidate(
         segments, main_location->first, placements,
         options.maximum_subset_states, maximum_padding);
   }
-  if (!order.has_value())
-    return reject("no fallthrough-closed component assignment reaches every natural target");
+  if (!order.has_value()) {
+    std::string geometry =
+        "no fallthrough-closed component assignment reaches every natural target; main=" +
+        std::to_string(segment_cells(segments.at(main_location->first))) +
+        "; padding-cap=" + std::to_string(maximum_padding) + "; fixed=";
+    std::set<std::size_t> fixed_segments;
+    for (const NaturalTargetPlacement& placement : placements) {
+      if (!fixed_segments.empty())
+        geometry += ",";
+      fixed_segments.insert(placement.target_segment);
+      geometry += std::to_string(placement.natural_target) + "@" +
+                  std::to_string(placement.target_offset) + "+" +
+                  std::to_string(segment_cells(segments.at(placement.target_segment)));
+    }
+    if (flexible_placement.has_value()) {
+      geometry += "; flexible=@" +
+                  std::to_string(flexible_placement->target_offset) + "+" +
+                  std::to_string(
+                      segment_cells(segments.at(flexible_placement->target_segment)));
+      fixed_segments.insert(flexible_placement->target_segment);
+    }
+    geometry += "; free=";
+    bool first_free = true;
+    for (std::size_t segment = 0; segment < segments.size(); ++segment) {
+      if (segment == main_location->first || fixed_segments.contains(segment))
+        continue;
+      if (!first_free)
+        geometry += ",";
+      first_free = false;
+      geometry += std::to_string(segment_cells(segments.at(segment)));
+    }
+    return reject(std::move(geometry));
+  }
 
   CandidateArtifact candidate;
   candidate.items = flatten_segments(segments, order->segments,
@@ -1865,15 +2237,19 @@ std::optional<CandidateArtifact> try_candidate(
   const std::map<std::size_t, int> new_address_by_origin =
       origin_addresses(candidate.items, candidate.new_item_by_origin);
   std::map<std::size_t, int> target_address_by_origin;
-  for (const auto& [target_origin, selector] : selector_by_target_origin) {
-    const auto target_address = new_address_by_origin.find(target_origin);
+  for (const auto& [target_origin, anchor] : anchor_by_target_origin) {
+    const std::optional<std::size_t> physical =
+        physical_target_origin(*anchor, trampolines);
+    if (!physical.has_value())
+      return reject("flattened component order lost a trampoline target");
+    const auto target_address = new_address_by_origin.find(*physical);
     if (target_address == new_address_by_origin.end())
       return reject("flattened component order lost a selected target");
-    if (!selector->rebindable_address &&
-        target_address->second != selector->fixed_target) {
+    if (!anchor->selector.rebindable_address &&
+        target_address->second != anchor->selector.fixed_target) {
       return reject("flattened component order missed a natural target");
     }
-    if (selector->rebindable_address &&
+    if (anchor->selector.rebindable_address &&
         (target_address->second <= 0 ||
          target_address->second >
              official_program_last_address(options.address_space_model))) {
@@ -1893,7 +2269,11 @@ std::optional<CandidateArtifact> try_candidate(
                                   candidate.new_item_by_origin, new_address_by_origin) ||
       !retarget_indirect_facts(candidate.items, control_flow,
                                candidate.new_item_by_origin, new_address_by_origin,
-                               rewrites, displaced_flows)) {
+                               rewrites, displaced_flows, anchors, trampolines) ||
+      !retarget_trampolines(candidate.items, candidate.new_item_by_origin,
+                            new_address_by_origin, trampolines) ||
+      !retarget_split_bridges(candidate.items, candidate.new_item_by_origin,
+                              new_address_by_origin, split_bridges)) {
     return reject("direct or indirect target rebinding failed");
   }
 
@@ -1904,7 +2284,7 @@ std::optional<CandidateArtifact> try_candidate(
   std::vector<NaturalTargetPreloadRewrite> preload_rewrites;
   if (!rebind_preloads(items, control_flow, original_address_by_origin,
                        new_address_by_origin, anchors,
-                       displaced_flows,
+                       displaced_flows, trampolines,
                        options.address_space_model, candidate.preloads,
                        preload_rewrites)) {
     return reject("runtime preload rebinding proof failed");
@@ -1936,15 +2316,27 @@ std::optional<CandidateArtifact> try_candidate(
   std::map<std::size_t, std::size_t> rewritten_origin_by_item;
   for (const auto& [origin, item_index] : candidate.new_item_by_origin)
     rewritten_origin_by_item.emplace(item_index, origin);
+  std::map<std::size_t, std::size_t> transparent_aliases;
+  for (const TransparentTrampoline& trampoline : trampolines)
+    transparent_aliases.emplace(trampoline.command_origin, trampoline.target_origin);
+  for (const TransparentSplitBridge& bridge : split_bridges)
+    transparent_aliases.emplace(bridge.command_origin, bridge.target_origin);
+  const bool trampolines_proved = transparent_trampolines_proved(
+      candidate.items, candidate.new_item_by_origin, new_address_by_origin,
+      final_flow, trampolines);
+  const bool split_bridges_proved = transparent_split_bridges_proved(
+      candidate.items, candidate.new_item_by_origin, new_address_by_origin,
+      final_flow, split_bridges);
   const std::optional<TraceGraph> rewritten_trace = build_trace_graph(
       candidate.items, final_flow, rewritten_origin_by_item,
-      options.address_space_model, options.maximum_execution_states);
+      options.address_space_model, options.maximum_execution_states,
+      &transparent_aliases);
   const std::optional<std::vector<ExternalIdentity>> rewritten_external =
       external_identities(final_flow, rewritten_origin_by_item);
   const std::optional<std::vector<NaturalTargetRuntimeSelectorProof>> runtime_selectors =
       prove_runtime_selectors(items, control_flow, candidate.items, final_flow,
                               rewritten_origin_by_item, candidate.preloads,
-                              options.address_space_model);
+                              options.address_space_model, transparent_aliases);
   if (!rewritten_trace.has_value())
     return reject("rewritten identity trace is incomplete");
   if (!rewritten_external.has_value())
@@ -1965,6 +2357,8 @@ std::optional<CandidateArtifact> try_candidate(
   plan.removed_cells = plan.input_cells - plan.output_cells;
   plan.moved_segments = count_moved_segments(order->segments);
   plan.rebound_indirect_flows = static_cast<int>(displaced_flows.size());
+  plan.transparent_trampolines = static_cast<int>(trampolines.size());
+  plan.transparent_split_bridges = static_cast<int>(split_bridges.size());
   plan.calls = std::move(rewrites);
   plan.preloads = std::move(preload_rewrites);
   plan.runtime_selectors = *runtime_selectors;
@@ -1972,6 +2366,7 @@ std::optional<CandidateArtifact> try_candidate(
   plan.control_flow_equivalent = true;
   plan.call_return_equivalent = true;
   plan.stack_and_x2_equivalent =
+      trampolines_proved && split_bridges_proved &&
       converted_call_effects_equivalent(items, anchors, plan.calls) &&
       unchanged_command_effects_preserved(items, candidate.items,
                                           candidate.new_item_by_origin, plan.calls,
@@ -1984,6 +2379,8 @@ std::optional<CandidateArtifact> try_candidate(
                 plan.removed_cells ==
                     static_cast<int>(plan.calls.size()) -
                         static_cast<int>(displaced_flows.size()) -
+                        2 * static_cast<int>(trampolines.size()) -
+                        2 * static_cast<int>(split_bridges.size()) -
                         order->padding_cells &&
                 plan.removed_cells > 0 && plan.control_flow_equivalent &&
                 plan.call_return_equivalent && plan.stack_and_x2_equivalent &&
@@ -2000,6 +2397,10 @@ bool better_candidate(const CandidateArtifact& left, const CandidateArtifact& ri
   if (left.plan.selector_origin != right.plan.selector_origin) {
     return left.plan.selector_origin == NaturalTargetSelectorOrigin::ExistingPreload;
   }
+  if (left.plan.transparent_trampolines != right.plan.transparent_trampolines)
+    return left.plan.transparent_trampolines < right.plan.transparent_trampolines;
+  if (left.plan.transparent_split_bridges != right.plan.transparent_split_bridges)
+    return left.plan.transparent_split_bridges < right.plan.transparent_split_bridges;
   return std::tie(left.plan.natural_target, left.plan.selector_register) <
          std::tie(right.plan.natural_target, right.plan.selector_register);
 }
@@ -2099,6 +2500,8 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
 
   std::map<int, std::vector<NaturalTargetAnchorCandidate>> options_by_selector;
   for (const SelectorCandidate& selector : selectors) {
+    if (!selector.rebindable_address && selector.fixed_target <= 0)
+      continue;
     for (const std::size_t target : call_targets) {
       if (!selector_existing_uses_match_target(selector, target, logical_items, *logical_flow))
         continue;
@@ -2131,44 +2534,115 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     selector_groups.push_back(std::move(group));
   }
 
-  std::vector<std::vector<NaturalTargetAnchorCandidate>> combinations;
-  std::vector<NaturalTargetAnchorCandidate> current;
-  std::set<std::size_t> used_targets;
-  bool combination_search_capped = false;
-  const auto enumerate = [&](auto&& self, std::size_t group_index) -> void {
-    if (combinations.size() >= options.maximum_subset_states) {
-      combination_search_capped = true;
-      return;
-    }
-    if (group_index == selector_groups.size()) {
-      if (!current.empty())
-        combinations.push_back(current);
-      return;
-    }
-    for (const NaturalTargetAnchorCandidate& choice : selector_groups.at(group_index)) {
-      if (options.maximum_anchors > 0U && current.size() >= options.maximum_anchors)
-        break;
-      if (!used_targets.insert(choice.target_origin).second)
-        continue;
-      current.push_back(choice);
-      self(self, group_index + 1U);
-      current.pop_back();
-      used_targets.erase(choice.target_origin);
-      if (combination_search_capped)
-        return;
-    }
-    self(self, group_index + 1U);
-  };
-  enumerate(enumerate, 0);
-  if (combination_search_capped)
-    add_reason(result.plan, "multi-anchor candidate enumeration reached its proof-search cap");
-
   const auto score = [](const std::vector<NaturalTargetAnchorCandidate>& anchors) {
     int total = 0;
     for (const NaturalTargetAnchorCandidate& anchor : anchors)
-      total += anchor.call_sites - anchor.selector.displaced_flow_uses;
+      total += anchor.call_sites - anchor.selector.displaced_flow_uses -
+               (anchor.via_trampoline ? 2 : 0) -
+               (anchor.split_prefix_cells > 0 ? 2 : 0);
     return total;
   };
+  struct CombinationChoice {
+    std::optional<NaturalTargetAnchorCandidate> anchor;
+    int score = 0;
+  };
+  std::vector<std::vector<CombinationChoice>> choices_by_selector;
+  choices_by_selector.reserve(selector_groups.size());
+  for (const std::vector<NaturalTargetAnchorCandidate>& group : selector_groups) {
+    std::vector<CombinationChoice> choices;
+    choices.reserve(group.size() + 1U);
+    for (const NaturalTargetAnchorCandidate& anchor : group) {
+      choices.push_back(CombinationChoice{
+          .anchor = anchor,
+          .score = score(std::vector<NaturalTargetAnchorCandidate>{anchor}),
+      });
+    }
+    choices.push_back(CombinationChoice{});
+    std::stable_sort(choices.begin(), choices.end(), [](const CombinationChoice& left,
+                                                        const CombinationChoice& right) {
+      if (left.score != right.score)
+        return left.score > right.score;
+      if (left.anchor.has_value() != right.anchor.has_value())
+        return left.anchor.has_value();
+      if (!left.anchor.has_value())
+        return false;
+      return std::tie(left.anchor->selector.fixed_target,
+                      left.anchor->target_origin) <
+             std::tie(right.anchor->selector.fixed_target,
+                      right.anchor->target_origin);
+    });
+    choices_by_selector.push_back(std::move(choices));
+  }
+
+  struct CombinationSearchState {
+    int score = 0;
+    std::vector<std::size_t> choices;
+  };
+  const auto lower_priority = [](const CombinationSearchState& left,
+                                 const CombinationSearchState& right) {
+    if (left.score != right.score)
+      return left.score < right.score;
+    return left.choices > right.choices;
+  };
+  std::priority_queue<CombinationSearchState,
+                      std::vector<CombinationSearchState>,
+                      decltype(lower_priority)>
+      pending(lower_priority);
+  CombinationSearchState initial;
+  initial.choices.resize(choices_by_selector.size(), 0U);
+  for (std::size_t group = 0; group < choices_by_selector.size(); ++group)
+    initial.score += choices_by_selector.at(group).front().score;
+  pending.push(initial);
+  std::set<std::vector<std::size_t>> visited;
+  visited.insert(initial.choices);
+
+  std::vector<std::vector<NaturalTargetAnchorCandidate>> combinations;
+  std::size_t expanded_states = 0;
+  const std::size_t maximum_expanded_states =
+      options.maximum_subset_states >
+              std::numeric_limits<std::size_t>::max() / 32U
+          ? std::numeric_limits<std::size_t>::max()
+          : options.maximum_subset_states * 32U;
+  while (!pending.empty() && combinations.size() < options.maximum_subset_states &&
+         expanded_states < maximum_expanded_states) {
+    CombinationSearchState state = pending.top();
+    pending.pop();
+    ++expanded_states;
+    std::vector<NaturalTargetAnchorCandidate> anchors;
+    std::set<std::size_t> used_targets;
+    bool valid = true;
+    for (std::size_t group = 0; group < state.choices.size(); ++group) {
+      const CombinationChoice& choice =
+          choices_by_selector.at(group).at(state.choices.at(group));
+      if (!choice.anchor.has_value())
+        continue;
+      if (!used_targets.insert(choice.anchor->target_origin).second) {
+        valid = false;
+        break;
+      }
+      anchors.push_back(*choice.anchor);
+    }
+    if (options.maximum_anchors > 0U && anchors.size() > options.maximum_anchors)
+      valid = false;
+    if (valid && !anchors.empty())
+      combinations.push_back(std::move(anchors));
+
+    for (std::size_t group = 0; group < state.choices.size(); ++group) {
+      const std::size_t current = state.choices.at(group);
+      if (current + 1U >= choices_by_selector.at(group).size())
+        continue;
+      CombinationSearchState next = state;
+      next.score -= choices_by_selector.at(group).at(current).score;
+      ++next.choices.at(group);
+      next.score += choices_by_selector.at(group).at(next.choices.at(group)).score;
+      if (visited.insert(next.choices).second)
+        pending.push(std::move(next));
+    }
+  }
+  const bool combination_search_capped = !pending.empty();
+  if (combination_search_capped)
+    add_reason(result.plan, "best-first multi-anchor search reached its proof-search cap");
+
   std::stable_sort(combinations.begin(), combinations.end(), [&](const auto& left,
                                                                   const auto& right) {
     const int left_score = score(left);
@@ -2180,9 +2654,13 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     for (std::size_t index = 0; index < left.size(); ++index) {
       const auto left_key = std::tie(left.at(index).selector.register_index,
                                      left.at(index).selector.fixed_target,
+                                     left.at(index).via_trampoline,
+                                     left.at(index).split_prefix_cells,
                                      left.at(index).target_origin);
       const auto right_key = std::tie(right.at(index).selector.register_index,
                                       right.at(index).selector.fixed_target,
+                                      right.at(index).via_trampoline,
+                                      right.at(index).split_prefix_cells,
                                       right.at(index).target_origin);
       if (left_key != right_key)
         return left_key < right_key;
@@ -2191,25 +2669,93 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   });
 
   std::optional<CandidateArtifact> best;
-  for (const auto& anchors : combinations) {
-    if (best.has_value() && score(anchors) < best->plan.removed_cells)
-      break;
+  std::size_t transparent_jump_attempts = 0;
+  bool transparent_jump_search_capped = false;
+  const auto consider_trial = [&](const std::vector<NaturalTargetAnchorCandidate>& trial,
+                                  bool charges_search_cap) {
+    if (charges_search_cap &&
+        transparent_jump_attempts >= options.maximum_subset_states) {
+      transparent_jump_search_capped = true;
+      return;
+    }
+    if (best.has_value() && score(trial) < best->plan.removed_cells)
+      return;
+    if (charges_search_cap)
+      ++transparent_jump_attempts;
     const std::optional<CandidateArtifact> candidate = try_candidate(
-        logical_items, preloads, *logical_flow, options, *references, calls, anchors,
+        logical_items, preloads, *logical_flow, options, *references, calls, trial,
         *original_trace, *original_external, &result.plan.reasons);
     if (candidate.has_value() &&
         (!best.has_value() || better_candidate(*candidate, *best))) {
       best = candidate;
     }
+  };
+  for (const auto& anchors : combinations) {
+    if (best.has_value() && score(anchors) < best->plan.removed_cells)
+      break;
+    consider_trial(anchors, false);
+
+    std::set<std::tuple<std::size_t, int>> split_variants;
+    for (std::size_t lower = 0; lower < anchors.size(); ++lower) {
+      const NaturalTargetAnchorCandidate& split_anchor = anchors.at(lower);
+      if (split_anchor.selector.rebindable_address || split_anchor.call_sites < 2 ||
+          split_anchor.selector.fixed_target < 0) {
+        continue;
+      }
+      for (std::size_t upper = 0; upper < anchors.size(); ++upper) {
+        if (lower == upper || anchors.at(upper).selector.rebindable_address ||
+            anchors.at(upper).selector.fixed_target <=
+                split_anchor.selector.fixed_target + 2) {
+          continue;
+        }
+        const int prefix = anchors.at(upper).selector.fixed_target -
+                           split_anchor.selector.fixed_target - 2;
+        if (!split_variants.emplace(lower, prefix).second)
+          continue;
+        std::vector<NaturalTargetAnchorCandidate> split_trial = anchors;
+        split_trial.at(lower).split_prefix_cells = prefix;
+        consider_trial(split_trial, true);
+      }
+    }
+
+    std::vector<std::size_t> trampoline_eligible;
+    for (std::size_t anchor_index = 0; anchor_index < anchors.size(); ++anchor_index) {
+      const NaturalTargetAnchorCandidate& anchor = anchors.at(anchor_index);
+      if (!anchor.selector.rebindable_address && anchor.call_sites >= 2 &&
+          anchor.selector.fixed_target >= 0 &&
+          anchor.selector.fixed_target + 1 <=
+              official_program_last_address(options.address_space_model)) {
+        trampoline_eligible.push_back(anchor_index);
+      }
+    }
+    const std::size_t variant_count = std::size_t{1} << trampoline_eligible.size();
+    for (std::size_t mask = 1; mask < variant_count; ++mask) {
+      std::vector<NaturalTargetAnchorCandidate> trial = anchors;
+      for (std::size_t bit = 0; bit < trampoline_eligible.size(); ++bit) {
+        if ((mask & (std::size_t{1} << bit)) != 0U)
+          trial.at(trampoline_eligible.at(bit)).via_trampoline = true;
+      }
+      consider_trial(trial, true);
+      if (transparent_jump_search_capped)
+        break;
+    }
   }
+  if (transparent_jump_search_capped)
+    add_reason(result.plan, "transparent-jump proof search reached its cap");
   if (!best.has_value()) {
     add_reason(result.plan,
                "no stable selector and fallthrough-closed component layout passed every proof");
     return result;
   }
+  std::vector<std::string> search_reasons = std::move(result.plan.reasons);
   result.items = std::move(best->items);
   result.preloads = std::move(best->preloads);
   result.plan = std::move(best->plan);
+  for (std::string& reason : search_reasons) {
+    if (result.plan.reasons.size() >= options.maximum_rejection_reasons)
+      break;
+    add_reason(result.plan, std::move(reason));
+  }
   result.applied = static_cast<int>(result.plan.calls.size());
   result.removed_cells = result.plan.removed_cells;
   return result;

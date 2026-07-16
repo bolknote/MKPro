@@ -188,6 +188,81 @@ Fixture paid_alignment_fixture() {
   return result;
 }
 
+Fixture overlapping_fixed_targets_fixture() {
+  Fixture result;
+  const std::string helper_a = "unrelated_overlap_helper_a";
+  const std::string helper_b = "unrelated_overlap_helper_b";
+
+  result.items.push_back(MachineItem::label("unrelated_overlap_entry"));
+  for (int call = 0; call < 3; ++call) {
+    result.items.push_back(op(0x53));
+    result.items.push_back(MachineItem::address(helper_a));
+  }
+  for (int call = 0; call < 4; ++call) {
+    result.items.push_back(op(0x53));
+    result.items.push_back(MachineItem::address(helper_b));
+  }
+  result.visible_stop = result.items.size();
+  result.items.push_back(stop());
+
+  const auto append_helper = [&](const std::string& name, int first_opcode) {
+    result.items.push_back(MachineItem::label(name));
+    result.items.push_back(op(first_opcode));
+    for (int cell = 0; cell < 8; ++cell)
+      result.items.push_back(op(0x54));
+    result.items.push_back(op(0x52));
+  };
+  append_helper(helper_a, 0x22);
+  append_helper(helper_b, 0x23);
+
+  const auto append_padding = [&](const std::string& name, int length) {
+    result.items.push_back(MachineItem::label(name));
+    for (int cell = 1; cell < length; ++cell)
+      result.items.push_back(op(0x54));
+    result.items.push_back(stop());
+  };
+  append_padding("unrelated_overlap_padding_12", 12);
+  append_padding("unrelated_overlap_padding_2", 2);
+
+  result.preloads.push_back(PreloadReport{.register_name = "8", .value = "20"});
+  result.preloads.push_back(PreloadReport{.register_name = "9", .value = "22"});
+  return result;
+}
+
+Fixture split_overlapping_fixed_targets_fixture() {
+  Fixture result;
+  const std::string helper_a = "unrelated_split_helper_a";
+  const std::string helper_b = "unrelated_split_helper_b";
+
+  result.items.push_back(MachineItem::label("unrelated_split_entry"));
+  for (int call = 0; call < 3; ++call) {
+    result.items.push_back(op(0x53));
+    result.items.push_back(MachineItem::address(helper_a));
+  }
+  for (int call = 0; call < 4; ++call) {
+    result.items.push_back(op(0x53));
+    result.items.push_back(MachineItem::address(helper_b));
+  }
+  for (int cell = 0; cell < 14; ++cell)
+    result.items.push_back(op(0x54));
+  result.visible_stop = result.items.size();
+  result.items.push_back(stop());
+
+  const auto append_helper = [&](const std::string& name, int first_opcode, int length) {
+    result.items.push_back(MachineItem::label(name));
+    result.items.push_back(op(first_opcode));
+    for (int cell = 2; cell < length; ++cell)
+      result.items.push_back(op(0x54));
+    result.items.push_back(op(0x52));
+  };
+  append_helper(helper_a, 0x22, 10);
+  append_helper(helper_b, 0x23, 7);
+
+  result.preloads.push_back(PreloadReport{.register_name = "8", .value = "29"});
+  result.preloads.push_back(PreloadReport{.register_name = "9", .value = "34"});
+  return result;
+}
+
 Fixture address_selector_rebind_fixture() {
   Fixture result;
   const std::string helper = "unrelated_rebound_address_helper";
@@ -299,6 +374,45 @@ bool reason_contains(const core::NaturalTargetComponentLayoutPlan& plan,
 } // namespace
 
 void natural_target_component_layout_is_generic_and_proof_gated() {
+  {
+    const Fixture input = split_overlapping_fixed_targets_fixture();
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    require(rewritten.plan.proved && rewritten.applied == 7 &&
+                rewritten.removed_cells == 5 &&
+                rewritten.plan.transparent_trampolines == 0 &&
+                rewritten.plan.transparent_split_bridges == 1 &&
+                rewritten.items.at(item_at_address(rewritten.items, 32)).opcode == 0x51 &&
+                rewritten.items.at(item_at_address(rewritten.items, 33)).kind ==
+                    MachineItemKind::Address &&
+                rewritten.items.at(item_at_address(rewritten.items, 34)).kind ==
+                    MachineItemKind::Op,
+            "a helper suffix should fill the gap before two overlapping fixed targets");
+    const Observation before = observe(input.items, input.preloads);
+    const Observation after = observe(rewritten.items, rewritten.preloads);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "transparent helper split must preserve observable machine state");
+  }
+
+  {
+    const Fixture input = overlapping_fixed_targets_fixture();
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    require(rewritten.plan.proved && rewritten.applied == 7 &&
+                rewritten.removed_cells == 5 &&
+                rewritten.plan.transparent_trampolines == 1 &&
+                rewritten.items.at(item_at_address(rewritten.items, 20)).opcode == 0x51 &&
+                rewritten.items.at(item_at_address(rewritten.items, 21)).kind ==
+                    MachineItemKind::Address &&
+                rewritten.items.at(item_at_address(rewritten.items, 22)).kind ==
+                    MachineItemKind::Op,
+            "overlapping fixed targets should share a profitable proved jump trampoline");
+    const Observation before = observe(input.items, input.preloads);
+    const Observation after = observe(rewritten.items, rewritten.preloads);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "transparent natural-target trampoline must preserve observable machine state");
+  }
+
   {
     const Fixture input = address_selector_rebind_fixture();
     const auto rewritten = core::optimize_natural_target_component_layout(
