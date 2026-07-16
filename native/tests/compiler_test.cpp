@@ -385,6 +385,66 @@ program ExpandedSixteenRegisters {
           "standard profile should exhaust registers on the same sixteen-state shape");
 }
 
+void compiler_feature_profile_rf_optimizer_is_size_monotonic_contract() {
+  const std::filesystem::path root = std::filesystem::current_path();
+  const std::string source =
+      read_file(root / "examples" / "pending-optimizer" / "tic-tac-toe-4x4.mkpro");
+  const auto compile_full = &mkpro::compile_source;
+
+  CompileOptions without_rf_options;
+  without_rf_options.budget = 105;
+  without_rf_options.fast_candidate_search = true;
+  const CompileResult without_rf = compile_full(source, without_rf_options);
+  require(without_rf.implemented && !has_error_diagnostic(without_rf),
+          "standard-profile optimizer root should compile the regression fixture");
+
+  CompileOptions with_rf_options = without_rf_options;
+  with_rf_options.feature_profile = FeatureProfile::Mk61SMiniExpanded;
+  with_rf_options.budget = 112;
+  const CompileResult with_rf = compile_full(source, with_rf_options);
+  require(with_rf.implemented && !has_error_diagnostic(with_rf),
+          "RF-enabled expanded optimizer should compile the regression fixture");
+  require(with_rf.feature_profile == FeatureProfile::Mk61SMiniExpanded,
+          "selected standard optimizer root should retain the expanded target profile");
+  require(with_rf.budget.has_value() && *with_rf.budget == 112,
+          "selected standard optimizer root should retain the expanded target budget");
+  require(with_rf.steps.size() <= without_rf.steps.size(),
+          "enabling the RF/expanded-space target must not increase the optimized program: RF=" +
+              std::to_string(with_rf.steps.size()) +
+              " RF-free=" + std::to_string(without_rf.steps.size()));
+  require(has_optimization(with_rf, "rf-allocation-policy-search"),
+          "regression fixture should exercise the full standard-profile optimizer root");
+  require(std::any_of(with_rf.candidates.begin(), with_rf.candidates.end(),
+                      [](const CandidateReport& candidate) {
+                        return candidate.site == "feature-profile-search" &&
+                               candidate.variant == "mk61-root" && candidate.selected;
+                      }),
+          "expanded optimizer report should expose the selected standard root");
+  require(std::any_of(with_rf.candidates.begin(), with_rf.candidates.end(),
+                      [](const CandidateReport& candidate) {
+                        return candidate.site == "feature-profile-search" &&
+                               candidate.variant == "mk61s-mini-expand-root" &&
+                               !candidate.selected;
+                      }),
+          "expanded optimizer report should expose the non-winning expanded root");
+  require(step_opcodes(with_rf) == step_opcodes(without_rf),
+          "selected RF-free optimizer root should preserve its proved final byte sequence");
+  require(with_rf.listing.find("A5") != std::string::npos,
+          "selected standard optimizer root should be reformatted in expanded address space");
+
+  const CompileResult cached_with_rf = compile_full(source, with_rf_options);
+  require(step_opcodes(cached_with_rf) == step_opcodes(with_rf),
+          "cached RF-enabled search should preserve the selected final byte sequence");
+  require(std::any_of(cached_with_rf.candidates.begin(), cached_with_rf.candidates.end(),
+                      [&](const CandidateReport& candidate) {
+                        return candidate.site == "feature-profile-search" &&
+                               candidate.variant == "mk61s-mini-expand-root" &&
+                               candidate.steps > static_cast<int>(cached_with_rf.steps.size()) &&
+                               !candidate.selected;
+                      }),
+          "cached RF-enabled search should retain the independent expanded-root result");
+}
+
 void compiler_lowers_initial_v2_subset() {
   const std::filesystem::path root = std::filesystem::current_path();
   const std::string basic_source = read_file(root / "examples" / "basic.mkpro");

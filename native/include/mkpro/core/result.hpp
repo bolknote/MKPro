@@ -296,6 +296,9 @@ struct CompileOptions {
   DeliveryMode delivery = DeliveryMode::Manual;
   OutputFormat output = OutputFormat::Listing;
   FeatureProfile feature_profile = FeatureProfile::Standard;
+  // Internal optimizer root. The public target profile remains unchanged, but
+  // lowering and candidate search use this strict subset of target features.
+  std::optional<FeatureProfile> optimizer_feature_profile_override;
   std::optional<int> budget;
   bool analysis = false;
   bool strict = false;
@@ -408,6 +411,10 @@ struct CompileOptions {
   std::vector<SignPackedStatePlan> sign_packed_state_plans;
   std::vector<RegisterShare> forced_register_shares;
 };
+
+inline FeatureProfile effective_optimizer_feature_profile(const CompileOptions& options) {
+  return options.optimizer_feature_profile_override.value_or(options.feature_profile);
+}
 
 struct CompileResult {
   bool implemented = false;

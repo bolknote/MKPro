@@ -68,7 +68,8 @@ bool register_is_overwritten(const std::vector<IrOp>& ops, const std::string& re
 }
 
 AddressSpaceModel address_space_model_for_context(const PassContext& context) {
-  return address_space_model_for_feature_profile(context.options.feature_profile);
+  return address_space_model_for_feature_profile(
+      effective_optimizer_feature_profile(context.options));
 }
 
 bool selector_targets_return_zero(const std::string& register_name, const std::string& value,

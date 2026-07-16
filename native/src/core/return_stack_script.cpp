@@ -24,7 +24,7 @@ constexpr int kMaxScriptReturns = 5;
 constexpr int kMaxRewriteRounds = 8;
 
 AddressSpaceModel address_space_model_for_options(const CompileOptions& options) {
-  return address_space_model_for_feature_profile(options.feature_profile);
+  return address_space_model_for_feature_profile(effective_optimizer_feature_profile(options));
 }
 
 AddressSpaceModel address_space_model_for_options(const DirtyReturnStackDispatchOptions& options) {
@@ -587,7 +587,7 @@ std::optional<DirtyReturnStackDispatchPlan> proved_dirty_overflow_script_dispatc
       adjusted_return_stack_from_calls(original_layout, plan),
       static_cast<int>(plan.calls.size()) + 1, candidate,
       DirtyReturnStackDispatchOptions{
-          .feature_profile = options.feature_profile,
+          .feature_profile = effective_optimizer_feature_profile(options),
           .size_rescue = true,
       });
   if (!dirty.enabled || !dirty.layout_proved || dirty.dirty_targets.empty())
@@ -614,7 +614,7 @@ std::optional<DirtyReturnStackDispatchAllocationPlan> repair_dirty_overflow_scri
           adjusted_return_stack_from_calls(original_layout, plan),
           static_cast<int>(plan.calls.size()) + 1, candidate,
           DirtyReturnStackDispatchOptions{
-              .feature_profile = options.feature_profile,
+              .feature_profile = effective_optimizer_feature_profile(options),
               .size_rescue = true,
           });
   if (!allocation.allocated || !allocation.dispatch.layout_proved)
