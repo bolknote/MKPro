@@ -24,13 +24,14 @@ struct NaturalTargetComponentLayoutOptions {
   std::size_t maximum_rejection_reasons = 64;
 };
 
-struct NaturalTargetCallRewrite {
-  std::size_t original_call_item = 0;
+struct NaturalTargetFlowRewrite {
+  std::size_t original_command_item = 0;
   std::size_t original_target_item = 0;
   std::string selector_register;
+  int original_opcode = -1;
   int target_address = -1;
 
-  bool operator==(const NaturalTargetCallRewrite&) const = default;
+  bool operator==(const NaturalTargetFlowRewrite&) const = default;
 };
 
 struct NaturalTargetPreloadRewrite {
@@ -77,7 +78,7 @@ struct NaturalTargetComponentLayoutPlan {
   int rebound_indirect_flows = 0;
   int transparent_trampolines = 0;
   int transparent_split_bridges = 0;
-  std::vector<NaturalTargetCallRewrite> calls;
+  std::vector<NaturalTargetFlowRewrite> flows;
   std::vector<NaturalTargetPreloadRewrite> preloads;
   std::vector<NaturalTargetRuntimeSelectorProof> runtime_selectors;
   AuthoritativePostLayoutControlFlow final_control_flow;
@@ -101,8 +102,8 @@ std::optional<std::vector<MachineItem>> normalize_natural_target_overflow_formal
 
 // Reorder generic fallthrough-closed machine segments so a called command
 // identity lands on an address already represented by a stable internal
-// register.  Every converted direct PP keeps its continuation identity and is
-// replaced by the one-cell indirect K PP opcode.  Numeric direct targets,
+// register. Every converted direct PP or BP keeps its flow identity and is
+// replaced by the corresponding one-cell indirect K PP or K BP opcode. Numeric direct targets,
 // complete indirect facts, external entries, and return-stack slots are rebound
 // by command identity and the final artifact is independently reconstructed.
 //

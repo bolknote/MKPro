@@ -62,10 +62,11 @@ struct DirectReference {
   std::size_t target = 0;
 };
 
-struct DirectCallSite {
+struct DirectFlowSite {
   std::size_t command = 0;
   std::size_t operand = 0;
   std::size_t target = 0;
+  int direct_opcode = -1;
 };
 
 struct SelectorCandidate {
@@ -81,7 +82,7 @@ struct SelectorCandidate {
 struct NaturalTargetAnchorCandidate {
   SelectorCandidate selector;
   std::size_t target_origin = 0;
-  int call_sites = 0;
+  int flow_sites = 0;
   bool via_trampoline = false;
   int split_prefix_cells = 0;
 };
@@ -384,17 +385,20 @@ std::optional<std::vector<DirectReference>> collect_direct_references(
   return result;
 }
 
-std::vector<DirectCallSite> direct_calls(const std::vector<DirectReference>& references,
-                                         const std::vector<MachineItem>& items) {
-  std::vector<DirectCallSite> result;
+std::vector<DirectFlowSite> shortenable_direct_flows(
+    const std::vector<DirectReference>& references,
+    const std::vector<MachineItem>& items) {
+  std::vector<DirectFlowSite> result;
   for (const DirectReference& reference : references) {
-    if (items.at(reference.command).opcode == kCallOpcode) {
-      result.push_back(DirectCallSite{
-          .command = reference.command,
-          .operand = reference.operand,
-          .target = reference.target,
-      });
-    }
+    const int opcode = items.at(reference.command).opcode;
+    if (opcode != kCallOpcode && opcode != kJumpOpcode)
+      continue;
+    result.push_back(DirectFlowSite{
+        .command = reference.command,
+        .operand = reference.operand,
+        .target = reference.target,
+        .direct_opcode = opcode,
+    });
   }
   return result;
 }
@@ -839,11 +843,11 @@ bool selector_existing_uses_match_target(
   return true;
 }
 
-std::optional<std::vector<Cell>> convert_direct_calls(
-    const std::vector<MachineItem>& items, const std::vector<DirectCallSite>& calls,
+std::optional<std::vector<Cell>> convert_direct_flows(
+    const std::vector<MachineItem>& items, const std::vector<DirectFlowSite>& flows,
     const AuthoritativePostLayoutControlFlow& flow,
     const std::vector<NaturalTargetAnchorCandidate>& anchors,
-    std::vector<NaturalTargetCallRewrite>& rewrites,
+    std::vector<NaturalTargetFlowRewrite>& rewrites,
     std::vector<DisplacedIndirectFlowRewrite>& displaced_flows,
     std::vector<TransparentTrampoline>& trampolines) {
   const std::optional<std::vector<Cell>> original_cells = make_cells(items);
@@ -861,16 +865,17 @@ std::optional<std::vector<Cell>> convert_direct_calls(
 
   std::set<std::size_t> converted_commands;
   std::set<std::size_t> removed_operands;
-  for (const DirectCallSite& call : calls) {
-    const auto selected = selector_by_target.find(call.target);
+  for (const DirectFlowSite& direct_flow : flows) {
+    const auto selected = selector_by_target.find(direct_flow.target);
     if (selected == selector_by_target.end())
       continue;
-    converted_commands.insert(call.command);
-    removed_operands.insert(call.operand);
-    rewrites.push_back(NaturalTargetCallRewrite{
-        .original_call_item = call.command,
-        .original_target_item = call.target,
+    converted_commands.insert(direct_flow.command);
+    removed_operands.insert(direct_flow.operand);
+    rewrites.push_back(NaturalTargetFlowRewrite{
+        .original_command_item = direct_flow.command,
+        .original_target_item = direct_flow.target,
         .selector_register = selected->second->register_name,
+        .original_opcode = direct_flow.direct_opcode,
     });
   }
   if (converted_commands.empty() ||
@@ -920,22 +925,22 @@ std::optional<std::vector<Cell>> convert_direct_calls(
       continue;
     }
     if (converted_commands.contains(cell.value.origin)) {
-      MachineItem& call = cell.value.item;
-      if (call.kind != MachineItemKind::Op || call.opcode != kCallOpcode)
-        return std::nullopt;
-      const auto original_call = std::find_if(
-          calls.begin(), calls.end(), [&](const DirectCallSite& candidate) {
+      MachineItem& command = cell.value.item;
+      const auto original_flow = std::find_if(
+          flows.begin(), flows.end(), [&](const DirectFlowSite& candidate) {
             return candidate.command == cell.value.origin;
           });
-      if (original_call == calls.end())
+      if (original_flow == flows.end() || command.kind != MachineItemKind::Op ||
+          command.opcode != original_flow->direct_opcode)
         return std::nullopt;
-      const auto selected = selector_by_target.find(original_call->target);
+      const auto selected = selector_by_target.find(original_flow->target);
       if (selected == selector_by_target.end())
         return std::nullopt;
-      call.opcode = 0xa0 + selected->second->register_index;
-      call.mnemonic = opcode_by_code(call.opcode).name;
-      call.indirect_flow_targets =
-          std::vector<IrTarget>{static_cast<int>(original_call->target)};
+      const int family = original_flow->direct_opcode == kCallOpcode ? 0xa0 : 0x80;
+      command.opcode = family + selected->second->register_index;
+      command.mnemonic = opcode_by_code(command.opcode).name;
+      command.indirect_flow_targets =
+          std::vector<IrTarget>{static_cast<int>(original_flow->target)};
     }
     const auto displaced = displaced_by_command.find(cell.value.origin);
     if (displaced != displaced_by_command.end()) {
@@ -1264,7 +1269,7 @@ bool retarget_indirect_facts(
     const AuthoritativePostLayoutControlFlow& original_flow,
     const std::map<std::size_t, std::size_t>& new_item_by_origin,
     const std::map<std::size_t, int>& new_address_by_origin,
-    const std::vector<NaturalTargetCallRewrite>& converted_calls,
+    const std::vector<NaturalTargetFlowRewrite>& converted_flows,
     const std::vector<DisplacedIndirectFlowRewrite>& displaced_flows,
     const std::vector<NaturalTargetAnchorCandidate>& anchors,
     const std::vector<TransparentTrampoline>& trampolines) {
@@ -1321,8 +1326,8 @@ bool retarget_indirect_facts(
     address.target = target->second;
     address.formal_opcode.reset();
   }
-  for (const NaturalTargetCallRewrite& rewrite : converted_calls) {
-    const auto command = new_item_by_origin.find(rewrite.original_call_item);
+  for (const NaturalTargetFlowRewrite& rewrite : converted_flows) {
+    const auto command = new_item_by_origin.find(rewrite.original_command_item);
     const auto anchor = std::find_if(
         anchors.begin(), anchors.end(), [&](const NaturalTargetAnchorCandidate& candidate) {
           return candidate.selector.register_name == rewrite.selector_register &&
@@ -1931,30 +1936,34 @@ bool indirect_memory_facts_equivalent(
   return rebound == original.indirect_memory_targets;
 }
 
-bool converted_call_effects_equivalent(const std::vector<MachineItem>& original_items,
-                                       const std::vector<NaturalTargetAnchorCandidate>& anchors,
-                                       const std::vector<NaturalTargetCallRewrite>& calls) {
+bool converted_flow_effects_equivalent(
+    const std::vector<MachineItem>& original_items,
+    const std::vector<NaturalTargetAnchorCandidate>& anchors,
+    const std::vector<NaturalTargetFlowRewrite>& flows) {
   if (std::any_of(anchors.begin(), anchors.end(), [](const auto& anchor) {
         return indirect_selector_mutation(anchor.selector.register_name) !=
                IndirectSelectorMutation::Stable;
       })) {
     return false;
   }
-  const OpcodeInfo& direct = opcode_by_code(kCallOpcode);
-  return std::all_of(calls.begin(), calls.end(), [&](const NaturalTargetCallRewrite& call) {
+  return std::all_of(flows.begin(), flows.end(), [&](const NaturalTargetFlowRewrite& flow) {
     const auto anchor = std::find_if(anchors.begin(), anchors.end(), [&](const auto& candidate) {
-      return candidate.selector.register_name == call.selector_register;
+      return candidate.selector.register_name == flow.selector_register;
     });
     if (anchor == anchors.end())
       return false;
+    if (flow.original_opcode != kCallOpcode && flow.original_opcode != kJumpOpcode)
+      return false;
+    const OpcodeInfo& direct = opcode_by_code(flow.original_opcode);
+    const int indirect_family = flow.original_opcode == kCallOpcode ? 0xa0 : 0x80;
     const OpcodeInfo& indirect =
-        opcode_by_code(0xa0 + anchor->selector.register_index);
+        opcode_by_code(indirect_family + anchor->selector.register_index);
     return direct.stack_effect == indirect.stack_effect &&
            direct.x2_effect == indirect.x2_effect &&
            direct.takes_address != indirect.takes_address &&
-           call.original_call_item < original_items.size() &&
-           original_items.at(call.original_call_item).kind == MachineItemKind::Op &&
-           original_items.at(call.original_call_item).opcode == kCallOpcode;
+           flow.original_command_item < original_items.size() &&
+           original_items.at(flow.original_command_item).kind == MachineItemKind::Op &&
+           original_items.at(flow.original_command_item).opcode == flow.original_opcode;
   });
 }
 
@@ -2016,8 +2025,8 @@ std::optional<std::vector<NaturalTargetRuntimeSelectorProof>> prove_runtime_sele
       return std::nullopt;
 
     // Existing indirect commands must retain the same target identity.  A
-    // newly converted direct call has no original indirect-map entry and is
-    // checked by the direct-call identity trace instead.
+    // newly converted direct flow has no original indirect-map entry and is
+    // checked by the command-identity trace instead.
     const auto original_targets = original_flow.indirect_flow_targets.find(*command_origin);
     if (original_targets != original_flow.indirect_flow_targets.end()) {
       if (original_targets->second.size() != 1U ||
@@ -2050,11 +2059,11 @@ bool unchanged_command_effects_preserved(
     const std::vector<MachineItem>& original_items,
     const std::vector<MachineItem>& rewritten_items,
     const std::map<std::size_t, std::size_t>& new_item_by_origin,
-    const std::vector<NaturalTargetCallRewrite>& calls,
+    const std::vector<NaturalTargetFlowRewrite>& flows,
     const std::vector<DisplacedIndirectFlowRewrite>& displaced_flows) {
   std::set<std::size_t> converted;
-  for (const NaturalTargetCallRewrite& call : calls)
-    converted.insert(call.original_call_item);
+  for (const NaturalTargetFlowRewrite& flow : flows)
+    converted.insert(flow.original_command_item);
   std::map<std::size_t, int> displaced;
   for (const DisplacedIndirectFlowRewrite& rewrite : displaced_flows)
     displaced.emplace(rewrite.command_origin, rewrite.direct_opcode);
@@ -2184,7 +2193,7 @@ std::optional<CandidateArtifact> try_candidate(
     const AuthoritativePostLayoutControlFlow& control_flow,
     const NaturalTargetComponentLayoutOptions& options,
     const std::vector<DirectReference>& references,
-    const std::vector<DirectCallSite>& calls,
+    const std::vector<DirectFlowSite>& flows,
     const std::vector<NaturalTargetAnchorCandidate>& anchors,
     const TraceGraph& original_trace,
     const std::vector<ExternalIdentity>& original_external,
@@ -2218,13 +2227,13 @@ std::optional<CandidateArtifact> try_candidate(
   };
   if (anchors.empty())
     return reject("candidate has no natural-target anchors");
-  std::vector<NaturalTargetCallRewrite> rewrites;
+  std::vector<NaturalTargetFlowRewrite> rewrites;
   std::vector<DisplacedIndirectFlowRewrite> displaced_flows;
   std::vector<TransparentTrampoline> trampolines;
-  const std::optional<std::vector<Cell>> converted = convert_direct_calls(
-      items, calls, control_flow, anchors, rewrites, displaced_flows, trampolines);
+  const std::optional<std::vector<Cell>> converted = convert_direct_flows(
+      items, flows, control_flow, anchors, rewrites, displaced_flows, trampolines);
   if (!converted.has_value() || rewrites.empty())
-    return reject("direct-call conversion failed");
+    return reject("direct-flow conversion failed");
   std::vector<Segment> segments = make_segments(*converted);
   std::size_t next_synthetic_origin =
       items.size() + displaced_flows.size() + 2U * trampolines.size();
@@ -2383,13 +2392,13 @@ std::optional<CandidateArtifact> try_candidate(
     }
     target_address_by_origin.emplace(target_origin, target_address->second);
   }
-  for (NaturalTargetCallRewrite& rewrite : rewrites)
+  for (NaturalTargetFlowRewrite& rewrite : rewrites)
     rewrite.target_address = target_address_by_origin.at(rewrite.original_target_item);
 
   std::set<std::size_t> removed_operands;
-  for (const DirectCallSite& call : calls) {
-    if (target_address_by_origin.contains(call.target))
-      removed_operands.insert(call.operand);
+  for (const DirectFlowSite& flow_site : flows) {
+    if (target_address_by_origin.contains(flow_site.target))
+      removed_operands.insert(flow_site.operand);
   }
   if (!retarget_direct_references(candidate.items, references, removed_operands,
                                   candidate.new_item_by_origin, new_address_by_origin) ||
@@ -2486,7 +2495,7 @@ std::optional<CandidateArtifact> try_candidate(
   plan.rebound_indirect_flows = static_cast<int>(displaced_flows.size());
   plan.transparent_trampolines = static_cast<int>(trampolines.size());
   plan.transparent_split_bridges = static_cast<int>(split_bridges.size());
-  plan.calls = std::move(rewrites);
+  plan.flows = std::move(rewrites);
   plan.preloads = std::move(preload_rewrites);
   plan.runtime_selectors = *runtime_selectors;
   plan.final_control_flow = final_flow;
@@ -2494,9 +2503,9 @@ std::optional<CandidateArtifact> try_candidate(
   plan.call_return_equivalent = true;
   plan.stack_and_x2_equivalent =
       trampolines_proved && split_bridges_proved &&
-      converted_call_effects_equivalent(items, anchors, plan.calls) &&
+      converted_flow_effects_equivalent(items, anchors, plan.flows) &&
       unchanged_command_effects_preserved(items, candidate.items,
-                                          candidate.new_item_by_origin, plan.calls,
+                                          candidate.new_item_by_origin, plan.flows,
                                           displaced_flows);
   plan.indirect_memory_equivalent = indirect_memory_facts_equivalent(
       control_flow, final_flow, rewritten_origin_by_item);
@@ -2504,7 +2513,7 @@ std::optional<CandidateArtifact> try_candidate(
   plan.final_artifact_proved = final_flow.proved;
   plan.proved =
                 plan.removed_cells ==
-                    static_cast<int>(plan.calls.size()) -
+                    static_cast<int>(plan.flows.size()) -
                         static_cast<int>(displaced_flows.size()) -
                         2 * static_cast<int>(trampolines.size()) -
                         2 * static_cast<int>(split_bridges.size()) -
@@ -2594,9 +2603,10 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     add_reason(result.plan, "direct command identities cannot be resolved exactly");
     return result;
   }
-  const std::vector<DirectCallSite> calls = direct_calls(*references, logical_items);
-  if (calls.empty()) {
-    add_reason(result.plan, "artifact contains no direct call to shorten");
+  const std::vector<DirectFlowSite> flows =
+      shortenable_direct_flows(*references, logical_items);
+  if (flows.empty()) {
+    add_reason(result.plan, "artifact contains no direct call or jump to shorten");
     return result;
   }
 
@@ -2616,31 +2626,31 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   std::vector<SelectorCandidate> selectors = selector_candidates(
       logical_items, preloads, *logical_flow, options);
 
-  std::set<std::size_t> call_targets;
-  std::map<std::size_t, int> call_sites_by_target;
-  for (const DirectCallSite& call : calls)
-    ++call_sites_by_target[call.target];
-  for (const auto& [target, count] : call_sites_by_target) {
+  std::set<std::size_t> flow_targets;
+  std::map<std::size_t, int> flow_sites_by_target;
+  for (const DirectFlowSite& flow_site : flows)
+    ++flow_sites_by_target[flow_site.target];
+  for (const auto& [target, count] : flow_sites_by_target) {
     (void)count;
-    call_targets.insert(target);
+    flow_targets.insert(target);
   }
 
   std::map<int, std::vector<NaturalTargetAnchorCandidate>> options_by_selector;
   for (const SelectorCandidate& selector : selectors) {
     if (!selector.rebindable_address && selector.fixed_target <= 0)
       continue;
-    for (const std::size_t target : call_targets) {
+    for (const std::size_t target : flow_targets) {
       if (!selector_existing_uses_match_target(selector, target, logical_items, *logical_flow))
         continue;
       if (selector.rebindable_address &&
-          call_sites_by_target.at(target) <= selector.displaced_flow_uses) {
+          flow_sites_by_target.at(target) <= selector.displaced_flow_uses) {
         continue;
       }
       options_by_selector[selector.register_index].push_back(
           NaturalTargetAnchorCandidate{
               .selector = selector,
               .target_origin = target,
-              .call_sites = call_sites_by_target.at(target),
+              .flow_sites = flow_sites_by_target.at(target),
           });
     }
   }
@@ -2650,9 +2660,9 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     (void)register_index;
     std::sort(group.begin(), group.end(), [](const auto& left, const auto& right) {
       const int left_savings =
-          left.call_sites - left.selector.displaced_flow_uses;
+          left.flow_sites - left.selector.displaced_flow_uses;
       const int right_savings =
-          right.call_sites - right.selector.displaced_flow_uses;
+          right.flow_sites - right.selector.displaced_flow_uses;
       if (left_savings != right_savings)
         return left_savings > right_savings;
       return std::tie(left.selector.fixed_target, left.target_origin) <
@@ -2664,7 +2674,7 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   const auto score = [](const std::vector<NaturalTargetAnchorCandidate>& anchors) {
     int total = 0;
     for (const NaturalTargetAnchorCandidate& anchor : anchors)
-      total += anchor.call_sites - anchor.selector.displaced_flow_uses -
+      total += anchor.flow_sites - anchor.selector.displaced_flow_uses -
                (anchor.via_trampoline ? 2 : 0) -
                (anchor.split_prefix_cells > 0 ? 2 : 0);
     return total;
@@ -2810,7 +2820,7 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     if (charges_search_cap)
       ++transparent_jump_attempts;
     const std::optional<CandidateArtifact> candidate = try_candidate(
-        logical_items, preloads, *logical_flow, options, *references, calls, trial,
+        logical_items, preloads, *logical_flow, options, *references, flows, trial,
         *original_trace, *original_external, &result.plan.reasons);
     if (candidate.has_value() &&
         (!best.has_value() || better_candidate(*candidate, *best))) {
@@ -2825,7 +2835,7 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     std::set<std::tuple<std::size_t, int>> split_variants;
     for (std::size_t lower = 0; lower < anchors.size(); ++lower) {
       const NaturalTargetAnchorCandidate& split_anchor = anchors.at(lower);
-      if (split_anchor.selector.rebindable_address || split_anchor.call_sites < 2 ||
+      if (split_anchor.selector.rebindable_address || split_anchor.flow_sites < 2 ||
           split_anchor.selector.fixed_target < 0) {
         continue;
       }
@@ -2848,7 +2858,7 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     std::vector<std::size_t> trampoline_eligible;
     for (std::size_t anchor_index = 0; anchor_index < anchors.size(); ++anchor_index) {
       const NaturalTargetAnchorCandidate& anchor = anchors.at(anchor_index);
-      if (!anchor.selector.rebindable_address && anchor.call_sites >= 2 &&
+      if (!anchor.selector.rebindable_address && anchor.flow_sites >= 2 &&
           anchor.selector.fixed_target >= 0 &&
           anchor.selector.fixed_target + 1 <=
               official_program_last_address(options.address_space_model)) {
@@ -2883,7 +2893,7 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
       break;
     add_reason(result.plan, std::move(reason));
   }
-  result.applied = static_cast<int>(result.plan.calls.size());
+  result.applied = static_cast<int>(result.plan.flows.size());
   result.removed_cells = result.plan.removed_cells;
   return result;
 }

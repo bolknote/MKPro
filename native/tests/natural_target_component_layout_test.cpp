@@ -301,6 +301,35 @@ Fixture split_internal_fixed_target_fixture() {
   return result;
 }
 
+Fixture shared_call_and_tail_jump_fixture() {
+  Fixture result;
+  const std::string helper = "unrelated_shared_flow_helper";
+
+  result.items.push_back(MachineItem::label("unrelated_shared_flow_entry"));
+  for (int call = 0; call < 2; ++call) {
+    result.items.push_back(op(0x53));
+    result.items.push_back(MachineItem::address(helper));
+  }
+  result.visible_stop = result.items.size();
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label("unrelated_shared_flow_tail"));
+  result.items.push_back(op(0x51));
+  result.items.push_back(MachineItem::address(helper));
+
+  result.items.push_back(MachineItem::label(helper));
+  result.items.push_back(op(0x22));
+  result.items.push_back(op(0x52));
+
+  result.items.push_back(MachineItem::label("unrelated_shared_flow_padding"));
+  for (int cell = 1; cell < 16; ++cell)
+    result.items.push_back(op(0x54));
+  result.items.push_back(stop());
+
+  result.preloads.push_back(PreloadReport{.register_name = "8", .value = "20"});
+  return result;
+}
+
 Fixture address_selector_rebind_fixture() {
   Fixture result;
   const std::string helper = "unrelated_rebound_address_helper";
@@ -412,6 +441,32 @@ bool reason_contains(const core::NaturalTargetComponentLayoutPlan& plan,
 } // namespace
 
 void natural_target_component_layout_is_generic_and_proof_gated() {
+  {
+    const Fixture input = shared_call_and_tail_jump_fixture();
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    const int converted_calls = static_cast<int>(std::count_if(
+        rewritten.plan.flows.begin(), rewritten.plan.flows.end(), [](const auto& flow) {
+          return flow.original_opcode == 0x53;
+        }));
+    const int converted_jumps = static_cast<int>(std::count_if(
+        rewritten.plan.flows.begin(), rewritten.plan.flows.end(), [](const auto& flow) {
+          return flow.original_opcode == 0x51;
+        }));
+    require(rewritten.plan.proved && rewritten.applied == 3 &&
+                rewritten.removed_cells == 3 && converted_calls == 2 &&
+                converted_jumps == 1 &&
+                rewritten.items.at(item_at_address(rewritten.items, 0)).opcode == 0xa8 &&
+                rewritten.items.at(item_at_address(rewritten.items, 1)).opcode == 0xa8 &&
+                rewritten.items.at(item_at_address(rewritten.items, 3)).opcode == 0x88 &&
+                rewritten.items.at(item_at_address(rewritten.items, 20)).opcode == 0x22,
+            "calls and a tail jump should share one proved natural-target selector");
+    const Observation before = observe(input.items, input.preloads);
+    const Observation after = observe(rewritten.items, rewritten.preloads);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "mixed direct-flow conversion must preserve observable machine state");
+  }
+
   {
     const Fixture input = split_internal_fixed_target_fixture();
     const auto rewritten = core::optimize_natural_target_component_layout(
@@ -529,12 +584,12 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
     const auto rewritten = core::optimize_natural_target_component_layout(
         input.items, input.preloads, input_flow);
     const int calls_through_8 = static_cast<int>(std::count_if(
-        rewritten.plan.calls.begin(), rewritten.plan.calls.end(), [](const auto& call) {
-          return call.selector_register == "8" && call.target_address == 20;
+        rewritten.plan.flows.begin(), rewritten.plan.flows.end(), [](const auto& flow) {
+          return flow.selector_register == "8" && flow.target_address == 20;
         }));
     const int calls_through_9 = static_cast<int>(std::count_if(
-        rewritten.plan.calls.begin(), rewritten.plan.calls.end(), [](const auto& call) {
-          return call.selector_register == "9" && call.target_address == 30;
+        rewritten.plan.flows.begin(), rewritten.plan.flows.end(), [](const auto& flow) {
+          return flow.selector_register == "9" && flow.target_address == 30;
         }));
     require(rewritten.plan.proved && rewritten.applied == 5 &&
                 rewritten.removed_cells == 5 && calls_through_8 == 2 &&
@@ -562,7 +617,7 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
                     core::NaturalTargetSelectorOrigin::ExistingPreload &&
                 rewritten.plan.selector_register == "8" &&
                 rewritten.plan.natural_target == input.selector_target &&
-                rewritten.plan.calls.size() == static_cast<std::size_t>(calls) &&
+                rewritten.plan.flows.size() == static_cast<std::size_t>(calls) &&
                 cell_count(rewritten.items) == cell_count(input.items) - calls,
             "arbitrary call count and component count should use the same exact planner: calls=" +
                 std::to_string(calls) + " applied=" + std::to_string(rewritten.applied) +

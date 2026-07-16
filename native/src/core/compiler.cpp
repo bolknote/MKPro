@@ -49046,9 +49046,9 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
             });
           }
           std::vector<std::pair<std::string, int>> natural_placements;
-          for (const core::NaturalTargetCallRewrite& call : natural_layout.plan.calls) {
+          for (const core::NaturalTargetFlowRewrite& flow : natural_layout.plan.flows) {
             const std::pair<std::string, int> placement{
-                call.selector_register, call.target_address};
+                flow.selector_register, flow.target_address};
             if (std::find(natural_placements.begin(), natural_placements.end(), placement) ==
                 natural_placements.end()) {
               natural_placements.push_back(placement);
@@ -49072,9 +49072,17 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
             }
             natural_layout_detail += ")";
           }
+          const int natural_calls = static_cast<int>(std::count_if(
+              natural_layout.plan.flows.begin(), natural_layout.plan.flows.end(),
+              [](const core::NaturalTargetFlowRewrite& flow) {
+                return flow.original_opcode == 0x53;
+              }));
+          const int natural_jumps = natural_layout.applied - natural_calls;
           natural_layout_detail +=
               " and replaced " + std::to_string(natural_layout.applied) +
-              " direct call(s) with one-cell indirect calls";
+              " direct flow command(s) with one-cell indirect flow (" +
+              std::to_string(natural_calls) + " call(s), " +
+              std::to_string(natural_jumps) + " jump(s))";
           const int alignment_cells =
               natural_layout.applied -
               natural_layout.plan.rebound_indirect_flows -
