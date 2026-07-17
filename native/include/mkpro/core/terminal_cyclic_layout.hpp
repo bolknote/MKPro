@@ -4,6 +4,7 @@
 #include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/helper_semantic_alias.hpp"
 #include "mkpro/core/ir.hpp"
+#include "mkpro/core/natural_target_component_layout.hpp"
 #include "mkpro/core/passes/helpers.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
 #include "mkpro/core/result.hpp"
@@ -91,5 +92,18 @@ optimize_terminal_cyclic_layout(const std::vector<MachineItem>& items,
                                 const std::vector<PreloadReport>& preloads,
                                 const AuthoritativePostLayoutControlFlow& control_flow,
                                 const TerminalCyclicLayoutOptions& options = {});
+
+// Fold `F x=0 terminal; V/O` into the complementary one-cell indirect
+// condition before component layout. The shared return becomes a typed
+// zero-flow selector target while unrelated direct flows provide the actual
+// layout saving. The transaction commits only after complete
+// CFG/return-stack/stack/X2 and runtime-selector proofs plus a net size
+// reduction.
+NaturalTargetComponentLayoutResult optimize_terminal_shared_return_selector_layout(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const NaturalTargetComponentLayoutOptions& natural_options = {},
+    const TerminalCyclicLayoutOptions& terminal_options = {});
 
 } // namespace mkpro::core

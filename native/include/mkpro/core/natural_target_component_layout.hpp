@@ -16,6 +16,20 @@ enum class NaturalTargetSelectorOrigin {
   ExistingPreload,
 };
 
+struct NaturalTargetRequiredFlowSelector {
+  std::size_t command_item = 0;
+  std::string register_name;
+
+  bool operator==(const NaturalTargetRequiredFlowSelector&) const = default;
+};
+
+struct NaturalTargetRequiredSelectorTarget {
+  std::size_t target_item = 0;
+  std::string register_name;
+
+  bool operator==(const NaturalTargetRequiredSelectorTarget&) const = default;
+};
+
 struct NaturalTargetComponentLayoutOptions {
   AddressSpaceModel address_space_model = AddressSpaceModel::Standard;
   std::size_t maximum_subset_states = 20000;
@@ -29,6 +43,20 @@ struct NaturalTargetComponentLayoutOptions {
   std::vector<std::string> required_bounded_target_labels;
   int maximum_bounded_target_address = 99;
   bool allow_size_neutral_bounded_layout = false;
+  // A caller may use a proved zero-saving selector reassignment as one stage
+  // of a larger atomic machine-layout transaction. Ordinary standalone
+  // natural-target optimization keeps requiring a positive size saving.
+  bool allow_size_neutral_flow_rebind = false;
+  // Atomic callers may require a particular direct-flow identity to use a
+  // particular selector while the generic solver remains free to optimize all
+  // unrelated targets with other selectors. Invalid, conflicting, or
+  // unsatisfied bindings fail closed.
+  std::vector<NaturalTargetRequiredFlowSelector> required_flow_selectors;
+  // A caller that already owns a typed indirect consumer may require its
+  // stable selector to address a command identity even when no direct flow to
+  // that target exists. This is a zero-flow layout anchor, not a saving by
+  // itself, and is accepted only as part of a separately profitable layout.
+  std::vector<NaturalTargetRequiredSelectorTarget> required_selector_targets;
 };
 
 struct NaturalTargetFlowRewrite {
@@ -86,9 +114,11 @@ struct NaturalTargetComponentLayoutPlan {
   int transparent_trampolines = 0;
   int transparent_split_bridges = 0;
   int x2_reconvergence_flows = 0;
+  int terminal_shared_return_folds = 0;
   int bounded_targets = 0;
   bool bounded_targets_proved = false;
   bool size_neutral_bounded_layout = false;
+  bool size_neutral_flow_rebind = false;
   std::vector<NaturalTargetFlowRewrite> flows;
   std::vector<NaturalTargetPreloadRewrite> preloads;
   std::vector<NaturalTargetRuntimeSelectorProof> runtime_selectors;

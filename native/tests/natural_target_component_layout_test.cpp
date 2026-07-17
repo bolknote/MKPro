@@ -876,6 +876,57 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
             "joint natural-target layout must preserve the observable machine state");
   }
 
+  {
+    const Fixture input = fixture(2, 3, true);
+    const auto direct_call = std::find_if(
+        input.items.begin(), input.items.end(), [](const MachineItem& item) {
+          return item.kind == MachineItemKind::Op && item.opcode == 0x53;
+        });
+    require(direct_call != input.items.end(),
+            "required-selector fixture should expose a direct call");
+    const std::size_t call_item = static_cast<std::size_t>(
+        std::distance(input.items.begin(), direct_call));
+    const auto baseline = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    const auto baseline_flow = std::find_if(
+        baseline.plan.flows.begin(), baseline.plan.flows.end(),
+        [&](const core::NaturalTargetFlowRewrite& rewrite) {
+          return rewrite.original_command_item == call_item;
+        });
+    require(baseline.plan.proved && baseline_flow != baseline.plan.flows.end(),
+            "required-selector fixture should have a proved baseline target identity");
+    const std::size_t helper_item = baseline_flow->original_target_item;
+    core::NaturalTargetComponentLayoutOptions required;
+    required.required_flow_selectors.push_back(
+        core::NaturalTargetRequiredFlowSelector{
+            .command_item = call_item,
+            .register_name = "8",
+        });
+    required.required_selector_targets.push_back(
+        core::NaturalTargetRequiredSelectorTarget{
+            .target_item = helper_item,
+            .register_name = "8",
+        });
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input), required);
+    require(rewritten.plan.proved &&
+                std::any_of(rewritten.plan.flows.begin(), rewritten.plan.flows.end(),
+                            [&](const core::NaturalTargetFlowRewrite& rewrite) {
+                              return rewrite.original_command_item == call_item &&
+                                     rewrite.selector_register == "8";
+                            }) &&
+                rewritten.items.at(item_at_address(
+                    rewritten.items, input.selector_target)).opcode == 0x22,
+            "typed required flow and zero-flow selector targets should share the exact "
+            "proved command identity");
+
+    required.required_selector_targets.front().target_item = input.items.size();
+    const auto invalid = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input), required);
+    require(!invalid.plan.proved && invalid.applied == 0,
+            "an invalid required selector target must fail closed");
+  }
+
   for (const auto [calls, components] :
        {std::pair{2, 3}, std::pair{3, 5}, std::pair{5, 6}}) {
     const Fixture input = fixture(calls, components, true);
@@ -1039,6 +1090,62 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
     require(before.stopped && after.stopped &&
                 before.state.at("x") == after.state.at("x"),
             "retuning the proved mantissa suffix must preserve its observable projection");
+  }
+
+  {
+    Fixture input;
+    const std::string old_helper = "retunable_rebind_old_helper";
+    const std::string new_helper = "retunable_rebind_new_helper";
+    input.items.push_back(MachineItem::label("retunable_rebind_entry"));
+    MachineItem selector_recall = op(0x67);
+    selector_recall.roles.push_back(
+        std::string(kRetunableNaturalFractionalSelectorRolePrefix) + "0.226000");
+    input.items.push_back(std::move(selector_recall));
+    input.items.push_back(op(0x12));
+    input.items.push_back(op(0x15));
+    input.items.push_back(op(0x34));
+    MachineItem old_indirect_call = op(0xa7);
+    old_indirect_call.indirect_flow_targets = std::vector<IrTarget>{old_helper};
+    input.items.push_back(std::move(old_indirect_call));
+    for (int call = 0; call < 3; ++call) {
+      input.items.push_back(op(0x53));
+      input.items.push_back(MachineItem::address(new_helper));
+    }
+    input.visible_stop = input.items.size();
+    input.items.push_back(stop());
+    input.items.push_back(MachineItem::label(old_helper));
+    input.items.push_back(op(0x0b));
+    input.items.push_back(op(0x52));
+    input.items.push_back(MachineItem::label(new_helper));
+    input.items.push_back(op(0x22));
+    input.items.push_back(op(0x52));
+    input.preloads.push_back(PreloadReport{
+        .register_name = "7",
+        .value = "2.2600012E-1",
+        .retunable_natural_fractional_prefix = "0.226000",
+    });
+
+    const Observation before = observe(input.items, input.preloads, true);
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    const Observation after = observe(rewritten.items, rewritten.preloads, true);
+    const std::map<std::string, std::string> final_preloads =
+        preload_map(rewritten.preloads);
+    require(rewritten.plan.proved && rewritten.applied == 3 &&
+                rewritten.removed_cells == 2 &&
+                rewritten.plan.rebound_indirect_flows == 1 &&
+                final_preloads.at("7") == "2.2600010E-1",
+            "a retunable fractional selector should move from one old flow to three new calls: "
+            "proved=" + std::to_string(rewritten.plan.proved) +
+                ", applied=" + std::to_string(rewritten.applied) +
+                ", removed=" + std::to_string(rewritten.removed_cells) +
+                ", rebound=" + std::to_string(rewritten.plan.rebound_indirect_flows) +
+                ", preload=" + final_preloads.at("7") +
+                ", firstReason=" +
+                (rewritten.plan.reasons.empty() ? std::string("-")
+                                                : rewritten.plan.reasons.front()));
+    require(before.stopped && after.stopped && before.state == after.state,
+            "fractional selector reassignment must preserve data and flow observations");
   }
 
   {

@@ -734,12 +734,6 @@ std::optional<std::string> canonical_plain_fraction(std::string_view value) {
 std::optional<std::string> proved_natural_fractional_selector_family(
     const std::vector<MachineItem>& items, int register_index_value,
     std::string_view preload_value, std::string_view family_prefix) {
-  if (std::any_of(items.begin(), items.end(), [&](const MachineItem& item) {
-        return item.kind == MachineItemKind::Op && is_indirect_flow(item.opcode) &&
-               encoded_register(item.opcode) == register_index_value;
-      })) {
-    return std::nullopt;
-  }
   bool saw_recall = false;
   for (const MachineItem& item : items) {
     if (item.kind != MachineItemKind::Op)
@@ -760,8 +754,16 @@ std::optional<std::string> proved_natural_fractional_selector_family(
       canonical_plain_fraction(preload_value);
   const std::optional<std::string> canonical_family =
       canonical_plain_fraction(family_prefix);
-  if (!canonical_preload.has_value() || !canonical_family.has_value() ||
-      *canonical_preload != *canonical_family) {
+  const bool plain_family_value =
+      canonical_preload.has_value() && canonical_family.has_value() &&
+      *canonical_preload == *canonical_family;
+  bool delivered_family_value = false;
+  for (int target = 1; target <= 99 && !delivered_family_value; ++target) {
+    const std::optional<std::string> candidate =
+        natural_fractional_selector_family_value(family_prefix, target);
+    delivered_family_value = candidate.has_value() && *candidate == preload_value;
+  }
+  if (!plain_family_value && !delivered_family_value) {
     return std::nullopt;
   }
   return std::string(family_prefix);
@@ -846,6 +848,11 @@ std::vector<std::size_t> indirect_flow_uses(const std::vector<MachineItem>& item
   return result;
 }
 
+bool is_late_bound_selector_consumer(const MachineItem& item) {
+  return std::find(item.roles.begin(), item.roles.end(),
+                   "late-decimal-selector-consumer") != item.roles.end();
+}
+
 bool register_has_nonflow_use(const std::vector<MachineItem>& items,
                               int register_index_value) {
   return std::any_of(items.begin(), items.end(), [&](const MachineItem& item) {
@@ -916,6 +923,31 @@ std::vector<SelectorCandidate> selector_candidates(
       if (const auto natural = natural_fractional_selector_encoding(value))
         append(natural->delivered_value);
 
+      std::vector<std::size_t> uses = indirect_flow_uses(items, index);
+      uses.erase(std::remove_if(uses.begin(), uses.end(), [&](std::size_t use) {
+                   return is_late_bound_selector_consumer(items.at(use));
+                 }),
+                 uses.end());
+      std::optional<IndirectAddressEvaluation> decoded_existing_flow;
+      try {
+        decoded_existing_flow = evaluate_indirect_address(
+            name, value, IndirectOperationKind::Flow,
+            options.address_space_model);
+      } catch (const std::exception&) {
+        decoded_existing_flow.reset();
+      }
+      const bool exact_existing_uses =
+          uses.empty() ||
+          (decoded_existing_flow.has_value() &&
+           decoded_existing_flow->actual_flow_target.has_value() &&
+           std::all_of(uses.begin(), uses.end(), [&](std::size_t use) {
+             const auto targets = flow.indirect_flow_targets.find(use);
+             return targets != flow.indirect_flow_targets.end() &&
+                    targets->second.size() == 1U &&
+                    targets->second.front().address ==
+                        *decoded_existing_flow->actual_flow_target;
+           }));
+
       if (report.retunable_natural_fractional_prefix.has_value()) {
         const std::optional<std::string> family =
             proved_natural_fractional_selector_family(
@@ -923,34 +955,19 @@ std::vector<SelectorCandidate> selector_candidates(
                 *report.retunable_natural_fractional_prefix);
         if (!family.has_value())
           continue;
-        result.push_back(SelectorCandidate{
-            .register_index = index,
-            .register_name = name,
-            .origin = NaturalTargetSelectorOrigin::ExistingPreload,
-            .rebindable_natural_fractional_prefix = *family,
-        });
+        if (exact_existing_uses) {
+          result.push_back(SelectorCandidate{
+              .register_index = index,
+              .register_name = name,
+              .origin = NaturalTargetSelectorOrigin::ExistingPreload,
+              .rebindable_natural_fractional_prefix = *family,
+              .displaced_flow_uses = static_cast<int>(uses.size()),
+          });
+        }
       }
 
-      const std::vector<std::size_t> uses = indirect_flow_uses(items, index);
       if (!uses.empty() && !register_has_nonflow_use(items, index) &&
           has_proved_address_projection(value)) {
-        std::optional<IndirectAddressEvaluation> decoded;
-        try {
-          decoded = evaluate_indirect_address(name, value,
-                                              IndirectOperationKind::Flow,
-                                              options.address_space_model);
-        } catch (const std::exception&) {
-          decoded.reset();
-        }
-        const bool exact_existing_uses =
-            decoded.has_value() && decoded->actual_flow_target.has_value() &&
-            std::all_of(uses.begin(), uses.end(), [&](std::size_t use) {
-              const auto targets = flow.indirect_flow_targets.find(use);
-              return targets != flow.indirect_flow_targets.end() &&
-                     targets->second.size() == 1U &&
-                     targets->second.front().address ==
-                         *decoded->actual_flow_target;
-            });
         if (exact_existing_uses) {
           result.push_back(SelectorCandidate{
               .register_index = index,
@@ -974,6 +991,8 @@ bool selector_existing_uses_match_target(
   if (selector_is_flexible(selector))
     return true;
   for (const std::size_t use : indirect_flow_uses(items, selector.register_index)) {
+    if (is_late_bound_selector_consumer(items.at(use)))
+      continue;
     const auto targets = flow.indirect_flow_targets.find(use);
     if (targets == flow.indirect_flow_targets.end() || targets->second.size() != 1U ||
         targets->second.front().item_index != target_origin) {
@@ -1023,6 +1042,8 @@ std::optional<std::vector<Cell>> convert_direct_flows(
   }
   if (converted_commands.empty() ||
       std::any_of(anchors.begin(), anchors.end(), [&](const auto& anchor) {
+        if (anchor.flow_sites == 0)
+          return false;
         return std::none_of(rewrites.begin(), rewrites.end(), [&](const auto& rewrite) {
           return rewrite.original_target_item == anchor.target_origin;
         });
@@ -1033,8 +1054,11 @@ std::optional<std::vector<Cell>> convert_direct_flows(
   std::map<std::size_t, DisplacedIndirectFlowRewrite> displaced_by_command;
   std::size_t next_synthetic_origin = items.size();
   for (const NaturalTargetAnchorCandidate& anchor : anchors) {
-    if (!anchor.selector.rebindable_address)
+    if (anchor.selector.displaced_flow_uses <= 0 ||
+        (!anchor.selector.rebindable_address &&
+         !anchor.selector.rebindable_natural_fractional_prefix.has_value())) {
       continue;
+    }
     for (const std::size_t command :
          indirect_flow_uses(items, anchor.selector.register_index)) {
       const auto targets = flow.indirect_flow_targets.find(command);
@@ -2014,10 +2038,7 @@ bool rebind_preloads(
     if (displaced_commands.contains(item_index))
       continue;
     const int reg = encoded_register(item.opcode);
-    const bool late_bound_consumer =
-        std::find(item.roles.begin(), item.roles.end(),
-                  "late-decimal-selector-consumer") != item.roles.end();
-    if (late_bound_consumer)
+    if (is_late_bound_selector_consumer(item))
       continue;
     const std::optional<std::size_t> target =
         target_origin_for_flow_use(original_flow, item_index);
@@ -2075,7 +2096,9 @@ bool rebind_preloads(
     const bool had_original_flow_use =
         std::any_of(original_uses.begin(), original_uses.end(),
                     [&](std::size_t use) {
-                      return !displaced_commands.contains(use);
+                      return !displaced_commands.contains(use) &&
+                             !is_late_bound_selector_consumer(
+                                 original_items.at(use));
                     });
     if (had_original_flow_use) {
       if (!preload_value_targets(name, old_value, old_target->second, model))
@@ -2155,7 +2178,10 @@ bool rebind_preloads(
     const NonFlowUseProjection projection =
         prove_fractional_nonflow_projection(original_items, reg);
     if (!projection.proved)
-      return reject("non-flow selector projection was not proved");
+      return reject("non-flow selector projection was not proved for R" + name +
+                    "=" + old_value + " old-target=" +
+                    std::to_string(old_target->second) + " new-target=" +
+                    std::to_string(new_target->second));
     const std::optional<std::string> rebound =
         rebind_stable_decimal_value(old_value, new_target->second);
     if (!rebound.has_value() ||
@@ -2702,8 +2728,7 @@ std::optional<std::vector<NaturalTargetRuntimeSelectorProof>> prove_runtime_sele
     const std::optional<std::size_t> command_origin =
         origin_for_item(final_origin_by_item, final_command);
     const bool late_bound_consumer =
-        std::find(command.roles.begin(), command.roles.end(),
-                  "late-decimal-selector-consumer") != command.roles.end();
+        is_late_bound_selector_consumer(command);
     if (late_bound_consumer) {
       if (!command_origin.has_value() || *command_origin >= original_items.size())
         return std::nullopt;
@@ -3376,6 +3401,9 @@ std::optional<CandidateArtifact> try_candidate(
   plan.bounded_targets = static_cast<int>(bounded_target_origins.size());
   plan.bounded_targets_proved = bounded_targets_proved;
   plan.size_neutral_bounded_layout = bounded_only;
+  plan.size_neutral_flow_rebind =
+      !bounded_only && options.allow_size_neutral_flow_rebind &&
+      plan.removed_cells == 0;
   const bool unchanged_command_effects_proved = unchanged_command_effects_preserved(
       items, candidate.items, candidate.new_item_by_origin, plan.flows,
       displaced_flows);
@@ -3393,7 +3421,8 @@ std::optional<CandidateArtifact> try_candidate(
       split_bridge_cells(split_bridges) -
       selected_layout->order.padding_cells;
   const bool size_goal_proved =
-      bounded_only ? plan.removed_cells == 0 : plan.removed_cells > 0;
+      bounded_only ? plan.removed_cells == 0
+                   : plan.removed_cells > 0 || plan.size_neutral_flow_rebind;
   plan.proved = plan.removed_cells == expected_removed_cells &&
                 size_goal_proved && plan.control_flow_equivalent &&
                 plan.call_return_equivalent && plan.stack_and_x2_equivalent &&
@@ -3405,7 +3434,8 @@ std::optional<CandidateArtifact> try_candidate(
       reason += ": size-accounting=" + std::to_string(plan.removed_cells) +
                 "/" + std::to_string(expected_removed_cells);
     }
-    if (!bounded_only && plan.removed_cells <= 0)
+    if (!bounded_only && plan.removed_cells <= 0 &&
+        !plan.size_neutral_flow_rebind)
       reason += ": nonpositive-size-saving";
     if (bounded_only && plan.removed_cells != 0)
       reason += ": bounded-layout-size-changed";
@@ -3545,6 +3575,37 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     return result;
   }
 
+  std::map<std::size_t, int> required_selector_by_flow;
+  std::map<std::size_t, int> required_selector_by_target;
+  for (const NaturalTargetRequiredFlowSelector& required :
+       options.required_flow_selectors) {
+    int selector = -1;
+    try {
+      selector = register_index(register_from_text(required.register_name));
+    } catch (const std::exception&) {
+      add_reason(result.plan, "required flow selector has an invalid register");
+      return result;
+    }
+    const auto flow_site = std::find_if(
+        flows.begin(), flows.end(), [&](const DirectFlowSite& flow) {
+          return flow.command == required.command_item;
+        });
+    if (selector < 7 || selector > 0x0e || flow_site == flows.end()) {
+      add_reason(result.plan,
+                 "required flow selector does not name a shortenable direct flow");
+      return result;
+    }
+    const auto [flow_binding, flow_inserted] =
+        required_selector_by_flow.emplace(required.command_item, selector);
+    const auto [target_binding, target_inserted] =
+        required_selector_by_target.emplace(flow_site->target, selector);
+    if ((!flow_inserted && flow_binding->second != selector) ||
+        (!target_inserted && target_binding->second != selector)) {
+      add_reason(result.plan, "required flow selector bindings conflict");
+      return result;
+    }
+  }
+
   std::map<std::size_t, std::size_t> original_origin_by_item;
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index)
     original_origin_by_item.emplace(item_index, item_index);
@@ -3561,6 +3622,109 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   std::vector<SelectorCandidate> selectors = selector_candidates(
       logical_items, preloads, *logical_flow, options);
 
+  std::vector<NaturalTargetAnchorCandidate> required_target_anchors;
+  std::map<int, std::size_t> required_target_by_selector;
+  std::set<std::size_t> required_target_identities;
+  for (const NaturalTargetRequiredSelectorTarget& required :
+       options.required_selector_targets) {
+    int selector_index = -1;
+    try {
+      selector_index = register_index(register_from_text(required.register_name));
+    } catch (const std::exception&) {
+      add_reason(result.plan, "required selector target has an invalid register");
+      return result;
+    }
+    if (selector_index < 7 || selector_index > 0x0e ||
+        required.target_item >= logical_items.size() ||
+        logical_items.at(required.target_item).kind != MachineItemKind::Op ||
+        !required_target_identities.insert(required.target_item).second ||
+        !required_target_by_selector
+             .emplace(selector_index, required.target_item)
+             .second) {
+      add_reason(result.plan,
+                 "required selector targets are invalid, duplicated, or conflicting");
+      return result;
+    }
+    auto selector = std::find_if(
+        selectors.begin(), selectors.end(), [&](const SelectorCandidate& candidate) {
+          return candidate.register_index == selector_index &&
+                 selector_is_flexible(candidate) &&
+                 selector_existing_uses_match_target(
+                     candidate, required.target_item, logical_items, *logical_flow);
+        });
+    if (selector == selectors.end()) {
+      selector = std::find_if(
+          selectors.begin(), selectors.end(), [&](const SelectorCandidate& candidate) {
+            return candidate.register_index == selector_index &&
+                   candidate.fixed_target > 0 &&
+                   selector_existing_uses_match_target(
+                       candidate, required.target_item, logical_items,
+                       *logical_flow);
+          });
+    }
+    if (selector == selectors.end()) {
+      add_reason(result.plan,
+                 "required selector target has no stable selector candidate");
+      return result;
+    }
+    required_target_anchors.push_back(NaturalTargetAnchorCandidate{
+        .selector = *selector,
+        .target_origin = required.target_item,
+        .flow_sites = 0,
+    });
+  }
+
+  // Existing stable indirect flows are hard layout constraints even when the
+  // current transaction does not convert another direct flow through their
+  // selector. Previously those targets were checked only after placement,
+  // causing the search to enumerate layouts that necessarily failed preload
+  // rebinding. Carry them as zero-flow anchors in every trial instead.
+  std::vector<NaturalTargetAnchorCandidate> preservation_anchors;
+  std::set<int> preserved_registers;
+  std::set<int> flexible_registers;
+  for (const SelectorCandidate& selector : selectors) {
+    if (selector_is_flexible(selector))
+      flexible_registers.insert(selector.register_index);
+  }
+  for (const SelectorCandidate& selector : selectors) {
+    if (selector_is_flexible(selector) || selector.fixed_target < 0 ||
+        flexible_registers.contains(selector.register_index) ||
+        prove_fractional_nonflow_projection(logical_items,
+                                            selector.register_index)
+            .proved ||
+        preserved_registers.contains(selector.register_index)) {
+      continue;
+    }
+    const std::vector<std::size_t> uses =
+        indirect_flow_uses(logical_items, selector.register_index);
+    if (uses.empty())
+      continue;
+    std::optional<std::size_t> target_origin;
+    bool exact_target = true;
+    for (const std::size_t use : uses) {
+      if (is_late_bound_selector_consumer(logical_items.at(use)))
+        continue;
+      const std::optional<std::size_t> target =
+          target_origin_for_flow_use(*logical_flow, use);
+      if (!target.has_value() ||
+          (target_origin.has_value() && *target_origin != *target)) {
+        exact_target = false;
+        break;
+      }
+      target_origin = target;
+    }
+    if (!exact_target || !target_origin.has_value() ||
+        index.item_addresses.at(*target_origin) != selector.fixed_target) {
+      continue;
+    }
+    preservation_anchors.push_back(NaturalTargetAnchorCandidate{
+        .selector = selector,
+        .target_origin = *target_origin,
+        .flow_sites = 0,
+    });
+    preserved_registers.insert(selector.register_index);
+  }
+
   std::set<std::size_t> flow_targets;
   std::map<std::size_t, int> flow_sites_by_target;
   for (const DirectFlowSite& flow_site : flows)
@@ -3575,10 +3739,23 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     if (!selector_is_flexible(selector) && selector.fixed_target <= 0)
       continue;
     for (const std::size_t target : flow_targets) {
+      const auto required_target =
+          required_target_by_selector.find(selector.register_index);
+      if (required_target != required_target_by_selector.end() &&
+          required_target->second != target) {
+        continue;
+      }
+      const auto required = required_selector_by_target.find(target);
+      if (required != required_selector_by_target.end() &&
+          required->second != selector.register_index) {
+        continue;
+      }
       if (!selector_existing_uses_match_target(selector, target, logical_items, *logical_flow))
         continue;
-      if (selector.rebindable_address &&
-          flow_sites_by_target.at(target) <= selector.displaced_flow_uses) {
+      if (selector.displaced_flow_uses > 0 &&
+          (options.allow_size_neutral_flow_rebind
+               ? flow_sites_by_target.at(target) < selector.displaced_flow_uses
+               : flow_sites_by_target.at(target) <= selector.displaced_flow_uses)) {
         continue;
       }
       options_by_selector[selector.register_index].push_back(
@@ -3753,6 +3930,47 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   std::optional<CandidateArtifact> best;
   std::size_t transparent_jump_attempts = 0;
   bool transparent_jump_search_capped = false;
+  const auto with_preservation_anchors =
+      [&](const std::vector<NaturalTargetAnchorCandidate>& trial)
+      -> std::optional<std::vector<NaturalTargetAnchorCandidate>> {
+    std::vector<NaturalTargetAnchorCandidate> complete = trial;
+    for (const NaturalTargetAnchorCandidate& required : required_target_anchors) {
+      const auto same_selector = std::find_if(
+          complete.begin(), complete.end(), [&](const auto& anchor) {
+            return anchor.selector.register_index ==
+                   required.selector.register_index;
+          });
+      const auto same_target = std::find_if(
+          complete.begin(), complete.end(), [&](const auto& anchor) {
+            return anchor.target_origin == required.target_origin;
+          });
+      if ((same_selector != complete.end() &&
+           same_selector->target_origin != required.target_origin) ||
+          (same_target != complete.end() &&
+           same_target->selector.register_index !=
+               required.selector.register_index)) {
+        return std::nullopt;
+      }
+      if (same_selector == complete.end())
+        complete.push_back(required);
+    }
+    for (const NaturalTargetAnchorCandidate& preserved : preservation_anchors) {
+      const auto selected = std::find_if(
+          complete.begin(), complete.end(), [&](const auto& anchor) {
+            return anchor.selector.register_index ==
+                   preserved.selector.register_index;
+          });
+      if (selected != complete.end()) {
+        if (selected->target_origin == preserved.target_origin)
+          continue;
+        if (selector_is_flexible(selected->selector))
+          continue;
+        return std::nullopt;
+      }
+      complete.push_back(preserved);
+    }
+    return complete;
+  };
   const auto consider_trial = [&](const std::vector<NaturalTargetAnchorCandidate>& trial,
                                   bool charges_search_cap) {
     if (charges_search_cap &&
@@ -3762,13 +3980,41 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     }
     if (best.has_value() && score(trial) < best->plan.removed_cells)
       return;
+    for (const auto& [target, selector] : required_selector_by_target) {
+      const auto required = std::find_if(
+          trial.begin(), trial.end(), [&](const NaturalTargetAnchorCandidate& anchor) {
+            return anchor.target_origin == target &&
+                   anchor.selector.register_index == selector;
+          });
+      if (required == trial.end())
+        return;
+    }
     if (charges_search_cap)
       ++transparent_jump_attempts;
+    const std::optional<std::vector<NaturalTargetAnchorCandidate>> complete_trial =
+        with_preservation_anchors(trial);
+    if (!complete_trial.has_value())
+      return;
     const std::optional<CandidateArtifact> candidate = try_candidate(
-        logical_items, preloads, *logical_flow, options, *references, flows, trial,
+        logical_items, preloads, *logical_flow, options, *references, flows,
+        *complete_trial,
         bounded_target_origins,
         *original_trace, *original_external, &result.plan.reasons);
-    if (candidate.has_value() &&
+    const bool required_flows_proved =
+        candidate.has_value() &&
+        std::all_of(required_selector_by_flow.begin(),
+                    required_selector_by_flow.end(),
+                    [&](const auto& binding) {
+                      return std::any_of(
+                          candidate->plan.flows.begin(),
+                          candidate->plan.flows.end(),
+                          [&](const NaturalTargetFlowRewrite& flow) {
+                            return flow.original_command_item == binding.first &&
+                                   flow.selector_register ==
+                                       register_name(binding.second);
+                          });
+                    });
+    if (required_flows_proved &&
         (!best.has_value() || better_candidate(*candidate, *best))) {
       best = candidate;
     }

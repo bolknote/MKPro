@@ -3,6 +3,7 @@
 #include "mkpro/core/stack_value_equivalence.hpp"
 
 #include "mkpro/core/indirect_addressing.hpp"
+#include "mkpro/core/natural_target_component_layout.hpp"
 #include "mkpro/core/opcodes.hpp"
 
 #include <algorithm>
@@ -451,6 +452,7 @@ reachable_return_stacks(const std::vector<MachineItem>& items, const ArtifactInd
     add_reason(reasons, "terminal report candidate is unreachable from every proved entry");
   return std::vector<std::vector<int>>(stacks.begin(), stacks.end());
 }
+
 
 std::optional<int> direct_recall_register(const MachineItem& item) {
   if (item.kind != MachineItemKind::Op)
@@ -1974,6 +1976,7 @@ std::vector<ReboundArtifact> normalize_inverted_terminal_tail_layouts(
   return candidates;
 }
 
+
 std::vector<ReboundArtifact> normalize_empty_return_startup_layouts(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& control_flow,
@@ -2310,6 +2313,603 @@ symbolize_terminal_layout_direct_targets(const std::vector<MachineItem>& items,
   return symbolized;
 }
 
+NaturalTargetComponentLayoutResult optimize_terminal_shared_return_selector_layout(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const NaturalTargetComponentLayoutOptions& natural_options,
+    const TerminalCyclicLayoutOptions& terminal_options) {
+  NaturalTargetComponentLayoutResult rejected;
+  rejected.items = items;
+  rejected.preloads = preloads;
+  const auto reject = [&](std::string reason) {
+    add_reason(rejected.plan.reasons,
+               "terminal shared-return selector: " + std::move(reason));
+  };
+  if (natural_options.address_space_model != terminal_options.address_space_model ||
+      natural_options.address_space_model != AddressSpaceModel::Standard) {
+    reject("address-space models differ or are not standard");
+    return rejected;
+  }
+
+  const ArtifactIndex input_index = index_artifact(items);
+  std::vector<std::string> control_reasons;
+  if (!validate_complete_control_flow(items, input_index, control_flow,
+                                      terminal_options, control_reasons)) {
+    for (const std::string& reason : control_reasons)
+      reject(reason);
+    return rejected;
+  }
+
+  struct TerminalTail {
+    std::size_t condition = 0;
+    std::size_t operand = 0;
+    std::size_t local_return = 0;
+    std::size_t terminal_block_begin = 0;
+    std::size_t dot = 0;
+    std::size_t stop = 0;
+    std::size_t terminal_block_end = 0;
+  };
+  std::optional<TerminalTail> tail;
+  for (std::size_t mask = 0; mask < items.size() && !tail.has_value(); ++mask) {
+    if (!is_op(items, mask, 0x37))
+      continue;
+    const std::optional<std::size_t> fraction = next_cell_item(items, mask);
+    const std::optional<std::size_t> condition =
+        fraction.has_value() ? next_cell_item(items, *fraction) : std::nullopt;
+    const std::optional<std::size_t> operand =
+        condition.has_value() ? next_cell_item(items, *condition) : std::nullopt;
+    const std::optional<std::size_t> local_return =
+        operand.has_value() ? next_cell_item(items, *operand) : std::nullopt;
+    if (!fraction.has_value() || !condition.has_value() || !operand.has_value() ||
+        !local_return.has_value() || *operand != *condition + 1U ||
+        *local_return != *operand + 1U || !is_op(items, *fraction, 0x35) ||
+        !is_op(items, *condition, 0x5e) || items.at(*condition).raw ||
+        !is_op(items, *local_return, kReturnOpcode)) {
+      continue;
+    }
+    const std::optional<int> terminal_address =
+        resolved_target(items.at(*operand), input_index,
+                        terminal_options.address_space_model);
+    if (!terminal_address.has_value())
+      continue;
+    const auto terminal_cell = input_index.cell_items.find(*terminal_address);
+    if (terminal_cell == input_index.cell_items.end())
+      continue;
+    const std::size_t dot = terminal_cell->second;
+    const std::optional<std::size_t> stop = next_cell_item(items, dot);
+    if (!is_op(items, dot, 0x0a) || !stop.has_value() ||
+        !is_op(items, *stop, kStopOpcode) ||
+        items.at(*stop).stop_disposition != StopDisposition::Terminal ||
+        dot <= *local_return) {
+      continue;
+    }
+    std::size_t terminal_block_begin = dot;
+    while (terminal_block_begin > 0U &&
+           items.at(terminal_block_begin - 1U).kind == MachineItemKind::Label) {
+      --terminal_block_begin;
+    }
+    const std::size_t terminal_block_end = *stop + 1U;
+    const std::optional<std::size_t> predecessor =
+        previous_cell_item(items, terminal_block_begin);
+    if (!predecessor.has_value() ||
+        !is_non_fallthrough_command(items.at(*predecessor))) {
+      continue;
+    }
+
+    bool exclusive_terminal_entry = true;
+    for (std::size_t source = 0; source < items.size(); ++source) {
+      if (items.at(source).kind != MachineItemKind::Op ||
+          !is_direct_flow_opcode(items.at(source).opcode)) {
+        continue;
+      }
+      const std::optional<std::size_t> source_operand = next_cell_item(items, source);
+      const std::optional<int> target =
+          source_operand.has_value()
+              ? resolved_target(items.at(*source_operand), input_index,
+                                terminal_options.address_space_model)
+              : std::nullopt;
+      if (!target.has_value()) {
+        exclusive_terminal_entry = false;
+        break;
+      }
+      const auto target_cell = input_index.cell_items.find(*target);
+      if (target_cell == input_index.cell_items.end()) {
+        exclusive_terminal_entry = false;
+        break;
+      }
+      if ((target_cell->second == dot || target_cell->second == *stop) &&
+          !(source == *condition && target_cell->second == dot)) {
+        exclusive_terminal_entry = false;
+        break;
+      }
+    }
+    for (const auto& [source, targets] : control_flow.indirect_flow_targets) {
+      (void)source;
+      if (std::any_of(targets.begin(), targets.end(), [&](const auto& target) {
+            return target.item_index == dot || target.item_index == *stop;
+          })) {
+        exclusive_terminal_entry = false;
+      }
+    }
+    for (const PostLayoutExternalEntryState& entry : control_flow.external_entries) {
+      if (entry.entry.item_index == dot || entry.entry.item_index == *stop ||
+          std::any_of(entry.return_stack.begin(), entry.return_stack.end(),
+                      [&](const PostLayoutCommandIdentity& slot) {
+                        return slot.item_index == dot || slot.item_index == *stop;
+                      })) {
+        exclusive_terminal_entry = false;
+      }
+    }
+    if (exclusive_terminal_entry) {
+      tail = TerminalTail{
+          .condition = *condition,
+          .operand = *operand,
+          .local_return = *local_return,
+          .terminal_block_begin = terminal_block_begin,
+          .dot = dot,
+          .stop = *stop,
+          .terminal_block_end = terminal_block_end,
+      };
+    }
+  }
+  if (!tail.has_value()) {
+    reject("no exclusive K-AND/K-frac/Fx=0 terminal tail");
+    return rejected;
+  }
+
+  const OpcodeInfo& direct_condition = opcode_by_code(0x5e);
+  const OpcodeInfo& shared_return_info = opcode_by_code(kReturnOpcode);
+  if (direct_condition.stack_effect != StackEffect::Preserves ||
+      !direct_condition.conditional_x2_effect.has_value() ||
+      direct_condition.conditional_x2_effect->jump != X2Effect::Preserves ||
+      shared_return_info.x2_effect != X2Effect::Affects) {
+    reject("opcode contracts do not prove the direct side of the terminal fold");
+    return rejected;
+  }
+
+  constexpr std::string_view kConditionRole =
+      "terminal-shared-return-selector:condition";
+  constexpr std::string_view kDotRole =
+      "terminal-shared-return-selector:dot";
+  constexpr std::string_view kStopRole =
+      "terminal-shared-return-selector:stop";
+  constexpr std::string_view kReturnRole =
+      "terminal-shared-return-selector:shared-return";
+  constexpr std::string_view kLateBoundRole =
+      "late-decimal-selector-consumer";
+  const auto add_role = [](MachineItem& item, std::string_view role) {
+    if (std::find(item.roles.begin(), item.roles.end(), role) == item.roles.end())
+      item.roles.emplace_back(role);
+  };
+  const auto unique_role_item = [](const std::vector<MachineItem>& artifact,
+                                   std::string_view role)
+      -> std::optional<std::size_t> {
+    std::optional<std::size_t> found;
+    for (std::size_t item = 0; item < artifact.size(); ++item) {
+      if (std::find(artifact.at(item).roles.begin(), artifact.at(item).roles.end(),
+                    role) == artifact.at(item).roles.end()) {
+        continue;
+      }
+      if (found.has_value())
+        return std::nullopt;
+      found = item;
+    }
+    return found;
+  };
+  const auto relocated_external_entries_match = [](
+      const AuthoritativePostLayoutControlFlow& before,
+      const AuthoritativePostLayoutControlFlow& after,
+      const std::vector<std::optional<std::size_t>>& relocation) {
+    if (before.external_entries.size() != after.external_entries.size())
+      return false;
+    for (const PostLayoutExternalEntryState& old_entry : before.external_entries) {
+      if (old_entry.entry.item_index >= relocation.size() ||
+          !relocation.at(old_entry.entry.item_index).has_value()) {
+        return false;
+      }
+      std::vector<std::size_t> stack;
+      for (const PostLayoutCommandIdentity& slot : old_entry.return_stack) {
+        if (slot.item_index >= relocation.size() ||
+            !relocation.at(slot.item_index).has_value()) {
+          return false;
+        }
+        stack.push_back(*relocation.at(slot.item_index));
+      }
+      const bool present = std::any_of(
+          after.external_entries.begin(), after.external_entries.end(),
+          [&](const PostLayoutExternalEntryState& candidate) {
+            std::vector<std::size_t> candidate_stack;
+            for (const PostLayoutCommandIdentity& slot : candidate.return_stack)
+              candidate_stack.push_back(slot.item_index);
+            return candidate.entry.item_index ==
+                       *relocation.at(old_entry.entry.item_index) &&
+                   candidate_stack == stack && candidate.kind == old_entry.kind &&
+                   candidate.manual_interaction == old_entry.manual_interaction;
+          });
+      if (!present)
+        return false;
+    }
+    return true;
+  };
+
+  const std::map<int, std::string> stable_preloads = unique_stable_preloads(preloads);
+  std::optional<NaturalTargetComponentLayoutResult> best;
+  int best_selector = -1;
+  std::vector<std::string> candidate_reasons;
+  for (const auto& [selector, raw_value] : stable_preloads) {
+    const std::string selector_name = "R" + register_text(selector);
+    if (!selector_is_unwritten(items, selector, control_flow)) {
+      candidate_reasons.push_back(selector_name + " is written at runtime");
+      continue;
+    }
+    if (raw_value.empty()) {
+      candidate_reasons.push_back(selector_name + " has no delivered preload");
+      continue;
+    }
+
+    bool conflicting_flow = false;
+    for (const auto& [source, targets] : control_flow.indirect_flow_targets) {
+      const std::optional<int> source_selector = encoded_register(items.at(source).opcode);
+      if (!source_selector.has_value() || *source_selector != selector)
+        continue;
+      if (targets.size() != 1U ||
+          targets.front().item_index != tail->local_return) {
+        conflicting_flow = true;
+        break;
+      }
+    }
+    if (conflicting_flow) {
+      candidate_reasons.push_back(selector_name +
+                                  " already selects another flow identity");
+      continue;
+    }
+
+    const OpcodeInfo& indirect_condition = opcode_by_code(0xe0 + selector);
+    const OpcodeInfo& indirect_jump = opcode_by_code(0x80 + selector);
+    if (indirect_condition.stack_effect != StackEffect::Preserves ||
+        indirect_jump.stack_effect != StackEffect::Preserves ||
+        !indirect_condition.conditional_x2_effect.has_value() ||
+        indirect_condition.conditional_x2_effect->fallthrough != X2Effect::Preserves ||
+        indirect_condition.conditional_x2_effect->jump != X2Effect::Preserves ||
+        indirect_jump.x2_effect != X2Effect::Preserves) {
+      candidate_reasons.push_back(selector_name +
+                                  " opcode family lacks the required stack/X2 contract");
+      continue;
+    }
+
+    std::vector<std::optional<std::size_t>> staging_relocation(items.size());
+    std::vector<MachineItem> staged;
+    staged.reserve(items.size());
+    for (std::size_t old_item = 0; old_item < items.size(); ++old_item) {
+      if (old_item == tail->condition) {
+        staging_relocation.at(old_item) = staged.size();
+        MachineItem folded = items.at(old_item);
+        folded.opcode = 0xe0 + selector;
+        folded.name = indirect_condition.name;
+        folded.comment = "proved complementary terminal branch";
+        add_role(folded, kConditionRole);
+        add_role(folded, kLateBoundRole);
+        staged.push_back(std::move(folded));
+        for (std::size_t moved = tail->terminal_block_begin;
+             moved < tail->terminal_block_end; ++moved) {
+          staging_relocation.at(moved) = staged.size();
+          MachineItem item = items.at(moved);
+          if (moved == tail->dot)
+            add_role(item, kDotRole);
+          if (moved == tail->stop)
+            add_role(item, kStopRole);
+          staged.push_back(std::move(item));
+        }
+        continue;
+      }
+      if (old_item == tail->operand ||
+          (old_item >= tail->terminal_block_begin &&
+           old_item < tail->terminal_block_end)) {
+        continue;
+      }
+      staging_relocation.at(old_item) = staged.size();
+      MachineItem item = items.at(old_item);
+      if (old_item == tail->local_return)
+        add_role(item, kReturnRole);
+      staged.push_back(std::move(item));
+    }
+    const ArtifactIndex staged_index = index_artifact(staged);
+    bool staging_rebound = true;
+    for (std::size_t source = 0; source < items.size(); ++source) {
+      if (source == tail->condition || items.at(source).kind != MachineItemKind::Op ||
+          !is_direct_flow_opcode(items.at(source).opcode)) {
+        continue;
+      }
+      const std::optional<std::size_t> old_operand = next_cell_item(items, source);
+      const std::optional<int> old_target =
+          old_operand.has_value()
+              ? resolved_target(items.at(*old_operand), input_index,
+                                terminal_options.address_space_model)
+              : std::nullopt;
+      if (!old_operand.has_value() || !old_target.has_value() ||
+          !staging_relocation.at(source).has_value() ||
+          !staging_relocation.at(*old_operand).has_value()) {
+        staging_rebound = false;
+        break;
+      }
+      const auto target_cell = input_index.cell_items.find(*old_target);
+      if (target_cell == input_index.cell_items.end() ||
+          !staging_relocation.at(target_cell->second).has_value() ||
+          !rewrite_direct_operand(
+              staged.at(*staging_relocation.at(*old_operand)),
+              staged_index.item_addresses.at(
+                  *staging_relocation.at(target_cell->second)))) {
+        staging_rebound = false;
+        break;
+      }
+    }
+    if (!staging_rebound ||
+        !staging_relocation.at(tail->local_return).has_value()) {
+      candidate_reasons.push_back("staged direct targets cannot be rebound");
+      continue;
+    }
+
+    for (MachineItem& item : staged) {
+      item.indirect_flow_targets.reset();
+      item.indirect_memory_targets.reset();
+    }
+    bool staging_metadata = true;
+    for (const auto& [source, targets] : control_flow.indirect_flow_targets) {
+      if (!staging_relocation.at(source).has_value()) {
+        staging_metadata = false;
+        break;
+      }
+      std::vector<IrTarget> metadata;
+      for (const PostLayoutCommandIdentity& target : targets) {
+        if (!staging_relocation.at(target.item_index).has_value()) {
+          staging_metadata = false;
+          break;
+        }
+        metadata.emplace_back(staged_index.item_addresses.at(
+            *staging_relocation.at(target.item_index)));
+      }
+      if (!staging_metadata)
+        break;
+      staged.at(*staging_relocation.at(source)).indirect_flow_targets =
+          std::move(metadata);
+    }
+    for (const auto& [source, targets] : control_flow.indirect_memory_targets) {
+      if (!staging_relocation.at(source).has_value()) {
+        staging_metadata = false;
+        break;
+      }
+      staged.at(*staging_relocation.at(source)).indirect_memory_targets = targets;
+    }
+    const std::size_t staged_condition =
+        *staging_relocation.at(tail->condition);
+    const std::size_t staged_return =
+        *staging_relocation.at(tail->local_return);
+    staged.at(staged_condition).indirect_flow_targets =
+        std::vector<IrTarget>{staged_index.item_addresses.at(staged_return)};
+    if (!staging_metadata) {
+      candidate_reasons.push_back("staged typed control-flow facts cannot be rebound");
+      continue;
+    }
+
+    const auto main_entry = std::find_if(
+        control_flow.external_entries.begin(), control_flow.external_entries.end(),
+        [](const PostLayoutExternalEntryState& entry) {
+          return entry.kind == ExternalEntryKind::Main;
+        });
+    if (main_entry == control_flow.external_entries.end() ||
+        !staging_relocation.at(main_entry->entry.item_index).has_value()) {
+      candidate_reasons.push_back("staged main entry cannot be rebound");
+      continue;
+    }
+    PostLayoutControlFlowOptions staged_flow_options;
+    staged_flow_options.address_space_model = terminal_options.address_space_model;
+    staged_flow_options.maximum_return_depth = terminal_options.maximum_return_depth;
+    staged_flow_options.maximum_execution_states =
+        static_cast<std::size_t>(terminal_options.maximum_execution_states);
+    staged_flow_options.main_entry = staged_index.item_addresses.at(
+        *staging_relocation.at(main_entry->entry.item_index));
+    if (control_flow.empty_return_target.has_value()) {
+      if (!staging_relocation.at(
+               control_flow.empty_return_target->item_index).has_value()) {
+        candidate_reasons.push_back("staged empty-return target cannot be rebound");
+        continue;
+      }
+      staged_flow_options.empty_return_target = staged_index.item_addresses.at(
+          *staging_relocation.at(control_flow.empty_return_target->item_index));
+    }
+    const AuthoritativePostLayoutControlFlow staged_flow =
+        build_post_layout_control_flow(staged, staged_flow_options);
+    std::vector<std::string> staged_reasons;
+    if (!staged_flow.proved ||
+        !validate_complete_control_flow(staged, staged_index, staged_flow,
+                                        terminal_options, staged_reasons) ||
+        !relocated_external_entries_match(control_flow, staged_flow,
+                                          staging_relocation)) {
+      candidate_reasons.push_back(
+          staged_flow.reasons.empty() ? "staged CFG is not complete"
+                                      : "staged CFG: " + staged_flow.reasons.front());
+      continue;
+    }
+
+    NaturalTargetComponentLayoutOptions transactional_options = natural_options;
+    transactional_options.allow_size_neutral_flow_rebind = false;
+    transactional_options.required_flow_selectors.clear();
+    bool required_bindings_relocated = true;
+    for (const NaturalTargetRequiredFlowSelector& required :
+         natural_options.required_flow_selectors) {
+      const std::optional<int> required_selector =
+          normalized_register_index(required.register_name);
+      if (required_selector.has_value() && *required_selector == selector)
+        continue;
+      if (required.command_item >= staging_relocation.size() ||
+          !staging_relocation.at(required.command_item).has_value()) {
+        required_bindings_relocated = false;
+        break;
+      }
+      transactional_options.required_flow_selectors.push_back(
+          NaturalTargetRequiredFlowSelector{
+              .command_item =
+                  *staging_relocation.at(required.command_item),
+              .register_name = required.register_name,
+          });
+    }
+    if (!required_bindings_relocated) {
+      candidate_reasons.push_back(
+          "a required selector binding cannot be relocated into the folded artifact");
+      continue;
+    }
+    transactional_options.required_selector_targets.clear();
+    for (const NaturalTargetRequiredSelectorTarget& required :
+         natural_options.required_selector_targets) {
+      if (required.target_item >= staging_relocation.size() ||
+          !staging_relocation.at(required.target_item).has_value()) {
+        required_bindings_relocated = false;
+        break;
+      }
+      transactional_options.required_selector_targets.push_back(
+          NaturalTargetRequiredSelectorTarget{
+              .target_item =
+                  *staging_relocation.at(required.target_item),
+              .register_name = required.register_name,
+          });
+    }
+    if (!required_bindings_relocated) {
+      candidate_reasons.push_back(
+          "a required selector target cannot be relocated into the folded artifact");
+      continue;
+    }
+    transactional_options.required_selector_targets.push_back(
+        NaturalTargetRequiredSelectorTarget{
+            .target_item = staged_return,
+            .register_name = register_text(selector),
+        });
+    NaturalTargetComponentLayoutResult natural =
+        optimize_natural_target_component_layout(staged, preloads, staged_flow,
+                                                 transactional_options);
+    if (natural.applied <= 0 || !natural.plan.proved ||
+        !natural.plan.final_artifact_proved || natural.removed_cells <= 0) {
+      if (!natural.plan.reasons.empty())
+        candidate_reasons.push_back(natural.plan.reasons.back());
+      continue;
+    }
+    const std::optional<std::size_t> condition =
+        unique_role_item(natural.items, kConditionRole);
+    const std::optional<std::size_t> dot = unique_role_item(natural.items, kDotRole);
+    const std::optional<std::size_t> stop = unique_role_item(natural.items, kStopRole);
+    const std::optional<std::size_t> final_return =
+        unique_role_item(natural.items, kReturnRole);
+    if (!condition.has_value() || !dot.has_value() || !stop.has_value() ||
+        !final_return.has_value() ||
+        !is_op(natural.items, *condition, 0xe0 + selector) ||
+        next_cell_item(natural.items, *condition) != dot ||
+        next_cell_item(natural.items, *dot) != stop ||
+        !is_op(natural.items, *dot, 0x0a) ||
+        !is_op(natural.items, *stop, kStopOpcode) ||
+        natural.items.at(*stop).stop_disposition != StopDisposition::Terminal ||
+        !is_op(natural.items, *final_return, kReturnOpcode)) {
+      candidate_reasons.push_back("selector layout changed the terminal fold shape");
+      continue;
+    }
+    const ArtifactIndex natural_index = index_artifact(natural.items);
+    const auto condition_targets =
+        natural.plan.final_control_flow.indirect_flow_targets.find(*condition);
+    if (condition_targets ==
+            natural.plan.final_control_flow.indirect_flow_targets.end() ||
+        condition_targets->second.size() != 1U ||
+        condition_targets->second.front().item_index != *final_return) {
+      candidate_reasons.push_back(
+          "required selector target changed command identity");
+      continue;
+    }
+
+    const auto delivered_preload = std::find_if(
+        natural.preloads.begin(), natural.preloads.end(),
+        [&](const PreloadReport& preload) {
+          const std::optional<int> reg =
+              normalized_register_index(preload.register_name);
+          return reg.has_value() && *reg == selector;
+        });
+    std::optional<IndirectAddressEvaluation> final_decode;
+    try {
+      if (delivered_preload != natural.preloads.end()) {
+        final_decode = evaluate_indirect_address(
+            register_text(selector), delivered_preload->value,
+            IndirectOperationKind::Flow, terminal_options.address_space_model);
+      }
+    } catch (const std::exception&) {
+      final_decode.reset();
+    }
+    if (!final_decode.has_value() || !final_decode->actual_flow_target.has_value() ||
+        *final_decode->actual_flow_target !=
+            natural_index.item_addresses.at(*final_return)) {
+      candidate_reasons.push_back(
+          "delivered selector does not decode to the shared return");
+      continue;
+    }
+
+    const ArtifactIndex final_index = natural_index;
+    const AuthoritativePostLayoutControlFlow final_flow =
+        natural.plan.final_control_flow;
+    const auto final_condition_targets = condition_targets;
+    natural.plan.runtime_selectors.push_back(
+        NaturalTargetRuntimeSelectorProof{
+            .original_command_item = tail->condition,
+            .final_command_item = *condition,
+            .original_target_item = tail->local_return,
+            .register_name = register_text(selector),
+            .delivered_preload = delivered_preload->value,
+            .decoded_target = *final_decode->actual_flow_target,
+            .final_target_address =
+                final_condition_targets->second.front().address,
+            .stable_mutation_class = true,
+            .selector_unwritten = true,
+            .typed_target_matches_runtime_decode = true,
+        });
+
+    const int output_cells = final_index.cells;
+    if (output_cells >= input_index.cells) {
+      candidate_reasons.push_back("atomic transaction has no net size saving");
+      continue;
+    }
+    natural.plan.input_cells = input_index.cells;
+    natural.plan.output_cells = output_cells;
+    natural.plan.removed_cells = input_index.cells - output_cells;
+    natural.plan.terminal_shared_return_folds = 1;
+    natural.plan.size_neutral_flow_rebind = false;
+    natural.plan.selector_register = register_text(selector);
+    natural.plan.natural_target = *final_decode->actual_flow_target;
+    natural.plan.final_control_flow = final_flow;
+    natural.plan.final_artifact_proved = true;
+    natural.plan.proved = natural.plan.control_flow_equivalent &&
+                          natural.plan.call_return_equivalent &&
+                          natural.plan.stack_and_x2_equivalent &&
+                          natural.plan.indirect_memory_equivalent &&
+                          natural.plan.data_projection_equivalent &&
+                          natural.plan.final_artifact_proved &&
+                          natural.plan.removed_cells > 0;
+    if (!natural.plan.proved) {
+      candidate_reasons.push_back("combined proof did not remain complete");
+      continue;
+    }
+    natural.applied = std::max(1, natural.applied);
+    natural.removed_cells = natural.plan.removed_cells;
+    if (!best.has_value() || natural.plan.output_cells < best->plan.output_cells ||
+        (natural.plan.output_cells == best->plan.output_cells &&
+         selector < best_selector)) {
+      best = std::move(natural);
+      best_selector = selector;
+    }
+  }
+
+  if (best.has_value())
+    return std::move(*best);
+  for (const std::string& reason : candidate_reasons)
+    reject(reason);
+  if (candidate_reasons.empty())
+    reject("no stable non-conflicting selector can address the shared return");
+  return rejected;
+}
 TerminalCyclicLayoutPlan
 verify_terminal_cyclic_layout(const std::vector<MachineItem>& items,
                               const std::vector<PreloadReport>& preloads,
@@ -2493,8 +3093,7 @@ optimize_terminal_cyclic_layout(const std::vector<MachineItem>& items,
                                                      &result.plan.reasons);
           alias.has_value()) {
         return *alias;
-      }
-    }
+      }    }
     for (ReboundArtifact& normalized :
          normalize_inverted_terminal_tail_layouts(items, control_flow, options)) {
       TerminalCyclicLayoutResult candidate = optimize_terminal_cyclic_layout(

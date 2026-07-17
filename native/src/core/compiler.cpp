@@ -50074,10 +50074,11 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
           }
         };
 
-        consider_layout(core::optimize_natural_target_component_layout(
-                            *natural_layout_input, effective_preloads, control_flow,
-                            natural_options),
-                        std::nullopt);
+        core::NaturalTargetComponentLayoutResult ordinary_natural_layout =
+            core::optimize_natural_target_component_layout(
+                *natural_layout_input, effective_preloads, control_flow,
+                natural_options);
+        consider_layout(std::move(ordinary_natural_layout), std::nullopt);
 
         const auto refreshed_contracts =
             refresh_helper_semantic_alias_contracts(*natural_layout_input,
@@ -50233,6 +50234,15 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                           : "natural-target-component-layout",
               .detail = std::move(natural_layout_detail),
           });
+          if (natural_layout.plan.terminal_shared_return_folds > 0) {
+            post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+                .name = "terminal-shared-return-selector-layout",
+                .detail =
+                    "Folded a proved terminal/direct-return branch through a stable "
+                    "selector before generic component layout, then removed its "
+                    "temporary final layout anchor after complete final-artifact proof.",
+            });
+          }
           if (options.analysis && !natural_layout_search_rejections.empty()) {
             std::string rejection_detail;
             for (const std::string& reason : natural_layout_search_rejections) {
@@ -50275,6 +50285,93 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
     merge_terminal_preloads(final_layout_effective_preloads.has_value()
                                 ? *final_layout_effective_preloads
                                 : post_layout_flow_preloads);
+
+    const bool shared_return_already_folded = std::any_of(
+        post_layout_optimizations.begin(), post_layout_optimizations.end(),
+        [](const core::passes::AppliedOptimization& optimization) {
+          return optimization.name == "terminal-shared-return-selector-layout";
+        });
+    if (!shared_return_already_folded &&
+        address_space_model_for_options(options) == AddressSpaceModel::Standard &&
+        core::machine_cell_count(post_layout_items) >
+            program_step_limit_for_options(options)) {
+      core::PostLayoutControlFlowOptions shared_return_flow_options;
+      shared_return_flow_options.address_space_model =
+          address_space_model_for_options(options);
+      shared_return_flow_options.empty_return_target = 1;
+      const std::optional<std::vector<MachineItem>> shared_return_input =
+          core::normalize_natural_target_overflow_formals(
+              post_layout_items, address_space_model_for_options(options));
+      if (shared_return_input.has_value()) {
+        const core::AuthoritativePostLayoutControlFlow shared_return_flow =
+            core::build_post_layout_control_flow(*shared_return_input,
+                                                 shared_return_flow_options);
+        if (shared_return_flow.proved) {
+          const core::NaturalTargetComponentLayoutResult shared_return_layout =
+              core::optimize_terminal_shared_return_selector_layout(
+                  *shared_return_input, terminal_layout_preloads,
+                  shared_return_flow,
+                  core::NaturalTargetComponentLayoutOptions{
+                      .address_space_model =
+                          address_space_model_for_options(options),
+                      .maximum_anchors = options.maximum_natural_target_anchors,
+                      .maximum_rejection_reasons = options.analysis ? 512U : 0U,
+                  },
+                  core::TerminalCyclicLayoutOptions{
+                      .address_space_model =
+                          address_space_model_for_options(options),
+                      .enable_return_alias = true,
+                  });
+          if (shared_return_layout.applied > 0 &&
+              shared_return_layout.plan.proved &&
+              shared_return_layout.plan.final_artifact_proved &&
+              core::machine_cell_count(shared_return_layout.items) <
+                  core::machine_cell_count(post_layout_items)) {
+            post_layout_items = shared_return_layout.items;
+            terminal_layout_preloads = shared_return_layout.preloads;
+            final_layout_effective_preloads = shared_return_layout.preloads;
+            for (const PreloadReport& preload : shared_return_layout.preloads)
+              post_layout_preload_overrides[preload.register_name] = preload.value;
+            const auto apply_shared_return_preloads =
+                [&](std::vector<PreloadReport>& preloads) {
+              for (PreloadReport& preload : preloads) {
+                const auto found =
+                    post_layout_preload_overrides.find(preload.register_name);
+                if (found != post_layout_preload_overrides.end())
+                  preload.value = found->second;
+              }
+            };
+            apply_shared_return_preloads(setup_preloads);
+            apply_shared_return_preloads(stop_tail_preloads);
+            apply_shared_return_preloads(post_layout_flow_preloads);
+            remove_preloaded_indirect_flow_comment_annotations(post_layout_items);
+            post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+                .name = "terminal-shared-return-selector-layout",
+                .detail =
+                    "Reassigned one stable selector through the generic natural-target "
+                    "solver and folded a proved terminal conditional/jump pair into one "
+                    "indirect conditional after complete final-artifact proof.",
+            });
+          } else if (options.analysis) {
+            std::string detail;
+            const std::size_t reason_count =
+                std::min<std::size_t>(shared_return_layout.plan.reasons.size(), 8U);
+            for (std::size_t reason = 0; reason < reason_count; ++reason) {
+              if (!detail.empty())
+                detail += " | ";
+              detail += shared_return_layout.plan.reasons.at(reason);
+            }
+            if (!detail.empty()) {
+              post_layout_optimizations.push_back(
+                  core::passes::AppliedOptimization{
+                      .name = "terminal-shared-return-selector-rejections",
+                      .detail = std::move(detail),
+                  });
+            }
+          }
+        }
+      }
+    }
 
     core::PostLayoutControlFlowOptions terminal_flow_options;
     terminal_flow_options.address_space_model = address_space_model_for_options(options);

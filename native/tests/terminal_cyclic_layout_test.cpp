@@ -278,6 +278,7 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
             "full terminal continuation proof is unavailable: " + alias_reasons);
   }
 
+
   {
     const std::string helper = "semantic_zero_helper";
     const std::string update = "semantic_update";
