@@ -61,6 +61,56 @@ core::passes::PassResult run_register_coalesce(const std::vector<IrOp>& ops,
 
 void register_coalesce_matches_typescript_contract() {
   {
+    core::passes::RegisterInterferenceGraph graph;
+    for (int index = 0; index < 20; ++index)
+      graph.neighbors.try_emplace("logical_" + std::to_string(index));
+    const auto allocation = core::passes::color_precolored_register_graph(
+        graph, core::passes::PrecoloredRegisterAllocationOptions{.color_count = 15});
+
+    require(allocation.has_value() && allocation->size() == 20U,
+            "logical coloring incorrectly limited the number of disjoint live ranges");
+    require(std::all_of(allocation->begin(), allocation->end(),
+                        [](const auto& entry) { return entry.second >= 0 && entry.second < 15; }),
+            "logical coloring emitted a color outside the standard R0..Re profile");
+  }
+
+  {
+    core::passes::RegisterInterferenceGraph graph;
+    graph.neighbors["hardware_0"].insert("live");
+    graph.neighbors["live"].insert("hardware_0");
+    graph.neighbors.try_emplace("late");
+    const auto allocation = core::passes::color_precolored_register_graph(
+        graph, core::passes::PrecoloredRegisterAllocationOptions{
+                   .color_count = 2,
+                   .fixed_colors = {{"hardware_0", 0}},
+                   .preferred_colors = {{"live", 0}, {"late", 0}},
+               });
+
+    require(allocation.has_value() && allocation->at("hardware_0") == 0 &&
+                allocation->at("live") == 1 && allocation->at("late") == 0,
+            "precolored logical allocation did not preserve a physical anchor while reusing it "
+            "outside the anchor's lifetime");
+  }
+
+  {
+    core::passes::RegisterInterferenceGraph graph;
+    for (int left = 0; left < 16; ++left) {
+      const std::string left_name = "live_" + std::to_string(left);
+      graph.neighbors.try_emplace(left_name);
+      for (int right = left + 1; right < 16; ++right) {
+        const std::string right_name = "live_" + std::to_string(right);
+        graph.neighbors[left_name].insert(right_name);
+        graph.neighbors[right_name].insert(left_name);
+      }
+    }
+    const auto allocation = core::passes::color_precolored_register_graph(
+        graph, core::passes::PrecoloredRegisterAllocationOptions{.color_count = 15});
+
+    require(!allocation.has_value(),
+            "logical coloring accepted sixteen simultaneously live values on R0..Re");
+  }
+
+  {
     const std::vector<IrOp> program = {store("1"), recall("1"), halt(), store("2"), recall("2")};
     const core::passes::PassResult result = run_register_coalesce(program);
 

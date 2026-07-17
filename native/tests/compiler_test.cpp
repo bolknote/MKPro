@@ -11,6 +11,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -354,6 +355,37 @@ program SharedPreloadOwner {
             return preload.register_name == shared.registers.at("anchor") && preload.value == "7";
           }),
           "shared setup did not preserve the live-at-entry owner's preload");
+
+  const std::string external_owner_source = R"mkpro(
+program SharedExternalPreloadOwner {
+  state {
+    external: counter 0..99999
+    late: counter 0..99999 = 99
+  }
+  loop {
+    halt(external)
+    late = read()
+    halt(late)
+  }
+}
+)mkpro";
+  const CompileResult external_baseline = compile_source(external_owner_source, baseline_options);
+  require(external_baseline.implemented && external_baseline.diagnostics.empty(),
+          "external preload-owner fixture should compile before sharing");
+  CompileOptions external_shared_options = baseline_options;
+  external_shared_options.forced_register_shares.push_back(RegisterShare{
+      .free_register = external_baseline.registers.at("late"),
+      .keep_register = external_baseline.registers.at("external"),
+  });
+  const CompileResult external_shared =
+      compile_source(external_owner_source, external_shared_options);
+  require(external_shared.implemented && external_shared.diagnostics.empty(),
+          "lifetime sharing should preserve externally supplied entry state");
+  require(std::none_of(external_shared.preloads.begin(), external_shared.preloads.end(),
+                       [&](const PreloadReport& preload) {
+                         return preload.register_name == external_shared.registers.at("external");
+                       }),
+          "dead co-tenant initializer overwrote an external live-at-entry value");
 }
 
 void compiler_feature_profile_rf_extends_state_allocator_contract() {
@@ -481,8 +513,179 @@ program StandardLifetimeOverflow {
                                preload.value == "14";
                       }),
           "Rf relocation did not preserve the live-at-entry owner's preload");
-  require(has_optimization(lifetime_reclaimed, "reclaim-coalesced-preloads"),
-          "standard lifetime overflow rescue did not report register reclamation");
+  require(has_optimization(lifetime_reclaimed, "logical-register-lifetime-allocation") ||
+              has_optimization(lifetime_reclaimed, "reclaim-coalesced-preloads"),
+          "standard lifetime overflow rescue did not report register allocation");
+}
+
+void compiler_logical_register_allocator_handles_arbitrary_live_range_count_contract() {
+  const std::string source = R"mkpro(
+program TwentyDisjointRegisters {
+  state {
+    v00: counter 0..99999 = 0
+    v01: counter 0..99999 = 1
+    v02: counter 0..99999 = 2
+    v03: counter 0..99999 = 3
+    v04: counter 0..99999 = 4
+    v05: counter 0..99999 = 5
+    v06: counter 0..99999 = 6
+    v07: counter 0..99999 = 7
+    v08: counter 0..99999 = 8
+    v09: counter 0..99999 = 9
+    v10: counter 0..99999 = 10
+    v11: counter 0..99999 = 11
+    v12: counter 0..99999 = 12
+    v13: counter 0..99999 = 13
+    v14: counter 0..99999 = 14
+    v15: counter 0..99999 = 15
+    v16: counter 0..99999 = 16
+    v17: counter 0..99999 = 17
+    v18: counter 0..99999 = 18
+    v19: counter 0..99999 = 19
+  }
+
+  loop {
+    v00 = read()
+    show(v00)
+    v01 = read()
+    show(v01)
+    v02 = read()
+    show(v02)
+    v03 = read()
+    show(v03)
+    v04 = read()
+    show(v04)
+    v05 = read()
+    show(v05)
+    v06 = read()
+    show(v06)
+    v07 = read()
+    show(v07)
+    v08 = read()
+    show(v08)
+    v09 = read()
+    show(v09)
+    v10 = read()
+    show(v10)
+    v11 = read()
+    show(v11)
+    v12 = read()
+    show(v12)
+    v13 = read()
+    show(v13)
+    v14 = read()
+    show(v14)
+    v15 = read()
+    show(v15)
+    v16 = read()
+    show(v16)
+    v17 = read()
+    show(v17)
+    v18 = read()
+    show(v18)
+    v19 = read()
+    show(v19)
+  }
+}
+)mkpro";
+
+  CompileOptions baseline_options;
+  baseline_options.disable_candidate_search = true;
+  const CompileResult baseline = compile_source(source, baseline_options);
+  require(has_error_diagnostic(baseline),
+          "ordinary one-slot-per-name allocation should exhaust on twenty state fields");
+
+  CompileOptions probe_options = baseline_options;
+  probe_options.analysis = true;
+  probe_options.collect_logical_register_allocation = true;
+  const CompileResult probe = compile_source(source, probe_options);
+  require(probe.implemented && probe.diagnostics.empty(),
+          "logical allocation probe should color twenty disjoint live ranges");
+  require(probe.logical_register_assignments.size() >= 20U,
+          "logical allocation probe should return every state assignment");
+
+  CompileOptions final_options = baseline_options;
+  final_options.forced_logical_register_assignments = probe.logical_register_assignments;
+  const CompileResult compiled = compile_source(source, final_options);
+  require(compiled.implemented && compiled.diagnostics.empty(),
+          "regenerated standard program should pass its final lifetime proof");
+  require(has_optimization(compiled, "logical-register-lifetime-allocation"),
+          "regenerated program should report logical lifetime allocation");
+  std::set<std::string> physical_registers;
+  for (int index = 0; index < 20; ++index) {
+    const std::string name =
+        "v" + (index < 10 ? std::string("0") : std::string{}) + std::to_string(index);
+    physical_registers.insert(compiled.registers.at(name));
+  }
+  require(physical_registers.size() <= 15U && !physical_registers.contains("f"),
+          "standard logical allocation must use only R0..Re");
+
+  const std::string impossible = R"mkpro(
+program SixteenEntryLiveRegisters {
+  state {
+    v00: counter 0..99999 = 0
+    v01: counter 0..99999 = 1
+    v02: counter 0..99999 = 2
+    v03: counter 0..99999 = 3
+    v04: counter 0..99999 = 4
+    v05: counter 0..99999 = 5
+    v06: counter 0..99999 = 6
+    v07: counter 0..99999 = 7
+    v08: counter 0..99999 = 8
+    v09: counter 0..99999 = 9
+    v10: counter 0..99999 = 10
+    v11: counter 0..99999 = 11
+    v12: counter 0..99999 = 12
+    v13: counter 0..99999 = 13
+    v14: counter 0..99999 = 14
+    v15: counter 0..99999 = 15
+  }
+  loop {
+    show(v00)
+    show(v01)
+    show(v02)
+    show(v03)
+    show(v04)
+    show(v05)
+    show(v06)
+    show(v07)
+    show(v08)
+    show(v09)
+    show(v10)
+    show(v11)
+    show(v12)
+    show(v13)
+    show(v14)
+    show(v15)
+  }
+}
+)mkpro";
+  const CompileResult rejected = compile_source(impossible, probe_options);
+  require(!rejected.implemented && has_error_diagnostic(rejected),
+          "sixteen simultaneously entry-live values must remain impossible on R0..Re");
+
+  CompileOptions expanded_probe_options = probe_options;
+  expanded_probe_options.feature_profile = FeatureProfile::Mk61SMiniExpanded;
+  const CompileResult expanded = compile_source(impossible, expanded_probe_options);
+  require(expanded.implemented && expanded.diagnostics.empty(),
+          "sixteen entry-live values should fit only when the target exposes Rf");
+  require(std::any_of(expanded.logical_register_assignments.begin(),
+                      expanded.logical_register_assignments.end(),
+                      [](const LogicalRegisterAssignment& assignment) {
+                        return assignment.register_name == "f";
+                      }),
+          "expanded logical coloring did not use the sixteenth physical register Rf");
+
+  CompileOptions conflicting_options = baseline_options;
+  for (int index = 0; index < 16; ++index) {
+    conflicting_options.forced_logical_register_assignments.push_back(LogicalRegisterAssignment{
+        .name = "v" + (index < 10 ? std::string("0") : std::string{}) + std::to_string(index),
+        .register_name = "0",
+    });
+  }
+  const CompileResult conflicting = compile_source(impossible, conflicting_options);
+  require(!conflicting.implemented && has_error_diagnostic(conflicting),
+          "regenerated lowering accepted a forced assignment that violates liveness");
 }
 
 void compiler_feature_profile_rf_optimizer_is_size_monotonic_contract() {

@@ -95,6 +95,12 @@ struct MachineItem {
   // opaque exact labels. Memory integers are post-mutation R0..Re indices.
   std::optional<std::vector<IrTarget>> indirect_flow_targets;
   std::optional<std::vector<int>> indirect_memory_targets;
+  // Source-level register identity retained through provisional lowering.
+  // These fields are proof metadata only: executable opcodes still refer to
+  // physical registers, while the lifetime allocator analyzes these logical
+  // names before choosing the final R0..Re assignment.
+  std::optional<std::string> logical_register_name;
+  std::optional<std::vector<std::string>> logical_indirect_memory_targets;
   // The instruction is used only for its selector mutation. Its recalled
   // memory value is proved dead even though the hardware still loads X.
   bool discarded_indirect_recall_value = false;
@@ -148,6 +154,11 @@ struct IrMeta {
   std::optional<ManualInteractionAnchor> manual_interaction;
   std::optional<std::vector<IrTarget>> indirect_flow_targets;
   std::optional<std::vector<int>> indirect_memory_targets;
+  std::optional<std::string> logical_register_name;
+  std::optional<std::vector<std::string>> logical_indirect_memory_targets;
+  // Set only on the private IR copy used by logical-register liveness. Normal
+  // optimization passes continue to consume physical indirect-memory facts.
+  bool logical_register_analysis = false;
   bool discarded_indirect_recall_value = false;
   bool borrowed_entry_phase_selector = false;
   std::vector<std::uint64_t> semantic_call_origins;

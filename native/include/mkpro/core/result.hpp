@@ -242,6 +242,14 @@ struct RegisterShare {
   std::string keep_register;
 };
 
+struct LogicalRegisterAssignment {
+  std::string name;
+  std::string register_name;
+  // This logical value (or an observable setup action that produces it) owns
+  // the setup-time contents when several disjoint lifetimes share a register.
+  bool preload_owner = false;
+};
+
 struct FractionalConstantSelectorPlan {
   std::string value;
   int target = 0;
@@ -389,6 +397,10 @@ struct CompileOptions {
   bool fast_candidate_search = false;
   int fast_candidate_threshold_ms = 500;
   bool collect_coalesce_shares = false;
+  // Internal two-pass source allocator. The probe permits provisional physical
+  // aliases solely to emit a complete logical access trace; a normal compile
+  // then re-lowers from source using the proved final assignment below.
+  bool collect_logical_register_allocation = false;
   // Requested setup-time constant preloads. This is optimizer intent, not a
   // proof artifact: indirect-flow gates must still prove branch selectors from
   // final PreloadReport entries rather than trusting this map.
@@ -414,6 +426,7 @@ struct CompileOptions {
   std::vector<std::string> trig_fractional_pack_names;
   std::vector<SignPackedStatePlan> sign_packed_state_plans;
   std::vector<RegisterShare> forced_register_shares;
+  std::vector<LogicalRegisterAssignment> forced_logical_register_assignments;
 };
 
 inline FeatureProfile effective_optimizer_feature_profile(const CompileOptions& options) {
@@ -446,6 +459,7 @@ struct CompileResult {
   std::optional<SetupProgramReport> setup_program;
   std::optional<std::string> expected_mode;
   std::vector<RegisterShare> coalesce_shares;
+  std::vector<LogicalRegisterAssignment> logical_register_assignments;
   std::string hex;
   std::string listing;
   std::string setup_hex;

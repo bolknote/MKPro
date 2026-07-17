@@ -103,6 +103,7 @@ std::optional<CoordListIndirectContext> coord_list_indirect_context(
       .count = static_cast<int>(items->size()),
       .pointer_start = item_indices.front() - 1,
       .item_registers = item_indices,
+      .item_names = *items,
       .pointer = pointer_name,
       .counter = counter_name,
   };
@@ -123,6 +124,8 @@ void emit_coord_list_indirect_recall(CoordListEmitApi& api,
   api.emitter.emit_op(0xd0 + pointer_index, "К П->X " + api.register_text_for(context.pointer),
                       comment + coord_list_indirect_targets_suffix(context), source_line);
   api.emitter.items.back().indirect_memory_targets = coord_list_indirect_targets(context);
+  api.emitter.items.back().logical_register_name = context.pointer;
+  api.emitter.items.back().logical_indirect_memory_targets = context.item_names;
   api.emitter.current_x_variable.reset();
   api.emitter.current_x_aliases.clear();
 }
@@ -134,6 +137,7 @@ void emit_coord_list_counter_loop(CoordListEmitApi& api, const std::string& coun
   if (const auto loop_opcode = api.fl_loop_opcode_for_register(counter_index)) {
     api.emitter.emit_jump(loop_opcode->first, loop_opcode->second, target, comment,
                           source_line);
+    api.emitter.items.back().logical_register_name = counter;
     api.emitter.coord_list_counter_known_one = true;
     return;
   }
@@ -269,6 +273,8 @@ bool lower_coord_list_remove(CoordListEmitApi& api, const CoordListIndirectConte
   api.emitter.emit_op(0xb0 + pointer_index, "К X->П " + api.register_text_for(context.pointer),
                       "coord_list remove current", source_line);
   api.emitter.items.back().indirect_memory_targets = coord_list_indirect_targets(context);
+  api.emitter.items.back().logical_register_name = context.pointer;
+  api.emitter.items.back().logical_indirect_memory_targets = context.item_names;
   api.emitter.current_x_variable.reset();
   api.emitter.current_x_aliases.clear();
   api.emitter.current_x_known_zero = false;

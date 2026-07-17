@@ -224,6 +224,19 @@ void liveness_analysis_matches_typescript_contract() {
   }
 
   {
+    IrOp logical_mutating = indirect_recall("selector", std::vector<int>{8});
+    logical_mutating.opcode = 0xd4;
+    logical_mutating.meta.logical_register_analysis = true;
+    IrOp logical_stable = logical_mutating;
+    logical_stable.opcode = 0xd7;
+
+    require(core::passes::register_effects(logical_mutating).must_defs.contains("selector"),
+            "logical liveness ignored the mutating class encoded by an indirect opcode");
+    require(!core::passes::register_effects(logical_stable).must_defs.contains("selector"),
+            "logical liveness treated a stable indirect opcode as selector mutation");
+  }
+
+  {
     const std::vector<IrOp> program = {indirect_recall("0", std::nullopt)};
     const core::passes::LivenessInfo info = core::passes::compute_liveness(program);
 

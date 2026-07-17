@@ -177,6 +177,14 @@ struct LoweringContext {
   // standard policy, then use Rf only as one overflow color. A proved forced
   // share must eliminate Rf before standard lowering continues.
   bool standard_rf_overflow_allocation = false;
+  bool provisional_logical_register_allocation = false;
+  int provisional_logical_register_cursor = 0;
+  std::map<std::string, int> forced_logical_register_indices;
+  std::set<std::string> forced_logical_preload_owners;
+  bool apply_forced_logical_register_indices = false;
+  std::set<std::string> logical_register_variables;
+  std::map<std::string, int> logical_fixed_registers;
+  std::map<std::string, int> logical_preferred_registers;
   std::map<std::string, std::string> registers;
   std::map<std::string, int> register_index_by_name;
   // Original logical owners whose entry value must win when a forced lifetime

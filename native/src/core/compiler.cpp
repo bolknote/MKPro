@@ -7074,6 +7074,11 @@ void compile_stack_stop_risk_tail(LoweringContext& context, const StackStopRiskM
 }
 
 void bind_register(LoweringContext& context, const std::string& name, int index) {
+  if (context.apply_forced_logical_register_indices) {
+    const auto forced = context.forced_logical_register_indices.find(name);
+    if (forced != context.forced_logical_register_indices.end())
+      index = forced->second;
+  }
   context.register_index_by_name[name] = index;
   context.registers[name] =
       register_from_text(core::register_name_for_index(index, context.feature_profile));
@@ -7123,6 +7128,12 @@ bool reserve_negative_zero_degree_register(LoweringContext& context) {
 void assign_register(LoweringContext& context, const std::string& name) {
   if (context.register_index_by_name.contains(name))
     return;
+  if (const auto forced = context.forced_logical_register_indices.find(name);
+      context.apply_forced_logical_register_indices &&
+      forced != context.forced_logical_register_indices.end()) {
+    bind_register(context, name, forced->second);
+    return;
+  }
   std::set<int> used;
   for (const auto& [unused_name, index] : context.register_index_by_name) {
     (void)unused_name;
@@ -7139,6 +7150,12 @@ void assign_register(LoweringContext& context, const std::string& name) {
     }
   } else {
     index = core::pick_register_index_for_variable(name, used, context.feature_profile);
+  }
+  if (!index.has_value() && context.provisional_logical_register_allocation) {
+    const int first_stable = 7;
+    const int maximum = feature_profile_max_register_index(context.feature_profile);
+    const int stable_count = std::max(1, maximum - first_stable + 1);
+    index = first_stable + (context.provisional_logical_register_cursor++ % stable_count);
   }
   if (!index.has_value()) {
     context.diagnostics.push_back(
@@ -7411,6 +7428,49 @@ void bind_fixed_registers(LoweringContext& context, const std::set<std::string>&
 
 void allocate_collected_registers(LoweringContext& context, const RegisterCollection& collection,
                                   const RegisterHints& hints) {
+  context.logical_register_variables.insert(collection.variables.begin(),
+                                            collection.variables.end());
+  for (const auto& [name, index] : context.register_index_by_name) {
+    context.logical_register_variables.insert(name);
+    context.logical_fixed_registers.emplace(name, index);
+  }
+  for (const auto& [name, hint] : hints) {
+    if (hint.mode == RegisterHintMode::Fixed)
+      context.logical_fixed_registers[name] = hint.index;
+    else
+      context.logical_preferred_registers[name] = hint.index;
+  }
+
+  if (!context.forced_logical_register_indices.empty()) {
+    const int maximum = feature_profile_max_register_index(context.feature_profile);
+    for (const auto& [name, index] : context.forced_logical_register_indices) {
+      if (index < core::k_min_register_index || index > maximum) {
+        context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                                                 "Logical register assignment for '" + name +
+                                                     "' is outside the target profile."));
+        continue;
+      }
+      const auto fixed = context.logical_fixed_registers.find(name);
+      if (fixed != context.logical_fixed_registers.end() && fixed->second != index) {
+        context.diagnostics.push_back(diagnostic(
+            DiagnosticSeverity::Error, "native-unsupported",
+            "Logical register assignment violates the fixed register for '" + name + "'."));
+      }
+    }
+
+    context.apply_forced_logical_register_indices = true;
+    for (const std::string& variable : context.logical_register_variables) {
+      const auto forced = context.forced_logical_register_indices.find(variable);
+      if (forced != context.forced_logical_register_indices.end())
+        bind_register(context, variable, forced->second);
+    }
+    for (const std::string& owner : context.forced_logical_preload_owners) {
+      const auto forced = context.forced_logical_register_indices.find(owner);
+      if (forced != context.forced_logical_register_indices.end())
+        context.forced_share_preload_owners[forced->second].insert(owner);
+    }
+  }
+
   bind_fixed_registers(context, collection.variables, hints);
 
   std::vector<std::string> ordered(collection.variables.begin(), collection.variables.end());
@@ -11316,6 +11376,7 @@ void emit_recall(LoweringContext& context, const std::string& name) {
   const int index = register_index_for(context, name);
   context.emitter.emit_op(0x60 + index, "П->X " + register_text_for(context, name),
                           "recall " + name);
+  context.emitter.items.back().logical_register_name = name;
   mark_current_x(context, name);
 }
 
@@ -11340,6 +11401,7 @@ void emit_store(LoweringContext& context, const std::string& name, std::string c
   std::set<std::string> aliases = context.emitter.current_x_aliases;
   context.emitter.emit_op(0x40 + index, "X->П " + register_text_for(context, name),
                           std::move(comment));
+  context.emitter.items.back().logical_register_name = name;
   context.emitter.current_x_variable = name;
   context.emitter.current_x_expression.reset();
   context.emitter.current_x_formatted_coord_report_body.reset();
@@ -12281,6 +12343,15 @@ std::vector<int> indexed_memory_targets(const LoweringContext& context,
   return targets;
 }
 
+std::vector<std::string> indexed_memory_logical_targets(const V2StateField& field) {
+  std::vector<std::string> targets;
+  if (!field.bank.has_value())
+    return targets;
+  for (int index = field.bank->min; index <= field.bank->max; ++index)
+    targets.push_back(state_bank_element_name(field, index));
+  return targets;
+}
+
 std::string indexed_memory_comment(const LoweringContext& context, const std::string& action,
                                    const Expression& expression, const V2StateField& field,
                                    const PreparedIndexedSelector& prepared) {
@@ -12313,6 +12384,9 @@ void attach_indexed_memory_targets(LoweringContext& context, const Expression& e
   std::vector<int> targets = indexed_memory_targets(context, *field);
   if (!targets.empty())
     context.emitter.items.back().indirect_memory_targets = std::move(targets);
+  std::vector<std::string> logical_targets = indexed_memory_logical_targets(*field);
+  if (!logical_targets.empty())
+    context.emitter.items.back().logical_indirect_memory_targets = std::move(logical_targets);
 }
 
 std::string indexed_memory_comment_or_action(LoweringContext& context, const std::string& action,
@@ -12562,6 +12636,7 @@ void emit_prepared_indirect_indexed_recall(LoweringContext& context, const Expre
   context.emitter.emit_op(0xd0 + selector_index,
                           "К П->X " + register_text_for(context, prepared.selector), comment,
                           source_line);
+  context.emitter.items.back().logical_register_name = prepared.selector;
   attach_indexed_memory_targets(context, expression);
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_expression = std::make_shared<Expression>(expression);
@@ -12581,6 +12656,7 @@ void emit_prepared_indirect_indexed_store(LoweringContext& context, const Expres
   context.emitter.emit_op(0xb0 + selector_index,
                           "К X->П " + register_text_for(context, prepared.selector), comment,
                           source_line);
+  context.emitter.items.back().logical_register_name = prepared.selector;
   attach_indexed_memory_targets(context, expression);
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_expression = std::make_shared<Expression>(expression);
@@ -15091,6 +15167,7 @@ bool emit_selected_segmented_plane_recall(LoweringContext& context, const std::s
     return false;
   context.emitter.emit_op(0xd0 + selector_index, "К П->X " + register_text_for(context, selector),
                           std::move(comment), source_line);
+  context.emitter.items.back().logical_register_name = selector;
   return true;
 }
 
@@ -15101,7 +15178,15 @@ bool emit_selected_segmented_plane_store(LoweringContext& context, const std::st
     return false;
   context.emitter.emit_op(0xb0 + selector_index, "К X->П " + register_text_for(context, selector),
                           std::move(comment), source_line);
+  context.emitter.items.back().logical_register_name = selector;
   return true;
+}
+
+void attach_segmented_plane_targets(LoweringContext& context, const std::string& collection) {
+  if (!context.emitter.items.empty()) {
+    context.emitter.items.back().logical_indirect_memory_targets =
+        core::emit::segmented_bitplane_names(collection);
+  }
 }
 
 bool emit_segmented_bitplane_hit_with_selector(LoweringContext& context,
@@ -15113,6 +15198,7 @@ bool emit_segmented_bitplane_hit_with_selector(LoweringContext& context,
   if (!emit_selected_segmented_plane_recall(context, selector, "segmented bitplane selected plane",
                                             source_line))
     return false;
+  attach_segmented_plane_targets(context, collection);
   context.emitter.emit_op(0x37, "К ∧", "segmented bitplane hit test", source_line);
   context.emitter.emit_op(0x35, "К {x}", "segmented bitplane hit fraction", source_line);
   context.emitter.emit_op(0x32, "К ЗН", "segmented bitplane hit to count", source_line);
@@ -15170,12 +15256,14 @@ bool lower_segmented_bitplane_update(LoweringContext& context, const std::string
     if (!emit_selected_segmented_plane_recall(context, *selector,
                                               "segmented bitplane selected plane", source_line))
       return false;
+    attach_segmented_plane_targets(context, collection);
     context.emitter.emit_op(op == "+=" ? 0x38 : 0x37, op == "+=" ? "К ∨" : "К ∧",
                             op == "+=" ? "segmented bitplane set" : "segmented bitplane clear",
                             source_line);
     if (!emit_selected_segmented_plane_store(
             context, *selector, "segmented bitplane store selected plane", source_line))
       return false;
+    attach_segmented_plane_targets(context, collection);
     context.optimizations.push_back(OptimizationReport{
         .name = "segmented-bitplane-update-indirect",
         .detail = std::string(op == "+=" ? "Set " : "Cleared ") + collection +
@@ -15299,6 +15387,7 @@ bool lower_segmented_bitplane_line_count_scan_to_x(LoweringContext& context,
   context.emitter.emit_label(next, {.hidden = true});
   context.emitter.emit_jump(fl_counter->first, fl_counter->second, start, "line_count scan loop",
                             source_line);
+  context.emitter.items.back().logical_register_name = counter;
   emit_recall(context, total);
   context.emitter.items.back().comment = "line_count scan result";
   context.optimizations.push_back(OptimizationReport{
@@ -15751,6 +15840,7 @@ bool lower_spatial_progression_count_inline_loops(
             : fl_loop_opcode_for_register(counter_it->second);
     if (fl.has_value()) {
       context.emitter.emit_jump(fl->first, fl->second, start, operation + " loop", source_line);
+      context.emitter.items.back().logical_register_name = counter;
       context.optimizations.push_back(OptimizationReport{
           .name = "spatial-count-fl-loop",
           .detail = "Used " + fl->second + " for " + operation + " loop counter.",
@@ -15902,6 +15992,7 @@ bool lower_spatial_line_count_loop_to_x(LoweringContext& context, const Expressi
                                 "К ПП " + register_text_for(context, *indirect),
                                 "line_count progression; preloaded " +
                                     register_text_for(context, *indirect) + " indirect flow");
+        context.emitter.items.back().logical_register_name = *indirect;
         context.emitter.current_x_variable.reset();
         context.emitter.current_x_expression.reset();
         context.emitter.current_x_aliases.clear();
@@ -16162,6 +16253,7 @@ bool emit_indirect_unit_increment(LoweringContext& context, const std::string& t
   }
   context.emitter.emit_op(0xd0 + register_it->second,
                           "К П->X " + register_text_for(context, target), comment, source_line);
+  context.emitter.items.back().logical_register_name = target;
   mark_current_x(context, target);
   context.optimizations.push_back(OptimizationReport{
       .name = "indirect-incdec-counter",
@@ -16188,6 +16280,7 @@ bool emit_known_one_indirect_loop_back(LoweringContext& context, const std::stri
   context.emitter.emit_op(0x80 + register_it->second,
                           "К БП " + register_text_for(context, std::string(kCoordListCounter)),
                           "loop back via known-one counter", source_line);
+  context.emitter.items.back().logical_register_name = std::string(kCoordListCounter);
   context.optimizations.push_back(OptimizationReport{
       .name = "indirect-incdec-counter",
       .detail = "Reused " + std::string(kCoordListCounter) +
@@ -17948,6 +18041,7 @@ bool lower_decrement_update(LoweringContext& context, const std::string& target,
   if (can_lower_indirect_decrement_update(context, target, source_line)) {
     context.emitter.emit_op(0xd0 + index, "К П->X " + register_text_for(context, target),
                             "decrement " + target, source_line);
+    context.emitter.items.back().logical_register_name = target;
     context.emitter.current_x_variable.reset();
     context.emitter.current_x_aliases.clear();
     context.emitter.current_x_known_zero = false;
@@ -17984,6 +18078,7 @@ bool lower_increment_update(LoweringContext& context, const std::string& target,
     return false;
   context.emitter.emit_op(0xd0 + index, "К П->X " + register_text_for(context, target),
                           "increment " + target, source_line);
+  context.emitter.items.back().logical_register_name = target;
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_aliases.clear();
   context.optimizations.push_back(OptimizationReport{
@@ -18343,6 +18438,7 @@ bool lower_dungeon_match(LoweringContext& context, const V2Statement& statement)
                           "false branch for ==; preloaded R8=B2 indirect-target=0 indirect flow",
                           statement.line);
   context.emitter.emit_op(0xd4, "К П->X 4", "increment mistakes", statement.line);
+  context.emitter.items.back().logical_register_name = "mistakes";
   emit_recall(context, "mistakes");
   context.emitter.emit_number("3");
   context.emitter.emit_op(0x11, "-", "condition compare", statement.line);
@@ -21958,6 +22054,7 @@ bool emit_indexed_packed_pow10_delta_from_stack_index(LoweringContext& context,
                               context, "indexed packed digit update base", target,
                               prepared_selector),
                           line);
+  context.emitter.items.back().logical_register_name = selector;
   attach_indexed_memory_targets(context, target);
   const std::optional<std::pair<int, std::string>> opcode = binary_opcode(op);
   if (!opcode.has_value())
@@ -22077,6 +22174,7 @@ bool lower_indexed_packed_pow10_delta_statement(LoweringContext& context,
                               context, "indexed packed digit update base", target,
                               *prepared_selector),
                           statement.line);
+  context.emitter.items.back().logical_register_name = prepared_selector->selector;
   attach_indexed_memory_targets(context, target);
   clear_current_x_facts(context);
   emit_recall(context, index_name);
@@ -22634,6 +22732,7 @@ void emit_x_param_indexed_fractional_report_tail(
                               context, "indexed packed digit update base", update.target,
                               prepared_selector),
                           update.update_line);
+  context.emitter.items.back().logical_register_name = update.selector;
   attach_indexed_memory_targets(context, update.target);
   const std::optional<std::pair<int, std::string>> op = binary_opcode(update.op);
   if (op.has_value())
@@ -22737,6 +22836,7 @@ bool lower_x_param_indexed_fractional_report_tail_rule(LoweringContext& context,
                                 context, "indexed packed digit update base", match->target,
                                 prepared_selector),
                             match->update_line);
+    context.emitter.items.back().logical_register_name = match->selector;
     attach_indexed_memory_targets(context, match->target);
     const std::optional<std::pair<int, std::string>> op = binary_opcode(match->op);
     if (!op.has_value())
@@ -29336,6 +29436,7 @@ bool lower_segmented_cells_contains_clear_if(LoweringContext& context,
     if (!emit_selected_segmented_plane_recall(context, *selector,
                                               "segmented bitplane selected plane", statement.line))
       return false;
+    attach_segmented_plane_targets(context, collection);
     context.emitter.emit_op(0x37, "К ∧", "segmented bitplane probe", statement.line);
     context.emitter.emit_op(0x35, "К {x}", "segmented bitplane hit fraction", statement.line);
     context.emitter.emit_jump(0x57, "F x≠0", false_label, "false branch for segmented hit",
@@ -29344,10 +29445,12 @@ bool lower_segmented_cells_contains_clear_if(LoweringContext& context,
     if (!emit_selected_segmented_plane_recall(
             context, *selector, "segmented bitplane clear selected plane", clear.line))
       return false;
+    attach_segmented_plane_targets(context, collection);
     context.emitter.emit_op(0x37, "К ∧", "segmented bitplane clear matched bit", clear.line);
     if (!emit_selected_segmented_plane_store(context, *selector,
                                              "segmented bitplane store selected plane", clear.line))
       return false;
+    attach_segmented_plane_targets(context, collection);
     context.optimizations.push_back(OptimizationReport{
         .name = "segmented-bitplane-hit-update-indirect",
         .detail = "Fused " + collection +
@@ -30051,6 +30154,7 @@ bool lower_synthesized_dispatch(LoweringContext& context, const V2Statement& sta
   context.emitter.emit_op(0x80 + jump_index, "К БП " + register_text_for(context, jump_var),
                           "computed dispatch; " + targets_marker + "; " + proof_targets_marker,
                           statement.line);
+  context.emitter.items.back().logical_register_name = jump_var;
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_expression.reset();
   context.emitter.current_x_aliases.clear();
@@ -31022,6 +31126,7 @@ bool lower_packed_score_y_stack_update(LoweringContext& context, const V2Stateme
       "К П->X " + register_text_for(context, prepared->selector),
       indexed_memory_comment_or_action(context, "indexed recall", bank, *prepared),
       statement.line);
+  context.emitter.items.back().logical_register_name = prepared->selector;
   attach_indexed_memory_targets(context, bank);
   context.emitter.emit_op(0x14, "X<->Y", "packed-score y-stack digit order", statement.line);
   context.emitter.emit_op(0x13, "/", "packed-score y-stack digit extract", statement.line);
@@ -32580,6 +32685,16 @@ std::string packed_bcd_indirect_memory_comment(const LoweringContext& context,
   return out.str();
 }
 
+std::vector<std::string> logical_register_names_for_targets(const LoweringContext& context,
+                                                            const std::vector<int>& targets) {
+  std::vector<std::string> names;
+  for (const auto& [name, index] : context.register_index_by_name) {
+    if (std::find(targets.begin(), targets.end(), index) != targets.end())
+      names.push_back(name);
+  }
+  return names;
+}
+
 void emit_packed_bcd_indirect_recall(LoweringContext& context, const std::string& selector,
                                      int line, const std::string& comment,
                                      const std::vector<int>& targets) {
@@ -32587,6 +32702,9 @@ void emit_packed_bcd_indirect_recall(LoweringContext& context, const std::string
   context.emitter.emit_op(0xd0 + index, "К П->X " + register_text_for(context, selector),
                           packed_bcd_indirect_memory_comment(context, comment, targets), line);
   context.emitter.items.back().indirect_memory_targets = targets;
+  context.emitter.items.back().logical_register_name = selector;
+  context.emitter.items.back().logical_indirect_memory_targets =
+      logical_register_names_for_targets(context, targets);
   clear_current_x_facts(context);
 }
 
@@ -32597,6 +32715,9 @@ void emit_packed_bcd_indirect_store(LoweringContext& context, const std::string&
   context.emitter.emit_op(0xb0 + index, "К X->П " + register_text_for(context, selector),
                           packed_bcd_indirect_memory_comment(context, comment, targets), line);
   context.emitter.items.back().indirect_memory_targets = targets;
+  context.emitter.items.back().logical_register_name = selector;
+  context.emitter.items.back().logical_indirect_memory_targets =
+      logical_register_names_for_targets(context, targets);
   clear_current_x_facts(context);
 }
 
@@ -32695,6 +32816,7 @@ bool lower_packed_bcd_horner_threshold(LoweringContext& context,
   const std::optional<std::pair<int, std::string>> fl = fl_loop_opcode_for_register(0x0);
   context.emitter.emit_jump(fl->first, fl->second, loop, "packed BCD Horner loop",
                             statement.line);
+  context.emitter.items.back().logical_register_name = counter;
   context.optimizations.push_back(OptimizationReport{
       .name = "packed-bcd-horner-threshold-lowering",
       .detail = "Emitted a shared packed-BCD split and horizontal threshold fold.",
@@ -32840,6 +32962,7 @@ bool lower_packed_bcd_one_hot_update(LoweringContext& context,
                                  "store packed indexed value", bank_targets);
   const std::optional<std::pair<int, std::string>> fl = fl_loop_opcode_for_register(0x0);
   context.emitter.emit_jump(fl->first, fl->second, loop, "packed one-hot loop", statement.line);
+  context.emitter.items.back().logical_register_name = counter;
   context.optimizations.push_back(OptimizationReport{
       .name = "packed-bcd-one-hot-lowering",
       .detail = "Emitted a generic indexed one-hot update through two shared packed bit masks.",
@@ -32938,6 +33061,7 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
       context.emitter.emit_op(0x80 + register_index,
                               "К БП " + register_text_for(context, selector),
                               "proved loop-rotated zero-address back edge", statement.line);
+      context.emitter.items.back().logical_register_name = selector;
       context.emitter.items.back().indirect_flow_targets =
           std::vector<IrTarget>{IrTarget{label}};
       return true;
@@ -34443,6 +34567,7 @@ bool lower_decrement_test_pair(LoweringContext& context, const V2Statement& upda
       const std::string end_label = context.emitter.fresh_label("decrement_end");
       context.emitter.emit_jump(fl->first, fl->second, else_label,
                                 "decrement/test " + *update.target, update.line);
+      context.emitter.items.back().logical_register_name = *update.target;
       const bool then_stops = statements_always_stop(context, branch.then_body);
       if (!lower_statement_block(context, branch.then_body))
         return false;
@@ -34887,6 +35012,7 @@ void emit_delayed_indirect_unit_decrement(LoweringContext& context, const V2Stat
                                           const std::string& target) {
   context.emitter.emit_op(0xd0 + register_index, "К П->X " + register_text_for(context, target),
                           "delayed predecrement " + target, decrement.line);
+  context.emitter.items.back().logical_register_name = target;
   context.emitter.items.back().discarded_indirect_recall_value = true;
   clear_current_x_facts(context);
   context.optimizations.push_back(OptimizationReport{
@@ -35761,6 +35887,7 @@ bool lower_show_read_decrement_underflow_fusion(LoweringContext& context,
       context.emitter.emit_op(0xd0 + decrement_register,
                               "К П->X " + register_text_for(context, *decrement_storage),
                               "predecrement " + *decrement_storage, decrement.line);
+      context.emitter.items.back().logical_register_name = *decrement_storage;
       context.emitter.items.back().discarded_indirect_recall_value = true;
       emit_recall(context, *decrement_storage);
       if (!context.emitter.items.empty())
@@ -37334,8 +37461,8 @@ bool intervening_statement_is_safe_for_counted_loop(LoweringContext& context,
 }
 
 bool emit_counted_while_body(LoweringContext& context, const V2Statement& loop,
-                             const std::pair<int, std::string>& fl, const std::string& label_prefix,
-                             const std::string& jump_comment) {
+                             const std::pair<int, std::string>& fl, const std::string& counter,
+                             const std::string& label_prefix, const std::string& jump_comment) {
   std::vector<V2Statement> body_tail(loop.body.begin(), loop.body.end() - 1);
   if (statements_always_stop(context, body_tail))
     return false;
@@ -37345,6 +37472,7 @@ bool emit_counted_while_body(LoweringContext& context, const V2Statement& loop,
   if (!lower_statement_block(context, body_tail))
     return false;
   context.emitter.emit_jump(fl.first, fl.second, start_label, jump_comment, loop.line);
+  context.emitter.items.back().logical_register_name = counter;
   return true;
 }
 
@@ -37411,7 +37539,7 @@ bool lower_setup_only_counted_while(LoweringContext& context,
   if (!fl.has_value())
     return false;
 
-  if (!emit_counted_while_body(context, loop, *fl, "setup_counted_while",
+  if (!emit_counted_while_body(context, loop, *fl, *counted_target, "setup_counted_while",
                                "setup-counted while " + *counted_target))
     return false;
   context.optimizations.push_back(OptimizationReport{
@@ -37464,7 +37592,7 @@ bool lower_initialized_counted_while_run(LoweringContext& context,
       }
 
       if (fl.has_value()) {
-        if (!emit_counted_while_body(context, statement, *fl, "counted_while",
+        if (!emit_counted_while_body(context, statement, *fl, *counted_target, "counted_while",
                                      "counted while " + *counted_target))
           return false;
         context.optimizations.push_back(OptimizationReport{
@@ -37555,7 +37683,7 @@ bool lower_repeated_assignment_counted_loop_reuse_run(LoweringContext& context,
           if (!lower_statement_block(context, intervening))
             return false;
         }
-        if (!emit_counted_while_body(context, loop, *fl, "counted_while",
+        if (!emit_counted_while_body(context, loop, *fl, *counted_target, "counted_while",
                                      "counted while " + *counted_target))
           return false;
         context.optimizations.push_back(OptimizationReport{
@@ -39466,6 +39594,7 @@ bool lower_preincrement_indexed_store(LoweringContext& context, const V2Statemen
                           indexed_memory_comment(context, "preincrement indexed set",
                                                  store->target, *field, prepared_selector),
                           store->line);
+  context.emitter.items.back().logical_register_name = pointer;
   attach_indexed_memory_targets(context, store->target);
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_expression.reset();
@@ -39525,6 +39654,7 @@ bool lower_predecrement_indexed_store(LoweringContext& context, const V2Statemen
                           indexed_memory_comment(context, "predecrement indexed set",
                                                  store->target, *field, prepared_selector),
                           store->line);
+  context.emitter.items.back().logical_register_name = pointer;
   attach_indexed_memory_targets(context, store->target);
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_expression.reset();
@@ -39590,6 +39720,7 @@ bool lower_mutating_indexed_recall_assignment(LoweringContext& context,
                           indexed_memory_comment(context, action + " indexed recall", expression,
                                                  *field, prepared_selector),
                           recall_statement.line);
+  context.emitter.items.back().logical_register_name = pointer;
   attach_indexed_memory_targets(context, expression);
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_expression = std::make_shared<Expression>(expression);
@@ -41436,6 +41567,7 @@ bool lower_spatial_line_progression_helpers(LoweringContext& context) {
             : fl_loop_opcode_for_register(counter_it->second);
     if (fl.has_value()) {
       context.emitter.emit_jump(fl->first, fl->second, start, helper.operation + " line loop");
+      context.emitter.items.back().logical_register_name = helper.counter;
       context.optimizations.push_back(OptimizationReport{
           .name = "spatial-count-fl-loop",
           .detail =
@@ -41528,6 +41660,7 @@ bool lower_spatial_sum_helpers(LoweringContext& context) {
             : fl_loop_opcode_for_register(counter_it->second);
     if (fl.has_value()) {
       context.emitter.emit_jump(fl->first, fl->second, start, helper.operation + " loop");
+      context.emitter.items.back().logical_register_name = helper.counter;
       context.optimizations.push_back(OptimizationReport{
           .name = "spatial-count-fl-loop",
           .detail = "Used " + fl->second + " for " + helper.operation + " loop counter.",
@@ -41696,6 +41829,9 @@ bool lower_packed_bcd_helpers(LoweringContext& context) {
                                 context.packed_bcd_full_store_targets));
     context.emitter.items.back().indirect_memory_targets =
         context.packed_bcd_full_store_targets;
+    context.emitter.items.back().logical_register_name = *context.packed_bcd_full_selector;
+    context.emitter.items.back().logical_indirect_memory_targets =
+        logical_register_names_for_targets(context, context.packed_bcd_full_store_targets);
     context.emitter.emit_op(0x25, "F reverse", "expose packed BCD low bit plane");
     emit_number_or_preload(context, *context.packed_bcd_full_mask);
     context.emitter.emit_op(0x37, "К ∧", "broadcast anchored packed BCD bit");
@@ -41974,9 +42110,13 @@ mk61_bitwise_display_literal_for_expression(const Expression& expression) {
   return cells.has_value() ? mk61_display_literal_from_cells(*cells) : std::nullopt;
 }
 
+bool preload_must_reach_generated_setup_program(const PreloadReport& preload);
+
 std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
                                                   const V2Program& program,
-                                                  const std::vector<MachineItem>& items) {
+                                                  const std::vector<MachineItem>& items,
+                                                  std::set<std::string>* mandatory_logical_owners =
+                                                      nullptr) {
   std::vector<PreloadReport> preloads;
   std::vector<std::pair<PreloadReport, std::string>> deferred_indexed_initializer_preloads;
   std::map<std::string, bool> selected_preload_is_preferred_owner;
@@ -42012,14 +42152,37 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
                          std::optional<int> setup_source_line = std::nullopt,
                          std::optional<std::string> setup_expression_text = std::nullopt,
                          std::optional<std::string> proved_fractional_prefix = std::nullopt) {
+    if (mandatory_logical_owners != nullptr) {
+      const PreloadReport ownership_probe{
+          .register_name = register_name,
+          .value = value,
+          .counts_against_program = false,
+          .retunable_natural_fractional_prefix = proved_fractional_prefix,
+          .setup_target_name = setup_target_name,
+          .setup_expression = setup_expression,
+          .setup_expression_text = setup_expression_text,
+          .setup_source_line = setup_source_line,
+      };
+      if (preload_must_reach_generated_setup_program(ownership_probe))
+        mandatory_logical_owners->insert(logical_owner);
+    }
+    bool has_preferred_owner = false;
     bool preferred_owner = false;
     try {
       const auto preferred =
           context.forced_share_preload_owners.find(register_index(register_name));
-      preferred_owner = preferred != context.forced_share_preload_owners.end() &&
-                        preferred->second.contains(logical_owner);
+      has_preferred_owner =
+          preferred != context.forced_share_preload_owners.end() && !preferred->second.empty();
+      preferred_owner = has_preferred_owner && preferred->second.contains(logical_owner);
     } catch (const std::exception&) {
     }
+    // A shared slot can have a live-at-entry owner without that owner
+    // requiring a compiler-generated preload (for example, externally
+    // supplied state). Never let a dead co-tenant's literal initializer
+    // overwrite that value merely because its report was encountered
+    // first—or because the real owner has no report at all.
+    if (has_preferred_owner && !preferred_owner)
+      return;
     const auto duplicate =
         std::find_if(preloads.begin(), preloads.end(), [&](const PreloadReport& preload) {
           return preload.register_name == register_name;
@@ -42395,6 +42558,223 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
     add_preload(name, register_it->second, std::to_string(address_it->second));
   }
   return preloads;
+}
+
+inline constexpr std::string_view kPhysicalRegisterAnchorPrefix = "__mkpro_physical_register_";
+
+std::string physical_register_anchor(const std::string& register_name) {
+  return std::string(kPhysicalRegisterAnchorPrefix) + register_name;
+}
+
+std::optional<int> physical_register_anchor_index(const std::string& name) {
+  if (!name.starts_with(kPhysicalRegisterAnchorPrefix))
+    return std::nullopt;
+  try {
+    return register_index(name.substr(kPhysicalRegisterAnchorPrefix.size()));
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+std::string physical_loop_register_name(const std::string& counter) {
+  if (counter == "L0")
+    return "0";
+  if (counter == "L1")
+    return "1";
+  if (counter == "L2")
+    return "2";
+  if (counter == "L3")
+    return "3";
+  return {};
+}
+
+std::vector<IrOp> logical_register_ir(const LoweringContext& context,
+                                      const std::vector<MachineItem>& items) {
+  std::set<std::string> logical_names;
+  for (const auto& [name, index] : context.register_index_by_name) {
+    (void)index;
+    logical_names.insert(name);
+  }
+
+  std::vector<IrOp> ops = raise_machine_to_ir(items, context.feature_profile);
+  for (IrOp& op : ops) {
+    op.meta.logical_register_analysis = true;
+    const auto analyzed_name = [&](const std::string& physical_name) {
+      if (op.meta.logical_register_name.has_value() &&
+          logical_names.contains(*op.meta.logical_register_name)) {
+        return *op.meta.logical_register_name;
+      }
+      return physical_register_anchor(physical_name);
+    };
+
+    switch (op.kind) {
+    case IrKind::Store:
+    case IrKind::Recall:
+    case IrKind::IndirectStore:
+    case IrKind::IndirectRecall:
+    case IrKind::IndirectJump:
+    case IrKind::IndirectCall:
+    case IrKind::IndirectCondJump:
+      op.register_name = analyzed_name(op.register_name);
+      break;
+    case IrKind::Loop: {
+      const std::string physical = physical_loop_register_name(op.counter);
+      op.meta.logical_register_name = analyzed_name(physical);
+      break;
+    }
+    case IrKind::Label:
+    case IrKind::Jump:
+    case IrKind::CondJump:
+    case IrKind::Call:
+    case IrKind::Return:
+    case IrKind::Stop:
+    case IrKind::Plain:
+    case IrKind::OrphanAddress:
+      break;
+    }
+
+    if (op.kind != IrKind::IndirectStore && op.kind != IrKind::IndirectRecall)
+      continue;
+    std::vector<std::string> logical_targets;
+    if (op.meta.logical_indirect_memory_targets.has_value()) {
+      for (const std::string& target : *op.meta.logical_indirect_memory_targets) {
+        const auto physical = context.register_index_by_name.find(target);
+        logical_targets.push_back(logical_names.contains(target) ? target
+                                  : physical != context.register_index_by_name.end()
+                                      ? physical_register_anchor(core::register_name_for_index(
+                                            physical->second, context.feature_profile))
+                                      : std::string{});
+      }
+      logical_targets.erase(
+          std::remove(logical_targets.begin(), logical_targets.end(), std::string{}),
+          logical_targets.end());
+    } else if (op.meta.indirect_memory_targets.has_value()) {
+      for (const int target : *op.meta.indirect_memory_targets) {
+        logical_targets.push_back(physical_register_anchor(
+            core::register_name_for_index(target, context.feature_profile)));
+      }
+    }
+    std::sort(logical_targets.begin(), logical_targets.end());
+    logical_targets.erase(std::unique(logical_targets.begin(), logical_targets.end()),
+                          logical_targets.end());
+    op.meta.logical_indirect_memory_targets = std::move(logical_targets);
+  }
+  return ops;
+}
+
+void add_register_clique(core::passes::RegisterInterferenceGraph& graph,
+                         const std::set<std::string>& nodes) {
+  for (auto left = nodes.begin(); left != nodes.end(); ++left) {
+    graph.neighbors.try_emplace(*left);
+    for (auto right = std::next(left); right != nodes.end(); ++right) {
+      if (*left == *right)
+        continue;
+      graph.neighbors[*left].insert(*right);
+      graph.neighbors[*right].insert(*left);
+    }
+  }
+}
+
+struct LogicalRegisterGraphModel {
+  core::passes::RegisterInterferenceGraph graph;
+  std::set<std::string> logical_names;
+  std::set<std::string> preload_owners;
+  std::map<std::string, int> fixed_colors;
+  std::map<std::string, int> preferred_colors;
+};
+
+LogicalRegisterGraphModel
+build_logical_register_graph_model(const LoweringContext& context, const V2Program& program,
+                                   const std::vector<MachineItem>& items) {
+  LogicalRegisterGraphModel model;
+  for (const auto& [name, index] : context.register_index_by_name) {
+    model.logical_names.insert(name);
+    model.preferred_colors[name] = index;
+  }
+  for (const auto& [name, index] : context.logical_fixed_registers)
+    model.fixed_colors[name] = index;
+  for (const auto& [name, index] : context.logical_preferred_registers)
+    model.preferred_colors[name] = index;
+
+  std::set<std::string> mandatory_setup_owners;
+  (void)build_preload_reports(context, program, items, &mandatory_setup_owners);
+
+  const std::vector<IrOp> ops = logical_register_ir(context, items);
+  const core::passes::LivenessInfo liveness =
+      core::passes::compute_liveness(ops, core::passes::LivenessOptions{
+                                              .unknown_indirect_flow_to_all = true,
+                                              .unresolved_direct_flow_to_all = true,
+                                              .include_physical_register_universe = false,
+                                          });
+  model.graph = core::passes::build_register_interference_graph(ops, liveness);
+  for (const std::string& name : model.logical_names)
+    model.graph.neighbors.try_emplace(name);
+
+  std::set<std::string> entry_exclusive = mandatory_setup_owners;
+  if (!liveness.live_in.empty())
+    entry_exclusive.insert(liveness.live_in.front().begin(), liveness.live_in.front().end());
+  add_register_clique(model.graph, entry_exclusive);
+  for (const std::string& name : model.logical_names) {
+    if (entry_exclusive.contains(name))
+      model.preload_owners.insert(name);
+  }
+
+  for (const auto& [node, neighbors] : model.graph.neighbors) {
+    (void)neighbors;
+    if (const std::optional<int> index = physical_register_anchor_index(node))
+      model.fixed_colors[node] = *index;
+  }
+  return model;
+}
+
+std::optional<std::vector<LogicalRegisterAssignment>>
+solve_logical_register_allocation(const LoweringContext& context, const V2Program& program,
+                                  const std::vector<MachineItem>& items) {
+  const LogicalRegisterGraphModel model =
+      build_logical_register_graph_model(context, program, items);
+  const int color_count = feature_profile_max_register_index(context.feature_profile) + 1;
+  if (model.preload_owners.size() > static_cast<std::size_t>(color_count))
+    return std::nullopt;
+  const std::optional<std::map<std::string, int>> colors =
+      core::passes::color_precolored_register_graph(
+          model.graph, core::passes::PrecoloredRegisterAllocationOptions{
+                           .color_count = color_count,
+                           .fixed_colors = model.fixed_colors,
+                           .preferred_colors = model.preferred_colors,
+                       });
+  if (!colors.has_value())
+    return std::nullopt;
+
+  std::vector<LogicalRegisterAssignment> assignments;
+  assignments.reserve(model.logical_names.size());
+  for (const std::string& name : model.logical_names) {
+    const auto color = colors->find(name);
+    if (color == colors->end())
+      return std::nullopt;
+    assignments.push_back(LogicalRegisterAssignment{
+        .name = name,
+        .register_name = core::register_name_for_index(color->second, context.feature_profile),
+        .preload_owner = model.preload_owners.contains(name),
+    });
+  }
+  return assignments;
+}
+
+bool verify_logical_register_allocation(const LoweringContext& context, const V2Program& program,
+                                        const std::vector<MachineItem>& items) {
+  const LogicalRegisterGraphModel model =
+      build_logical_register_graph_model(context, program, items);
+  std::map<std::string, int> actual_colors = model.fixed_colors;
+  for (const auto& [name, index] : context.register_index_by_name)
+    actual_colors[name] = index;
+  const int color_count = feature_profile_max_register_index(context.feature_profile) + 1;
+  const std::optional<std::map<std::string, int>> verified =
+      core::passes::color_precolored_register_graph(
+          model.graph, core::passes::PrecoloredRegisterAllocationOptions{
+                           .color_count = color_count,
+                           .fixed_colors = std::move(actual_colors),
+                       });
+  return verified.has_value();
 }
 
 bool random_unique_coord_list_setup_context_available(const LoweringContext& context,
@@ -48329,6 +48709,20 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
       options.feature_profile == FeatureProfile::Standard &&
       context.feature_profile == FeatureProfile::Mk61SMiniExpanded &&
       options.collect_coalesce_shares;
+  context.provisional_logical_register_allocation = options.collect_logical_register_allocation;
+  for (const LogicalRegisterAssignment& assignment : options.forced_logical_register_assignments) {
+    try {
+      context.forced_logical_register_indices[assignment.name] =
+          register_index(assignment.register_name);
+      if (assignment.preload_owner)
+        context.forced_logical_preload_owners.insert(assignment.name);
+    } catch (const std::exception&) {
+      context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                                               "Invalid forced logical register '" +
+                                                   assignment.register_name + "' for '" +
+                                                   assignment.name + "'."));
+    }
+  }
   context.emitter.address_space_model = address_space_model_for_options(options);
   context.cave_sketch_shape = false;
   context.segmented_bitplanes = options.segmented_bitplanes;
@@ -48671,6 +49065,43 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
     });
   }
 
+  if (!has_errors(context.diagnostics) && ast.v2.has_value() &&
+      options.collect_logical_register_allocation) {
+    const std::optional<std::vector<LogicalRegisterAssignment>> assignment =
+        solve_logical_register_allocation(context, *ast.v2, context.emitter.items);
+    result.registers = context.registers;
+    hide_internal_constant_report_registers(result.registers);
+    hide_inline_x_param_report_registers(result.registers, context, *ast.v2);
+    result.optimizations = context.optimizations;
+    result.diagnostics.insert(result.diagnostics.end(), context.diagnostics.begin(),
+                              context.diagnostics.end());
+    if (!assignment.has_value()) {
+      result.diagnostics.push_back(diagnostic(
+          DiagnosticSeverity::Error, "native-unsupported",
+          "Logical register interference graph requires more registers than the target profile."));
+      result.implemented = false;
+      return result;
+    }
+    result.logical_register_assignments = *assignment;
+    result.implemented = true;
+    return result;
+  }
+
+  if (!has_errors(context.diagnostics) && ast.v2.has_value() &&
+      !options.forced_logical_register_assignments.empty()) {
+    if (!verify_logical_register_allocation(context, *ast.v2, context.emitter.items)) {
+      context.diagnostics.push_back(diagnostic(
+          DiagnosticSeverity::Error, "native-unsupported",
+          "Final logical register assignment failed the regenerated interference proof."));
+    } else {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "logical-register-lifetime-allocation",
+          .detail = "Colored source-level register lifetimes and regenerated the program with "
+                    "the proved physical assignment.",
+      });
+    }
+  }
+
   if (!has_errors(context.diagnostics) && options.collect_coalesce_shares) {
     const std::map<std::string, std::string> shares =
         core::passes::compute_non_overlapping_register_mapping(
@@ -48695,6 +49126,14 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   merge_planned_preloaded_constant_registers(pass_options, context);
 
   std::vector<MachineItem> ir_pass_input = context.emitter.items;
+  // Logical names are a lowering-time proof trace. Keeping them past the
+  // regenerated-assignment check would leak an internal representation into
+  // public IR JSON and could make unrelated post-lowering passes compare
+  // proof annotations instead of executable machine semantics.
+  for (MachineItem& item : ir_pass_input) {
+    item.logical_register_name.reset();
+    item.logical_indirect_memory_targets.reset();
+  }
   std::vector<core::HelperSemanticContract> semantic_alias_contracts;
   if (!exact_decimal_series && ast.v2.has_value()) {
     semantic_alias_contracts = helper_semantic_alias_contracts(context, *ast.v2, ir_pass_input);
@@ -50180,7 +50619,9 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          !options.preloaded_constant_registers.empty() ||
          !options.suppress_constant_preloads.empty() ||
          !options.force_fractional_constant_selector_preloads.empty() ||
-         options.collect_coalesce_shares || !options.forced_register_shares.empty();
+         options.collect_coalesce_shares || options.collect_logical_register_allocation ||
+         !options.forced_register_shares.empty() ||
+         !options.forced_logical_register_assignments.empty();
 }
 
 int estimated_startup_program_cost(const CompileResult& result) {
@@ -50923,8 +51364,8 @@ std::string implemented_candidate_key(const CompileOptions& options) {
       << ";optimizer_feature_profile=";
   if (options.optimizer_feature_profile_override.has_value())
     out << feature_profile_id(*options.optimizer_feature_profile_override);
-  out
-      << ";collect_coalesce_shares=" << options.collect_coalesce_shares;
+  out << ";collect_coalesce_shares=" << options.collect_coalesce_shares
+      << ";collect_logical_register_allocation=" << options.collect_logical_register_allocation;
   for (const auto& [value, reg] : options.preloaded_constant_registers)
     out << ";preloaded_constant=" << value << ":" << reg;
   for (const std::string& value : options.suppress_constant_preloads)
@@ -50942,6 +51383,10 @@ std::string implemented_candidate_key(const CompileOptions& options) {
     out << ";force_fractional_selector_preload=" << normalize_number_key(value);
   for (const RegisterShare& share : options.forced_register_shares)
     out << ";forced_share=" << share.free_register << ">" << share.keep_register;
+  for (const LogicalRegisterAssignment& assignment : options.forced_logical_register_assignments) {
+    out << ";forced_logical_register=" << assignment.name << ">" << assignment.register_name << ":"
+        << assignment.preload_owner;
+  }
   return out.str();
 }
 
@@ -65820,6 +66265,34 @@ CompileResult compile_source_for_optimizer_profile(
     bool used_standard_rf_overflow_probe = false;
     try {
       probe = cached_compile_source_once(probe_options);
+      if (!probe.implemented && has_register_allocation_failure(probe.diagnostics)) {
+        CompileOptions logical_probe_options = base_options;
+        logical_probe_options.analysis = true;
+        logical_probe_options.collect_logical_register_allocation = true;
+        logical_probe_options.collect_coalesce_shares = false;
+        const CompileResult logical_probe = cached_compile_source_once(logical_probe_options);
+        if (logical_probe.implemented && !logical_probe.logical_register_assignments.empty()) {
+          std::string key = reclaim_base_key(base_options) + "|logical-register-allocation";
+          for (const LogicalRegisterAssignment& assignment :
+               logical_probe.logical_register_assignments) {
+            key += "|" + assignment.name + ">" + assignment.register_name +
+                   (assignment.preload_owner ? "!" : "");
+          }
+          if (tried_reclaims.insert(key).second) {
+            CompileOptions candidate_options = base_options;
+            candidate_options.forced_logical_register_assignments =
+                logical_probe.logical_register_assignments;
+            candidates.push_back(CandidateSpec{
+                .options = std::move(candidate_options),
+                .name = "logical-register-lifetime-allocation",
+                .detail = "Colored an arbitrary number of logical live ranges into the target's "
+                          "physical register set, then regenerated and re-verified the program",
+                .gate = CandidateGate::Always,
+            });
+          }
+          return;
+        }
+      }
       if (!probe.implemented &&
           base_options.feature_profile == FeatureProfile::Standard &&
           !base_options.optimizer_feature_profile_override.has_value() &&

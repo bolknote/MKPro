@@ -17,11 +17,16 @@ struct LivenessInfo {
   std::vector<RegisterValueSet> live_out;
   bool control_flow_targets_are_exact = true;
   std::vector<int> conservative_flow_sources;
+  bool includes_physical_register_universe = true;
 };
 
 struct LivenessOptions {
   bool unknown_indirect_flow_to_all = true;
   bool unresolved_direct_flow_to_all = true;
+  // Logical-register allocation has an unbounded symbolic namespace. Adding
+  // R0..Re as unrelated nodes there would consume fifteen colors before any
+  // source value is considered.
+  bool include_physical_register_universe = true;
 };
 
 struct RegisterInterferenceGraph {

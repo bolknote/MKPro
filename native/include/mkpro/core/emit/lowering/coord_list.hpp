@@ -17,6 +17,7 @@ struct CoordListIndirectContext {
   int count = 0;
   int pointer_start = 0;
   std::vector<int> item_registers;
+  std::vector<std::string> item_names;
   std::string pointer;
   std::string counter;
 };

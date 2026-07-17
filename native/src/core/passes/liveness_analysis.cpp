@@ -20,17 +20,26 @@ void insert_if_named(RegisterValueSet& registers, const std::string& register_na
     registers.insert(register_name);
 }
 
-void add_indirect_selector_definition(RegisterEffects& effects,
-                                      const std::string& register_name) {
-  if (register_name.empty())
+void add_indirect_selector_definition(RegisterEffects& effects, const IrOp& op) {
+  if (op.register_name.empty())
     return;
-  try {
-    if (!core::is_stable_indirect_selector(register_name))
-      effects.must_defs.insert(register_name);
-  } catch (const std::exception&) {
-    // Malformed IR remains conservative through its use; no physical selector
-    // mutation can be proved without a valid register name.
+  // Symbolic analysis cannot derive the selector class from register_name, so
+  // it uses the lowered opcode. Ordinary IR tests and hand-built passes may
+  // carry only a base opcode; retain their physical-name contract.
+  if (!op.meta.logical_register_analysis) {
+    try {
+      if (!core::is_stable_indirect_selector(op.register_name))
+        effects.must_defs.insert(op.register_name);
+    } catch (const std::exception&) {
+    }
+    return;
   }
+  int selector = op.opcode & 0x0f;
+  // The xF aliases are the R0 pre-decrement forms on the stock machine.
+  if (selector == 0x0f)
+    selector = 0;
+  if (selector >= 0 && selector <= 6)
+    effects.must_defs.insert(op.register_name);
 }
 
 RegisterValueSet physical_register_universe() {
@@ -43,8 +52,10 @@ RegisterValueSet physical_register_universe() {
 }
 
 RegisterValueSet register_universe(const std::vector<IrOp>& ops,
-                                   const std::vector<RegisterEffects>& effects) {
-  RegisterValueSet registers = physical_register_universe();
+                                   const std::vector<RegisterEffects>& effects,
+                                   bool include_physical_register_universe) {
+  RegisterValueSet registers =
+      include_physical_register_universe ? physical_register_universe() : RegisterValueSet{};
   for (std::size_t index = 0; index < ops.size(); ++index) {
     const IrOp& op = ops.at(index);
     switch (op.kind) {
@@ -58,7 +69,10 @@ RegisterValueSet register_universe(const std::vector<IrOp>& ops,
       insert_if_named(registers, op.register_name);
       break;
     case IrKind::Loop:
-      insert_if_named(registers, loop_counter_register(op.counter));
+      insert_if_named(registers,
+                      op.meta.logical_register_analysis && op.meta.logical_register_name.has_value()
+                          ? *op.meta.logical_register_name
+                          : loop_counter_register(op.counter));
       break;
     case IrKind::Label:
     case IrKind::Jump:
@@ -108,7 +122,7 @@ RegisterEffects register_effects(const IrOp& op) {
   case IrKind::IndirectRecall: {
     if (op.meta.discarded_indirect_recall_value) {
       RegisterEffects effects{.uses = RegisterValueSet{op.register_name}};
-      add_indirect_selector_definition(effects, op.register_name);
+      add_indirect_selector_definition(effects, op);
       return effects;
     }
     const std::optional<std::set<std::string>> targets = known_indirect_memory_targets(op);
@@ -118,7 +132,7 @@ RegisterEffects register_effects(const IrOp& op) {
     };
     if (targets.has_value())
       effects.uses.insert(targets->begin(), targets->end());
-    add_indirect_selector_definition(effects, op.register_name);
+    add_indirect_selector_definition(effects, op);
     return effects;
   }
   case IrKind::IndirectStore: {
@@ -131,18 +145,21 @@ RegisterEffects register_effects(const IrOp& op) {
     } else {
       effects.may_defs = *targets;
     }
-    add_indirect_selector_definition(effects, op.register_name);
+    add_indirect_selector_definition(effects, op);
     return effects;
   }
   case IrKind::IndirectJump:
   case IrKind::IndirectCall:
   case IrKind::IndirectCondJump: {
     RegisterEffects effects{.uses = RegisterValueSet{op.register_name}};
-    add_indirect_selector_definition(effects, op.register_name);
+    add_indirect_selector_definition(effects, op);
     return effects;
   }
   case IrKind::Loop: {
-    const std::string counter = loop_counter_register(op.counter);
+    const std::string counter =
+        op.meta.logical_register_analysis && op.meta.logical_register_name.has_value()
+            ? *op.meta.logical_register_name
+            : loop_counter_register(op.counter);
     if (counter.empty())
       return RegisterEffects{};
     return RegisterEffects{
@@ -186,7 +203,8 @@ LivenessInfo compute_liveness(const std::vector<IrOp>& ops, LivenessOptions opti
   effects.reserve(size);
   for (const IrOp& op : ops)
     effects.push_back(register_effects(op));
-  const RegisterValueSet universe = register_universe(ops, effects);
+  const RegisterValueSet universe =
+      register_universe(ops, effects, options.include_physical_register_universe);
 
   std::set<int> conservative_sources;
   for (const CfgUncertainty& uncertainty : graph.uncertainties)
@@ -246,6 +264,7 @@ LivenessInfo compute_liveness(const std::vector<IrOp>& ops, LivenessOptions opti
       .control_flow_targets_are_exact = graph.targets_are_exact(),
       .conservative_flow_sources =
           std::vector<int>(conservative_sources.begin(), conservative_sources.end()),
+      .includes_physical_register_universe = options.include_physical_register_universe,
   };
 }
 
@@ -287,7 +306,7 @@ RegisterInterferenceGraph build_register_interference_graph(const std::vector<Ir
     for (const std::string& reg : live)
       graph.neighbors.try_emplace(reg);
   }
-  if (needs_physical_universe) {
+  if (needs_physical_universe && liveness.includes_physical_register_universe) {
     for (const std::string& reg : physical_register_universe())
       graph.neighbors.try_emplace(reg);
   }

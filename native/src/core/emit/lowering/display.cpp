@@ -1190,6 +1190,7 @@ bool lower_mantissa_exponent_display_statement(DisplayEmitApi& api, LoweringCont
   api.emitter.emit_op(0x0b, "/-/", "display template exponent sign", source_line);
   api.emitter.emit_jump(loop_opcode->first, loop_opcode->second, loop_label,
                         "display template exponent loop", source_line);
+  api.emitter.items.back().logical_register_name = loop_scratch;
   api.emit_store(value_scratch, "display " + display_name + " exponent body");
 
   if (exponent_can_be_zero)
@@ -1332,6 +1333,7 @@ bool lower_formatted_coord_report_display_statement(DisplayEmitApi& api, Lowerin
     api.emitter.emit_op(0x10, "+", "display formatted video body", source_line);
     api.emitter.emit_op(0x60 + mask_it->second, "П->X " + mask_register_text,
                         "display " + display_name + " formatted mask", source_line);
+    api.emitter.items.back().logical_register_name = std::string(k_coord_list_dx);
     api.emitter.emit_op(0x39, "К ⊕", "display formatted mask merge", source_line);
     api.emitter.emit_op(0x35, "К {x}", "display formatted video fraction", source_line);
     api.emitter.emit_op(0x0b, "/-/", "display formatted sign", source_line);
@@ -1377,6 +1379,7 @@ bool lower_formatted_coord_report_display_statement(DisplayEmitApi& api, Lowerin
   api.emitter.emit_op(0x10, "+", "display formatted video body", source_line);
   api.emitter.emit_op(0x60 + mask_it->second, "П->X " + mask_register_text,
                       "display " + display_name + " formatted mask", source_line);
+  api.emitter.items.back().logical_register_name = std::string(k_coord_list_dx);
   api.emitter.emit_op(0x39, "К ⊕", "display formatted mask merge", source_line);
   api.emitter.emit_op(0x35, "К {x}", "display formatted video fraction", source_line);
   api.emitter.emit_op(0x0b, "/-/", "display formatted sign", source_line);

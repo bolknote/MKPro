@@ -730,6 +730,12 @@ committed example oracles under `native/oracles/`.
   source-relevant compact bit-mask and dead-source residual variants, so the
   reclaimed-preload result does not depend on whether those variants happened
   to be selected earlier as standalone candidates.
+- `logical-register-lifetime-allocation` — when ordinary source allocation runs
+  out of registers, lowers once with symbolic register identities, builds the
+  complete CFG interference graph, exactly colors it against the target's
+  precolored hardware registers, and lowers again with that assignment. The
+  regenerated program is independently re-verified before it can become a
+  candidate.
 - `demote-constant-indirect-flow` — recompiles with selective setup-enterable
   numeric constant inlining to free registers for post-layout indirect-flow
   rescue; probe bases include existing-constant dual-use selectors when that
@@ -973,14 +979,17 @@ Display rewrites are separated into strategy selection + body lowering.
 - Compiler-generated indirect recalls used only for an `R0..R6` selector
   mutation carry a typed discarded-result fact: liveness retains the selector
   read/write while avoiding a false dependency on the unobserved memory value.
-- The source-level allocation probe may keep an address/entry value in a
-  physical register and reuse that register after its last read, including for
-  a logical value whose first write occurs later. It regenerates register
-  reports and setup preloads from the selected sharing; entry preload ownership
-  is preserved, and setup actions with observable effects are not discarded.
-  For a standard MK-61 target, `Rf` is only one internal overflow color used by
-  this proof. It must be relocated into a proved-free `R0..Re` before lowering;
-  actual `Rf` commands remain exclusive to `feature mk61s-mini-expand`.
+- The source-level allocator tracks logical identities independently of their
+  provisional physical slots. Therefore it can reuse an entry/address register
+  after its last read for any number of values whose first write occurs later;
+  it is not limited to one overflow register or one pairwise merge. Raw hardware
+  accesses are precolored anchors, fixed selector/loop constraints remain hard,
+  and preferred register hints affect only listing stability. The exact coloring
+  is followed by a fresh source lowering and a second interference check of the
+  actual assignment. Register reports and setup preloads are regenerated;
+  entry preload ownership is preserved, and observable setup actions are not
+  discarded. A standard `mk61` result can use only `R0..Re`; `Rf` remains
+  available only under `feature mk61s-mini-expand`.
 - `copy-coalesce` — removes redundant copy writes between registers.
 - `last-x-reuse` — avoids `P->X` when X already holds the needed value and the
   recall is not an X2-sync boundary for `.`/`/-/`/`ВП` before the next X2-affecting

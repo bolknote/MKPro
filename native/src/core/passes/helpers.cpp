@@ -684,6 +684,14 @@ std::optional<std::string> known_indirect_memory_target(const IrOp& op) {
 }
 
 std::optional<std::set<std::string>> known_indirect_memory_targets(const IrOp& op) {
+  if (op.meta.logical_register_analysis) {
+    if (!op.meta.logical_indirect_memory_targets.has_value() ||
+        op.meta.logical_indirect_memory_targets->empty()) {
+      return std::nullopt;
+    }
+    return std::set<std::string>(op.meta.logical_indirect_memory_targets->begin(),
+                                 op.meta.logical_indirect_memory_targets->end());
+  }
   if (op.meta.indirect_memory_targets.has_value()) {
     const auto& indices = *op.meta.indirect_memory_targets;
     if (indices.empty())
