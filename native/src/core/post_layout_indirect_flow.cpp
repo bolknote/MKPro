@@ -5,6 +5,7 @@
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/passes/helpers.hpp"
 #include "mkpro/core/passes/preloaded_indirect_flow.hpp"
+#include "mkpro/core/post_layout_control_flow.hpp"
 
 #include <algorithm>
 #include <array>
@@ -138,6 +139,7 @@ struct RewriteStep {
   std::vector<int> converted_addresses;
   std::vector<int> protected_targets;
   bool existing_preload = false;
+  bool borrowed_entry_phase = false;
   int converted = 0;
 };
 
@@ -1154,6 +1156,13 @@ IrOp indirect_flow_op(const IrOp& op, const std::string& register_name,
   return result;
 }
 
+IrOp borrowed_entry_phase_flow_op(const IrOp& op, const std::string& register_name,
+                                  const std::string& selector_value, int target) {
+  IrOp result = indirect_flow_op(op, register_name, selector_value, target, false);
+  result.meta.borrowed_entry_phase_selector = true;
+  return result;
+}
+
 std::optional<std::string> fractional_selector_suffix(const std::string& value) {
   static const std::regex pattern(R"(^(\d+)(\.\d+)$)");
   std::smatch match;
@@ -1273,9 +1282,24 @@ bool is_dark_entry_target(const IndirectAddressEvaluation& decoded) {
          decoded.formal_address->kind != FormalAddressKind::SuperDark;
 }
 
+std::set<std::string>
+borrowed_entry_phase_selector_registers(const std::vector<MachineItem>& items) {
+  std::set<std::string> result;
+  for (const MachineItem& item : items) {
+    if (item.kind != MachineItemKind::Op || !item.borrowed_entry_phase_selector) {
+      continue;
+    }
+    const std::optional<std::string> register_name = register_from_indirect_opcode(item.opcode);
+    if (register_name.has_value() && is_stable_indirect_selector(*register_name))
+      result.insert(*register_name);
+  }
+  return result;
+}
+
 MergeDuplicateSelectorsResult merge_duplicate_selectors(const std::vector<MachineItem>& items,
                                                         const std::vector<PreloadReport>& preloads,
                                                         AddressSpaceModel model) {
+  const std::set<std::string> borrowed_registers = borrowed_entry_phase_selector_registers(items);
   std::map<std::string, std::string> canonical_by_value;
   std::map<std::string, std::string> remap;
   std::map<std::string, std::string> value_by_kept_register;
@@ -1283,9 +1307,13 @@ MergeDuplicateSelectorsResult merge_duplicate_selectors(const std::vector<Machin
   kept.reserve(preloads.size());
 
   for (const PreloadReport& preload : preloads) {
-    const auto canonical_it = canonical_by_value.find(preload.value);
+    const std::string canonical_key =
+        borrowed_registers.contains(preload.register_name)
+            ? preload.value + "#borrowed-entry-phase:R" + preload.register_name
+            : preload.value;
+    const auto canonical_it = canonical_by_value.find(canonical_key);
     if (canonical_it == canonical_by_value.end()) {
-      canonical_by_value[preload.value] = preload.register_name;
+      canonical_by_value[canonical_key] = preload.register_name;
       value_by_kept_register[preload.register_name] = preload.value;
       kept.push_back(preload);
       continue;
@@ -2234,11 +2262,24 @@ std::optional<RewriteStep> apply_existing_selector_fixed_point_rewrite(
   return best;
 }
 
-std::optional<RewriteStep>
-validate_forward_rewrite_group(const std::vector<int>& indices, const std::vector<IrOp>& ir,
-                               const std::vector<std::optional<std::string>>& target_labels,
-                               const std::string& register_name,
-                               const std::vector<MachineItem>& items, AddressSpaceModel model) {
+PostLayoutBorrowedSelectorProof borrowed_entry_phase_proof(const std::vector<MachineItem>& items,
+                                                           AddressSpaceModel model) {
+  PostLayoutControlFlowOptions options;
+  options.address_space_model = model;
+  PostLayoutBorrowedSelectorProof proof =
+      prove_post_layout_borrowed_entry_selectors(items, options);
+  if (proof.proved)
+    return proof;
+  options.empty_return_target = IrTarget{1};
+  PostLayoutBorrowedSelectorProof empty_return_proof =
+      prove_post_layout_borrowed_entry_selectors(items, options);
+  return empty_return_proof.proved ? empty_return_proof : proof;
+}
+
+std::optional<RewriteStep> validate_generated_selector_rewrite_group(
+    const std::vector<int>& indices, const std::vector<IrOp>& ir,
+    const std::vector<std::optional<std::string>>& target_labels, const std::string& register_name,
+    const std::vector<MachineItem>& items, AddressSpaceModel model, bool borrowed_entry_phase) {
   if (indices.empty())
     return std::nullopt;
 
@@ -2289,7 +2330,9 @@ validate_forward_rewrite_group(const std::vector<int>& indices, const std::vecto
     const IrOp& op = ir.at(index);
     if (index_set.contains(static_cast<int>(index)) && is_direct_branch_op(op)) {
       candidate.push_back(
-          indirect_flow_op(op, register_name, *selector_value, *final_target, false));
+          borrowed_entry_phase
+              ? borrowed_entry_phase_flow_op(op, register_name, *selector_value, *final_target)
+              : indirect_flow_op(op, register_name, *selector_value, *final_target, false));
     } else {
       candidate.push_back(op);
     }
@@ -2297,6 +2340,19 @@ validate_forward_rewrite_group(const std::vector<int>& indices, const std::vecto
   std::vector<MachineItem> candidate_items = lower_ir_to_machine(candidate);
   if (machine_cell_count(candidate_items) >= machine_cell_count(items))
     return std::nullopt;
+  if (borrowed_entry_phase) {
+    const PostLayoutBorrowedSelectorProof proof =
+        borrowed_entry_phase_proof(candidate_items, model);
+    if (!proof.proved) {
+      if (trace_post_layout_enabled()) {
+        std::cerr << "[post-layout] borrowed-entry proof rejected R" << register_name;
+        for (const std::string& reason : proof.reasons)
+          std::cerr << "; " << reason;
+        std::cerr << "\n";
+      }
+      return std::nullopt;
+    }
+  }
 
   const std::vector<int> addresses = address_by_index(ir);
   std::vector<int> converted_addresses;
@@ -2318,6 +2374,7 @@ validate_forward_rewrite_group(const std::vector<int>& indices, const std::vecto
       .converted_addresses = std::move(converted_addresses),
       .protected_targets = {*final_target},
       .existing_preload = false,
+      .borrowed_entry_phase = borrowed_entry_phase,
       .converted = static_cast<int>(indices.size()),
   };
 }
@@ -2379,8 +2436,9 @@ apply_forward_rewrite(const std::vector<IrOp>& ir,
   std::optional<RewriteStep> best;
   for (const auto& [label, indices] : groups) {
     (void)label;
-    std::optional<RewriteStep> candidate =
-        validate_forward_rewrite_group(indices, ir, target_labels, *register_name, items, model);
+    std::optional<RewriteStep> candidate = validate_generated_selector_rewrite_group(
+        indices, ir, target_labels, *register_name, items, model,
+        /*borrowed_entry_phase=*/false);
     if (trace) {
       std::cerr << "[post-layout] forward candidate label=" << label
                 << " valid=" << (candidate.has_value() ? "yes" : "no");
@@ -2392,6 +2450,93 @@ apply_forward_rewrite(const std::vector<IrOp>& ir,
       std::cerr << "\n";
     }
     best = better_rewrite(std::move(best), std::move(candidate));
+  }
+  return best;
+}
+
+bool ir_op_reads_register(const IrOp& op, const std::string& register_name) {
+  if (op.kind == IrKind::Recall && op.register_name == register_name)
+    return true;
+  if (op.kind == IrKind::IndirectJump || op.kind == IrKind::IndirectCall ||
+      op.kind == IrKind::IndirectCondJump || op.kind == IrKind::IndirectStore ||
+      op.kind == IrKind::IndirectRecall) {
+    if (op.register_name == register_name)
+      return true;
+  }
+  if (op.kind != IrKind::IndirectRecall)
+    return false;
+  const std::optional<std::set<std::string>> targets = passes::known_indirect_memory_targets(op);
+  return !targets.has_value() || targets->contains(register_name);
+}
+
+std::optional<RewriteStep>
+apply_borrowed_entry_phase_rewrite(const std::vector<IrOp>& ir,
+                                   const std::vector<std::optional<std::string>>& target_labels,
+                                   const std::vector<MachineItem>& items,
+                                   const std::set<std::string>& reserved, AddressSpaceModel model) {
+  // A globally spare register is both simpler and strictly stronger. Entry
+  // phase borrowing is considered only when ordinary spare allocation failed.
+  if (first_spare_stable_register(ir, reserved).has_value())
+    return std::nullopt;
+
+  const std::set<std::string> used = used_registers(ir);
+  std::optional<RewriteStep> best;
+  for (const std::string_view candidate_view : kStableRegisters) {
+    const std::string register_name(candidate_view);
+    if (!used.contains(register_name) || reserved.contains(register_name))
+      continue;
+
+    std::optional<int> first_store;
+    std::optional<int> first_read;
+    for (std::size_t index = 0; index < ir.size(); ++index) {
+      const IrOp& op = ir.at(index);
+      if (!first_store.has_value() && op.kind == IrKind::Store &&
+          op.register_name == register_name) {
+        first_store = static_cast<int>(index);
+      }
+      if (!first_read.has_value() && ir_op_reads_register(op, register_name))
+        first_read = static_cast<int>(index);
+    }
+    // This cheap filter keeps candidate search bounded. The authoritative
+    // cyclic proof below remains the correctness boundary.
+    if (!first_store.has_value() || (first_read.has_value() && *first_read < *first_store)) {
+      continue;
+    }
+
+    std::vector<std::pair<std::string, std::vector<int>>> groups;
+    for (std::size_t index = 0; index < ir.size() && static_cast<int>(index) < *first_store;
+         ++index) {
+      const IrOp& op = ir.at(index);
+      if (passes::has_rewrite_barrier(op) || !is_convertible_post_layout_branch(op) ||
+          !target_labels.at(index).has_value()) {
+        continue;
+      }
+      const std::string& label = *target_labels.at(index);
+      auto group = std::find_if(groups.begin(), groups.end(),
+                                [&](const auto& entry) { return entry.first == label; });
+      if (group == groups.end()) {
+        groups.push_back({label, {static_cast<int>(index)}});
+      } else {
+        group->second.push_back(static_cast<int>(index));
+      }
+    }
+
+    for (const auto& [unused_label, indices] : groups) {
+      (void)unused_label;
+      std::optional<RewriteStep> group_candidate = validate_generated_selector_rewrite_group(
+          indices, ir, target_labels, register_name, items, model,
+          /*borrowed_entry_phase=*/true);
+      const bool group_proved = group_candidate.has_value();
+      best = better_rewrite(std::move(best), std::move(group_candidate));
+      if (group_proved || indices.size() <= 1U)
+        continue;
+      for (const int index : indices) {
+        best = better_rewrite(std::move(best),
+                              validate_generated_selector_rewrite_group(
+                                  {index}, ir, target_labels, register_name, items, model,
+                                  /*borrowed_entry_phase=*/true));
+      }
+    }
   }
   return best;
 }
@@ -2507,7 +2652,12 @@ std::optional<RewriteStep> apply_one_rewrite(const std::vector<MachineItem>& ite
     }
     std::cerr << "\n";
   }
-  return better_rewrite(std::move(best), std::move(forward));
+  best = better_rewrite(std::move(best), std::move(forward));
+  if (!best.has_value() && round_options.aggressive_post_layout_indirect_flow) {
+    best = better_rewrite(std::move(best), apply_borrowed_entry_phase_rewrite(
+                                               ir, view.target_labels, items, reserved, model));
+  }
+  return best;
 }
 
 std::vector<StopTailReuseBase> stop_tail_reuse_bases(const std::vector<MachineItem>& items,
@@ -2789,6 +2939,7 @@ optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
   int super_dark_applied = 0;
   int dark_entry_applied = 0;
   int existing_selector_applied = 0;
+  int borrowed_entry_phase_applied = 0;
   std::vector<int> immutable_targets;
   const AddressSpaceModel model = address_space_model_for_options(options);
   for (int round = 0; round < kMaxRewrites; ++round) {
@@ -2804,7 +2955,8 @@ optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
                 << " cells_before=" << machine_cell_count(current)
                 << " cells_after_step=" << machine_cell_count(step->items)
                 << " dark=" << step->dark_entry << " super_dark=" << step->super_dark
-                << " existing=" << step->existing_preload << "\n";
+                << " existing=" << step->existing_preload
+                << " borrowed-entry=" << step->borrowed_entry_phase << "\n";
     }
     const bool crosses_immutable_target = std::any_of(
         step->converted_addresses.begin(), step->converted_addresses.end(), [&](int address) {
@@ -2837,6 +2989,8 @@ optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
       ++super_dark_applied;
     if (step->dark_entry)
       ++dark_entry_applied;
+    if (step->borrowed_entry_phase)
+      borrowed_entry_phase_applied += step->converted;
   }
 
   if (applied == 0) {
@@ -2850,6 +3004,11 @@ optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
   MergeDuplicateSelectorsResult merge = merge_duplicate_selectors(current, preloads, model);
   current = std::move(merge.items);
   preloads = std::move(merge.preloads);
+  if (borrowed_entry_phase_applied > 0 && !borrowed_entry_phase_proof(current, model).proved) {
+    if (trace)
+      std::cerr << "[post-layout] final borrowed-entry proof failed\n";
+    return PostLayoutIndirectFlowResult{.items = items};
+  }
 
   std::vector<passes::AppliedOptimization> optimizations = {
       passes::AppliedOptimization{
@@ -2873,6 +3032,15 @@ optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
         .detail = "Pointed " + std::to_string(dark_entry_applied) +
                   " branch(es) at an executable suffix through a proven dark-entry formal "
                   "address (beyond the official program window).",
+    });
+  }
+  if (borrowed_entry_phase_applied > 0) {
+    optimizations.push_back(passes::AppliedOptimization{
+        .name = "borrowed-entry-phase-selector",
+        .detail = "Borrowed an allocated register's dead entry phase for " +
+                  std::to_string(borrowed_entry_phase_applied) + " indirect-flow selector use" +
+                  (borrowed_entry_phase_applied == 1 ? "" : "s") +
+                  " after exact cyclic (PC, return-stack) proof.",
     });
   }
   if (merge.merged > 0) {

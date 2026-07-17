@@ -1,4 +1,7 @@
+#include "mkpro/core/compiler_static_proof_gate.hpp"
+#include "mkpro/core/emit/machine_emitter.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
+#include "mkpro/core/post_layout_control_flow.hpp"
 #include "mkpro/core/post_layout_indirect_flow.hpp"
 #include "mkpro/core/super_dark_layout.hpp"
 
@@ -91,6 +94,86 @@ void post_layout_indirect_flow_matches_typescript_contract() {
   options.delivery = DeliveryMode::Manual;
   options.budget = 999999;
   options.analysis = true;
+
+  {
+    CompileOptions borrowed_options = options;
+    borrowed_options.aggressive_post_layout_indirect_flow = true;
+    for (const std::string& register_name : {"7", "8", "a", "b", "c", "d", "e"})
+      borrowed_options.preloaded_constant_registers[register_name] = "99";
+
+    std::vector<MachineItem> program = {MachineItem::label("main")};
+    const std::vector<MachineItem> branch = cjump("branch_write");
+    program.insert(program.end(), branch.begin(), branch.end());
+    program.push_back(MachineItem::op(0x49, "X->П 9"));
+    MachineItem fallthrough_stop = MachineItem::op(0x50, "С/П");
+    fallthrough_stop.stop_disposition = StopDisposition::Terminal;
+    program.push_back(std::move(fallthrough_stop));
+    program.push_back(MachineItem::label("branch_write"));
+    program.push_back(MachineItem::op(0x49, "X->П 9"));
+    MachineItem branch_stop = MachineItem::op(0x50, "С/П");
+    branch_stop.stop_disposition = StopDisposition::Terminal;
+    program.push_back(std::move(branch_stop));
+
+    const core::PostLayoutIndirectFlowResult result =
+        core::optimize_post_layout_indirect_flow(program, borrowed_options, 0);
+    require(result.applied == 1 &&
+                core::machine_cell_count(result.items) == core::machine_cell_count(program) - 1,
+            "post-layout flow should borrow R9 before its first write when every path proves "
+            "the entry value dead");
+    require(result.preloads.size() == 1 && result.preloads.front().register_name == "9",
+            "entry-phase rewrite should preload the allocated R9 itself");
+    require(std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                        [](const auto& optimization) {
+                          return optimization.name == "borrowed-entry-phase-selector";
+                        }),
+            "entry-phase register borrowing should be reported explicitly");
+    require(std::any_of(result.items.begin(), result.items.end(),
+                        [](const MachineItem& item) { return item.borrowed_entry_phase_selector; }),
+            "borrowed selector use should retain typed proof provenance in the final artifact");
+    require(core::prove_post_layout_borrowed_entry_selectors(result.items).proved,
+            "the final borrowed-selector artifact should pass the exact lifetime proof");
+
+    CompileResult verified;
+    verified.items = result.items;
+    verified.steps = resolve_machine_items(result.items, borrowed_options).steps;
+    verified.preloads = result.preloads;
+    verified.registers["allocated_value"] = "9";
+    for (const auto& optimization : result.optimizations) {
+      verified.optimizations.push_back(OptimizationReport{
+          .name = optimization.name,
+          .detail = optimization.detail,
+      });
+    }
+    require(optimizer_static_proof_gate_accepts_for_testing(borrowed_options, verified),
+            "the optimizer acceptance boundary should accept a typed, exact borrowed lifetime "
+            "even though R9 is allocated as ordinary data");
+  }
+
+  {
+    CompileOptions recurring_options = options;
+    recurring_options.aggressive_post_layout_indirect_flow = true;
+    for (const std::string& register_name : {"7", "8", "a", "b", "c", "d", "e"})
+      recurring_options.preloaded_constant_registers[register_name] = "99";
+
+    std::vector<MachineItem> program = {MachineItem::label("main")};
+    const std::vector<MachineItem> branch = cjump("write");
+    program.insert(program.end(), branch.begin(), branch.end());
+    program.push_back(MachineItem::label("write"));
+    program.push_back(MachineItem::op(0x49, "X->П 9"));
+    const std::vector<MachineItem> loop = jump("main");
+    program.insert(program.end(), loop.begin(), loop.end());
+
+    const core::PostLayoutIndirectFlowResult result =
+        core::optimize_post_layout_indirect_flow(program, recurring_options, 0);
+    require(result.applied == 0 &&
+                core::machine_cell_count(result.items) == core::machine_cell_count(program),
+            "entry-phase R9 borrowing must fail when control loops back after R9 is overwritten");
+    require(std::none_of(result.optimizations.begin(), result.optimizations.end(),
+                         [](const auto& optimization) {
+                           return optimization.name == "borrowed-entry-phase-selector";
+                         }),
+            "a recurring branch must not claim the entry-phase lifetime proof");
+  }
 
   {
     const std::vector<MachineItem> program = program_with_backward_jump(110);

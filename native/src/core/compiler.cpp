@@ -32913,6 +32913,8 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
       context.emitter.emit_op(0x80 + register_index,
                               "К БП " + register_text_for(context, selector),
                               "proved loop-rotated zero-address back edge", statement.line);
+      context.emitter.items.back().indirect_flow_targets =
+          std::vector<IrTarget>{IrTarget{label}};
       return true;
     }
     if (context.lunar_shape) {
@@ -48686,6 +48688,20 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   std::map<std::string, std::string> post_layout_preload_overrides;
   std::optional<std::vector<PreloadReport>> final_layout_effective_preloads;
   std::vector<core::passes::AppliedOptimization> post_layout_optimizations;
+  const auto borrowed_entry_selector_registers_for = [](const std::vector<MachineItem>& items) {
+    std::set<std::string> registers;
+    for (const MachineItem& item : items) {
+      if (item.kind != MachineItemKind::Op || !item.borrowed_entry_phase_selector)
+        continue;
+      const int family = item.opcode & 0xf0;
+      const int register_index = item.opcode & 0x0f;
+      const bool indirect_flow = family == 0x70 || family == 0x80 || family == 0x90 ||
+                                 family == 0xa0 || family == 0xc0 || family == 0xe0;
+      if (indirect_flow && register_index <= 14)
+        registers.insert(core::register_name_for_index(register_index));
+    }
+    return registers;
+  };
   if (single_use_inline.inlined > 0) {
     post_layout_optimizations.push_back(core::passes::AppliedOptimization{
         .name = "single-use-procedure-inline",
@@ -49133,6 +49149,21 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                                      post_layout_r0_flow.optimizations.end());
 
     setup_preloads = build_preload_reports(context, *ast.v2, post_layout_items);
+    const std::set<std::string> borrowed_entry_selector_registers =
+        borrowed_entry_selector_registers_for(post_layout_items);
+    for (PreloadReport& setup_preload : setup_preloads) {
+      if (!borrowed_entry_selector_registers.contains(setup_preload.register_name))
+        continue;
+      const auto selector =
+          std::find_if(post_layout_flow_preloads.begin(), post_layout_flow_preloads.end(),
+                       [&](const PreloadReport& preload) {
+                         return preload.register_name == setup_preload.register_name;
+                       });
+      if (selector == post_layout_flow_preloads.end())
+        continue;
+      setup_preload.value = selector->value;
+      post_layout_preload_overrides[setup_preload.register_name] = selector->value;
+    }
     std::vector<PreloadReport> stop_tail_input = post_layout_flow.preloads;
     const std::vector<PreloadReport> retargetable_setup_preloads =
         fractional_selector_setup_preloads(setup_preloads, context);
@@ -49779,6 +49810,76 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
     }
   }
 
+  const std::set<std::string> final_borrowed_entry_selector_registers =
+      borrowed_entry_selector_registers_for(post_layout_items);
+  if (!final_borrowed_entry_selector_registers.empty()) {
+    std::map<std::string, std::string> final_selector_values;
+    const auto collect_borrowed_values = [&](const std::vector<PreloadReport>& preloads) {
+      for (const PreloadReport& preload : preloads) {
+        if (final_borrowed_entry_selector_registers.contains(preload.register_name))
+          final_selector_values[preload.register_name] = preload.value;
+      }
+    };
+    collect_borrowed_values(post_layout_flow_preloads);
+    collect_borrowed_values(stop_tail_preloads);
+    if (final_layout_effective_preloads.has_value())
+      collect_borrowed_values(*final_layout_effective_preloads);
+    for (const std::string& register_name : final_borrowed_entry_selector_registers) {
+      if (final_selector_values.contains(register_name))
+        continue;
+      result.diagnostics.push_back(diagnostic(
+          DiagnosticSeverity::Error, "borrowed-entry-selector-preload-missing",
+          "Final setup-time selector value for borrowed R" + register_name + " is missing."));
+      result.implemented = false;
+      return result;
+    }
+
+    const auto apply_borrowed_values = [&](std::vector<PreloadReport>& preloads) {
+      for (PreloadReport& preload : preloads) {
+        const auto value = final_selector_values.find(preload.register_name);
+        if (value != final_selector_values.end())
+          preload.value = value->second;
+      }
+    };
+    apply_borrowed_values(setup_preloads);
+    apply_borrowed_values(stop_tail_preloads);
+    apply_borrowed_values(post_layout_flow_preloads);
+    if (final_layout_effective_preloads.has_value())
+      apply_borrowed_values(*final_layout_effective_preloads);
+    for (const auto& [register_name, value] : final_selector_values)
+      post_layout_preload_overrides[register_name] = value;
+  }
+
+  const bool has_borrowed_entry_selector =
+      std::any_of(post_layout_optimizations.begin(), post_layout_optimizations.end(),
+                  [](const core::passes::AppliedOptimization& optimization) {
+                    return optimization.name == "borrowed-entry-phase-selector";
+                  });
+  if (has_borrowed_entry_selector) {
+    core::PostLayoutControlFlowOptions borrowed_flow_options;
+    borrowed_flow_options.address_space_model = address_space_model_for_options(options);
+    core::PostLayoutBorrowedSelectorProof borrowed_proof =
+        core::prove_post_layout_borrowed_entry_selectors(post_layout_items, borrowed_flow_options);
+    if (!borrowed_proof.proved) {
+      borrowed_flow_options.empty_return_target = IrTarget{1};
+      const core::PostLayoutBorrowedSelectorProof empty_return_proof =
+          core::prove_post_layout_borrowed_entry_selectors(post_layout_items,
+                                                           borrowed_flow_options);
+      if (empty_return_proof.proved)
+        borrowed_proof = empty_return_proof;
+    }
+    if (!borrowed_proof.proved) {
+      result.diagnostics.push_back(
+          diagnostic(DiagnosticSeverity::Error, "borrowed-entry-selector-unproved",
+                     borrowed_proof.reasons.empty()
+                         ? "Final borrowed entry-phase selector lifetime is not proved."
+                         : "Final borrowed entry-phase selector lifetime is not proved: " +
+                               borrowed_proof.reasons.front()));
+      result.implemented = false;
+      return result;
+    }
+  }
+
   for (MachineItem& item : post_layout_items)
     item.semantic_call_origins.clear();
 
@@ -50052,12 +50153,14 @@ bool preloaded_constant_registers_proved(const CompileOptions& options,
                                          const std::vector<PreloadReport>& preloads);
 bool indirect_flow_targets_proved(const std::vector<OptimizationReport>& optimizations,
                                   const std::vector<PreloadReport>& preloads,
+                                  const std::vector<MachineItem>& items,
                                   const std::vector<ResolvedStep>& steps,
                                   const std::map<std::string, std::string>& allocated_registers,
                                   AddressSpaceModel model);
 std::optional<std::string> indirect_flow_targets_rejection_reason(
     const std::vector<OptimizationReport>& optimizations,
     const std::vector<PreloadReport>& preloads,
+    const std::vector<MachineItem>& items,
     const std::vector<ResolvedStep>& steps,
     const std::map<std::string, std::string>& allocated_registers,
     AddressSpaceModel model);
@@ -50363,8 +50466,8 @@ bool preloaded_indirect_flow_static_gate_accepts(const CompileOptions& candidate
   if (!suppressed_preload_static_gate_accepts(candidate_options, result))
     return false;
   const bool has_indirect_flow_proof =
-      indirect_flow_targets_proved(result.optimizations, result.preloads, result.steps,
-                                   result.registers,
+      indirect_flow_targets_proved(result.optimizations, result.preloads, result.items,
+                                   result.steps, result.registers,
                                    address_space_model_for_options(candidate_options));
   return has_indirect_flow_proof;
 }
@@ -50385,8 +50488,8 @@ bool aggressive_post_layout_indirect_flow_static_gate_accepts(
   if (!suppressed_preload_static_gate_accepts(candidate_options, result))
     return false;
   const bool has_indirect_flow_proof =
-      indirect_flow_targets_proved(result.optimizations, result.preloads, result.steps,
-                                   result.registers,
+      indirect_flow_targets_proved(result.optimizations, result.preloads, result.items,
+                                   result.steps, result.registers,
                                    address_space_model_for_options(candidate_options));
   return has_indirect_flow_proof;
 }
@@ -50443,8 +50546,8 @@ bool dual_use_constant_indirect_flow_static_gate_accepts(const CompileOptions& c
                            item.name == "post-layout-existing-selector-flow";
                   });
   const bool has_indirect_flow_proof =
-      indirect_flow_targets_proved(result.optimizations, result.preloads, result.steps,
-                                   result.registers,
+      indirect_flow_targets_proved(result.optimizations, result.preloads, result.items,
+                                   result.steps, result.registers,
                                    address_space_model_for_options(candidate_options));
   if (!has_indirect_flow_optimization || !has_indirect_flow_proof)
     return false;
@@ -50505,8 +50608,8 @@ bool forward_indirect_flow_static_gate_accepts(const CompileOptions& candidate_o
                            item.name == "constants-dual-use";
                   });
   const bool has_indirect_flow_proof =
-      indirect_flow_targets_proved(result.optimizations, result.preloads, result.steps,
-                                   result.registers,
+      indirect_flow_targets_proved(result.optimizations, result.preloads, result.items,
+                                   result.steps, result.registers,
                                    address_space_model_for_options(candidate_options));
   if (!has_indirect_flow_optimization || !has_indirect_flow_proof)
     return false;
@@ -50594,7 +50697,7 @@ std::optional<std::string> optimizer_static_gate_rejection_reason(
   if (needs_indirect_flow_target_proof) {
     if (const std::optional<std::string> reason =
             indirect_flow_targets_rejection_reason(result.optimizations, result.preloads,
-                                                   result.steps, result.registers,
+                                                   result.items, result.steps, result.registers,
                                                    address_space_model_for_options(
                                                        candidate_options))) {
       return reason;
@@ -52529,12 +52632,24 @@ std::optional<std::string> indirect_flow_selector_preservation_rejection_reason(
 std::optional<std::string> indirect_flow_targets_rejection_reason(
     const std::vector<OptimizationReport>& optimizations,
     const std::vector<PreloadReport>& preloads,
+    const std::vector<MachineItem>& items,
     const std::vector<ResolvedStep>& steps,
     const std::map<std::string, std::string>& allocated_registers,
     AddressSpaceModel model) {
   (void)optimizations;
   bool saw_candidate_step = false;
   std::set<std::string> selector_registers;
+  std::set<std::string> borrowed_selector_registers;
+  std::set<std::string> ordinary_selector_registers;
+  std::set<int> borrowed_selector_addresses;
+  int item_address = 0;
+  for (const MachineItem& item : items) {
+    if (item.kind == MachineItemKind::Label)
+      continue;
+    if (item.kind == MachineItemKind::Op && item.borrowed_entry_phase_selector)
+      borrowed_selector_addresses.insert(item_address);
+    ++item_address;
+  }
   for (const ResolvedStep& step : steps) {
     if (!step.comment.has_value() ||
         step.comment->find("indirect-target=") == std::string::npos) {
@@ -52588,6 +52703,10 @@ std::optional<std::string> indirect_flow_targets_rejection_reason(
              });
     }
     selector_registers.insert(*register_name);
+    if (borrowed_selector_addresses.contains(step.address))
+      borrowed_selector_registers.insert(*register_name);
+    else
+      ordinary_selector_registers.insert(*register_name);
   }
 
   if (!saw_candidate_step) {
@@ -52600,23 +52719,66 @@ std::optional<std::string> indirect_flow_targets_rejection_reason(
            });
   }
 
-  if (const std::optional<std::string> preservation =
-          indirect_flow_selector_preservation_rejection_reason(selector_registers,
-                                                               allocated_registers, steps)) {
-    return preservation;
+  for (const std::string& register_name : borrowed_selector_registers) {
+    if (ordinary_selector_registers.contains(register_name)) {
+      return "static proof gate rejected candidate; " +
+             static_proof_gate_key_values({
+                 {"proofFamily", "indirect-flow-targets"},
+                 {"missingProof", "entry-phase-selector-exclusivity"},
+                 {"selectorRegister", register_name},
+                 {"proofFailure", "borrowed-register-also-has-unmarked-selector-use"},
+                 {"requiredAction", "keep-all-entry-phase-selector-uses-proof-marked"},
+             });
+    }
+  }
+  if (!borrowed_selector_registers.empty()) {
+    core::PostLayoutControlFlowOptions flow_options;
+    flow_options.address_space_model = model;
+    core::PostLayoutBorrowedSelectorProof borrowed_proof =
+        core::prove_post_layout_borrowed_entry_selectors(items, flow_options);
+    if (!borrowed_proof.proved) {
+      flow_options.empty_return_target = IrTarget{1};
+      const core::PostLayoutBorrowedSelectorProof empty_return_proof =
+          core::prove_post_layout_borrowed_entry_selectors(items, flow_options);
+      if (empty_return_proof.proved)
+        borrowed_proof = empty_return_proof;
+    }
+    if (!borrowed_proof.proved) {
+      return "static proof gate rejected candidate; " +
+             static_proof_gate_key_values({
+                 {"proofFamily", "indirect-flow-targets"},
+                 {"missingProof", "entry-phase-selector-lifetime"},
+                 {"candidateSelectorRegisters",
+                  static_proof_gate_join_values(borrowed_selector_registers)},
+                 {"proofFailure", borrowed_proof.reasons.empty() ? "exact-lifetime-proof-failed"
+                                                                 : borrowed_proof.reasons.front()},
+                 {"requiredAction", "restore-selector-before-every-cyclic-use-or-do-not-borrow"},
+             });
+    }
+  }
+
+  for (const std::string& register_name : borrowed_selector_registers)
+    selector_registers.erase(register_name);
+  if (!selector_registers.empty()) {
+    const std::optional<std::string> preservation =
+        indirect_flow_selector_preservation_rejection_reason(selector_registers,
+                                                             allocated_registers, steps);
+    if (preservation.has_value())
+      return preservation;
   }
   return std::nullopt;
 }
 
 bool indirect_flow_targets_proved(const std::vector<OptimizationReport>& optimizations,
                                   const std::vector<PreloadReport>& preloads,
+                                  const std::vector<MachineItem>& items,
                                   const std::vector<ResolvedStep>& steps,
                                   const std::map<std::string, std::string>& allocated_registers,
                                   AddressSpaceModel model) {
   // Selector preload intent is not a proof artifact. The proof is discharged by
   // final delivered preload reports paired with final proof-carrying step
   // annotations under the active machine profile's official target range.
-  return !indirect_flow_targets_rejection_reason(optimizations, preloads, steps,
+  return !indirect_flow_targets_rejection_reason(optimizations, preloads, items, steps,
                                                  allocated_registers, model)
               .has_value();
 }
@@ -53394,6 +53556,7 @@ std::vector<ProofReport> build_proof_report(const ProgramAst& ast,
                                             const std::vector<OptimizationReport>& optimizations,
                                             const CompileOptions& options,
                                             const std::vector<PreloadReport>& preloads,
+                                            const std::vector<MachineItem>& items,
                                             const std::vector<ResolvedStep>& steps,
                                             const std::map<std::string, std::string>& registers) {
   std::vector<ProofReport> proofs;
@@ -53404,7 +53567,7 @@ std::vector<ProofReport> build_proof_report(const ProgramAst& ast,
         .detail = "V2 state domains and expression ranges were tracked during lowering.",
     });
   }
-  if (indirect_flow_targets_proved(optimizations, preloads, steps, registers,
+  if (indirect_flow_targets_proved(optimizations, preloads, items, steps, registers,
                                    address_space_model_for_options(options))) {
     proofs.push_back(ProofReport{
         .id = "indirect-flow-targets",
@@ -53412,6 +53575,15 @@ std::vector<ProofReport> build_proof_report(const ProgramAst& ast,
         .detail =
             "Final preload artifacts for indirect branch/call selectors match the annotated "
             "selector value and re-resolve to the annotated target.",
+    });
+  }
+  if (has_optimization_named(optimizations, "borrowed-entry-phase-selector")) {
+    proofs.push_back(ProofReport{
+        .id = "borrowed-entry-phase-selector-lifetime",
+        .status = "proved",
+        .detail = "Every borrowed setup-time selector is read only by its marked indirect-flow "
+                  "sites before a definite write, including all reachable loop and return-stack "
+                  "states.",
     });
   }
   if (has_optimization_named(optimizations, "computed-dispatch") &&
@@ -61921,7 +62093,7 @@ void populate_public_report(CompileResult& result, const ProgramAst& ast,
   result.machine_features_used =
       build_machine_features_used(result.optimizations, result.candidates, options);
   result.proofs = build_proof_report(ast, result.optimizations, options, result.preloads,
-                                     result.steps, result.registers);
+                                     result.items, result.steps, result.registers);
   result.emulator_facts = mk61_profile().emulator_facts;
 }
 

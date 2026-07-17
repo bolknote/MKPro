@@ -221,6 +221,9 @@ void example_sizes_match_typescript_baselines() {
       const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
       require(result.steps.size() == 100U,
               "zagaday-tsifru should fit in addresses 00..99");
+      require(!has_optimization(result, "borrowed-entry-phase-selector"),
+              "zagaday-tsifru must not borrow R9 only for its first iteration: input overwrites "
+              "R9 before the program loops back to the same branch");
       require(has_optimization(result, "packed-bcd-horner-threshold-loop") &&
                   has_optimization(result, "packed-bcd-history-prepend") &&
                   has_optimization(

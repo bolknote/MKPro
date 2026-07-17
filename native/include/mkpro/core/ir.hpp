@@ -93,6 +93,9 @@ struct MachineItem {
   // opaque exact labels. Memory integers are post-mutation R0..Re indices.
   std::optional<std::vector<IrTarget>> indirect_flow_targets;
   std::optional<std::vector<int>> indirect_memory_targets;
+  // This indirect-flow command consumes a setup-time selector borrowed from
+  // an allocated register before that register's first ordinary definition.
+  bool borrowed_entry_phase_selector = false;
   // Opaque typed provenance for semantic helper calls. Optimizers may copy or
   // union these identities, but never infer meaning from their numeric value.
   std::vector<std::uint64_t> semantic_call_origins;
@@ -140,6 +143,7 @@ struct IrMeta {
   std::optional<ManualInteractionAnchor> manual_interaction;
   std::optional<std::vector<IrTarget>> indirect_flow_targets;
   std::optional<std::vector<int>> indirect_memory_targets;
+  bool borrowed_entry_phase_selector = false;
   std::vector<std::uint64_t> semantic_call_origins;
   std::optional<std::string> tactic;
 };

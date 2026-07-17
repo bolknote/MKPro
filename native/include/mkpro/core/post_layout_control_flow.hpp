@@ -40,6 +40,17 @@ struct PostLayoutExternalEntryState {
   bool operator==(const PostLayoutExternalEntryState&) const = default;
 };
 
+// One reachable calculator execution state. The same command may appear more
+// than once with different return stacks; keeping those states separate is
+// what makes downstream liveness precise across helper calls and returns.
+struct PostLayoutExecutionState {
+  std::size_t item_index = 0;
+  int address = -1;
+  std::vector<int> return_stack;
+
+  bool operator==(const PostLayoutExecutionState&) const = default;
+};
+
 struct PostLayoutControlFlowOptions {
   AddressSpaceModel address_space_model = AddressSpaceModel::Standard;
   int maximum_return_depth = 5;
@@ -65,8 +76,21 @@ struct AuthoritativePostLayoutControlFlow {
   std::map<std::size_t, std::vector<PostLayoutCommandIdentity>> indirect_flow_targets;
   std::map<std::size_t, std::vector<int>> indirect_memory_targets;
   std::optional<PostLayoutCommandIdentity> empty_return_target;
+  std::vector<PostLayoutExecutionState> execution_states;
+  std::vector<std::vector<std::size_t>> execution_successors;
   int maximum_observed_return_depth = 0;
   std::size_t explored_states = 0;
+  std::vector<std::string> reasons;
+};
+
+// A setup-time selector may temporarily occupy an allocated stable register
+// only while its ordinary entry value is dead. Cycles are part of the proof,
+// so a borrow that works only on the first iteration is rejected.
+struct PostLayoutBorrowedSelectorProof {
+  bool proved = false;
+  std::size_t selector_registers = 0;
+  std::size_t selector_states = 0;
+  std::size_t entry_value_states = 0;
   std::vector<std::string> reasons;
 };
 
@@ -76,5 +100,9 @@ struct AuthoritativePostLayoutControlFlow {
 AuthoritativePostLayoutControlFlow
 build_post_layout_control_flow(const std::vector<MachineItem>& items,
                                const PostLayoutControlFlowOptions& options = {});
+
+PostLayoutBorrowedSelectorProof
+prove_post_layout_borrowed_entry_selectors(const std::vector<MachineItem>& items,
+                                           const PostLayoutControlFlowOptions& options = {});
 
 } // namespace mkpro::core
