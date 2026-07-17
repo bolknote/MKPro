@@ -51734,6 +51734,9 @@ constexpr std::string_view kCalleeHoleSkeletonCallMarker = "callee-hole skeleton
 constexpr std::string_view kCalleeHoleChargeMarker = "callee-hole selector-value=";
 constexpr std::string_view kCalleeHoleEntryEqualityMarker =
     "callee-hole entry-X equivalence ";
+constexpr std::string_view kCalleeHoleDeadSelectorMarker = "selector-scope=dead";
+constexpr std::string_view kCalleeHoleScopeEntryMarker = "callee-hole selector-scope entry ";
+constexpr std::string_view kCalleeHoleScopeEndMarker = "callee-hole selector-scope end ";
 
 struct CalleeHoleSelectorCharge {
   int value = 0;
@@ -51764,7 +51767,9 @@ std::optional<CalleeHoleSelectorCharge> callee_hole_selector_charge_from_comment
     return std::nullopt;
   pos += kTargetMarker.size();
   const std::optional<int> target = parse_nonnegative(pos);
-  if (!target.has_value() || pos != comment->size() || *target < 0 ||
+  const bool valid_suffix =
+      pos == comment->size() || comment->substr(pos) == "; selector-scope=dead";
+  if (!target.has_value() || !valid_suffix || *target < 0 ||
       *target > official_last_program_address_for_options(options)) {
     return std::nullopt;
   }
@@ -51889,6 +51894,239 @@ bool callee_hole_entry_stack_difference_erased(const std::vector<ResolvedStep>& 
   return core::stack_values_fully_equal(equality);
 }
 
+bool callee_hole_dead_selector_marker(const std::optional<std::string>& comment) {
+  return comment.has_value() && comment->find(kCalleeHoleDeadSelectorMarker) != std::string::npos;
+}
+
+std::optional<std::string> callee_hole_scope_name(const std::optional<std::string>& comment,
+                                                  std::string_view marker) {
+  if (!comment.has_value())
+    return std::nullopt;
+  const std::size_t begin = comment->find(marker);
+  if (begin == std::string::npos)
+    return std::nullopt;
+  const std::size_t value_begin = begin + marker.size();
+  const std::size_t end = comment->find(';', value_begin);
+  const std::string value = comment->substr(
+      value_begin, end == std::string::npos ? std::string::npos : end - value_begin);
+  return value.empty() ? std::nullopt : std::optional<std::string>(value);
+}
+
+bool callee_hole_step_reads_register(const ResolvedStep& step,
+                                     const std::string& register_name) {
+  const int register_id = register_index(register_name);
+  if (step.opcode >= 0x60 && step.opcode <= 0x6e)
+    return step.opcode - 0x60 == register_id;
+  if (step.opcode >= 0x58 && step.opcode <= 0x5b)
+    return step.opcode - 0x58 == register_id;
+  const std::optional<std::string> flow_register = indirect_flow_register_for_opcode(step.opcode);
+  if (flow_register.has_value() && *flow_register == register_name)
+    return true;
+  if (step.opcode >= 0xb0 && step.opcode <= 0xbe)
+    return step.opcode - 0xb0 == register_id;
+  if (step.opcode >= 0xd0 && step.opcode <= 0xde) {
+    if (step.opcode - 0xd0 == register_id)
+      return true;
+    const std::optional<std::set<std::string>> targets =
+        indirect_memory_targets_from_comment(step.comment);
+    return !targets.has_value() || targets->contains(register_name);
+  }
+  return false;
+}
+
+bool callee_hole_step_writes_register(const ResolvedStep& step,
+                                      const std::string& register_name) {
+  const int register_id = register_index(register_name);
+  if (step.opcode >= 0x40 && step.opcode <= 0x4e)
+    return step.opcode - 0x40 == register_id;
+  if (step.opcode == 0x4f && register_id == 0)
+    return true;
+  if (step.opcode >= 0x58 && step.opcode <= 0x5b)
+    return step.opcode - 0x58 == register_id;
+  if (step.opcode >= 0xb0 && step.opcode <= 0xbe) {
+    const std::optional<std::set<std::string>> targets =
+        indirect_memory_targets_from_comment(step.comment);
+    return !targets.has_value() || targets->contains(register_name);
+  }
+  const std::optional<std::string> flow_register = indirect_flow_register_for_opcode(step.opcode);
+  return flow_register.has_value() && *flow_register == register_name && register_id <= 6;
+}
+
+struct CalleeHoleResolvedFlow {
+  std::vector<bool> address_operand;
+  std::vector<std::vector<std::size_t>> successors;
+};
+
+CalleeHoleResolvedFlow callee_hole_resolved_flow(const std::vector<ResolvedStep>& steps,
+                                                 const CompileOptions& options) {
+  CalleeHoleResolvedFlow flow;
+  flow.address_operand.assign(steps.size(), false);
+  flow.successors.resize(steps.size());
+  std::map<int, std::size_t> index_by_address;
+  for (std::size_t index = 0; index < steps.size(); ++index)
+    index_by_address.emplace(steps.at(index).address, index);
+  for (std::size_t index = 0; index + 1U < steps.size(); ++index) {
+    if (flow.address_operand.at(index))
+      continue;
+    if (opcode_by_code(steps.at(index).opcode).takes_address &&
+        steps.at(index).address + 1 == steps.at(index + 1U).address) {
+      flow.address_operand.at(index + 1U) = true;
+    }
+  }
+  const auto next_executable = [&](std::size_t index) -> std::optional<std::size_t> {
+    for (++index; index < steps.size(); ++index) {
+      if (!flow.address_operand.at(index))
+        return index;
+    }
+    return std::nullopt;
+  };
+  const auto index_for_target = [&](int target) -> std::optional<std::size_t> {
+    const auto found = index_by_address.find(target);
+    return found == index_by_address.end() ? std::nullopt
+                                           : std::optional<std::size_t>(found->second);
+  };
+  std::vector<std::size_t> call_returns;
+  for (std::size_t index = 0; index < steps.size(); ++index) {
+    if (flow.address_operand.at(index))
+      continue;
+    const int opcode = steps.at(index).opcode;
+    const bool direct_call = opcode == 0x53;
+    const bool indirect_call = opcode >= 0xa0 && opcode <= 0xae;
+    if (!direct_call && !indirect_call)
+      continue;
+    const std::optional<std::size_t> continuation =
+        direct_call && index + 1U < steps.size() ? next_executable(index + 1U)
+                                                : next_executable(index);
+    if (continuation.has_value())
+      call_returns.push_back(*continuation);
+  }
+  const auto add_target = [&](std::size_t source, int target) {
+    if (const std::optional<std::size_t> destination = index_for_target(target))
+      flow.successors.at(source).push_back(*destination);
+  };
+  const auto add_all_executable = [&](std::size_t source) {
+    for (std::size_t target = 0; target < steps.size(); ++target) {
+      if (!flow.address_operand.at(target))
+        flow.successors.at(source).push_back(target);
+    }
+  };
+  for (std::size_t index = 0; index < steps.size(); ++index) {
+    if (flow.address_operand.at(index))
+      continue;
+    const ResolvedStep& step = steps.at(index);
+    const std::optional<std::size_t> fallthrough = next_executable(index);
+    const auto add_fallthrough = [&]() {
+      if (fallthrough.has_value())
+        flow.successors.at(index).push_back(*fallthrough);
+    };
+    if (step.opcode == 0x52) {
+      flow.successors.at(index).insert(flow.successors.at(index).end(), call_returns.begin(),
+                                       call_returns.end());
+      continue;
+    }
+    if (opcode_by_code(step.opcode).takes_address) {
+      if (index + 1U >= steps.size())
+        continue;
+      const int target = formal_address_info(steps.at(index + 1U).opcode).actual;
+      add_target(index, target);
+      if (step.opcode != 0x51 && step.opcode != 0x53)
+        add_fallthrough();
+      continue;
+    }
+    const bool indirect_jump = step.opcode >= 0x80 && step.opcode <= 0x8e;
+    const bool indirect_call = step.opcode >= 0xa0 && step.opcode <= 0xae;
+    const bool indirect_conditional =
+        (step.opcode >= 0x70 && step.opcode <= 0x7e) ||
+        (step.opcode >= 0x90 && step.opcode <= 0x9e) ||
+        (step.opcode >= 0xc0 && step.opcode <= 0xce) ||
+        (step.opcode >= 0xe0 && step.opcode <= 0xee);
+    if (indirect_jump || indirect_call || indirect_conditional) {
+      bool added = false;
+      if (const auto leaves = callee_hole_leaf_targets_from_comment(step.comment, options)) {
+        for (const auto& [target, unused] : *leaves) {
+          (void)unused;
+          add_target(index, target);
+          added = true;
+        }
+      } else if (const std::optional<int> target =
+                     indirect_target_from_comment(step.comment, options)) {
+        add_target(index, *target);
+        added = true;
+      }
+      if (!added)
+        add_all_executable(index);
+      if (indirect_conditional)
+        add_fallthrough();
+      continue;
+    }
+    add_fallthrough();
+  }
+  return flow;
+}
+
+bool callee_hole_selector_value_is_dead_after_call(
+    const std::vector<ResolvedStep>& steps, const CalleeHoleResolvedFlow& flow,
+    std::size_t call_index, const std::string& register_name) {
+  if (call_index + 1U >= steps.size() || !flow.address_operand.at(call_index + 1U))
+    return false;
+  std::optional<std::size_t> continuation;
+  for (std::size_t index = call_index + 2U; index < steps.size(); ++index) {
+    if (!flow.address_operand.at(index)) {
+      continuation = index;
+      break;
+    }
+  }
+  if (!continuation.has_value())
+    return true;
+  std::vector<std::size_t> pending{*continuation};
+  std::set<std::size_t> visited;
+  while (!pending.empty()) {
+    const std::size_t index = pending.back();
+    pending.pop_back();
+    if (!visited.insert(index).second || flow.address_operand.at(index))
+      continue;
+    const ResolvedStep& step = steps.at(index);
+    if (callee_hole_step_reads_register(step, register_name))
+      return false;
+    if (callee_hole_step_writes_register(step, register_name))
+      continue;
+    pending.insert(pending.end(), flow.successors.at(index).begin(),
+                   flow.successors.at(index).end());
+  }
+  return true;
+}
+
+bool callee_hole_scoped_helper_body_isolated(const std::vector<ResolvedStep>& steps,
+                                             std::size_t hole_index,
+                                             const std::string& proof,
+                                             const std::string& register_name) {
+  std::optional<std::size_t> entry;
+  std::optional<std::size_t> end;
+  for (std::size_t index = 0; index < steps.size(); ++index) {
+    if (callee_hole_scope_name(steps.at(index).comment, kCalleeHoleScopeEntryMarker) == proof) {
+      if (entry.has_value())
+        return false;
+      entry = index;
+    }
+    if (callee_hole_scope_name(steps.at(index).comment, kCalleeHoleScopeEndMarker) == proof) {
+      if (end.has_value())
+        return false;
+      end = index;
+    }
+  }
+  if (!entry.has_value() || !end.has_value() || *entry > hole_index || hole_index >= *end)
+    return false;
+  for (std::size_t index = *entry; index <= *end; ++index) {
+    if (index == hole_index)
+      continue;
+    if (callee_hole_step_reads_register(steps.at(index), register_name) ||
+        callee_hole_step_writes_register(steps.at(index), register_name)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // Callee-hole proof: charge literals and their semantic leaf targets are
 // independently re-derived from the delivered listing. Stable selectors use
 // target==charge. Mutating R0..R6 selectors additionally have to resolve their
@@ -51901,6 +52139,15 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
     return false;
 
   std::map<std::string, std::map<int, std::set<int>>> charged_values;
+  std::map<std::string, std::vector<std::size_t>> scoped_charge_calls;
+  std::set<std::string> scoped_registers;
+  for (const ResolvedStep& step : steps) {
+    if (step.opcode >= 0xa0 && step.opcode <= 0xae &&
+        step.comment.has_value() && step.comment->starts_with(kCalleeHoleCallMarker) &&
+        callee_hole_dead_selector_marker(step.comment)) {
+      scoped_registers.insert(core::register_name_for_index(step.opcode - 0xa0));
+    }
+  }
   std::set<std::string> poisoned;
   bool all_poisoned = false;
   for (std::size_t index = 0; index < steps.size(); ++index) {
@@ -51919,15 +52166,25 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
             steps.at(index + 1U).comment->find(kCalleeHoleSkeletonCallMarker) !=
                 std::string::npos;
         if (followed_by_skeleton_call) {
+          if (scoped_registers.contains(*store_register)) {
+            if (!callee_hole_dead_selector_marker(step.comment) ||
+                !callee_hole_dead_selector_marker(steps.at(index + 1U).comment)) {
+              return false;
+            }
+            scoped_charge_calls[*store_register].push_back(index + 1U);
+          }
           charged_values[*store_register][charge->target].insert(charge->value);
           continue;
         }
       }
-      poisoned.insert(*store_register);
+      if (!scoped_registers.contains(*store_register))
+        poisoned.insert(*store_register);
       continue;
     }
     if (step.opcode >= 0x60 && step.opcode <= 0x6e) {
-      poisoned.insert(core::register_name_for_index(step.opcode - 0x60));
+      const std::string register_name = core::register_name_for_index(step.opcode - 0x60);
+      if (!scoped_registers.contains(register_name))
+        poisoned.insert(register_name);
     }
     if (step.opcode >= 0x70 && step.opcode <= 0xee &&
         !(step.opcode >= 0xb0 && step.opcode <= 0xbe)) {
@@ -51935,18 +52192,24 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
           core::register_name_for_index(step.opcode & 0x0f);
       const bool is_callee_hole = step.comment.has_value() &&
                                   step.comment->starts_with(kCalleeHoleCallMarker);
-      if (!is_callee_hole)
+      if (!is_callee_hole && !scoped_registers.contains(register_name))
         poisoned.insert(register_name);
     }
     if (step.opcode >= 0xb0 && step.opcode <= 0xbe) {
-      poisoned.insert(core::register_name_for_index(step.opcode - 0xb0));
+      const std::string selector = core::register_name_for_index(step.opcode - 0xb0);
+      if (!scoped_registers.contains(selector))
+        poisoned.insert(selector);
       const std::optional<std::set<std::string>> targets =
           indirect_memory_targets_from_comment(step.comment);
       if (!targets.has_value()) {
-        all_poisoned = true;
+        if (scoped_registers.empty())
+          all_poisoned = true;
         continue;
       }
-      poisoned.insert(targets->begin(), targets->end());
+      for (const std::string& target : *targets) {
+        if (!scoped_registers.contains(target))
+          poisoned.insert(target);
+      }
     }
   }
 
@@ -51983,16 +52246,18 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
   };
 
   bool saw_proved_hole = false;
+  const CalleeHoleResolvedFlow resolved_flow = callee_hole_resolved_flow(steps, options);
   for (std::size_t step_index = 0; step_index < steps.size(); ++step_index) {
     const ResolvedStep& step = steps.at(step_index);
     const std::optional<std::map<int, std::string>> leaf_targets =
         callee_hole_leaf_targets_from_comment(step.comment, options);
     if (!leaf_targets.has_value())
       continue;
-    if (all_poisoned || step.opcode < 0xa0 || step.opcode > 0xae)
+    if (step.opcode < 0xa0 || step.opcode > 0xae)
       return false;
     const std::string register_name = core::register_name_for_index(step.opcode - 0xa0);
-    if (poisoned.contains(register_name))
+    const bool scoped_selector = scoped_registers.contains(register_name);
+    if ((!scoped_selector && all_poisoned) || poisoned.contains(register_name))
       return false;
     std::set<int> annotated;
     for (const auto& [target, label] : *leaf_targets) {
@@ -52019,6 +52284,21 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
     }
     if (charged_targets != annotated)
       return false;
+
+    if (scoped_selector) {
+      const std::optional<std::string> proof = callee_hole_proof_id_from_comment(step.comment);
+      const auto charges = scoped_charge_calls.find(register_name);
+      if (!proof.has_value() || charges == scoped_charge_calls.end() || charges->second.empty() ||
+          !callee_hole_scoped_helper_body_isolated(steps, step_index, *proof, register_name)) {
+        return false;
+      }
+      for (const std::size_t call_index : charges->second) {
+        if (!callee_hole_selector_value_is_dead_after_call(steps, resolved_flow, call_index,
+                                                           register_name)) {
+          return false;
+        }
+      }
+    }
 
     if (!core::is_stable_indirect_selector(register_name)) {
       const std::optional<std::string> proof = callee_hole_proof_id_from_comment(step.comment);

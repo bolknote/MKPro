@@ -199,7 +199,8 @@ void callee_hole_helper_matches_direct_call_semantics() {
   ir.push_back(plain(0x0d));
   ir.push_back(terminal(IrKind::Return, 0x52));
   // Occupy every stable selector and R1..R6. R0 is the only globally unused
-  // register, so a successful skeleton must discharge the mutating proof.
+  // register. Their later recalls keep the values live across both regions,
+  // so a successful skeleton must still discharge the mutating R0 proof.
   for (int index = 1; index <= 0x0e; ++index) {
     IrOp store;
     store.kind = IrKind::Store;
@@ -221,6 +222,13 @@ void callee_hole_helper_matches_direct_call_semantics() {
   append_region("leaf_a");
   ir.push_back(terminal(IrKind::Stop, 0x50));
   append_region("leaf_b");
+  for (int index = 1; index <= 0x0e; ++index) {
+    IrOp recall;
+    recall.kind = IrKind::Recall;
+    recall.register_name = core::register_name_for_index(index);
+    recall.opcode = 0x60 + index;
+    ir.push_back(std::move(recall));
+  }
   ir.push_back(terminal(IrKind::Stop, 0x50));
 
   CompileOptions mutating_options;
@@ -241,6 +249,44 @@ void callee_hole_helper_matches_direct_call_semantics() {
                    op.meta.comment->find("callee-hole entry-X equivalence") != std::string::npos;
           }),
           "mutating skeleton should carry its entry-stack proof marker");
+
+  std::vector<IrOp> scoped_ir;
+  scoped_ir.push_back(label("scoped_leaf_a"));
+  scoped_ir.push_back(plain(0x0d));
+  scoped_ir.push_back(terminal(IrKind::Return, 0x52));
+  scoped_ir.push_back(label("scoped_leaf_b"));
+  scoped_ir.push_back(plain(0x0d));
+  scoped_ir.push_back(terminal(IrKind::Return, 0x52));
+  IrOp use_r7;
+  use_r7.kind = IrKind::Recall;
+  use_r7.register_name = "7";
+  use_r7.opcode = 0x67;
+  scoped_ir.push_back(use_r7);
+  scoped_ir.push_back(terminal(IrKind::Stop, 0x50));
+  const auto append_scoped_region = [&](const std::string& leaf) {
+    for (int index = 0; index < 10; ++index) {
+      IrOp recall;
+      recall.kind = IrKind::Recall;
+      recall.register_name = "1";
+      recall.opcode = 0x61;
+      scoped_ir.push_back(std::move(recall));
+    }
+    scoped_ir.push_back(call(leaf));
+  };
+  append_scoped_region("scoped_leaf_a");
+  scoped_ir.push_back(terminal(IrKind::Stop, 0x50));
+  append_scoped_region("scoped_leaf_b");
+  scoped_ir.push_back(terminal(IrKind::Stop, 0x50));
+  const core::passes::PassResult scoped = core::passes::callee_hole_straight_line_helper(
+      scoped_ir, core::passes::PassContext{.options = mutating_options});
+  require(scoped.applied >= 2,
+          "callee-hole pass should reuse a globally used selector when CFG liveness proves it dead");
+  require(std::any_of(scoped.ops.begin(), scoped.ops.end(), [](const IrOp& op) {
+            return op.kind == IrKind::IndirectCall && op.register_name == "7" &&
+                   op.meta.comment.has_value() &&
+                   op.meta.comment->find("selector-scope=dead") != std::string::npos;
+          }),
+          "locally dead stable selector should carry a final-proof scope marker");
 
   CompileOptions gate_options;
   gate_options.callee_hole_straight_line_helper = true;
@@ -272,6 +318,43 @@ void callee_hole_helper_matches_direct_call_semantics() {
   live_entry_x.steps.erase(live_entry_x.steps.begin() + 11);
   require(!optimizer_static_proof_gate_accepts_for_testing(gate_options, live_entry_x),
           "final static gate should reject R0 when one stack slot still carries the charge");
+
+  CompileResult proved_scoped;
+  proved_scoped.optimizations.push_back(
+      OptimizationReport{.name = "callee-hole-straight-line-helper"});
+  proved_scoped.steps = {
+      step(0, 3, "callee-hole selector-value=30 indirect-target=30; selector-scope=dead"),
+      step(1, 0, "callee-hole selector-value=30 indirect-target=30; selector-scope=dead"),
+      step(2, 0x47, "callee-hole selector-value=30 indirect-target=30; selector-scope=dead"),
+      step(3, 0x53, "callee-hole skeleton call; selector-scope=dead"),
+      step(4, 0x20),
+      step(5, 0x47),
+      step(6, 4, "callee-hole selector-value=40 indirect-target=40; selector-scope=dead"),
+      step(7, 0, "callee-hole selector-value=40 indirect-target=40; selector-scope=dead"),
+      step(8, 0x47, "callee-hole selector-value=40 indirect-target=40; selector-scope=dead"),
+      step(9, 0x53, "callee-hole skeleton call; selector-scope=dead"),
+      step(10, 0x20),
+      step(11, 0x47),
+      step(20, 0x61, "callee-hole selector-scope entry proof_s"),
+      step(21, 0x61),
+      step(22, 0x61),
+      step(23, 0x61),
+      step(24, 0xa7,
+           "callee-hole indirect call; proof=proof_s; leaf-targets=30:leaf_a,40:leaf_b; "
+           "selector-scope=dead"),
+      step(25, 0x52, "callee-hole helper return; callee-hole selector-scope end proof_s"),
+      step(30, 0x0d, "callee-hole leaf entry leaf_a"),
+      step(31, 0x52),
+      step(40, 0x0d, "callee-hole leaf entry leaf_b"),
+      step(41, 0x52),
+  };
+  require(optimizer_static_proof_gate_accepts_for_testing(gate_options, proved_scoped),
+          "final static gate should accept a reused selector killed on every return path");
+
+  CompileResult leaked_scoped = proved_scoped;
+  leaked_scoped.steps.at(11).opcode = 0x67;
+  require(!optimizer_static_proof_gate_accepts_for_testing(gate_options, leaked_scoped),
+          "final static gate should reject a reused selector read after the skeleton returns");
 }
 
 } // namespace mkpro::tests

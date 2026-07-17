@@ -69,6 +69,8 @@ IR and lowering optimizer switches:
   --coalesce-copies               Coalesce copy-only register moves.
   --shared-straight-line-call-bodies
                                   Share duplicate straight-line call bodies.
+  --callee-hole-straight-line-helper
+                                  Share straight-line bodies that differ only by a nested call.
   --segmented-bitplanes           Use segmented bitplane lowering.
   --segmented-line-count-scan     Use segmented bitplanes with line-count scan.
   --compact-bit-mask-helper-body  Compact generated bit-mask helper bodies.
@@ -1230,6 +1232,8 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       options.coalesce_copies = true;
     } else if (arg == "--shared-straight-line-call-bodies") {
       options.shared_straight_line_call_bodies = true;
+    } else if (arg == "--callee-hole-straight-line-helper") {
+      options.callee_hole_straight_line_helper = true;
     } else if (arg == "--segmented-bitplanes") {
       options.segmented_bitplanes = true;
     } else if (arg == "--segmented-line-count-scan") {

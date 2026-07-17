@@ -1,5 +1,7 @@
 #include "mkpro/core/passes/shared_straight_line_helper.hpp"
 
+#include "mkpro/core/passes/liveness_analysis.hpp"
+
 #include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/opcodes.hpp"
@@ -746,6 +748,7 @@ struct SelectedHoleHelper {
   std::vector<HoleOccurrence> occurrences;
   std::string register_name;
   bool mutating_selector = false;
+  bool reused_selector = false;
   std::map<int, int> charge_values;
   // Leaf label by frozen numeric address; the labels keep the leaves alive in
   // the CFG and the addresses are re-validated by the final static proof.
@@ -875,6 +878,27 @@ std::set<std::string> hole_used_registers(const std::vector<IrOp>& ops) {
     flush();
   }
   return used;
+}
+
+bool has_unknown_hole_memory_access(const std::vector<IrOp>& ops) {
+  return std::any_of(ops.begin(), ops.end(), [](const IrOp& op) {
+    return (op.kind == IrKind::IndirectStore || op.kind == IrKind::IndirectRecall) &&
+           !known_indirect_memory_targets(op).has_value();
+  });
+}
+
+bool hole_register_is_locally_dead(const std::string& register_name,
+                                   const std::vector<HoleOccurrence>& occurrences,
+                                   const std::vector<IrOp>& body,
+                                   const LivenessInfo& liveness) {
+  if (hole_used_registers(body).contains(register_name))
+    return false;
+  return std::all_of(occurrences.begin(), occurrences.end(), [&](const HoleOccurrence& occurrence) {
+    const std::size_t start = static_cast<std::size_t>(occurrence.start);
+    const std::size_t end = static_cast<std::size_t>(occurrence.end);
+    return !liveness.live_in.at(start).contains(register_name) &&
+           !liveness.live_out.at(end).contains(register_name);
+  });
 }
 
 std::vector<HoleCandidate> collect_hole_candidates(const std::vector<IrOp>& ops,
@@ -1041,7 +1065,11 @@ std::vector<SelectedHoleHelper> select_hole_helpers(const std::vector<IrOp>& ops
 
   LabelAllocator hole_labels(ops, "__callee_hole_helper_");
   std::set<int> protected_indexes;
-  std::set<std::string> taken_registers = hole_used_registers(ops);
+  const std::set<std::string> globally_used_registers = hole_used_registers(ops);
+  const bool local_reuse_is_provable = !has_unknown_hole_memory_access(ops);
+  const LivenessInfo liveness = compute_liveness(
+      ops, LivenessOptions{.unknown_indirect_flow_to_all = true});
+  std::set<std::string> taken_registers;
   std::vector<SelectedHoleHelper> selected;
 
   for (const HoleCandidate& candidate : ordered) {
@@ -1158,26 +1186,33 @@ std::vector<SelectedHoleHelper> select_hole_helpers(const std::vector<IrOp>& ops
       retargeted = true;
     }
 
-    const auto register_it =
-        std::find_if(kHoleSelectorRegisters.begin(), kHoleSelectorRegisters.end(),
-                     [&](std::string_view name) {
-                       return !taken_registers.contains(std::string(name));
-                     });
-
     const std::vector<IrOp> body(ops.begin() + occurrences.front().start,
                                  ops.begin() + occurrences.front().end + 1);
+    const auto register_is_available = [&](std::string_view name) {
+      const std::string register_name(name);
+      if (taken_registers.contains(register_name))
+        return false;
+      return !globally_used_registers.contains(register_name) ||
+             (local_reuse_is_provable &&
+              hole_register_is_locally_dead(register_name, occurrences, body, liveness));
+    };
+    const auto register_it =
+        std::find_if(kHoleSelectorRegisters.begin(), kHoleSelectorRegisters.end(),
+                     register_is_available);
     std::string selector_register;
     bool mutating_selector = false;
+    bool reused_selector = false;
     std::map<int, int> charge_values;
     if (register_it != kHoleSelectorRegisters.end()) {
       selector_register = std::string(*register_it);
+      reused_selector = globally_used_registers.contains(selector_register);
       for (const auto& [target, unused_label] : leaf_labels) {
         (void)unused_label;
         charge_values[target] = target;
       }
     } else {
       for (const std::string_view candidate_register : kMutatingHoleSelectorRegisters) {
-        if (taken_registers.contains(std::string(candidate_register)) ||
+        if (!register_is_available(candidate_register) ||
             !hole_body_erases_mutating_charge(body, *hole_positions, candidate_register)) {
           continue;
         }
@@ -1199,6 +1234,7 @@ std::vector<SelectedHoleHelper> select_hole_helpers(const std::vector<IrOp>& ops
         if (!valid)
           continue;
         selector_register = std::string(candidate_register);
+        reused_selector = globally_used_registers.contains(selector_register);
         charge_values = std::move(candidate_values);
         mutating_selector = true;
         break;
@@ -1213,6 +1249,7 @@ std::vector<SelectedHoleHelper> select_hole_helpers(const std::vector<IrOp>& ops
     helper.occurrences = occurrences;
     helper.register_name = selector_register;
     helper.mutating_selector = mutating_selector;
+    helper.reused_selector = reused_selector;
     helper.charge_values = std::move(charge_values);
     helper.leaf_labels = leaf_labels;
     helper.hole_positions = *hole_positions;
@@ -1230,11 +1267,13 @@ std::vector<SelectedHoleHelper> select_hole_helpers(const std::vector<IrOp>& ops
 
 std::vector<IrOp> hole_charge_ops(int charge_value, int leaf_target,
                                   const std::string& register_name,
-                                  const std::string& helper_label, const IrOp& source) {
+                                  const std::string& helper_label, bool reused_selector,
+                                  const IrOp& source) {
   std::vector<IrOp> result;
   const std::string text = std::to_string(charge_value);
-  const std::string selector_comment = "callee-hole selector-value=" + text +
-                                       " indirect-target=" + std::to_string(leaf_target);
+  const std::string selector_comment =
+      "callee-hole selector-value=" + text + " indirect-target=" +
+      std::to_string(leaf_target) + (reused_selector ? "; selector-scope=dead" : "");
   for (const char digit : text) {
     IrOp op;
     op.kind = IrKind::Plain;
@@ -1258,7 +1297,8 @@ std::vector<IrOp> hole_charge_ops(int charge_value, int leaf_target,
   call.target = helper_label;
   call.opcode = 0x53;
   call.meta.mnemonic = "ПП";
-  call.meta.comment = "callee-hole skeleton call";
+  call.meta.comment = "callee-hole skeleton call" +
+                      std::string(reused_selector ? "; selector-scope=dead" : "");
   call.meta.source_line = source.meta.source_line;
   call.target_meta.comment = "callee-hole skeleton";
   result.push_back(std::move(call));
@@ -1325,6 +1365,7 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
                           replacement->second.leaf_target,
                           replacement->second.helper->register_name,
                           replacement->second.helper->label,
+                          replacement->second.helper->reused_selector,
                           ops.at(static_cast<std::size_t>(index)));
       result.insert(result.end(), charge.begin(), charge.end());
       index = replacement->second.end;
@@ -1341,7 +1382,8 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
 
     const std::string hole_comment =
         "callee-hole indirect call; proof=" + helper.label + "; leaf-targets=" +
-        hole_leaf_targets_text(helper.leaf_labels);
+        hole_leaf_targets_text(helper.leaf_labels) +
+        (helper.reused_selector ? "; selector-scope=dead" : "");
     std::size_t call_position = 0;
     bool marked_entry_proof = false;
     for (const IrOp& op : helper.body) {
@@ -1363,8 +1405,15 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
         }
       }
       IrOp body_op = mark_helper_body_op(op);
-      if (helper.mutating_selector && !marked_entry_proof) {
-        const std::string marker = "callee-hole entry-X equivalence " + helper.label;
+      if ((helper.mutating_selector || helper.reused_selector) && !marked_entry_proof) {
+        std::string marker;
+        if (helper.mutating_selector)
+          marker = "callee-hole entry-X equivalence " + helper.label;
+        if (helper.reused_selector) {
+          if (!marker.empty())
+            marker += "; ";
+          marker += "callee-hole selector-scope entry " + helper.label;
+        }
         body_op.meta.comment = body_op.meta.comment.has_value()
                                    ? *body_op.meta.comment + "; " + marker
                                    : marker;
@@ -1378,6 +1427,8 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
     ret.opcode = 0x52;
     ret.meta.mnemonic = "В/О";
     ret.meta.comment = "callee-hole helper return";
+    if (helper.reused_selector)
+      ret.meta.comment = *ret.meta.comment + "; callee-hole selector-scope end " + helper.label;
     result.push_back(std::move(ret));
   }
 
