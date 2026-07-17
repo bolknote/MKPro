@@ -301,6 +301,15 @@ void emulator_hex_arithmetic_facts_match_typescript_contract() {
           {"Г", {kIp1, 0x0c, 0x02, 0x0b, kKSign}, "1,"},
       },
       "K sign structural hex");
+  {
+    emulator::MK61 calc;
+    calc.set_register("x", "2");
+    calc.load_program({kKSign, kStop});
+    calc.press_sequence({"В/О", "С/П"});
+    (void)calc.run_until_stable(300, 4);
+    require_equal(compact(calc.read_register("x1")), "2,",
+                  "K sign should copy its input X into hidden X1");
+  }
   require_not_equal(run_unary_register_program("0F", {kIp1, kKSign}), "1,",
                     "0F should not be a pinned positive structural sign");
   require_not_equal(run_unary_register_program("F", {kIp1, 0x0c, 0x02, 0x0b, kKSign}),

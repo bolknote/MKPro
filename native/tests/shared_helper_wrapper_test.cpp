@@ -135,6 +135,32 @@ void shared_helper_wrapper_rewrites_only_proved_continuations() {
                               "not followed by a bare return"),
           "a nonterminal equal call must not become a wrapper");
 
+  std::vector<MachineItem> x2_overwrite = fixture();
+  x2_overwrite.at(item_at_address(x2_overwrite, 6)) =
+      MachineItem::op(0x32, "К ЗН");
+  const core::SharedHelperWrapperResult x2_converged =
+      core::optimize_shared_helper_wrapper(x2_overwrite);
+  require(x2_converged.applied == 1 && x2_converged.removed_cells == 2 &&
+              x2_converged.proof.proved,
+          "an X2-affecting unary command should prove convergence before the next call");
+
+  std::vector<MachineItem> conditional_x2_overwrite = fixture();
+  const std::size_t branch = item_at_address(conditional_x2_overwrite, 6);
+  const std::size_t overwrite = item_at_address(conditional_x2_overwrite, 7);
+  conditional_x2_overwrite.at(branch) = MachineItem::op(0x5e, "F x=0");
+  conditional_x2_overwrite.at(overwrite) = MachineItem::op(0x32, "К ЗН");
+  conditional_x2_overwrite.insert(
+      conditional_x2_overwrite.begin() + static_cast<std::ptrdiff_t>(overwrite),
+      {MachineItem::address("__x2_overwrite"),
+       MachineItem::label("__x2_overwrite")});
+  const core::SharedHelperWrapperResult conditional_x2_converged =
+      core::optimize_shared_helper_wrapper(conditional_x2_overwrite);
+  require(conditional_x2_converged.applied == 1 &&
+              conditional_x2_converged.removed_cells == 2 &&
+              conditional_x2_converged.proof.proved,
+          "a direct conditional should use its path-specific X2 effects before a common "
+          "overwriting command");
+
   std::vector<MachineItem> x2_restore = fixture();
   x2_restore.at(item_at_address(x2_restore, 6)) =
       MachineItem::op(0x0a, ".");

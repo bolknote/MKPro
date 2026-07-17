@@ -305,6 +305,9 @@ bool x2_difference_converges(const std::vector<MachineItem>& items, const Artifa
     }
 
     const IrKind kind = basic_kind_for_opcode(item.opcode);
+    const bool direct_jump = item.opcode == 0x51;
+    const bool direct_call = item.opcode == 0x53;
+    const bool direct_conditional = item.opcode >= 0x57 && item.opcode <= 0x5e;
     if (kind == IrKind::Return || kind == IrKind::Stop) {
       if (!state.stack_equal.at(0)) {
         reasons.push_back("return/stop observes unequal visible X before X2 converges");
@@ -313,12 +316,12 @@ bool x2_difference_converges(const std::vector<MachineItem>& items, const Artifa
       state.x2_equal = true;
       continue;
     }
-    if (kind == IrKind::Call || kind == IrKind::IndirectCall) {
+    if (direct_call || kind == IrKind::Call || kind == IrKind::IndirectCall) {
       reasons.push_back("a nested call can observe the moved return's unequal X2 value");
       return false;
     }
 
-    if (kind == IrKind::Jump || kind == IrKind::CondJump || kind == IrKind::Loop) {
+    if (direct_jump || direct_conditional) {
       const std::optional<std::size_t> operand = next_cell_item(items, item_index);
       if (!operand.has_value() || items.at(*operand).kind != MachineItemKind::Address) {
         reasons.push_back("direct flow in X2 proof has no address operand");
@@ -330,7 +333,7 @@ bool x2_difference_converges(const std::vector<MachineItem>& items, const Artifa
         reasons.push_back("direct flow target in X2 proof cannot be resolved");
         return false;
       }
-      if (kind == IrKind::Jump) {
+      if (direct_jump) {
         if (!enqueue_successor(work, index, *target, state, reasons))
           return false;
         continue;
@@ -419,7 +422,9 @@ bool x2_difference_converges(const std::vector<MachineItem>& items, const Artifa
     const StackValueEqualityTransfer transfer =
         transfer_stack_value_equality(state, item.opcode, step_kind);
     if (transfer == StackValueEqualityTransfer::Rejected) {
-      reasons.push_back("continuation can observe unequal X2 before convergence");
+      reasons.push_back("continuation can observe unequal X2 before convergence at physical " +
+                        std::to_string(index.item_addresses.at(item_index)) + " (" +
+                        opcode_by_code(item.opcode).name + ")");
       return false;
     }
     if (transfer == StackValueEqualityTransfer::Converged)
@@ -596,7 +601,8 @@ verify_shared_helper_continuation(const std::vector<MachineItem>& items,
           proof.reasons.push_back("ordinary continuation has no following convergence path");
         } else {
           std::vector<std::string> convergence_reasons;
-          if (!x2_difference_converges(items, index, *after_store, options, convergence_reasons)) {
+          if (!x2_difference_converges(items, index, *after_store, options,
+                                       convergence_reasons)) {
             proof.reasons.push_back("ordinary call at physical " +
                                     std::to_string(call.call_address) +
                                     " lacks an X2 convergence proof: " +

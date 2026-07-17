@@ -273,7 +273,8 @@ std::vector<OpcodeInfo> build_opcode_catalog() {
 
   set(info(0x30, "К °<-′\""));
   set(info(0x31, "К |x|"));
-  set(info(0x32, "К ЗН"));
+  set(info(0x32, "К ЗН", "К ЗН",
+           with_effects(X2Effect::Affects, StackEffect::Preserves)));
   set(info(0x33, "К °<-′"));
   set(info(0x34, "К [x]"));
   set(info(0x35, "К {x}"));
