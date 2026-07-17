@@ -11,6 +11,14 @@ namespace mkpro {
 using IrTarget = std::variant<int, std::string>;
 using CellRole = std::string;
 
+// Compiler-owned proof role for a decimal constant whose final two mantissa
+// digits may be selected by final layout.  The suffix after this prefix is the
+// stable decimal prefix before those two digits.  Source syntax cannot forge
+// roles, so consumers may use this only after checking every data recall of
+// the carrier and independently decoding the rebuilt preload.
+inline constexpr const char* kRetunableNaturalFractionalSelectorRolePrefix =
+    "retunable-natural-fractional-selector:";
+
 // Compiler-owned interaction semantics.  Comments and mnemonic text are
 // deliberately not part of this channel: post-layout proofs must be able to
 // distinguish a resumable prompt from source-level halt() after comments have

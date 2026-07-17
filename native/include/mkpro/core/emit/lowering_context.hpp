@@ -268,6 +268,9 @@ struct LoweringContext {
   std::set<std::string> transient_show_targets;
   std::map<std::string, std::string> preloaded_numbers;
   std::vector<std::string> preloaded_number_order;
+  std::map<std::string, std::string> retunable_natural_fractional_selector_prefixes;
+  std::map<std::string, int> emitted_number_use_counts;
+  std::map<std::string, int> proved_retunable_natural_fractional_use_counts;
   std::set<std::string> suppress_constant_preloads;
   std::set<std::string> reserve_suppressed_constant_preload_slots;
   std::optional<std::string> negative_zero_degree_register;

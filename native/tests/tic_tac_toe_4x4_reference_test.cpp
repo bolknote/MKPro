@@ -536,9 +536,19 @@ void tic_tac_toe_4x4_source_manual_ui_contract_is_explicit() {
   options.analysis = true;
   options.budget = 999;
   options.disable_candidate_search = true;
+  options.packed_score_accumulator_helpers = true;
+  options.disable_return_suffix_gadget = true;
+  options.proc_layout_strategy = "reverse";
   const CompileResult compiled = compile_source(text, options);
   require(compiled.implemented && compiled.diagnostics.empty(),
           "full source UI contract should compile through generic lowering");
+  require(compiled.steps.size() <= 142U,
+          "full source must not regress above the proved 142-cell optimizer result");
+  require(std::any_of(compiled.preloads.begin(), compiled.preloads.end(),
+                      [](const PreloadReport& preload) {
+                        return preload.retunable_natural_fractional_prefix == "0.226000";
+                      }),
+          "cell-mask lowering should preserve its retunable fractional-selector preload proof");
   require(compiled.interaction_protocols.size() == 1U &&
               compiled.interaction_protocols.front().phases.size() == 2U &&
               !compiled.interaction_protocols.front().phases.at(0).admitted_domain.known() &&

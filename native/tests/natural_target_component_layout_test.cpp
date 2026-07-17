@@ -164,29 +164,6 @@ Fixture multi_anchor_fixture() {
   return result;
 }
 
-Fixture selector_omission_frontier_fixture() {
-  Fixture result;
-  result.items.push_back(MachineItem::label("selector_omission_entry"));
-  result.visible_stop = result.items.size();
-  result.items.push_back(stop());
-
-  for (int index = 0; index < 16; ++index) {
-    const std::string suffix = std::to_string(index);
-    const std::string helper = "selector_omission_helper_" + suffix;
-    result.items.push_back(MachineItem::label("selector_omission_caller_" + suffix));
-    result.items.push_back(op(0x53));
-    result.items.push_back(MachineItem::address(helper));
-    result.items.push_back(stop());
-    result.items.push_back(MachineItem::label(helper));
-    result.items.push_back(op(index % 10));
-    result.items.push_back(op(0x52));
-  }
-
-  result.preloads.push_back(PreloadReport{.register_name = "8", .value = "20"});
-  result.preloads.push_back(PreloadReport{.register_name = "9", .value = "30"});
-  return result;
-}
-
 Fixture paid_alignment_fixture() {
   Fixture result;
   const std::string helper = "unrelated_paid_alignment_helper";
@@ -683,30 +660,6 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
             "joint natural-target layout must preserve the observable machine state");
   }
 
-  {
-    const Fixture input = selector_omission_frontier_fixture();
-    const core::NaturalTargetComponentLayoutOptions options{
-        .maximum_subset_states = 20000,
-        .maximum_combination_states = 1,
-        .maximum_anchors = 2,
-    };
-    const auto rewritten = core::optimize_natural_target_component_layout(
-        input.items, input.preloads, flow(input), options);
-    std::string reasons;
-    for (const std::string& reason : rewritten.plan.reasons) {
-      if (!reasons.empty())
-        reasons += " | ";
-      reasons += reason;
-    }
-    require(rewritten.plan.proved && rewritten.applied == 2 &&
-                rewritten.removed_cells == 2,
-            "a bounded best-first search should cover the greedy plan obtained by "
-            "omitting each conflicting selector: applied=" +
-                std::to_string(rewritten.applied) +
-                ", removed=" + std::to_string(rewritten.removed_cells) +
-                ", reason=" + (reasons.empty() ? std::string("none") : reasons));
-  }
-
   for (const auto [calls, components] :
        {std::pair{2, 3}, std::pair{3, 5}, std::pair{5, 6}}) {
     const Fixture input = fixture(calls, components, true);
@@ -832,6 +785,44 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
             "fractional exponent selector must preserve its numeric data projection: before=" +
                 before.state.at("x") + "/R8=" + before.state.at("8") + " after=" +
                 after.state.at("x") + "/R8=" + after.state.at("8"));
+  }
+
+  {
+    Fixture input;
+    input.items.push_back(MachineItem::label("retunable_fraction_entry"));
+    input.items.push_back(op(0x01));
+    input.items.push_back(op(0x53));
+    input.items.push_back(MachineItem::address("retunable_fraction_helper"));
+    input.visible_stop = input.items.size();
+    input.items.push_back(stop());
+    input.items.push_back(MachineItem::label("retunable_fraction_helper"));
+    MachineItem selector_recall = op(0x67);
+    selector_recall.roles.push_back(
+        std::string(kRetunableNaturalFractionalSelectorRolePrefix) + "0.226000");
+    input.items.push_back(std::move(selector_recall));
+    input.items.push_back(op(0x12));
+    input.items.push_back(op(0x15));
+    input.items.push_back(op(0x34));
+    input.items.push_back(op(0x52));
+    input.preloads.push_back(PreloadReport{
+        .register_name = "7",
+        .value = "0.226",
+        .retunable_natural_fractional_prefix = "0.226000",
+    });
+
+    const Observation before = observe(input.items, input.preloads, true);
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    const Observation after = observe(rewritten.items, rewritten.preloads, true);
+    const std::map<std::string, std::string> final_preloads =
+        preload_map(rewritten.preloads);
+    require(rewritten.plan.proved && rewritten.applied == 1 &&
+                rewritten.removed_cells == 1 &&
+                final_preloads.at("7") == "2.2600003E-1",
+            "a proved natural-fractional family should receive the helper's final address");
+    require(before.stopped && after.stopped &&
+                before.state.at("x") == after.state.at("x"),
+            "retuning the proved mantissa suffix must preserve its observable projection");
   }
 
   {

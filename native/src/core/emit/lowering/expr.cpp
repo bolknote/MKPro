@@ -550,10 +550,12 @@ void emit_grid_norm_body(ExpressionEmitApi& api, int width) {
     // Preserve the original MK-61 width-four UI arithmetic byte-for-byte:
     // division by four has exactly the signed .00/.25/.50/.75 remainder shape
     // used by the reference program.
-    api.emit_number_or_preload(width_literal, "grid_norm width divisor", std::nullopt);
+    api.emit_number_or_preload(width_literal, "grid_norm width divisor", std::nullopt,
+                               std::nullopt);
     api.emitter.emit_op(0x13, "/", "grid_norm quotient");
     api.emitter.emit_op(0x35, "К {x}", "grid_norm signed fraction");
-    api.emit_number_or_preload(width_literal, "grid_norm width scale", std::nullopt);
+    api.emit_number_or_preload(width_literal, "grid_norm width scale", std::nullopt,
+                               std::nullopt);
     api.emitter.emit_op(0x12, "*", "grid_norm signed remainder");
   } else {
     // A repeating decimal quotient (for example 4 / 3) cannot safely recover
@@ -562,10 +564,12 @@ void emit_grid_norm_body(ExpressionEmitApi& api, int width) {
     // n - int(n / width) * width. The scratch preserves caller Y/Z and keeps
     // the same ordinary sticky-T boundary as the compact width-four form.
     api.emit_store("__grid_norm_dividend", "grid_norm preserve dividend");
-    api.emit_number_or_preload(width_literal, "grid_norm width divisor", std::nullopt);
+    api.emit_number_or_preload(width_literal, "grid_norm width divisor", std::nullopt,
+                               std::nullopt);
     api.emitter.emit_op(0x13, "/", "grid_norm quotient");
     api.emitter.emit_op(0x34, "К [x]", "grid_norm quotient integer part");
-    api.emit_number_or_preload(width_literal, "grid_norm width scale", std::nullopt);
+    api.emit_number_or_preload(width_literal, "grid_norm width scale", std::nullopt,
+                               std::nullopt);
     api.emitter.emit_op(0x12, "*", "grid_norm quotient multiple");
     api.emit_recall("__grid_norm_dividend");
     api.emitter.emit_op(0x14, "X↔Y", "grid_norm restore dividend above multiple");
@@ -578,7 +582,8 @@ void emit_grid_norm_body(ExpressionEmitApi& api, int width) {
   api.emitter.emit_jump(0x59, "F x>=0", adjust, "grid_norm negative correction");
   api.emitter.emit_jump(0x5e, "F x=0", done, "grid_norm positive result");
   api.emitter.emit_label(adjust, {.hidden = true});
-  api.emit_number_or_preload(width_literal, "grid_norm one-based correction", std::nullopt);
+  api.emit_number_or_preload(width_literal, "grid_norm one-based correction", std::nullopt,
+                             std::nullopt);
   api.emitter.emit_op(0x10, "+", "grid_norm corrected result");
   api.emitter.emit_label(done, {.hidden = true});
   api.emitter.current_x_variable.reset();
@@ -631,7 +636,13 @@ std::optional<bool> lower_basic_expression_to_x(ExpressionEmitApi& api, Lowering
       api.emitter.items.back().comment = "preload const 60";
       return true;
     }
-    api.emit_number_or_preload(value, std::nullopt, std::nullopt);
+    const std::optional<CellRole> proof_role =
+        expression.retunable_natural_fractional_prefix.has_value()
+            ? std::optional<CellRole>{
+                  std::string(kRetunableNaturalFractionalSelectorRolePrefix) +
+                  *expression.retunable_natural_fractional_prefix}
+            : std::nullopt;
+    api.emit_number_or_preload(value, std::nullopt, std::nullopt, proof_role);
     return true;
   }
 
@@ -640,7 +651,7 @@ std::optional<bool> lower_basic_expression_to_x(ExpressionEmitApi& api, Lowering
       std::string value =
           trim_ascii(expression.expr->raw.empty() ? expression.expr->text : expression.expr->raw);
       value = value.starts_with("-") ? value.substr(1) : "-" + value;
-      api.emit_number_or_preload(value, std::nullopt, std::nullopt);
+      api.emit_number_or_preload(value, std::nullopt, std::nullopt, std::nullopt);
       return true;
     }
     if (const std::optional<double> folded =
@@ -970,7 +981,7 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
     api.emitter.emit_op(0x15, "F 10^x", "pow10()");
     api.emitter.emit_op(0x13, "/", "expr /");
     api.emitter.emit_op(0x35, "К {x}", "frac()");
-    api.emit_number_or_preload("10", std::nullopt, std::nullopt);
+    api.emit_number_or_preload("10", std::nullopt, std::nullopt, std::nullopt);
     api.emitter.emit_op(0x12, "*", "expr *");
     api.emitter.emit_op(0x34, "К [x]", "int()");
     api.emitter.current_x_variable.reset();

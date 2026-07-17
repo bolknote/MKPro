@@ -364,8 +364,13 @@ std::string expression_to_json(const Expression& expression) {
   bool first = true;
   out << '{';
   add_field(out, first, "kind", json_escape(expression.kind));
-  if (expression.kind == "number")
+  if (expression.kind == "number") {
     add_field(out, first, "raw", json_escape(expression.raw));
+    if (expression.retunable_natural_fractional_prefix.has_value()) {
+      add_field(out, first, "retunableNaturalFractionalPrefix",
+                json_escape(*expression.retunable_natural_fractional_prefix));
+    }
+  }
   if (expression.kind == "string")
     add_field(out, first, "text", json_escape(expression.text));
   if (expression.kind == "identifier")

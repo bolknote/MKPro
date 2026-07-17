@@ -730,14 +730,14 @@ std::string board_width_literal(int width) {
 
 std::string cell_mask_row_constant_literal(int width) {
   if (width == 4)
-    return "0.22600067";
+    return "0.226";
   throw std::runtime_error("cell_mask is only hardware-verified for board width(s) 4; width " +
                            std::to_string(width) + " needs a verified fractional constant");
 }
 
 double cell_mask_row_constant(int width) {
   if (width == 4)
-    return 0.22600067;
+    return 0.226;
   (void)cell_mask_row_constant_literal(width);
   return 0.0;
 }
@@ -784,10 +784,12 @@ Expression bit_membership_expression(Expression mask, Expression index) {
 }
 
 Expression cell_mask_expression(Expression x, Expression y, int width) {
+  Expression row_constant = number_expression(cell_mask_row_constant_literal(width));
+  row_constant.retunable_natural_fractional_prefix = "0.226000";
   return add_expression(
       pow10_expression(std::move(x)),
       int_expression(pow10_expression(multiply_expression(
-          std::move(y), number_expression(cell_mask_row_constant_literal(width))))));
+          std::move(y), std::move(row_constant)))));
 }
 
 Expression offset_expression(Expression expression, int offset) {

@@ -11838,8 +11838,31 @@ unique_normalized_fractional_selector_values(const std::vector<std::string>& val
 
 void emit_number_or_preload(LoweringContext& context, const std::string& value,
                             std::optional<std::string> comment = std::nullopt,
-                            std::optional<int> source_line = std::nullopt) {
+                            std::optional<int> source_line = std::nullopt,
+                            std::optional<CellRole> proof_role = std::nullopt) {
+  const std::size_t first_item = context.emitter.items.size();
+  const auto attach_proof_role = [&]() {
+    if (!proof_role.has_value())
+      return;
+    for (std::size_t item_index = first_item; item_index < context.emitter.items.size();
+         ++item_index) {
+      std::vector<CellRole>& roles = context.emitter.items.at(item_index).roles;
+      if (std::find(roles.begin(), roles.end(), *proof_role) == roles.end())
+        roles.push_back(*proof_role);
+    }
+  };
   const std::string key = normalize_number_key(value);
+  ++context.emitted_number_use_counts[key];
+  if (proof_role.has_value()) {
+    const std::string role_prefix = kRetunableNaturalFractionalSelectorRolePrefix;
+    if (proof_role->starts_with(role_prefix)) {
+      const std::string family_value = proof_role->substr(role_prefix.size());
+      const auto [family, inserted] =
+          context.retunable_natural_fractional_selector_prefixes.emplace(key, family_value);
+      if ((inserted || family->second == family_value) && !family_value.empty())
+        ++context.proved_retunable_natural_fractional_use_counts[key];
+    }
+  }
   if (key == "0" && emit_zero(context, comment, source_line))
     return;
   const std::optional<FractionalConstantSelectorPlan> selector =
@@ -11865,6 +11888,7 @@ void emit_number_or_preload(LoweringContext& context, const std::string& value,
     } else {
       context.emitter.items.back().comment = "preload const " + key;
     }
+    attach_proof_role();
     if (selector.has_value() && selector_value.has_value() &&
         fractional_selector_needs_recovery(key, *selector_value) &&
         !context.assume_dead_selector_integer_part) {
@@ -11911,9 +11935,12 @@ void emit_number_or_preload(LoweringContext& context, const std::string& value,
     });
     return;
   }
-  if (!comment.has_value() && try_emit_constant_synthesis(context, key, source_line))
+  if (!comment.has_value() && try_emit_constant_synthesis(context, key, source_line)) {
+    attach_proof_role();
     return;
+  }
   context.emitter.emit_number(value);
+  attach_proof_role();
   if (comment.has_value() && !context.emitter.items.empty())
     context.emitter.items.back().comment = std::move(*comment);
   (void)source_line;
@@ -11972,8 +11999,9 @@ core::emit::ExpressionEmitApi expression_emit_api(LoweringContext& context,
           [&](const std::string& name) { return ensure_hidden_register(context, name); },
       .emit_number_or_preload =
           [&](const std::string& value, std::optional<std::string> comment,
-              std::optional<int> source_line) {
-            emit_number_or_preload(context, value, std::move(comment), source_line);
+              std::optional<int> source_line, std::optional<CellRole> proof_role) {
+            emit_number_or_preload(context, value, std::move(comment), source_line,
+                                   std::move(proof_role));
           },
   };
 }
@@ -41023,8 +41051,12 @@ bool lower_random_cell_helpers(LoweringContext& context) {
 }
 
 void emit_cell_mask_expression_helper_row_mask(LoweringContext& context, int line) {
-  emit_number_or_preload(context, format_number_literal(cell_mask_row_constant(4)), std::nullopt,
-                         line);
+  const std::string value = format_number_literal(cell_mask_row_constant(4));
+  context.retunable_natural_fractional_selector_prefixes[normalize_number_key(value)] =
+      "0.226000";
+  const std::string selector_family_role =
+      std::string(kRetunableNaturalFractionalSelectorRolePrefix) + "0.226000";
+  emit_number_or_preload(context, value, std::nullopt, line, selector_family_role);
   context.emitter.emit_op(0x12, "*", "expr *", line);
   context.emitter.emit_op(0x15, "F 10^x", "pow10()", line);
   context.emitter.emit_op(0x34, "К [x]", "int()", line);
@@ -41918,21 +41950,52 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
                                                   const std::vector<MachineItem>& items) {
   std::vector<PreloadReport> preloads;
   std::vector<PreloadReport> deferred_indexed_initializer_preloads;
+  const auto retunable_natural_fractional_prefix =
+      [&](const std::string& register_name,
+          const std::string& value) -> std::optional<std::string> {
+    const std::string key = normalize_number_key(value);
+    const auto family =
+        context.retunable_natural_fractional_selector_prefixes.find(key);
+    if (family == context.retunable_natural_fractional_selector_prefixes.end())
+      return std::nullopt;
+    const auto all_uses = context.emitted_number_use_counts.find(key);
+    const auto proved_uses =
+        context.proved_retunable_natural_fractional_use_counts.find(key);
+    if (all_uses == context.emitted_number_use_counts.end() ||
+        proved_uses == context.proved_retunable_natural_fractional_use_counts.end() ||
+        all_uses->second <= 0 || all_uses->second != proved_uses->second) {
+      return std::nullopt;
+    }
+    const int recall_opcode = 0x60 + register_index(register_name);
+    bool saw_recall = false;
+    for (const MachineItem& item : items) {
+      if (item.kind != MachineItemKind::Op || item.opcode != recall_opcode)
+        continue;
+      saw_recall = true;
+    }
+    return saw_recall ? std::optional<std::string>{family->second} : std::nullopt;
+  };
   auto add_preload = [&](const std::string& register_name, const std::string& value,
                          std::optional<std::string> setup_target_name = std::nullopt,
                          bool setup_expression = false,
                          std::optional<int> setup_source_line = std::nullopt,
-                         std::optional<std::string> setup_expression_text = std::nullopt) {
+                         std::optional<std::string> setup_expression_text = std::nullopt,
+                         std::optional<std::string> proved_fractional_prefix = std::nullopt) {
     const auto duplicate =
         std::find_if(preloads.begin(), preloads.end(), [&](const PreloadReport& preload) {
           return preload.register_name == register_name;
         });
     if (duplicate != preloads.end())
       return;
+    if (!proved_fractional_prefix.has_value()) {
+      proved_fractional_prefix =
+          retunable_natural_fractional_prefix(register_name, value);
+    }
     preloads.push_back(PreloadReport{
         .register_name = register_name,
         .value = value,
         .counts_against_program = false,
+        .retunable_natural_fractional_prefix = std::move(proved_fractional_prefix),
         .setup_target_name = std::move(setup_target_name),
         .setup_expression = setup_expression,
         .setup_expression_text = std::move(setup_expression_text),
@@ -41941,7 +42004,8 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
   };
   auto add_preload_report = [&](const PreloadReport& preload) {
     add_preload(preload.register_name, preload.value, preload.setup_target_name,
-                preload.setup_expression, preload.setup_source_line, preload.setup_expression_text);
+                preload.setup_expression, preload.setup_source_line, preload.setup_expression_text,
+                preload.retunable_natural_fractional_prefix);
   };
 
   auto inline_setup_constants = [&](const auto& self, const Expression& expression,
@@ -49311,6 +49375,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                                          const PreloadReport& right) {
       return left.register_name == right.register_name && left.value == right.value &&
              left.counts_against_program == right.counts_against_program &&
+             left.retunable_natural_fractional_prefix ==
+                 right.retunable_natural_fractional_prefix &&
              left.setup_target_name == right.setup_target_name &&
              left.setup_expression == right.setup_expression &&
              left.setup_expression_text == right.setup_expression_text &&

@@ -40,6 +40,18 @@ void board_width_macros_matches_typescript_contract() {
               expression_to_json(core::emit::cell_mask_expression(operand(), operand(), 4)),
           "default cell_mask lowering should match explicit width 4");
 
+  const Expression ordinary_row_constant{.kind = "number", .raw = "0.226"};
+  const std::string ordinary_row_json = expression_to_json(ordinary_row_constant);
+  const std::string cell_mask_json =
+      expression_to_json(core::emit::cell_mask_expression(operand(), operand(), 4));
+  require(ordinary_row_json.find("retunableNaturalFractionalPrefix") == std::string::npos,
+          "ordinary numeric literals must not acquire an address-retuning proof");
+  require(cell_mask_json.find("\"retunableNaturalFractionalPrefix\":\"0.226000\"") !=
+              std::string::npos,
+          "cell_mask row constants should retain their proved address-retuning origin");
+  require(ordinary_row_json != cell_mask_json,
+          "ordinary literals and proved address carriers must not share an AST key");
+
   const std::string wrap3 =
       expression_to_json(core::emit::grid_norm_expression(operand(), 3));
   const std::string wrap4 =

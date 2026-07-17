@@ -642,8 +642,12 @@ void print_json(const mkpro::CompileResult& result) {
     std::cout << ", \"value\": ";
     print_json_string(std::cout, preload.value);
     std::cout << ", \"countsAgainstProgram\": "
-              << (preload.counts_against_program ? "true" : "false") << "}"
-              << (index + 1U == result.preloads.size() ? "" : ",") << "\n";
+              << (preload.counts_against_program ? "true" : "false");
+    if (preload.retunable_natural_fractional_prefix.has_value()) {
+      std::cout << ", \"retunableNaturalFractionalPrefix\": ";
+      print_json_string(std::cout, *preload.retunable_natural_fractional_prefix);
+    }
+    std::cout << "}" << (index + 1U == result.preloads.size() ? "" : ",") << "\n";
   }
   std::cout << "  ]";
   std::cout << ",\n  \"optimizations\": [\n";

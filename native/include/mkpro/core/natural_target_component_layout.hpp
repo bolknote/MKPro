@@ -19,9 +19,6 @@ enum class NaturalTargetSelectorOrigin {
 struct NaturalTargetComponentLayoutOptions {
   AddressSpaceModel address_space_model = AddressSpaceModel::Standard;
   std::size_t maximum_subset_states = 20000;
-  // Zero inherits maximum_subset_states.  Kept separate so callers can bound
-  // selector-assignment search without starving exact component placement.
-  std::size_t maximum_combination_states = 0;
   int maximum_execution_states = 20000;
   std::size_t maximum_anchors = 0;
   std::size_t maximum_rejection_reasons = 64;

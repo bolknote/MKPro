@@ -126,7 +126,8 @@ struct ExpressionHarness {
             .ensure_hidden_register = [&](const std::string&) { return true; },
 	            .emit_number_or_preload =
 	                [&](const std::string& value, std::optional<std::string> comment,
-	                    std::optional<int> source_line) {
+	                    std::optional<int> source_line,
+	                    std::optional<CellRole> proof_role) {
 	                  if (const auto preload = context.preloaded_numbers.find(value);
 	                      preload != context.preloaded_numbers.end()) {
 	                    context.emitter.emit_op(0x60, "П->X " + preload->second,
@@ -137,6 +138,7 @@ struct ExpressionHarness {
 	                  if (comment.has_value() && !context.emitter.items.empty())
 	                    context.emitter.items.back().comment = std::move(*comment);
 	                  (void)source_line;
+	                  (void)proof_role;
 	                }} {
     lower = [&](const Expression& expression) {
       const std::optional<bool> result =

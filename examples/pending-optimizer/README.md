@@ -14,7 +14,7 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 144 | 105 | +39 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 142 | 105 | +37 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
@@ -80,13 +80,25 @@ mode may reject over-window programs earlier than the analysis path.
   indirect-memory projections, ambiguous targets, and any final artifact that
   fails exact CFG, return-stack, stack, X2, runtime-selector, or size proofs.
   Here it jointly shortens twelve calls while restoring one old flow, reducing
-  the verified result from 149 to 144 cells; the remaining gap is 39 cells.
+  the verified result from 149 to 144 cells.
 - Exact signed decimal preloads whose complete integer mantissa survives the
   MK-61 eight-digit delivery step can now serve as natural-target selectors.
   The final machine decoder and runtime-selector proof remain authoritative;
   exotic, truncated, mutable, or generated values still fail closed. The
-  current selected layout remains 145 cells because its five-anchor assignment
-  does not pass the bounded component geometry search.
+  additional candidates did not improve the selected 144-cell layout because
+  their five-anchor assignments did not pass the bounded component geometry
+  search.
+- Compiler-generated constants may expose a proved two-digit fractional address
+  suffix without fixing that suffix in the source-level arithmetic. The
+  width-four `cell_mask` lowering now preloads the mathematical value `0.226`;
+  complete-use provenance certifies that its final two mantissa digits are
+  unobservable to the row-mask calculation. Natural-target layout rebuilds
+  those digits from the selected helper address, then independently rechecks
+  the final numeric decoder, CFG, return stack, data stack, X2 state, selector
+  stability, and every ordinary data recall. An untagged user literal with the
+  same numeric value blocks the proof. This selected `0.22600088`, shortened
+  fourteen flows jointly, and reduced the verified result from 144 to 142
+  cells; the remaining gap is 37 cells.
 - Optimizer tests must use unrelated synthetic programs and local proof
   obligations. The tic-tac-toe fixture may lock only its size and observable
   UI; it must not select or justify an optimization by recognizing this game

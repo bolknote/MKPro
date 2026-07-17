@@ -76,8 +76,14 @@ struct SelectorCandidate {
   std::optional<std::string> value;
   int fixed_target = -1;
   bool rebindable_address = false;
+  std::optional<std::string> rebindable_natural_fractional_prefix;
   int displaced_flow_uses = 0;
 };
+
+bool selector_is_flexible(const SelectorCandidate& selector) {
+  return selector.rebindable_address ||
+         selector.rebindable_natural_fractional_prefix.has_value();
+}
 
 struct NaturalTargetAnchorCandidate {
   SelectorCandidate selector;
@@ -521,16 +527,18 @@ std::vector<Segment> make_segments(std::vector<Cell> cells) {
 bool apply_transparent_segment_splits(
     std::vector<Segment>& segments,
     const std::vector<NaturalTargetAnchorCandidate>& anchors,
-    std::size_t& next_synthetic_origin,
-    std::vector<TransparentSplitBridge>& bridges) {
+  std::size_t& next_synthetic_origin,
+  std::vector<TransparentSplitBridge>& bridges) {
   for (const NaturalTargetAnchorCandidate& anchor : anchors) {
     if (anchor.split_prefix_cells <= 0)
       continue;
     const std::optional<std::pair<std::size_t, int>> location =
         locate_origin(segments, anchor.target_origin);
-    if (!location.has_value() || location->second != 0)
+    if (!location.has_value())
       return false;
     const std::size_t segment_index = location->first;
+    if (location->second != 0)
+      return false;
     const std::size_t prefix_cells =
         static_cast<std::size_t>(anchor.split_prefix_cells);
     for (const NaturalTargetAnchorCandidate& other : anchors) {
@@ -662,6 +670,75 @@ natural_fractional_selector_encoding(std::string_view value) {
                          std::to_string(leading_zeroes + 1U),
       .target = target,
   };
+}
+
+std::optional<std::string> natural_fractional_selector_family_value(
+    std::string_view stable_prefix, int target) {
+  if (target <= 0 || target > 99 || !stable_prefix.starts_with("0.") ||
+      stable_prefix.size() <= 2U ||
+      !std::all_of(stable_prefix.begin() + 2, stable_prefix.end(),
+                   [](char ch) { return ch >= '0' && ch <= '9'; })) {
+    return std::nullopt;
+  }
+  std::string candidate(stable_prefix);
+  if (target < 10)
+    candidate.push_back('0');
+  candidate += std::to_string(target);
+  const std::optional<NaturalFractionalSelectorEncoding> encoded =
+      natural_fractional_selector_encoding(candidate);
+  if (!encoded.has_value() || encoded->target != target)
+    return std::nullopt;
+  return encoded->delivered_value;
+}
+
+std::optional<std::string> canonical_plain_fraction(std::string_view value) {
+  if (!value.starts_with("0.") || value.size() <= 2U ||
+      !std::all_of(value.begin() + 2, value.end(),
+                   [](char ch) { return ch >= '0' && ch <= '9'; })) {
+    return std::nullopt;
+  }
+  std::string result(value);
+  while (result.size() > 2U && result.back() == '0')
+    result.pop_back();
+  if (result.back() == '.')
+    result.push_back('0');
+  return result;
+}
+
+std::optional<std::string> proved_natural_fractional_selector_family(
+    const std::vector<MachineItem>& items, int register_index_value,
+    std::string_view preload_value, std::string_view family_prefix) {
+  if (std::any_of(items.begin(), items.end(), [&](const MachineItem& item) {
+        return item.kind == MachineItemKind::Op && is_indirect_flow(item.opcode) &&
+               encoded_register(item.opcode) == register_index_value;
+      })) {
+    return std::nullopt;
+  }
+  bool saw_recall = false;
+  for (const MachineItem& item : items) {
+    if (item.kind != MachineItemKind::Op)
+      continue;
+    if (is_indirect_memory(item.opcode) &&
+        encoded_register(item.opcode) == register_index_value) {
+      return std::nullopt;
+    }
+    if (item.opcode != 0x60 + register_index_value)
+      continue;
+    saw_recall = true;
+  }
+  if (!saw_recall ||
+      !natural_fractional_selector_family_value(family_prefix, 1).has_value()) {
+    return std::nullopt;
+  }
+  const std::optional<std::string> canonical_preload =
+      canonical_plain_fraction(preload_value);
+  const std::optional<std::string> canonical_family =
+      canonical_plain_fraction(family_prefix);
+  if (!canonical_preload.has_value() || !canonical_family.has_value() ||
+      *canonical_preload != *canonical_family) {
+    return std::nullopt;
+  }
+  return std::string(family_prefix);
 }
 
 bool is_canonical_natural_fractional_selector_encoding(std::string_view value) {
@@ -813,6 +890,21 @@ std::vector<SelectorCandidate> selector_candidates(
       if (const auto natural = natural_fractional_selector_encoding(value))
         append(natural->delivered_value);
 
+      if (report.retunable_natural_fractional_prefix.has_value()) {
+        const std::optional<std::string> family =
+            proved_natural_fractional_selector_family(
+                items, index, value,
+                *report.retunable_natural_fractional_prefix);
+        if (!family.has_value())
+          continue;
+        result.push_back(SelectorCandidate{
+            .register_index = index,
+            .register_name = name,
+            .origin = NaturalTargetSelectorOrigin::ExistingPreload,
+            .rebindable_natural_fractional_prefix = *family,
+        });
+      }
+
       const std::vector<std::size_t> uses = indirect_flow_uses(items, index);
       if (!uses.empty() && !register_has_nonflow_use(items, index) &&
           has_proved_address_projection(value)) {
@@ -853,7 +945,7 @@ bool selector_existing_uses_match_target(
     const SelectorCandidate& selector, std::size_t target_origin,
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow) {
-  if (selector.rebindable_address)
+  if (selector_is_flexible(selector))
     return true;
   for (const std::size_t use : indirect_flow_uses(items, selector.register_index)) {
     const auto targets = flow.indirect_flow_targets.find(use);
@@ -1677,6 +1769,36 @@ bool rebind_preloads(
       continue;
     }
     if (selected != selected_by_register.end() &&
+        selected->second->selector.rebindable_natural_fractional_prefix.has_value()) {
+      const std::optional<std::string> proved_family =
+          preloads.at(preload->second).retunable_natural_fractional_prefix.has_value()
+              ? proved_natural_fractional_selector_family(
+                    original_items, reg, old_value,
+                    *preloads.at(preload->second)
+                         .retunable_natural_fractional_prefix)
+              : std::nullopt;
+      if (!proved_family.has_value() ||
+          *proved_family !=
+              *selected->second->selector.rebindable_natural_fractional_prefix) {
+        return false;
+      }
+      const std::optional<std::string> rebound =
+          natural_fractional_selector_family_value(*proved_family,
+                                                   new_target->second);
+      if (!rebound.has_value() ||
+          !preload_value_targets(name, *rebound, new_target->second, model)) {
+        return false;
+      }
+      preloads.at(preload->second).value = *rebound;
+      rewrites.push_back(NaturalTargetPreloadRewrite{
+          .register_name = name,
+          .old_value = old_value,
+          .new_value = *rebound,
+          .fractional_projection_only = false,
+      });
+      continue;
+    }
+    if (selected != selected_by_register.end() &&
         selected->second->selector.value.has_value()) {
       const std::optional<NaturalFractionalSelectorEncoding> natural =
           natural_fractional_selector_encoding(old_value);
@@ -2280,7 +2402,7 @@ std::optional<CandidateArtifact> try_candidate(
         if (!detail.empty())
           detail += ",";
         detail += "R" + anchor.selector.register_name + "->" +
-                  (anchor.selector.rebindable_address
+                  (selector_is_flexible(anchor.selector)
                        ? std::string("rebind")
                        : std::to_string(anchor.selector.fixed_target)) +
                   (anchor.via_trampoline ? std::string("/trampoline")
@@ -2330,7 +2452,7 @@ std::optional<CandidateArtifact> try_candidate(
     return reject("main component identity cannot be located");
 
   std::vector<NaturalTargetPlacement> placements;
-  std::optional<NaturalTargetPlacement> flexible_placement;
+  std::vector<NaturalTargetPlacement> flexible_placements;
   std::map<std::size_t, const NaturalTargetAnchorCandidate*> anchor_by_target_origin;
   for (const NaturalTargetAnchorCandidate& anchor : anchors) {
     if (anchor.selector.origin != NaturalTargetSelectorOrigin::ExistingPreload)
@@ -2352,10 +2474,8 @@ std::optional<CandidateArtifact> try_candidate(
         .target_offset = target_location->second,
         .natural_target = anchor.selector.fixed_target,
     };
-    if (anchor.selector.rebindable_address) {
-      if (flexible_placement.has_value())
-        return reject("multiple address-only selector rebinds are not bounded");
-      flexible_placement = placement;
+    if (selector_is_flexible(anchor.selector)) {
+      flexible_placements.push_back(placement);
     } else {
       placements.push_back(placement);
     }
@@ -2368,12 +2488,22 @@ std::optional<CandidateArtifact> try_candidate(
     return reject("address-selector displacement cannot produce a smaller artifact");
   std::optional<NaturalTargetLayoutVariant> selected_layout;
   int flexible_target = -1;
-  if (flexible_placement.has_value()) {
+  if (flexible_placements.size() == 1U) {
+    const auto flexible_anchor = std::find_if(
+        anchors.begin(), anchors.end(), [](const NaturalTargetAnchorCandidate& anchor) {
+          return selector_is_flexible(anchor.selector);
+        });
+    if (flexible_anchor == anchors.end())
+      return reject("flexible selector identity was lost");
+    const int last_flexible_target =
+        flexible_anchor->selector.rebindable_natural_fractional_prefix.has_value()
+            ? std::min(99, official_program_last_address(options.address_space_model))
+            : official_program_last_address(options.address_space_model);
     for (int target = 1;
-         target <= official_program_last_address(options.address_space_model);
+         target <= last_flexible_target;
          ++target) {
       std::vector<NaturalTargetPlacement> trial_placements = placements;
-      NaturalTargetPlacement trial = *flexible_placement;
+      NaturalTargetPlacement trial = flexible_placements.front();
       trial.natural_target = target;
       trial_placements.push_back(trial);
       std::optional<NaturalTargetLayoutVariant> trial_layout =
@@ -2393,6 +2523,17 @@ std::optional<CandidateArtifact> try_candidate(
         flexible_target = target;
       }
     }
+  } else if (!flexible_placements.empty()) {
+    // Flexible selectors have no equality constraint on their target address:
+    // their preload is rebuilt after flattening.  Fixed anchors alone define
+    // the component geometry, while every flexible result is independently
+    // range-checked and decoded below.  This avoids an exponential cartesian
+    // search over address tuples and permits unrelated flexible carriers to
+    // participate in the same globally proved layout.
+    selected_layout = layout_order_with_optional_split(
+        segments, main_location->first, placements,
+        options.maximum_subset_states, maximum_padding,
+        next_synthetic_origin);
   } else {
     selected_layout = layout_order_with_optional_split(
         segments, main_location->first, placements,
@@ -2413,12 +2554,17 @@ std::optional<CandidateArtifact> try_candidate(
                   std::to_string(placement.target_offset) + "+" +
                   std::to_string(segment_cells(segments.at(placement.target_segment)));
     }
-    if (flexible_placement.has_value()) {
-      geometry += "; flexible=@" +
-                  std::to_string(flexible_placement->target_offset) + "+" +
-                  std::to_string(
-                      segment_cells(segments.at(flexible_placement->target_segment)));
-      fixed_segments.insert(flexible_placement->target_segment);
+    if (!flexible_placements.empty()) {
+      geometry += "; flexible=";
+      bool first_flexible = true;
+      for (const NaturalTargetPlacement& flexible : flexible_placements) {
+        if (!first_flexible)
+          geometry += ",";
+        first_flexible = false;
+        geometry += "@" + std::to_string(flexible.target_offset) + "+" +
+                    std::to_string(segment_cells(segments.at(flexible.target_segment)));
+        fixed_segments.insert(flexible.target_segment);
+      }
     }
     geometry += "; free=";
     bool first_free = true;
@@ -2454,15 +2600,19 @@ std::optional<CandidateArtifact> try_candidate(
     const auto target_address = new_address_by_origin.find(*physical);
     if (target_address == new_address_by_origin.end())
       return reject("flattened component order lost a selected target");
-    if (!anchor->selector.rebindable_address &&
+    if (!selector_is_flexible(anchor->selector) &&
         target_address->second != anchor->selector.fixed_target) {
       return reject("flattened component order missed a natural target");
     }
-    if (anchor->selector.rebindable_address &&
+    if (selector_is_flexible(anchor->selector) &&
         (target_address->second <= 0 ||
          target_address->second >
              official_program_last_address(options.address_space_model))) {
       return reject("rebound address selector target is outside the official window");
+    }
+    if (anchor->selector.rebindable_natural_fractional_prefix.has_value() &&
+        target_address->second > 99) {
+      return reject("rebound natural fractional selector exceeds two address digits");
     }
     target_address_by_origin.emplace(target_origin, target_address->second);
   }
@@ -2712,7 +2862,7 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
 
   std::map<int, std::vector<NaturalTargetAnchorCandidate>> options_by_selector;
   for (const SelectorCandidate& selector : selectors) {
-    if (!selector.rebindable_address && selector.fixed_target <= 0)
+    if (!selector_is_flexible(selector) && selector.fixed_target <= 0)
       continue;
     for (const std::size_t target : flow_targets) {
       if (!selector_existing_uses_match_target(selector, target, logical_items, *logical_flow))
@@ -2831,80 +2981,10 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   };
 
   const std::size_t maximum_expanded_states =
-      (options.maximum_combination_states == 0U
-           ? options.maximum_subset_states
-           : options.maximum_combination_states) >
-              std::numeric_limits<std::size_t>::max() / 32U
+      options.maximum_subset_states > std::numeric_limits<std::size_t>::max() / 32U
           ? std::numeric_limits<std::size_t>::max()
-          : (options.maximum_combination_states == 0U
-                 ? options.maximum_subset_states
-                 : options.maximum_combination_states) *
-                32U;
-  const std::size_t maximum_combinations =
-      options.maximum_combination_states == 0U
-          ? options.maximum_subset_states
-          : options.maximum_combination_states;
-
-  // A high-scoring selector can make every jointly anchored layout impossible,
-  // while the best compatible plan excludes only that selector.  The ordinary
-  // score-first lattice may exhaust its bounded frontier before reaching the
-  // final `none` choice for a selector with many equally profitable targets.
-  // Preserve the exhaustive frontier below, but also cover each one-selector
-  // omission of its greedy state independently of that cap.
-  for (std::size_t omitted_group = 0; omitted_group < choices_by_selector.size();
-       ++omitted_group) {
-    const auto none = std::find_if(
-        choices_by_selector.at(omitted_group).begin(),
-        choices_by_selector.at(omitted_group).end(),
-        [](const CombinationChoice& choice) { return !choice.anchor.has_value(); });
-    if (none == choices_by_selector.at(omitted_group).end())
-      continue;
-    CombinationSearchState coverage_initial = initial;
-    coverage_initial.score -= choices_by_selector.at(omitted_group)
-                                  .at(coverage_initial.choices.at(omitted_group))
-                                  .score;
-    coverage_initial.choices.at(omitted_group) = static_cast<std::size_t>(
-        std::distance(choices_by_selector.at(omitted_group).begin(), none));
-
-    std::priority_queue<CombinationSearchState,
-                        std::vector<CombinationSearchState>,
-                        decltype(lower_priority)>
-        coverage_pending(lower_priority);
-    coverage_pending.push(coverage_initial);
-    std::set<std::vector<std::size_t>> coverage_visited;
-    coverage_visited.insert(coverage_initial.choices);
-    const std::size_t coverage_state_cap = std::max<std::size_t>(
-        1U, maximum_expanded_states /
-                std::max<std::size_t>(1U, choices_by_selector.size()));
-    const std::size_t selector_count = choices_by_selector.size();
-    const std::size_t coverage_combination_cap = std::max<std::size_t>(
-        1U, std::min(maximum_combinations /
-                         std::max<std::size_t>(1U, selector_count),
-                     selector_count * selector_count * selector_count));
-    std::size_t coverage_states = 0;
-    std::size_t coverage_combinations = 0;
-    while (!coverage_pending.empty() && coverage_states < coverage_state_cap &&
-           coverage_combinations < coverage_combination_cap) {
-      CombinationSearchState coverage = coverage_pending.top();
-      coverage_pending.pop();
-      ++coverage_states;
-      if (append_combination(coverage))
-        ++coverage_combinations;
-      for (std::size_t group = 0; group < coverage.choices.size(); ++group) {
-        if (group == omitted_group)
-          continue;
-        const std::size_t current = coverage.choices.at(group);
-        if (current + 1U >= choices_by_selector.at(group).size())
-          continue;
-        CombinationSearchState next = coverage;
-        next.score -= choices_by_selector.at(group).at(current).score;
-        ++next.choices.at(group);
-        next.score += choices_by_selector.at(group).at(next.choices.at(group)).score;
-        if (coverage_visited.insert(next.choices).second)
-          coverage_pending.push(std::move(next));
-      }
-    }
-  }
+          : options.maximum_subset_states * 32U;
+  const std::size_t maximum_combinations = options.maximum_subset_states;
 
   std::size_t expanded_states = 0;
   std::size_t searched_combinations = 0;
@@ -2990,12 +3070,12 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     std::set<std::tuple<std::size_t, int>> split_variants;
     for (std::size_t lower = 0; lower < anchors.size(); ++lower) {
       const NaturalTargetAnchorCandidate& split_anchor = anchors.at(lower);
-      if (split_anchor.selector.rebindable_address || split_anchor.flow_sites < 2 ||
+      if (selector_is_flexible(split_anchor.selector) || split_anchor.flow_sites < 2 ||
           split_anchor.selector.fixed_target < 0) {
         continue;
       }
       for (std::size_t upper = 0; upper < anchors.size(); ++upper) {
-        if (lower == upper || anchors.at(upper).selector.rebindable_address ||
+        if (lower == upper || selector_is_flexible(anchors.at(upper).selector) ||
             anchors.at(upper).selector.fixed_target <=
                 split_anchor.selector.fixed_target + 2) {
           continue;
@@ -3013,7 +3093,7 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     std::vector<std::size_t> trampoline_eligible;
     for (std::size_t anchor_index = 0; anchor_index < anchors.size(); ++anchor_index) {
       const NaturalTargetAnchorCandidate& anchor = anchors.at(anchor_index);
-      if (!anchor.selector.rebindable_address && anchor.flow_sites >= 2 &&
+      if (!selector_is_flexible(anchor.selector) && anchor.flow_sites >= 2 &&
           anchor.selector.fixed_target >= 0 &&
           anchor.selector.fixed_target + 1 <=
               official_program_last_address(options.address_space_model)) {

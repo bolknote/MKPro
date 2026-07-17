@@ -22,7 +22,8 @@ struct ExpressionEmitApi {
   std::function<bool(const Expression&, const std::string&)> expression_contains_identifier;
   std::function<bool(const Expression&)> x_holds_expression;
   std::function<bool(const std::string&)> ensure_hidden_register;
-  std::function<void(const std::string&, std::optional<std::string>, std::optional<int>)>
+  std::function<void(const std::string&, std::optional<std::string>, std::optional<int>,
+                     std::optional<CellRole>)>
       emit_number_or_preload;
 };
 

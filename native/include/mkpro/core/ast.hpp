@@ -19,6 +19,7 @@ struct Expression {
   std::string name;
   std::string base;
   std::optional<std::string> field;
+  std::optional<std::string> retunable_natural_fractional_prefix;
   std::string op;
   std::string callee;
   ExpressionPtr index;
