@@ -71,6 +71,11 @@ std::string call_target_key(const IrTarget& target) {
 bool is_shareable_body_op(const IrOp& op, bool allow_direct_calls = false) {
   if (has_rewrite_barrier(op) || is_display_focus_sensitive(op))
     return false;
+  if (!allow_direct_calls &&
+      (!op.semantic.empty() || !op.meta.roles.empty() ||
+       !op.target_meta.roles.empty() || !op.meta.semantic_call_origins.empty())) {
+    return false;
+  }
   switch (op.kind) {
   case IrKind::Store:
   case IrKind::Recall:

@@ -176,8 +176,11 @@ void helper_semantic_alias_compiler_composes_with_natural_target_layout() {
 
   const CompileResult unsafe = compile_alias_composition_fixture("    sample = random()\n");
   require(unsafe.implemented, "unknown-input helper-alias fixture should still compile");
+  const std::string unsafe_domain_detail =
+      optimization_detail(unsafe, "helper-semantic-alias-domain-proof").value_or("<none>");
   require(!has_optimization(unsafe, "helper-semantic-alias-domain-proof"),
-          "an unknown source-call input must not issue a finite typed domain certificate");
+          "an unknown source-call input must not issue a finite typed domain certificate: " +
+              unsafe_domain_detail);
   require(!has_optimization(unsafe, "helper-semantic-alias"),
           "the final optimizer must reject an alias without the typed domain certificate");
 }

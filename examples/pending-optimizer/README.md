@@ -14,7 +14,7 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 142 | 105 | +37 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 141 | 105 | +36 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
@@ -98,7 +98,13 @@ mode may reject over-window programs earlier than the analysis path.
   stability, and every ordinary data recall. An untagged user literal with the
   same numeric value blocks the proof. This selected `0.22600088`, shortened
   fourteen flows jointly, and reduced the verified result from 144 to 142
-  cells; the remaining gap is 37 cells.
+  cells.
+- Exact final-layout fingerprints group option sets only when their complete
+  machine items, preloads, register contracts, address-space model, and layout
+  limits are byte-for-byte equivalent. This reduced 889 finalist option sets
+  to 183 distinct proof inputs. The resulting generic final search selected a
+  reverse-suffix-free packed-score accumulator layout and reduced the verified
+  result from 142 to 141 cells; the remaining gap is 36 cells.
 - Optimizer tests must use unrelated synthetic programs and local proof
   obligations. The tic-tac-toe fixture may lock only its size and observable
   UI; it must not select or justify an optimization by recognizing this game

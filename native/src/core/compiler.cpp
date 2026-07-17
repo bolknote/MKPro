@@ -48644,7 +48644,10 @@ inline_single_use_procedures(std::vector<MachineItem> items) {
 
 CompileResult compile_source_once(std::string source, const CompileOptions& requested_options,
                                   bool source_has_entered,
-                                  bool apply_final_layout_size_rescue = false) {
+                                  bool apply_final_layout_size_rescue = false,
+                                  std::string* final_layout_input_fingerprint = nullptr) {
+  if (final_layout_input_fingerprint != nullptr)
+    final_layout_input_fingerprint->clear();
   CompileOptions options = requested_options;
   CompileResult result;
   result.implemented = true;
@@ -49153,21 +49156,17 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
               std::max(certified_domain.maximum, contract.admitted_input.maximum);
         }
       }
-      const std::string detail = certified_call_sites > 0 && certified_domain.valid()
-                                     ? "Certified " + std::to_string(certified_call_sites) +
-                                           " direct helper call-site(s) with finite integral "
-                                           "union [" +
-                                           std::to_string(certified_domain.minimum) + ", " +
-                                           std::to_string(certified_domain.maximum) +
-                                           "]; issued " +
-                                           std::to_string(semantic_alias_contracts.size()) +
-                                           " typed semantic contract(s)."
-                                     : "Issued " +
-                                           std::to_string(semantic_alias_contracts.size()) +
-                                           " typed generated-helper contract(s) on exact "
-                                           "compiler-proved domains.";
-      context.optimizations.push_back(OptimizationReport{
-          .name = "helper-semantic-alias-domain-proof", .detail = detail});
+      if (certified_call_sites > 0 && certified_domain.valid()) {
+        context.optimizations.push_back(OptimizationReport{
+            .name = "helper-semantic-alias-domain-proof",
+            .detail = "Certified " + std::to_string(certified_call_sites) +
+                      " direct helper call-site(s) with finite integral union [" +
+                      std::to_string(certified_domain.minimum) + ", " +
+                      std::to_string(certified_domain.maximum) + "]; issued " +
+                      std::to_string(semantic_alias_contracts.size()) +
+                      " typed semantic contract(s).",
+        });
+      }
     }
   }
 
@@ -49857,6 +49856,65 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
     post_layout_optimizations.insert(post_layout_optimizations.end(),
                                      dark_side_suffix.optimizations.begin(),
                                      dark_side_suffix.optimizations.end());
+  }
+
+  if (final_layout_input_fingerprint != nullptr) {
+    std::ostringstream fingerprint;
+    const auto append_field = [&](std::string_view value) {
+      fingerprint << value.size() << ':' << value;
+    };
+    const auto append_optional_string = [&](const std::optional<std::string>& value) {
+      append_field(value.has_value() ? "1" : "0");
+      if (value.has_value())
+        append_field(*value);
+    };
+    const auto append_optional_int = [&](const std::optional<int>& value) {
+      append_field(value.has_value() ? "1" : "0");
+      if (value.has_value())
+        append_field(std::to_string(*value));
+    };
+    const auto append_preloads = [&](const std::vector<PreloadReport>& preloads) {
+      append_field(std::to_string(preloads.size()));
+      for (const PreloadReport& preload : preloads) {
+        append_field(preload.register_name);
+        append_field(preload.value);
+        append_field(preload.counts_against_program ? "1" : "0");
+        append_optional_string(preload.retunable_natural_fractional_prefix);
+        append_optional_string(preload.setup_target_name);
+        append_field(preload.setup_expression ? "1" : "0");
+        append_optional_string(preload.setup_expression_text);
+        append_optional_int(preload.setup_source_line);
+      }
+    };
+
+    append_field(machine_items_to_json(post_layout_items));
+    append_preloads(setup_preloads);
+    append_preloads(optimized.preloads);
+    append_preloads(stop_tail_preloads);
+    append_preloads(post_layout_flow_preloads);
+    append_field(final_layout_effective_preloads.has_value() ? "1" : "0");
+    if (final_layout_effective_preloads.has_value())
+      append_preloads(*final_layout_effective_preloads);
+    append_field(std::to_string(post_layout_preload_overrides.size()));
+    for (const auto& [register_name, value] : post_layout_preload_overrides) {
+      append_field(register_name);
+      append_field(value);
+    }
+    append_field(std::to_string(context.registers.size()));
+    for (const auto& [name, register_name] : context.registers) {
+      append_field(name);
+      append_field(register_name);
+    }
+    append_field(std::to_string(post_layout_optimizations.size()));
+    // Details are diagnostics only; final-layout consumers branch on typed
+    // optimization names and on MachineItem metadata serialized above.
+    for (const core::passes::AppliedOptimization& optimization : post_layout_optimizations) {
+      append_field(optimization.name);
+    }
+    append_field(std::to_string(options.maximum_natural_target_anchors));
+    append_field(std::to_string(static_cast<int>(address_space_model_for_options(options))));
+    append_field(options.analysis ? "1" : "0");
+    *final_layout_input_fingerprint = std::move(fingerprint).str();
   }
 
   // A stable internal preload may already encode an address that can become a
@@ -64489,6 +64547,7 @@ CompileResult compile_source_for_optimizer_profile(
   }
 
   std::map<std::string, CompileResult> once_cache;
+  std::map<std::string, std::string> final_layout_input_fingerprints;
   const bool trace_candidates = std::getenv("MKPRO_NATIVE_TRACE_CANDIDATES") != nullptr;
   auto cached_compile_source_once = [&](const CompileOptions& compile_options) {
     const std::string key = compile_once_cache_key(compile_options);
@@ -64496,14 +64555,17 @@ CompileResult compile_source_for_optimizer_profile(
     if (cached != once_cache.end())
       return cached->second;
     const auto started = std::chrono::steady_clock::now();
+    std::string final_layout_input_fingerprint;
     CompileResult result =
         compile_source_once(source, compile_options, source_has_entered,
-                            /*apply_final_layout_size_rescue=*/false);
+                            /*apply_final_layout_size_rescue=*/false,
+                            &final_layout_input_fingerprint);
     if (!result.implemented && can_retry_lowering_attempt_in_analysis(result, compile_options)) {
       CompileOptions analysis_options = compile_options;
       analysis_options.analysis = true;
       result = compile_source_once(source, analysis_options, source_has_entered,
-                                   /*apply_final_layout_size_rescue=*/false);
+                                   /*apply_final_layout_size_rescue=*/false,
+                                   &final_layout_input_fingerprint);
     }
     if (trace_candidates) {
       const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -64513,6 +64575,7 @@ CompileResult compile_source_for_optimizer_profile(
                 << " implemented=" << (result.implemented ? "yes" : "no")
                 << " steps=" << result.steps.size() << " ms=" << elapsed << "\n";
     }
+    final_layout_input_fingerprints.emplace(key, std::move(final_layout_input_fingerprint));
     once_cache.emplace(key, result);
     return result;
   };
@@ -67304,6 +67367,42 @@ CompileResult compile_source_for_optimizer_profile(
     for (const CandidateSpec& candidate : candidates)
       add_finalist(candidate.options, candidate.name, candidate.detail);
 
+    struct FinalLayoutCandidateGroup {
+      FinalLayoutCandidate representative;
+      std::vector<FinalLayoutCandidate> equivalents;
+    };
+    std::vector<FinalLayoutCandidateGroup> finalist_groups;
+    std::map<std::string, std::size_t> finalist_group_by_input;
+    for (const FinalLayoutCandidate& finalist : finalists) {
+      std::string input_key = "options:" + implemented_candidate_key(finalist.options);
+      try {
+        (void)cached_compile_source_once(finalist.options);
+        const auto fingerprint = final_layout_input_fingerprints.find(
+            compile_once_cache_key(finalist.options));
+        if (fingerprint != final_layout_input_fingerprints.end() &&
+            !fingerprint->second.empty()) {
+          input_key = "input:" + fingerprint->second;
+        }
+      } catch (const std::exception&) {
+        // A candidate without a complete ordinary artifact cannot share a
+        // final-layout proof input with any other option set.
+      }
+      const auto [group, inserted] =
+          finalist_group_by_input.emplace(std::move(input_key), finalist_groups.size());
+      if (inserted) {
+        finalist_groups.push_back(FinalLayoutCandidateGroup{
+            .representative = finalist,
+            .equivalents = {finalist},
+        });
+      } else {
+        finalist_groups.at(group->second).equivalents.push_back(finalist);
+      }
+    }
+    if (trace_candidates) {
+      std::cerr << "[candidate-trace] final-groups " << finalist_groups.size() << "/"
+                << finalists.size() << " exact proof input(s)\n";
+    }
+
     std::optional<CompileResult> finalized_best;
     std::optional<FinalLayoutCandidate> selected_finalist;
     struct RankedFinalist {
@@ -67313,12 +67412,13 @@ CompileResult compile_source_for_optimizer_profile(
     std::vector<RankedFinalist> ranked_finalists;
     std::size_t finalized_layout_attempts = 0;
     std::size_t finalization_index = 0;
-    for (const FinalLayoutCandidate& finalist : finalists) {
+    for (const FinalLayoutCandidateGroup& finalist_group : finalist_groups) {
+      const FinalLayoutCandidate& finalist = finalist_group.representative;
       ++finalization_index;
       const auto finalist_started = std::chrono::steady_clock::now();
       if (trace_candidates) {
         std::cerr << "[candidate-trace] final-start #" << finalization_index << "/"
-                  << finalists.size() << " "
+                  << finalist_groups.size() << " "
                   << (finalist.name.empty() ? "incumbent" : finalist.name) << "\n";
       }
       try {
@@ -67332,9 +67432,15 @@ CompileResult compile_source_for_optimizer_profile(
           finalized = compile_source_once(source, finalized_options, source_has_entered,
                                           /*apply_final_layout_size_rescue=*/true);
         }
+        const auto accepted_equivalent = std::find_if(
+            finalist_group.equivalents.begin(), finalist_group.equivalents.end(),
+            [&](const FinalLayoutCandidate& equivalent) {
+              return !candidate_needs_static_proof_gate(equivalent.options) ||
+                     !optimizer_static_gate_rejection_reason(equivalent.options, finalized)
+                          .has_value();
+            });
         const bool final_static_proof_accepted =
-            !candidate_needs_static_proof_gate(finalized_options) ||
-            !optimizer_static_gate_rejection_reason(finalized_options, finalized).has_value();
+            accepted_equivalent != finalist_group.equivalents.end();
         if (trace_candidates) {
           const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                                    std::chrono::steady_clock::now() - finalist_started)
@@ -67350,13 +67456,13 @@ CompileResult compile_source_for_optimizer_profile(
         }
         ranked_finalists.push_back(RankedFinalist{
             .cells = finalized.steps.size(),
-            .candidate = finalist,
+            .candidate = *accepted_equivalent,
         });
         if (finalized_best.has_value() &&
             !candidate_beats_best(finalized, *finalized_best, options))
           continue;
         finalized_best = std::move(finalized);
-        selected_finalist = finalist;
+        selected_finalist = *accepted_equivalent;
       } catch (const std::exception&) {
         if (trace_candidates) {
           const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
