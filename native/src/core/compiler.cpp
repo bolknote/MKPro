@@ -49232,7 +49232,6 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                   " after proving a unique direct call and terminal return.",
     });
   }
-
   if (!exact_decimal_series) {
     const int indirect_flow_rescue_above =
         pass_options.aggressive_post_layout_indirect_flow
@@ -49828,33 +49827,6 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
     setup_preloads = build_preload_reports(context, *ast.v2, post_layout_items);
   }
 
-  const core::LateBoundDecimalSelectorResult late_bound_selectors =
-      core::bind_late_bound_decimal_selectors(
-          post_layout_items,
-          core::LateBoundDecimalSelectorOptions{.minimum_target_address = 0,
-                                                .maximum_target_address = 99});
-  post_layout_items = late_bound_selectors.items;
-  result.diagnostics.insert(result.diagnostics.end(), late_bound_selectors.diagnostics.begin(),
-                            late_bound_selectors.diagnostics.end());
-  for (const core::LateBoundDecimalSelectorProof& proof : late_bound_selectors.proofs) {
-    for (const std::size_t item_index : {proof.high_item_index, proof.low_item_index}) {
-      if (item_index >= post_layout_items.size())
-        continue;
-      MachineItem& item = post_layout_items.at(item_index);
-      const std::string proof_comment =
-          "late-bound-target=" + std::to_string(proof.target_address);
-      item.comment = item.comment.has_value() ? *item.comment + "; " + proof_comment
-                                              : proof_comment;
-    }
-  }
-  if (late_bound_selectors.applied > 0) {
-    post_layout_optimizations.push_back(core::passes::AppliedOptimization{
-        .name = "late-bound-decimal-selector",
-        .detail = "Bound " + std::to_string(late_bound_selectors.applied) +
-                  " two-cell selector charge(s) to their final post-layout helper addresses.",
-    });
-  }
-
   // A one-cell-over-limit artifact may use the physical A4 -> 00 wrap as a
   // return only after the generic helper verifier has proved every entry and
   // relocation edge. The pass is deliberately profile- and layout-driven; it
@@ -49968,11 +49940,47 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
         control_flow =
             core::build_post_layout_control_flow(*natural_layout_input, control_options);
       }
+      const bool has_late_bound_decimal_selector =
+          std::any_of(post_layout_items.begin(), post_layout_items.end(),
+                      [](const MachineItem& item) {
+                        return std::any_of(
+                            item.roles.begin(), item.roles.end(), [](const CellRole& role) {
+                              return role.starts_with("late-decimal-selector-high:");
+                            });
+                      });
+      if (options.analysis && has_late_bound_decimal_selector &&
+          (!natural_layout_input.has_value() || !control_flow.proved)) {
+        std::string detail = natural_layout_input.has_value()
+                                 ? "authoritative control flow was not proved"
+                                 : "overflow formal normalization failed";
+        const std::size_t reason_count =
+            std::min<std::size_t>(control_flow.reasons.size(), 8U);
+        for (std::size_t reason = 0; reason < reason_count; ++reason)
+          detail += (reason == 0U ? ": " : " | ") + control_flow.reasons.at(reason);
+        result.diagnostics.push_back(diagnostic(
+            DiagnosticSeverity::Note, "late-bound-natural-layout-control-rejected", detail));
+      }
       if (natural_layout_input.has_value() && control_flow.proved) {
+        std::set<std::string> late_bound_target_labels;
+        constexpr std::string_view kLateBoundHighRole =
+            "late-decimal-selector-high:";
+        for (const MachineItem& item : *natural_layout_input) {
+          for (const CellRole& role : item.roles) {
+            if (role.starts_with(kLateBoundHighRole) &&
+                role.size() > kLateBoundHighRole.size()) {
+              late_bound_target_labels.insert(role.substr(kLateBoundHighRole.size()));
+            }
+          }
+        }
         const core::NaturalTargetComponentLayoutOptions natural_options{
             .address_space_model = address_space_model_for_options(options),
             .maximum_anchors = options.maximum_natural_target_anchors,
             .maximum_rejection_reasons = options.analysis ? 512U : 0U,
+            .required_bounded_target_labels =
+                std::vector<std::string>(late_bound_target_labels.begin(),
+                                         late_bound_target_labels.end()),
+            .maximum_bounded_target_address = 99,
+            .allow_size_neutral_bounded_layout = !late_bound_target_labels.empty(),
         };
         std::optional<core::NaturalTargetComponentLayoutResult> chosen_layout;
         std::optional<core::HelperSemanticAliasProof> chosen_alias;
@@ -49990,10 +49998,16 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
               }
             }
           }
+          const int candidate_cells = core::machine_cell_count(candidate.items);
+          const int current_cells = core::machine_cell_count(post_layout_items);
+          const bool size_improves =
+              candidate.removed_cells > 0 && candidate_cells < current_cells;
+          const bool bounded_layout =
+              candidate.plan.size_neutral_bounded_layout &&
+              candidate.plan.bounded_targets_proved && candidate.removed_cells == 0 &&
+              candidate_cells == current_cells;
           if (candidate.applied <= 0 || !candidate.plan.final_artifact_proved ||
-              candidate.removed_cells <= 0 ||
-              core::machine_cell_count(candidate.items) >=
-                  core::machine_cell_count(post_layout_items))
+              (!size_improves && !bounded_layout))
             return;
           if (!chosen_layout.has_value() || core::machine_cell_count(candidate.items) <
                                                 core::machine_cell_count(chosen_layout->items)) {
@@ -50031,6 +50045,16 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
           }
         }
 
+        if (!chosen_layout.has_value() && options.analysis && has_late_bound_decimal_selector) {
+          std::string detail = "no size-positive natural-target component layout was proved";
+          const std::size_t reason_count =
+              std::min<std::size_t>(natural_layout_search_rejections.size(), 8U);
+          for (std::size_t reason = 0; reason < reason_count; ++reason)
+            detail += (reason == 0U ? ": " : " | ") +
+                      natural_layout_search_rejections.at(reason);
+          result.diagnostics.push_back(diagnostic(
+              DiagnosticSeverity::Note, "late-bound-natural-layout-plan-rejected", detail));
+        }
         if (chosen_layout.has_value()) {
           core::NaturalTargetComponentLayoutResult& natural_layout = *chosen_layout;
           post_layout_items = natural_layout.items;
@@ -50070,7 +50094,14 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
             }
           }
           std::string natural_layout_detail;
-          if (natural_placements.size() == 1U) {
+          if (natural_layout.plan.size_neutral_bounded_layout) {
+            natural_layout_detail =
+                "Reordered " + std::to_string(natural_layout.plan.moved_segments) +
+                " fallthrough-closed component(s) without changing size so " +
+                std::to_string(natural_layout.plan.bounded_targets) +
+                " late-bound decimal selector target(s) fit in addresses 00..99 under "
+                "the final-artifact identity/control/return-stack/stack/X2 proof.";
+          } else if (natural_placements.size() == 1U) {
             natural_layout_detail =
                 "Placed a proved helper at stable natural target " +
                 format_address(natural_placements.front().second) + " through R" +
@@ -50087,6 +50118,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
             }
             natural_layout_detail += ")";
           }
+          if (!natural_layout.plan.size_neutral_bounded_layout) {
           const int natural_calls = static_cast<int>(std::count_if(
               natural_layout.plan.flows.begin(), natural_layout.plan.flows.end(),
               [](const core::NaturalTargetFlowRewrite& flow) {
@@ -50136,8 +50168,11 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
           }
           natural_layout_detail += " after exact final-artifact "
               "control/return-stack/stack/X2/runtime-selector proofs.";
+          }
           post_layout_optimizations.push_back(core::passes::AppliedOptimization{
-              .name = "natural-target-component-layout",
+              .name = natural_layout.plan.size_neutral_bounded_layout
+                          ? "late-bound-decimal-target-layout"
+                          : "natural-target-component-layout",
               .detail = std::move(natural_layout_detail),
           });
           if (options.analysis && !natural_layout_search_rejections.empty()) {
@@ -50334,6 +50369,118 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
         });
       }
     }
+  }
+
+  // Bind symbolic decimal selector charges only after every procedure and
+  // terminal-layout transformation has selected the delivered order.  In
+  // particular, callee-hole leaves may begin outside the two-digit address
+  // range and move into it during the final generic layout search.
+  const core::LateBoundDecimalSelectorResult late_bound_selectors =
+      core::bind_late_bound_decimal_selectors(
+          post_layout_items,
+          core::LateBoundDecimalSelectorOptions{.minimum_target_address = 0,
+                                                .maximum_target_address = 99});
+  post_layout_items = late_bound_selectors.items;
+  result.diagnostics.insert(result.diagnostics.end(), late_bound_selectors.diagnostics.begin(),
+                            late_bound_selectors.diagnostics.end());
+
+  constexpr std::string_view kCalleeHoleLateChargeMarker =
+      "callee-hole late-selector-label=";
+  constexpr std::string_view kCalleeHoleLateLeavesMarker = "; leaf-labels=";
+  constexpr std::string_view kCalleeHoleDeadScopeSuffix = "; selector-scope=dead";
+  std::map<std::string, int> late_bound_target_by_label;
+  for (const core::LateBoundDecimalSelectorProof& proof : late_bound_selectors.proofs) {
+    late_bound_target_by_label[proof.target_label] = proof.target_address;
+    const auto is_callee_hole_charge = [&](std::size_t item_index) {
+      return item_index < post_layout_items.size() &&
+             post_layout_items.at(item_index).comment.has_value() &&
+             post_layout_items.at(item_index).comment->starts_with(
+                 std::string(kCalleeHoleLateChargeMarker) + proof.target_label);
+    };
+    const bool callee_hole_charge = is_callee_hole_charge(proof.high_item_index) &&
+                                    is_callee_hole_charge(proof.low_item_index);
+    if (callee_hole_charge) {
+      const bool dead_scope =
+          post_layout_items.at(proof.high_item_index).comment->find(
+              kCalleeHoleDeadScopeSuffix) != std::string::npos;
+      const std::string proof_comment =
+          "callee-hole selector-value=" + std::to_string(proof.target_address) +
+          " indirect-target=" + std::to_string(proof.target_address) +
+          (dead_scope ? std::string(kCalleeHoleDeadScopeSuffix) : "");
+      post_layout_items.at(proof.high_item_index).comment = proof_comment;
+      post_layout_items.at(proof.low_item_index).comment = proof_comment;
+      for (std::size_t item_index = proof.low_item_index + 1U;
+           item_index < post_layout_items.size(); ++item_index) {
+        MachineItem& item = post_layout_items.at(item_index);
+        if (!item.comment.has_value() ||
+            !item.comment->starts_with(std::string(kCalleeHoleLateChargeMarker) +
+                                       proof.target_label)) {
+          continue;
+        }
+        item.comment = proof_comment;
+        break;
+      }
+      continue;
+    }
+
+    for (const std::size_t item_index : {proof.high_item_index, proof.low_item_index}) {
+      if (item_index >= post_layout_items.size())
+        continue;
+      MachineItem& item = post_layout_items.at(item_index);
+      const std::string proof_comment =
+          "late-bound-target=" + std::to_string(proof.target_address);
+      item.comment = item.comment.has_value() ? *item.comment + "; " + proof_comment
+                                              : proof_comment;
+    }
+  }
+
+  bool unresolved_callee_hole_leaf = false;
+  for (MachineItem& item : post_layout_items) {
+    if (!item.comment.has_value() ||
+        !item.comment->starts_with("callee-hole indirect call;")) {
+      continue;
+    }
+    const std::size_t marker = item.comment->find(kCalleeHoleLateLeavesMarker);
+    if (marker == std::string::npos)
+      continue;
+    const std::size_t labels_begin = marker + kCalleeHoleLateLeavesMarker.size();
+    const std::size_t suffix = item.comment->find(kCalleeHoleDeadScopeSuffix, labels_begin);
+    const std::size_t labels_end = suffix == std::string::npos ? item.comment->size() : suffix;
+    const std::string labels = item.comment->substr(labels_begin, labels_end - labels_begin);
+    std::string targets;
+    std::size_t begin = 0;
+    while (begin <= labels.size()) {
+      const std::size_t comma = labels.find(',', begin);
+      const std::size_t end = comma == std::string::npos ? labels.size() : comma;
+      const std::string label = labels.substr(begin, end - begin);
+      const auto target = late_bound_target_by_label.find(label);
+      if (label.empty() || target == late_bound_target_by_label.end()) {
+        unresolved_callee_hole_leaf = true;
+        break;
+      }
+      if (!targets.empty())
+        targets += ",";
+      targets += std::to_string(target->second) + ":" + label;
+      if (comma == std::string::npos)
+        break;
+      begin = comma + 1U;
+    }
+    if (unresolved_callee_hole_leaf)
+      continue;
+    item.comment = item.comment->substr(0, marker) + "; leaf-targets=" + targets +
+                   (suffix == std::string::npos ? "" : item.comment->substr(suffix));
+  }
+  if (unresolved_callee_hole_leaf) {
+    result.diagnostics.push_back(diagnostic(
+        DiagnosticSeverity::Error, "callee-hole-late-selector-unresolved",
+        "A callee-hole leaf label was not resolved by the final decimal-selector binding."));
+  }
+  if (late_bound_selectors.applied > 0) {
+    post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+        .name = "late-bound-decimal-selector",
+        .detail = "Bound " + std::to_string(late_bound_selectors.applied) +
+                  " two-cell selector charge(s) to their final post-layout helper addresses.",
+    });
   }
 
   const std::set<std::string> final_borrowed_entry_selector_registers =
@@ -67165,7 +67312,15 @@ CompileResult compile_source_for_optimizer_profile(
     };
     std::vector<RankedFinalist> ranked_finalists;
     std::size_t finalized_layout_attempts = 0;
+    std::size_t finalization_index = 0;
     for (const FinalLayoutCandidate& finalist : finalists) {
+      ++finalization_index;
+      const auto finalist_started = std::chrono::steady_clock::now();
+      if (trace_candidates) {
+        std::cerr << "[candidate-trace] final-start #" << finalization_index << "/"
+                  << finalists.size() << " "
+                  << (finalist.name.empty() ? "incumbent" : finalist.name) << "\n";
+      }
       try {
         ++finalized_layout_attempts;
         CompileOptions finalized_options = finalist.options;
@@ -67180,6 +67335,16 @@ CompileResult compile_source_for_optimizer_profile(
         const bool final_static_proof_accepted =
             !candidate_needs_static_proof_gate(finalized_options) ||
             !optimizer_static_gate_rejection_reason(finalized_options, finalized).has_value();
+        if (trace_candidates) {
+          const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now() - finalist_started)
+                                   .count();
+          std::cerr << "[candidate-trace] final-done #" << finalization_index << " "
+                    << (finalist.name.empty() ? "incumbent" : finalist.name)
+                    << " implemented=" << (finalized.implemented ? "yes" : "no")
+                    << " proved=" << (final_static_proof_accepted ? "yes" : "no")
+                    << " steps=" << finalized.steps.size() << " ms=" << elapsed << "\n";
+        }
         if (!finalized.implemented || !final_static_proof_accepted) {
           continue;
         }
@@ -67193,6 +67358,14 @@ CompileResult compile_source_for_optimizer_profile(
         finalized_best = std::move(finalized);
         selected_finalist = finalist;
       } catch (const std::exception&) {
+        if (trace_candidates) {
+          const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now() - finalist_started)
+                                   .count();
+          std::cerr << "[candidate-trace] final-throw #" << finalization_index << " "
+                    << (finalist.name.empty() ? "incumbent" : finalist.name)
+                    << " ms=" << elapsed << "\n";
+        }
         // An independently finalized candidate is opportunistic; other proved
         // finalists and the ordinary incumbent remain available.
       }

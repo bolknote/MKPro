@@ -22,6 +22,13 @@ struct NaturalTargetComponentLayoutOptions {
   int maximum_execution_states = 20000;
   std::size_t maximum_anchors = 0;
   std::size_t maximum_rejection_reasons = 64;
+  // Symbolic targets that must remain representable by a fixed-width decimal
+  // selector after the final component order is chosen.  A size-neutral order
+  // is admissible only when explicitly enabled and every target satisfies the
+  // bound under the same final-artifact proof as ordinary natural anchors.
+  std::vector<std::string> required_bounded_target_labels;
+  int maximum_bounded_target_address = 99;
+  bool allow_size_neutral_bounded_layout = false;
 };
 
 struct NaturalTargetFlowRewrite {
@@ -79,6 +86,9 @@ struct NaturalTargetComponentLayoutPlan {
   int transparent_trampolines = 0;
   int transparent_split_bridges = 0;
   int x2_reconvergence_flows = 0;
+  int bounded_targets = 0;
+  bool bounded_targets_proved = false;
+  bool size_neutral_bounded_layout = false;
   std::vector<NaturalTargetFlowRewrite> flows;
   std::vector<NaturalTargetPreloadRewrite> preloads;
   std::vector<NaturalTargetRuntimeSelectorProof> runtime_selectors;

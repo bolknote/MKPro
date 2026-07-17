@@ -215,9 +215,15 @@ void callee_hole_helper_matches_direct_call_semantics() {
       recall.kind = IrKind::Recall;
       recall.register_name = "1";
       recall.opcode = 0x61;
+      if (index == 0)
+        recall.meta.roles = {"shared-body-role"};
       ir.push_back(std::move(recall));
     }
-    ir.push_back(call(leaf));
+    IrOp leaf_call = call(leaf);
+    leaf_call.meta.roles = {"source-call-role:" + leaf};
+    leaf_call.target_meta.roles = {"source-address-role:" + leaf};
+    leaf_call.meta.semantic_call_origins = {leaf == "leaf_a" ? 101U : 202U};
+    ir.push_back(std::move(leaf_call));
   };
   append_region("leaf_a");
   ir.push_back(terminal(IrKind::Stop, 0x50));
@@ -244,6 +250,16 @@ void callee_hole_helper_matches_direct_call_semantics() {
                                           });
   require(mutating_hole != mutating.ops.end(),
           "mutating callee-hole fixture should dispatch through free R0");
+  require(mutating_hole->meta.roles.empty() && mutating_hole->target_meta.roles.empty() &&
+              mutating_hole->meta.semantic_call_origins ==
+                  std::vector<std::uint64_t>({101U, 202U}),
+          "shared callback should union opaque call origins without promoting source-specific "
+          "cell roles");
+  require(std::any_of(mutating.ops.begin(), mutating.ops.end(), [](const IrOp& op) {
+            return op.kind == IrKind::Recall &&
+                   op.meta.roles == std::vector<CellRole>({"shared-body-role"});
+          }),
+          "identical semantic roles on ordinary skeleton commands should be preserved");
   require(std::any_of(mutating.ops.begin(), mutating.ops.end(), [](const IrOp& op) {
             return op.meta.comment.has_value() &&
                    op.meta.comment->find("callee-hole entry-X equivalence") != std::string::npos;
@@ -287,6 +303,61 @@ void callee_hole_helper_matches_direct_call_semantics() {
                    op.meta.comment->find("selector-scope=dead") != std::string::npos;
           }),
           "locally dead stable selector should carry a final-proof scope marker");
+
+  std::vector<IrOp> late_ir;
+  const auto append_late_region = [&](const std::string& leaf) {
+    for (int index = 0; index < 10; ++index) {
+      IrOp recall;
+      recall.kind = IrKind::Recall;
+      recall.register_name = "1";
+      recall.opcode = 0x61;
+      late_ir.push_back(std::move(recall));
+    }
+    late_ir.push_back(call(leaf));
+  };
+  append_late_region("late_leaf_a");
+  late_ir.push_back(terminal(IrKind::Stop, 0x50));
+  append_late_region("late_leaf_b");
+  late_ir.push_back(terminal(IrKind::Stop, 0x50));
+  late_ir.push_back(label("late_leaf_a"));
+  late_ir.push_back(plain(0x0d));
+  late_ir.push_back(terminal(IrKind::Return, 0x52));
+  late_ir.push_back(label("late_leaf_b"));
+  late_ir.push_back(plain(0x0d));
+  late_ir.push_back(terminal(IrKind::Return, 0x52));
+
+  const core::passes::PassResult late = core::passes::callee_hole_straight_line_helper(
+      late_ir, core::passes::PassContext{.options = mutating_options});
+  require(late.applied >= 2,
+          "callee-hole pass should defer stable selector digits until final layout");
+  const auto late_hole = std::find_if(late.ops.begin(), late.ops.end(), [](const IrOp& op) {
+    return op.kind == IrKind::IndirectCall &&
+           std::find(op.meta.roles.begin(), op.meta.roles.end(),
+                     "late-decimal-selector-consumer") != op.meta.roles.end();
+  });
+  require(late_hole != late.ops.end() && late_hole->meta.indirect_flow_targets.has_value(),
+          "late-bound callee-hole call should carry an authoritative symbolic target set");
+  const auto has_late_target = [&](const std::string& label_name) {
+    return std::any_of(late_hole->meta.indirect_flow_targets->begin(),
+                       late_hole->meta.indirect_flow_targets->end(),
+                       [&](const IrTarget& target) {
+                         const auto* label_target = std::get_if<std::string>(&target);
+                         return label_target != nullptr && *label_target == label_name;
+                       });
+  };
+  require(late_hole->meta.indirect_flow_targets->size() == 2U &&
+              has_late_target("late_leaf_a") && has_late_target("late_leaf_b"),
+          "late-bound callee-hole call should preserve every leaf label exactly");
+  const auto role_count = [&](const std::string& prefix) {
+    return std::count_if(late.ops.begin(), late.ops.end(), [&](const IrOp& op) {
+      return std::any_of(op.meta.roles.begin(), op.meta.roles.end(), [&](const CellRole& role) {
+        return role.starts_with(prefix);
+      });
+    });
+  };
+  require(role_count("late-decimal-selector-high:") == 2 &&
+              role_count("late-decimal-selector-low:") == 2,
+          "each late selector charge should expose independently bindable decimal digits");
 
   CompileOptions gate_options;
   gate_options.callee_hole_straight_line_helper = true;

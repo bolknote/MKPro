@@ -2014,6 +2014,11 @@ bool rebind_preloads(
     if (displaced_commands.contains(item_index))
       continue;
     const int reg = encoded_register(item.opcode);
+    const bool late_bound_consumer =
+        std::find(item.roles.begin(), item.roles.end(),
+                  "late-decimal-selector-consumer") != item.roles.end();
+    if (late_bound_consumer)
+      continue;
     const std::optional<std::size_t> target =
         target_origin_for_flow_use(original_flow, item_index);
     if (!target.has_value())
@@ -2689,13 +2694,29 @@ std::optional<std::vector<NaturalTargetRuntimeSelectorProof>> prove_runtime_sele
 
   std::vector<NaturalTargetRuntimeSelectorProof> result;
   for (const auto& [final_command, targets] : final_flow.indirect_flow_targets) {
-    if (final_command >= final_items.size() || targets.size() != 1U)
+    if (final_command >= final_items.size() || targets.empty())
       return std::nullopt;
     const MachineItem& command = final_items.at(final_command);
     if (command.kind != MachineItemKind::Op || !is_indirect_flow(command.opcode))
       return std::nullopt;
     const std::optional<std::size_t> command_origin =
         origin_for_item(final_origin_by_item, final_command);
+    const bool late_bound_consumer =
+        std::find(command.roles.begin(), command.roles.end(),
+                  "late-decimal-selector-consumer") != command.roles.end();
+    if (late_bound_consumer) {
+      if (!command_origin.has_value() || *command_origin >= original_items.size())
+        return std::nullopt;
+      const MachineItem& original_command = original_items.at(*command_origin);
+      if (std::find(original_command.roles.begin(), original_command.roles.end(),
+                    "late-decimal-selector-consumer") ==
+          original_command.roles.end()) {
+        return std::nullopt;
+      }
+      continue;
+    }
+    if (targets.size() != 1U)
+      return std::nullopt;
     const std::optional<std::size_t> target_origin =
         origin_for_item(final_origin_by_item, targets.front().item_index);
     if (!command_origin.has_value() || !target_origin.has_value())
@@ -2922,6 +2943,7 @@ std::optional<CandidateArtifact> try_candidate(
     const std::vector<DirectReference>& references,
     const std::vector<DirectFlowSite>& flows,
     const std::vector<NaturalTargetAnchorCandidate>& anchors,
+    const std::vector<std::size_t>& bounded_target_origins,
     const TraceGraph& original_trace,
     const std::vector<ExternalIdentity>& original_external,
     std::vector<std::string>* rejection_reasons) {
@@ -2952,7 +2974,10 @@ std::optional<CandidateArtifact> try_candidate(
     }
     return std::nullopt;
   };
-  if (anchors.empty())
+  const bool bounded_only =
+      anchors.empty() && options.allow_size_neutral_bounded_layout &&
+      !bounded_target_origins.empty();
+  if (anchors.empty() && !bounded_only)
     return reject("candidate has no natural-target anchors");
   std::vector<NaturalTargetFlowRewrite> rewrites;
   std::vector<DisplacedIndirectFlowRewrite> displaced_flows;
@@ -2960,36 +2985,42 @@ std::optional<CandidateArtifact> try_candidate(
   std::set<std::size_t> excluded_direct_commands;
   std::vector<std::string> excluded_direct_failures;
   std::optional<std::vector<Cell>> converted;
-  for (;;) {
-    rewrites.clear();
-    displaced_flows.clear();
-    trampolines.clear();
-    converted = convert_direct_flows(items, flows, control_flow, anchors,
-                                     excluded_direct_commands, rewrites,
-                                     displaced_flows, trampolines);
-    if (!converted.has_value() || rewrites.empty()) {
-      std::string reason = "direct-flow conversion failed";
-      if (!excluded_direct_commands.empty()) {
-        reason += " after excluding";
-        for (const auto command : excluded_direct_commands)
-          reason += " " + std::to_string(command);
-        for (const auto& failure : excluded_direct_failures)
-          reason += "; " + failure;
+  if (bounded_only) {
+    converted = make_cells(items);
+    if (!converted.has_value())
+      return reject("bounded layout input cannot be represented as complete cells");
+  } else {
+    for (;;) {
+      rewrites.clear();
+      displaced_flows.clear();
+      trampolines.clear();
+      converted = convert_direct_flows(items, flows, control_flow, anchors,
+                                       excluded_direct_commands, rewrites,
+                                       displaced_flows, trampolines);
+      if (!converted.has_value() || rewrites.empty()) {
+        std::string reason = "direct-flow conversion failed";
+        if (!excluded_direct_commands.empty()) {
+          reason += " after excluding";
+          for (const auto command : excluded_direct_commands)
+            reason += " " + std::to_string(command);
+          for (const auto& failure : excluded_direct_failures)
+            reason += "; " + failure;
+        }
+        return reject(reason);
       }
-      return reject(reason);
+      std::string failure;
+      std::size_t failure_command = std::numeric_limits<std::size_t>::max();
+      if (converted_flow_effects_equivalent(
+              items, anchors, rewrites, control_flow, original_trace, &failure,
+              &failure_command)) {
+        break;
+      }
+      if (failure_command == std::numeric_limits<std::size_t>::max() ||
+          !excluded_direct_commands.insert(failure_command).second) {
+        return reject("direct-flow effect proof failed: " + failure);
+      }
+      excluded_direct_failures.push_back(failure);
     }
-    std::string failure;
-    std::size_t failure_command = std::numeric_limits<std::size_t>::max();
-    if (converted_flow_effects_equivalent(
-            items, anchors, rewrites, control_flow, original_trace, &failure,
-            &failure_command)) {
-      break;
-    }
-    if (failure_command == std::numeric_limits<std::size_t>::max() ||
-        !excluded_direct_commands.insert(failure_command).second) {
-      return reject("direct-flow effect proof failed: " + failure);
-    }
-    excluded_direct_failures.push_back(failure);
   }
   std::vector<Segment> segments = make_segments(*converted);
   std::size_t next_synthetic_origin =
@@ -3011,6 +3042,18 @@ std::optional<CandidateArtifact> try_candidate(
       locate_origin(segments, *main);
   if (!main_location.has_value() || main_location->second != 0)
     return reject("main component identity cannot be located");
+
+  std::vector<NaturalTargetPlacement> bounded_placements;
+  bounded_placements.reserve(bounded_target_origins.size());
+  for (const std::size_t target_origin : bounded_target_origins) {
+    const auto target_location = locate_origin(segments, target_origin);
+    if (!target_location.has_value())
+      return reject("bounded target component identity cannot be located");
+    bounded_placements.push_back(NaturalTargetPlacement{
+        .target_segment = target_location->first,
+        .target_offset = target_location->second,
+    });
+  }
 
   std::vector<NaturalTargetPlacement> placements;
   std::vector<NaturalTargetPlacement> flexible_placements;
@@ -3042,15 +3085,23 @@ std::optional<CandidateArtifact> try_candidate(
       placements.push_back(placement);
     }
   }
-  const int maximum_padding = static_cast<int>(rewrites.size()) -
-                              static_cast<int>(displaced_flows.size()) -
-                              2 * static_cast<int>(trampolines.size()) -
-                              split_bridge_cells(split_bridges) - 1;
+  const int maximum_padding =
+      bounded_only
+          ? 0
+          : static_cast<int>(rewrites.size()) -
+                static_cast<int>(displaced_flows.size()) -
+                2 * static_cast<int>(trampolines.size()) -
+                split_bridge_cells(split_bridges) - 1;
   if (maximum_padding < 0)
     return reject("address-selector displacement cannot produce a smaller artifact");
   std::optional<NaturalTargetLayoutVariant> selected_layout;
   int flexible_target = -1;
-  if (flexible_placements.size() == 1U) {
+  if (bounded_only) {
+    selected_layout = layout_order_with_optional_split(
+        segments, main_location->first, {}, options.maximum_subset_states,
+        maximum_padding, next_synthetic_origin, bounded_placements,
+        options.maximum_bounded_target_address);
+  } else if (flexible_placements.size() == 1U) {
     const auto flexible_anchor = std::find_if(
         anchors.begin(), anchors.end(), [](const NaturalTargetAnchorCandidate& anchor) {
           return selector_is_flexible(anchor.selector);
@@ -3072,7 +3123,8 @@ std::optional<CandidateArtifact> try_candidate(
           layout_order_with_optional_split(
               segments, main_location->first, trial_placements,
               options.maximum_subset_states, maximum_padding,
-              next_synthetic_origin);
+              next_synthetic_origin, bounded_placements,
+              options.maximum_bounded_target_address);
       if (!trial_layout.has_value())
         continue;
       if (!selected_layout.has_value() ||
@@ -3092,16 +3144,21 @@ std::optional<CandidateArtifact> try_candidate(
     // range-checked and decoded below.  This avoids an exponential cartesian
     // search over address tuples and permits unrelated flexible carriers to
     // participate in the same globally proved layout.
+    std::vector<NaturalTargetPlacement> all_bounded = bounded_placements;
+    all_bounded.insert(all_bounded.end(), flexible_placements.begin(),
+                       flexible_placements.end());
     selected_layout = layout_order_with_optional_split(
         segments, main_location->first, placements,
         options.maximum_subset_states, maximum_padding,
-        next_synthetic_origin, flexible_placements,
-        std::min(99, official_program_last_address(options.address_space_model)));
+        next_synthetic_origin, all_bounded,
+        std::min(options.maximum_bounded_target_address,
+                 std::min(99, official_program_last_address(options.address_space_model))));
   } else {
     selected_layout = layout_order_with_optional_split(
         segments, main_location->first, placements,
         options.maximum_subset_states, maximum_padding,
-        next_synthetic_origin);
+        next_synthetic_origin, bounded_placements,
+        options.maximum_bounded_target_address);
   }
   if (!selected_layout.has_value()) {
     std::string geometry =
@@ -3156,6 +3213,17 @@ std::optional<CandidateArtifact> try_candidate(
                                      candidate.new_item_by_origin);
   const std::map<std::size_t, int> new_address_by_origin =
       origin_addresses(candidate.items, candidate.new_item_by_origin);
+  const bool bounded_targets_proved =
+      std::all_of(bounded_target_origins.begin(), bounded_target_origins.end(),
+                  [&](const std::size_t target_origin) {
+                    const auto target_address = new_address_by_origin.find(target_origin);
+                    return target_address != new_address_by_origin.end() &&
+                           target_address->second >= 0 &&
+                           target_address->second <=
+                               options.maximum_bounded_target_address;
+                  });
+  if (!bounded_targets_proved)
+    return reject("flattened component order missed a bounded target deadline");
   std::map<std::size_t, int> target_address_by_origin;
   for (const auto& [target_origin, anchor] : anchor_by_target_origin) {
     const std::optional<std::size_t> physical =
@@ -3279,9 +3347,11 @@ std::optional<CandidateArtifact> try_candidate(
     return reject("rewritten external-entry ledger differs from the logical input");
 
   NaturalTargetComponentLayoutPlan& plan = candidate.plan;
-  plan.selector_origin = anchors.front().selector.origin;
-  plan.selector_register = anchors.front().selector.register_name;
-  plan.natural_target = target_address_by_origin.at(anchors.front().target_origin);
+  if (!anchors.empty()) {
+    plan.selector_origin = anchors.front().selector.origin;
+    plan.selector_register = anchors.front().selector.register_name;
+    plan.natural_target = target_address_by_origin.at(anchors.front().target_origin);
+  }
   plan.input_cells = original_index.cells;
   plan.output_cells = index_artifact(candidate.items).cells;
   plan.removed_cells = plan.input_cells - plan.output_cells;
@@ -3298,10 +3368,14 @@ std::optional<CandidateArtifact> try_candidate(
   plan.call_return_equivalent = true;
   std::string converted_flow_failure;
   int x2_reconvergence_flows = 0;
-  const bool converted_flow_effects_proved = converted_flow_effects_equivalent(
-      items, anchors, plan.flows, control_flow, original_trace,
-      &converted_flow_failure, nullptr, &x2_reconvergence_flows);
+  const bool converted_flow_effects_proved =
+      bounded_only || converted_flow_effects_equivalent(
+                          items, anchors, plan.flows, control_flow, original_trace,
+                          &converted_flow_failure, nullptr, &x2_reconvergence_flows);
   plan.x2_reconvergence_flows = x2_reconvergence_flows;
+  plan.bounded_targets = static_cast<int>(bounded_target_origins.size());
+  plan.bounded_targets_proved = bounded_targets_proved;
+  plan.size_neutral_bounded_layout = bounded_only;
   const bool unchanged_command_effects_proved = unchanged_command_effects_preserved(
       items, candidate.items, candidate.new_item_by_origin, plan.flows,
       displaced_flows);
@@ -3311,15 +3385,17 @@ std::optional<CandidateArtifact> try_candidate(
   plan.indirect_memory_equivalent = indirect_memory_facts_equivalent(
       control_flow, final_flow, rewritten_origin_by_item);
   plan.data_projection_equivalent = true;
-  plan.final_artifact_proved = final_flow.proved;
+  plan.final_artifact_proved = final_flow.proved && bounded_targets_proved;
   const int expected_removed_cells =
       static_cast<int>(plan.flows.size()) -
       static_cast<int>(displaced_flows.size()) -
       2 * static_cast<int>(trampolines.size()) -
       split_bridge_cells(split_bridges) -
       selected_layout->order.padding_cells;
+  const bool size_goal_proved =
+      bounded_only ? plan.removed_cells == 0 : plan.removed_cells > 0;
   plan.proved = plan.removed_cells == expected_removed_cells &&
-                plan.removed_cells > 0 && plan.control_flow_equivalent &&
+                size_goal_proved && plan.control_flow_equivalent &&
                 plan.call_return_equivalent && plan.stack_and_x2_equivalent &&
                 plan.indirect_memory_equivalent && plan.data_projection_equivalent &&
                 plan.final_artifact_proved;
@@ -3329,8 +3405,10 @@ std::optional<CandidateArtifact> try_candidate(
       reason += ": size-accounting=" + std::to_string(plan.removed_cells) +
                 "/" + std::to_string(expected_removed_cells);
     }
-    if (plan.removed_cells <= 0)
+    if (!bounded_only && plan.removed_cells <= 0)
       reason += ": nonpositive-size-saving";
+    if (bounded_only && plan.removed_cells != 0)
+      reason += ": bounded-layout-size-changed";
     if (!plan.stack_and_x2_equivalent) {
       reason += ": stack-or-X2";
       if (!trampolines_proved)
@@ -3423,6 +3501,37 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     return result;
   }
   const ArtifactIndex index = index_artifact(logical_items);
+  std::vector<std::size_t> bounded_target_origins;
+  if (!options.required_bounded_target_labels.empty()) {
+    if (options.maximum_bounded_target_address < 0) {
+      add_reason(result.plan, "bounded target address limit is negative");
+      return result;
+    }
+    std::set<std::string> duplicate_labels;
+    std::set<std::string> seen_labels;
+    for (const MachineItem& item : logical_items) {
+      if (item.kind == MachineItemKind::Label && !seen_labels.insert(item.name).second)
+        duplicate_labels.insert(item.name);
+    }
+    for (const std::string& label : options.required_bounded_target_labels) {
+      const auto label_address = index.label_addresses.find(label);
+      if (label.empty() || duplicate_labels.contains(label) ||
+          label_address == index.label_addresses.end()) {
+        add_reason(result.plan, "bounded target label is missing or duplicated: " + label);
+        return result;
+      }
+      const auto cell_item = index.cell_items.find(label_address->second);
+      if (cell_item == index.cell_items.end()) {
+        add_reason(result.plan, "bounded target label has no executable cell: " + label);
+        return result;
+      }
+      bounded_target_origins.push_back(cell_item->second);
+    }
+    std::sort(bounded_target_origins.begin(), bounded_target_origins.end());
+    bounded_target_origins.erase(
+        std::unique(bounded_target_origins.begin(), bounded_target_origins.end()),
+        bounded_target_origins.end());
+  }
   const std::optional<std::vector<DirectReference>> references =
       collect_direct_references(logical_items, index, options.address_space_model);
   if (!references.has_value()) {
@@ -3431,7 +3540,7 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   }
   const std::vector<DirectFlowSite> flows =
       shortenable_direct_flows(*references, logical_items);
-  if (flows.empty()) {
+  if (flows.empty() && bounded_target_origins.empty()) {
     add_reason(result.plan, "artifact contains no direct flow to shorten");
     return result;
   }
@@ -3657,6 +3766,7 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
       ++transparent_jump_attempts;
     const std::optional<CandidateArtifact> candidate = try_candidate(
         logical_items, preloads, *logical_flow, options, *references, flows, trial,
+        bounded_target_origins,
         *original_trace, *original_external, &result.plan.reasons);
     if (candidate.has_value() &&
         (!best.has_value() || better_candidate(*candidate, *best))) {
@@ -3713,6 +3823,13 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
         break;
     }
   }
+  // A bounded-only layout never removes cells, so every proved natural-target
+  // layout ranks ahead of it.  Keep this potentially exponential permutation
+  // search as a true fallback instead of paying for a result that cannot win.
+  if (!best.has_value() && options.allow_size_neutral_bounded_layout &&
+      !bounded_target_origins.empty()) {
+    consider_trial({}, false);
+  }
   if (transparent_jump_search_capped)
     add_reason(result.plan, "transparent-jump proof search reached its cap");
   if (!best.has_value()) {
@@ -3729,7 +3846,9 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
       break;
     add_reason(result.plan, std::move(reason));
   }
-  result.applied = static_cast<int>(result.plan.flows.size());
+  result.applied = result.plan.size_neutral_bounded_layout
+                       ? std::max(1, result.plan.moved_segments)
+                       : static_cast<int>(result.plan.flows.size());
   result.removed_cells = result.plan.removed_cells;
   return result;
 }

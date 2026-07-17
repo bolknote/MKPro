@@ -4,6 +4,7 @@
 
 #include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
+#include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/passes/outline.hpp"
 #include "mkpro/core/stack_value_equivalence.hpp"
@@ -68,7 +69,7 @@ std::string call_target_key(const IrTarget& target) {
 }
 
 bool is_shareable_body_op(const IrOp& op, bool allow_direct_calls = false) {
-  if (has_rewrite_barrier(op) || is_display_focus_sensitive(op) || !op.meta.roles.empty())
+  if (has_rewrite_barrier(op) || is_display_focus_sensitive(op))
     return false;
   switch (op.kind) {
   case IrKind::Store:
@@ -217,20 +218,38 @@ bool x2_restore_boundaries_are_internal(const std::vector<IrOp>& ops, int start,
   return true;
 }
 
+std::string metadata_text_key(std::string_view value) {
+  return std::to_string(value.size()) + ":" + std::string(value);
+}
+
+std::string metadata_roles_key(const std::vector<CellRole>& roles) {
+  std::string key;
+  for (const CellRole& role : roles)
+    key += metadata_text_key(role);
+  return key;
+}
+
 std::string op_key(const IrOp& op) {
+  std::string key;
   switch (op.kind) {
   case IrKind::Store:
-    return "store:" + op.register_name;
+    key = "store:" + op.register_name;
+    break;
   case IrKind::Recall:
-    return "recall:" + op.register_name;
+    key = "recall:" + op.register_name;
+    break;
   case IrKind::IndirectStore:
-    return "indirect-store:" + op.register_name;
+    key = "indirect-store:" + op.register_name;
+    break;
   case IrKind::IndirectRecall:
-    return "indirect-recall:" + op.register_name;
+    key = "indirect-recall:" + op.register_name;
+    break;
   case IrKind::Plain:
-    return "plain:" + std::to_string(op.opcode);
+    key = "plain:" + std::to_string(op.opcode);
+    break;
   case IrKind::Call:
-    return "call:" + call_target_key(op.target);
+    key = "call:" + call_target_key(op.target);
+    break;
   case IrKind::Label:
   case IrKind::Jump:
   case IrKind::CondJump:
@@ -241,9 +260,12 @@ std::string op_key(const IrOp& op) {
   case IrKind::Return:
   case IrKind::Stop:
   case IrKind::OrphanAddress:
-    return ir_kind_name(op.kind);
+    key = ir_kind_name(op.kind);
+    break;
   }
-  return {};
+  return key + "|semantic=" + metadata_text_key(op.semantic) +
+         "|roles=" + metadata_roles_key(op.meta.roles) +
+         "|target-roles=" + metadata_roles_key(op.target_meta.roles);
 }
 
 std::string join_parts(const std::vector<std::string>& parts, std::size_t start = 0) {
@@ -734,6 +756,9 @@ struct HoleOccurrence {
   // targets agree stay direct calls inside the skeleton.
   std::vector<int> call_targets;
   std::vector<std::string> call_labels;
+  std::vector<std::string> call_semantics;
+  std::vector<std::string> call_role_keys;
+  std::vector<std::vector<std::uint64_t>> call_origins;
 };
 
 struct HoleCandidate {
@@ -749,6 +774,7 @@ struct SelectedHoleHelper {
   std::string register_name;
   bool mutating_selector = false;
   bool reused_selector = false;
+  bool late_bound_selector = false;
   std::map<int, int> charge_values;
   // Leaf label by frozen numeric address; the labels keep the leaves alive in
   // the CFG and the addresses are re-validated by the final static proof.
@@ -756,6 +782,11 @@ struct SelectedHoleHelper {
   // Call positions (in region order) routed through the hole register; other
   // call positions target the same label in every occurrence and stay direct.
   std::vector<bool> hole_positions;
+  // Semantic call identities are opaque and explicitly unionable.  A shared
+  // skeleton represents every removed source call at a given call position,
+  // while source-specific CellRole annotations are deliberately not promoted
+  // to the shared command.
+  std::vector<std::vector<std::uint64_t>> call_origins;
   int cells = 0;
 };
 
@@ -765,9 +796,12 @@ std::string hole_op_key(const IrOp& op) {
   return op_key(op);
 }
 
-int hole_charge_cost(int leaf_target) {
+int hole_charge_cost(int leaf_target, bool late_bound_selector = false) {
   // Literal digits of the leaf address + X->П r + ПП skeleton (2 cells).
-  return static_cast<int>(std::to_string(leaf_target).size()) + 1 + 2;
+  const int digits = late_bound_selector
+                         ? 2
+                         : static_cast<int>(std::to_string(leaf_target).size());
+  return digits + 1 + 2;
 }
 
 std::optional<int> hole_selector_charge_value(std::string_view register_name, int leaf_target,
@@ -917,6 +951,9 @@ std::vector<HoleCandidate> collect_hole_candidates(const std::vector<IrOp>& ops,
     int cells = 0;
     std::vector<int> call_targets;
     std::vector<std::string> call_labels;
+    std::vector<std::string> call_semantics;
+    std::vector<std::string> call_role_keys;
+    std::vector<std::vector<std::uint64_t>> call_origins;
     for (int end = start; end < static_cast<int>(ops.size()); ++end) {
       if (protected_indexes.contains(end))
         break;
@@ -934,6 +971,10 @@ std::vector<HoleCandidate> collect_hole_candidates(const std::vector<IrOp>& ops,
           break;
         call_targets.push_back(*target);
         call_labels.push_back(*label);
+        call_semantics.push_back(op.semantic);
+        call_role_keys.push_back(metadata_roles_key(op.meta.roles) + "|" +
+                                 metadata_roles_key(op.target_meta.roles));
+        call_origins.push_back(op.meta.semantic_call_origins);
       }
       parts.push_back(hole_op_key(op));
       cells += cells_per_op(op);
@@ -954,6 +995,9 @@ std::vector<HoleCandidate> collect_hole_candidates(const std::vector<IrOp>& ops,
           .call_count = static_cast<int>(call_targets.size()),
           .call_targets = call_targets,
           .call_labels = call_labels,
+          .call_semantics = call_semantics,
+          .call_role_keys = call_role_keys,
+          .call_origins = call_origins,
       });
     }
   }
@@ -971,10 +1015,12 @@ std::vector<HoleCandidate> collect_hole_candidates(const std::vector<IrOp>& ops,
   return result;
 }
 
-int hole_net_savings(const std::vector<HoleOccurrence>& occurrences, int cells) {
+int hole_net_savings(const std::vector<HoleOccurrence>& occurrences, int cells,
+                     bool late_bound_selector = false) {
   int savings = 0;
   for (const HoleOccurrence& occurrence : occurrences)
-    savings += occurrence.cells - hole_charge_cost(occurrence.leaf_target);
+    savings += occurrence.cells -
+               hole_charge_cost(occurrence.leaf_target, late_bound_selector);
   // Each hole call shrinks from a two-cell ПП to a one-cell К ПП in the body.
   const int hole_calls = occurrences.empty() ? 0 : occurrences.front().call_count;
   return savings - (cells - hole_calls + 1);
@@ -990,7 +1036,10 @@ std::optional<std::vector<bool>> assign_hole_positions(std::vector<HoleOccurrenc
     return std::nullopt;
   const std::size_t positions = occurrences.front().call_targets.size();
   for (const HoleOccurrence& occurrence : occurrences) {
-    if (occurrence.call_targets.size() != positions)
+    if (occurrence.call_targets.size() != positions ||
+        occurrence.call_semantics.size() != positions ||
+        occurrence.call_role_keys.size() != positions ||
+        occurrence.call_origins.size() != positions)
       return std::nullopt;
   }
   std::vector<bool> hole_positions(positions, false);
@@ -1004,6 +1053,18 @@ std::optional<std::vector<bool>> assign_hole_positions(std::vector<HoleOccurrenc
   }
   if (std::none_of(hole_positions.begin(), hole_positions.end(), [](bool hole) { return hole; }))
     return std::nullopt;
+  for (std::size_t position = 0; position < positions; ++position) {
+    if (hole_positions.at(position))
+      continue;
+    for (const HoleOccurrence& occurrence : occurrences) {
+      if (occurrence.call_semantics.at(position) !=
+              occurrences.front().call_semantics.at(position) ||
+          occurrence.call_role_keys.at(position) !=
+              occurrences.front().call_role_keys.at(position)) {
+        return std::nullopt;
+      }
+    }
+  }
   for (HoleOccurrence& occurrence : occurrences) {
     int leaf_target = -1;
     std::string leaf_label;
@@ -1054,8 +1115,12 @@ std::vector<SelectedHoleHelper> select_hole_helpers(const std::vector<IrOp>& ops
   }
   std::sort(ordered.begin(), ordered.end(), [](const HoleCandidate& left,
                                                const HoleCandidate& right) {
-    const int left_savings = hole_net_savings(left.occurrences, left.cells);
-    const int right_savings = hole_net_savings(right.occurrences, right.cells);
+    const int left_savings =
+        std::max(hole_net_savings(left.occurrences, left.cells),
+                 hole_net_savings(left.occurrences, left.cells, true));
+    const int right_savings =
+        std::max(hole_net_savings(right.occurrences, right.cells),
+                 hole_net_savings(right.occurrences, right.cells, true));
     if (right_savings != left_savings)
       return right_savings < left_savings;
     if (right.cells != left.cells)
@@ -1099,7 +1164,8 @@ std::vector<SelectedHoleHelper> select_hole_helpers(const std::vector<IrOp>& ops
     // handles the shape; the hole is only worth its charges for >=2 leaves.
     if (leaf_labels.size() < 2U)
       continue;
-    if (hole_net_savings(occurrences, candidate.cells) <= 0)
+    if (hole_net_savings(occurrences, candidate.cells) <= 0 &&
+        hole_net_savings(occurrences, candidate.cells, true) <= 0)
       continue;
 
     // The charges freeze numeric leaf addresses. Leaves strictly before the
@@ -1120,9 +1186,27 @@ std::vector<SelectedHoleHelper> select_hole_helpers(const std::vector<IrOp>& ops
           return occurrence.leaf_target < first_modified_address &&
                  occurrence.leaf_target <= official_last;
         });
+
+    const std::vector<IrOp> body(ops.begin() + occurrences.front().start,
+                                 ops.begin() + occurrences.front().end + 1);
+    const auto register_is_available = [&](std::string_view name) {
+      const std::string register_name(name);
+      if (taken_registers.contains(register_name))
+        return false;
+      return !globally_used_registers.contains(register_name) ||
+             (local_reuse_is_provable &&
+              hole_register_is_locally_dead(register_name, occurrences, body, liveness));
+    };
+    const auto stable_register_it =
+        std::find_if(kHoleSelectorRegisters.begin(), kHoleSelectorRegisters.end(),
+                     register_is_available);
+    const bool late_bound_selector =
+        !leaves_stable && stable_register_it != kHoleSelectorRegisters.end() &&
+        hole_net_savings(occurrences, candidate.cells, true) > 0;
+
     bool retargeted = false;
     if (!leaves_stable) {
-      if (!selected.empty())
+      if (!late_bound_selector && !selected.empty())
         continue;
       struct RegionSpan {
         int start_address = 0;
@@ -1146,59 +1230,55 @@ std::vector<SelectedHoleHelper> select_hole_helpers(const std::vector<IrOp>& ops
       if (leaf_inside_region)
         continue;
 
-      std::vector<int> final_targets(occurrences.size(), 0);
-      for (std::size_t index = 0; index < occurrences.size(); ++index)
-        final_targets[index] = occurrences.at(index).leaf_target;
-      bool converged = false;
-      for (int iteration = 0; iteration < 4 && !converged; ++iteration) {
-        converged = true;
-        for (std::size_t index = 0; index < occurrences.size(); ++index) {
-          const int original = occurrences.at(index).leaf_target;
-          int shift = 0;
-          for (std::size_t other = 0; other < occurrences.size(); ++other) {
-            if (spans.at(other).start_address + spans.at(other).cells > original)
-              continue;
-            shift += spans.at(other).cells - hole_charge_cost(final_targets.at(other));
-          }
-          const int updated = original - shift;
-          if (updated != final_targets.at(index)) {
-            final_targets[index] = updated;
-            converged = false;
+      if (late_bound_selector) {
+        // Stable indirect-flow registers preserve an ordinary two-digit
+        // selector.  Its value is bound to the leaf label only after every
+        // layout-changing transformation has finished, so no numeric
+        // retargeting or single-helper restriction is needed here.
+      } else {
+
+        std::vector<int> final_targets(occurrences.size(), 0);
+        for (std::size_t index = 0; index < occurrences.size(); ++index)
+          final_targets[index] = occurrences.at(index).leaf_target;
+        bool converged = false;
+        for (int iteration = 0; iteration < 4 && !converged; ++iteration) {
+          converged = true;
+          for (std::size_t index = 0; index < occurrences.size(); ++index) {
+            const int original = occurrences.at(index).leaf_target;
+            int shift = 0;
+            for (std::size_t other = 0; other < occurrences.size(); ++other) {
+              if (spans.at(other).start_address + spans.at(other).cells > original)
+                continue;
+              shift += spans.at(other).cells - hole_charge_cost(final_targets.at(other));
+            }
+            const int updated = original - shift;
+            if (updated != final_targets.at(index)) {
+              final_targets[index] = updated;
+              converged = false;
+            }
           }
         }
+        const bool targets_valid =
+            converged && std::all_of(final_targets.begin(), final_targets.end(),
+                                     [&](int target) {
+                                       return target >= 0 && target <= official_last;
+                                     });
+        if (!targets_valid)
+          continue;
+        for (std::size_t index = 0; index < occurrences.size(); ++index)
+          occurrences[index].leaf_target = final_targets.at(index);
+        leaf_labels.clear();
+        for (const HoleOccurrence& occurrence : occurrences)
+          leaf_labels[occurrence.leaf_target] = occurrence.leaf_label;
+        if (leaf_labels.size() < 2U)
+          continue;
+        if (hole_net_savings(occurrences, candidate.cells) <= 0)
+          continue;
+        retargeted = true;
       }
-      const bool targets_valid =
-          converged && std::all_of(final_targets.begin(), final_targets.end(),
-                                   [&](int target) {
-                                     return target >= 0 && target <= official_last;
-                                   });
-      if (!targets_valid)
-        continue;
-      for (std::size_t index = 0; index < occurrences.size(); ++index)
-        occurrences[index].leaf_target = final_targets.at(index);
-      leaf_labels.clear();
-      for (const HoleOccurrence& occurrence : occurrences)
-        leaf_labels[occurrence.leaf_target] = occurrence.leaf_label;
-      if (leaf_labels.size() < 2U)
-        continue;
-      if (hole_net_savings(occurrences, candidate.cells) <= 0)
-        continue;
-      retargeted = true;
     }
 
-    const std::vector<IrOp> body(ops.begin() + occurrences.front().start,
-                                 ops.begin() + occurrences.front().end + 1);
-    const auto register_is_available = [&](std::string_view name) {
-      const std::string register_name(name);
-      if (taken_registers.contains(register_name))
-        return false;
-      return !globally_used_registers.contains(register_name) ||
-             (local_reuse_is_provable &&
-              hole_register_is_locally_dead(register_name, occurrences, body, liveness));
-    };
-    const auto register_it =
-        std::find_if(kHoleSelectorRegisters.begin(), kHoleSelectorRegisters.end(),
-                     register_is_available);
+    const auto register_it = stable_register_it;
     std::string selector_register;
     bool mutating_selector = false;
     bool reused_selector = false;
@@ -1206,9 +1286,11 @@ std::vector<SelectedHoleHelper> select_hole_helpers(const std::vector<IrOp>& ops
     if (register_it != kHoleSelectorRegisters.end()) {
       selector_register = std::string(*register_it);
       reused_selector = globally_used_registers.contains(selector_register);
-      for (const auto& [target, unused_label] : leaf_labels) {
-        (void)unused_label;
-        charge_values[target] = target;
+      if (!late_bound_selector) {
+        for (const auto& [target, unused_label] : leaf_labels) {
+          (void)unused_label;
+          charge_values[target] = target;
+        }
       }
     } else {
       for (const std::string_view candidate_register : kMutatingHoleSelectorRegisters) {
@@ -1250,9 +1332,19 @@ std::vector<SelectedHoleHelper> select_hole_helpers(const std::vector<IrOp>& ops
     helper.register_name = selector_register;
     helper.mutating_selector = mutating_selector;
     helper.reused_selector = reused_selector;
+    helper.late_bound_selector = late_bound_selector;
     helper.charge_values = std::move(charge_values);
     helper.leaf_labels = leaf_labels;
     helper.hole_positions = *hole_positions;
+    helper.call_origins.resize(hole_positions->size());
+    for (std::size_t position = 0; position < hole_positions->size(); ++position) {
+      std::set<std::uint64_t> origins;
+      for (const HoleOccurrence& occurrence : occurrences) {
+        origins.insert(occurrence.call_origins.at(position).begin(),
+                       occurrence.call_origins.at(position).end());
+      }
+      helper.call_origins.at(position).assign(origins.begin(), origins.end());
+    }
     helper.cells = candidate.cells;
     taken_registers.insert(helper.register_name);
     selected.push_back(std::move(helper));
@@ -1266,21 +1358,32 @@ std::vector<SelectedHoleHelper> select_hole_helpers(const std::vector<IrOp>& ops
 }
 
 std::vector<IrOp> hole_charge_ops(int charge_value, int leaf_target,
+                                  const std::string& leaf_label, bool late_bound_selector,
                                   const std::string& register_name,
                                   const std::string& helper_label, bool reused_selector,
                                   const IrOp& source) {
   std::vector<IrOp> result;
-  const std::string text = std::to_string(charge_value);
+  const std::string text = late_bound_selector ? "00" : std::to_string(charge_value);
+  const std::string scope_suffix = reused_selector ? "; selector-scope=dead" : "";
   const std::string selector_comment =
-      "callee-hole selector-value=" + text + " indirect-target=" +
-      std::to_string(leaf_target) + (reused_selector ? "; selector-scope=dead" : "");
-  for (const char digit : text) {
+      late_bound_selector
+          ? "callee-hole late-selector-label=" + leaf_label + scope_suffix
+          : "callee-hole selector-value=" + text + " indirect-target=" +
+                std::to_string(leaf_target) + scope_suffix;
+  for (std::size_t index = 0; index < text.size(); ++index) {
+    const char digit = text.at(index);
     IrOp op;
     op.kind = IrKind::Plain;
     op.opcode = digit - '0';
     op.meta.mnemonic = std::string(1, digit);
     op.meta.comment = selector_comment;
     op.meta.source_line = source.meta.source_line;
+    if (late_bound_selector) {
+      op.meta.roles.push_back(make_late_bound_decimal_selector_role(
+          index == 0U ? LateBoundDecimalSelectorPart::High
+                      : LateBoundDecimalSelectorPart::Low,
+          leaf_label));
+    }
     result.push_back(std::move(op));
   }
   IrOp store;
@@ -1315,6 +1418,17 @@ std::string hole_leaf_targets_text(const std::map<int, std::string>& leaf_labels
   return text;
 }
 
+std::string hole_leaf_labels_text(const std::map<int, std::string>& leaf_labels) {
+  std::string text;
+  for (const auto& [unused_target, label] : leaf_labels) {
+    (void)unused_target;
+    if (!text.empty())
+      text += ",";
+    text += label;
+  }
+  return text;
+}
+
 } // namespace
 
 PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
@@ -1343,7 +1457,8 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
   int applied = 0;
   int saved_cells = 0;
   for (const SelectedHoleHelper& helper : selected) {
-    saved_cells += hole_net_savings(helper.occurrences, helper.cells);
+    saved_cells +=
+        hole_net_savings(helper.occurrences, helper.cells, helper.late_bound_selector);
     for (const HoleOccurrence& occurrence : helper.occurrences) {
       replacement_by_start[occurrence.start] = HoleReplacement{
           .end = occurrence.end,
@@ -1360,9 +1475,14 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
     const auto replacement = replacement_by_start.find(index);
     if (replacement != replacement_by_start.end()) {
       const std::vector<IrOp> charge =
-          hole_charge_ops(replacement->second.helper->charge_values.at(
-                              replacement->second.leaf_target),
+          hole_charge_ops(replacement->second.helper->late_bound_selector
+                              ? 0
+                              : replacement->second.helper->charge_values.at(
+                                    replacement->second.leaf_target),
                           replacement->second.leaf_target,
+                          replacement->second.helper->leaf_labels.at(
+                              replacement->second.leaf_target),
+                          replacement->second.helper->late_bound_selector,
                           replacement->second.helper->register_name,
                           replacement->second.helper->label,
                           replacement->second.helper->reused_selector,
@@ -1381,30 +1501,46 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
     result.push_back(std::move(label));
 
     const std::string hole_comment =
-        "callee-hole indirect call; proof=" + helper.label + "; leaf-targets=" +
-        hole_leaf_targets_text(helper.leaf_labels) +
+        "callee-hole indirect call; proof=" + helper.label + "; " +
+        (helper.late_bound_selector
+             ? "leaf-labels=" + hole_leaf_labels_text(helper.leaf_labels)
+             : "leaf-targets=" + hole_leaf_targets_text(helper.leaf_labels)) +
         (helper.reused_selector ? "; selector-scope=dead" : "");
     std::size_t call_position = 0;
     bool marked_entry_proof = false;
     for (const IrOp& op : helper.body) {
+      IrOp body_source = op;
       if (op.kind == IrKind::Call) {
         const bool is_hole = call_position < helper.hole_positions.size() &&
-                             helper.hole_positions.at(call_position);
+                            helper.hole_positions.at(call_position);
+        body_source.meta.semantic_call_origins = helper.call_origins.at(call_position);
         ++call_position;
         if (is_hole) {
-          IrOp hole = op;
+          body_source.meta.roles.clear();
+          body_source.target_meta.roles.clear();
+          IrOp hole = std::move(body_source);
           hole.kind = IrKind::IndirectCall;
           hole.register_name = helper.register_name;
           hole.target = 0;
           hole.target_meta = {};
           hole.opcode = 0xa0 + register_index(helper.register_name);
+          hole.semantic.clear();
+          std::vector<IrTarget> symbolic_leaf_targets;
+          symbolic_leaf_targets.reserve(helper.leaf_labels.size());
+          for (const auto& [unused_target, leaf_label] : helper.leaf_labels) {
+            (void)unused_target;
+            symbolic_leaf_targets.push_back(leaf_label);
+          }
+          hole.meta.indirect_flow_targets = std::move(symbolic_leaf_targets);
+          if (helper.late_bound_selector)
+            hole.meta.roles.push_back("late-decimal-selector-consumer");
           hole.meta.mnemonic = "К ПП " + helper.register_name;
           hole.meta.comment = hole_comment;
           result.push_back(std::move(hole));
           continue;
         }
       }
-      IrOp body_op = mark_helper_body_op(op);
+      IrOp body_op = mark_helper_body_op(std::move(body_source));
       if ((helper.mutating_selector || helper.reused_selector) && !marked_entry_proof) {
         std::string marker;
         if (helper.mutating_selector)

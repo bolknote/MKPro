@@ -575,6 +575,50 @@ bool reason_contains(const core::NaturalTargetComponentLayoutPlan& plan,
 
 void natural_target_component_layout_is_generic_and_proof_gated() {
   {
+    Fixture input;
+    input.items.push_back(MachineItem::label("bounded_entry"));
+    input.items.push_back(stop());
+    input.items.push_back(MachineItem::label("bounded_padding"));
+    for (int cell = 0; cell < 5; ++cell)
+      input.items.push_back(op(0x0d));
+    input.items.push_back(stop());
+    input.items.push_back(MachineItem::label("bounded_leaf"));
+    input.items.push_back(op(0x22));
+    input.items.push_back(op(0x52));
+
+    core::NaturalTargetComponentLayoutOptions options;
+    options.required_bounded_target_labels = {"bounded_leaf"};
+    options.maximum_bounded_target_address = 3;
+    options.allow_size_neutral_bounded_layout = true;
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input), options);
+    int bounded_leaf_address = -1;
+    int address = 0;
+    for (const MachineItem& item : rewritten.items) {
+      if (item.kind == MachineItemKind::Label) {
+        if (item.name == "bounded_leaf")
+          bounded_leaf_address = address;
+      } else {
+        ++address;
+      }
+    }
+    require(rewritten.plan.proved && rewritten.applied > 0 &&
+                rewritten.removed_cells == 0 &&
+                rewritten.plan.size_neutral_bounded_layout &&
+                rewritten.plan.bounded_targets == 1 &&
+                rewritten.plan.bounded_targets_proved && bounded_leaf_address >= 0 &&
+                bounded_leaf_address <= 3 &&
+                cell_count(rewritten.items) == cell_count(input.items),
+            "bounded target layout should prove a size-neutral component reorder");
+
+    options.maximum_bounded_target_address = 0;
+    const auto rejected = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input), options);
+    require(!rejected.plan.proved && rejected.applied == 0,
+            "bounded target layout should fail closed when main occupies the whole range");
+  }
+
+  {
     const Fixture input = shared_conditional_fixture();
     const auto rewritten = core::optimize_natural_target_component_layout(
         input.items, input.preloads, flow(input));
