@@ -97,6 +97,7 @@ IrMeta meta_from_op(const MachineItem& item) {
   meta.manual_interaction = item.manual_interaction;
   meta.indirect_flow_targets = item.indirect_flow_targets;
   meta.indirect_memory_targets = item.indirect_memory_targets;
+  meta.borrowed_entry_phase_selector = item.borrowed_entry_phase_selector;
   meta.semantic_call_origins = item.semantic_call_origins;
   return meta;
 }
@@ -157,6 +158,7 @@ MachineItem machine_op_from_meta(int opcode, const IrMeta& meta) {
   item.manual_interaction = meta.manual_interaction;
   item.indirect_flow_targets = meta.indirect_flow_targets;
   item.indirect_memory_targets = meta.indirect_memory_targets;
+  item.borrowed_entry_phase_selector = meta.borrowed_entry_phase_selector;
   item.semantic_call_origins = meta.semantic_call_origins;
   return item;
 }
@@ -291,6 +293,8 @@ std::string meta_to_json(const IrMeta& meta) {
     add_field(out, first, "indirectMemoryTargets",
               int_array_to_json(*meta.indirect_memory_targets));
   }
+  if (meta.borrowed_entry_phase_selector)
+    add_field(out, first, "borrowedEntryPhaseSelector", "true");
   if (meta.tactic.has_value())
     add_field(out, first, "tactic", json_escape(*meta.tactic));
   out << '}';
@@ -366,6 +370,8 @@ std::string machine_item_to_json(const MachineItem& item) {
       add_field(out, first, "indirectMemoryTargets",
                 int_array_to_json(*item.indirect_memory_targets));
     }
+    if (item.borrowed_entry_phase_selector)
+      add_field(out, first, "borrowedEntryPhaseSelector", "true");
   } else {
     add_field(out, first, "kind", json_escape("address"));
     add_field(out, first, "target", target_to_json(item.target));
@@ -783,6 +789,7 @@ bool machine_items_equal(const MachineItem& a, const MachineItem& b) {
            a.manual_interaction == b.manual_interaction &&
            a.indirect_flow_targets == b.indirect_flow_targets &&
            a.indirect_memory_targets == b.indirect_memory_targets &&
+           a.borrowed_entry_phase_selector == b.borrowed_entry_phase_selector &&
            a.semantic_call_origins == b.semantic_call_origins;
   }
   return targets_equal(a.target, b.target) && a.comment == b.comment &&

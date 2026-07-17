@@ -1,6 +1,8 @@
 #include "mkpro/core/post_layout_control_flow.hpp"
 
+#include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/opcodes.hpp"
+#include "mkpro/core/register_allocator.hpp"
 
 #include <algorithm>
 #include <compare>
@@ -445,18 +447,41 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
   }
   add_external_entry(result, items, index, main->address, {}, ExternalEntryKind::Main);
 
-  std::deque<ExecutionState> pending;
-  pending.push_back(ExecutionState{.pc = main->address});
-  std::set<ExecutionState> visited;
-  while (!pending.empty() && result.reasons.empty()) {
-    ExecutionState state = std::move(pending.front());
-    pending.pop_front();
-    if (!visited.insert(state).second)
-      continue;
-    if (visited.size() > options.maximum_execution_states) {
+  std::deque<std::size_t> pending;
+  std::map<ExecutionState, std::size_t> state_ids;
+  std::vector<ExecutionState> states;
+  auto record_state = [&](const ExecutionState& state) -> std::optional<std::size_t> {
+    if (const auto found = state_ids.find(state); found != state_ids.end())
+      return found->second;
+    if (states.size() >= options.maximum_execution_states) {
       add_reason(result, "control-flow exploration exceeds the execution-state cap");
-      break;
+      return std::nullopt;
     }
+    const std::optional<PostLayoutCommandIdentity> identity =
+        identity_at_address(items, index, state.pc);
+    if (!identity.has_value()) {
+      add_reason(result, "control flow has a missing executable successor");
+      return std::nullopt;
+    }
+    const std::size_t id = states.size();
+    state_ids.emplace(state, id);
+    states.push_back(state);
+    result.execution_states.push_back(PostLayoutExecutionState{
+        .item_index = identity->item_index,
+        .address = state.pc,
+        .return_stack = state.returns,
+    });
+    result.execution_successors.emplace_back();
+    pending.push_back(id);
+    return id;
+  };
+  (void)record_state(ExecutionState{.pc = main->address});
+  std::size_t explored = 0;
+  while (!pending.empty() && result.reasons.empty()) {
+    const std::size_t state_id = pending.front();
+    pending.pop_front();
+    const ExecutionState state = states.at(state_id);
+    ++explored;
     result.maximum_observed_return_depth =
         std::max(result.maximum_observed_return_depth, static_cast<int>(state.returns.size()));
 
@@ -470,11 +495,13 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
     const int opcode = item.opcode;
 
     const auto enqueue = [&](int pc, const std::vector<int>& returns) {
-      if (!identity_at_address(items, index, pc).has_value()) {
-        add_reason(result, "control flow has a missing executable successor");
+      const std::optional<std::size_t> successor =
+          record_state(ExecutionState{.pc = pc, .returns = returns});
+      if (!successor.has_value())
         return;
-      }
-      pending.push_back(ExecutionState{.pc = pc, .returns = returns});
+      std::vector<std::size_t>& edges = result.execution_successors.at(state_id);
+      if (std::find(edges.begin(), edges.end(), *successor) == edges.end())
+        edges.push_back(*successor);
     };
 
     if (opcode == kStopOpcode) {
@@ -494,8 +521,15 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
                                  ? ExternalEntryKind::ManualSingleStep
                                  : ExternalEntryKind::ManualContinuous,
                              anchor);
-          if (phase + 1 == static_cast<int>(protocol->second.phase_items.size()))
-            enqueue(index.item_addresses.at(phase_item), state.returns);
+        }
+        const auto first_phase = protocol->second.phase_items.find(0);
+        if (first_phase == protocol->second.phase_items.end()) {
+          add_reason(result, "manual protocol has no first input phase");
+        } else {
+          // The operator's pauses do not mutate calculator registers. Follow
+          // every single-step input command in order so its defs participate
+          // in exact liveness, then continue naturally from the final phase.
+          enqueue(index.item_addresses.at(first_phase->second), state.returns);
         }
       } else {
         const std::optional<int> resume_pc =
@@ -609,7 +643,7 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
       enqueue(*successor, state.returns);
     }
   }
-  result.explored_states = visited.size();
+  result.explored_states = explored;
 
   std::sort(
       result.external_entries.begin(), result.external_entries.end(),
@@ -663,6 +697,209 @@ build_post_layout_control_flow(const std::vector<MachineItem>& items,
   explore_entries_and_return_stacks(items, index, protocols, options, result);
   result.proved = result.reasons.empty();
   return result;
+}
+
+namespace {
+
+enum class RegisterWriteEffect {
+  None,
+  Maybe,
+  Definite,
+};
+
+struct RegisterAccessEffect {
+  bool reads = false;
+  RegisterWriteEffect writes = RegisterWriteEffect::None;
+};
+
+std::optional<std::string> stable_indirect_flow_register(const MachineItem& item) {
+  if (item.kind != MachineItemKind::Op || !is_indirect_flow_opcode(item.opcode))
+    return std::nullopt;
+  const int index = item.opcode & 0x0f;
+  if (index < 0 || index > 14)
+    return std::nullopt;
+  const std::string register_name = register_name_for_index(index);
+  return is_stable_indirect_selector(register_name) ? std::optional<std::string>(register_name)
+                                                    : std::nullopt;
+}
+
+RegisterAccessEffect register_access_effect(const MachineItem& item,
+                                            const std::string& register_name) {
+  RegisterAccessEffect result;
+  if (item.kind != MachineItemKind::Op)
+    return result;
+
+  const int register_number = register_index(register_name);
+  if (item.opcode >= 0x40 && item.opcode <= 0x4e && item.opcode - 0x40 == register_number) {
+    result.writes = RegisterWriteEffect::Definite;
+    return result;
+  }
+  if (item.opcode >= 0x60 && item.opcode <= 0x6e && item.opcode - 0x60 == register_number) {
+    result.reads = true;
+    return result;
+  }
+
+  const int family = item.opcode & 0xf0;
+  const int selector = item.opcode & 0x0f;
+  if ((is_indirect_flow_opcode(item.opcode) || is_indirect_memory_opcode(item.opcode)) &&
+      selector == register_number) {
+    result.reads = true;
+  }
+
+  if (family != 0xb0 && family != 0xd0)
+    return result;
+
+  std::set<int> targets;
+  if (item.indirect_memory_targets.has_value()) {
+    targets.insert(item.indirect_memory_targets->begin(), item.indirect_memory_targets->end());
+  }
+  const bool unknown_targets = targets.empty();
+  const bool may_touch = unknown_targets || targets.contains(register_number);
+  if (!may_touch)
+    return result;
+  if (family == 0xd0) {
+    result.reads = true;
+  } else if (!unknown_targets && targets.size() == 1U) {
+    result.writes = RegisterWriteEffect::Definite;
+  } else {
+    result.writes = RegisterWriteEffect::Maybe;
+  }
+  return result;
+}
+
+void add_proof_reason(PostLayoutBorrowedSelectorProof& proof, std::string reason) {
+  if (std::find(proof.reasons.begin(), proof.reasons.end(), reason) == proof.reasons.end())
+    proof.reasons.push_back(std::move(reason));
+}
+
+void prove_one_borrowed_register(const std::vector<MachineItem>& items,
+                                 const AuthoritativePostLayoutControlFlow& control,
+                                 const std::string& register_name,
+                                 const std::set<std::size_t>& selector_items,
+                                 PostLayoutBorrowedSelectorProof& proof) {
+  constexpr unsigned kEntryValue = 1U;
+  constexpr unsigned kOverwrittenValue = 2U;
+
+  if (!is_stable_indirect_selector(register_name)) {
+    add_proof_reason(proof, "borrowed selector R" + register_name + " is not stable");
+    return;
+  }
+  if (selector_items.empty()) {
+    add_proof_reason(proof, "borrowed selector R" + register_name + " has no marked uses");
+    return;
+  }
+
+  std::vector<unsigned> incoming(control.execution_states.size(), 0U);
+  std::vector<bool> queued(control.execution_states.size(), false);
+  std::deque<std::size_t> pending;
+  incoming.front() = kEntryValue;
+  pending.push_back(0U);
+  queued.front() = true;
+  std::set<std::size_t> reached_selector_items;
+  std::set<std::size_t> reached_selector_states;
+
+  while (!pending.empty()) {
+    const std::size_t state_index = pending.front();
+    pending.pop_front();
+    queued.at(state_index) = false;
+    const PostLayoutExecutionState& state = control.execution_states.at(state_index);
+    if (state.item_index >= items.size()) {
+      add_proof_reason(proof, "borrowed-selector graph references a missing machine item");
+      continue;
+    }
+
+    const MachineItem& item = items.at(state.item_index);
+    const unsigned state_values = incoming.at(state_index);
+    const RegisterAccessEffect access = register_access_effect(item, register_name);
+    const bool selector_use = selector_items.contains(state.item_index);
+    if (selector_use) {
+      reached_selector_items.insert(state.item_index);
+      reached_selector_states.insert(state_index);
+      const std::optional<std::string> actual_register = stable_indirect_flow_register(item);
+      if (!actual_register.has_value() || *actual_register != register_name) {
+        add_proof_reason(proof, "marked borrowed-selector item does not use R" + register_name);
+      }
+      if ((state_values & kEntryValue) == 0U || (state_values & kOverwrittenValue) != 0U) {
+        add_proof_reason(proof, "borrowed selector R" + register_name +
+                                    " is reachable after its entry value was overwritten");
+      }
+    } else if ((state_values & kEntryValue) != 0U && access.reads) {
+      add_proof_reason(proof, "entry value of borrowed selector R" + register_name +
+                                  " is read by ordinary code before a definite write");
+    }
+
+    unsigned outgoing = state_values;
+    if (access.writes == RegisterWriteEffect::Definite) {
+      outgoing = kOverwrittenValue;
+    } else if (access.writes == RegisterWriteEffect::Maybe) {
+      outgoing |= kOverwrittenValue;
+    }
+    for (const std::size_t successor : control.execution_successors.at(state_index)) {
+      if (successor >= incoming.size()) {
+        add_proof_reason(proof, "borrowed-selector graph has an invalid successor");
+        continue;
+      }
+      const unsigned combined = incoming.at(successor) | outgoing;
+      if (combined == incoming.at(successor))
+        continue;
+      incoming.at(successor) = combined;
+      if (!queued.at(successor)) {
+        queued.at(successor) = true;
+        pending.push_back(successor);
+      }
+    }
+  }
+
+  for (const std::size_t item_index : selector_items) {
+    if (!reached_selector_items.contains(item_index)) {
+      add_proof_reason(proof,
+                       "borrowed selector R" + register_name + " has an unreachable marked use");
+    }
+  }
+  proof.selector_states += reached_selector_states.size();
+  proof.entry_value_states +=
+      static_cast<std::size_t>(std::count_if(incoming.begin(), incoming.end(), [](unsigned values) {
+        return (values & kEntryValue) != 0U;
+      }));
+}
+
+} // namespace
+
+PostLayoutBorrowedSelectorProof
+prove_post_layout_borrowed_entry_selectors(const std::vector<MachineItem>& items,
+                                           const PostLayoutControlFlowOptions& options) {
+  PostLayoutBorrowedSelectorProof proof;
+  std::map<std::string, std::set<std::size_t>> selector_items;
+  for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
+    const MachineItem& item = items.at(item_index);
+    if (!item.borrowed_entry_phase_selector) {
+      continue;
+    }
+    const std::optional<std::string> register_name = stable_indirect_flow_register(item);
+    if (!register_name.has_value()) {
+      add_proof_reason(proof, "borrowed-selector marker is not on stable indirect flow");
+      continue;
+    }
+    selector_items[*register_name].insert(item_index);
+  }
+  proof.selector_registers = selector_items.size();
+  if (selector_items.empty()) {
+    add_proof_reason(proof, "final artifact has no borrowed entry-phase selector markers");
+    return proof;
+  }
+
+  const AuthoritativePostLayoutControlFlow control = build_post_layout_control_flow(items, options);
+  if (!control.proved || control.execution_states.empty() ||
+      control.execution_states.size() != control.execution_successors.size()) {
+    add_proof_reason(proof, control.reasons.empty()
+                                ? "borrowed-selector control-flow graph is not proved"
+                                : control.reasons.front());
+    return proof;
+  }
+  for (const auto& [register_name, marked_items] : selector_items)
+    prove_one_borrowed_register(items, control, register_name, marked_items, proof);
+  proof.proved = proof.reasons.empty();
+  return proof;
 }
 
 } // namespace mkpro::core

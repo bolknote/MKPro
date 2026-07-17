@@ -155,6 +155,10 @@ void post_layout_control_flow_matches_typed_contract() {
                            return entry.entry.address == 2;
                          }),
             "PromptStop itself must not become an ordinary external resume entry");
+    require(
+        std::any_of(facts.execution_states.begin(), facts.execution_states.end(),
+                    [](const core::PostLayoutExecutionState& state) { return state.address == 3; }),
+        "exact execution graph should include a manual single-step store before resume");
   }
 
   {
@@ -185,9 +189,47 @@ void post_layout_control_flow_matches_typed_contract() {
         core::build_post_layout_control_flow(items);
     require(facts.proved && facts.maximum_observed_return_depth == 1,
             "direct call/resume/return should have an exact one-slot return stack");
+    require(facts.execution_states.size() == 4U &&
+                facts.execution_successors.size() == facts.execution_states.size() &&
+                facts.explored_states == facts.execution_states.size(),
+            "authoritative control flow should expose every exact return-stack state and edge");
     require(has_entry(facts, 0, core::ExternalEntryKind::Main) &&
                 has_entry(facts, 4, core::ExternalEntryKind::ResumableStop, {2}),
             "resumable STOP in a subroutine should preserve its exact return continuation");
+  }
+
+  {
+    std::vector<MachineItem> acyclic;
+    acyclic.push_back(op(0xe9, "К x=0 9"));
+    acyclic.back().indirect_flow_targets = std::vector<IrTarget>{std::string("branch_write")};
+    acyclic.back().borrowed_entry_phase_selector = true;
+    acyclic.push_back(op(0x49, "X->П 9"));
+    acyclic.push_back(stop(StopDisposition::Terminal));
+    acyclic.push_back(MachineItem::label("branch_write"));
+    acyclic.push_back(op(0x49, "X->П 9"));
+    acyclic.push_back(stop(StopDisposition::Terminal));
+    const core::PostLayoutBorrowedSelectorProof safe =
+        core::prove_post_layout_borrowed_entry_selectors(acyclic);
+    require(safe.proved && safe.selector_registers == 1U && safe.selector_states > 0U,
+            "entry-phase selector should be valid when every continuation overwrites it "
+            "before ordinary use");
+
+    std::vector<MachineItem> recurring;
+    recurring.push_back(op(0xe9, "К x=0 9"));
+    recurring.back().indirect_flow_targets = std::vector<IrTarget>{std::string("write")};
+    recurring.back().borrowed_entry_phase_selector = true;
+    recurring.push_back(MachineItem::label("write"));
+    recurring.push_back(op(0x49, "X->П 9"));
+    recurring.push_back(op(0x51, "БП"));
+    recurring.push_back(MachineItem::address(0));
+    const core::PostLayoutBorrowedSelectorProof unsafe =
+        core::prove_post_layout_borrowed_entry_selectors(recurring);
+    require(!unsafe.proved && std::any_of(unsafe.reasons.begin(), unsafe.reasons.end(),
+                                          [](const std::string& reason) {
+                                            return reason.find("reachable after") !=
+                                                   std::string::npos;
+                                          }),
+            "entry-phase selector must be rejected when a later write loops back to it");
   }
 
   std::size_t condition = 0;
