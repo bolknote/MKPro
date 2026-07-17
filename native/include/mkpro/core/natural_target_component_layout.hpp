@@ -78,6 +78,7 @@ struct NaturalTargetComponentLayoutPlan {
   int rebound_indirect_flows = 0;
   int transparent_trampolines = 0;
   int transparent_split_bridges = 0;
+  int x2_reconvergence_flows = 0;
   std::vector<NaturalTargetFlowRewrite> flows;
   std::vector<NaturalTargetPreloadRewrite> preloads;
   std::vector<NaturalTargetRuntimeSelectorProof> runtime_selectors;
@@ -135,8 +136,10 @@ std::optional<std::vector<MachineItem>> normalize_natural_target_overflow_formal
 // accepted only after its exact structure is proved and collapsed from the
 // identity trace without changing the incoming flow kind or return stack.
 // A fallthrough-closed helper may likewise be split before a later fixed target:
-// its prefix receives a proved direct-jump bridge and its suffix remains freely
-// placeable. Candidate cuts are derived only from target geometry.
+// its prefix receives either a proved direct-jump bridge or a one-cell indirect
+// bridge when the suffix begins at an independently proved stable selector target.
+// The suffix remains freely placeable and candidate cuts are derived only from
+// target geometry and typed selector identity.
 NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     const std::vector<MachineItem>& items,
     const std::vector<PreloadReport>& preloads,

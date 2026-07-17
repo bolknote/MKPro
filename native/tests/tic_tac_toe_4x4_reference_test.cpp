@@ -537,7 +537,6 @@ void tic_tac_toe_4x4_source_manual_ui_contract_is_explicit() {
   options.budget = 999;
   options.disable_candidate_search = true;
   options.packed_score_accumulator_helpers = true;
-  options.disable_return_suffix_gadget = true;
   options.proc_layout_strategy = "reverse";
   const CompileResult compiled = compile_source(text, options);
   require(compiled.implemented && compiled.diagnostics.empty(),

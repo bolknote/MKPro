@@ -749,6 +749,26 @@ void pass_pipeline_matches_initial_typescript_contract() {
   }
 
   {
+    const core::passes::PassResult result = run_return_suffix_gadget(
+        {recall("5"), recall("1"), recall("2"), plain(0x10), call_to("normalize"),
+         call_to("mark"), recall("4"), recall("1"), recall("2"), plain(0x11),
+         call_to("normalize"), jump_to("mark")});
+    require(result.applied == 2,
+            "sum/difference tail gadget should apply one canonicalization and one shared tail");
+    require(result.ops.size() == 11,
+            "sum/difference tail gadget should remove one opcode and three encoded cells");
+    require(std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                        [](const core::passes::AppliedOptimization& optimization) {
+                          return optimization.name == "sum-difference-tail-gadget";
+                        }),
+            "sum/difference tail gadget should report its algebraic proof");
+    require(std::any_of(result.ops.begin(), result.ops.end(), [](const IrOp& op) {
+              return op.kind == IrKind::Plain && op.opcode == 0x0b;
+            }),
+            "sum/difference tail gadget should form a-b as (-b)+a");
+  }
+
+  {
     const core::passes::PassResult result = run_shared_straight_line_helper(
         {label("first"), recall("1"), recall("2"), plain(0x10), store("3"), recall("4"), store("5"),
          plain(0x20), label("second"), recall("1"), recall("2"), plain(0x10), store("3"),

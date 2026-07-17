@@ -331,6 +331,81 @@ Fixture shared_call_and_tail_jump_fixture() {
   return result;
 }
 
+Fixture indirect_split_bridge_fixture() {
+  Fixture result;
+  const std::string prefix = "unrelated_indirect_split_prefix";
+  const std::string suffix = "unrelated_indirect_split_suffix";
+
+  result.items.push_back(MachineItem::label("unrelated_indirect_split_entry"));
+  for (int call = 0; call < 2; ++call) {
+    result.items.push_back(op(0x53));
+    result.items.push_back(MachineItem::address(prefix));
+  }
+  for (int call = 0; call < 4; ++call) {
+    result.items.push_back(op(0x53));
+    result.items.push_back(MachineItem::address(suffix));
+  }
+  result.visible_stop = result.items.size();
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label("unrelated_indirect_split_padding"));
+  for (int cell = 1; cell < 13; ++cell)
+    result.items.push_back(op(0x54));
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label(prefix));
+  for (int cell = 0; cell < 10; ++cell)
+    result.items.push_back(op(0x54));
+  result.items.push_back(MachineItem::label(suffix));
+  result.items.push_back(op(0x22));
+  result.items.push_back(op(0x52));
+
+  result.preloads.push_back(PreloadReport{.register_name = "8", .value = "20"});
+  result.preloads.push_back(PreloadReport{.register_name = "9", .value = "31"});
+  return result;
+}
+
+Fixture indirect_split_bridge_call_continuation_fixture() {
+  Fixture result;
+  const std::string prefix = "unrelated_split_call_prefix";
+  const std::string suffix = "unrelated_split_call_suffix";
+  const std::string callee = "unrelated_split_call_callee";
+
+  result.items.push_back(MachineItem::label("unrelated_split_call_entry"));
+  for (int call = 0; call < 2; ++call) {
+    result.items.push_back(op(0x53));
+    result.items.push_back(MachineItem::address(prefix));
+  }
+  for (int call = 0; call < 4; ++call) {
+    result.items.push_back(op(0x53));
+    result.items.push_back(MachineItem::address(suffix));
+  }
+  result.visible_stop = result.items.size();
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label("unrelated_split_call_padding"));
+  for (int cell = 1; cell < 13; ++cell)
+    result.items.push_back(op(0x54));
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label(prefix));
+  for (int cell = 0; cell < 8; ++cell)
+    result.items.push_back(op(0x54));
+  result.items.push_back(op(0x53));
+  result.items.push_back(MachineItem::address(callee));
+  result.items.push_back(MachineItem::label(suffix));
+  result.items.push_back(op(0x22));
+  result.items.push_back(op(0x52));
+
+  result.items.push_back(MachineItem::label(callee));
+  result.items.push_back(op(0x54));
+  result.items.push_back(op(0x52));
+
+  result.preloads.push_back(PreloadReport{.register_name = "8", .value = "20"});
+  result.preloads.push_back(PreloadReport{.register_name = "9", .value = "31"});
+  return result;
+}
+
 Fixture shared_conditional_fixture() {
   Fixture result;
   const std::string guard_sink = "unrelated_shared_conditional_guard_sink";
@@ -356,6 +431,35 @@ Fixture shared_conditional_fixture() {
   result.items.push_back(stop());
 
   result.preloads.push_back(PreloadReport{.register_name = "8", .value = "20"});
+  return result;
+}
+
+Fixture conditional_x2_reconvergence_fixture(bool restore_before_overwrite) {
+  Fixture result;
+  const std::string sink = "unrelated_x2_reconvergence_sink";
+
+  result.items.push_back(MachineItem::label("unrelated_x2_reconvergence_entry"));
+  for (int branch = 0; branch < 2; ++branch) {
+    result.items.push_back(op(0x60));
+    result.items.push_back(op(0x5e));
+    result.items.push_back(MachineItem::address(sink));
+    if (restore_before_overwrite)
+      result.items.push_back(op(0x0a));
+    result.items.push_back(op(0x61));
+  }
+  result.visible_stop = result.items.size();
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label(sink));
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label("unrelated_x2_reconvergence_padding"));
+  const int padding_cells = restore_before_overwrite ? 9 : 11;
+  for (int cell = 1; cell < padding_cells; ++cell)
+    result.items.push_back(op(0x54));
+  result.items.push_back(stop());
+
+  result.preloads.push_back(PreloadReport{.register_name = "8", .value = "18"});
   return result;
 }
 
@@ -499,6 +603,43 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
   }
 
   {
+    const Fixture input = conditional_x2_reconvergence_fixture(false);
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    const int converted_conditionals = static_cast<int>(std::count_if(
+        rewritten.plan.flows.begin(), rewritten.plan.flows.end(), [](const auto& flow) {
+          return flow.original_opcode == 0x5e;
+        }));
+    std::string rejection;
+    for (const std::string& reason : rewritten.plan.reasons) {
+      if (!rejection.empty())
+        rejection += " | ";
+      rejection += reason;
+    }
+    require(rewritten.plan.proved && rewritten.removed_cells == 2 &&
+                converted_conditionals == 2 &&
+                rewritten.plan.x2_reconvergence_flows == 2,
+            "two conditionals may share a selector when every changed fallthrough X2 "
+            "value is overwritten before it can be observed: applied=" +
+                std::to_string(rewritten.applied) +
+                ", removed=" + std::to_string(rewritten.removed_cells) +
+                ", reasons=" + rejection);
+    const Observation before = observe(input.items, input.preloads);
+    const Observation after = observe(rewritten.items, rewritten.preloads);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "proved conditional X2 reconvergence must preserve observable state");
+  }
+
+  {
+    const Fixture input = conditional_x2_reconvergence_fixture(true);
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    require(rewritten.applied == 0 &&
+                reason_contains(rewritten.plan, "x2=0"),
+            "an X2 restore before overwrite must reject indirect conditional conversion");
+  }
+
+  {
     const Fixture input = shared_call_and_tail_jump_fixture();
     const auto rewritten = core::optimize_natural_target_component_layout(
         input.items, input.preloads, flow(input));
@@ -522,6 +663,37 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
     const Observation after = observe(rewritten.items, rewritten.preloads);
     require(before.stopped && after.stopped && before.state == after.state,
             "mixed direct-flow conversion must preserve observable machine state");
+  }
+
+  {
+    const Fixture input = indirect_split_bridge_fixture();
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    require(rewritten.plan.proved && rewritten.applied == 6 &&
+                rewritten.removed_cells == 5 &&
+                rewritten.plan.transparent_split_bridges == 1 &&
+                rewritten.items.at(item_at_address(rewritten.items, 30)).opcode == 0x89 &&
+                rewritten.items.at(item_at_address(rewritten.items, 31)).opcode == 0x22,
+            "a selected suffix target should split its fallthrough component with one "
+            "proved indirect bridge");
+    const Observation before = observe(input.items, input.preloads);
+    const Observation after = observe(rewritten.items, rewritten.preloads);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "an indirect split bridge must preserve observable machine state");
+  }
+
+  {
+    const Fixture input = indirect_split_bridge_call_continuation_fixture();
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    require(rewritten.plan.proved && rewritten.applied > 0 &&
+                rewritten.plan.transparent_split_bridges == 1,
+            "an indirect split bridge should remain transparent when a nested call "
+            "returns through it");
+    const Observation before = observe(input.items, input.preloads);
+    const Observation after = observe(rewritten.items, rewritten.preloads);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "a split bridge must canonicalize dynamic return continuations");
   }
 
   {

@@ -100,12 +100,12 @@ bool is_tail_call_gadget_body_op(const IrOp& op) {
   case IrKind::Recall:
   case IrKind::IndirectStore:
   case IrKind::IndirectRecall:
+  case IrKind::Call:
   case IrKind::Plain:
     return true;
   case IrKind::Label:
   case IrKind::Jump:
   case IrKind::CondJump:
-  case IrKind::Call:
   case IrKind::Loop:
   case IrKind::IndirectJump:
   case IrKind::IndirectCall:
@@ -293,7 +293,6 @@ std::map<std::string, std::vector<BodyOccurrence>> collect_tail_call_occurrences
               .cells = cells + cells_per_op(op),
           });
         }
-        break;
       }
       if (!is_tail_call_gadget_body_op(op))
         break;
@@ -301,6 +300,108 @@ std::map<std::string, std::vector<BodyOccurrence>> collect_tail_call_occurrences
       cells += cells_per_op(op);
     }
   }
+  return result;
+}
+
+struct RecallArithmeticGroup {
+  std::vector<int> additions;
+  std::vector<int> subtractions;
+};
+
+bool is_direct_recall_arithmetic(const std::vector<IrOp>& ops, int start, int opcode) {
+  if (start < 0 || start + 2 >= static_cast<int>(ops.size()))
+    return false;
+  const IrOp& left = ops.at(static_cast<std::size_t>(start));
+  const IrOp& right = ops.at(static_cast<std::size_t>(start + 1));
+  const IrOp& arithmetic = ops.at(static_cast<std::size_t>(start + 2));
+  return left.kind == IrKind::Recall && right.kind == IrKind::Recall &&
+         arithmetic.kind == IrKind::Plain && arithmetic.opcode == opcode &&
+         !has_rewrite_barrier(left) && !has_rewrite_barrier(right) &&
+         !has_rewrite_barrier(arithmetic);
+}
+
+IrOp canonical_sign_change(const IrOp& source) {
+  IrOp result;
+  result.kind = IrKind::Plain;
+  result.opcode = 0x0b;
+  result.meta.mnemonic = "/-/";
+  result.meta.comment = "sum/difference tail canonicalization";
+  result.meta.source_line = source.meta.source_line;
+  result.meta.semantic_call_origins = source.meta.semantic_call_origins;
+  result.meta.tactic = source.meta.tactic;
+  return result;
+}
+
+IrOp canonical_addition(const IrOp& source) {
+  IrOp result;
+  result.kind = IrKind::Plain;
+  result.opcode = 0x10;
+  result.meta.mnemonic = "+";
+  result.meta.comment = "sum/difference tail canonicalization";
+  result.meta.source_line = source.meta.source_line;
+  result.meta.semantic_call_origins = source.meta.semantic_call_origins;
+  result.meta.tactic = source.meta.tactic;
+  return result;
+}
+
+std::vector<IrOp> canonicalize_sum_difference_tails(const std::vector<IrOp>& ops,
+                                                    int& canonicalized_groups) {
+  std::map<std::pair<std::string, std::string>, RecallArithmeticGroup> groups;
+  for (int start = 0; start + 2 < static_cast<int>(ops.size()); ++start) {
+    if (!is_direct_recall_arithmetic(ops, start, 0x10) &&
+        !is_direct_recall_arithmetic(ops, start, 0x11)) {
+      continue;
+    }
+    const auto key = std::pair{ops.at(static_cast<std::size_t>(start)).register_name,
+                               ops.at(static_cast<std::size_t>(start + 1)).register_name};
+    RecallArithmeticGroup& group = groups[key];
+    if (ops.at(static_cast<std::size_t>(start + 2)).opcode == 0x10)
+      group.additions.push_back(start);
+    else
+      group.subtractions.push_back(start);
+  }
+
+  std::set<int> addition_starts;
+  std::set<int> subtraction_starts;
+  for (const auto& [unused_key, group] : groups) {
+    (void)unused_key;
+    if (group.additions.empty() || group.subtractions.empty())
+      continue;
+    addition_starts.insert(group.additions.begin(), group.additions.end());
+    subtraction_starts.insert(group.subtractions.begin(), group.subtractions.end());
+    ++canonicalized_groups;
+  }
+  if (canonicalized_groups == 0)
+    return ops;
+
+  std::vector<IrOp> result;
+  result.reserve(ops.size() + subtraction_starts.size());
+  for (int index = 0; index < static_cast<int>(ops.size()); ++index) {
+    if (addition_starts.contains(index)) {
+      result.push_back(ops.at(static_cast<std::size_t>(index + 1)));
+      result.push_back(ops.at(static_cast<std::size_t>(index)));
+      result.push_back(ops.at(static_cast<std::size_t>(index + 2)));
+      index += 2;
+      continue;
+    }
+    if (subtraction_starts.contains(index)) {
+      const IrOp& subtraction = ops.at(static_cast<std::size_t>(index + 2));
+      result.push_back(ops.at(static_cast<std::size_t>(index + 1)));
+      result.push_back(canonical_sign_change(subtraction));
+      result.push_back(ops.at(static_cast<std::size_t>(index)));
+      result.push_back(canonical_addition(subtraction));
+      index += 2;
+      continue;
+    }
+    result.push_back(ops.at(static_cast<std::size_t>(index)));
+  }
+  return result;
+}
+
+int total_cells(const std::vector<IrOp>& ops) {
+  int result = 0;
+  for (const IrOp& op : ops)
+    result += cells_per_op(op);
   return result;
 }
 
@@ -490,17 +591,21 @@ PassResult return_suffix_gadget(const std::vector<IrOp>& ops, const PassContext&
   if (has_shared_straight_line_helper_label(ops))
     return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
 
+  int canonicalized_groups = 0;
+  const std::vector<IrOp> working_ops =
+      canonicalize_sum_difference_tails(ops, canonicalized_groups);
+
   const std::vector<OutlineCandidate> candidates = collect_suffix_candidates(
-      ops, SuffixCollectionConfig{
+      working_ops, SuffixCollectionConfig{
                .is_terminal = is_shareable_return,
                .is_body_op = is_shareable_body_op,
                .op_key = op_key,
            });
-  const std::vector<SelectedGadget> selected = select_gadgets(candidates, ops);
+  const std::vector<SelectedGadget> selected = select_gadgets(candidates, working_ops);
   if (selected.empty())
     return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
 
-  std::vector<IrOp> merged_ops = ops;
+  std::vector<IrOp> merged_ops = working_ops;
   for (const SelectedGadget& gadget : selected) {
     if (gadget.kind == SelectedGadget::Kind::Jump) {
       for (const OutlineOccurrence& replacement : gadget.suffix_replacements)
@@ -547,11 +652,12 @@ PassResult return_suffix_gadget(const std::vector<IrOp>& ops, const PassContext&
     }
 
     const std::optional<StoreResult> return_x =
-        gadget.body_target.has_value() ? body_return_x(ops, *gadget.body_target) : std::nullopt;
+        gadget.body_target.has_value() ? body_return_x(working_ops, *gadget.body_target)
+                                       : std::nullopt;
     for (const BodyOccurrence& replacement : gadget.body_replacements) {
       const IrOp* next =
-          replacement.end + 1 < static_cast<int>(ops.size())
-              ? &ops.at(static_cast<std::size_t>(replacement.end + 1))
+          replacement.end + 1 < static_cast<int>(working_ops.size())
+              ? &working_ops.at(static_cast<std::size_t>(replacement.end + 1))
               : nullptr;
       const bool skip_next_recall = return_x.has_value() && recall_matches_store(next, *return_x);
       replacement_by_start[replacement.start] = Replacement{
@@ -571,8 +677,8 @@ PassResult return_suffix_gadget(const std::vector<IrOp>& ops, const PassContext&
   }
 
   std::vector<IrOp> result;
-  result.reserve(ops.size() + target_labels.size());
-  for (int index = 0; index < static_cast<int>(ops.size()); ++index) {
+  result.reserve(working_ops.size() + target_labels.size());
+  for (int index = 0; index < static_cast<int>(working_ops.size()); ++index) {
     const auto labels_at = target_labels.find(index);
     if (labels_at != target_labels.end()) {
       for (const std::string& label : labels_at->second) {
@@ -598,25 +704,38 @@ PassResult return_suffix_gadget(const std::vector<IrOp>& ops, const PassContext&
     result.push_back(merged_ops.at(static_cast<std::size_t>(index)));
   }
 
+  if (canonicalized_groups > 0 && total_cells(result) >= total_cells(ops))
+    return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
+
+  std::vector<AppliedOptimization> optimizations{
+      AppliedOptimization{
+          .name = "return-suffix-gadget",
+          .detail =
+              "Shared " + std::to_string(applied) + " return/tail-call gadget" +
+              (applied == 1 ? "" : "s") + " (" + std::to_string(jumps) + " jump, " +
+              std::to_string(calls) + " call; " + std::to_string(saved_cells) + " cell" +
+              (saved_cells == 1 ? "" : "s") + " saved" +
+              (reused_return_x == 0
+                   ? std::string()
+                   : ", " + std::to_string(reused_return_x) + " returned-X recall" +
+                         (reused_return_x == 1 ? "" : "s") + " reused") +
+              ").",
+      },
+  };
+  if (canonicalized_groups > 0) {
+    optimizations.push_back(AppliedOptimization{
+        .name = "sum-difference-tail-gadget",
+        .detail = "Canonicalized " + std::to_string(canonicalized_groups) +
+                  " direct-recall sum/difference group" +
+                  (canonicalized_groups == 1 ? "" : "s") +
+                  " only after the shared tail proved a net cell saving.",
+    });
+  }
+
   return PassResult{
       .ops = std::move(result),
-      .applied = applied,
-      .optimizations =
-          {
-              AppliedOptimization{
-                  .name = "return-suffix-gadget",
-                  .detail =
-                      "Shared " + std::to_string(applied) + " return/tail-call gadget" +
-                      (applied == 1 ? "" : "s") + " (" + std::to_string(jumps) + " jump, " +
-                      std::to_string(calls) + " call; " + std::to_string(saved_cells) + " cell" +
-                      (saved_cells == 1 ? "" : "s") + " saved" +
-                      (reused_return_x == 0
-                           ? std::string()
-                           : ", " + std::to_string(reused_return_x) + " returned-X recall" +
-                                 (reused_return_x == 1 ? "" : "s") + " reused") +
-                      ").",
-              },
-          },
+      .applied = applied + canonicalized_groups,
+      .optimizations = std::move(optimizations),
   };
 }
 
