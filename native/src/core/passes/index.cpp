@@ -147,7 +147,8 @@ const std::vector<IrPass>& pass_pipeline() {
 
 RunPassesResult run_ir_passes(const std::vector<MachineItem>& items,
                               const CompileOptions& options) {
-  RunOnIrResult result = run_passes_on_ir(raise_machine_to_ir(items), options, false);
+  RunOnIrResult result = run_passes_on_ir(
+      raise_machine_to_ir(items, effective_optimizer_feature_profile(options)), options, false);
   return RunPassesResult{
       .items = lower_ir_to_machine(result.ops),
       .applied = result.applied,

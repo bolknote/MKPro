@@ -19,8 +19,7 @@ constexpr int kDirectStoreBase = 0x40;
 constexpr int kDirectRecallBase = 0x60;
 
 using RegisterSet = std::set<std::string>;
-using IndexSet = std::set<int>;
-using RegisterRangeMap = std::map<std::string, IndexSet>;
+constexpr std::size_t kMaximumHardwareRegisterCount = 16U;
 
 std::optional<std::string> loop_counter_register(const std::string& counter) {
   if (counter == "L0")
@@ -58,52 +57,6 @@ RegisterSet gather_used_registers(const std::vector<IrOp>& ops) {
     }
   }
   return registers;
-}
-
-RegisterRangeMap live_range_per_register(const std::vector<IrOp>& ops, const RegisterSet& registers,
-                                         bool def_aware) {
-  const LivenessInfo liveness = compute_liveness(ops);
-  RegisterRangeMap ranges;
-  for (const std::string& reg : registers) {
-    ranges.emplace(reg, IndexSet{});
-  }
-
-  for (std::size_t index = 0; index < ops.size(); ++index) {
-    const int position = static_cast<int>(index);
-    for (const std::string& reg : liveness.live_in.at(index)) {
-      if (const auto found = ranges.find(reg); found != ranges.end())
-        found->second.insert(position);
-    }
-    for (const std::string& reg : liveness.live_out.at(index)) {
-      if (const auto found = ranges.find(reg); found != ranges.end())
-        found->second.insert(position);
-    }
-
-    if (def_aware) {
-      const IrOp& op = ops.at(index);
-      if (op.kind == IrKind::Store) {
-        if (const auto found = ranges.find(op.register_name); found != ranges.end())
-          found->second.insert(position);
-      } else if (op.kind == IrKind::IndirectStore) {
-        if (const std::optional<std::set<std::string>> targets =
-                known_indirect_memory_targets(op)) {
-          for (const std::string& target : *targets) {
-            if (const auto found = ranges.find(target); found != ranges.end())
-              found->second.insert(position);
-          }
-        }
-      }
-    }
-  }
-
-  return ranges;
-}
-
-bool intersects(const IndexSet& left, const IndexSet& right) {
-  const IndexSet& smaller = left.size() < right.size() ? left : right;
-  const IndexSet& larger = left.size() < right.size() ? right : left;
-  return std::any_of(smaller.begin(), smaller.end(),
-                     [&](int value) { return larger.contains(value); });
 }
 
 bool uses_indirect_access(const std::vector<IrOp>& ops, const std::string& register_name) {
@@ -144,8 +97,11 @@ bool uses_loop_counter(const std::vector<IrOp>& ops, const std::string& register
   });
 }
 
-void union_into(IndexSet& target, const IndexSet& source) {
-  target.insert(source.begin(), source.end());
+bool uses_manual_interaction_register(const std::vector<IrOp>& ops,
+                                      const std::string& register_name) {
+  return std::any_of(ops.begin(), ops.end(), [&](const IrOp& op) {
+    return op.meta.manual_interaction.has_value() && op.register_name == register_name;
+  });
 }
 
 int coalesced_opcode(IrKind kind, const std::string& register_name) {
@@ -169,11 +125,202 @@ RegisterSet excluded_registers(const std::vector<IrOp>& ops, const RegisterSet& 
   RegisterSet excluded;
   for (const std::string& reg : registers) {
     if (uses_indirect_access(ops, reg) || uses_display_focus_sensitive_access(ops, reg) ||
-        uses_loop_counter(ops, reg)) {
+        uses_loop_counter(ops, reg) || uses_manual_interaction_register(ops, reg)) {
       excluded.insert(reg);
     }
   }
   return excluded;
+}
+
+struct RegisterColor {
+  std::string representative;
+  RegisterSet members;
+};
+
+bool color_accepts(const RegisterInterferenceGraph& graph, const RegisterColor& color,
+                   const std::string& reg) {
+  return std::none_of(color.members.begin(), color.members.end(),
+                      [&](const std::string& member) { return graph.interferes(member, reg); });
+}
+
+std::size_t interference_degree(const RegisterInterferenceGraph& graph, const std::string& reg) {
+  const auto found = graph.neighbors.find(reg);
+  return found == graph.neighbors.end() ? 0U : found->second.size();
+}
+
+std::string select_coloring_node(const RegisterInterferenceGraph& graph,
+                                 const RegisterSet& unassigned,
+                                 const std::map<std::string, std::size_t>& assignments) {
+  std::string selected;
+  std::size_t selected_saturation = 0;
+  std::size_t selected_degree = 0;
+  bool has_selected = false;
+  for (const std::string& reg : unassigned) {
+    std::set<std::size_t> adjacent_colors;
+    const auto neighbors = graph.neighbors.find(reg);
+    if (neighbors != graph.neighbors.end()) {
+      for (const std::string& neighbor : neighbors->second) {
+        const auto assignment = assignments.find(neighbor);
+        if (assignment != assignments.end())
+          adjacent_colors.insert(assignment->second);
+      }
+    }
+    const std::size_t saturation = adjacent_colors.size();
+    const std::size_t degree = interference_degree(graph, reg);
+    if (!has_selected || saturation > selected_saturation ||
+        (saturation == selected_saturation && degree > selected_degree) ||
+        (saturation == selected_saturation && degree == selected_degree && reg < selected)) {
+      selected = reg;
+      selected_saturation = saturation;
+      selected_degree = degree;
+      has_selected = true;
+    }
+  }
+  return selected;
+}
+
+std::vector<RegisterColor> greedy_register_coloring(const RegisterInterferenceGraph& graph,
+                                                    const std::vector<std::string>& anchors,
+                                                    const std::vector<std::string>& movable) {
+  std::vector<RegisterColor> colors;
+  std::map<std::string, std::size_t> assignments;
+  for (const std::string& anchor : anchors) {
+    assignments[anchor] = colors.size();
+    colors.push_back(RegisterColor{.representative = anchor, .members = RegisterSet{anchor}});
+  }
+
+  RegisterSet unassigned(movable.begin(), movable.end());
+  while (!unassigned.empty()) {
+    const std::string reg = select_coloring_node(graph, unassigned, assignments);
+    std::optional<std::size_t> accepted;
+    for (std::size_t color = 0; color < colors.size(); ++color) {
+      if (color_accepts(graph, colors.at(color), reg)) {
+        accepted = color;
+        break;
+      }
+    }
+    if (!accepted.has_value()) {
+      accepted = colors.size();
+      colors.push_back(RegisterColor{.representative = reg});
+    }
+    colors.at(*accepted).members.insert(reg);
+    assignments[reg] = *accepted;
+    unassigned.erase(reg);
+  }
+  return colors;
+}
+
+class OptimalRegisterColoring {
+public:
+  OptimalRegisterColoring(const RegisterInterferenceGraph& graph,
+                          const std::vector<std::string>& anchors,
+                          const std::vector<std::string>& movable)
+      : graph_(graph), unassigned_(movable.begin(), movable.end()),
+        best_(greedy_register_coloring(graph, anchors, movable)), best_count_(best_.size()) {
+    for (const std::string& anchor : anchors) {
+      assignments_[anchor] = colors_.size();
+      colors_.push_back(RegisterColor{.representative = anchor, .members = RegisterSet{anchor}});
+    }
+  }
+
+  std::vector<RegisterColor> solve() {
+    search();
+    return best_;
+  }
+
+private:
+  void search() {
+    if (unassigned_.empty()) {
+      if (colors_.size() < best_count_) {
+        best_ = colors_;
+        best_count_ = colors_.size();
+      }
+      return;
+    }
+    if (colors_.size() >= best_count_)
+      return;
+
+    const std::string reg = select_coloring_node(graph_, unassigned_, assignments_);
+    unassigned_.erase(reg);
+
+    for (std::size_t color = 0; color < colors_.size(); ++color) {
+      if (!color_accepts(graph_, colors_.at(color), reg))
+        continue;
+      colors_.at(color).members.insert(reg);
+      assignments_[reg] = color;
+      search();
+      assignments_.erase(reg);
+      colors_.at(color).members.erase(reg);
+    }
+
+    if (colors_.size() + 1U < best_count_) {
+      const std::size_t color = colors_.size();
+      colors_.push_back(RegisterColor{.representative = reg, .members = RegisterSet{reg}});
+      assignments_[reg] = color;
+      search();
+      assignments_.erase(reg);
+      colors_.pop_back();
+    }
+
+    unassigned_.insert(reg);
+  }
+
+  const RegisterInterferenceGraph& graph_;
+  RegisterSet unassigned_;
+  std::map<std::string, std::size_t> assignments_;
+  std::vector<RegisterColor> colors_;
+  std::vector<RegisterColor> best_;
+  std::size_t best_count_ = 0;
+};
+
+std::map<std::string, std::string>
+mapping_from_interference_graph(const std::vector<IrOp>& ops, const RegisterSet& registers,
+                                const LivenessInfo& liveness,
+                                const RegisterInterferenceGraph& graph,
+                                bool allow_live_at_entry_anchor_reuse) {
+  const RegisterSet live_at_entry =
+      liveness.live_in.empty() ? RegisterSet{} : liveness.live_in.front();
+  std::vector<std::string> anchors;
+  std::vector<std::string> movable;
+  for (const std::string& reg : registers) {
+    if (uses_display_focus_sensitive_access(ops, reg) ||
+        (live_at_entry.contains(reg) && !allow_live_at_entry_anchor_reuse))
+      continue;
+    if (live_at_entry.contains(reg) || uses_indirect_access(ops, reg) ||
+        uses_loop_counter(ops, reg) ||
+        uses_manual_interaction_register(ops, reg)) {
+      anchors.push_back(reg);
+    } else {
+      movable.push_back(reg);
+    }
+  }
+
+  if (movable.empty())
+    return {};
+
+  const std::vector<RegisterColor> colors =
+      anchors.size() + movable.size() <= kMaximumHardwareRegisterCount
+          ? OptimalRegisterColoring(graph, anchors, movable).solve()
+          : greedy_register_coloring(graph, anchors, movable);
+  const RegisterSet anchor_set(anchors.begin(), anchors.end());
+  std::map<std::string, std::string> mapping;
+  for (const RegisterColor& color : colors) {
+    // An anchor is tied to its physical register. For an all-movable color,
+    // choose the lowest physical register independently of DSATUR traversal.
+    // In particular, a proof for the standard profile must prefer R0..Re over
+    // the temporary Rf overflow color whenever they can share a lifetime.
+    const auto anchored = std::find_if(color.members.begin(), color.members.end(),
+                                       [&](const std::string& member) {
+                                         return anchor_set.contains(member);
+                                       });
+    const std::string& representative =
+        anchored == color.members.end() ? *color.members.begin() : *anchored;
+    for (const std::string& member : color.members) {
+      if (member != representative)
+        mapping[member] = representative;
+    }
+  }
+  return mapping;
 }
 
 struct CoalesceResult {
@@ -207,6 +354,7 @@ CoalesceResult coalesce_copies(const std::vector<IrOp>& ops) {
     return CoalesceResult{.ops = ops, .applied = 0};
 
   const LivenessInfo liveness = compute_liveness(ops);
+  const RegisterInterferenceGraph interference = build_register_interference_graph(ops, liveness);
   const RegisterSet excluded = excluded_registers(ops, registers);
 
   std::map<std::string, std::vector<int>> store_indices;
@@ -230,6 +378,8 @@ CoalesceResult coalesce_copies(const std::vector<IrOp>& ops) {
     if (source == dest || mapping.contains(dest) || mapping.contains(source))
       continue;
     if (excluded.contains(source) || excluded.contains(dest))
+      continue;
+    if (interference.interferes(source, dest))
       continue;
 
     const auto dest_stores = store_indices.find(dest);
@@ -285,77 +435,26 @@ std::map<std::string, std::string>
 compute_non_overlapping_register_mapping(const std::vector<IrOp>& ops,
                                          RegisterCoalesceMappingOptions options) {
   const RegisterSet registers = gather_used_registers(ops);
-  std::map<std::string, std::string> mapping;
-  if (registers.size() <= 1U || has_unknown_indirect_memory_targets(ops))
-    return mapping;
+  if (registers.size() <= 1U || has_unknown_indirect_memory_targets(ops) ||
+      std::any_of(ops.begin(), ops.end(), [](const IrOp& op) { return op.meta.raw; }))
+    return {};
 
   const LivenessInfo liveness = compute_liveness(ops);
-  const RegisterSet live_at_entry =
-      liveness.live_in.empty() ? RegisterSet{} : liveness.live_in.front();
-  RegisterRangeMap ranges = live_range_per_register(ops, registers, options.def_aware);
-
-  std::vector<std::string> ordered(registers.begin(), registers.end());
-  for (std::size_t left = 0; left < ordered.size(); ++left) {
-    const std::string& a = ordered.at(left);
-    if (mapping.contains(a))
-      continue;
-    if (live_at_entry.contains(a))
-      continue;
-    if (!options.def_aware && uses_indirect_access(ops, a))
-      continue;
-    if (uses_display_focus_sensitive_access(ops, a))
-      continue;
-    if (!options.def_aware && uses_loop_counter(ops, a))
-      continue;
-
-    for (std::size_t right = left + 1U; right < ordered.size(); ++right) {
-      const std::string& b = ordered.at(right);
-      if (mapping.contains(b))
-        continue;
-      if (live_at_entry.contains(b))
-        continue;
-      if (uses_indirect_access(ops, b))
-        continue;
-      if (uses_display_focus_sensitive_access(ops, b))
-        continue;
-      if (uses_loop_counter(ops, b))
-        continue;
-
-      IndexSet& range_a = ranges.at(a);
-      const IndexSet& range_b = ranges.at(b);
-      if (intersects(range_a, range_b))
-        continue;
-
-      mapping[b] = a;
-      union_into(range_a, range_b);
-      break;
-    }
-  }
-
-  return mapping;
+  const RegisterInterferenceGraph graph = build_register_interference_graph(ops, liveness);
+  return mapping_from_interference_graph(ops, registers, liveness, graph,
+                                         options.allow_live_at_entry_anchor_reuse);
 }
 
 PassResult register_coalesce(const std::vector<IrOp>& ops, const PassContext& context) {
   if (ops.empty())
     return PassResult{.ops = {}, .applied = 0, .optimizations = {}};
 
-  if (std::any_of(ops.begin(), ops.end(), [](const IrOp& op) { return has_rewrite_barrier(op); }))
+  if (std::any_of(ops.begin(), ops.end(), [](const IrOp& op) { return op.meta.raw; }))
     return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
 
   std::vector<AppliedOptimization> optimizations;
   std::vector<IrOp> current = ops;
   int applied = 0;
-
-  CoalesceResult non_overlap = coalesce_non_overlapping(current);
-  current = std::move(non_overlap.ops);
-  applied += non_overlap.applied;
-  if (non_overlap.applied > 0) {
-    optimizations.push_back(AppliedOptimization{
-        .name = "register-coalesce",
-        .detail = "Coalesced " + std::to_string(non_overlap.applied) +
-                  " non-overlapping register live range(s).",
-    });
-  }
 
   if (context.options.coalesce_copies) {
     CoalesceResult copies = coalesce_copies(current);
@@ -368,6 +467,17 @@ PassResult register_coalesce(const std::vector<IrOp>& ops, const PassContext& co
                     " non-diverging copy assignment(s), dropping the copy and freeing a register.",
       });
     }
+  }
+
+  CoalesceResult non_overlap = coalesce_non_overlapping(current);
+  current = std::move(non_overlap.ops);
+  applied += non_overlap.applied;
+  if (non_overlap.applied > 0) {
+    optimizations.push_back(AppliedOptimization{
+        .name = "register-coalesce",
+        .detail = "Coalesced " + std::to_string(non_overlap.applied) +
+                  " non-overlapping register live range(s).",
+    });
   }
 
   if (applied == 0)

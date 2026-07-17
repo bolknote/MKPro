@@ -1282,6 +1282,12 @@ bool is_dark_entry_target(const IndirectAddressEvaluation& decoded) {
          decoded.formal_address->kind != FormalAddressKind::SuperDark;
 }
 
+FeatureProfile feature_profile_for_address_space(AddressSpaceModel model) {
+  return model == AddressSpaceModel::Mk61SMiniExpanded
+             ? FeatureProfile::Mk61SMiniExpanded
+             : FeatureProfile::Standard;
+}
+
 std::set<std::string>
 borrowed_entry_phase_selector_registers(const std::vector<MachineItem>& items) {
   std::set<std::string> result;
@@ -1329,7 +1335,7 @@ MergeDuplicateSelectorsResult merge_duplicate_selectors(const std::vector<Machin
     };
   }
 
-  std::vector<IrOp> ir = raise_machine_to_ir(items);
+  std::vector<IrOp> ir = raise_machine_to_ir(items, feature_profile_for_address_space(model));
   for (IrOp& op : ir) {
     if (!is_indirect_branch_op(op))
       continue;
@@ -1468,8 +1474,9 @@ std::optional<int> find_fractional_r0_flow_rewrite(const std::vector<IrOp>& ops)
 }
 
 std::optional<PostLayoutIndirectFlowResult>
-apply_fractional_r0_flow_rewrite(const std::vector<MachineItem>& items) {
-  const std::vector<IrOp> ir = raise_machine_to_ir(items);
+apply_fractional_r0_flow_rewrite(const std::vector<MachineItem>& items,
+                                 FeatureProfile feature_profile) {
+  const std::vector<IrOp> ir = raise_machine_to_ir(items, feature_profile);
   const std::optional<int> rewrite = find_fractional_r0_flow_rewrite(ir);
   if (!rewrite.has_value())
     return std::nullopt;
@@ -2562,7 +2569,8 @@ std::optional<RewriteStep> apply_one_rewrite(const std::vector<MachineItem>& ite
     reserved.insert(register_name);
   }
 
-  const std::vector<IrOp> ir = raise_machine_to_ir(items);
+  const std::vector<IrOp> ir =
+      raise_machine_to_ir(items, effective_optimizer_feature_profile(round_options));
   const std::map<std::string, int> labels = passes::calculate_label_addresses(ir);
   const NumericTargetView view = numeric_target_view(ir, labels);
   if (trace) {
@@ -2966,7 +2974,8 @@ optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
     if (crosses_immutable_target)
       break;
 
-    const std::vector<IrOp> before_ops = raise_machine_to_ir(current);
+    const std::vector<IrOp> before_ops =
+        raise_machine_to_ir(current, effective_optimizer_feature_profile(options));
     const std::optional<RetargetedIr> retargeted =
         retarget_existing_selectors_after_shift(before_ops, step->ops, preloads, model);
     if (!retargeted.has_value()) {
@@ -3072,7 +3081,8 @@ optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
 
 PostLayoutIndirectFlowResult
 optimize_post_layout_fractional_r0_flow(const std::vector<MachineItem>& items,
-                                        const std::vector<PreloadReport>& existing_flow_preloads) {
+                                        const std::vector<PreloadReport>& existing_flow_preloads,
+                                        const CompileOptions& options) {
   if (!existing_flow_preloads.empty()) {
     return PostLayoutIndirectFlowResult{
         .items = items,
@@ -3083,7 +3093,8 @@ optimize_post_layout_fractional_r0_flow(const std::vector<MachineItem>& items,
   int applied = 0;
   for (int round = 0; round < 8; ++round) {
     const std::optional<PostLayoutIndirectFlowResult> result =
-        apply_fractional_r0_flow_rewrite(current);
+        apply_fractional_r0_flow_rewrite(current,
+                                         effective_optimizer_feature_profile(options));
     if (!result.has_value())
       break;
     current = result->items;

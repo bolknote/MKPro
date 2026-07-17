@@ -209,7 +209,13 @@ PassResult r0_fractional_sentinel(const std::vector<IrOp>& ops, const PassContex
   if (ops.empty())
     return PassResult{.ops = {}, .applied = 0, .optimizations = {}};
 
-  const LivenessInfo liveness = compute_liveness(ops);
+  // Address 99 is the explicit external target this pass is designed to
+  // materialize. When it is outside the current fragment, keep it as an exit
+  // rather than feeding its unresolved edge back into every local command.
+  // The liveness source is still a full-register barrier; only live_out uses
+  // the pass-specific external-exit contract.
+  const LivenessInfo liveness =
+      compute_liveness(ops, LivenessOptions{.unresolved_direct_flow_to_all = false});
   std::set<std::size_t> remove;
   std::map<std::size_t, IrOp> replace;
   R0Fact r0_fact = R0Fact::Unknown;

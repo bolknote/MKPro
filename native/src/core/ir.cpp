@@ -15,7 +15,7 @@ namespace mkpro {
 namespace {
 
 const std::vector<std::string> kRegisters = {
-    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e",
+    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f",
 };
 
 constexpr int kDirectStoreBase = 0x40;
@@ -71,8 +71,8 @@ bool plain_addressed_opcode_with_label_target(const IrOp& op) {
   return label != nullptr && !label->empty();
 }
 
-bool is_in_range(int opcode, int base) {
-  return opcode >= base && opcode <= base + 0xe;
+bool is_in_range(int opcode, int base, int maximum_offset = 0x0e) {
+  return opcode >= base && opcode <= base + maximum_offset;
 }
 
 std::string register_for_offset(int opcode, int base) {
@@ -97,6 +97,7 @@ IrMeta meta_from_op(const MachineItem& item) {
   meta.manual_interaction = item.manual_interaction;
   meta.indirect_flow_targets = item.indirect_flow_targets;
   meta.indirect_memory_targets = item.indirect_memory_targets;
+  meta.discarded_indirect_recall_value = item.discarded_indirect_recall_value;
   meta.borrowed_entry_phase_selector = item.borrowed_entry_phase_selector;
   meta.semantic_call_origins = item.semantic_call_origins;
   return meta;
@@ -158,6 +159,7 @@ MachineItem machine_op_from_meta(int opcode, const IrMeta& meta) {
   item.manual_interaction = meta.manual_interaction;
   item.indirect_flow_targets = meta.indirect_flow_targets;
   item.indirect_memory_targets = meta.indirect_memory_targets;
+  item.discarded_indirect_recall_value = meta.discarded_indirect_recall_value;
   item.borrowed_entry_phase_selector = meta.borrowed_entry_phase_selector;
   item.semantic_call_origins = meta.semantic_call_origins;
   return item;
@@ -293,6 +295,8 @@ std::string meta_to_json(const IrMeta& meta) {
     add_field(out, first, "indirectMemoryTargets",
               int_array_to_json(*meta.indirect_memory_targets));
   }
+  if (meta.discarded_indirect_recall_value)
+    add_field(out, first, "discardedIndirectRecallValue", "true");
   if (meta.borrowed_entry_phase_selector)
     add_field(out, first, "borrowedEntryPhaseSelector", "true");
   if (meta.tactic.has_value())
@@ -370,6 +374,8 @@ std::string machine_item_to_json(const MachineItem& item) {
       add_field(out, first, "indirectMemoryTargets",
                 int_array_to_json(*item.indirect_memory_targets));
     }
+    if (item.discarded_indirect_recall_value)
+      add_field(out, first, "discardedIndirectRecallValue", "true");
     if (item.borrowed_entry_phase_selector)
       add_field(out, first, "borrowedEntryPhaseSelector", "true");
   } else {
@@ -440,53 +446,75 @@ std::string layout_cell_to_json(const LayoutIrCell& cell) {
   return out.str();
 }
 
-void push_basic_opcode_ir(std::vector<IrOp>& result, int opcode, const IrMeta& meta) {
-  if (is_in_range(opcode, kDirectStoreBase)) {
+void push_basic_opcode_ir(std::vector<IrOp>& result, int opcode, const IrMeta& meta,
+                          FeatureProfile feature_profile = FeatureProfile::Standard) {
+  const int maximum_direct_register = feature_profile_max_register_index(feature_profile);
+  const bool standard_store_r0_alias =
+      feature_profile == FeatureProfile::Standard && opcode == kDirectStoreBase + 0x0f;
+  if (is_in_range(opcode, kDirectStoreBase, maximum_direct_register) ||
+      standard_store_r0_alias) {
     result.push_back(IrOp{.kind = IrKind::Store,
-                          .register_name = register_for_offset(opcode, kDirectStoreBase),
+                          .register_name = standard_store_r0_alias
+                                               ? "0"
+                                               : register_for_offset(opcode, kDirectStoreBase),
                           .opcode = opcode,
                           .meta = meta});
     return;
   }
-  if (is_in_range(opcode, kDirectRecallBase)) {
+  const bool standard_recall_r0_alias =
+      feature_profile == FeatureProfile::Standard && opcode == kDirectRecallBase + 0x0f;
+  if (is_in_range(opcode, kDirectRecallBase, maximum_direct_register) ||
+      standard_recall_r0_alias) {
     result.push_back(IrOp{.kind = IrKind::Recall,
-                          .register_name = register_for_offset(opcode, kDirectRecallBase),
+                          .register_name = standard_recall_r0_alias
+                                               ? "0"
+                                               : register_for_offset(opcode, kDirectRecallBase),
                           .opcode = opcode,
                           .meta = meta});
     return;
   }
-  if (is_in_range(opcode, kIndirectStoreBase)) {
+  if (is_in_range(opcode, kIndirectStoreBase) || opcode == kIndirectStoreBase + 0x0f) {
     result.push_back(IrOp{.kind = IrKind::IndirectStore,
-                          .register_name = register_for_offset(opcode, kIndirectStoreBase),
+                          .register_name = opcode == kIndirectStoreBase + 0x0f
+                                               ? "0"
+                                               : register_for_offset(opcode, kIndirectStoreBase),
                           .opcode = opcode,
                           .meta = meta});
     return;
   }
-  if (is_in_range(opcode, kIndirectRecallBase)) {
+  if (is_in_range(opcode, kIndirectRecallBase) || opcode == kIndirectRecallBase + 0x0f) {
     result.push_back(IrOp{.kind = IrKind::IndirectRecall,
-                          .register_name = register_for_offset(opcode, kIndirectRecallBase),
+                          .register_name = opcode == kIndirectRecallBase + 0x0f
+                                               ? "0"
+                                               : register_for_offset(opcode, kIndirectRecallBase),
                           .opcode = opcode,
                           .meta = meta});
     return;
   }
-  if (is_in_range(opcode, kIndirectJumpBase)) {
+  if (is_in_range(opcode, kIndirectJumpBase) || opcode == kIndirectJumpBase + 0x0f) {
     result.push_back(IrOp{.kind = IrKind::IndirectJump,
-                          .register_name = register_for_offset(opcode, kIndirectJumpBase),
+                          .register_name = opcode == kIndirectJumpBase + 0x0f
+                                               ? "0"
+                                               : register_for_offset(opcode, kIndirectJumpBase),
                           .opcode = opcode,
                           .meta = meta});
     return;
   }
-  if (is_in_range(opcode, kIndirectCallBase)) {
+  if (is_in_range(opcode, kIndirectCallBase) || opcode == kIndirectCallBase + 0x0f) {
     result.push_back(IrOp{.kind = IrKind::IndirectCall,
-                          .register_name = register_for_offset(opcode, kIndirectCallBase),
+                          .register_name = opcode == kIndirectCallBase + 0x0f
+                                               ? "0"
+                                               : register_for_offset(opcode, kIndirectCallBase),
                           .opcode = opcode,
                           .meta = meta});
     return;
   }
   for (const auto& [base, condition] : kIndirectCondBases) {
-    if (is_in_range(opcode, base)) {
+    if (is_in_range(opcode, base) || opcode == base + 0x0f) {
       result.push_back(IrOp{.kind = IrKind::IndirectCondJump,
-                            .register_name = register_for_offset(opcode, base),
+                            .register_name = opcode == base + 0x0f
+                                                 ? "0"
+                                                 : register_for_offset(opcode, base),
                             .condition = condition,
                             .opcode = opcode,
                             .meta = meta});
@@ -572,7 +600,8 @@ MachineItem MachineItem::address(IrTarget address_target) {
   return item;
 }
 
-std::vector<IrOp> raise_machine_to_ir(const std::vector<MachineItem>& items) {
+std::vector<IrOp> raise_machine_to_ir(const std::vector<MachineItem>& items,
+                                      FeatureProfile feature_profile) {
   std::vector<IrOp> result;
   for (std::size_t index = 0; index < items.size(); ++index) {
     const MachineItem& item = items.at(index);
@@ -604,7 +633,7 @@ std::vector<IrOp> raise_machine_to_ir(const std::vector<MachineItem>& items) {
                         target_meta_from_address(target_item));
       continue;
     }
-    push_basic_opcode_ir(result, opcode, meta);
+    push_basic_opcode_ir(result, opcode, meta, feature_profile);
   }
   return result;
 }
@@ -789,6 +818,7 @@ bool machine_items_equal(const MachineItem& a, const MachineItem& b) {
            a.manual_interaction == b.manual_interaction &&
            a.indirect_flow_targets == b.indirect_flow_targets &&
            a.indirect_memory_targets == b.indirect_memory_targets &&
+           a.discarded_indirect_recall_value == b.discarded_indirect_recall_value &&
            a.borrowed_entry_phase_selector == b.borrowed_entry_phase_selector &&
            a.semantic_call_origins == b.semantic_call_origins;
   }

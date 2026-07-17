@@ -648,6 +648,14 @@ std::optional<int> target_address(const IrTarget& target,
 std::optional<std::string> known_indirect_memory_target(const IrOp& op) {
   if (op.kind != IrKind::IndirectRecall && op.kind != IrKind::IndirectStore)
     return std::nullopt;
+  if (op.meta.indirect_memory_targets.has_value()) {
+    const std::vector<int>& targets = *op.meta.indirect_memory_targets;
+    if (targets.size() != 1U || targets.front() < 0 || targets.front() > 14)
+      return std::nullopt;
+    const int index = targets.front();
+    return index < 10 ? std::to_string(index)
+                      : std::string(1, static_cast<char>('a' + index - 10));
+  }
   if (!op.meta.comment.has_value())
     return std::nullopt;
 
@@ -735,6 +743,22 @@ std::optional<int> known_indirect_flow_target(const IrOp& op, AddressSpaceModel 
   if (op.kind != IrKind::IndirectJump && op.kind != IrKind::IndirectCall &&
       op.kind != IrKind::IndirectCondJump) {
     return std::nullopt;
+  }
+  if (op.meta.indirect_flow_targets.has_value()) {
+    const std::vector<IrTarget>& targets = *op.meta.indirect_flow_targets;
+    if (targets.size() != 1U)
+      return std::nullopt;
+    const auto* target = std::get_if<int>(&targets.front());
+    // A typed label is still an exact target, but this legacy helper can only
+    // return numeric addresses. Keep the numeric proof marker fallback for
+    // consumers that have not yet migrated to the typed multi-target CFG.
+    if (target == nullptr) {
+      // Continue below.
+    } else if (*target < 0 || *target > official_program_last_address(model)) {
+      return std::nullopt;
+    } else {
+      return *target;
+    }
   }
   if (!op.meta.comment.has_value())
     return std::nullopt;

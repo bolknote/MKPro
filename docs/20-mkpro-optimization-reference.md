@@ -963,7 +963,24 @@ Display rewrites are separated into strategy selection + body lowering.
 - `auto-preload-initial-state` — moves required startup cells into setup so main code is shorter.
 - `preloaded-indirect-flow` — enables indexed writes via preloaded selector.
 - `preincrement-indexed-store` — uses preincrement semantics for indexed stores where profitable.
-- `register-coalesce` — coalesces cells when lifetimes do not overlap.
+- `register-coalesce` — builds a CFG liveness/interference graph and coalesces
+  registers only when their values cannot overlap. Direct definitions,
+  multi-target/unknown indirect memory, calls and returns, loops, manual resume
+  points, and the pre-decrement/pre-increment mutation of indirect selectors
+  `R0..R6` participate in the proof. Unknown or unresolved control flow is a
+  full-register barrier, and liveness runs to a true fixed point rather than a
+  bounded number of sweeps.
+- Compiler-generated indirect recalls used only for an `R0..R6` selector
+  mutation carry a typed discarded-result fact: liveness retains the selector
+  read/write while avoiding a false dependency on the unobserved memory value.
+- The source-level allocation probe may keep an address/entry value in a
+  physical register and reuse that register after its last read, including for
+  a logical value whose first write occurs later. It regenerates register
+  reports and setup preloads from the selected sharing; entry preload ownership
+  is preserved, and setup actions with observable effects are not discarded.
+  For a standard MK-61 target, `Rf` is only one internal overflow color used by
+  this proof. It must be relocated into a proved-free `R0..Re` before lowering;
+  actual `Rf` commands remain exclusive to `feature mk61s-mini-expand`.
 - `copy-coalesce` — removes redundant copy writes between registers.
 - `last-x-reuse` — avoids `P->X` when X already holds the needed value and the
   recall is not an X2-sync boundary for `.`/`/-/`/`ВП` before the next X2-affecting

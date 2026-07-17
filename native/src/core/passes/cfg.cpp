@@ -3,6 +3,7 @@
 #include "mkpro/core/passes/helpers.hpp"
 
 #include <algorithm>
+#include <set>
 #include <string>
 #include <variant>
 #include <vector>
@@ -63,10 +64,9 @@ numeric_flow_target_layout_guard(const std::vector<IrOp>& ops) {
   return NumericFlowTargetLayoutGuard{.latest_target_index = latest_target_index};
 }
 
-std::vector<std::vector<CfgEdge>> build_cfg_edges(const std::vector<IrOp>& ops,
-                                                  BuildCfgOptions options) {
+ControlFlowGraph build_control_flow_graph(const std::vector<IrOp>& ops, BuildCfgOptions options) {
   const CfgTargetIndexes indexes = build_target_indexes(ops);
-  std::vector<std::vector<CfgEdge>> successors(ops.size());
+  ControlFlowGraph graph{.edges = std::vector<std::vector<CfgEdge>>(ops.size())};
 
   std::vector<int> call_returns;
   std::vector<int> executable_indexes;
@@ -84,11 +84,19 @@ std::vector<std::vector<CfgEdge>> build_cfg_edges(const std::vector<IrOp>& ops,
   for (std::size_t index = 0; index < ops.size(); ++index) {
     const IrOp& op = ops.at(index);
     const int next = static_cast<int>(index + 1U);
+    auto add_edge = [&](int target, CfgEdgeKind kind) {
+      std::vector<CfgEdge>& row = graph.edges.at(index);
+      const bool duplicate = std::any_of(row.begin(), row.end(), [&](const CfgEdge& edge) {
+        return edge.target == target && edge.kind == kind;
+      });
+      if (!duplicate)
+        row.push_back(CfgEdge{.target = target, .kind = kind});
+    };
     auto fallthrough = [&]() {
       if (next < static_cast<int>(ops.size()))
-        successors.at(index).push_back(CfgEdge{.target = next, .kind = CfgEdgeKind::Fallthrough});
+        add_edge(next, CfgEdgeKind::Fallthrough);
     };
-    auto jump_to = [&](const IrTarget& target) {
+    auto jump_to = [&](const IrTarget& target) -> bool {
       std::optional<int> target_index;
       if (const auto* label = std::get_if<std::string>(&target)) {
         const auto found = indexes.label_index.find(*label);
@@ -100,20 +108,66 @@ std::vector<std::vector<CfgEdge>> build_cfg_edges(const std::vector<IrOp>& ops,
           target_index = found->second;
       }
       if (target_index.has_value()) {
-        successors.at(index).push_back(CfgEdge{.target = *target_index, .kind = CfgEdgeKind::Jump});
+        add_edge(*target_index, CfgEdgeKind::Jump);
+        return true;
       }
+      return false;
     };
-    auto jump_to_address = [&](int target) {
+    auto jump_to_address = [&](int target) -> bool {
       const auto found = indexes.address_index.find(target);
       if (found != indexes.address_index.end()) {
-        successors.at(index).push_back(CfgEdge{.target = found->second, .kind = CfgEdgeKind::Jump});
+        add_edge(found->second, CfgEdgeKind::Jump);
+        return true;
+      }
+      return false;
+    };
+    auto flow_to_all = [&](bool enabled) {
+      if (!enabled)
+        return;
+      for (const int target : executable_indexes)
+        add_edge(target, CfgEdgeKind::Jump);
+    };
+    auto record_uncertainty = [&](CfgUncertaintyKind kind, bool expand_to_all) {
+      graph.uncertainties.push_back(
+          CfgUncertainty{.source = static_cast<int>(index), .kind = kind});
+      flow_to_all(expand_to_all);
+    };
+    auto direct_jump_to = [&](const IrTarget& target) {
+      if (!jump_to(target)) {
+        record_uncertainty(CfgUncertaintyKind::UnresolvedDirectTarget,
+                           options.unresolved_direct_flow_to_all);
       }
     };
-    auto unknown_indirect_flow = [&]() {
-      if (!options.unknown_indirect_flow_to_all)
+    auto indirect_targets = [&]() -> std::optional<std::vector<IrTarget>> {
+      if (op.meta.indirect_flow_targets.has_value()) {
+        if (op.meta.indirect_flow_targets->empty())
+          return std::nullopt;
+        return *op.meta.indirect_flow_targets;
+      }
+      if (const std::optional<int> target = known_indirect_flow_target(op))
+        return std::vector<IrTarget>{IrTarget{*target}};
+      const std::vector<std::string> labels = computed_dispatch_target_labels(op);
+      if (labels.empty())
+        return std::nullopt;
+      std::vector<IrTarget> targets;
+      targets.reserve(labels.size());
+      for (const std::string& label : labels)
+        targets.push_back(IrTarget{label});
+      return targets;
+    };
+    auto indirect_jump_to_targets = [&]() {
+      const std::optional<std::vector<IrTarget>> targets = indirect_targets();
+      if (!targets.has_value()) {
+        record_uncertainty(CfgUncertaintyKind::UnknownIndirectTarget,
+                           options.unknown_indirect_flow_to_all);
         return;
-      for (const int target : executable_indexes) {
-        successors.at(index).push_back(CfgEdge{.target = target, .kind = CfgEdgeKind::Jump});
+      }
+      bool unresolved = false;
+      for (const IrTarget& target : *targets)
+        unresolved = !jump_to(target) || unresolved;
+      if (unresolved) {
+        record_uncertainty(CfgUncertaintyKind::UnresolvedIndirectTarget,
+                           options.unknown_indirect_flow_to_all);
       }
     };
 
@@ -129,65 +183,48 @@ std::vector<std::vector<CfgEdge>> build_cfg_edges(const std::vector<IrOp>& ops,
       fallthrough();
       break;
     case IrKind::Jump:
-      jump_to(op.target);
+      direct_jump_to(op.target);
       break;
     case IrKind::CondJump:
     case IrKind::Loop:
-      jump_to(op.target);
+      direct_jump_to(op.target);
       fallthrough();
       break;
     case IrKind::Call:
-      jump_to(op.target);
+      direct_jump_to(op.target);
       break;
     case IrKind::IndirectJump:
-      if (const std::optional<int> target = known_indirect_flow_target(op)) {
-        jump_to_address(*target);
-      } else if (const std::vector<std::string> labels = computed_dispatch_target_labels(op);
-                 !labels.empty()) {
-        for (const std::string& label : labels)
-          jump_to(IrTarget{label});
-      } else {
-        unknown_indirect_flow();
-      }
+      indirect_jump_to_targets();
       break;
     case IrKind::IndirectCall:
-      if (const std::optional<int> target = known_indirect_flow_target(op)) {
-        jump_to_address(*target);
-      } else if (const std::vector<std::string> labels = computed_dispatch_target_labels(op);
-                 !labels.empty()) {
-        for (const std::string& label : labels)
-          jump_to(IrTarget{label});
-      } else {
-        unknown_indirect_flow();
-      }
+      indirect_jump_to_targets();
       if (options.indirect_call_fallthrough)
         fallthrough();
       break;
     case IrKind::IndirectCondJump:
-      if (const std::optional<int> target = known_indirect_flow_target(op)) {
-        jump_to_address(*target);
-      } else if (const std::vector<std::string> labels = computed_dispatch_target_labels(op);
-                 !labels.empty()) {
-        for (const std::string& label : labels)
-          jump_to(IrTarget{label});
-      } else {
-        unknown_indirect_flow();
-      }
+      indirect_jump_to_targets();
       fallthrough();
       break;
     case IrKind::Return:
       if (return_acts_as_address_one_jump(op)) {
-        jump_to_address(1);
-      } else {
-        for (const int target : call_returns) {
-          successors.at(index).push_back(CfgEdge{.target = target, .kind = CfgEdgeKind::Normal});
+        if (!jump_to_address(1)) {
+          record_uncertainty(CfgUncertaintyKind::UnresolvedDirectTarget,
+                             options.unresolved_direct_flow_to_all);
         }
+      } else {
+        for (const int target : call_returns)
+          add_edge(target, CfgEdgeKind::Normal);
       }
       break;
     }
   }
 
-  return successors;
+  return graph;
+}
+
+std::vector<std::vector<CfgEdge>> build_cfg_edges(const std::vector<IrOp>& ops,
+                                                  BuildCfgOptions options) {
+  return build_control_flow_graph(ops, options).edges;
 }
 
 std::vector<std::vector<int>> build_cfg_successors(const std::vector<IrOp>& ops,

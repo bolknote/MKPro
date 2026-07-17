@@ -24,7 +24,8 @@ optimize_post_layout_super_dark_address_overlay(const std::vector<MachineItem>& 
                                                 int rescue_above = 105);
 PostLayoutIndirectFlowResult optimize_post_layout_fractional_r0_flow(
     const std::vector<MachineItem>& items,
-    const std::vector<PreloadReport>& existing_flow_preloads = {});
+    const std::vector<PreloadReport>& existing_flow_preloads = {},
+    const CompileOptions& options = {});
 PostLayoutIndirectFlowResult
 optimize_post_layout_address_code_overlay(const std::vector<MachineItem>& items,
                                          const std::vector<PreloadReport>& preloads = {},

@@ -2,6 +2,7 @@
 
 #include "test_support.hpp"
 
+#include <algorithm>
 #include <string>
 #include <utility>
 #include <vector>
@@ -98,6 +99,44 @@ void ir_round_trip_matches_typescript_contract() {
   }
 
   {
+    const std::vector<MachineItem> rf_items = {
+        op(0x4f, "X->П f"),
+        op(0x6f, "П->X f"),
+    };
+    const std::vector<IrOp> standard = raise_machine_to_ir(rf_items);
+    require_kind(standard.at(0), IrKind::Store,
+                 "standard profile should type 4F as the undocumented R0 store alias");
+    require_kind(standard.at(1), IrKind::Recall,
+                 "standard profile should type 6F as the undocumented R0 recall alias");
+    require(standard.at(0).register_name == "0" && standard.at(1).register_name == "0",
+            "standard-profile 4F/6F aliases lost their R0 identity");
+
+    const std::vector<IrOp> expanded =
+        raise_machine_to_ir(rf_items, FeatureProfile::Mk61SMiniExpanded);
+    require_kind(expanded.at(0), IrKind::Store, "expanded profile should type the Rf store");
+    require_kind(expanded.at(1), IrKind::Recall, "expanded profile should type the Rf recall");
+    require(expanded.at(0).register_name == "f" && expanded.at(1).register_name == "f",
+            "expanded-profile Rf operations lost their register identity");
+  }
+
+  {
+    const std::vector<IrOp> aliases = raise_machine_to_ir({
+        op(0x8f, "К БП 0 alias"),
+        op(0xbf, "К X->П 0 alias"),
+        op(0xdf, "К П->X 0 alias"),
+    });
+    require_kind(aliases.at(0), IrKind::IndirectJump,
+                 "standard 8F alias should retain indirect R0 flow semantics");
+    require_kind(aliases.at(1), IrKind::IndirectStore,
+                 "standard BF alias should retain indirect R0 store semantics");
+    require_kind(aliases.at(2), IrKind::IndirectRecall,
+                 "standard DF alias should retain indirect R0 recall semantics");
+    require(std::all_of(aliases.begin(), aliases.end(),
+                        [](const IrOp& alias) { return alias.register_name == "0"; }),
+            "standard xF aliases lost their R0 selector identity");
+  }
+
+  {
     std::vector<MachineItem> stops = {
         op(0x50, "С/П"), op(0x50, "С/П"), op(0x50, "С/П"), op(0x50, "С/П"),
         op(0x50, "С/П"), op(0x50, "С/П"), op(0x50, "С/П"),
@@ -150,19 +189,23 @@ void ir_round_trip_matches_typescript_contract() {
     std::vector<MachineItem> typed_indirect = {
         op(0xa7, "К ПП 7"),
         op(0xb8, "К X->П 8"),
+        op(0xd1, "К П->X 1"),
     };
     typed_indirect.at(0).indirect_flow_targets =
         std::vector<IrTarget>{std::string("callee"), 42};
     typed_indirect.at(1).indirect_memory_targets = std::vector<int>{2, 4, 6};
+    typed_indirect.at(2).discarded_indirect_recall_value = true;
     const std::vector<MachineItem> restored =
         lower_ir_to_machine(raise_machine_to_ir(typed_indirect));
     require(restored.size() == typed_indirect.size() &&
                 machine_items_equal(restored.at(0), typed_indirect.at(0)) &&
-                machine_items_equal(restored.at(1), typed_indirect.at(1)),
+                machine_items_equal(restored.at(1), typed_indirect.at(1)) &&
+                machine_items_equal(restored.at(2), typed_indirect.at(2)),
             "typed complete indirect target sets must survive machine/IR round-trip");
     const std::string json = machine_items_to_json(restored);
     require(json.find("\"indirectFlowTargets\":[\"callee\",42]") != std::string::npos &&
-                json.find("\"indirectMemoryTargets\":[2,4,6]") != std::string::npos,
+                json.find("\"indirectMemoryTargets\":[2,4,6]") != std::string::npos &&
+                json.find("\"discardedIndirectRecallValue\":true") != std::string::npos,
             "typed complete indirect target sets should be visible in machine JSON");
   }
 

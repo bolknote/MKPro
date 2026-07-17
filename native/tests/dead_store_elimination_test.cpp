@@ -151,6 +151,25 @@ void dead_store_elimination_matches_typescript_contract() {
   }
 
   {
+    IrOp raw = plain(0x0d, "raw");
+    raw.meta.raw = true;
+    const std::vector<IrOp> program = {store("1"), raw, store("1"), recall("1"), halt()};
+    const core::passes::PassResult result = run_dead_store_elimination(program);
+    require(result.applied == 1 && store_count(result.ops) == 1,
+            "known raw opcode was incorrectly treated as an all-register memory barrier");
+  }
+
+  {
+    IrOp raw_recall = recall("0");
+    raw_recall.opcode = 0x6f;
+    raw_recall.meta.raw = true;
+    const std::vector<IrOp> program = {store("0"), raw_recall, store("0"), halt()};
+    const core::passes::PassResult result = run_dead_store_elimination(program);
+    require(result.applied == 1 && result.ops.front().kind == IrKind::Store,
+            "raw R0 recall alias did not preserve the reaching R0 store");
+  }
+
+  {
     const core::passes::PassResult result =
         run_dead_store_elimination({known_target_indirect_store("8", "2"), halt()});
     require(result.applied == 1,
@@ -228,8 +247,7 @@ void dead_store_elimination_matches_typescript_contract() {
 
   {
     const core::passes::PassResult result = run_dead_store_elimination(
-        {entered_store("1", ManualInteractionAnchorKind::ContinuousResume), recall("2"),
-         halt()});
+        {entered_store("1", ManualInteractionAnchorKind::ContinuousResume), recall("2"), halt()});
     require(result.applied == 1 && result.ops.front().kind == IrKind::Recall &&
                 result.ops.front().meta.manual_interaction.has_value() &&
                 result.ops.front().meta.manual_interaction->kind ==

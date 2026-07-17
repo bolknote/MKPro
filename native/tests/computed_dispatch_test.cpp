@@ -79,17 +79,16 @@ void computed_dispatch_targets_survive_dead_code_elimination() {
   const CompileOptions options;
   const PassContext context{.options = options};
 
-  // Control: without the target marker the computed jump exposes no successors,
-  // so the case bodies are genuinely unreachable and the DCE pass removes them.
-  // This proves the survival assertion below is meaningful.
+  // Without an exact target marker the computed jump may reach any executable
+  // cell. DCE must fail closed instead of declaring its apparent tail dead.
   {
-    const PassResult removed = dead_code_after_halt(dispatch_ir("computed dispatch"), context);
-    require(!has_plain(removed.ops, "body_a"),
-            "unmarked computed-jump case body A must be dead-code eliminated");
-    require(!has_plain(removed.ops, "body_b"),
-            "unmarked computed-jump case body B must be dead-code eliminated");
-    require(!has_plain(removed.ops, "body_c"),
-            "unmarked computed-jump case body C must be dead-code eliminated");
+    const PassResult kept = dead_code_after_halt(dispatch_ir("computed dispatch"), context);
+    require(has_plain(kept.ops, "body_a"),
+            "unknown computed-jump target must conservatively keep case body A");
+    require(has_plain(kept.ops, "body_b"),
+            "unknown computed-jump target must conservatively keep case body B");
+    require(has_plain(kept.ops, "body_c"),
+            "unknown computed-jump target must conservatively keep case body C");
   }
 
   // With the target marker the reachability scan follows the advertised edges, so
@@ -107,17 +106,17 @@ void computed_dispatch_targets_survive_dead_code_elimination() {
   }
 
   {
-    const PassResult removed =
+    const PassResult kept =
         dead_code_after_halt(dispatch_ir(
                                  "note: computed dispatch; computed-dispatch-targets=case_a,"
                                  "case_b,case_c"),
                              context);
-    require(!has_plain(removed.ops, "body_a"),
-            "embedded computed-dispatch marker must not keep case body A reachable");
-    require(!has_plain(removed.ops, "body_b"),
-            "embedded computed-dispatch marker must not keep case body B reachable");
-    require(!has_plain(removed.ops, "body_c"),
-            "embedded computed-dispatch marker must not keep case body C reachable");
+    require(has_plain(kept.ops, "body_a"),
+            "unrecognized embedded marker must fall back to conservative case body A reachability");
+    require(has_plain(kept.ops, "body_b"),
+            "unrecognized embedded marker must fall back to conservative case body B reachability");
+    require(has_plain(kept.ops, "body_c"),
+            "unrecognized embedded marker must fall back to conservative case body C reachability");
   }
 }
 

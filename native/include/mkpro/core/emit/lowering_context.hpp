@@ -173,8 +173,15 @@ struct LoweringContext {
   MachineEmitter emitter;
   const V2Program* program = nullptr;
   FeatureProfile feature_profile = FeatureProfile::Standard;
+  // Internal standard-target proof probe: allocate R0..Re with the ordinary
+  // standard policy, then use Rf only as one overflow color. A proved forced
+  // share must eliminate Rf before standard lowering continues.
+  bool standard_rf_overflow_allocation = false;
   std::map<std::string, std::string> registers;
   std::map<std::string, int> register_index_by_name;
+  // Original logical owners whose entry value must win when a forced lifetime
+  // share makes several source names resolve to one physical preload.
+  std::map<int, std::set<std::string>> forced_share_preload_owners;
   std::map<std::string, const V2Rule*> rules;
   std::map<std::string, int> proc_call_counts;
   std::map<std::string, int> known_zero_proc_call_counts;

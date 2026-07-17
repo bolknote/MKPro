@@ -1,5 +1,6 @@
-#include "mkpro/core/passes/register_coalesce.hpp"
 #include "mkpro/core/opcodes.hpp"
+#include "mkpro/core/passes/liveness_analysis.hpp"
+#include "mkpro/core/passes/register_coalesce.hpp"
 
 #include "test_support.hpp"
 
@@ -30,6 +31,15 @@ IrOp indirect_store(std::string selector, std::optional<std::string> targets = s
   op.meta.mnemonic = "К X->П " + op.register_name;
   if (targets.has_value())
     op.meta.comment = "indirect-memory-targets=" + *targets;
+  return op;
+}
+
+IrOp indirect_jump(std::string selector) {
+  IrOp op;
+  op.kind = IrKind::IndirectJump;
+  op.register_name = std::move(selector);
+  op.opcode = 0x80 + register_index(op.register_name);
+  op.meta.mnemonic = "К БП " + op.register_name;
   return op;
 }
 
@@ -69,6 +79,25 @@ void register_coalesce_matches_typescript_contract() {
   }
 
   {
+    IrOp manual_store = store("1");
+    manual_store.meta.manual_interaction = ManualInteractionAnchor{
+        .protocol_id = 2,
+        .phase = 0,
+        .kind = ManualInteractionAnchorKind::SingleStepCommand,
+    };
+    const std::vector<IrOp> program = {manual_store, recall("1"), halt(), store("2"), recall("2")};
+    const core::passes::PassResult result = run_register_coalesce(program);
+
+    require(result.applied == 1,
+            "manual interaction blocked a proved disjoint register lifetime");
+    require(result.ops.front().register_name == "1" &&
+                result.ops.front().meta.manual_interaction.has_value(),
+            "register coalescing rewrote the manually entered register command");
+    require(result.ops.at(3).register_name == "1" && result.ops.at(4).register_name == "1",
+            "disjoint post-interaction lifetime did not reuse the anchored register");
+  }
+
+  {
     const std::vector<IrOp> program = {store("1"), recall("1"), store("2"),
                                        store("1"), recall("2"), halt()};
     const std::map<std::string, std::string> plain =
@@ -77,23 +106,66 @@ void register_coalesce_matches_typescript_contract() {
         core::passes::compute_non_overlapping_register_mapping(
             program, core::passes::RegisterCoalesceMappingOptions{.def_aware = true});
 
-    require(plain.size() == 1,
-            "register-coalesce plain mapping stopped matching TypeScript liveness behavior");
+    require(plain.empty(),
+            "register-coalesce ignored a direct definition that clobbers a live register");
     require(def_aware.empty(),
             "register-coalesce def-aware mapping failed to block dead-store clobber");
+    const core::passes::RegisterInterferenceGraph graph =
+        core::passes::build_register_interference_graph(program);
+    require(graph.interferes("1", "2"),
+            "interference graph omitted a definition-versus-live-value conflict");
+  }
+
+  {
+    const std::vector<IrOp> program = {store("1"),  recall("1"), halt(),     store("2"),
+                                       recall("2"), halt(),      store("3"), recall("3")};
+    const std::map<std::string, std::string> mapping =
+        core::passes::compute_non_overlapping_register_mapping(program);
+
+    require(mapping.size() == 2U && mapping.at("2") == "1" && mapping.at("3") == "1",
+            "interference coloring did not merge three pairwise-disjoint lifetimes into one "
+            "register");
+  }
+
+  {
+    const std::vector<IrOp> program = {
+        store("f"), store("0"), recall("0"), store("1"),
+        recall("1"), recall("f"), store("e"), recall("e"),
+    };
+    const std::map<std::string, std::string> mapping =
+        core::passes::compute_non_overlapping_register_mapping(program);
+
+    require(mapping.contains("f") && mapping.at("f") == "e",
+            "register coloring retained temporary Rf as the representative of a movable color");
   }
 
   {
     const std::vector<IrOp> program = {recall("1"), store("2"), recall("2")};
     const core::passes::PassResult result = run_register_coalesce(program);
+    const std::map<std::string, std::string> allocator_mapping =
+        core::passes::compute_non_overlapping_register_mapping(
+            program, core::passes::RegisterCoalesceMappingOptions{
+                         .allow_live_at_entry_anchor_reuse = true,
+                     });
 
-    require(result.applied == 0, "register-coalesce ignored live-at-entry exclusion");
-    require(result.ops.size() == program.size(), "register-coalesce changed live-at-entry program");
+    require(result.applied == 0,
+            "late IR register pass reused an entry value without updating setup metadata");
+    require(allocator_mapping.size() == 1U && allocator_mapping.at("2") == "1",
+            "source-level allocator did not reuse a live-at-entry register after its final use");
   }
 
   {
-    const std::vector<IrOp> program = {
-        store("0"), indirect_store("0", "4,5,6,7"), halt(), store("3"), recall("3")};
+    const std::vector<IrOp> program = {recall("1"), recall("2")};
+    const std::map<std::string, std::string> mapping =
+        core::passes::compute_non_overlapping_register_mapping(program);
+
+    require(mapping.empty(),
+            "register-coalesce merged two values that are simultaneously live at entry");
+  }
+
+  {
+    const std::vector<IrOp> program = {store("0"), indirect_store("0", "4,5,6,7"), halt(),
+                                       store("3"), recall("3")};
     const std::map<std::string, std::string> mapping =
         core::passes::compute_non_overlapping_register_mapping(
             program, core::passes::RegisterCoalesceMappingOptions{.def_aware = true});
@@ -104,14 +176,35 @@ void register_coalesce_matches_typescript_contract() {
   }
 
   {
-    const std::vector<IrOp> program = {
-        store("0"), indirect_store("0"), halt(), store("3"), recall("3")};
+    const std::vector<IrOp> program = {store("0"), indirect_store("0"), halt(), store("3"),
+                                       recall("3")};
     const std::map<std::string, std::string> mapping =
         core::passes::compute_non_overlapping_register_mapping(
             program, core::passes::RegisterCoalesceMappingOptions{.def_aware = true});
 
     require(mapping.empty(),
             "def-aware register mapping accepted an unknown indirect-memory target set");
+  }
+
+  {
+    const std::vector<IrOp> program = {store("1"), store("3"), recall("3"),
+                                       indirect_store("e", "1,2"), recall("1")};
+    const std::map<std::string, std::string> mapping =
+        core::passes::compute_non_overlapping_register_mapping(program);
+
+    require(mapping.contains("3") && mapping.at("3") == "2",
+            "may-def liveness did not preserve the old possible-target value across an indirect "
+            "store");
+  }
+
+  {
+    const std::vector<IrOp> program = {store("1"), recall("1"), indirect_jump("e"), store("2"),
+                                       recall("2")};
+    const std::map<std::string, std::string> mapping =
+        core::passes::compute_non_overlapping_register_mapping(program);
+
+    require(mapping.empty(),
+            "register coloring crossed an unknown indirect-flow full-register barrier");
   }
 
   {
@@ -146,6 +239,20 @@ void register_coalesce_matches_typescript_contract() {
   }
 
   {
+    CompileOptions options;
+    options.coalesce_copies = true;
+    const std::vector<IrOp> program = {
+        recall("1"), store("2"), store("1"), recall("2"),
+    };
+    const core::passes::PassResult result = run_register_coalesce(program, options);
+
+    require(result.applied == 0,
+            "copy-coalesce merged registers that interfere after the source is overwritten");
+    require(result.ops.size() == program.size(),
+            "rejected interfering copy changed the program");
+  }
+
+  {
     IrOp raw_store = store("1");
     raw_store.meta.raw = true;
     const std::vector<IrOp> program = {raw_store, recall("1"), halt(), store("2"), recall("2")};
@@ -153,6 +260,8 @@ void register_coalesce_matches_typescript_contract() {
 
     require(result.applied == 0, "register-coalesce crossed a raw rewrite barrier");
     require(result.ops.size() == program.size(), "register-coalesce changed raw-barrier program");
+    require(core::passes::compute_non_overlapping_register_mapping(program).empty(),
+            "register mapping exposed a forced-share candidate across a raw command");
   }
 }
 

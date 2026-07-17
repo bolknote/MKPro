@@ -319,6 +319,41 @@ program ExpandedPreloadedConstant {
           "expanded main listing should mark RF recalls as not keyboard-enterable");
   require(expanded.listing.find("X→П 0 alias") == std::string::npos,
           "expanded setup listing should not render RF stores as the stock 4F alias");
+
+  const std::string shared_preload_source = R"mkpro(
+program SharedPreloadOwner {
+  state {
+    late: counter 0..99999 = 99
+    anchor: counter 0..99999 = 7
+  }
+
+  loop {
+    halt(anchor)
+    late = read()
+    halt(late)
+  }
+}
+)mkpro";
+  CompileOptions baseline_options;
+  baseline_options.disable_candidate_search = true;
+  const CompileResult baseline = compile_source(shared_preload_source, baseline_options);
+  require(baseline.implemented && baseline.diagnostics.empty(),
+          "preload-owner fixture should compile before forced lifetime sharing");
+
+  CompileOptions shared_options = baseline_options;
+  shared_options.forced_register_shares.push_back(RegisterShare{
+      .free_register = baseline.registers.at("late"),
+      .keep_register = baseline.registers.at("anchor"),
+  });
+  const CompileResult shared = compile_source(shared_preload_source, shared_options);
+  require(shared.implemented && shared.diagnostics.empty(),
+          "proved lifetime share should compile with an entry-value owner");
+  require(shared.registers.at("late") == shared.registers.at("anchor"),
+          "forced lifetime share did not assign both logical names to one register");
+  require(std::any_of(shared.preloads.begin(), shared.preloads.end(), [&](const PreloadReport& preload) {
+            return preload.register_name == shared.registers.at("anchor") && preload.value == "7";
+          }),
+          "shared setup did not preserve the live-at-entry owner's preload");
 }
 
 void compiler_feature_profile_rf_extends_state_allocator_contract() {
@@ -368,11 +403,9 @@ program ExpandedSixteenRegisters {
                         return preload.register_name == "f" && preload.value == "15";
                       }),
           "expanded setup should preload the sixteenth state field into RF");
-  require(std::any_of(expanded.steps.begin(), expanded.steps.end(),
-                      [](const ResolvedStep& step) {
-                        return step.opcode == 0x4f && step.mnemonic == "X->П f";
-                      }),
-          "expanded state writes should emit 4F for RF");
+  require(expanded.listing.find("X→П f") != std::string::npos &&
+              expanded.listing.find("setup Rf") != std::string::npos,
+          "expanded setup should emit 4F for the real RF preload");
 
   std::string standard_source = expanded_source;
   const std::string feature_line = "feature mk61s-mini-expand\n";
@@ -383,6 +416,73 @@ program ExpandedSixteenRegisters {
   const CompileResult standard = compile_source(standard_source, options);
   require(has_error_diagnostic(standard),
           "standard profile should exhaust registers on the same sixteen-state shape");
+
+  CompileOptions lifetime_options;
+  lifetime_options.fast_candidate_search = true;
+  lifetime_options.fast_candidate_threshold_ms = 0;
+  lifetime_options.disable_return_stack_script = true;
+  lifetime_options.disable_aggressive_post_layout = true;
+  const CompileResult lifetime_reclaimed = compile_source(R"mkpro(
+program StandardLifetimeOverflow {
+  state {
+    early: counter 0..99999 = 0
+    late: counter 0..99999 = 0
+    live00: counter 0..99999 = 1
+    live01: counter 0..99999 = 2
+    live02: counter 0..99999 = 3
+    live03: counter 0..99999 = 4
+    live04: counter 0..99999 = 5
+    live05: counter 0..99999 = 6
+    live06: counter 0..99999 = 7
+    live07: counter 0..99999 = 8
+    live08: counter 0..99999 = 9
+    live09: counter 0..99999 = 10
+    live10: counter 0..99999 = 11
+    live11: counter 0..99999 = 12
+    live12: counter 0..99999 = 13
+    live13: counter 0..99999 = 14
+  }
+
+  loop {
+    early = read()
+    halt(0)
+    halt(live00 + live01 + live02 + live03 + live04 + live05 + live06 +
+         live07 + live08 + live09 + live10 + live11 + live12 + live13 + early)
+    late = read()
+    halt(0)
+    late += 2
+    halt(late)
+  }
+}
+)mkpro",
+                                                          lifetime_options);
+  require(lifetime_reclaimed.implemented,
+          "standard allocator should reclaim an Rf overflow color from disjoint lifetimes");
+  require(lifetime_reclaimed.diagnostics.empty(),
+          "lifetime-reclaimed standard compile should not report diagnostics");
+  require(lifetime_reclaimed.registers.at("early") == lifetime_reclaimed.registers.at("late"),
+          "standard allocator did not assign disjoint early/late values to one register");
+  require(lifetime_reclaimed.registers.at("early") != "f",
+          "standard lifetime allocation leaked the internal Rf proof color");
+  require(std::none_of(lifetime_reclaimed.registers.begin(),
+                       lifetime_reclaimed.registers.end(), [](const auto& allocation) {
+                         return allocation.second == "f";
+                       }),
+          "standard lifetime allocation exposed Rf in the public register map");
+  require(std::none_of(lifetime_reclaimed.steps.begin(), lifetime_reclaimed.steps.end(),
+                       [](const ResolvedStep& step) {
+                         return step.mnemonic.ends_with(" f") &&
+                                (step.opcode == 0x4f || step.opcode == 0x6f);
+                       }),
+          "standard lifetime allocation emitted an expanded-profile Rf command");
+  require(std::any_of(lifetime_reclaimed.preloads.begin(), lifetime_reclaimed.preloads.end(),
+                      [&](const PreloadReport& preload) {
+                        return preload.register_name == lifetime_reclaimed.registers.at("live13") &&
+                               preload.value == "14";
+                      }),
+          "Rf relocation did not preserve the live-at-entry owner's preload");
+  require(has_optimization(lifetime_reclaimed, "reclaim-coalesced-preloads"),
+          "standard lifetime overflow rescue did not report register reclamation");
 }
 
 void compiler_feature_profile_rf_optimizer_is_size_monotonic_contract() {

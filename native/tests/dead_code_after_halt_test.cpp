@@ -51,8 +51,26 @@ IrOp known_target_indirect_jump(std::string selector, int target) {
   op.register_name = std::move(selector);
   op.opcode = 0x87;
   op.meta.mnemonic = "К БП 7";
-  op.meta.comment = "preloaded R7=C5 indirect-target=" + std::to_string(target) +
-                    " indirect flow";
+  op.meta.comment = "preloaded R7=C5 indirect-target=" + std::to_string(target) + " indirect flow";
+  return op;
+}
+
+IrOp typed_target_indirect_jump(std::string selector, IrTarget target) {
+  IrOp op;
+  op.kind = IrKind::IndirectJump;
+  op.register_name = std::move(selector);
+  op.opcode = 0x87;
+  op.meta.mnemonic = "К БП 7";
+  op.meta.indirect_flow_targets = std::vector<IrTarget>{std::move(target)};
+  return op;
+}
+
+IrOp unknown_indirect_jump(std::string selector) {
+  IrOp op;
+  op.kind = IrKind::IndirectJump;
+  op.register_name = std::move(selector);
+  op.opcode = 0x87;
+  op.meta.mnemonic = "К БП 7";
   return op;
 }
 
@@ -75,8 +93,7 @@ IrOp ret() {
 
 core::passes::PassResult run_dead_code_after_halt(const std::vector<IrOp>& ops) {
   const CompileOptions options;
-  return core::passes::dead_code_after_halt(ops,
-                                            core::passes::PassContext{.options = options});
+  return core::passes::dead_code_after_halt(ops, core::passes::PassContext{.options = options});
 }
 
 bool has_plain_opcode(const std::vector<IrOp>& ops, int opcode) {
@@ -94,9 +111,8 @@ bool has_stop(const std::vector<IrOp>& ops) {
 
 void dead_code_after_halt_matches_typescript_contract() {
   {
-    const core::passes::PassResult result =
-        run_dead_code_after_halt({jump_to("END"), plain(0x00, "0"), plain(0x10, "+"),
-                                  label("END"), halt()});
+    const core::passes::PassResult result = run_dead_code_after_halt(
+        {jump_to("END"), plain(0x00, "0"), plain(0x10, "+"), label("END"), halt()});
     require(result.applied >= 2, "dead-code-after-halt did not prune skipped entry ops");
     require(!has_plain_opcode(result.ops, 0x00), "dead-code-after-halt kept skipped 0");
     require(!has_plain_opcode(result.ops, 0x10), "dead-code-after-halt kept skipped +");
@@ -113,8 +129,25 @@ void dead_code_after_halt_matches_typescript_contract() {
 
   {
     const core::passes::PassResult result =
-        run_dead_code_after_halt({call_to("terminal"), plain(0x09, "9"),
-                                  label("terminal"), halt()});
+        run_dead_code_after_halt({typed_target_indirect_jump("7", IrTarget{std::string("helper")}),
+                                  plain(0x09, "9"), label("helper"), plain(0x08, "8")});
+    require(has_plain_opcode(result.ops, 0x08),
+            "dead-code-after-halt dropped a typed-label indirect target");
+    require(!has_plain_opcode(result.ops, 0x09),
+            "dead-code-after-halt kept typed indirect-jump fallthrough");
+  }
+
+  {
+    const std::vector<IrOp> program = {unknown_indirect_jump("7"), plain(0x09, "9"),
+                                       plain(0x08, "8")};
+    const core::passes::PassResult result = run_dead_code_after_halt(program);
+    require(result.applied == 0 && result.ops.size() == program.size(),
+            "dead-code-after-halt removed code reachable through unknown indirect flow");
+  }
+
+  {
+    const core::passes::PassResult result = run_dead_code_after_halt(
+        {call_to("terminal"), plain(0x09, "9"), label("terminal"), halt()});
     require(!has_plain_opcode(result.ops, 0x09),
             "dead-code-after-halt kept non-returning call continuation");
     require(result.applied >= 1,
@@ -122,9 +155,8 @@ void dead_code_after_halt_matches_typescript_contract() {
   }
 
   {
-    const core::passes::PassResult result =
-        run_dead_code_after_halt({call_to("returns"), plain(0x09, "9"), halt(),
-                                  label("returns"), ret()});
+    const core::passes::PassResult result = run_dead_code_after_halt(
+        {call_to("returns"), plain(0x09, "9"), halt(), label("returns"), ret()});
     require(has_plain_opcode(result.ops, 0x09),
             "dead-code-after-halt removed continuation reached by return");
   }

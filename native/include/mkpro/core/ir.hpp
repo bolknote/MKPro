@@ -1,5 +1,7 @@
 #pragma once
 
+#include "mkpro/core/feature_profile.hpp"
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -93,6 +95,9 @@ struct MachineItem {
   // opaque exact labels. Memory integers are post-mutation R0..Re indices.
   std::optional<std::vector<IrTarget>> indirect_flow_targets;
   std::optional<std::vector<int>> indirect_memory_targets;
+  // The instruction is used only for its selector mutation. Its recalled
+  // memory value is proved dead even though the hardware still loads X.
+  bool discarded_indirect_recall_value = false;
   // This indirect-flow command consumes a setup-time selector borrowed from
   // an allocated register before that register's first ordinary definition.
   bool borrowed_entry_phase_selector = false;
@@ -143,6 +148,7 @@ struct IrMeta {
   std::optional<ManualInteractionAnchor> manual_interaction;
   std::optional<std::vector<IrTarget>> indirect_flow_targets;
   std::optional<std::vector<int>> indirect_memory_targets;
+  bool discarded_indirect_recall_value = false;
   bool borrowed_entry_phase_selector = false;
   std::vector<std::uint64_t> semantic_call_origins;
   std::optional<std::string> tactic;
@@ -185,7 +191,9 @@ struct LowerLayoutResult {
   std::vector<LabelAddress> address_of_label;
 };
 
-std::vector<IrOp> raise_machine_to_ir(const std::vector<MachineItem>& items);
+std::vector<IrOp> raise_machine_to_ir(
+    const std::vector<MachineItem>& items,
+    FeatureProfile feature_profile = FeatureProfile::Standard);
 std::vector<MachineItem> lower_ir_to_machine(const std::vector<IrOp>& ops);
 
 std::vector<IrOp> raise_layout_to_ir(const std::vector<LayoutIrCell>& cells);

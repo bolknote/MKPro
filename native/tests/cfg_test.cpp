@@ -125,8 +125,7 @@ bool edges_equal(const std::vector<core::passes::CfgEdge>& actual,
   return true;
 }
 
-void require_edges(const std::vector<std::vector<core::passes::CfgEdge>>& edges,
-                   std::size_t index,
+void require_edges(const std::vector<std::vector<core::passes::CfgEdge>>& edges, std::size_t index,
                    const std::vector<std::pair<int, core::passes::CfgEdgeKind>>& expected,
                    const std::string& context) {
   require(index < edges.size(), context + " edge index exists");
@@ -136,11 +135,13 @@ void require_edges(const std::vector<std::vector<core::passes::CfgEdge>>& edges,
 } // namespace
 
 void cfg_matches_typescript_contract() {
-  using core::passes::BuildCfgOptions;
-  using core::passes::CfgEdgeKind;
   using core::passes::build_cfg_edges;
   using core::passes::build_cfg_successors;
+  using core::passes::build_control_flow_graph;
   using core::passes::build_target_indexes;
+  using core::passes::BuildCfgOptions;
+  using core::passes::CfgEdgeKind;
+  using core::passes::CfgUncertaintyKind;
   using core::passes::loop_counter_register;
 
   {
@@ -173,16 +174,14 @@ void cfg_matches_typescript_contract() {
     const std::vector<IrOp> ops = {cjump(std::string("done")), plain(0x01, "1"),
                                    jump(std::string("done")), label("done"), halt()};
     const std::vector<std::vector<core::passes::CfgEdge>> edges = build_cfg_edges(ops);
-    require_edges(edges, 0,
-                  {{3, CfgEdgeKind::Jump}, {1, CfgEdgeKind::Fallthrough}},
+    require_edges(edges, 0, {{3, CfgEdgeKind::Jump}, {1, CfgEdgeKind::Fallthrough}},
                   "conditional jump");
     require_edges(edges, 2, {{3, CfgEdgeKind::Jump}}, "direct jump");
   }
 
   {
     const std::vector<IrOp> ops = {label("head"), plain(0x01, "1"), loop("head"), halt()};
-    require_edges(build_cfg_edges(ops), 2,
-                  {{0, CfgEdgeKind::Jump}, {3, CfgEdgeKind::Fallthrough}},
+    require_edges(build_cfg_edges(ops), 2, {{0, CfgEdgeKind::Jump}, {3, CfgEdgeKind::Fallthrough}},
                   "counted loop");
   }
 
@@ -200,11 +199,46 @@ void cfg_matches_typescript_contract() {
   }
 
   {
-    const std::vector<IrOp> ops = {indirect_jump("7", 3), indirect_jump("8"),
-                                   plain(0x01, "1"), plain(0x02, "2")};
-    const std::vector<std::vector<core::passes::CfgEdge>> edges = build_cfg_edges(ops);
-    require_edges(edges, 0, {{3, CfgEdgeKind::Jump}}, "proved indirect jump");
-    require_edges(edges, 1, {}, "unknown indirect jump");
+    const std::vector<IrOp> ops = {indirect_jump("7", 3), indirect_jump("8"), plain(0x01, "1"),
+                                   plain(0x02, "2")};
+    const core::passes::ControlFlowGraph graph = build_control_flow_graph(ops);
+    require_edges(graph.edges, 0, {{3, CfgEdgeKind::Jump}}, "proved indirect jump");
+    require_edges(graph.edges, 1,
+                  {{0, CfgEdgeKind::Jump},
+                   {1, CfgEdgeKind::Jump},
+                   {2, CfgEdgeKind::Jump},
+                   {3, CfgEdgeKind::Jump}},
+                  "conservative unknown indirect jump");
+    require(graph.uncertainties.size() == 1U && graph.uncertainties.front().source == 1 &&
+                graph.uncertainties.front().kind == CfgUncertaintyKind::UnknownIndirectTarget,
+            "cfg did not expose the unknown indirect target proof gap");
+
+    const std::vector<std::vector<core::passes::CfgEdge>> sparse =
+        build_cfg_edges(ops, BuildCfgOptions{.unknown_indirect_flow_to_all = false});
+    require_edges(sparse, 1, {}, "explicit sparse unknown indirect jump");
+  }
+
+  {
+    IrOp dispatch = indirect_jump("7");
+    dispatch.meta.indirect_flow_targets = std::vector<IrTarget>{IrTarget{1}, IrTarget{2}};
+    const std::vector<IrOp> ops = {dispatch, plain(0x01, "1"), plain(0x02, "2")};
+    const core::passes::ControlFlowGraph graph = build_control_flow_graph(ops);
+
+    require_edges(graph.edges, 0, {{1, CfgEdgeKind::Jump}, {2, CfgEdgeKind::Jump}},
+                  "typed multi-target indirect jump");
+    require(graph.targets_are_exact(),
+            "resolved typed multi-target indirect jump was marked uncertain");
+  }
+
+  {
+    const std::vector<IrOp> ops = {jump(std::string("missing")), plain(0x01, "1")};
+    const core::passes::ControlFlowGraph graph = build_control_flow_graph(ops);
+
+    require_edges(graph.edges, 0, {{0, CfgEdgeKind::Jump}, {1, CfgEdgeKind::Jump}},
+                  "conservative unresolved direct jump");
+    require(graph.uncertainties.size() == 1U &&
+                graph.uncertainties.front().kind == CfgUncertaintyKind::UnresolvedDirectTarget,
+            "cfg did not expose the unresolved direct target proof gap");
   }
 
   {
@@ -215,14 +249,13 @@ void cfg_matches_typescript_contract() {
 
     const std::vector<std::vector<core::passes::CfgEdge>> with =
         build_cfg_edges(ops, BuildCfgOptions{.indirect_call_fallthrough = true});
-    require_edges(with, 0,
-                  {{2, CfgEdgeKind::Jump}, {1, CfgEdgeKind::Fallthrough}},
+    require_edges(with, 0, {{2, CfgEdgeKind::Jump}, {1, CfgEdgeKind::Fallthrough}},
                   "indirect call with fallthrough");
   }
 
   {
-    const std::vector<IrOp> ops = {cjump(std::string("done")), plain(0x01, "1"),
-                                   label("done"), halt()};
+    const std::vector<IrOp> ops = {cjump(std::string("done")), plain(0x01, "1"), label("done"),
+                                   halt()};
     require(build_cfg_successors(ops) == std::vector<std::vector<int>>{{2, 1}, {2}, {3}, {}},
             "cfg plain successors should drop edge kinds");
   }

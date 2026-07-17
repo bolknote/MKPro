@@ -417,6 +417,40 @@ void pass_pipeline_matches_initial_typescript_contract() {
   }
 
   {
+    const std::vector<MachineItem> items = {
+        MachineItem::op(0x4f, "X->П f / R0 alias"),
+        MachineItem::op(0x40, "X->П 0"),
+        MachineItem::op(0x6f, "П->X f / R0 alias"),
+        MachineItem::op(0x10, "+"),
+        MachineItem::op(0x50, "С/П"),
+    };
+    CompileOptions standard_options;
+    const core::passes::RunPassesResult standard =
+        core::passes::run_ir_passes(items, standard_options);
+    require(std::none_of(standard.items.begin(), standard.items.end(), [](const MachineItem& item) {
+              return item.kind == MachineItemKind::Op && item.opcode == 0x4f;
+            }) &&
+                std::any_of(standard.items.begin(), standard.items.end(), [](const MachineItem& item) {
+                  return item.kind == MachineItemKind::Op && item.opcode == 0x40;
+                }),
+            "standard IR pipeline did not treat 4F/6F as R0 aliases: " +
+                machine_items_to_json(standard.items));
+
+    CompileOptions expanded_options;
+    expanded_options.feature_profile = FeatureProfile::Mk61SMiniExpanded;
+    const core::passes::RunPassesResult expanded =
+        core::passes::run_ir_passes(items, expanded_options);
+    require(std::any_of(expanded.items.begin(), expanded.items.end(), [](const MachineItem& item) {
+              return item.kind == MachineItemKind::Op && item.opcode == 0x4f;
+            }) &&
+                std::none_of(expanded.items.begin(), expanded.items.end(), [](const MachineItem& item) {
+                  return item.kind == MachineItemKind::Op && item.opcode == 0x40;
+                }),
+            "expanded IR pipeline confused the real Rf with the standard R0 alias: " +
+                machine_items_to_json(expanded.items));
+  }
+
+  {
     const std::vector<MachineItem> items =
         lower_ir_to_machine({plain(0x02), store("1"), call_to("inc"), stop("halt"), label("inc"),
                              recall("1"), plain(0x01), plain(0x10), ret()});

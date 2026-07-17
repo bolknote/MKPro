@@ -7128,8 +7128,18 @@ void assign_register(LoweringContext& context, const std::string& name) {
     (void)unused_name;
     used.insert(index);
   }
-  const std::optional<int> index =
-      core::pick_register_index_for_variable(name, used, context.feature_profile);
+  std::optional<int> index;
+  if (context.standard_rf_overflow_allocation) {
+    index = core::pick_register_index_for_variable(name, used, FeatureProfile::Standard);
+    if (!index.has_value()) {
+      const std::optional<int> expanded = core::pick_register_index_for_variable(
+          name, used, FeatureProfile::Mk61SMiniExpanded);
+      if (expanded == 0x0f)
+        index = expanded;
+    }
+  } else {
+    index = core::pick_register_index_for_variable(name, used, context.feature_profile);
+  }
   if (!index.has_value()) {
     context.diagnostics.push_back(
         diagnostic(DiagnosticSeverity::Error, "native-unsupported",
@@ -7444,6 +7454,10 @@ void allocate_collected_registers(LoweringContext& context, const RegisterCollec
 
 void apply_forced_register_shares(LoweringContext& context,
                                   const std::vector<RegisterShare>& shares) {
+  std::map<int, std::set<std::string>> original_owners_by_index;
+  for (const auto& [name, index] : context.register_index_by_name)
+    original_owners_by_index[index].insert(name);
+
   for (const RegisterShare& share : shares) {
     if (share.free_register == share.keep_register)
       continue;
@@ -7455,8 +7469,19 @@ void apply_forced_register_shares(LoweringContext& context,
     } catch (const std::exception&) {
       continue;
     }
-    if (!physical_register_in_use(context, keep_index))
+    const bool relocate_rf_overflow_to_freed_standard =
+        context.standard_rf_overflow_allocation && free_index == 0x0f &&
+        keep_index >= core::k_min_register_index && keep_index <= core::k_max_register_index;
+    const bool keep_was_occupied = physical_register_in_use(context, keep_index);
+    if (!keep_was_occupied && !relocate_rf_overflow_to_freed_standard)
       continue;
+
+    if (!context.forced_share_preload_owners.contains(keep_index)) {
+      const int owner_index = keep_was_occupied ? keep_index : free_index;
+      const auto owners = original_owners_by_index.find(owner_index);
+      if (owners != original_owners_by_index.end() && !owners->second.empty())
+        context.forced_share_preload_owners.emplace(keep_index, owners->second);
+    }
 
     bool moved_any = false;
     for (auto& [name, index] : context.register_index_by_name) {
@@ -34862,6 +34887,7 @@ void emit_delayed_indirect_unit_decrement(LoweringContext& context, const V2Stat
                                           const std::string& target) {
   context.emitter.emit_op(0xd0 + register_index, "К П->X " + register_text_for(context, target),
                           "delayed predecrement " + target, decrement.line);
+  context.emitter.items.back().discarded_indirect_recall_value = true;
   clear_current_x_facts(context);
   context.optimizations.push_back(OptimizationReport{
       .name = "delayed-indirect-underflow-decrement",
@@ -35735,6 +35761,7 @@ bool lower_show_read_decrement_underflow_fusion(LoweringContext& context,
       context.emitter.emit_op(0xd0 + decrement_register,
                               "К П->X " + register_text_for(context, *decrement_storage),
                               "predecrement " + *decrement_storage, decrement.line);
+      context.emitter.items.back().discarded_indirect_recall_value = true;
       emit_recall(context, *decrement_storage);
       if (!context.emitter.items.empty())
         context.emitter.items.back().comment = "decrement/test " + *decrement_storage;
@@ -41951,7 +41978,8 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
                                                   const V2Program& program,
                                                   const std::vector<MachineItem>& items) {
   std::vector<PreloadReport> preloads;
-  std::vector<PreloadReport> deferred_indexed_initializer_preloads;
+  std::vector<std::pair<PreloadReport, std::string>> deferred_indexed_initializer_preloads;
+  std::map<std::string, bool> selected_preload_is_preferred_owner;
   const auto retunable_natural_fractional_prefix =
       [&](const std::string& register_name,
           const std::string& value) -> std::optional<std::string> {
@@ -41977,23 +42005,33 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
     }
     return saw_recall ? std::optional<std::string>{family->second} : std::nullopt;
   };
-  auto add_preload = [&](const std::string& register_name, const std::string& value,
+  auto add_preload = [&](const std::string& logical_owner, const std::string& register_name,
+                         const std::string& value,
                          std::optional<std::string> setup_target_name = std::nullopt,
                          bool setup_expression = false,
                          std::optional<int> setup_source_line = std::nullopt,
                          std::optional<std::string> setup_expression_text = std::nullopt,
                          std::optional<std::string> proved_fractional_prefix = std::nullopt) {
+    bool preferred_owner = false;
+    try {
+      const auto preferred =
+          context.forced_share_preload_owners.find(register_index(register_name));
+      preferred_owner = preferred != context.forced_share_preload_owners.end() &&
+                        preferred->second.contains(logical_owner);
+    } catch (const std::exception&) {
+    }
     const auto duplicate =
         std::find_if(preloads.begin(), preloads.end(), [&](const PreloadReport& preload) {
           return preload.register_name == register_name;
         });
-    if (duplicate != preloads.end())
+    if (duplicate != preloads.end() &&
+        (!preferred_owner || selected_preload_is_preferred_owner[register_name]))
       return;
     if (!proved_fractional_prefix.has_value()) {
       proved_fractional_prefix =
           retunable_natural_fractional_prefix(register_name, value);
     }
-    preloads.push_back(PreloadReport{
+    PreloadReport report{
         .register_name = register_name,
         .value = value,
         .counts_against_program = false,
@@ -42002,10 +42040,15 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
         .setup_expression = setup_expression,
         .setup_expression_text = std::move(setup_expression_text),
         .setup_source_line = setup_source_line,
-    });
+    };
+    if (duplicate == preloads.end())
+      preloads.push_back(std::move(report));
+    else
+      *duplicate = std::move(report);
+    selected_preload_is_preferred_owner[register_name] = preferred_owner;
   };
-  auto add_preload_report = [&](const PreloadReport& preload) {
-    add_preload(preload.register_name, preload.value, preload.setup_target_name,
+  auto add_preload_report = [&](const PreloadReport& preload, const std::string& logical_owner) {
+    add_preload(logical_owner, preload.register_name, preload.value, preload.setup_target_name,
                 preload.setup_expression, preload.setup_source_line, preload.setup_expression_text,
                 preload.retunable_natural_fractional_prefix);
   };
@@ -42138,16 +42181,17 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
         context.boards.contains(*field->domain) && field->count.has_value()) {
       const std::string initial_text = trim_ascii(*field->initial);
       for (int index = 0; index < *field->count; ++index) {
-        const auto register_it =
-            context.registers.find(core::emit::coord_list_item_name(field->name, index));
+        const std::string item_name = core::emit::coord_list_item_name(field->name, index);
+        const auto register_it = context.registers.find(item_name);
         if (register_it == context.registers.end())
           continue;
         if (initial_text == "random()") {
-          add_preload(register_it->second, "random(" + *field->domain + ")");
+          add_preload(item_name, register_it->second, "random(" + *field->domain + ")");
         } else if (initial_text == "random_unique()") {
-          add_preload(register_it->second, core::emit::lowering::random_unique_coord_list_value(
-                                               *field->domain, field->name, index, *field->count,
-                                               context.scaled_coord_lists.contains(field->name)));
+          add_preload(item_name, register_it->second,
+                      core::emit::lowering::random_unique_coord_list_value(
+                          *field->domain, field->name, index, *field->count,
+                          context.scaled_coord_lists.contains(field->name)));
         }
       }
       if (initial_text == "random()" || initial_text == "random_unique()")
@@ -42161,10 +42205,11 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
         const auto planes_it = context.segmented_cells.find(field->name);
         if (planes_it != context.segmented_cells.end()) {
           for (std::size_t index = 0; index < planes_it->second.size(); ++index) {
-            const auto register_it = context.registers.find(planes_it->second.at(index));
+            const std::string& plane_name = planes_it->second.at(index);
+            const auto register_it = context.registers.find(plane_name);
             if (register_it == context.registers.end())
               continue;
-            add_preload(register_it->second,
+            add_preload(plane_name, register_it->second,
                         core::emit::lowering::segmented_bitplane_random_unique_value(
                             field->name, *count_source, static_cast<int>(index)));
           }
@@ -42186,17 +42231,19 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
           const std::string element = state_bank_element_name(*field, index);
           const auto register_it = context.registers.find(element);
           if (register_it != context.registers.end()) {
-            deferred_indexed_initializer_preloads.push_back(PreloadReport{
-                .register_name = register_it->second,
-                .value = preload_value->value,
-                .counts_against_program = false,
-                .setup_target_name = preload_value->setup_expression
-                                         ? std::optional<std::string>{element}
-                                         : std::nullopt,
-                .setup_expression = preload_value->setup_expression,
-                .setup_expression_text = preload_value->setup_expression_text,
-                .setup_source_line = field->line,
-            });
+            deferred_indexed_initializer_preloads.push_back(
+                {PreloadReport{
+                     .register_name = register_it->second,
+                     .value = preload_value->value,
+                     .counts_against_program = false,
+                     .setup_target_name = preload_value->setup_expression
+                                              ? std::optional<std::string>{element}
+                                              : std::nullopt,
+                     .setup_expression = preload_value->setup_expression,
+                     .setup_expression_text = preload_value->setup_expression_text,
+                     .setup_source_line = field->line,
+                 },
+                 element});
           }
         }
         continue;
@@ -42254,7 +42301,7 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
         const std::string element = state_bank_element_name(*field, index);
         const auto register_it = context.registers.find(element);
         if (register_it != context.registers.end())
-          add_preload(register_it->second, *value,
+          add_preload(element, register_it->second, *value,
                       bank_needs_generated_setup ? std::optional<std::string>{element}
                                                  : std::nullopt,
                       setup_expression, field->line);
@@ -42264,7 +42311,8 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
 
     const auto register_it = context.registers.find(field->name);
     if (register_it != context.registers.end())
-      add_preload(register_it->second, *value, setup_target_name, setup_expression, field->line);
+      add_preload(field->name, register_it->second, *value, setup_target_name, setup_expression,
+                  field->line);
   }
 
   for (const V2StateField& field : program.state) {
@@ -42285,16 +42333,17 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
     }
     const auto register_it = context.registers.find(field.name);
     if (register_it != context.registers.end())
-      add_preload(register_it->second, *value, setup_target_name, setup_expression, field.line);
+      add_preload(field.name, register_it->second, *value, setup_target_name, setup_expression,
+                  field.line);
   }
 
-  for (const PreloadReport& preload : deferred_indexed_initializer_preloads)
-    add_preload_report(preload);
+  for (const auto& [preload, logical_owner] : deferred_indexed_initializer_preloads)
+    add_preload_report(preload, logical_owner);
 
   if (context.uses_formatted_coord_report) {
     const auto register_it = context.registers.find(std::string(kCoordListDx));
     if (register_it != context.registers.end())
-      add_preload(register_it->second, "8,-00--_");
+      add_preload(std::string(kCoordListDx), register_it->second, "8,-00--_");
   }
 
   for (const auto& [value, name] : preloaded_numbers_in_js_object_order(context)) {
@@ -42306,7 +42355,7 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
     const std::optional<std::string> selector_value =
         selector.has_value() ? fractional_selector_preload_value(value, selector->target)
                              : std::nullopt;
-    add_preload(register_it->second, selector_value.value_or(value));
+    add_preload(name, register_it->second, selector_value.value_or(value));
   }
 
   static constexpr std::string_view kDisplayScalePrefix = "__display_scale_";
@@ -42315,14 +42364,14 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
       continue;
     const std::string value = name.substr(kDisplayScalePrefix.size());
     if (!value.empty())
-      add_preload(register_name, value);
+      add_preload(name, register_name, value);
   }
 
   for (const std::string& name :
        core::emit::display_template_mask_scratch_names_for_program(program)) {
     const auto register_it = context.registers.find(name);
     if (register_it != context.registers.end())
-      add_preload(register_it->second, "8,-00-000");
+      add_preload(name, register_it->second, "8,-00-000");
   }
 
   if (context.negative_zero_degree_register.has_value() &&
@@ -42333,7 +42382,8 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
                   })) {
     const auto register_it = context.registers.find(*context.negative_zero_degree_register);
     if (register_it != context.registers.end())
-      add_preload(register_it->second, std::string(kNegativeZeroDegreePreloadValue));
+      add_preload(*context.negative_zero_degree_register, register_it->second,
+                  std::string(kNegativeZeroDegreePreloadValue));
   }
 
   const std::map<std::string, int> label_addresses = machine_item_label_address_map(items);
@@ -42342,7 +42392,7 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
     const auto address_it = label_addresses.find(label);
     if (register_it == context.registers.end() || address_it == label_addresses.end())
       continue;
-    add_preload(register_it->second, std::to_string(address_it->second));
+    add_preload(name, register_it->second, std::to_string(address_it->second));
   }
   return preloads;
 }
@@ -48275,6 +48325,10 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   LoweringContext context;
   context.program = &*ast.v2;
   context.feature_profile = optimizer_feature_profile_for_options(options);
+  context.standard_rf_overflow_allocation =
+      options.feature_profile == FeatureProfile::Standard &&
+      context.feature_profile == FeatureProfile::Mk61SMiniExpanded &&
+      options.collect_coalesce_shares;
   context.emitter.address_space_model = address_space_model_for_options(options);
   context.cave_sketch_shape = false;
   context.segmented_bitplanes = options.segmented_bitplanes;
@@ -48536,12 +48590,37 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
               collect_terminal_underflow_unit_decrements(context, *ast.v2);
         }
         trace_stage("metadata-collect-registers");
+        const FeatureProfile lowering_profile = context.feature_profile;
+        const bool forced_standard_rf_overflow =
+            lowering_profile == FeatureProfile::Standard &&
+            std::any_of(options.forced_register_shares.begin(),
+                        options.forced_register_shares.end(), [](const RegisterShare& share) {
+                          return share.free_register == "f";
+                        });
+        if (forced_standard_rf_overflow) {
+          context.feature_profile = FeatureProfile::Mk61SMiniExpanded;
+          context.standard_rf_overflow_allocation = true;
+        }
         collect_registers(context, *ast.v2);
         trace_stage("metadata-forced-shares-preloads");
         context.preloaded_indirect_flow =
             context.preloaded_indirect_flow ||
             (program_uses_cells_bit_mask_sugar(context, *ast.v2) && !context.cave_sketch_shape);
         apply_forced_register_shares(context, options.forced_register_shares);
+        if (forced_standard_rf_overflow) {
+          const bool rf_remains =
+              std::any_of(context.register_index_by_name.begin(),
+                          context.register_index_by_name.end(), [](const auto& allocation) {
+                            return allocation.second > core::k_max_register_index;
+                          });
+          context.feature_profile = lowering_profile;
+          context.standard_rf_overflow_allocation = false;
+          if (rf_remains) {
+            context.diagnostics.push_back(diagnostic(
+                DiagnosticSeverity::Error, "native-unsupported",
+                "Register-lifetime proof did not eliminate the temporary Rf overflow color."));
+          }
+        }
         trace_stage("metadata-plan-constant-preloads");
         plan_general_constant_preloads(context, *ast.v2, options.startup_aware_constant_preloads,
                                        options.force_fractional_constant_selector_preloads);
@@ -48595,8 +48674,12 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   if (!has_errors(context.diagnostics) && options.collect_coalesce_shares) {
     const std::map<std::string, std::string> shares =
         core::passes::compute_non_overlapping_register_mapping(
-            raise_machine_to_ir(context.emitter.items),
-            core::passes::RegisterCoalesceMappingOptions{.def_aware = true});
+            raise_machine_to_ir(context.emitter.items,
+                                optimizer_feature_profile_for_options(options)),
+            core::passes::RegisterCoalesceMappingOptions{
+                .def_aware = true,
+                .allow_live_at_entry_anchor_reuse = true,
+            });
     for (const auto& [free_register, keep_register] : shares) {
       result.coalesce_shares.push_back(RegisterShare{
           .free_register = free_register,
@@ -48728,7 +48811,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
           core::scan_return_stack_script_opportunity(post_layout_items, pass_options);
       const core::ReturnStackIrTailLayoutSearch return_stack_tail_layout_scan =
           core::analyze_return_stack_ir_tail_layout(
-              raise_machine_to_ir(post_layout_items),
+              raise_machine_to_ir(post_layout_items,
+                                  optimizer_feature_profile_for_options(options)),
               core::ReturnStackStartupLayoutOptions{
                   .size_rescue = return_stack_needs_size_rescue,
                   .feature_profile = optimizer_feature_profile_for_options(options),
@@ -48743,7 +48827,9 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
       if (run_return_stack_pipeline) {
       const core::ReturnStackIrTailLayoutSearch tail_layout =
           core::analyze_return_stack_ir_tail_layout_with_pipeline(
-              raise_machine_to_ir(post_layout_items), post_layout_items, pass_options,
+              raise_machine_to_ir(post_layout_items,
+                                  optimizer_feature_profile_for_options(options)),
+              post_layout_items, pass_options,
               core::ReturnStackStartupLayoutOptions{
                   .size_rescue = return_stack_needs_size_rescue,
                   .feature_profile = optimizer_feature_profile_for_options(options),
@@ -49142,7 +49228,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
     r0_existing_preloads.insert(r0_existing_preloads.end(), post_layout_flow.preloads.begin(),
                                 post_layout_flow.preloads.end());
     const core::PostLayoutIndirectFlowResult post_layout_r0_flow =
-        core::optimize_post_layout_fractional_r0_flow(post_layout_items, r0_existing_preloads);
+        core::optimize_post_layout_fractional_r0_flow(post_layout_items, r0_existing_preloads,
+                                                      pass_options);
     post_layout_items = post_layout_r0_flow.items;
     post_layout_optimizations.insert(post_layout_optimizations.end(),
                                      post_layout_r0_flow.optimizations.begin(),
@@ -65730,8 +65817,19 @@ CompileResult compile_source_for_optimizer_profile(
     probe_options.analysis = true;
     probe_options.collect_coalesce_shares = true;
     CompileResult probe;
+    bool used_standard_rf_overflow_probe = false;
     try {
       probe = cached_compile_source_once(probe_options);
+      if (!probe.implemented &&
+          base_options.feature_profile == FeatureProfile::Standard &&
+          !base_options.optimizer_feature_profile_override.has_value() &&
+          has_register_allocation_failure(probe.diagnostics)) {
+        CompileOptions overflow_probe_options = probe_options;
+        overflow_probe_options.optimizer_feature_profile_override =
+            FeatureProfile::Mk61SMiniExpanded;
+        probe = cached_compile_source_once(overflow_probe_options);
+        used_standard_rf_overflow_probe = probe.implemented;
+      }
     } catch (const std::exception&) {
       return;
     }
@@ -65742,8 +65840,49 @@ CompileResult compile_source_for_optimizer_profile(
                   return left.free_register < right.free_register;
                 return left.keep_register < right.keep_register;
               });
+    if (used_standard_rf_overflow_probe &&
+        std::none_of(shares.begin(), shares.end(), [](const RegisterShare& share) {
+          return share.free_register == "f";
+        })) {
+      const auto freed_standard =
+          std::find_if(shares.begin(), shares.end(), [](const RegisterShare& share) {
+            return share.free_register != "f" && share.keep_register != share.free_register;
+          });
+      if (freed_standard != shares.end()) {
+        // The coalesce proof first empties this standard register. Relocate the
+        // sole overflow color from Rf into that now-free slot; this is a rename,
+        // not permission to emit Rf in a standard result.
+        shares.push_back(RegisterShare{
+            .free_register = "f",
+            .keep_register = freed_standard->free_register,
+        });
+      }
+    }
     if (!probe.implemented || shares.empty())
       return;
+
+    // A normal free->keep share intentionally discards the free register's
+    // entry value because liveness proved it dead. It must not, however, drop
+    // an observable setup action such as random(), random_unique(), or a
+    // stack-provided manual input. A later share into an already vacated slot
+    // is a pure relocation (used by the internal Rf overflow color), so that
+    // preload remains owned and is preserved instead of discarded.
+    std::set<std::string> vacated_registers;
+    for (const RegisterShare& share : shares) {
+      const bool relocation = vacated_registers.contains(share.keep_register);
+      if (!relocation) {
+        const auto dropped_preload =
+            std::find_if(probe.preloads.begin(), probe.preloads.end(),
+                         [&](const PreloadReport& preload) {
+                           return preload.register_name == share.free_register &&
+                                  preload_must_reach_generated_setup_program(preload);
+                         });
+        if (dropped_preload != probe.preloads.end())
+          return;
+      }
+      vacated_registers.erase(share.keep_register);
+      vacated_registers.insert(share.free_register);
+    }
 
     std::string key = reclaim_base_key(base_options);
     for (const RegisterShare& share : shares) {
