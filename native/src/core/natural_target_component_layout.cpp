@@ -1445,7 +1445,9 @@ layout_order_with_optional_split(
   auto try_direct_gap_splits =
       [&](const std::vector<Segment>& base_segments,
           const std::vector<NaturalTargetPlacement>& base_placements,
-          const std::vector<TransparentSplitBridge>& base_bridges) {
+          const std::vector<TransparentSplitBridge>& base_bridges,
+          const std::vector<NaturalTargetPlacement>&
+              base_bounded_placements) {
         const int existing_bridge_cells = split_bridge_cells(base_bridges);
         if (main_segment >= base_segments.size() ||
             maximum_padding < existing_bridge_cells + 2) {
@@ -1486,9 +1488,21 @@ layout_order_with_optional_split(
             continue;
           const int length = segment_cells(base_segments.at(segment));
           std::set<int> cut_candidates;
+          const int maximum_cut_slack = std::min(
+              maximum_padding - existing_bridge_cells - 2,
+              std::max(0, length - 1));
           for (const int gap : gap_capacities) {
-            cut_candidates.insert(gap - 2);
-            cut_candidates.insert(length - gap);
+            // An exact gap-sized prefix/suffix is only one point on the
+            // profitable frontier.  That cut can fall between an address
+            // command and its operand even though a nearby cut plus a small
+            // amount of padding is both legal and still size-reducing.
+            // Enumerate precisely the slack already admitted by the global
+            // saving budget; split_segment_with_bridge and the final layout
+            // proof continue to reject unsafe boundaries and arrangements.
+            for (int slack = 0; slack <= maximum_cut_slack; ++slack) {
+              cut_candidates.insert(gap - 2 - slack);
+              cut_candidates.insert(length - gap + slack);
+            }
           }
           for (const int cut : cut_candidates) {
             if (cut <= 0 || cut >= length)
@@ -1506,6 +1520,8 @@ layout_order_with_optional_split(
 
             std::vector<NaturalTargetPlacement> trial_placements =
                 base_placements;
+            std::vector<NaturalTargetPlacement> trial_bounded_placements =
+                base_bounded_placements;
             const std::size_t suffix_segment = trial_segments.size() - 1U;
             for (NaturalTargetPlacement& placement : trial_placements) {
               if (placement.target_segment != segment ||
@@ -1515,9 +1531,19 @@ layout_order_with_optional_split(
               placement.target_segment = suffix_segment;
               placement.target_offset -= cut;
             }
+            for (NaturalTargetPlacement& placement :
+                 trial_bounded_placements) {
+              if (placement.target_segment != segment ||
+                  placement.target_offset < cut) {
+                continue;
+              }
+              placement.target_segment = suffix_segment;
+              placement.target_offset -= cut;
+            }
             const auto trial_order = layout_order_for_targets(
                 trial_segments, main_segment, trial_placements, maximum_states,
-                maximum_padding - existing_bridge_cells - 2);
+                maximum_padding - existing_bridge_cells - 2,
+                trial_bounded_placements, maximum_bounded_target);
             if (!trial_order.has_value())
               continue;
 
@@ -1535,9 +1561,8 @@ layout_order_with_optional_split(
   if (ordinary.has_value()) {
     consider(segments, *ordinary, {});
   }
-  if (bounded_placements.empty() &&
-      (!ordinary.has_value() || ordinary->padding_cells > 2))
-    try_direct_gap_splits(segments, placements, {});
+  if (!ordinary.has_value() || ordinary->padding_cells > 2)
+    try_direct_gap_splits(segments, placements, {}, bounded_placements);
 
   if (maximum_padding >= 1) {
     for (const NaturalTargetPlacement& bridge_target : placements) {
@@ -1581,9 +1606,9 @@ layout_order_with_optional_split(
           maximum_bounded_target);
       if (trial_order.has_value())
         consider(trial_segments, *trial_order, {bridge});
-      if (bounded_placements.empty() &&
-          (!trial_order.has_value() || trial_order->padding_cells > 2))
-        try_direct_gap_splits(trial_segments, trial_placements, {bridge});
+      if (!trial_order.has_value() || trial_order->padding_cells > 2)
+        try_direct_gap_splits(trial_segments, trial_placements, {bridge},
+                              trial_bounded_placements);
     }
   }
 

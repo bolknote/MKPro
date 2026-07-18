@@ -151,6 +151,21 @@ void callee_hole_helper_matches_direct_call_semantics() {
           "walks differing only in their leaf call should merge into a skeleton");
   require(has_proof(hole, "callee-hole-indirect-call-targets"),
           "callee-hole dispatch should discharge its leaf-address proof");
+  const std::optional<std::string> hole_gate_rejection =
+      optimizer_static_proof_gate_rejection_reason_for_testing(hole_options, hole);
+  require(!hole_gate_rejection.has_value(),
+          "generated callee-hole final artifact should pass its static gate: " +
+              hole_gate_rejection.value_or("unknown rejection"));
+  require(std::count_if(hole.steps.begin(), hole.steps.end(), [](const ResolvedStep& step) {
+            return step.comment.has_value() &&
+                   step.comment->starts_with("callee-hole charge-entry store;");
+          }) == 1,
+          "stable callee-hole selector should use one shared charge-entry store");
+  require(std::count_if(hole.steps.begin(), hole.steps.end(), [](const ResolvedStep& step) {
+            return step.comment.has_value() &&
+                   step.comment->starts_with("callee-hole charge-entry call;");
+          }) == 2,
+          "each merged region should call the shared charge entry");
   require(hole.steps.size() < baseline.steps.size(),
           "callee-hole skeleton should shrink the program: hole=" +
               std::to_string(hole.steps.size()) +
@@ -359,6 +374,52 @@ void callee_hole_helper_matches_direct_call_semantics() {
               role_count("late-decimal-selector-low:") == 2,
           "each late selector charge should expose independently bindable decimal digits");
 
+  std::vector<IrOp> fixed_indirect_ir;
+  fixed_indirect_ir.push_back(label("fixed_leaf_a"));
+  fixed_indirect_ir.push_back(plain(0x0d));
+  fixed_indirect_ir.push_back(terminal(IrKind::Return, 0x52));
+  fixed_indirect_ir.push_back(label("fixed_leaf_b"));
+  fixed_indirect_ir.push_back(plain(0x0d));
+  fixed_indirect_ir.push_back(terminal(IrKind::Return, 0x52));
+  const auto append_fixed_indirect_region = [&](const std::string& leaf,
+                                                 const std::string& fixed_semantic) {
+    for (int index = 0; index < 6; ++index) {
+      IrOp recall;
+      recall.kind = IrKind::Recall;
+      recall.register_name = "1";
+      recall.opcode = 0x61;
+      fixed_indirect_ir.push_back(std::move(recall));
+    }
+    fixed_indirect_ir.push_back(call(leaf));
+    IrOp fixed_call;
+    fixed_call.kind = IrKind::IndirectCall;
+    fixed_call.register_name = "b";
+    fixed_call.opcode = 0xab;
+    fixed_call.meta.indirect_flow_targets =
+        std::vector<IrTarget>{IrTarget{std::string("fixed_shared_leaf")}};
+    fixed_indirect_ir.push_back(std::move(fixed_call));
+    IrOp fixed_direct_call = call("fixed_shared_leaf");
+    fixed_direct_call.semantic = fixed_semantic;
+    fixed_indirect_ir.push_back(std::move(fixed_direct_call));
+    fixed_indirect_ir.push_back(call(leaf));
+    fixed_indirect_ir.push_back(terminal(IrKind::Stop, 0x50));
+  };
+  append_fixed_indirect_region("fixed_leaf_a", "source-function-call");
+  append_fixed_indirect_region("fixed_leaf_b", "source-procedure-call");
+  fixed_indirect_ir.push_back(label("fixed_shared_leaf"));
+  fixed_indirect_ir.push_back(plain(0x0d));
+  fixed_indirect_ir.push_back(terminal(IrKind::Return, 0x52));
+
+  const core::passes::PassResult fixed_indirect =
+      core::passes::callee_hole_straight_line_helper(
+          fixed_indirect_ir, core::passes::PassContext{.options = mutating_options});
+  require(fixed_indirect.applied >= 2,
+          "callee-hole pass should share a skeleton across an invariant indirect call");
+  require(std::count_if(fixed_indirect.ops.begin(), fixed_indirect.ops.end(), [](const IrOp& op) {
+            return op.kind == IrKind::IndirectCall && op.register_name == "b";
+          }) == 1,
+          "the invariant indirect call should occur once in the shared skeleton");
+
   CompileOptions gate_options;
   gate_options.callee_hole_straight_line_helper = true;
   CompileResult proved_mutating;
@@ -384,6 +445,40 @@ void callee_hole_helper_matches_direct_call_semantics() {
   };
   require(optimizer_static_proof_gate_accepts_for_testing(gate_options, proved_mutating),
           "final static gate should accept a resolved R0 charge after four recalls erase X/X2");
+
+  CompileResult natural_skeleton_calls = proved_mutating;
+  natural_skeleton_calls.steps.at(3).opcode = 0xa7;
+  natural_skeleton_calls.steps.at(3).comment =
+      "callee-hole skeleton call; preloaded R7=20 indirect-target=20 indirect flow";
+  natural_skeleton_calls.steps.at(7).opcode = 0xa7;
+  natural_skeleton_calls.steps.at(7).comment =
+      "callee-hole skeleton call; preloaded R7=20 indirect-target=20 indirect flow";
+  require(!optimizer_static_proof_gate_accepts_for_testing(gate_options,
+                                                            natural_skeleton_calls),
+          "callee-hole gate should reject an indirect skeleton dispatch without its layout proof");
+  natural_skeleton_calls.optimizations.push_back(
+      OptimizationReport{.name = "natural-target-component-layout"});
+  require(optimizer_static_proof_gate_accepts_for_testing(gate_options,
+                                                           natural_skeleton_calls),
+          "callee-hole gate should compose with a proved natural-target skeleton dispatch");
+
+  CompileOptions preloaded_hole_options = gate_options;
+  preloaded_hole_options.preloaded_indirect_flow = true;
+  CompileResult preloaded_hole = natural_skeleton_calls;
+  preloaded_hole.preloads.push_back(PreloadReport{
+      .register_name = "7",
+      .value = "20",
+  });
+  const std::optional<std::string> combined_rejection =
+      optimizer_static_proof_gate_rejection_reason_for_testing(preloaded_hole_options,
+                                                                preloaded_hole);
+  require(!combined_rejection.has_value(),
+          "combined callee-hole/preloaded-flow gate should accept both proved final artifacts: " +
+              combined_rejection.value_or("unknown rejection"));
+  preloaded_hole.preloads.clear();
+  require(!optimizer_static_proof_gate_accepts_for_testing(preloaded_hole_options,
+                                                            preloaded_hole),
+          "combined callee-hole/preloaded-flow gate should reject a missing preload proof");
 
   CompileResult live_entry_x = proved_mutating;
   live_entry_x.steps.erase(live_entry_x.steps.begin() + 11);

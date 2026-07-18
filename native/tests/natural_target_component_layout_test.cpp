@@ -434,6 +434,62 @@ Fixture shared_conditional_fixture() {
   return result;
 }
 
+Fixture bounded_direct_gap_split_fixture() {
+  Fixture result;
+  const std::string helper_99 = "bounded_gap_helper_99";
+  const std::string helper_34 = "bounded_gap_helper_34";
+  const std::string helper_76 = "bounded_gap_helper_76";
+
+  result.items.push_back(MachineItem::label("bounded_gap_entry"));
+  for (int call = 0; call < 3; ++call) {
+    result.items.push_back(op(0x53));
+    result.items.push_back(MachineItem::address(helper_99));
+  }
+  for (int call = 0; call < 3; ++call) {
+    result.items.push_back(op(0x53));
+    result.items.push_back(MachineItem::address(helper_34));
+  }
+  for (int call = 0; call < 3; ++call) {
+    result.items.push_back(op(0x53));
+    result.items.push_back(MachineItem::address(helper_76));
+  }
+  for (int cell = 0; cell < 10; ++cell)
+    result.items.push_back(op(0x54));
+  result.visible_stop = result.items.size();
+  result.items.push_back(stop());
+
+  const auto append_helper = [&](const std::string& name, int length) {
+    result.items.push_back(MachineItem::label(name));
+    for (int cell = 1; cell < length; ++cell)
+      result.items.push_back(op(0x54));
+    result.items.push_back(op(0x52));
+  };
+  append_helper(helper_99, 18);
+  append_helper(helper_34, 9);
+  append_helper(helper_76, 13);
+
+  const auto append_free_segment = [&](const std::string& name, int length,
+                                       int bounded_offset) {
+    result.items.push_back(MachineItem::label(name));
+    for (int cell = 0; cell < length - 1; ++cell) {
+      if (cell == bounded_offset)
+        result.items.push_back(MachineItem::label("bounded_gap_target"));
+      result.items.push_back(op(0x54));
+    }
+    result.items.push_back(stop());
+  };
+  append_free_segment("bounded_gap_free_36", 36, 23);
+  append_free_segment("bounded_gap_free_11", 11, -1);
+  append_free_segment("bounded_gap_free_2", 2, -1);
+  append_free_segment("bounded_gap_free_8", 8, -1);
+  append_free_segment("bounded_gap_free_18", 18, -1);
+
+  result.preloads.push_back(PreloadReport{.register_name = "a", .value = "99"});
+  result.preloads.push_back(PreloadReport{.register_name = "c", .value = "34"});
+  result.preloads.push_back(PreloadReport{.register_name = "d", .value = "76"});
+  return result;
+}
+
 Fixture conditional_x2_reconvergence_fixture(bool restore_before_overwrite) {
   Fixture result;
   const std::string sink = "unrelated_x2_reconvergence_sink";
@@ -616,6 +672,33 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
         input.items, input.preloads, flow(input), options);
     require(!rejected.plan.proved && rejected.applied == 0,
             "bounded target layout should fail closed when main occupies the whole range");
+  }
+
+  {
+    const Fixture input = bounded_direct_gap_split_fixture();
+    core::NaturalTargetComponentLayoutOptions options;
+    options.required_bounded_target_labels = {"bounded_gap_target"};
+    options.maximum_bounded_target_address = 99;
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input), options);
+    int bounded_target_address = -1;
+    int address = 0;
+    for (const MachineItem& item : rewritten.items) {
+      if (item.kind == MachineItemKind::Label) {
+        if (item.name == "bounded_gap_target")
+          bounded_target_address = address;
+      } else {
+        ++address;
+      }
+    }
+    require(rewritten.plan.proved && rewritten.applied > 0 &&
+                rewritten.removed_cells > 0 &&
+                rewritten.plan.transparent_split_bridges == 1 &&
+                rewritten.plan.bounded_targets == 1 &&
+                rewritten.plan.bounded_targets_proved &&
+                bounded_target_address >= 0 && bounded_target_address <= 99 &&
+                cell_count(rewritten.items) < cell_count(input.items),
+            "a profitable direct gap split should preserve and prove a bounded suffix target");
   }
 
   {

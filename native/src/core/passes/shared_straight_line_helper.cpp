@@ -84,13 +84,13 @@ bool is_shareable_body_op(const IrOp& op, bool allow_direct_calls = false) {
   case IrKind::Plain:
     return true;
   case IrKind::Call:
+  case IrKind::IndirectCall:
     return allow_direct_calls;
   case IrKind::Label:
   case IrKind::Jump:
   case IrKind::CondJump:
   case IrKind::Loop:
   case IrKind::IndirectJump:
-  case IrKind::IndirectCall:
   case IrKind::IndirectCondJump:
   case IrKind::Return:
   case IrKind::Stop:
@@ -214,7 +214,9 @@ bool x2_restore_boundaries_are_internal(const std::vector<IrOp>& ops, int start,
     // The dynamic predecessor of an op following a subroutine call is the
     // callee's В/О (an X2-affecting op) in both the original layout and the
     // extracted helper, so a call boundary determines the X2 state itself.
-    const X2Effect previous_effect = calls_affect_x2 && previous.kind == IrKind::Call
+    const bool previous_is_call =
+        previous.kind == IrKind::Call || previous.kind == IrKind::IndirectCall;
+    const X2Effect previous_effect = calls_affect_x2 && previous_is_call
                                          ? X2Effect::Affects
                                          : x2_effect_for_boundary(previous);
     if (previous_effect != X2Effect::Affects && previous_effect != X2Effect::Restores)
@@ -255,12 +257,14 @@ std::string op_key(const IrOp& op) {
   case IrKind::Call:
     key = "call:" + call_target_key(op.target);
     break;
+  case IrKind::IndirectCall:
+    key = "indirect-call:" + op.register_name;
+    break;
   case IrKind::Label:
   case IrKind::Jump:
   case IrKind::CondJump:
   case IrKind::Loop:
   case IrKind::IndirectJump:
-  case IrKind::IndirectCall:
   case IrKind::IndirectCondJump:
   case IrKind::Return:
   case IrKind::Stop:
@@ -780,6 +784,10 @@ struct SelectedHoleHelper {
   bool mutating_selector = false;
   bool reused_selector = false;
   bool late_bound_selector = false;
+  // Stable, globally free selectors can be stored once at a shared entry.
+  // Each caller then passes the charged value in X instead of duplicating the
+  // same X->P selector command before its skeleton call.
+  bool shared_charge_entry = false;
   std::map<int, int> charge_values;
   // Leaf label by frozen numeric address; the labels keep the leaves alive in
   // the CFG and the addresses are re-validated by the final static proof.
@@ -787,6 +795,10 @@ struct SelectedHoleHelper {
   // Call positions (in region order) routed through the hole register; other
   // call positions target the same label in every occurrence and stay direct.
   std::vector<bool> hole_positions;
+  // Source-only call annotations may differ even when a fixed call targets
+  // the same leaf in every occurrence. Such annotations cannot be promoted
+  // to the shared opcode; semantic call origins remain unioned separately.
+  std::vector<bool> call_metadata_equivalent;
   // Semantic call identities are opaque and explicitly unionable.  A shared
   // skeleton represents every removed source call at a given call position,
   // while source-specific CellRole annotations are deliberately not promoted
@@ -988,7 +1000,8 @@ std::vector<HoleCandidate> collect_hole_candidates(const std::vector<IrOp>& ops,
       // A region ending in a call may sit right before an X2-restore op: the
       // restore's dynamic predecessor is a В/О (leaf's originally, the
       // skeleton's after extraction), which affects X2 either way.
-      if (ends_before_x2_restore(ops, end) && op.kind != IrKind::Call)
+      if (ends_before_x2_restore(ops, end) && op.kind != IrKind::Call &&
+          op.kind != IrKind::IndirectCall)
         continue;
       if (!x2_restore_boundaries_are_internal(ops, start, end, /*calls_affect_x2=*/true))
         continue;
@@ -1058,18 +1071,6 @@ std::optional<std::vector<bool>> assign_hole_positions(std::vector<HoleOccurrenc
   }
   if (std::none_of(hole_positions.begin(), hole_positions.end(), [](bool hole) { return hole; }))
     return std::nullopt;
-  for (std::size_t position = 0; position < positions; ++position) {
-    if (hole_positions.at(position))
-      continue;
-    for (const HoleOccurrence& occurrence : occurrences) {
-      if (occurrence.call_semantics.at(position) !=
-              occurrences.front().call_semantics.at(position) ||
-          occurrence.call_role_keys.at(position) !=
-              occurrences.front().call_role_keys.at(position)) {
-        return std::nullopt;
-      }
-    }
-  }
   for (HoleOccurrence& occurrence : occurrences) {
     int leaf_target = -1;
     std::string leaf_label;
@@ -1338,15 +1339,24 @@ std::vector<SelectedHoleHelper> select_hole_helpers(const std::vector<IrOp>& ops
     helper.mutating_selector = mutating_selector;
     helper.reused_selector = reused_selector;
     helper.late_bound_selector = late_bound_selector;
+    helper.shared_charge_entry = !mutating_selector && !reused_selector &&
+                                 (leaves_stable || late_bound_selector);
     helper.charge_values = std::move(charge_values);
     helper.leaf_labels = leaf_labels;
     helper.hole_positions = *hole_positions;
+    helper.call_metadata_equivalent.resize(hole_positions->size(), true);
     helper.call_origins.resize(hole_positions->size());
     for (std::size_t position = 0; position < hole_positions->size(); ++position) {
       std::set<std::uint64_t> origins;
       for (const HoleOccurrence& occurrence : occurrences) {
         origins.insert(occurrence.call_origins.at(position).begin(),
                        occurrence.call_origins.at(position).end());
+        if (occurrence.call_semantics.at(position) !=
+                occurrences.front().call_semantics.at(position) ||
+            occurrence.call_role_keys.at(position) !=
+                occurrences.front().call_role_keys.at(position)) {
+          helper.call_metadata_equivalent.at(position) = false;
+        }
       }
       helper.call_origins.at(position).assign(origins.begin(), origins.end());
     }
@@ -1366,6 +1376,7 @@ std::vector<IrOp> hole_charge_ops(int charge_value, int leaf_target,
                                   const std::string& leaf_label, bool late_bound_selector,
                                   const std::string& register_name,
                                   const std::string& helper_label, bool reused_selector,
+                                  bool shared_charge_entry,
                                   const IrOp& source) {
   std::vector<IrOp> result;
   const std::string text = late_bound_selector ? "00" : std::to_string(charge_value);
@@ -1391,22 +1402,28 @@ std::vector<IrOp> hole_charge_ops(int charge_value, int leaf_target,
     }
     result.push_back(std::move(op));
   }
-  IrOp store;
-  store.kind = IrKind::Store;
-  store.register_name = register_name;
-  store.opcode = 0x40 + register_index(register_name);
-  store.meta.mnemonic = "X->П " + register_name;
-  store.meta.comment = selector_comment;
-  store.meta.source_line = source.meta.source_line;
-  result.push_back(std::move(store));
+  if (!shared_charge_entry) {
+    IrOp store;
+    store.kind = IrKind::Store;
+    store.register_name = register_name;
+    store.opcode = 0x40 + register_index(register_name);
+    store.meta.mnemonic = "X->П " + register_name;
+    store.meta.comment = selector_comment;
+    store.meta.source_line = source.meta.source_line;
+    result.push_back(std::move(store));
+  }
 
   IrOp call;
   call.kind = IrKind::Call;
   call.target = helper_label;
   call.opcode = 0x53;
   call.meta.mnemonic = "ПП";
-  call.meta.comment = "callee-hole skeleton call" +
-                      std::string(reused_selector ? "; selector-scope=dead" : "");
+  call.meta.comment =
+      shared_charge_entry
+          ? "callee-hole charge-entry call; proof=" + helper_label +
+                "; selector=" + register_name
+          : "callee-hole skeleton call" +
+                std::string(reused_selector ? "; selector-scope=dead" : "");
   call.meta.source_line = source.meta.source_line;
   call.target_meta.comment = "callee-hole skeleton";
   result.push_back(std::move(call));
@@ -1464,6 +1481,8 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
   for (const SelectedHoleHelper& helper : selected) {
     saved_cells +=
         hole_net_savings(helper.occurrences, helper.cells, helper.late_bound_selector);
+    if (helper.shared_charge_entry)
+      saved_cells += static_cast<int>(helper.occurrences.size()) - 1;
     for (const HoleOccurrence& occurrence : helper.occurrences) {
       replacement_by_start[occurrence.start] = HoleReplacement{
           .end = occurrence.end,
@@ -1491,6 +1510,7 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
                           replacement->second.helper->register_name,
                           replacement->second.helper->label,
                           replacement->second.helper->reused_selector,
+                          replacement->second.helper->shared_charge_entry,
                           ops.at(static_cast<std::size_t>(index)));
       result.insert(result.end(), charge.begin(), charge.end());
       index = replacement->second.end;
@@ -1505,6 +1525,19 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
     label.name = helper.label;
     result.push_back(std::move(label));
 
+    if (helper.shared_charge_entry) {
+      IrOp store;
+      store.kind = IrKind::Store;
+      store.register_name = helper.register_name;
+      store.opcode = 0x40 + register_index(helper.register_name);
+      store.meta.mnemonic = "X->П " + helper.register_name;
+      store.meta.comment = "callee-hole charge-entry store; proof=" + helper.label +
+                           "; selector=" + helper.register_name;
+      if (!helper.body.empty())
+        store.meta.source_line = helper.body.front().meta.source_line;
+      result.push_back(std::move(store));
+    }
+
     const std::string hole_comment =
         "callee-hole indirect call; proof=" + helper.label + "; " +
         (helper.late_bound_selector
@@ -1518,8 +1551,16 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
       if (op.kind == IrKind::Call) {
         const bool is_hole = call_position < helper.hole_positions.size() &&
                             helper.hole_positions.at(call_position);
+        const bool metadata_equivalent =
+            call_position < helper.call_metadata_equivalent.size() &&
+            helper.call_metadata_equivalent.at(call_position);
         body_source.meta.semantic_call_origins = helper.call_origins.at(call_position);
         ++call_position;
+        if (!metadata_equivalent) {
+          body_source.semantic.clear();
+          body_source.meta.roles.clear();
+          body_source.target_meta.roles.clear();
+        }
         if (is_hole) {
           body_source.meta.roles.clear();
           body_source.target_meta.roles.clear();

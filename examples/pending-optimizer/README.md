@@ -14,7 +14,7 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 141 | 105 | +36 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 137 | 105 | +32 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
@@ -104,7 +104,14 @@ mode may reject over-window programs earlier than the analysis path.
   limits are byte-for-byte equivalent. This reduced 889 finalist option sets
   to 183 distinct proof inputs. The resulting generic final search selected a
   reverse-suffix-free packed-score accumulator layout and reduced the verified
-  result from 142 to 141 cells; the remaining gap is 36 cells.
+  result from 142 to 141 cells.
+- Callee-hole extraction now keeps invariant nested calls inside a shared
+  skeleton and canonicalizes divergent source-only call annotations. This
+  shares the complete four-line traversal without recognizing the game or its
+  data representation and reduces the verified result from 141 to 138 cells;
+  the generic natural-target layout then carries bounded helper entries through
+  a proved fallthrough split and reduces the result to 137 cells. The remaining
+  gap is 32 cells.
 - Optimizer tests must use unrelated synthetic programs and local proof
   obligations. The tic-tac-toe fixture may lock only its size and observable
   UI; it must not select or justify an optimization by recognizing this game
