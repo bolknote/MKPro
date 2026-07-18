@@ -34,6 +34,16 @@ IrOp indirect_store(std::string selector, std::optional<std::string> targets = s
   return op;
 }
 
+IrOp indirect_recall(std::string selector, bool discarded) {
+  IrOp op;
+  op.kind = IrKind::IndirectRecall;
+  op.register_name = std::move(selector);
+  op.opcode = 0xd0 + register_index(op.register_name);
+  op.meta.mnemonic = "К П->X " + op.register_name;
+  op.meta.discarded_indirect_recall_value = discarded;
+  return op;
+}
+
 IrOp indirect_jump(std::string selector) {
   IrOp op;
   op.kind = IrKind::IndirectJump;
@@ -205,6 +215,19 @@ void register_coalesce_matches_typescript_contract() {
   }
 
   {
+    const std::vector<IrOp> program = {recall("1")};
+    const std::map<std::string, std::string> mapping =
+        core::passes::compute_non_overlapping_register_mapping(
+            program, core::passes::RegisterCoalesceMappingOptions{
+                         .allow_live_at_entry_anchor_reuse = true,
+                         .allocated_registers = {"1", "2"},
+                     });
+
+    require(mapping.size() == 1U && mapping.at("2") == "1",
+            "source-level allocator did not reclaim an allocated register absent from the body");
+  }
+
+  {
     const std::vector<IrOp> program = {recall("1"), recall("2")};
     const std::map<std::string, std::string> mapping =
         core::passes::compute_non_overlapping_register_mapping(program);
@@ -234,6 +257,20 @@ void register_coalesce_matches_typescript_contract() {
 
     require(mapping.empty(),
             "def-aware register mapping accepted an unknown indirect-memory target set");
+  }
+
+  {
+    const std::vector<IrOp> observed = {store("0"), recall("0"), indirect_recall("4", false),
+                                        store("3"), recall("3")};
+    require(core::passes::compute_non_overlapping_register_mapping(observed).empty(),
+            "register mapping ignored an observed unknown indirect recall");
+
+    const std::vector<IrOp> discarded = {store("0"), recall("0"), indirect_recall("4", true),
+                                         store("3"), recall("3")};
+    const std::map<std::string, std::string> mapping =
+        core::passes::compute_non_overlapping_register_mapping(discarded);
+    require(mapping.contains("3") && mapping.at("3") == "0",
+            "register mapping treated a proved-discarded indirect recall as a memory read");
   }
 
   {
@@ -312,6 +349,23 @@ void register_coalesce_matches_typescript_contract() {
     require(result.ops.size() == program.size(), "register-coalesce changed raw-barrier program");
     require(core::passes::compute_non_overlapping_register_mapping(program).empty(),
             "register mapping exposed a forced-share candidate across a raw command");
+  }
+
+  {
+    IrOp raw_noop;
+    raw_noop.kind = IrKind::Plain;
+    raw_noop.opcode = 0x54;
+    raw_noop.meta.mnemonic = "К НОП";
+    raw_noop.meta.raw = true;
+    const std::vector<IrOp> program = {
+        store("1"), recall("1"), raw_noop, store("2"), recall("2"),
+    };
+    const core::passes::PassResult result = run_register_coalesce(program);
+
+    require(result.applied > 0,
+            "register-coalesce treated a register-free raw command as a rewrite barrier");
+    require(!core::passes::compute_non_overlapping_register_mapping(program).empty(),
+            "register mapping rejected a register-free raw command");
   }
 }
 

@@ -76,9 +76,23 @@ bool uses_indirect_access(const std::vector<IrOp>& ops, const std::string& regis
 
 bool has_unknown_indirect_memory_targets(const std::vector<IrOp>& ops) {
   return std::any_of(ops.begin(), ops.end(), [](const IrOp& op) {
+    if (op.kind == IrKind::IndirectRecall && op.meta.discarded_indirect_recall_value)
+      return false;
     return (op.kind == IrKind::IndirectStore || op.kind == IrKind::IndirectRecall) &&
            !known_indirect_memory_targets(op).has_value();
   });
+}
+
+bool raw_op_blocks_register_reallocation(const IrOp& op) {
+  if (!op.meta.raw)
+    return false;
+  const RegisterEffects effects = register_effects(op);
+  return effects.uses_all_registers || effects.may_define_any_register ||
+         !effects.uses.empty() || !effects.must_defs.empty() || !effects.may_defs.empty();
+}
+
+bool has_raw_register_reallocation_barrier(const std::vector<IrOp>& ops) {
+  return std::any_of(ops.begin(), ops.end(), raw_op_blocks_register_reallocation);
 }
 
 bool uses_display_focus_sensitive_access(const std::vector<IrOp>& ops,
@@ -610,22 +624,33 @@ color_precolored_register_graph(const RegisterInterferenceGraph& graph,
 std::map<std::string, std::string>
 compute_non_overlapping_register_mapping(const std::vector<IrOp>& ops,
                                          RegisterCoalesceMappingOptions options) {
-  const RegisterSet registers = gather_used_registers(ops);
+  RegisterSet registers = gather_used_registers(ops);
+  registers.insert(options.allocated_registers.begin(), options.allocated_registers.end());
   if (registers.size() <= 1U || has_unknown_indirect_memory_targets(ops) ||
-      std::any_of(ops.begin(), ops.end(), [](const IrOp& op) { return op.meta.raw; }))
+      has_raw_register_reallocation_barrier(ops))
     return {};
 
   const LivenessInfo liveness = compute_liveness(ops);
   const RegisterInterferenceGraph graph = build_register_interference_graph(ops, liveness);
-  return mapping_from_interference_graph(ops, registers, liveness, graph,
-                                         options.allow_live_at_entry_anchor_reuse);
+  const std::map<std::string, std::string> mapping = mapping_from_interference_graph(
+      ops, registers, liveness, graph, options.allow_live_at_entry_anchor_reuse);
+  if (!options.allow_live_at_entry_anchor_reuse)
+    return mapping;
+
+  // Entry-live anchors carry setup values and therefore constrain the
+  // regenerated preload layout. If excluding them frees the same number of
+  // registers, prefer that less constrained coloring; use entry-anchor reuse
+  // only when it proves an additional coalesce.
+  const std::map<std::string, std::string> entry_preserving_mapping =
+      mapping_from_interference_graph(ops, registers, liveness, graph, false);
+  return entry_preserving_mapping.size() >= mapping.size() ? entry_preserving_mapping : mapping;
 }
 
 PassResult register_coalesce(const std::vector<IrOp>& ops, const PassContext& context) {
   if (ops.empty())
     return PassResult{.ops = {}, .applied = 0, .optimizations = {}};
 
-  if (std::any_of(ops.begin(), ops.end(), [](const IrOp& op) { return op.meta.raw; }))
+  if (has_raw_register_reallocation_barrier(ops))
     return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
 
   std::vector<AppliedOptimization> optimizations;

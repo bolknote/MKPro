@@ -18042,6 +18042,7 @@ bool lower_decrement_update(LoweringContext& context, const std::string& target,
     context.emitter.emit_op(0xd0 + index, "К П->X " + register_text_for(context, target),
                             "decrement " + target, source_line);
     context.emitter.items.back().logical_register_name = target;
+    context.emitter.items.back().discarded_indirect_recall_value = true;
     context.emitter.current_x_variable.reset();
     context.emitter.current_x_aliases.clear();
     context.emitter.current_x_known_zero = false;
@@ -18079,6 +18080,7 @@ bool lower_increment_update(LoweringContext& context, const std::string& target,
   context.emitter.emit_op(0xd0 + index, "К П->X " + register_text_for(context, target),
                           "increment " + target, source_line);
   context.emitter.items.back().logical_register_name = target;
+  context.emitter.items.back().discarded_indirect_recall_value = true;
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_aliases.clear();
   context.optimizations.push_back(OptimizationReport{
@@ -48585,6 +48587,31 @@ inline_single_use_procedures(std::vector<MachineItem> items) {
         continue;
       }
 
+      const MachineItem* predecessor = nullptr;
+      for (std::size_t index = *call_op; index > 0U; --index) {
+        const MachineItem& item = result.items.at(index - 1U);
+        if (item.kind == MachineItemKind::Label)
+          continue;
+        if (item.kind == MachineItemKind::Op)
+          predecessor = &item;
+        break;
+      }
+      const MachineItem* first_body_op = nullptr;
+      for (std::size_t index = start + 1U; index < *terminal_return; ++index) {
+        const MachineItem& item = result.items.at(index);
+        if (item.kind == MachineItemKind::Label)
+          continue;
+        if (item.kind == MachineItemKind::Op)
+          first_body_op = &item;
+        break;
+      }
+      if (predecessor != nullptr && predecessor->opcode == 0x50 &&
+          predecessor->stop_disposition == StopDisposition::Resumable &&
+          first_body_op != nullptr && first_body_op->opcode >= 0x00 &&
+          first_body_op->opcode <= 0x0c) {
+        continue;
+      }
+
       for (std::size_t index = 0; index < result.items.size() && body_safe; ++index) {
         if (index >= start && index <= end)
           continue;
@@ -49105,23 +49132,6 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
     }
   }
 
-  if (!has_errors(context.diagnostics) && options.collect_coalesce_shares) {
-    const std::map<std::string, std::string> shares =
-        core::passes::compute_non_overlapping_register_mapping(
-            raise_machine_to_ir(context.emitter.items,
-                                optimizer_feature_profile_for_options(options)),
-            core::passes::RegisterCoalesceMappingOptions{
-                .def_aware = true,
-                .allow_live_at_entry_anchor_reuse = true,
-            });
-    for (const auto& [free_register, keep_register] : shares) {
-      result.coalesce_shares.push_back(RegisterShare{
-          .free_register = free_register,
-          .keep_register = keep_register,
-      });
-    }
-  }
-
   CompileOptions pass_options = options;
   pass_options.preloaded_indirect_flow = context.preloaded_indirect_flow;
   if (options.aggressive_indirect_call)
@@ -49129,6 +49139,15 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   merge_planned_preloaded_constant_registers(pass_options, context);
 
   std::vector<MachineItem> ir_pass_input = context.emitter.items;
+  std::map<std::string, std::string> pre_pass_coalesce_shares;
+  if (!has_errors(context.diagnostics) && options.collect_coalesce_shares) {
+    pre_pass_coalesce_shares = core::passes::compute_non_overlapping_register_mapping(
+        raise_machine_to_ir(ir_pass_input, optimizer_feature_profile_for_options(options)),
+        core::passes::RegisterCoalesceMappingOptions{
+            .def_aware = true,
+            .allow_live_at_entry_anchor_reuse = true,
+        });
+  }
   // Logical names are a lowering-time proof trace. Keeping them past the
   // regenerated-assignment check would leak an internal representation into
   // public IR JSON and could make unrelated post-lowering passes compare
@@ -50728,6 +50747,42 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   append_missing_preloaded_indirect_flow_comments(post_layout_items, annotation_preloads,
                                                   options);
 
+  if (!has_errors(context.diagnostics) && options.collect_coalesce_shares) {
+    std::set<std::string> allocated_registers;
+    for (const auto& [unused_name, index] : context.register_index_by_name) {
+      (void)unused_name;
+      allocated_registers.insert(
+          core::register_name_for_index(index, context.feature_profile));
+    }
+    std::map<std::string, std::string> shares =
+        core::passes::compute_non_overlapping_register_mapping(
+            raise_machine_to_ir(post_layout_items,
+                                optimizer_feature_profile_for_options(options)),
+            core::passes::RegisterCoalesceMappingOptions{
+                .def_aware = true,
+                .allow_live_at_entry_anchor_reuse = true,
+                .allocated_registers = std::move(allocated_registers),
+            });
+    // The final body may no longer mention a source-allocated register because
+    // an ordinary IR pass has already coalesced it. Such an absent node has no
+    // final interference edges and must not be recolored to an arbitrary
+    // anchor when the proposal is replayed before lowering. When both analyses
+    // free the same register, retain the representative proved on the complete
+    // pre-pass body. Never resurrect an early-only share that the final body no
+    // longer proves after its actual scheduling and helper layout.
+    for (const auto& [free_register, keep_register] : pre_pass_coalesce_shares) {
+      const auto final_share = shares.find(free_register);
+      if (final_share != shares.end())
+        final_share->second = keep_register;
+    }
+    for (const auto& [free_register, keep_register] : shares) {
+      result.coalesce_shares.push_back(RegisterShare{
+          .free_register = free_register,
+          .keep_register = keep_register,
+      });
+    }
+  }
+
   trace_stage("resolve");
   result.items = post_layout_items;
   for (const core::passes::AppliedOptimization& optimization : post_layout_optimizations) {
@@ -51006,8 +51061,10 @@ bool runtime_indirect_call_targets_proved(const std::vector<OptimizationReport>&
                                           const std::vector<ResolvedStep>& steps,
                                           const CompileOptions& options);
 bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationReport>& optimizations,
+                                              const std::vector<MachineItem>& items,
                                               const std::vector<ResolvedStep>& steps,
-                                              const CompileOptions& options);
+                                              const CompileOptions& options,
+                                              std::string* rejection_reason = nullptr);
 bool fractional_selector_data_values_proved(const std::vector<OptimizationReport>& optimizations,
                                             const CompileOptions& options,
                                             const std::vector<PreloadReport>& preloads,
@@ -51500,7 +51557,7 @@ bool callee_hole_straight_line_helper_static_gate_accepts(const CompileOptions& 
   }
   if (!suppressed_preload_static_gate_accepts(candidate_options, result))
     return false;
-  return callee_hole_indirect_call_targets_proved(result.optimizations, result.steps,
+  return callee_hole_indirect_call_targets_proved(result.optimizations, result.items, result.steps,
                                                   candidate_options);
 }
 
@@ -51526,7 +51583,7 @@ bool preloaded_indirect_flow_callee_hole_static_gate_accepts(
       result.optimizations, result.preloads, result.items, result.steps, result.registers,
       address_space_model_for_options(candidate_options));
   const bool callee_hole_targets_proved = callee_hole_indirect_call_targets_proved(
-      result.optimizations, result.steps, candidate_options);
+      result.optimizations, result.items, result.steps, candidate_options);
   return preloaded_targets_proved && callee_hole_targets_proved;
 }
 
@@ -51566,6 +51623,13 @@ std::optional<std::string> optimizer_static_gate_rejection_reason(
                                                    address_space_model_for_options(
                                                        candidate_options))) {
       return reason;
+    }
+  }
+  if (candidate_options.callee_hole_straight_line_helper) {
+    std::string reason;
+    if (!callee_hole_indirect_call_targets_proved(result.optimizations, result.items, result.steps,
+                                                   candidate_options, &reason)) {
+      return "callee-hole proof rejected candidate: " + reason;
     }
   }
   return std::string("static proof gate rejected candidate");
@@ -51747,6 +51811,26 @@ enum class CandidateGate {
 
 int estimated_candidate_search_cost_ms(std::string_view name) {
   if (name == "packed-score-accumulator-reverse-suffix-free-layout")
+    return 100;
+  if (name == "fractional-constant-selector" ||
+      name == "fractional-constant-selector-dead-int")
+    return 300;
+  if (name == "demote-constant-indirect-flow")
+    return 300;
+  if (name == "aggressive-post-layout-indirect-flow")
+    return 300;
+  if (name == "cheap-constant-materialization-aggressive-post-layout")
+    return 300;
+  if (name == "aggressive-post-layout-dual-use-constant" ||
+      name == "aggressive-post-layout-tail-branch" ||
+      name == "aggressive-post-layout-branch-underflow-call-count" ||
+      name == "aggressive-post-layout-shared-call-body" ||
+      name == "inline-floor-hoisted-proc-tail-layout")
+    return 300;
+  if (name == "stack-resident-helper-entries" ||
+      name == "stack-resident-function-entries")
+    return 300;
+  if (name.find("domain-error") != std::string_view::npos)
     return 300;
   if (name == "call-count-proc-layout" || name == "size-desc-proc-layout" ||
       name == "reverse-proc-layout") {
@@ -51767,7 +51851,6 @@ int estimated_candidate_search_cost_ms(std::string_view name) {
   }
   if (name.find("hoist") != std::string_view::npos ||
       name.find("layout") != std::string_view::npos ||
-      name.find("domain-error") != std::string_view::npos ||
       name.find("stack-resident") != std::string_view::npos ||
       name.find("share-random") != std::string_view::npos ||
       name.find("break-even") != std::string_view::npos) {
@@ -52633,9 +52716,12 @@ std::optional<CalleeHoleChargeEntryMarker> callee_hole_charge_entry_marker_from_
   if (selector == std::string::npos || selector == proof_start)
     return std::nullopt;
   const std::size_t register_start = selector + kSelectorMarker.size();
-  if (register_start + 1U != comment->size())
+  if (register_start >= comment->size())
     return std::nullopt;
-  const std::string register_name = comment->substr(register_start);
+  const std::size_t register_end = register_start + 1U;
+  if (register_end != comment->size() && comment->substr(register_end, 2U) != "; ")
+    return std::nullopt;
+  const std::string register_name = comment->substr(register_start, 1U);
   if (!core::is_stable_indirect_selector(register_name))
     return std::nullopt;
   return CalleeHoleChargeEntryMarker{
@@ -52858,7 +52944,22 @@ struct CalleeHoleResolvedFlow {
   std::vector<std::vector<std::size_t>> successors;
 };
 
+std::vector<const MachineItem*> callee_hole_items_by_step(
+    const std::vector<MachineItem>& items, std::size_t step_count) {
+  std::vector<const MachineItem*> result;
+  result.reserve(step_count);
+  for (const MachineItem& item : items) {
+    if (item.kind == MachineItemKind::Label)
+      continue;
+    result.push_back(&item);
+  }
+  if (result.size() != step_count)
+    result.assign(step_count, nullptr);
+  return result;
+}
+
 CalleeHoleResolvedFlow callee_hole_resolved_flow(const std::vector<ResolvedStep>& steps,
+                                                 const std::vector<const MachineItem*>& items,
                                                  const CompileOptions& options) {
   CalleeHoleResolvedFlow flow;
   flow.address_operand.assign(steps.size(), false);
@@ -52923,6 +53024,10 @@ CalleeHoleResolvedFlow callee_hole_resolved_flow(const std::vector<ResolvedStep>
     if (step.opcode == 0x52) {
       flow.successors.at(index).insert(flow.successors.at(index).end(), call_returns.begin(),
                                        call_returns.end());
+      continue;
+    }
+    if (step.opcode == 0x50 && index < items.size() && items.at(index) != nullptr &&
+        items.at(index)->stop_disposition == StopDisposition::Terminal) {
       continue;
     }
     if (opcode_by_code(step.opcode).takes_address) {
@@ -53034,12 +53139,22 @@ bool callee_hole_scoped_helper_body_isolated(const std::vector<ResolvedStep>& st
 // pre-modified charge to the leaf and carry a final-code proof that the charge's
 // different X/X2 value is erased before the skeleton observes it.
 bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationReport>& optimizations,
+                                              const std::vector<MachineItem>& items,
                                               const std::vector<ResolvedStep>& steps,
-                                              const CompileOptions& options) {
-  if (!has_optimization_named(optimizations, "callee-hole-straight-line-helper"))
+                                              const CompileOptions& options,
+                                              std::string* rejection_reason) {
+  const auto reject = [&](std::string reason) {
+    if (rejection_reason != nullptr)
+      *rejection_reason = std::move(reason);
     return false;
+  };
+  if (!has_optimization_named(optimizations, "callee-hole-straight-line-helper"))
+    return reject("missing callee-hole optimization artifact");
 
-  const CalleeHoleResolvedFlow resolved_flow = callee_hole_resolved_flow(steps, options);
+  const std::vector<const MachineItem*> items_by_step =
+      callee_hole_items_by_step(items, steps.size());
+  const CalleeHoleResolvedFlow resolved_flow =
+      callee_hole_resolved_flow(steps, items_by_step, options);
   std::map<std::string, std::map<int, std::set<int>>> charged_values;
   std::map<std::string, std::vector<std::size_t>> scoped_charge_calls;
   std::set<std::string> scoped_registers;
@@ -53071,13 +53186,18 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
   bool all_poisoned = false;
   std::set<std::size_t> proved_charge_entry_calls;
   for (std::size_t index = 0; index < steps.size(); ++index) {
+    if (resolved_flow.address_operand.at(index))
+      continue;
     const ResolvedStep& step = steps.at(index);
     if (step.comment.has_value() && step.comment->starts_with(kCalleeHoleChargeEntryCallMarker)) {
       const std::optional<CalleeHoleChargeEntryMarker> call =
           callee_hole_charge_entry_marker_from_comment(step.comment,
                                                         kCalleeHoleChargeEntryCallMarker);
-      if (!call.has_value() || duplicate_charge_entries.contains(call->proof))
-        return false;
+      if (!call.has_value())
+        return reject("malformed charge-entry call marker at address " +
+                      std::to_string(step.address));
+      if (duplicate_charge_entries.contains(call->proof))
+        return reject("duplicate charge-entry store for proof " + call->proof);
       const auto entry = charge_entries.find(call->proof);
       const std::optional<CalleeHoleSelectorCharge> charge =
           index == 0U ? std::nullopt
@@ -53091,10 +53211,20 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
           std::find(resolved_flow.successors.at(index).begin(),
                     resolved_flow.successors.at(index).end(), entry->second.first) !=
               resolved_flow.successors.at(index).end();
-      if (!charge.has_value() || !is_call || !reaches_entry ||
-          !callee_hole_charge_literal_precedes_store(steps, index, *charge, options)) {
-        return false;
-      }
+      if (entry == charge_entries.end() || entry->second.second != call->register_name)
+        return reject("charge-entry call does not match its store for proof " + call->proof);
+      if (!charge.has_value())
+        return reject("charge-entry call has no selector charge at address " +
+                      std::to_string(step.address));
+      if (!is_call)
+        return reject("charge-entry marker is not attached to a call at address " +
+                      std::to_string(step.address));
+      if (!reaches_entry)
+        return reject("charge-entry call does not resolve to its store at address " +
+                      std::to_string(step.address));
+      if (!callee_hole_charge_literal_precedes_store(steps, index, *charge, options))
+        return reject("charge-entry call is not preceded by its annotated literal at address " +
+                      std::to_string(step.address));
       charged_values[call->register_name][charge->target].insert(charge->value);
       proved_charge_entry_calls.insert(index);
     }
@@ -53134,7 +53264,8 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
           if (scoped_registers.contains(*store_register)) {
             if (!callee_hole_dead_selector_marker(step.comment) ||
                 !callee_hole_dead_selector_marker(steps.at(index + 1U).comment)) {
-              return false;
+              return reject("scoped selector charge is missing a dead-scope marker at address " +
+                            std::to_string(step.address));
             }
             scoped_charge_calls[*store_register].push_back(index + 1U);
           }
@@ -53164,8 +53295,23 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
       const std::string selector = core::register_name_for_index(step.opcode - 0xb0);
       if (!scoped_registers.contains(selector))
         poisoned.insert(selector);
-      const std::optional<std::set<std::string>> targets =
-          indirect_memory_targets_from_comment(step.comment);
+      std::optional<std::set<std::string>> targets;
+      if (index < items_by_step.size() && items_by_step.at(index) != nullptr &&
+          items_by_step.at(index)->indirect_memory_targets.has_value()) {
+        std::set<std::string> typed_targets;
+        bool valid = !items_by_step.at(index)->indirect_memory_targets->empty();
+        for (const int target : *items_by_step.at(index)->indirect_memory_targets) {
+          if (target < 0 || target > 14) {
+            valid = false;
+            break;
+          }
+          typed_targets.insert(core::register_name_for_index(target));
+        }
+        if (valid)
+          targets = std::move(typed_targets);
+      } else {
+        targets = indirect_memory_targets_from_comment(step.comment);
+      }
       if (!targets.has_value()) {
         if (scoped_registers.empty())
           all_poisoned = true;
@@ -53187,10 +53333,10 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
         continue;
       saw_predecessor = true;
       if (!proved_charge_entry_calls.contains(source))
-        return false;
+        return reject("charge-entry store has an unproved predecessor for proof " + proof);
     }
     if (!saw_predecessor)
-      return false;
+      return reject("charge-entry store has no proved predecessor for proof " + proof);
   }
 
   std::map<std::string, std::size_t> equality_entry_by_proof;
@@ -53233,48 +53379,55 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
     if (!leaf_targets.has_value())
       continue;
     if (step.opcode < 0xa0 || step.opcode > 0xae)
-      return false;
+      return reject("callee-hole marker is not attached to an indirect call at address " +
+                    std::to_string(step.address));
     const std::string register_name = core::register_name_for_index(step.opcode - 0xa0);
     const bool scoped_selector = scoped_registers.contains(register_name);
     if ((!scoped_selector && all_poisoned) || poisoned.contains(register_name))
-      return false;
+      return reject("selector R" + register_name + " has an unproved competing use");
     std::set<int> annotated;
     for (const auto& [target, label] : *leaf_targets) {
       const std::optional<int> entry_address = leaf_entry_address(label);
       if (!entry_address.has_value() || *entry_address != target)
-        return false;
+        return reject("leaf " + label + " does not resolve to annotated address " +
+                      std::to_string(target));
       annotated.insert(target);
     }
     const auto charged = charged_values.find(register_name);
     if (charged == charged_values.end())
-      return false;
+      return reject("selector R" + register_name + " has no proved charges");
     std::set<int> charged_targets;
     for (const auto& [target, values] : charged->second) {
       if (values.empty())
-        return false;
+        return reject("leaf address " + std::to_string(target) + " has no selector value");
       for (const int value : values) {
         if (!selector_value_resolves_to_flow_target(
                 register_name, std::to_string(value), target,
                 address_space_model_for_options(options))) {
-          return false;
+          return reject("selector R" + register_name + " value " +
+                        std::to_string(value) + " does not resolve to " +
+                        std::to_string(target));
         }
       }
       charged_targets.insert(target);
     }
     if (charged_targets != annotated)
-      return false;
+      return reject("selector R" + register_name +
+                    " charges do not cover the annotated leaf set");
 
     if (scoped_selector) {
       const std::optional<std::string> proof = callee_hole_proof_id_from_comment(step.comment);
       const auto charges = scoped_charge_calls.find(register_name);
       if (!proof.has_value() || charges == scoped_charge_calls.end() || charges->second.empty() ||
           !callee_hole_scoped_helper_body_isolated(steps, step_index, *proof, register_name)) {
-        return false;
+        return reject("scoped selector R" + register_name +
+                      " is not isolated inside its helper");
       }
       for (const std::size_t call_index : charges->second) {
         if (!callee_hole_selector_value_is_dead_after_call(steps, resolved_flow, call_index,
                                                            register_name)) {
-          return false;
+          return reject("scoped selector R" + register_name +
+                        " remains live after a skeleton call");
         }
       }
     }
@@ -53282,17 +53435,19 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
     if (!core::is_stable_indirect_selector(register_name)) {
       const std::optional<std::string> proof = callee_hole_proof_id_from_comment(step.comment);
       if (!proof.has_value() || duplicate_equality_entries.contains(*proof))
-        return false;
+        return reject("mutating selector R" + register_name +
+                      " has no unique entry equality proof");
       const auto entry = equality_entry_by_proof.find(*proof);
       if (entry == equality_entry_by_proof.end() || entry->second >= step_index ||
           !callee_hole_entry_stack_difference_erased(steps, entry->second, step_index,
                                                      register_name)) {
-        return false;
+        return reject("mutating selector R" + register_name +
+                      " does not erase its entry stack difference");
       }
     }
     saw_proved_hole = true;
   }
-  return saw_proved_hole;
+  return saw_proved_hole || reject("final artifact contains no proved callee-hole call");
 }
 
 std::optional<std::set<std::string>> indirect_memory_targets_from_comment(
@@ -54870,7 +55025,7 @@ std::vector<ProofReport> build_proof_report(const ProgramAst& ast,
             "register, and use that register before any overwrite.",
     });
   }
-  if (callee_hole_indirect_call_targets_proved(optimizations, steps, options)) {
+  if (callee_hole_indirect_call_targets_proved(optimizations, items, steps, options)) {
     proofs.push_back(ProofReport{
         .id = "callee-hole-indirect-call-targets",
         .status = "proved",
@@ -64828,11 +64983,34 @@ CompileResult compile_source_for_optimizer_profile(
     return result;
   };
 
-  CompileResult best = cached_compile_source_once(options);
+  std::optional<V2Program> selector_probe_program;
+  try {
+    ProgramAst ast = parse_program(source);
+    if (ast.v2.has_value()) {
+      lower_small_case_matches(*ast.v2);
+      materialize_rule_param_state_fields(*ast.v2);
+      selector_probe_program = *ast.v2;
+    }
+  } catch (const std::exception&) {
+  }
+  const bool may_use_packed_score_accumulator =
+      selector_probe_program.has_value() &&
+      packed_score_accumulator_helper_has_cost_effective_family(*selector_probe_program);
+  const bool use_packed_score_seed =
+      options.fast_candidate_search && may_use_packed_score_accumulator;
+  CompileOptions initial_options = options;
+  if (use_packed_score_seed) {
+    initial_options.packed_score_accumulator_helpers = true;
+    initial_options.disable_return_suffix_gadget = true;
+    initial_options.proc_layout_strategy = "reverse";
+    initial_options.callee_hole_straight_line_helper = true;
+  }
+
+  CompileResult best = cached_compile_source_once(initial_options);
   // Option-set that produced the current `best`, tracked so an optional
   // non-greedy beam pass (MKPRO_BEAM_SEARCH) can layer further candidates on
   // the winning combination instead of only the fixed base.
-  CompileOptions best_options = options;
+  CompileOptions best_options = initial_options;
   // Opt-in non-greedy beam search over the existing candidate mutations. Off by
   // default so normal builds and CI keep the fast greedy pass; computed once to
   // avoid per-compile getenv/bookkeeping overhead when disabled.
@@ -64845,7 +65023,8 @@ CompileResult compile_source_for_optimizer_profile(
   std::vector<std::function<void(CompileOptions&)>> beam_configures;
   std::optional<CompileResult> completed_return_stack_fallback;
   if (!options.disable_return_stack_script &&
-      (!best.implemented || has_return_stack_optimization(best))) {
+      ((!best.implemented && !use_packed_score_seed) ||
+       has_return_stack_optimization(best))) {
     CompileOptions fallback_options = options;
     fallback_options.return_stack_script = false;
     fallback_options.disable_return_stack_script = true;
@@ -64884,19 +65063,6 @@ CompileResult compile_source_for_optimizer_profile(
   // correct for all programs. See docs/20 "Applied post-parity optimizations".
   const bool allow_aggressive_post_layout = !options.disable_aggressive_post_layout;
   const bool may_use_dead_source_residual = source_has_dead_source_residual_temp_candidate(source);
-  std::optional<V2Program> selector_probe_program;
-  try {
-    ProgramAst ast = parse_program(source);
-    if (ast.v2.has_value()) {
-      lower_small_case_matches(*ast.v2);
-      materialize_rule_param_state_fields(*ast.v2);
-      selector_probe_program = *ast.v2;
-    }
-  } catch (const std::exception&) {
-  }
-  const bool may_use_packed_score_accumulator =
-      selector_probe_program.has_value() &&
-      packed_score_accumulator_helper_has_cost_effective_family(*selector_probe_program);
 
   struct CandidateSpec {
     CompileOptions options;
@@ -64906,10 +65072,24 @@ CompileResult compile_source_for_optimizer_profile(
   };
 
   std::vector<CandidateSpec> candidates;
-  std::set<std::string> candidate_effective_keys{implemented_candidate_key(options)};
+  std::set<std::string> candidate_effective_keys{
+      implemented_candidate_key(options), implemented_candidate_key(best_options)};
+  const std::size_t candidate_search_input_cells =
+      !best.steps.empty() ? best.steps.size() : official_program_limit;
+  const auto scaled_candidate_search_cost_ms = [&](std::string_view name) {
+    const std::uint64_t cells = std::max(candidate_search_input_cells,
+                                         official_program_limit);
+    const std::uint64_t limit = std::max<std::size_t>(official_program_limit, 1U);
+    const std::uint64_t base =
+        static_cast<std::uint64_t>(estimated_candidate_search_cost_ms(name));
+    const std::uint64_t scaled =
+        (base * cells * cells + limit * limit - 1U) / (limit * limit);
+    return static_cast<int>(std::min<std::uint64_t>(
+        scaled, static_cast<std::uint64_t>(std::numeric_limits<int>::max())));
+  };
   auto fast_candidate_allowed = [&](std::string_view name) {
     return !options.fast_candidate_search ||
-           estimated_candidate_search_cost_ms(name) <= options.fast_candidate_threshold_ms;
+           scaled_candidate_search_cost_ms(name) <= options.fast_candidate_threshold_ms;
   };
   auto add_configured_candidate = [&](CompileOptions candidate_options, std::string name,
                                       std::string detail,
@@ -64919,7 +65099,7 @@ CompileResult compile_source_for_optimizer_profile(
     if (!fast_candidate_allowed(name)) {
       if (trace_candidates) {
         std::cerr << "[candidate-trace] skip-fast " << name << " estimated_ms="
-                  << estimated_candidate_search_cost_ms(name)
+                  << scaled_candidate_search_cost_ms(name)
                   << " threshold_ms=" << options.fast_candidate_threshold_ms << "\n";
       }
       return;
@@ -65187,18 +65367,10 @@ CompileResult compile_source_for_optimizer_profile(
       });
       best_options = candidate.options;
       best = std::move(result);
-      if (options.fast_candidate_search && best.implemented &&
-          best.steps.size() <= rescue_threshold) {
-        ++evaluated_candidate_count;
-        break;
-      }
     }
   };
   auto selected_still_overflows_now = [&]() {
     return best.implemented && best.steps.size() > official_program_limit;
-  };
-  auto fast_search_target_met = [&]() {
-    return best.implemented && best.steps.size() <= rescue_threshold;
   };
   auto finish_fast_search = [&](std::string detail) {
     best.optimizations.push_back(OptimizationReport{
@@ -65209,12 +65381,6 @@ CompileResult compile_source_for_optimizer_profile(
     refresh_rejection_dependent_reports(best, options);
     write_compile_result_cache(source, options, best);
   };
-
-  if (options.fast_candidate_search && fast_search_target_met()) {
-    finish_fast_search("Stopped before candidate search because the base program already fits " +
-                       std::to_string(rescue_threshold) + " cells.");
-    return best;
-  }
 
   if (options.fast_candidate_search && needs_size_rescue) {
     add_candidate(
@@ -65268,13 +65434,6 @@ CompileResult compile_source_for_optimizer_profile(
         "reverse-proc-layout", "Emitted procedures in reverse source order",
         CandidateGate::SizeRescue);
     evaluate_queued_candidates();
-    if (fast_search_target_met()) {
-      finish_fast_search("Stopped after fast rescue candidates reached " +
-                         std::to_string(best.steps.size()) + " cells within the " +
-                         std::to_string(rescue_threshold) + "-cell target; candidate threshold " +
-                         std::to_string(options.fast_candidate_threshold_ms) + " ms.");
-      return best;
-    }
   }
 
   add_candidate(
@@ -65716,10 +65875,11 @@ CompileResult compile_source_for_optimizer_profile(
           candidate_options.packed_score_accumulator_helpers = true;
           candidate_options.disable_return_suffix_gadget = true;
           candidate_options.proc_layout_strategy = "reverse";
+          candidate_options.callee_hole_straight_line_helper = true;
         },
         "packed-score-accumulator-reverse-suffix-free-layout",
-        "Combined packed_score stack accumulation with reverse procedure layout while keeping "
-        "the generic return-suffix outliner disabled");
+        "Combined packed_score stack accumulation with reverse procedure layout and generic "
+        "callee-hole sharing while keeping the return-suffix outliner disabled");
     if (allow_aggressive_post_layout) {
       add_candidate(
           [](CompileOptions& candidate_options) {
@@ -66720,6 +66880,8 @@ CompileResult compile_source_for_optimizer_profile(
 
   std::set<std::string> tried_reclaims;
   auto add_reclaim_candidate = [&](const CompileOptions& base_options) {
+    if (use_packed_score_seed)
+      return;
     CompileOptions probe_options = base_options;
     probe_options.analysis = true;
     probe_options.collect_coalesce_shares = true;
@@ -66982,6 +67144,13 @@ CompileResult compile_source_for_optimizer_profile(
   }
 
   evaluate_queued_candidates();
+
+  if (options.fast_candidate_search && !needs_size_rescue) {
+    finish_fast_search("Completed the bounded candidate pass for a base program that already "
+                       "fits within " +
+                       std::to_string(rescue_threshold) + " cells.");
+    return best;
+  }
 
   // Last-ditch fractional address-synthesis twins (forward conversion +
   // dead-integer recovery elision). Only emitted when the program STILL
@@ -67433,6 +67602,79 @@ CompileResult compile_source_for_optimizer_profile(
 
   evaluate_queued_candidates();
 
+  // Bounded search still needs to compose a locally profitable semantic
+  // lowering with register-releasing constant demotions.  Keep a small
+  // proof-gated frontier of the best domain-error candidates and extend each
+  // with the same deterministic cheapest-first chain used by exhaustive
+  // search.  This is driven by candidate semantics and ordinary artifact size,
+  // not by source identity.
+  if (needs_size_rescue && selected_still_overflows_now() &&
+      options.fast_candidate_search && source_may_contain_error_trap(source)) {
+    struct BoundedDemotionBase {
+      std::size_t cells = 0;
+      CompileOptions options;
+    };
+    std::vector<BoundedDemotionBase> bounded_bases;
+    std::set<std::string> bounded_base_keys;
+    for (const CandidateSpec& candidate : candidates) {
+      if (!candidate.options.domain_error_guards)
+        continue;
+      const std::string key = implemented_candidate_key(candidate.options);
+      if (!bounded_base_keys.insert(key).second)
+        continue;
+      try {
+        const CompileResult ordinary = cached_compile_source_once(candidate.options);
+        if (!ordinary.implemented ||
+            (candidate_needs_static_proof_gate(candidate.options) &&
+             optimizer_static_gate_rejection_reason(candidate.options, ordinary).has_value())) {
+          continue;
+        }
+        bounded_bases.push_back(BoundedDemotionBase{
+            .cells = ordinary.steps.size(),
+            .options = candidate.options,
+        });
+      } catch (const std::exception&) {
+      }
+    }
+    std::stable_sort(
+        bounded_bases.begin(), bounded_bases.end(),
+        [](const BoundedDemotionBase& left, const BoundedDemotionBase& right) {
+          if (left.cells != right.cells)
+            return left.cells < right.cells;
+          return implemented_candidate_key(left.options) <
+                 implemented_candidate_key(right.options);
+        });
+    constexpr std::size_t kBoundedDomainDemotionBases = 4;
+    if (bounded_bases.size() > kBoundedDomainDemotionBases)
+      bounded_bases.resize(kBoundedDomainDemotionBases);
+    for (const BoundedDemotionBase& base : bounded_bases) {
+      CompileOptions chain_options = base.options;
+      std::set<std::string> suppressed = chain_options.suppress_constant_preloads;
+      std::vector<std::string> chain_values;
+      for (int depth = 0; depth < 6; ++depth) {
+        CompileResult probe;
+        try {
+          probe = cached_compile_source_once(chain_options);
+        } catch (const std::exception&) {
+          break;
+        }
+        const std::vector<std::string> next_values =
+            demotable_indirect_flow_preload_values(probe, suppressed);
+        if (next_values.empty())
+          break;
+        chain_values.push_back(next_values.front());
+        suppressed.insert(next_values.front());
+        chain_options.suppress_constant_preloads.insert(next_values.front());
+        add_configured_candidate(
+            chain_options, "bounded-domain-error-demotion-chain",
+            "Extended a competitive domain-error layout by inlining constants " +
+                join_strings(chain_values, ", ") +
+                " to release a register for indirect flow");
+        evaluate_queued_candidates();
+      }
+    }
+  }
+
   // Optional non-greedy beam search (opt-in via MKPRO_BEAM_SEARCH). The curated
   // candidate pass above is greedy: it only ever keeps strictly-smaller forms,
   // so enabling steps that are locally size-neutral (and only pay off once a
@@ -67619,7 +67861,8 @@ CompileResult compile_source_for_optimizer_profile(
       });
     };
     add_finalist(best_options, {}, {});
-    add_finalist(options, {}, {});
+    if (!use_packed_score_seed)
+      add_finalist(options, {}, {});
     for (const CandidateSpec& candidate : candidates)
       add_finalist(candidate.options, candidate.name, candidate.detail);
 
@@ -67792,13 +68035,24 @@ CompileResult compile_source_for_optimizer_profile(
       composition_bases.push_back(candidate);
       return true;
     };
+    const bool compose_final_layout_frontier =
+        fast_candidate_allowed("final-layout-frontier-composition") ||
+        (should_finish_boundary_candidate && finalized_best.has_value() &&
+         finalized_best->steps.size() == official_program_limit);
+    if (!compose_final_layout_frontier && trace_candidates) {
+      std::cerr << "[candidate-trace] skip-fast final-layout-frontier-composition estimated_ms="
+                << scaled_candidate_search_cost_ms("final-layout-frontier-composition")
+                << " threshold_ms=" << options.fast_candidate_threshold_ms << "\n";
+    }
     // Equal-size finalists can fill the bounded rank before the actual winner
     // by option-key order. Retain the selected artifact explicitly, then fill
     // the remaining frontier with independently ranked alternatives.
-    if (selected_finalist.has_value())
+    if (compose_final_layout_frontier && selected_finalist.has_value())
       add_composition_base(*selected_finalist);
     std::size_t ranked_composition_bases = 0;
     for (const RankedFinalist& finalist : ranked_finalists) {
+      if (!compose_final_layout_frontier)
+        break;
       if (ranked_composition_bases >= kFinalLayoutCompositionWidth)
         break;
       if (add_composition_base(finalist.candidate))

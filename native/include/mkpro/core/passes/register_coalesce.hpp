@@ -5,6 +5,7 @@
 
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 
 namespace mkpro::core::passes {
@@ -16,6 +17,10 @@ struct RegisterCoalesceMappingOptions {
   // Only the source-level two-pass allocator can safely update logical
   // register reports and setup preloads after reusing an entry-live anchor.
   bool allow_live_at_entry_anchor_reuse = false;
+  // Physical registers reserved by source allocation but absent from the
+  // emitted body. Including them lets the two-pass allocator prove that a
+  // dead allocation can be reclaimed without weakening ordinary IR passes.
+  std::set<std::string> allocated_registers;
 };
 
 std::map<std::string, std::string> compute_non_overlapping_register_mapping(

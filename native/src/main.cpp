@@ -55,8 +55,9 @@ Output and execution model:
 
 Candidate search:
   --disable-candidate-search      Compile only the requested option set.
-  --fast                          Enable fast candidate search.
+  --fast                          Enable bounded candidate search (default).
   --fast-threshold-ms N           Enable fast search and set per-candidate limit.
+  --exhaustive-candidate-search   Disable the bounded cost filter.
   --collect-coalesce-shares       Collect register coalesce-share suggestions and
                                   enable --analysis.
 
@@ -1201,6 +1202,8 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       options.disable_candidate_search = true;
     } else if (arg == "--fast") {
       options.fast_candidate_search = true;
+    } else if (arg == "--exhaustive-candidate-search") {
+      options.fast_candidate_search = false;
     } else if (arg == "--fast-threshold-ms") {
       if (index + 1 >= args.size()) {
         std::cerr << "missing value for --fast-threshold-ms\n";

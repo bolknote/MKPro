@@ -462,6 +462,77 @@ void callee_hole_helper_matches_direct_call_semantics() {
                                                            natural_skeleton_calls),
           "callee-hole gate should compose with a proved natural-target skeleton dispatch");
 
+  CompileResult natural_charge_entry_calls;
+  natural_charge_entry_calls.optimizations = {
+      OptimizationReport{.name = "callee-hole-straight-line-helper"},
+      OptimizationReport{.name = "natural-target-component-layout"},
+  };
+  natural_charge_entry_calls.steps = {
+      step(0, 3, "callee-hole selector-value=30 indirect-target=30"),
+      step(1, 0, "callee-hole selector-value=30 indirect-target=30"),
+      step(2, 0xa7,
+           "callee-hole charge-entry call; proof=proof_entry; selector=e; "
+           "preloaded R7=20 indirect-target=20 indirect flow"),
+      step(3, 0x51),
+      step(4, 0),
+      step(5, 4, "callee-hole selector-value=40 indirect-target=40"),
+      step(6, 0, "callee-hole selector-value=40 indirect-target=40"),
+      step(7, 0xa7,
+           "callee-hole charge-entry call; proof=proof_entry; selector=e; "
+           "preloaded R7=20 indirect-target=20 indirect flow"),
+      step(8, 0x51),
+      step(9, 0),
+      step(20, 0x4e,
+           "callee-hole charge-entry store; proof=proof_entry; selector=e"),
+      step(21, 0x61),
+      step(22, 0xae,
+           "callee-hole indirect call; proof=proof_entry; "
+           "leaf-targets=30:leaf_a,40:leaf_b"),
+      step(23, 0x52),
+      step(30, 0x0d, "callee-hole leaf entry leaf_a"),
+      step(31, 0x52),
+      step(40, 0x0d, "callee-hole leaf entry leaf_b"),
+      step(41, 0x52),
+  };
+  require(optimizer_static_proof_gate_accepts_for_testing(gate_options,
+                                                           natural_charge_entry_calls),
+          "callee-hole gate should preserve a charge-entry marker followed by proved "
+          "natural-target metadata");
+  natural_charge_entry_calls.steps.at(2).comment =
+      "callee-hole charge-entry call; proof=proof_entry; selector=ee; "
+      "preloaded R7=20 indirect-target=20 indirect flow";
+  require(!optimizer_static_proof_gate_accepts_for_testing(gate_options,
+                                                            natural_charge_entry_calls),
+          "callee-hole gate should reject a charge-entry marker with a noncanonical selector");
+  natural_charge_entry_calls.steps.at(2).comment =
+      "callee-hole charge-entry call; proof=proof_entry; selector=e; "
+      "preloaded R7=20 indirect-target=20 indirect flow";
+
+  CompileResult typed_terminal_entry = natural_charge_entry_calls;
+  typed_terminal_entry.steps.at(8).opcode = 0xb0;
+  typed_terminal_entry.steps.at(8).mnemonic = "К X->П 0";
+  typed_terminal_entry.steps.at(8).comment = "typed indirect store";
+  typed_terminal_entry.steps.at(9).opcode = 0x50;
+  typed_terminal_entry.steps.at(9).mnemonic = "С/П";
+  typed_terminal_entry.steps.at(9).comment = "terminal stop";
+  require(!optimizer_static_proof_gate_accepts_for_testing(gate_options,
+                                                            typed_terminal_entry),
+          "callee-hole gate should fail closed without typed memory targets and terminal-stop "
+          "metadata");
+  for (const ResolvedStep& resolved : typed_terminal_entry.steps) {
+    MachineItem item = MachineItem::op(resolved.opcode, resolved.mnemonic);
+    item.comment = resolved.comment;
+    if (resolved.address == 8)
+      item.indirect_memory_targets = std::vector<int>{4, 5, 6, 7};
+    if (resolved.address == 9)
+      item.stop_disposition = StopDisposition::Terminal;
+    typed_terminal_entry.items.push_back(std::move(item));
+  }
+  require(optimizer_static_proof_gate_accepts_for_testing(gate_options,
+                                                           typed_terminal_entry),
+          "callee-hole gate should use final typed memory targets and terminal-stop metadata "
+          "without relying on comments");
+
   CompileOptions preloaded_hole_options = gate_options;
   preloaded_hole_options.preloaded_indirect_flow = true;
   CompileResult preloaded_hole = natural_skeleton_calls;
