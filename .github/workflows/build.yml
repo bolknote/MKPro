@@ -159,80 +159,9 @@ jobs:
           path: mkpro-native-macos-universal
           if-no-files-found: error
 
-  mkpro-native-ape-universal:
-    name: APE (linux x86_64 + aarch64, xnu, windows)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y unzip
-      - name: Fetch cosmocc toolchain
-        run: |
-          set -euo pipefail
-          ok=0
-          for url in \
-            https://cosmo.zip/pub/cosmocc/cosmocc.zip \
-            https://cosmo.zip/pub/cosmos/bin/cosmocc.zip \
-            https://github.com/jart/cosmopolitan/releases/latest/download/cosmocc.zip; do
-            echo "Trying to download cosmocc from $url"
-            if curl -fsSL -o /tmp/cosmocc.zip "$url"; then
-              ok=1
-              break
-            fi
-          done
-          if [ "$ok" -ne 1 ]; then
-            echo "Failed to download cosmocc from all known sources"
-            exit 1
-          fi
-          unzip -q /tmp/cosmocc.zip -d /tmp/cosmocc
-      - name: Configure and build Linux x86_64 target with cosmocc
-        run: |
-          CC=/tmp/cosmocc/bin/x86_64-unknown-cosmo-cc \
-          CXX=/tmp/cosmocc/bin/x86_64-unknown-cosmo-c++ \
-            cmake -S . -B build/mkpro-ape-x86_64_linux \
-              -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_SYSTEM_NAME=Linux \
-              -DCMAKE_SYSTEM_PROCESSOR=x86_64 \
-              -DMKPRO_STATIC=ON \
-              -DMKPRO_WARNINGS_AS_ERRORS=OFF
-          cmake --build build/mkpro-ape-x86_64_linux --target mkpro_cli -j
-      - name: Configure and build Linux aarch64 target with cosmocc
-        run: |
-          CC=/tmp/cosmocc/bin/aarch64-unknown-cosmo-cc \
-          CXX=/tmp/cosmocc/bin/aarch64-unknown-cosmo-c++ \
-            cmake -S . -B build/mkpro-ape-aarch64_linux \
-              -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_SYSTEM_NAME=Linux \
-              -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-              -DMKPRO_STATIC=ON \
-              -DMKPRO_WARNINGS_AS_ERRORS=OFF
-          cmake --build build/mkpro-ape-aarch64_linux --target mkpro_cli -j
-      - name: Build APE universal binary
-        run: |
-          /tmp/cosmocc/bin/apelink \
-            -V linux,xnu,windows \
-            -l /tmp/cosmocc/bin/ape-x86_64.elf \
-            -l /tmp/cosmocc/bin/ape-aarch64.elf \
-            -M /tmp/cosmocc/bin/ape-m1.c \
-            -o mkpro-native-universal.com \
-            build/mkpro-ape-x86_64_linux/native/mkpro-native \
-            build/mkpro-ape-aarch64_linux/native/mkpro-native
-      - name: Smoke check
-        run: |
-          file mkpro-native-universal.com
-          ./mkpro-native-universal.com --help | sed -n '1,20p'
-          ./mkpro-native-universal.com compile examples/basic.mkpro --out hex | head -n 3
-      - uses: actions/upload-artifact@v6
-        with:
-          name: mkpro-native-universal.com
-          path: mkpro-native-universal.com
-          if-no-files-found: error
-
   release:
     name: Publish release
-    needs: [linux, windows, macos, int128-fallback, mkpro-native-ape-universal]
+    needs: [linux, windows, macos, int128-fallback]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
