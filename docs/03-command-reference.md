@@ -65,11 +65,52 @@ This reference uses the traditional MK-61 notation:
 | `38` | `К OR` / `К ∨` | Bitwise OR | Same logical-operation family as `37`. |
 | `39` | `К XOR` / `К ⊕` | Bitwise XOR | Same logical-operation family as `37`. |
 | `3A` | `К ИНВ` | Bitwise NOT | Same logical-operation family as `37`. |
-| `3B` | `К СЧ` | Pseudo-random number | Does not generate `1`; can rarely generate `0`. The sequence can cycle after `К` operations. `К max` with zero in `Y` resets it to the initial sequence. |
+| `3B` | `К СЧ` | Pseudo-random number | Does not generate `1`; can rarely generate `0`. It is deterministic and stateful; fixed inputs can enter a cycle. `К max` with zero in `Y` resets it to the initial zero-input sequence. See the ROM-backed note below. |
 | `3C` | not normally entered | Error | Produces `ЕГГ0Г`. |
 | `3D` | not normally entered | Alias of `2A` | Same as `К °->′"`. |
 | `3E` | not normally entered | Copy `Y` to `X`, `X -> X1` | Equivalent to `F ↻` then `В↑`, but not X2-affecting. |
 | `3F` | not normally entered | Empty operator | Undocumented/unenterable. |
+
+### `К СЧ` Internal State and Seeding
+
+`К СЧ` has state outside the user-visible stack and memory registers. A trace of
+the ИК1306 command ROM gives this part of the internal path:
+
+| ИК1306 state | Relevant ROM action | Role in `К СЧ` |
+| --- | --- | --- |
+| `16` | shift `M` into internal `ST` | load `X` |
+| `17` | shift `M` into internal `ST` | load `Y` |
+| `A4` | read and rotate `ST` | consume `Y` |
+| `A6` | read and rotate `ST` | consume `X` |
+| `A7` | read and rotate `ST` | consume the previous random state, `xi` |
+| `86` | shift the result back into `ST` | save the next `xi` |
+
+At rest, `xi` occupies one logical 14-tetrad lane of the private 42-tetrad
+`ST` ring in ИК1306. In the emulator's phase coordinates this lane is
+`ST[1]`, `ST[4]`, ..., `ST[40]`. It is not part of the calculator's visible
+`X`, `Y`, `Z`, `T` stack.
+
+This distinction matters when a draw is discarded. With all visible inputs
+zero, a cold emulator produces `0.404067`. If a `К СЧ` draw with `Y = 8` is
+discarded and visible `X` and `Y` are then cleared, the next draw is
+`0.9818002`, not `0.404067`. Clearing only the hidden `xi` lane restores
+`0.404067`. The discarded command has therefore already advanced the hidden
+state; retaining the result in visible `X` is not the sole cause. `X` still
+has a separate effect through the digit selected by the RNG microprogram.
+
+For a hardware-assisted first draw, there are two natural injection points:
+
+- without changing the ИК1306 microcode, place a valid random BCD value in
+  `Y` immediately before the first `К СЧ`; state `17` already carries it into
+  the RNG calculation, and the resulting `xi` persists;
+- when redesigning ИК1306 itself, preload the private `xi` lane of `ST` at
+  power-on, preserving valid number-format and exponent tetrads.
+
+Taking the integer part can make the relevant visible input repeat and thus
+encourage a short cycle, but it is not the only source of cycling. The next
+value depends on the hidden previous `xi`, the transformed `Y` input, and a
+selected digit of `X`; other commands that reuse ИК1306's private working
+storage can also perturb the continuation.
 
 ## Memory, Flow Control, and Tests
 
