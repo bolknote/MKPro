@@ -71,4 +71,12 @@ LateBoundDecimalSelectorResult
 bind_late_bound_decimal_selectors(const std::vector<MachineItem>& items,
                                   const LateBoundDecimalSelectorOptions& options = {});
 
+// Re-resolve compiler-marked selector pairs after a separately proved layout
+// transformation. Unlike the initial binder, this accepts only non-raw
+// decimal digit commands at marked cells; arbitrary source operations and raw
+// cells still fail closed. The ordinary binder remains placeholder-only.
+LateBoundDecimalSelectorResult
+rebind_late_bound_decimal_selectors(const std::vector<MachineItem>& items,
+                                    const LateBoundDecimalSelectorOptions& options = {});
+
 } // namespace mkpro::core

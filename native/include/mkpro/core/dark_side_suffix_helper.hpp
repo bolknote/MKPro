@@ -116,7 +116,9 @@ struct DarkSideSuffixLayoutCandidate {
 // where the body would have to start to end at F9; component placement and the
 // full dark-side final-artifact proof remain separate mandatory stages.
 std::vector<DarkSideSuffixLayoutCandidate>
-find_dark_side_suffix_layout_candidates(const std::vector<MachineItem>& items);
+find_dark_side_suffix_layout_candidates(
+    const std::vector<MachineItem>& items,
+    AddressSpaceModel model = AddressSpaceModel::Standard);
 
 // Verifies the pre-rewrite artifact.  The helper must already be co-laid out:
 // its executable body occupies a suffix ending at physical cell 47 and its

@@ -68,6 +68,11 @@ bool is_strict_placeholder(const MachineItem& item,
          item.opcode == options.placeholder_opcode && item.mnemonic == options.placeholder_mnemonic;
 }
 
+bool is_non_raw_decimal_digit(const MachineItem& item) {
+  return item.kind == MachineItemKind::Op && !item.raw && item.opcode >= 0x00 &&
+         item.opcode <= 0x09 && item.mnemonic == std::to_string(item.opcode);
+}
+
 } // namespace
 
 std::string make_late_bound_decimal_selector_role(LateBoundDecimalSelectorPart part,
@@ -255,6 +260,46 @@ bind_late_bound_decimal_selectors(const std::vector<MachineItem>& items,
     });
   }
   result.applied = static_cast<int>(pairs.size());
+  return result;
+}
+
+LateBoundDecimalSelectorResult
+rebind_late_bound_decimal_selectors(const std::vector<MachineItem>& items,
+                                    const LateBoundDecimalSelectorOptions& options) {
+  std::vector<MachineItem> placeholders = items;
+  LateBoundDecimalSelectorResult rejected;
+  rejected.items = items;
+
+  for (std::size_t index = 0; index < placeholders.size(); ++index) {
+    MachineItem& item = placeholders.at(index);
+    bool marked = false;
+    for (const std::string& role : item.roles) {
+      bool recognized = false;
+      (void)parse_marker_role(role, recognized);
+      marked = marked || recognized;
+    }
+    if (!marked)
+      continue;
+    if (!is_non_raw_decimal_digit(item)) {
+      append_error(rejected.diagnostics, "late-decimal-selector-not-bound-digit",
+                   "Late-bound decimal selector item " + std::to_string(index) +
+                       " is not a non-raw decimal digit command eligible for rebinding.");
+      continue;
+    }
+    item.opcode = options.placeholder_opcode;
+    item.mnemonic = options.placeholder_mnemonic;
+  }
+
+  if (!rejected.diagnostics.empty())
+    return rejected;
+
+  LateBoundDecimalSelectorResult result =
+      bind_late_bound_decimal_selectors(placeholders, options);
+  if (!result.diagnostics.empty()) {
+    result.items = items;
+    result.applied = 0;
+    result.proofs.clear();
+  }
   return result;
 }
 

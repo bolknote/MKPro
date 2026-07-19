@@ -180,6 +180,15 @@ void dark_side_suffix_helper_rewrites_only_proved_layouts() {
                 candidates.front().required_start_address == 39,
             "pre-layout discovery should derive the exact F9 anchor from opaque helper length");
 
+    unplaced.at(2) = MachineItem::address(4);
+    const std::vector<core::DarkSideSuffixLayoutCandidate> numeric_candidates =
+        core::find_dark_side_suffix_layout_candidates(unplaced);
+    require(numeric_candidates.size() == 1U &&
+                numeric_candidates.front().target_item_index ==
+                    candidates.front().target_item_index,
+            "pre-layout discovery should recognize a direct numeric call by physical command "
+            "identity");
+
     unplaced.at(1) = MachineItem::op(0x51, "БП");
     require(core::find_dark_side_suffix_layout_candidates(unplaced).empty(),
             "pre-layout discovery should reject a helper without a direct ПП entry");

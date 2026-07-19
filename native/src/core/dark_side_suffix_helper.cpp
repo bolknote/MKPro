@@ -495,7 +495,8 @@ bool verify_rewritten_artifact(const std::vector<MachineItem>& items,
 } // namespace
 
 std::vector<DarkSideSuffixLayoutCandidate>
-find_dark_side_suffix_layout_candidates(const std::vector<MachineItem>& items) {
+find_dark_side_suffix_layout_candidates(const std::vector<MachineItem>& items,
+                                        AddressSpaceModel model) {
   const ArtifactIndex index = index_artifact(items);
   std::vector<DarkSideSuffixLayoutCandidate> candidates;
   std::set<std::size_t> emitted_targets;
@@ -540,6 +541,13 @@ find_dark_side_suffix_layout_candidates(const std::vector<MachineItem>& items) {
       continue;
     }
 
+    std::set<int> entry_addresses;
+    for (const std::string& label : entry_labels) {
+      const auto address = index.label_addresses.find(label);
+      if (address != index.label_addresses.end())
+        entry_addresses.insert(address->second);
+    }
+
     int direct_calls = 0;
     bool non_call_entry = false;
     for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
@@ -547,7 +555,13 @@ find_dark_side_suffix_layout_candidates(const std::vector<MachineItem>& items) {
       if (item.kind != MachineItemKind::Address)
         continue;
       const auto* label = std::get_if<std::string>(&item.target);
-      if (label == nullptr || !entry_labels.contains(*label))
+      const bool targets_entry_by_label =
+          label != nullptr && entry_labels.contains(*label);
+      const std::optional<int> target_address =
+          referenced_physical_address(item, index, model);
+      const bool targets_entry_by_address =
+          target_address.has_value() && entry_addresses.contains(*target_address);
+      if (!targets_entry_by_label && !targets_entry_by_address)
         continue;
       if (item_index == 0U || items.at(item_index - 1U).kind != MachineItemKind::Op ||
           items.at(item_index - 1U).opcode != 0x53) {

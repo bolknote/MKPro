@@ -160,6 +160,49 @@ void late_bound_decimal_selector_binds_only_proved_pairs() {
     require(result.items.at(0).opcode == 7, "rejected ordinary code must not be overwritten");
   }
 
+  // A separately proved layout may move a target after the strict initial
+  // bind. Rebinding accepts only the compiler-marked decimal cells and remains
+  // atomic for raw or non-digit code.
+  {
+    std::vector<MachineItem> items = one_pair_at_target_address("target", 12);
+    const core::LateBoundDecimalSelectorResult bound =
+        core::bind_late_bound_decimal_selectors(items);
+    require(bound.diagnostics.empty() && bound.applied == 1 &&
+                bound.items.at(0).opcode == 1 && bound.items.at(1).opcode == 2,
+            "the synthetic selector should first bind to address 12");
+
+    std::vector<MachineItem> moved = bound.items;
+    const auto target = std::find_if(moved.begin(), moved.end(), [](const MachineItem& item) {
+      return item.kind == MachineItemKind::Label && item.name == "target";
+    });
+    require(target != moved.end(), "the synthetic selector target should exist");
+    moved.insert(target, MachineItem::op(0x0E, "+"));
+    const core::LateBoundDecimalSelectorResult rebound =
+        core::rebind_late_bound_decimal_selectors(moved);
+    require(rebound.diagnostics.empty() && rebound.applied == 1 &&
+                rebound.items.at(0).opcode == 1 && rebound.items.at(1).opcode == 3,
+            "marked bound digits should follow their target from address 12 to 13");
+
+    moved = bound.items;
+    moved.at(0).raw = true;
+    const core::LateBoundDecimalSelectorResult raw =
+        core::rebind_late_bound_decimal_selectors(moved);
+    require(raw.applied == 0 &&
+                has_diagnostic(raw, "late-decimal-selector-not-bound-digit") &&
+                raw.items.at(0).opcode == 1,
+            "raw marked digits must fail closed during rebinding");
+
+    moved = bound.items;
+    moved.at(0) = MachineItem::op(0x0E, "+");
+    moved.at(0).roles = bound.items.at(0).roles;
+    const core::LateBoundDecimalSelectorResult operation =
+        core::rebind_late_bound_decimal_selectors(moved);
+    require(operation.applied == 0 &&
+                has_diagnostic(operation, "late-decimal-selector-not-bound-digit") &&
+                operation.items.at(0).opcode == 0x0E,
+            "a marker must not authorize rebinding an ordinary operation");
+  }
+
   // Empty marker targets, duplicate labels, and addresses outside 10..99 each
   // fail explicitly.
   {
