@@ -65192,6 +65192,149 @@ bool identical_preloads(const std::vector<PreloadReport>& left,
                     });
 }
 
+std::optional<CompileResult>
+apply_finalization_dead_store_to_selected_result(
+    const std::string& source, const CompileResult& selected,
+    const CompileOptions& options) {
+  if (!selected.implemented || selected.items.empty())
+    return std::nullopt;
+
+  const int initial_cells = core::machine_cell_count(selected.items);
+  const core::passes::RunPassesResult finalized =
+      core::passes::run_finalization_dead_store_elimination(selected.items,
+                                                            options);
+  if (finalized.applied <= 0 ||
+      finalized.removed_cell_addresses.size() != 1U ||
+      core::machine_cell_count(finalized.items) != initial_cells - 1)
+    return std::nullopt;
+
+  const AddressSpaceModel model = address_space_model_for_options(options);
+  const std::optional<std::vector<MachineItem>> original =
+      core::normalize_natural_target_overflow_formals(selected.items, model);
+  const std::optional<std::vector<MachineItem>> reduced =
+      core::normalize_natural_target_overflow_formals(finalized.items, model);
+  if (!original.has_value() || !reduced.has_value())
+    return std::nullopt;
+
+  core::PostLayoutControlFlowOptions control_options;
+  control_options.address_space_model = model;
+  control_options.empty_return_target = 1;
+  const core::AuthoritativePostLayoutControlFlow original_control =
+      core::build_post_layout_control_flow(*original, control_options);
+  if (!original_control.proved)
+    return std::nullopt;
+
+  const int erased_address = finalized.removed_cell_addresses.front();
+  int physical_address = 0;
+  std::optional<std::size_t> erased_item;
+  for (std::size_t item_index = 0; item_index < original->size();
+       ++item_index) {
+    if (original->at(item_index).kind == MachineItemKind::Label)
+      continue;
+    if (physical_address == erased_address) {
+      erased_item = item_index;
+      break;
+    }
+    ++physical_address;
+  }
+  if (!erased_item.has_value())
+    return std::nullopt;
+
+  const core::PreloadedIndirectFlowCellErasurePlan selector_rebind =
+      core::plan_preloaded_indirect_flow_cell_erasure(
+          *original, selected.preloads, original_control, *erased_item,
+          erased_address, model);
+  if (!selector_rebind.proved ||
+      (selected.setup_program.has_value() &&
+       !identical_preloads(selector_rebind.preloads, selected.preloads))) {
+    return std::nullopt;
+  }
+
+  const core::AuthoritativePostLayoutControlFlow reduced_control =
+      core::build_post_layout_control_flow(*reduced, control_options);
+  if (!reduced_control.proved)
+    return std::nullopt;
+
+  if (original_control.indirect_flow_targets.size() !=
+      reduced_control.indirect_flow_targets.size()) {
+    return std::nullopt;
+  }
+  auto original_flow = original_control.indirect_flow_targets.begin();
+  auto reduced_flow = reduced_control.indirect_flow_targets.begin();
+  for (; original_flow != original_control.indirect_flow_targets.end();
+       ++original_flow, ++reduced_flow) {
+    if (original_flow->first >= original->size() ||
+        reduced_flow->first >= reduced->size() ||
+        original->at(original_flow->first).kind != MachineItemKind::Op ||
+        reduced->at(reduced_flow->first).kind != MachineItemKind::Op ||
+        original->at(original_flow->first).opcode !=
+            reduced->at(reduced_flow->first).opcode) {
+      return std::nullopt;
+    }
+    const auto expected =
+        selector_rebind.rebound_targets.find(original_flow->first);
+    if (expected == selector_rebind.rebound_targets.end())
+      return std::nullopt;
+    std::vector<int> actual;
+    actual.reserve(reduced_flow->second.size());
+    for (const core::PostLayoutCommandIdentity& target : reduced_flow->second)
+      actual.push_back(target.address);
+    std::sort(actual.begin(), actual.end());
+    std::vector<int> expected_addresses = expected->second;
+    std::sort(expected_addresses.begin(), expected_addresses.end());
+    if (actual != expected_addresses)
+      return std::nullopt;
+  }
+
+  CompileResult candidate = selected;
+  candidate.items = finalized.items;
+  candidate.preloads = selector_rebind.preloads;
+  for (const core::passes::AppliedOptimization& optimization :
+       finalized.optimizations) {
+    candidate.optimizations.push_back(OptimizationReport{
+        .name = optimization.name,
+        .detail = optimization.detail,
+    });
+  }
+  if (!selector_rebind.preload_rewrites.empty()) {
+    candidate.optimizations.push_back(OptimizationReport{
+        .name = "dead-store-indirect-selector-rebind",
+        .detail = "Retargeted " +
+                  std::to_string(selector_rebind.preload_rewrites.size()) +
+                  " proved stable indirect selector preload(s) after "
+                  "dead-store elimination.",
+    });
+  }
+
+  const ResolvedProgram resolved = resolve_machine_items(candidate.items, options);
+  if (!resolved.diagnostics.empty() ||
+      resolved.steps.size() >= selected.steps.size())
+    return std::nullopt;
+
+  ProgramAst ast;
+  try {
+    ast = parse_program(
+        source, ParseOptions{
+                    .signed_abs_match_pairs = options.signed_abs_match_pairs,
+                    .synthesize_parametric_siblings =
+                        options.synthesize_parametric_siblings,
+                    .segmented_bitplanes = options.segmented_bitplanes,
+                });
+  } catch (const ParseError&) {
+    return std::nullopt;
+  }
+
+  candidate.steps = resolved.steps;
+  candidate.labels = label_map(resolved.labels);
+  candidate.hex = format_hex_steps(candidate.steps, model);
+  candidate.listing = combine_listing(candidate, model);
+  candidate.implemented = !has_errors(candidate.diagnostics);
+  if (!candidate.implemented)
+    return std::nullopt;
+  populate_public_report(candidate, ast, options);
+  return candidate;
+}
+
 std::optional<SelectedAbsoluteDarkLayout>
 select_absolute_dark_layout_for_final_artifact(const CompileResult& selected,
                                                const CompileOptions& options) {
@@ -65487,6 +65630,18 @@ CompileResult compile_source_for_optimizer_profile(
         compile_source_once(source, options, source_has_entered,
                             /*apply_final_layout_size_rescue=*/true,
                             /*apply_atomic_absolute_dark_rescue=*/true);
+    if (result.implemented &&
+        result.steps.size() >
+            static_cast<std::size_t>(official_program_step_limit(
+                address_space_model_for_options(options)))) {
+      const std::optional<CompileResult> finalized =
+          apply_finalization_dead_store_to_selected_result(source, result,
+                                                           options);
+      if (finalized.has_value() &&
+          candidate_beats_best(*finalized, result, options)) {
+        result = *finalized;
+      }
+    }
     write_compile_result_cache(source, options, result);
     return result;
   }
@@ -68918,6 +69073,13 @@ CompileResult compile_source_for_optimizer_profile(
   // unresolved address, or non-decreasing result fails closed.
   if (best.implemented && best.steps.size() > official_program_limit) {
     try {
+      const std::optional<CompileResult> finalized =
+          apply_finalization_dead_store_to_selected_result(source, best,
+                                                           best_options);
+      if (finalized.has_value() &&
+          candidate_beats_best(*finalized, best, options)) {
+        best = *finalized;
+      }
       const std::optional<CompileResult> rescued =
           apply_absolute_dark_layout_to_selected_result(source, best, best_options);
       if (rescued.has_value() && candidate_beats_best(*rescued, best, options))

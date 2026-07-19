@@ -38,6 +38,7 @@
 #include "mkpro/core/passes/x2_noop_restore.hpp"
 
 #include <algorithm>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -46,6 +47,8 @@ namespace mkpro::core::passes {
 namespace {
 
 constexpr int kMaxFixpointIterations = 8;
+constexpr std::string_view kFinalizationCellOriginRole =
+    "finalization-cell-origin:";
 
 struct RunOnIrResult {
   std::vector<IrOp> ops;
@@ -54,6 +57,96 @@ struct RunOnIrResult {
   std::map<std::string, int> pass_counts;
   std::vector<PreloadReport> preloads;
 };
+
+std::vector<MachineItem> attach_finalization_flow_identity_labels(
+    const std::vector<MachineItem>& items) {
+  std::set<std::string> names;
+  std::set<int> referenced_addresses;
+  std::map<int, std::string> existing_label_by_address;
+  int cell_count = 0;
+  for (const MachineItem& item : items) {
+    if (item.kind == MachineItemKind::Label) {
+      names.insert(item.name);
+      existing_label_by_address.try_emplace(cell_count, item.name);
+    } else {
+      if (item.kind == MachineItemKind::Address) {
+        if (const int* target = std::get_if<int>(&item.target))
+          referenced_addresses.insert(*target);
+      }
+      if (item.indirect_flow_targets.has_value()) {
+        for (const IrTarget& target : *item.indirect_flow_targets) {
+          if (const int* address = std::get_if<int>(&target))
+            referenced_addresses.insert(*address);
+        }
+      }
+      ++cell_count;
+    }
+  }
+
+  std::vector<std::string> label_by_address;
+  std::vector<bool> synthetic_by_address;
+  label_by_address.reserve(static_cast<std::size_t>(cell_count));
+  synthetic_by_address.reserve(static_cast<std::size_t>(cell_count));
+  for (int address = 0; address < cell_count; ++address) {
+    if (!referenced_addresses.contains(address)) {
+      label_by_address.emplace_back();
+      synthetic_by_address.push_back(false);
+      continue;
+    }
+    const auto existing = existing_label_by_address.find(address);
+    if (existing != existing_label_by_address.end()) {
+      label_by_address.push_back(existing->second);
+      synthetic_by_address.push_back(false);
+      continue;
+    }
+    std::string label = "__finalization_cell_" + std::to_string(address);
+    while (names.contains(label))
+      label += "_";
+    names.insert(label);
+    label_by_address.push_back(std::move(label));
+    synthetic_by_address.push_back(true);
+  }
+
+  const auto rebound_target = [&](const IrTarget& target) -> IrTarget {
+    const int* address = std::get_if<int>(&target);
+    if (address == nullptr || *address < 0 || *address >= cell_count ||
+        label_by_address.at(static_cast<std::size_t>(*address)).empty()) {
+      return target;
+    }
+    return label_by_address.at(static_cast<std::size_t>(*address));
+  };
+
+  std::vector<MachineItem> result;
+  result.reserve(items.size() + label_by_address.size());
+  int address = 0;
+  for (const MachineItem& source : items) {
+    if (source.kind == MachineItemKind::Label) {
+      result.push_back(source);
+      continue;
+    }
+    if (synthetic_by_address.at(static_cast<std::size_t>(address))) {
+      MachineItem identity = MachineItem::label(
+          label_by_address.at(static_cast<std::size_t>(address)));
+      identity.hidden = true;
+      result.push_back(std::move(identity));
+    }
+
+    MachineItem item = source;
+    item.roles.push_back(std::string(kFinalizationCellOriginRole) +
+                         std::to_string(address));
+    if (item.kind == MachineItemKind::Address) {
+      item.target = rebound_target(item.target);
+      item.formal_opcode.reset();
+    }
+    if (item.indirect_flow_targets.has_value()) {
+      for (IrTarget& target : *item.indirect_flow_targets)
+        target = rebound_target(target);
+    }
+    result.push_back(std::move(item));
+    ++address;
+  }
+  return result;
+}
 
 RunOnIrResult run_passes_on_ir(std::vector<IrOp> initial, const CompileOptions& options,
                                bool layout_only) {
@@ -92,6 +185,7 @@ RunOnIrResult run_passes_on_ir(std::vector<IrOp> initial, const CompileOptions& 
                                 result.preloads.end());
       current = std::move(result.ops);
     }
+
   }
 
   aggregate.ops = std::move(current);
@@ -156,6 +250,56 @@ RunPassesResult run_ir_passes(const std::vector<MachineItem>& items,
       .pass_counts = std::move(result.pass_counts),
       .preloads = std::move(result.preloads),
   };
+}
+
+RunPassesResult run_finalization_dead_store_elimination(
+    const std::vector<MachineItem>& items, const CompileOptions& options) {
+  const std::vector<MachineItem> identity_items =
+      attach_finalization_flow_identity_labels(items);
+  std::vector<IrOp> current =
+      raise_machine_to_ir(identity_items,
+                          effective_optimizer_feature_profile(options));
+  RunPassesResult aggregate;
+  for (int iteration = 0; iteration < kMaxFixpointIterations; ++iteration) {
+    const PassResult result = finalization_dead_store_elimination(
+        current, PassContext{.options = options});
+    if (result.applied <= 0)
+      break;
+    aggregate.applied += result.applied;
+    aggregate.optimizations.insert(aggregate.optimizations.end(),
+                                   result.optimizations.begin(),
+                                   result.optimizations.end());
+    current = result.ops;
+  }
+  aggregate.items = lower_ir_to_machine(current);
+  std::set<int> retained_addresses;
+  for (MachineItem& item : aggregate.items) {
+    item.roles.erase(
+        std::remove_if(item.roles.begin(), item.roles.end(),
+                       [&](const CellRole& role) {
+                         if (!role.starts_with(kFinalizationCellOriginRole))
+                           return false;
+                         try {
+                           retained_addresses.insert(std::stoi(
+                               role.substr(kFinalizationCellOriginRole.size())));
+                         } catch (const std::exception&) {
+                         }
+                         return true;
+                       }),
+        item.roles.end());
+  }
+  const int original_cells = static_cast<int>(std::count_if(
+      items.begin(), items.end(), [](const MachineItem& item) {
+        return item.kind != MachineItemKind::Label;
+      }));
+  for (int address = 0; address < original_cells; ++address) {
+    if (!retained_addresses.contains(address))
+      aggregate.removed_cell_addresses.push_back(address);
+  }
+
+  aggregate.pass_counts["finalization-dead-store-elimination"] =
+      aggregate.applied;
+  return aggregate;
 }
 
 RunLayoutPassesResult run_ir_passes_on_layout(const std::vector<LayoutIrCell>& cells,

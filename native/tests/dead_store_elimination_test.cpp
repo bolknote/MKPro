@@ -238,6 +238,34 @@ void dead_store_elimination_matches_typescript_contract() {
   }
 
   {
+    const std::vector<IrOp> program = {
+        entered_store("1", ManualInteractionAnchorKind::ContinuousResume),
+        call_to("pure"),
+        store("1"),
+        halt(),
+        call_to("pure"),
+        recall("1"),
+        halt(),
+        label("pure"),
+        plain(0x00, "0"),
+        ret(),
+    };
+    const core::passes::PassResult ordinary =
+        run_dead_store_elimination(program);
+    CompileOptions options;
+    const core::passes::PassResult finalized =
+        core::passes::finalization_dead_store_elimination(
+            program, core::passes::PassContext{.options = options});
+    require(ordinary.applied == 0 && finalized.applied == 1 &&
+                finalized.ops.front().kind == IrKind::Call &&
+                finalized.ops.front().meta.manual_interaction.has_value() &&
+                finalized.ops.front().meta.manual_interaction->kind ==
+                    ManualInteractionAnchorKind::ContinuousResume,
+            "finalization DSE should ignore another call site's continuation and "
+            "transfer the continuous-resume anchor");
+  }
+
+  {
     const std::vector<IrOp> program = {plain(0x20, "F pi"), plain(0x35, "К {x}"), store("1"),
                                        plain(0x0c, "ВП"), halt()};
     const core::passes::PassResult result = run_dead_store_elimination(program);

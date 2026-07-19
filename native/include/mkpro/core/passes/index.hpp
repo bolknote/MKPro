@@ -10,6 +10,7 @@ namespace mkpro::core::passes {
 
 struct RunPassesResult {
   std::vector<MachineItem> items;
+  std::vector<int> removed_cell_addresses;
   int applied = 0;
   std::vector<AppliedOptimization> optimizations;
   std::map<std::string, int> pass_counts;
@@ -26,6 +27,8 @@ struct RunLayoutPassesResult {
 
 RunPassesResult run_ir_passes(const std::vector<MachineItem>& items,
                               const CompileOptions& options);
+RunPassesResult run_finalization_dead_store_elimination(
+    const std::vector<MachineItem>& items, const CompileOptions& options);
 RunLayoutPassesResult run_ir_passes_on_layout(const std::vector<LayoutIrCell>& cells,
                                               const CompileOptions& options);
 
