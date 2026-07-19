@@ -79,6 +79,11 @@ void late_bound_decimal_selector_binds_only_proved_pairs() {
                 result.proofs.at(0).low_cell_address == 1 && result.proofs.at(0).high_digit == 1 &&
                 result.proofs.at(0).low_digit == 2,
             "proof should record the final target and both charged cells");
+    const std::optional<std::vector<std::string>> target_labels =
+        core::late_bound_decimal_selector_target_labels(items);
+    require(target_labels.has_value() &&
+                *target_labels == std::vector<std::string>{target},
+            "layout consumers should recover the same unique opaque target set as the binder");
   }
 
   // A missing target is a hard, atomic failure: even an otherwise valid pair is
@@ -164,6 +169,8 @@ void late_bound_decimal_selector_binds_only_proved_pairs() {
         core::bind_late_bound_decimal_selectors(items);
     require(has_diagnostic(result, "late-decimal-selector-malformed-marker"),
             "an empty marker suffix must be rejected");
+    require(!core::late_bound_decimal_selector_target_labels(items).has_value(),
+            "the public target collector must fail closed on the same malformed marker");
   }
   {
     std::vector<MachineItem> items = one_pair_at_target_address("target", 10);

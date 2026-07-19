@@ -56,11 +56,29 @@ struct TerminalCyclicLayoutPlan {
 
 struct TerminalCyclicLayoutResult {
   std::vector<MachineItem> items;
+  std::vector<PreloadReport> preloads;
   TerminalCyclicLayoutPlan plan;
   std::vector<passes::AppliedOptimization> optimizations;
   int applied = 0;
   int removed_cells = 0;
 };
+
+struct EmptyReturnStartupLayoutResult {
+  std::vector<MachineItem> items;
+  std::vector<PreloadReport> preloads;
+  AuthoritativePostLayoutControlFlow control_flow;
+  bool final_artifact_proved = false;
+};
+
+// Replace one empty-stack `BP 00` startup loop with a physical-00 return and
+// remove its operand without changing size. Indirect targets may move only
+// when their delivered preload belongs to a compiler-proved retunable natural
+// fractional family; the returned preload set is part of the transaction.
+std::vector<EmptyReturnStartupLayoutResult> normalize_empty_return_startup_layouts(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const TerminalCyclicLayoutOptions& options = {});
 
 // Canonicalize every resolved direct-flow operand to a unique symbolic command
 // identity without changing cell count or control flow. This lets subsequent

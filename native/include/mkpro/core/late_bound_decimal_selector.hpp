@@ -4,6 +4,7 @@
 #include "mkpro/core/result.hpp"
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -55,6 +56,12 @@ struct LateBoundDecimalSelectorResult {
 // Empty target labels are rejected.
 std::string make_late_bound_decimal_selector_role(LateBoundDecimalSelectorPart part,
                                                   std::string_view target_label);
+
+// Returns the unique opaque target labels named by all well-formed high/low
+// marker roles. A malformed marker fails closed so layout passes can use this
+// as the same authoritative target set as the final binder.
+std::optional<std::vector<std::string>>
+late_bound_decimal_selector_target_labels(const std::vector<MachineItem>& items);
 
 // Resolve every strictly marked adjacent high/low placeholder pair against the
 // layout represented by `items`. This operation is atomic: any malformed pair,

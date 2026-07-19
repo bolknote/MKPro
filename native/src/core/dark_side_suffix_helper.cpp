@@ -48,6 +48,18 @@ ArtifactIndex index_artifact(const std::vector<MachineItem>& items) {
   return index;
 }
 
+std::optional<int> resolved_ir_target(const IrTarget& target,
+                                      const ArtifactIndex& index) {
+  if (const auto* numeric = std::get_if<int>(&target))
+    return *numeric;
+  const auto* label = std::get_if<std::string>(&target);
+  if (label == nullptr || index.duplicate_labels.contains(*label))
+    return std::nullopt;
+  const auto address = index.label_addresses.find(*label);
+  return address == index.label_addresses.end() ? std::nullopt
+                                                : std::optional<int>(address->second);
+}
+
 bool is_side_space_alias(const FormalAddressInfo& info);
 
 int formal_opcode_for_side_entry(int physical_address, AddressSpaceModel model) {
@@ -242,6 +254,19 @@ std::optional<int> referenced_physical_address(const MachineItem& address,
   return std::get<int>(address.target);
 }
 
+std::optional<std::string> unique_label_at_address(const ArtifactIndex& index,
+                                                   int address) {
+  std::optional<std::string> result;
+  for (const auto& [label, label_address] : index.label_addresses) {
+    if (label_address != address || index.duplicate_labels.contains(label))
+      continue;
+    if (result.has_value())
+      return std::nullopt;
+    result = label;
+  }
+  return result;
+}
+
 void append_comment(MachineItem& item, const std::string& suffix) {
   if (item.comment.has_value() && !item.comment->empty())
     item.comment = *item.comment + "; " + suffix;
@@ -251,8 +276,10 @@ void append_comment(MachineItem& item, const std::string& suffix) {
 
 std::map<std::string, DarkSideSuffixEntry> entry_map(const DarkSideSuffixHelperProof& proof) {
   std::map<std::string, DarkSideSuffixEntry> entries;
-  for (const DarkSideSuffixEntry& entry : proof.entries)
-    entries.emplace(entry.label, entry);
+  for (const DarkSideSuffixEntry& entry : proof.entries) {
+    if (!entry.label.empty())
+      entries.emplace(entry.label, entry);
+  }
   return entries;
 }
 
@@ -264,10 +291,20 @@ shifted_options_after_erasure(const DarkSideSuffixHelperOptions& options, std::s
     --shifted.proved_official_fallthrough->predecessor_item_index;
   }
   shifted.proved_indirect_flow_targets.clear();
-  for (const auto& [item, targets] : options.proved_indirect_flow_targets) {
+  const auto& final_targets = options.proved_rebound_indirect_flow_targets.empty()
+                                  ? options.proved_indirect_flow_targets
+                                  : options.proved_rebound_indirect_flow_targets;
+  for (const auto& [item, targets] : final_targets) {
     if (item == erased_item)
       continue;
     shifted.proved_indirect_flow_targets.emplace(item > erased_item ? item - 1U : item, targets);
+  }
+  shifted.proved_rebound_indirect_flow_targets.clear();
+  for (const auto& [item, targets] : options.proved_rebound_indirect_flow_targets) {
+    if (item == erased_item)
+      continue;
+    shifted.proved_rebound_indirect_flow_targets.emplace(
+        item > erased_item ? item - 1U : item, targets);
   }
   return shifted;
 }
@@ -330,28 +367,50 @@ bool verify_rewritten_artifact(const std::vector<MachineItem>& items,
   }
 
   const std::map<std::string, DarkSideSuffixEntry> entries = entry_map(original);
+  std::map<int, DarkSideSuffixEntry> entries_by_address;
+  for (const DarkSideSuffixEntry& entry : original.entries)
+    entries_by_address.emplace(entry.entry_address, entry);
   int calls = 0;
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
     const MachineItem& item = items.at(item_index);
     if (item.kind != MachineItemKind::Address)
       continue;
     const auto* label = std::get_if<std::string>(&item.target);
-    if (label == nullptr || !entries.contains(*label))
+    std::optional<DarkSideSuffixEntry> expected;
+    if (label != nullptr && entries.contains(*label))
+      expected = entries.at(*label);
+    if (item.formal_opcode.has_value()) {
+      try {
+        const FormalAddressInfo formal =
+            formal_address_info(*item.formal_opcode, options.address_space_model);
+        if (is_side_space_alias(formal) && entries_by_address.contains(formal.actual)) {
+          expected = entries_by_address.at(formal.actual);
+        } else if (is_side_space_alias(formal) &&
+                   formal.actual >= original.body_start_address &&
+                   formal.actual <= kSideSpaceLastPhysical) {
+          reasons.push_back("final artifact introduced an unproved side-space helper entry");
+          return false;
+        }
+      } catch (const std::exception&) {
+        reasons.push_back("final artifact contains an undecodable formal helper call");
+        return false;
+      }
+    }
+    if (!expected.has_value())
       continue;
     if (item_index == 0 || items.at(item_index - 1U).kind != MachineItemKind::Op ||
         items.at(item_index - 1U).opcode != 0x53) {
-      reasons.push_back("final artifact has a non-call reference to dark-side entry " + *label);
+      reasons.push_back("final artifact has a non-call reference to a dark-side entry");
       return false;
     }
-    const DarkSideSuffixEntry& entry = entries.at(*label);
-    if (!item.formal_opcode.has_value() || *item.formal_opcode != entry.formal_opcode) {
-      reasons.push_back("final artifact call to " + *label +
-                        " is not bound to its proved B2..F9 formal alias");
+    if (!item.formal_opcode.has_value() ||
+        *item.formal_opcode != expected->formal_opcode) {
+      reasons.push_back("final artifact helper call is not bound to its proved B2..F9 alias");
       return false;
     }
     const FormalAddressInfo formal =
         formal_address_info(*item.formal_opcode, options.address_space_model);
-    if (!is_side_space_alias(formal) || formal.actual != entry.entry_address) {
+    if (!is_side_space_alias(formal) || formal.actual != expected->entry_address) {
       reasons.push_back("final artifact formal call no longer resolves to its helper entry");
       return false;
     }
@@ -362,8 +421,34 @@ bool verify_rewritten_artifact(const std::vector<MachineItem>& items,
     return false;
   }
 
-  // Re-run the indirect-flow obligations on the final item indexes.  No exact
-  // target may name a cell that disappeared or shifted when В/О@48 was erased.
+  for (const DarkSideShiftedDirectTarget& shifted :
+       original.shifted_direct_targets) {
+    const std::size_t operand_item =
+        shifted.operand_item_index > original.explicit_return_item_index
+            ? shifted.operand_item_index - 1U
+            : shifted.operand_item_index;
+    const std::size_t target_item =
+        shifted.target_item_index > original.explicit_return_item_index
+            ? shifted.target_item_index - 1U
+            : shifted.target_item_index;
+    if (operand_item >= items.size() || target_item >= items.size() ||
+        items.at(operand_item).kind != MachineItemKind::Address ||
+        items.at(target_item).kind != MachineItemKind::Op) {
+      reasons.push_back("final artifact lost a shifted direct-flow identity");
+      return false;
+    }
+    const std::optional<int> rebound = referenced_physical_address(
+        items.at(operand_item), index, options.address_space_model);
+    if (!rebound.has_value() ||
+        *rebound != index.item_addresses.at(target_item)) {
+      reasons.push_back("final artifact changed a shifted direct-flow target identity");
+      return false;
+    }
+  }
+
+  // Re-run the indirect-flow obligations on the final item indexes and resolve
+  // the rewritten metadata independently. Official indirect entry into the
+  // helper remains invalid because it would bypass the implicit side return.
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
     const MachineItem& item = items.at(item_index);
     if (item.kind != MachineItemKind::Op ||
@@ -374,9 +459,31 @@ bool verify_rewritten_artifact(const std::vector<MachineItem>& items,
       reasons.push_back("final artifact indirect flow lacks a complete target proof");
       return false;
     }
+    if (options.proved_rebound_indirect_flow_targets.contains(item_index)) {
+      if (!item.indirect_flow_targets.has_value() || item.indirect_flow_targets->empty()) {
+        reasons.push_back("final artifact indirect flow lost its typed target metadata");
+        return false;
+      }
+      std::vector<int> resolved;
+      for (const IrTarget& target : *item.indirect_flow_targets) {
+        const std::optional<int> address = resolved_ir_target(target, index);
+        if (!address.has_value()) {
+          reasons.push_back("final artifact indirect target metadata cannot be resolved");
+          return false;
+        }
+        resolved.push_back(*address);
+      }
+      std::vector<int> expected = targets->second;
+      std::sort(resolved.begin(), resolved.end());
+      std::sort(expected.begin(), expected.end());
+      if (resolved != expected) {
+        reasons.push_back("final artifact indirect target metadata changed command identity");
+        return false;
+      }
+    }
     for (int target : targets->second) {
-      if (target >= original.body_start_address) {
-        reasons.push_back("final artifact indirect target can enter or cross the moved suffix");
+      if (target >= original.body_start_address && target <= kSideSpaceLastPhysical) {
+        reasons.push_back("final artifact indirect target enters the implicit-return suffix");
         return false;
       }
     }
@@ -386,6 +493,89 @@ bool verify_rewritten_artifact(const std::vector<MachineItem>& items,
 }
 
 } // namespace
+
+std::vector<DarkSideSuffixLayoutCandidate>
+find_dark_side_suffix_layout_candidates(const std::vector<MachineItem>& items) {
+  const ArtifactIndex index = index_artifact(items);
+  std::vector<DarkSideSuffixLayoutCandidate> candidates;
+  std::set<std::size_t> emitted_targets;
+
+  for (const auto& [root_label, root_item] : index.label_items) {
+    if (index.duplicate_labels.contains(root_label))
+      continue;
+
+    std::set<std::string> entry_labels;
+    std::size_t target_item = items.size();
+    int body_cells = 0;
+    bool found_return = false;
+    bool straight_line = true;
+    for (std::size_t item_index = root_item; item_index < items.size(); ++item_index) {
+      const MachineItem& item = items.at(item_index);
+      if (item.kind == MachineItemKind::Label) {
+        if (index.duplicate_labels.contains(item.name)) {
+          straight_line = false;
+          break;
+        }
+        entry_labels.insert(item.name);
+        continue;
+      }
+      if (item.kind != MachineItemKind::Op) {
+        straight_line = false;
+        break;
+      }
+      if (basic_kind_for_opcode(item.opcode) == IrKind::Return) {
+        found_return = true;
+        break;
+      }
+      if (!is_straight_line_body_opcode(item.opcode)) {
+        straight_line = false;
+        break;
+      }
+      if (target_item == items.size())
+        target_item = item_index;
+      ++body_cells;
+    }
+    if (!straight_line || !found_return || target_item == items.size() ||
+        body_cells <= 0 || body_cells > kSideSpaceLastPhysical) {
+      continue;
+    }
+
+    int direct_calls = 0;
+    bool non_call_entry = false;
+    for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
+      const MachineItem& item = items.at(item_index);
+      if (item.kind != MachineItemKind::Address)
+        continue;
+      const auto* label = std::get_if<std::string>(&item.target);
+      if (label == nullptr || !entry_labels.contains(*label))
+        continue;
+      if (item_index == 0U || items.at(item_index - 1U).kind != MachineItemKind::Op ||
+          items.at(item_index - 1U).opcode != 0x53) {
+        non_call_entry = true;
+        break;
+      }
+      ++direct_calls;
+    }
+    if (non_call_entry || direct_calls == 0 || !emitted_targets.insert(target_item).second)
+      continue;
+
+    candidates.push_back(DarkSideSuffixLayoutCandidate{
+        .helper_label = root_label,
+        .target_item_index = target_item,
+        .body_cells = body_cells,
+        .required_start_address = kExplicitReturnPhysical - body_cells,
+    });
+  }
+  std::sort(candidates.begin(), candidates.end(),
+            [](const DarkSideSuffixLayoutCandidate& left,
+               const DarkSideSuffixLayoutCandidate& right) {
+              return std::tie(left.required_start_address, left.target_item_index,
+                              left.helper_label) <
+                     std::tie(right.required_start_address, right.target_item_index,
+                              right.helper_label);
+            });
+  return candidates;
+}
 
 DarkSideSuffixHelperProof
 verify_dark_side_suffix_helper(const std::vector<MachineItem>& items,
@@ -491,32 +681,31 @@ verify_dark_side_suffix_helper(const std::vector<MachineItem>& items,
               return left.label < right.label;
             });
 
-  const std::map<std::string, DarkSideSuffixEntry> entries = entry_map(proof);
+  auto ensure_entry = [&](int address, std::string label)
+      -> std::optional<DarkSideSuffixEntry> {
+    const auto existing = std::find_if(
+        proof.entries.begin(), proof.entries.end(),
+        [&](const DarkSideSuffixEntry& entry) {
+          return entry.entry_address == address;
+        });
+    if (existing != proof.entries.end())
+      return *existing;
+    const int formal_opcode =
+        formal_opcode_for_side_entry(address, options.address_space_model);
+    if (formal_opcode < 0)
+      return std::nullopt;
+    DarkSideSuffixEntry entry{
+        .label = std::move(label),
+        .entry_address = address,
+        .formal_opcode = formal_opcode,
+    };
+    proof.entries.push_back(entry);
+    return entry;
+  };
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
     const MachineItem& item = items.at(item_index);
     if (item.kind != MachineItemKind::Address)
       continue;
-    const auto* label = std::get_if<std::string>(&item.target);
-    if (label != nullptr && entries.contains(*label)) {
-      if (item_index == 0 || items.at(item_index - 1U).kind != MachineItemKind::Op ||
-          items.at(item_index - 1U).opcode != 0x53) {
-        proof.reasons.push_back("entry " + *label + " has a non-ПП reference");
-        continue;
-      }
-      const DarkSideSuffixEntry& entry = entries.at(*label);
-      if (item.formal_opcode.has_value() && *item.formal_opcode != entry.formal_opcode) {
-        proof.reasons.push_back("existing formal call to " + *label +
-                                " does not use its B2..F9 alias");
-        continue;
-      }
-      proof.calls.push_back(DarkSideSuffixCall{
-          .call_item_index = item_index - 1U,
-          .operand_item_index = item_index,
-          .entry_label = *label,
-      });
-      continue;
-    }
-
     const std::optional<int> target =
         referenced_physical_address(item, index, options.address_space_model);
     if (!target.has_value()) {
@@ -527,17 +716,65 @@ verify_dark_side_suffix_helper(const std::vector<MachineItem>& items,
       proof.reasons.push_back("an address operand targets outside the final artifact");
       continue;
     }
+    if (*target >= proof.body_start_address && *target < kExplicitReturnPhysical &&
+        item_index > 0U &&
+        items.at(item_index - 1U).kind == MachineItemKind::Op &&
+        items.at(item_index - 1U).opcode == 0x53) {
+      const auto* label = std::get_if<std::string>(&item.target);
+      const std::optional<DarkSideSuffixEntry> entry =
+          ensure_entry(*target, label == nullptr ? std::string{} : *label);
+      if (!entry.has_value()) {
+        proof.reasons.push_back("no B2..F9 formal alias exists for a direct helper call");
+        continue;
+      }
+      if (item.formal_opcode.has_value() &&
+          *item.formal_opcode != entry->formal_opcode) {
+        proof.reasons.push_back("existing formal helper call does not use its B2..F9 alias");
+        continue;
+      }
+      proof.calls.push_back(DarkSideSuffixCall{
+          .call_item_index = item_index - 1U,
+          .operand_item_index = item_index,
+          .entry_label = entry->label,
+          .entry_address = entry->entry_address,
+          .formal_opcode = entry->formal_opcode,
+      });
+      continue;
+    }
     if (*target >= proof.body_start_address && *target <= kExplicitReturnPhysical) {
-      proof.reasons.push_back("official address reference can enter the helper or its removed В/О");
+      const std::string source =
+          item_index > 0U && items.at(item_index - 1U).kind == MachineItemKind::Op
+              ? opcode_by_code(items.at(item_index - 1U).opcode).name
+              : std::string("non-op");
+      proof.reasons.push_back(
+          "non-ПП reference at item " + std::to_string(item_index) +
+          " through " + source + " targets physical " + std::to_string(*target) +
+          " inside the helper or its removed В/О");
       continue;
     }
     const bool fixed_target =
         item.formal_opcode.has_value() || std::holds_alternative<int>(item.target);
     if (fixed_target && *target > kExplicitReturnPhysical) {
-      proof.reasons.push_back(
-          "fixed address after physical 48 would be stale after deleting the helper return");
+      const auto target_item = index.cell_items.find(*target);
+      if (target_item == index.cell_items.end() ||
+          items.at(target_item->second).kind != MachineItemKind::Op) {
+        proof.reasons.push_back(
+            "fixed address after physical 48 does not identify an executable command");
+      } else {
+        proof.shifted_direct_targets.push_back(DarkSideShiftedDirectTarget{
+            .operand_item_index = item_index,
+            .target_item_index = target_item->second,
+            .original_target_address = *target,
+        });
+      }
     }
   }
+  std::sort(proof.entries.begin(), proof.entries.end(),
+            [](const DarkSideSuffixEntry& left, const DarkSideSuffixEntry& right) {
+              if (left.entry_address != right.entry_address)
+                return left.entry_address < right.entry_address;
+              return left.label < right.label;
+            });
   if (proof.calls.empty())
     proof.reasons.push_back("helper has no direct ПП call sites to rewrite");
 
@@ -552,11 +789,32 @@ verify_dark_side_suffix_helper(const std::vector<MachineItem>& items,
                               " has no complete final-artifact target proof");
       continue;
     }
+    std::vector<int> expected_targets;
+    bool needs_rebind = false;
     for (int target : targets->second) {
-      if (target >= proof.body_start_address) {
+      if (target >= proof.body_start_address && target <= kExplicitReturnPhysical) {
         proof.reasons.push_back("proved indirect target " + std::to_string(target) +
-                                " can enter or shift with the dark-side suffix");
+                                " enters a helper whose explicit return is removed");
+        continue;
       }
+      needs_rebind = needs_rebind || target > kExplicitReturnPhysical;
+      expected_targets.push_back(target > kExplicitReturnPhysical ? target - 1 : target);
+    }
+    const auto rebound = options.proved_rebound_indirect_flow_targets.find(item_index);
+    if (needs_rebind && rebound == options.proved_rebound_indirect_flow_targets.end()) {
+      proof.reasons.push_back("proved indirect target after physical 48 has no selector-rebind "
+                              "proof");
+      continue;
+    }
+    std::vector<int> supplied =
+        rebound == options.proved_rebound_indirect_flow_targets.end()
+            ? targets->second
+            : rebound->second;
+    std::sort(expected_targets.begin(), expected_targets.end());
+    std::sort(supplied.begin(), supplied.end());
+    if (expected_targets != supplied) {
+      proof.reasons.push_back("proved indirect target rebinding does not preserve command "
+                              "identity across cell erasure");
     }
   }
 
@@ -574,14 +832,55 @@ rewrite_dark_side_suffix_helper(const std::vector<MachineItem>& items,
   if (!result.proof.proved)
     return result;
 
-  const std::map<std::string, DarkSideSuffixEntry> entries = entry_map(result.proof);
+  const ArtifactIndex symbolic_index = index_artifact(result.items);
+  for (const auto& [item_index, targets] :
+       options.proved_rebound_indirect_flow_targets) {
+    (void)targets;
+    if (item_index >= result.items.size())
+      continue;
+    MachineItem& item = result.items.at(item_index);
+    if (item.kind != MachineItemKind::Op || !item.indirect_flow_targets.has_value())
+      continue;
+    bool rebound = false;
+    for (IrTarget& target : *item.indirect_flow_targets) {
+      const auto* numeric = std::get_if<int>(&target);
+      if (numeric == nullptr || *numeric <= kExplicitReturnPhysical)
+        continue;
+      const std::optional<std::string> label =
+          unique_label_at_address(symbolic_index, *numeric);
+      target = label.has_value() ? IrTarget(*label) : IrTarget(*numeric - 1);
+      rebound = true;
+    }
+    if (rebound)
+      append_comment(item, "dark-side shifted indirect target rebound by command identity");
+  }
+  for (MachineItem& item : result.items) {
+    if (item.kind != MachineItemKind::Address)
+      continue;
+    const std::optional<int> target = referenced_physical_address(
+        item, symbolic_index, options.address_space_model);
+    const bool fixed_target =
+        item.formal_opcode.has_value() || std::holds_alternative<int>(item.target);
+    if (!fixed_target || !target.has_value() || *target <= kExplicitReturnPhysical)
+      continue;
+    const std::optional<std::string> label =
+        unique_label_at_address(symbolic_index, *target);
+    item.target = label.has_value()
+                      ? IrTarget(*label)
+                      : IrTarget(*target - 1);
+    item.formal_opcode.reset();
+    append_comment(item,
+                   label.has_value()
+                       ? "dark-side shifted direct target rebound by command-identity label"
+                       : "dark-side shifted direct target rebound by proved numeric identity");
+  }
+
   for (const DarkSideSuffixCall& call : result.proof.calls) {
     MachineItem& operand = result.items.at(call.operand_item_index);
-    const DarkSideSuffixEntry& entry = entries.at(call.entry_label);
-    operand.formal_opcode = entry.formal_opcode;
+    operand.formal_opcode = call.formal_opcode;
     append_comment(operand, "dark-side suffix call; formal=" +
-                                format_formal_address_opcode(entry.formal_opcode) + "->" +
-                                std::to_string(entry.entry_address));
+                                format_formal_address_opcode(call.formal_opcode) + "->" +
+                                std::to_string(call.entry_address));
   }
 
   const ArtifactIndex before_erasure = index_artifact(result.items);

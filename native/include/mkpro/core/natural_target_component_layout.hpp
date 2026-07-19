@@ -6,6 +6,7 @@
 #include "mkpro/core/result.hpp"
 
 #include <cstddef>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -28,6 +29,13 @@ struct NaturalTargetRequiredSelectorTarget {
   std::string register_name;
 
   bool operator==(const NaturalTargetRequiredSelectorTarget&) const = default;
+};
+
+struct NaturalTargetRequiredAbsoluteTarget {
+  std::size_t target_item = 0;
+  int target_address = -1;
+
+  bool operator==(const NaturalTargetRequiredAbsoluteTarget&) const = default;
 };
 
 struct NaturalTargetComponentLayoutOptions {
@@ -57,6 +65,17 @@ struct NaturalTargetComponentLayoutOptions {
   // that target exists. This is a zero-flow layout anchor, not a saving by
   // itself, and is accepted only as part of a separately profitable layout.
   std::vector<NaturalTargetRequiredSelectorTarget> required_selector_targets;
+  // A larger atomic layout transaction may require an executable command
+  // identity at one exact physical address before applying a separately
+  // proved size-reducing machine rewrite. This mode never claims savings on
+  // its own: it is admitted only when explicitly enabled, preserves every
+  // target/preload identity, and keeps the executable cell count unchanged.
+  std::vector<NaturalTargetRequiredAbsoluteTarget> required_absolute_targets;
+  bool allow_size_neutral_absolute_layout = false;
+  // Atomic callers that will apply a separate proved size-reducing rewrite
+  // may request only the neutral geometric solution. This skips unrelated
+  // natural-flow anchor combinations that the caller could not accept.
+  bool require_size_neutral_absolute_layout = false;
 };
 
 struct NaturalTargetFlowRewrite {
@@ -119,6 +138,9 @@ struct NaturalTargetComponentLayoutPlan {
   bool bounded_targets_proved = false;
   bool size_neutral_bounded_layout = false;
   bool size_neutral_flow_rebind = false;
+  int absolute_targets = 0;
+  bool absolute_targets_proved = false;
+  bool size_neutral_absolute_layout = false;
   std::vector<NaturalTargetFlowRewrite> flows;
   std::vector<NaturalTargetPreloadRewrite> preloads;
   std::vector<NaturalTargetRuntimeSelectorProof> runtime_selectors;
@@ -134,11 +156,42 @@ struct NaturalTargetComponentLayoutResult {
   int removed_cells = 0;
 };
 
+// Proof and preload rewrite for removing one executable cell while preserving
+// every existing indirect-flow command identity. Targets after the removed
+// cell move back by one; selectors are changed only when their register is
+// stable, unwritten, and either address-only or carries a proved retunable
+// data projection.
+struct PreloadedIndirectFlowCellErasurePlan {
+  bool proved = false;
+  std::vector<PreloadReport> preloads;
+  std::map<std::size_t, std::vector<int>> original_targets;
+  std::map<std::size_t, std::vector<int>> rebound_targets;
+  std::vector<NaturalTargetPreloadRewrite> preload_rewrites;
+  std::vector<std::string> reasons;
+};
+
 // Recover authoritative label or numeric identities from resolver-generated
 // wrapped formal operands whose targets currently lie beyond the official
 // window. Opaque/raw and super-dark multi-command operands fail closed.
 std::optional<std::vector<MachineItem>> normalize_natural_target_overflow_formals(
     const std::vector<MachineItem>& items,
+    AddressSpaceModel model = AddressSpaceModel::Standard);
+
+// Retarget a compiler-proved natural fractional selector family while keeping
+// every ordinary data recall in the same certified family. Untagged literals,
+// generated setup values, raw-sensitive uses, and stale old targets fail
+// closed.
+std::optional<std::string> rebind_proved_natural_fractional_selector_preload(
+    const std::vector<MachineItem>& items, const PreloadReport& preload,
+    int old_target, int new_target,
+    AddressSpaceModel model = AddressSpaceModel::Standard);
+
+PreloadedIndirectFlowCellErasurePlan
+plan_preloaded_indirect_flow_cell_erasure(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    std::size_t erased_item_index, int erased_address,
     AddressSpaceModel model = AddressSpaceModel::Standard);
 
 // Reorder generic fallthrough-closed machine segments so a direct flow target

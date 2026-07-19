@@ -48672,6 +48672,7 @@ inline_single_use_procedures(std::vector<MachineItem> items) {
 CompileResult compile_source_once(std::string source, const CompileOptions& requested_options,
                                   bool source_has_entered,
                                   bool apply_final_layout_size_rescue = false,
+                                  bool apply_atomic_absolute_dark_rescue = false,
                                   std::string* final_layout_input_fingerprint = nullptr) {
   if (final_layout_input_fingerprint != nullptr)
     final_layout_input_fingerprint->clear();
@@ -49222,6 +49223,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   SingleUseProcedureInlineResult single_use_inline =
       inline_single_use_procedures(optimized.items);
   std::vector<MachineItem> post_layout_items = std::move(single_use_inline.items);
+  std::vector<PreloadReport> layout_effective_preloads = optimized.preloads;
   std::vector<PreloadReport> setup_preloads;
   std::vector<PreloadReport> post_layout_flow_preloads;
   std::vector<PreloadReport> stop_tail_preloads;
@@ -49419,7 +49421,9 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                     std::to_string(tail_layout.cfg_tail_repeated_chain_candidates) +
                     ", nonterminal=" +
                     std::to_string(tail_layout.cfg_tail_nonterminal_chain_candidates) + "])" +
-                    ", rejected " +
+                    ", duplicated " +
+                    std::to_string(tail_layout.cfg_tail_external_entry_duplications) +
+                    " externally entered tail suffixes, rejected " +
                     std::to_string(tail_layout.cfg_tail_external_entry_rejections) +
                     " by external CFG entries" + nonterminal_labels +
                     external_entry_labels + external_predecessor_labels));
@@ -49671,6 +49675,243 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                                        early_recall_hoist.optimizations.end());
     }
 
+    // Before generic selector overlay turns direct calls into address-bearing
+    // indirect commands, consider an atomic physical-00/F9 layout. Component
+    // placement is size-neutral and source-agnostic; only the independently
+    // proved removal of В/О@48 may make the transaction win.
+    if (apply_final_layout_size_rescue && apply_atomic_absolute_dark_rescue &&
+        core::machine_cell_count(post_layout_items) >
+        program_step_limit_for_options(options)) {
+      struct EarlyDarkLayoutCandidate {
+        std::vector<MachineItem> items;
+        std::vector<PreloadReport> preloads;
+        std::vector<core::passes::AppliedOptimization> optimizations;
+        std::string helper_label;
+      };
+      std::optional<EarlyDarkLayoutCandidate> best_dark_layout;
+      std::vector<std::string> early_dark_rejections;
+      const auto remember_dark_rejection = [&](std::string reason) {
+        if (!options.analysis || reason.empty() ||
+            early_dark_rejections.size() >= 12U ||
+            std::find(early_dark_rejections.begin(), early_dark_rejections.end(),
+                      reason) != early_dark_rejections.end()) {
+          return;
+        }
+        early_dark_rejections.push_back(std::move(reason));
+      };
+      const int initial_cells = core::machine_cell_count(post_layout_items);
+      const AddressSpaceModel model = address_space_model_for_options(options);
+      const std::optional<std::vector<MachineItem>> normalized_dark_input =
+          core::normalize_natural_target_overflow_formals(post_layout_items, model);
+      if (normalized_dark_input.has_value()) {
+        core::PostLayoutControlFlowOptions dark_control_options;
+        dark_control_options.address_space_model = model;
+        dark_control_options.empty_return_target = 1;
+        const core::AuthoritativePostLayoutControlFlow dark_control =
+            core::build_post_layout_control_flow(*normalized_dark_input,
+                                                 dark_control_options);
+
+        const auto consider_dark_layout_input =
+            [&](const std::vector<MachineItem>& layout_input,
+                const std::vector<PreloadReport>& layout_preloads,
+                const core::AuthoritativePostLayoutControlFlow& layout_control,
+                bool used_empty_return_startup) {
+              if (!layout_control.proved)
+                return;
+              const std::vector<core::DarkSideSuffixLayoutCandidate> helpers =
+                  core::find_dark_side_suffix_layout_candidates(layout_input);
+              if (helpers.empty())
+                remember_dark_rejection("no direct-call straight-line helper ending in В/О");
+              const std::optional<std::vector<std::string>> late_bound_decimal_targets =
+                  core::late_bound_decimal_selector_target_labels(layout_input);
+              if (!late_bound_decimal_targets.has_value()) {
+                remember_dark_rejection("malformed late-bound decimal selector marker");
+                return;
+              }
+              for (const core::DarkSideSuffixLayoutCandidate& helper : helpers) {
+                core::NaturalTargetComponentLayoutOptions layout_options;
+                layout_options.address_space_model = model;
+                layout_options.maximum_subset_states = 512;
+                layout_options.maximum_anchors = options.maximum_natural_target_anchors;
+                layout_options.required_absolute_targets.push_back(
+                    core::NaturalTargetRequiredAbsoluteTarget{
+                        .target_item = helper.target_item_index,
+                        .target_address = helper.required_start_address,
+                    });
+                layout_options.allow_size_neutral_absolute_layout = true;
+                layout_options.require_size_neutral_absolute_layout = true;
+                layout_options.required_bounded_target_labels.assign(
+                    late_bound_decimal_targets->begin(),
+                    late_bound_decimal_targets->end());
+                // Every such target after physical 48 moves back one when the
+                // explicit return is removed. Address 100 is therefore the
+                // exact pre-erasure upper bound for a final two-digit charge.
+                layout_options.maximum_bounded_target_address = 100;
+                layout_options.allow_size_neutral_bounded_layout = true;
+                core::NaturalTargetComponentLayoutResult placed =
+                    core::optimize_natural_target_component_layout(
+                        layout_input, layout_preloads, layout_control,
+                        layout_options);
+                if (placed.applied <= 0 || !placed.plan.proved ||
+                    !placed.plan.final_artifact_proved ||
+                    !placed.plan.size_neutral_absolute_layout ||
+                    !placed.plan.absolute_targets_proved ||
+                    core::machine_cell_count(placed.items) !=
+                        core::machine_cell_count(layout_input)) {
+                  const std::string reason =
+                      placed.plan.reasons.empty()
+                          ? "absolute component placement was not proved"
+                          : placed.plan.reasons.front();
+                  remember_dark_rejection(helper.helper_label + ": " + reason);
+                  continue;
+                }
+                std::optional<std::size_t> erased_return_item;
+                int physical_address = 0;
+                for (std::size_t item_index = 0; item_index < placed.items.size(); ++item_index) {
+                  if (placed.items.at(item_index).kind == MachineItemKind::Label)
+                    continue;
+                  if (physical_address == 48) {
+                    erased_return_item = item_index;
+                    break;
+                  }
+                  ++physical_address;
+                }
+                if (!erased_return_item.has_value()) {
+                  remember_dark_rejection(helper.helper_label +
+                                           ": exact physical 48 cell is absent");
+                  continue;
+                }
+                const core::PreloadedIndirectFlowCellErasurePlan selector_rebind =
+                    core::plan_preloaded_indirect_flow_cell_erasure(
+                        placed.items, placed.preloads,
+                        placed.plan.final_control_flow, *erased_return_item, 48,
+                        model);
+                if (!selector_rebind.proved) {
+                  const std::string reason =
+                      selector_rebind.reasons.empty()
+                          ? "indirect selector cell-erasure proof failed"
+                          : selector_rebind.reasons.front();
+                  remember_dark_rejection(helper.helper_label + ": " + reason);
+                  continue;
+                }
+                core::DarkSideSuffixHelperOptions suffix_options;
+                suffix_options.address_space_model = model;
+                suffix_options.proved_indirect_flow_targets =
+                    selector_rebind.original_targets;
+                suffix_options.proved_rebound_indirect_flow_targets =
+                    selector_rebind.rebound_targets;
+                core::DarkSideSuffixHelperResult shortened =
+                    core::rewrite_dark_side_suffix_helper(
+                        placed.items, helper.helper_label, suffix_options);
+                if (shortened.applied <= 0 || !shortened.proof.proved ||
+                    !shortened.proof.final_artifact_proved) {
+                  const std::string reason =
+                      shortened.proof.reasons.empty()
+                          ? "F9 suffix final-artifact proof failed"
+                          : shortened.proof.reasons.front();
+                  remember_dark_rejection(helper.helper_label + ": " + reason);
+                  continue;
+                }
+                const core::LateBoundDecimalSelectorResult bounded_late_targets =
+                    core::bind_late_bound_decimal_selectors(
+                        shortened.items,
+                        core::LateBoundDecimalSelectorOptions{
+                            .minimum_target_address = 0,
+                            .maximum_target_address = 99,
+                        });
+                if (!bounded_late_targets.diagnostics.empty()) {
+                  remember_dark_rejection(
+                      helper.helper_label +
+                      ": final late-bound decimal target is outside 00..99");
+                  continue;
+                }
+                const int shortened_cells =
+                    core::machine_cell_count(shortened.items);
+                if (shortened_cells >= initial_cells ||
+                    (best_dark_layout.has_value() &&
+                     shortened_cells >=
+                         core::machine_cell_count(best_dark_layout->items))) {
+                  continue;
+                }
+                std::vector<core::passes::AppliedOptimization> applied;
+                if (used_empty_return_startup) {
+                  applied.push_back(core::passes::AppliedOptimization{
+                      .name = "empty-return-startup-layout",
+                      .detail =
+                          "Placed a transparent physical-00 return before an exact "
+                          "absolute component layout and rechecked every runtime selector.",
+                  });
+                }
+                applied.push_back(core::passes::AppliedOptimization{
+                    .name = "absolute-component-layout",
+                    .detail =
+                        "Placed one opaque straight-line helper at physical " +
+                        format_address(helper.required_start_address) +
+                        " so its final body command is F9, without changing size or "
+                        "command identity.",
+                });
+                applied.insert(applied.end(), shortened.optimizations.begin(),
+                               shortened.optimizations.end());
+                if (!selector_rebind.preload_rewrites.empty()) {
+                  applied.push_back(core::passes::AppliedOptimization{
+                      .name = "cell-erasure-indirect-selector-rebind",
+                      .detail = "Retargeted " +
+                                std::to_string(selector_rebind.preload_rewrites.size()) +
+                                " proved stable indirect selector preload(s) after removing one "
+                                "machine cell.",
+                  });
+                }
+                best_dark_layout = EarlyDarkLayoutCandidate{
+                    .items = std::move(shortened.items),
+                    .preloads = selector_rebind.preloads,
+                    .optimizations = std::move(applied),
+                    .helper_label = helper.helper_label,
+                };
+              }
+            };
+
+        if (dark_control.proved && !normalized_dark_input->empty() &&
+            normalized_dark_input->front().kind == MachineItemKind::Op &&
+            normalized_dark_input->front().opcode == 0x52) {
+          consider_dark_layout_input(*normalized_dark_input, layout_effective_preloads,
+                                     dark_control, false);
+        }
+        if (dark_control.proved) {
+          for (core::EmptyReturnStartupLayoutResult& startup :
+               core::normalize_empty_return_startup_layouts(
+                   *normalized_dark_input, layout_effective_preloads, dark_control,
+                   core::TerminalCyclicLayoutOptions{
+                       .address_space_model = model})) {
+            if (startup.final_artifact_proved) {
+              consider_dark_layout_input(startup.items, startup.preloads,
+                                         startup.control_flow, true);
+            }
+          }
+        }
+      }
+      if (best_dark_layout.has_value()) {
+        post_layout_items = std::move(best_dark_layout->items);
+        layout_effective_preloads = std::move(best_dark_layout->preloads);
+        for (const PreloadReport& preload : layout_effective_preloads)
+          post_layout_preload_overrides[preload.register_name] = preload.value;
+        post_layout_optimizations.insert(
+            post_layout_optimizations.end(),
+            best_dark_layout->optimizations.begin(),
+            best_dark_layout->optimizations.end());
+      } else if (options.analysis) {
+        if (!normalized_dark_input.has_value())
+          remember_dark_rejection("overflow formal normalization failed");
+        std::string detail =
+            "No atomic empty-return/absolute-F9 helper layout reduced the artifact";
+        for (std::size_t index = 0; index < early_dark_rejections.size(); ++index)
+          detail += (index == 0U ? ": " : " | ") + early_dark_rejections.at(index);
+        post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+            .name = "absolute-dark-side-layout-rejected",
+            .detail = std::move(detail),
+        });
+      }
+    }
+
     const core::PostLayoutIndirectFlowResult post_layout_flow =
         core::optimize_post_layout_super_dark_address_overlay(
             post_layout_items, pass_options, indirect_flow_rescue_above);
@@ -49680,7 +49921,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                                      post_layout_flow.optimizations.begin(),
                                      post_layout_flow.optimizations.end());
 
-    std::vector<PreloadReport> r0_existing_preloads = optimized.preloads;
+    std::vector<PreloadReport> r0_existing_preloads = layout_effective_preloads;
     r0_existing_preloads.insert(r0_existing_preloads.end(), post_layout_flow.preloads.begin(),
                                 post_layout_flow.preloads.end());
     const core::PostLayoutIndirectFlowResult post_layout_r0_flow =
@@ -49692,6 +49933,12 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                                      post_layout_r0_flow.optimizations.end());
 
     setup_preloads = build_preload_reports(context, *ast.v2, post_layout_items);
+    for (PreloadReport& setup_preload : setup_preloads) {
+      const auto rebound =
+          post_layout_preload_overrides.find(setup_preload.register_name);
+      if (rebound != post_layout_preload_overrides.end())
+        setup_preload.value = rebound->second;
+    }
     const std::set<std::string> borrowed_entry_selector_registers =
         borrowed_entry_selector_registers_for(post_layout_items);
     for (PreloadReport& setup_preload : setup_preloads) {
@@ -49908,7 +50155,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
 
     append_field(machine_items_to_json(post_layout_items));
     append_preloads(setup_preloads);
-    append_preloads(optimized.preloads);
+    append_preloads(layout_effective_preloads);
     append_preloads(stop_tail_preloads);
     append_preloads(post_layout_flow_preloads);
     append_field(final_layout_effective_preloads.has_value() ? "1" : "0");
@@ -49967,7 +50214,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
         if (selected)
           add_unique(preload);
       }
-      for (const PreloadReport& preload : optimized.preloads)
+      for (const PreloadReport& preload : layout_effective_preloads)
         add_unique(preload);
       for (const PreloadReport& preload : stop_tail_preloads)
         add_unique(preload);
@@ -50061,9 +50308,11 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
         };
         std::optional<core::NaturalTargetComponentLayoutResult> chosen_layout;
         std::optional<core::HelperSemanticAliasProof> chosen_alias;
+        bool chosen_empty_return_startup = false;
         std::vector<std::string> natural_layout_search_rejections;
         const auto consider_layout = [&](core::NaturalTargetComponentLayoutResult candidate,
-                                         std::optional<core::HelperSemanticAliasProof> alias) {
+                                         std::optional<core::HelperSemanticAliasProof> alias,
+                                         bool empty_return_startup = false) {
           if (options.analysis) {
             for (const std::string& reason : candidate.plan.reasons) {
               if (natural_layout_search_rejections.size() >= 512U)
@@ -50090,6 +50339,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                                                 core::machine_cell_count(chosen_layout->items)) {
             chosen_layout = std::move(candidate);
             chosen_alias = std::move(alias);
+            chosen_empty_return_startup = empty_return_startup;
           }
         };
 
@@ -50098,6 +50348,20 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                 *natural_layout_input, effective_preloads, control_flow,
                 natural_options);
         consider_layout(std::move(ordinary_natural_layout), std::nullopt);
+
+        for (core::EmptyReturnStartupLayoutResult& startup :
+             core::normalize_empty_return_startup_layouts(
+                 *natural_layout_input, effective_preloads, control_flow,
+                 core::TerminalCyclicLayoutOptions{
+                     .address_space_model =
+                         address_space_model_for_options(options)})) {
+          if (!startup.final_artifact_proved)
+            continue;
+          consider_layout(core::optimize_natural_target_component_layout(
+                              startup.items, startup.preloads,
+                              startup.control_flow, natural_options),
+                          std::nullopt, true);
+        }
 
         const auto refreshed_contracts =
             refresh_helper_semantic_alias_contracts(*natural_layout_input,
@@ -50160,6 +50424,15 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                           std::to_string(chosen_alias->removed_body_cells) +
                           "-cell unary-X helper before atomic downstream preload/layout "
                           "rebinding and final-artifact proof.",
+            });
+          }
+          if (chosen_empty_return_startup) {
+            post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+                .name = "empty-return-startup-layout",
+                .detail =
+                    "Placed a transparent physical-00 return before generic component "
+                    "layout, retargeting only compiler-proved fractional selector "
+                    "families and rechecking the complete final artifact.",
             });
           }
           std::vector<std::pair<std::string, int>> natural_placements;
@@ -50425,13 +50698,13 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                   .helper_semantic_contracts = &terminal_semantic_contracts});
       if (terminal_layout.applied > 0 && terminal_layout.plan.final_artifact_proved) {
         auto terminal_rebind_options = pass_options;
-        for (const PreloadReport& preload : terminal_layout_preloads)
+        for (const PreloadReport& preload : terminal_layout.preloads)
           terminal_rebind_options.preloaded_constant_registers[preload.register_name] =
               preload.value;
         const core::PostLayoutIndirectFlowResult rebound_flow =
             core::optimize_post_layout_indirect_flow(terminal_layout.items,
                                                      terminal_rebind_options, 0);
-        std::vector<PreloadReport> rebound_preloads = terminal_layout_preloads;
+        std::vector<PreloadReport> rebound_preloads = terminal_layout.preloads;
         for (const PreloadReport& preload : rebound_flow.preloads) {
           const auto existing = std::find_if(
               rebound_preloads.begin(), rebound_preloads.end(),
@@ -50487,10 +50760,10 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
             core::machine_cell_count(rebound_flow.items) <
                 core::machine_cell_count(post_layout_items)) {
           post_layout_items = rebound_flow.items;
-          post_layout_flow_preloads = rebound_flow.preloads;
-          final_layout_effective_preloads = rebound_flow.preloads;
+          post_layout_flow_preloads = rebound_preloads;
+          final_layout_effective_preloads = rebound_preloads;
           std::map<std::string, std::string> rebound_by_register;
-          for (const PreloadReport& preload : rebound_flow.preloads)
+          for (const PreloadReport& preload : rebound_preloads)
             rebound_by_register[preload.register_name] = preload.value;
           const auto apply_rebound_preloads = [&](std::vector<PreloadReport>& preloads) {
             for (PreloadReport& preload : preloads) {
@@ -64944,7 +65217,8 @@ CompileResult compile_source_for_optimizer_profile(
   if (has_explicit_lowering_variant(options)) {
     CompileResult result =
         compile_source_once(source, options, source_has_entered,
-                            /*apply_final_layout_size_rescue=*/true);
+                            /*apply_final_layout_size_rescue=*/true,
+                            /*apply_atomic_absolute_dark_rescue=*/true);
     write_compile_result_cache(source, options, result);
     return result;
   }
@@ -64962,12 +65236,14 @@ CompileResult compile_source_for_optimizer_profile(
     CompileResult result =
         compile_source_once(source, compile_options, source_has_entered,
                             /*apply_final_layout_size_rescue=*/false,
+                            /*apply_atomic_absolute_dark_rescue=*/false,
                             &final_layout_input_fingerprint);
     if (!result.implemented && can_retry_lowering_attempt_in_analysis(result, compile_options)) {
       CompileOptions analysis_options = compile_options;
       analysis_options.analysis = true;
       result = compile_source_once(source, analysis_options, source_has_entered,
                                    /*apply_final_layout_size_rescue=*/false,
+                                   /*apply_atomic_absolute_dark_rescue=*/false,
                                    &final_layout_input_fingerprint);
     }
     if (trace_candidates) {

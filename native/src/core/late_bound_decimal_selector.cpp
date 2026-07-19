@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <map>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -76,6 +77,24 @@ std::string make_late_bound_decimal_selector_role(LateBoundDecimalSelectorPart p
   const std::string_view prefix =
       part == LateBoundDecimalSelectorPart::High ? kHighRolePrefix : kLowRolePrefix;
   return std::string(prefix) + std::string(target_label);
+}
+
+std::optional<std::vector<std::string>>
+late_bound_decimal_selector_target_labels(const std::vector<MachineItem>& items) {
+  std::set<std::string> labels;
+  for (const MachineItem& item : items) {
+    for (const std::string& role : item.roles) {
+      bool recognized = false;
+      const std::optional<std::pair<LateBoundDecimalSelectorPart, std::string>> marker =
+          parse_marker_role(role, recognized);
+      if (!recognized)
+        continue;
+      if (!marker.has_value())
+        return std::nullopt;
+      labels.insert(marker->second);
+    }
+  }
+  return std::vector<std::string>(labels.begin(), labels.end());
 }
 
 LateBoundDecimalSelectorResult

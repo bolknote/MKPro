@@ -49,6 +49,13 @@ struct RuntimeCallPlan {
   std::string register_name;
   std::set<int> indices;
   int insert_index = 0;
+  bool reuses_phase_selector = false;
+};
+
+struct RuntimeSelectorLiveRange {
+  int first = 0;
+  int last = 0;
+  bool isolated_leaf_phase = false;
 };
 
 IrMeta clone_meta(IrMeta meta, const std::string& comment) {
@@ -395,6 +402,67 @@ bool can_borrow_register_for_runtime_selector(const std::vector<IrOp>& ops,
   return true;
 }
 
+std::optional<int> procedure_end_index(const std::vector<IrOp>& ops, int target_index) {
+  for (int index = target_index; index < static_cast<int>(ops.size()); ++index) {
+    const IrOp& op = ops.at(static_cast<std::size_t>(index));
+    if (op.procedure_boundary == "end")
+      return index;
+    if (index > target_index && op.procedure_boundary == "start")
+      return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+bool runtime_call_target_is_leaf(const std::vector<IrOp>& ops, int target_index) {
+  const std::optional<int> boundary_end = procedure_end_index(ops, target_index);
+  for (int index = target_index; index < static_cast<int>(ops.size()); ++index) {
+    const IrOp& op = ops.at(static_cast<std::size_t>(index));
+    if (op.kind == IrKind::Call || op.kind == IrKind::IndirectCall)
+      return false;
+    if (boundary_end.has_value()) {
+      if (index >= *boundary_end)
+        return true;
+      continue;
+    }
+    if (op.kind == IrKind::Return)
+      return true;
+    if (index > target_index && op.procedure_boundary == "start")
+      return false;
+  }
+  return false;
+}
+
+bool runtime_call_phase_isolated(
+    const std::vector<IrOp>& ops, const std::vector<int>& addresses,
+    const std::map<std::string, int>& labels, const RuntimeCallTarget& candidate,
+    int target_index) {
+  if (candidate.indices.empty() || !runtime_call_target_is_leaf(ops, target_index))
+    return false;
+  const std::set<int> selected(candidate.indices.begin(), candidate.indices.end());
+  const int last_index = candidate.indices.back();
+  for (int index = candidate.insert_index; index <= last_index; ++index) {
+    const IrOp& op = ops.at(static_cast<std::size_t>(index));
+    if (selected.contains(index))
+      continue;
+    if (op.kind == IrKind::IndirectCall)
+      return false;
+    if (op.kind != IrKind::Call)
+      continue;
+    const std::optional<int> target = target_address(op.target, labels);
+    if (!target.has_value())
+      return false;
+    const std::optional<int> called_index = first_op_index_at_address(ops, addresses, *target);
+    if (!called_index.has_value() || !runtime_call_target_is_leaf(ops, *called_index))
+      return false;
+  }
+  return true;
+}
+
+bool runtime_selector_ranges_overlap(const RuntimeSelectorLiveRange& left,
+                                     const RuntimeSelectorLiveRange& right) {
+  return left.first <= right.last && right.first <= left.last;
+}
+
 std::vector<RuntimeCallPlan> runtime_indirect_call_plans(
     const std::vector<IrOp>& ops, bool break_even, const std::set<std::string>& reserved,
     int official_last) {
@@ -439,7 +507,7 @@ std::vector<RuntimeCallPlan> runtime_indirect_call_plans(
   });
 
   std::vector<RuntimeCallPlan> plans;
-  std::set<std::string> used_registers;
+  std::map<std::string, std::vector<RuntimeSelectorLiveRange>> assigned_ranges;
   for (const RuntimeCallTarget& candidate : sorted) {
     const int preload_cost = static_cast<int>(std::to_string(candidate.target).size()) + 1;
     const int margin = break_even ? 0 : 2;
@@ -450,24 +518,50 @@ std::vector<RuntimeCallPlan> runtime_indirect_call_plans(
         first_op_index_at_address(ops, addresses, candidate.target);
     if (!target_index.has_value())
       continue;
-    auto register_it = std::find_if(kStableRegisters.begin(), kStableRegisters.end(),
-                                    [&](std::string_view item) {
-                                      const std::string candidate_register(item);
-                                      return !used_registers.contains(candidate_register) &&
-                                             !reserved.contains(candidate_register) &&
-                                             can_borrow_register_for_runtime_selector(
-                                                 ops, candidate_register, *target_index,
-                                                 candidate.insert_index, selected);
-                                    });
+    const RuntimeSelectorLiveRange live_range{
+        .first = candidate.insert_index,
+        .last = candidate.indices.back(),
+        .isolated_leaf_phase = runtime_call_phase_isolated(
+            ops, addresses, labels, candidate, *target_index),
+    };
+    const auto register_available = [&](std::string_view item, bool allow_phase_reuse) {
+      const std::string candidate_register(item);
+      if (reserved.contains(candidate_register) ||
+          !can_borrow_register_for_runtime_selector(
+              ops, candidate_register, *target_index, candidate.insert_index, selected)) {
+        return false;
+      }
+      const auto assigned = assigned_ranges.find(candidate_register);
+      if (assigned == assigned_ranges.end() || assigned->second.empty())
+        return true;
+      if (!allow_phase_reuse || !live_range.isolated_leaf_phase)
+        return false;
+      return std::all_of(
+          assigned->second.begin(), assigned->second.end(),
+          [&](const RuntimeSelectorLiveRange& existing) {
+            return existing.isolated_leaf_phase &&
+                   !runtime_selector_ranges_overlap(existing, live_range);
+          });
+    };
+    auto register_it = std::find_if(
+        kStableRegisters.begin(), kStableRegisters.end(),
+        [&](std::string_view item) { return register_available(item, false); });
+    if (register_it == kStableRegisters.end()) {
+      register_it = std::find_if(
+          kStableRegisters.begin(), kStableRegisters.end(),
+          [&](std::string_view item) { return register_available(item, true); });
+    }
     if (register_it == kStableRegisters.end())
       continue;
     const std::string register_name(*register_it);
-    used_registers.insert(register_name);
+    const bool reuses_phase_selector = !assigned_ranges[register_name].empty();
+    assigned_ranges[register_name].push_back(live_range);
     plans.push_back(RuntimeCallPlan{
         .target = candidate.target,
         .register_name = register_name,
         .indices = selected,
         .insert_index = candidate.insert_index,
+        .reuses_phase_selector = reuses_phase_selector,
     });
   }
   return plans;
@@ -507,6 +601,10 @@ PassResult runtime_indirect_call_flow(const std::vector<IrOp>& ops, const PassCo
 
   std::vector<IrOp> result;
   int rewritten = 0;
+  const int phase_reuses = static_cast<int>(
+      std::count_if(plans.begin(), plans.end(), [](const RuntimeCallPlan& plan) {
+        return plan.reuses_phase_selector;
+      }));
   for (std::size_t index = 0; index < ops.size(); ++index) {
     const int signed_index = static_cast<int>(index);
     for (const RuntimeCallPlan& plan : by_insert[signed_index]) {
@@ -528,17 +626,25 @@ PassResult runtime_indirect_call_flow(const std::vector<IrOp>& ops, const PassCo
     result.push_back(op);
   }
 
+  std::vector<AppliedOptimization> optimizations = {
+      AppliedOptimization{
+          .name = "runtime-indirect-call-flow",
+          .detail = "Borrowed dead stable register(s) for " +
+                    std::to_string(rewritten) + " repeated direct helper call(s).",
+      },
+  };
+  if (phase_reuses > 0) {
+    optimizations.push_back(AppliedOptimization{
+        .name = "runtime-indirect-call-phase-selector-reuse",
+        .detail = "Recharged a dead stable selector across " +
+                  std::to_string(phase_reuses) +
+                  " additional non-overlapping leaf-call phase(s).",
+    });
+  }
   return PassResult{
       .ops = std::move(result),
       .applied = rewritten,
-      .optimizations =
-          {
-              AppliedOptimization{
-                  .name = "runtime-indirect-call-flow",
-                  .detail = "Borrowed dead stable register(s) for " +
-                            std::to_string(rewritten) + " repeated direct helper call(s).",
-              },
-          },
+      .optimizations = std::move(optimizations),
   };
 }
 

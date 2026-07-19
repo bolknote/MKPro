@@ -2,6 +2,7 @@
 
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/opcodes.hpp"
+#include "mkpro/core/passes/helpers.hpp"
 
 #include <algorithm>
 #include <array>
@@ -553,18 +554,24 @@ std::vector<Segment> make_segments(std::vector<Cell> cells) {
 bool apply_transparent_segment_splits(
     std::vector<Segment>& segments,
     const std::vector<NaturalTargetAnchorCandidate>& anchors,
-  std::size_t& next_synthetic_origin,
-  std::vector<TransparentSplitBridge>& bridges) {
+    std::size_t& next_synthetic_origin,
+    std::vector<TransparentSplitBridge>& bridges,
+    std::string* failure_reason = nullptr) {
+  const auto fail = [&](std::string reason) {
+    if (failure_reason != nullptr)
+      *failure_reason = std::move(reason);
+    return false;
+  };
   for (const NaturalTargetAnchorCandidate& anchor : anchors) {
     if (anchor.split_prefix_cells <= 0)
       continue;
     const std::optional<std::pair<std::size_t, int>> location =
         locate_origin(segments, anchor.target_origin);
     if (!location.has_value())
-      return false;
+      return fail("split target origin is absent");
     const std::size_t segment_index = location->first;
     if (location->second != 0)
-      return false;
+      return fail("split target is not at the start of its fallthrough segment");
     const std::size_t prefix_cells =
         static_cast<std::size_t>(anchor.split_prefix_cells);
     for (const NaturalTargetAnchorCandidate& other : anchors) {
@@ -572,14 +579,23 @@ bool apply_transparent_segment_splits(
         continue;
       const auto other_location = locate_origin(segments, other.target_origin);
       if (other_location.has_value() && other_location->first == segment_index)
-        return false;
+        return fail("another natural target shares the split segment");
     }
+    const Segment& segment = segments.at(segment_index);
+    if (prefix_cells >= segment.cells.size())
+      return fail("split prefix reaches or exceeds the fallthrough segment");
+    if (segment.cells.at(prefix_cells).value.item.kind ==
+        MachineItemKind::Address) {
+      return fail("split boundary would detach an address operand");
+    }
+    if (safe_cut_after(segment.cells, prefix_cells - 1U))
+      return fail("split boundary is already fallthrough-closed");
 
     TransparentSplitBridge bridge;
     if (!split_segment_with_bridge(
             segments, segment_index, prefix_cells, next_synthetic_origin,
             next_synthetic_origin + 1U, bridge)) {
-      return false;
+      return fail("split bridge construction rejected the boundary");
     }
     next_synthetic_origin += 2U;
     bridges.push_back(bridge);
@@ -2474,12 +2490,99 @@ bool indirect_memory_facts_equivalent(
   return rebound == original.indirect_memory_targets;
 }
 
+struct ConvertedFlowEffectProofContext {
+  std::map<TraceState, std::vector<std::pair<TraceState, TraceEdgeKind>>>
+      incoming_edges;
+  std::set<std::size_t> external_entry_commands;
+  std::map<std::size_t, IrOp> raised_command_by_item;
+  std::map<TraceState, passes::X2ValueDataflowState> symbolic_x2_entries;
+};
+
+ConvertedFlowEffectProofContext build_converted_flow_effect_proof_context(
+    const std::vector<MachineItem>& original_items,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const TraceGraph& trace) {
+  ConvertedFlowEffectProofContext result;
+  for (const auto& [source, edges] : trace) {
+    for (const TraceEdge& edge : edges)
+      result.incoming_edges[edge.target].push_back({source, edge.kind});
+  }
+  for (const PostLayoutExternalEntryState& entry : control_flow.external_entries)
+    result.external_entry_commands.insert(entry.entry.item_index);
+
+  const std::vector<IrOp> raised = raise_machine_to_ir(original_items);
+  std::size_t raised_index = 0;
+  for (std::size_t item_index = 0; item_index < original_items.size(); ++item_index) {
+    const MachineItem& item = original_items.at(item_index);
+    if (item.kind != MachineItemKind::Op)
+      continue;
+    while (raised_index < raised.size() && raised.at(raised_index).kind == IrKind::Label)
+      ++raised_index;
+    if (raised_index >= raised.size() || raised.at(raised_index).opcode != item.opcode) {
+      result.raised_command_by_item.clear();
+      return result;
+    }
+    result.raised_command_by_item.emplace(item_index, raised.at(raised_index));
+    ++raised_index;
+  }
+
+  std::deque<TraceState> pending;
+  for (const auto& [state, edges] : trace) {
+    (void)edges;
+    if (!result.external_entry_commands.contains(state.command))
+      continue;
+    result.symbolic_x2_entries.emplace(
+        state, passes::empty_x2_value_dataflow_state(true));
+    pending.push_back(state);
+  }
+  while (!pending.empty()) {
+    const TraceState state = std::move(pending.front());
+    pending.pop_front();
+    const auto input = result.symbolic_x2_entries.find(state);
+    const auto command = result.raised_command_by_item.find(state.command);
+    const auto outgoing = trace.find(state);
+    if (input == result.symbolic_x2_entries.end() ||
+        command == result.raised_command_by_item.end() || outgoing == trace.end()) {
+      continue;
+    }
+    for (const TraceEdge& edge : outgoing->second) {
+      const passes::X2DataflowEdgeKind edge_kind =
+          edge.kind == TraceEdgeKind::Fallthrough
+              ? passes::X2DataflowEdgeKind::Fallthrough
+          : edge.kind == TraceEdgeKind::Taken
+              ? passes::X2DataflowEdgeKind::Jump
+              : passes::X2DataflowEdgeKind::Normal;
+      const std::optional<passes::X2ValueDataflowState> output =
+          passes::transfer_x2_value_state_for_edge(
+              input->second, command->second, edge_kind,
+              passes::X2TransferStateOptions{.track_register_memory = true},
+              static_cast<int>(state.command));
+      if (!output.has_value())
+        continue;
+      const auto existing = result.symbolic_x2_entries.find(edge.target);
+      const passes::X2ValueDataflowState joined =
+          passes::join_x2_value_dataflow_states(
+              existing == result.symbolic_x2_entries.end()
+                  ? std::optional<passes::X2ValueDataflowState>{}
+                  : std::optional<passes::X2ValueDataflowState>{existing->second},
+              *output, true);
+      if (existing != result.symbolic_x2_entries.end() &&
+          passes::same_x2_value_dataflow_state(existing->second, joined)) {
+        continue;
+      }
+      result.symbolic_x2_entries[edge.target] = joined;
+      pending.push_back(edge.target);
+    }
+  }
+  return result;
+}
+
 bool converted_flow_effects_equivalent(
     const std::vector<MachineItem>& original_items,
     const std::vector<NaturalTargetAnchorCandidate>& anchors,
     const std::vector<NaturalTargetFlowRewrite>& flows,
-    const AuthoritativePostLayoutControlFlow& control_flow,
-    const TraceGraph& trace, std::string* failure_reason = nullptr,
+    const TraceGraph& trace, ConvertedFlowEffectProofContext& proof_context,
+    std::string* failure_reason = nullptr,
     std::size_t* failure_command = nullptr,
     int* x2_reconvergence_flows = nullptr) {
   if (x2_reconvergence_flows != nullptr)
@@ -2499,23 +2602,227 @@ bool converted_flow_effects_equivalent(
   for (const NaturalTargetFlowRewrite& flow : flows)
     converted_commands.insert(flow.original_command_item);
 
-  std::map<TraceState, std::vector<std::pair<TraceState, TraceEdgeKind>>> incoming_edges;
-  for (const auto& [source, edges] : trace) {
-    for (const TraceEdge& edge : edges)
-      incoming_edges[edge.target].push_back({source, edge.kind});
-  }
-
   const auto is_external_entry_command = [&](std::size_t command) {
-    return std::any_of(control_flow.external_entries.begin(), control_flow.external_entries.end(),
-                       [&](const PostLayoutExternalEntryState& entry) {
-                         return entry.entry.item_index == command;
-                       });
+    return proof_context.external_entry_commands.contains(command);
   };
   const auto command_preserves_x = [](int opcode) {
     return (opcode >= 0x40 && opcode <= 0x4f) || opcode == 0x51 || opcode == 0x53 ||
            opcode == 0x54 || is_indirect_flow(opcode) ||
            (opcode >= 0xb0 && opcode <= 0xbf);
   };
+
+  const auto& incoming_edges = proof_context.incoming_edges;
+  const auto& raised_command_by_item = proof_context.raised_command_by_item;
+  const auto& symbolic_x2_entries = proof_context.symbolic_x2_entries;
+
+  std::map<std::size_t, int> converted_opcode_by_command;
+  for (const NaturalTargetFlowRewrite& flow : flows) {
+    const auto anchor = std::find_if(
+        anchors.begin(), anchors.end(), [&](const auto& candidate) {
+          return candidate.selector.register_name == flow.selector_register;
+        });
+    const std::optional<int> family =
+        indirect_family_for_direct_flow(flow.original_opcode);
+    if (anchor != anchors.end() && family.has_value()) {
+      converted_opcode_by_command.emplace(
+          flow.original_command_item,
+          *family + anchor->selector.register_index);
+    }
+  }
+
+  const auto symbolic_entry_has_x2_equal_x = [&](std::size_t command) {
+    bool found = false;
+    for (const auto& [state, edges] : trace) {
+      (void)edges;
+      if (state.command != command)
+        continue;
+      found = true;
+      const auto entry = symbolic_x2_entries.find(state);
+      if (entry == symbolic_x2_entries.end())
+        return false;
+      if (entry->second.x.size() != 1U || entry->second.x2.size() != 1U ||
+          *entry->second.x.begin() != *entry->second.x2.begin()) {
+        return false;
+      }
+    }
+    return found;
+  };
+
+  const auto paired_x2_reconverges_after_fallthrough =
+      [&](std::size_t command) {
+        const auto raised_command = raised_command_by_item.find(command);
+        const auto converted_opcode = converted_opcode_by_command.find(command);
+        if (raised_command == raised_command_by_item.end() ||
+            converted_opcode == converted_opcode_by_command.end()) {
+          return false;
+        }
+
+        IrOp indirect_command = raised_command->second;
+        indirect_command.opcode = converted_opcode->second;
+
+        const auto edge_kind = [](TraceEdgeKind kind) {
+          return kind == TraceEdgeKind::Fallthrough
+                     ? passes::X2DataflowEdgeKind::Fallthrough
+                 : kind == TraceEdgeKind::Taken
+                     ? passes::X2DataflowEdgeKind::Jump
+                     : passes::X2DataflowEdgeKind::Normal;
+        };
+        const auto target_starts_with_vp = [&](const TraceState& target) {
+          return target.command < original_items.size() &&
+                 original_items.at(target.command).kind == MachineItemKind::Op &&
+                 original_items.at(target.command).opcode == 0x0c;
+        };
+        const auto transfer = [&](const passes::X2ValueDataflowState& input,
+                                  const IrOp& op, const TraceEdge& edge,
+                                  std::size_t source) {
+          return passes::transfer_x2_value_state_for_edge(
+              input, op, edge_kind(edge.kind),
+              passes::X2TransferStateOptions{
+                  .track_register_memory = true,
+                  .target_starts_with_vp = target_starts_with_vp(edge.target)},
+              static_cast<int>(source));
+        };
+        const auto proved_equal = [&](const passes::X2ValueDataflowState& left,
+                                      const passes::X2ValueDataflowState& right) {
+          return passes::same_x2_value_dataflow_state(left, right) &&
+                 left.x.size() == 1U && left.x2.size() == 1U &&
+                 left.xShape.size() == 1U && left.x2Shape.size() == 1U;
+        };
+        const auto same_except_hidden_x2 =
+            [&](const passes::X2ValueDataflowState& left,
+                const passes::X2ValueDataflowState& right) {
+              passes::X2ValueDataflowState normalized_left =
+                  passes::clone_x2_value_dataflow_state(left);
+              passes::X2ValueDataflowState normalized_right =
+                  passes::clone_x2_value_dataflow_state(right);
+              normalized_left.x2 = {"paired:hidden-x2"};
+              normalized_right.x2 = normalized_left.x2;
+              normalized_left.x2Shape = {"paired:hidden-x2-shape"};
+              normalized_right.x2Shape = normalized_left.x2Shape;
+              return passes::same_x2_value_dataflow_state(
+                  normalized_left, normalized_right);
+        };
+
+        struct PendingPair {
+          TraceState trace_state;
+          passes::X2ValueDataflowState direct_state;
+          passes::X2ValueDataflowState indirect_state;
+        };
+        std::map<TraceState, std::vector<std::pair<passes::X2ValueDataflowState,
+                                                   passes::X2ValueDataflowState>>>
+            visited;
+        std::deque<PendingPair> pending;
+        bool found_fallthrough = false;
+
+        for (const auto& [state, edges] : trace) {
+          if (state.command != command)
+            continue;
+          const auto symbolic_entry = symbolic_x2_entries.find(state);
+          if (symbolic_entry == symbolic_x2_entries.end())
+            return false;
+
+          passes::X2ValueDataflowState input =
+              passes::clone_x2_value_dataflow_state(symbolic_entry->second);
+          const std::string suffix = "@" + std::to_string(command);
+          if (input.x.empty())
+            input.x.insert("paired:x" + suffix);
+          if (input.x2.empty())
+            input.x2.insert("paired:x2" + suffix);
+          if (input.xShape.empty())
+            input.xShape.insert("paired:x-shape" + suffix);
+          if (input.x2Shape.empty())
+            input.x2Shape.insert("paired:x2-shape" + suffix);
+
+          for (const TraceEdge& edge : edges) {
+            if (edge.kind != TraceEdgeKind::Fallthrough)
+              continue;
+            found_fallthrough = true;
+            const auto direct_state =
+                transfer(input, raised_command->second, edge, state.command);
+            const auto indirect_state =
+                transfer(input, indirect_command, edge, state.command);
+            if (!direct_state.has_value() || !indirect_state.has_value())
+              return false;
+            pending.push_back(PendingPair{.trace_state = edge.target,
+                                          .direct_state = *direct_state,
+                                          .indirect_state = *indirect_state});
+          }
+        }
+        if (!found_fallthrough)
+          return false;
+
+        std::size_t explored = 0;
+        while (!pending.empty()) {
+          PendingPair current = std::move(pending.front());
+          pending.pop_front();
+          if (proved_equal(current.direct_state, current.indirect_state))
+            continue;
+          if (!same_except_hidden_x2(current.direct_state,
+                                     current.indirect_state)) {
+            return false;
+          }
+          if (++explored > 512U)
+            return false;
+
+          auto& states_at_command = visited[current.trace_state];
+          const bool repeated = std::any_of(
+              states_at_command.begin(), states_at_command.end(),
+              [&](const auto& previous) {
+                return passes::same_x2_value_dataflow_state(
+                           previous.first, current.direct_state) &&
+                       passes::same_x2_value_dataflow_state(
+                           previous.second, current.indirect_state);
+              });
+          if (repeated)
+            return false;
+          states_at_command.push_back(
+              {current.direct_state, current.indirect_state});
+
+          if (current.trace_state.command >= original_items.size())
+            return false;
+          const MachineItem& item =
+              original_items.at(current.trace_state.command);
+          if (item.kind != MachineItemKind::Op)
+            return false;
+          const auto rewritten_opcode =
+              converted_opcode_by_command.find(current.trace_state.command);
+          const int final_opcode =
+              rewritten_opcode == converted_opcode_by_command.end()
+                  ? item.opcode
+                  : rewritten_opcode->second;
+          const auto next = trace.find(current.trace_state);
+          if (next == trace.end() || next->second.empty())
+            return false;
+          const auto next_command =
+              raised_command_by_item.find(current.trace_state.command);
+          if (next_command == raised_command_by_item.end())
+            return false;
+          IrOp final_command = next_command->second;
+          final_command.opcode = final_opcode;
+          for (const TraceEdge& edge : next->second) {
+            const auto direct_state = transfer(
+                current.direct_state, next_command->second, edge,
+                current.trace_state.command);
+            const auto indirect_state = transfer(
+                current.indirect_state, final_command, edge,
+                current.trace_state.command);
+            if (!direct_state.has_value() || !indirect_state.has_value())
+              return false;
+            if (direct_state->x.empty() || indirect_state->x.empty() ||
+                direct_state->x2.empty() || indirect_state->x2.empty() ||
+                direct_state->xShape.empty() ||
+                indirect_state->xShape.empty() ||
+                direct_state->x2Shape.empty() ||
+                indirect_state->x2Shape.empty()) {
+              return false;
+            }
+            pending.push_back(PendingPair{.trace_state = edge.target,
+                                          .direct_state = *direct_state,
+                                          .indirect_state = *indirect_state});
+          }
+        }
+        return true;
+      };
 
   std::set<TraceState> x2_equal_x_entries;
   bool x2_facts_changed = true;
@@ -2697,12 +3004,20 @@ bool converted_flow_effects_equivalent(
           !same_fallthrough_effect && !equal_at_entry &&
           flows_to_same_target >= 2 &&
           fallthrough_x2_difference_reconverges(flow.original_command_item);
+      const bool value_equal_at_entry =
+          !same_fallthrough_effect && !equal_at_entry && !used_x2_reconvergence &&
+          symbolic_entry_has_x2_equal_x(flow.original_command_item);
+      const bool paired_reconvergence =
+          !same_fallthrough_effect && !equal_at_entry && !used_x2_reconvergence &&
+          !value_equal_at_entry && paired_x2_reconverges_after_fallthrough(
+                                       flow.original_command_item);
       x2_equivalent = direct.conditional_x2_effect.has_value() &&
                       indirect.conditional_x2_effect.has_value() &&
                       direct.conditional_x2_effect->jump ==
                           indirect.conditional_x2_effect->jump &&
                       (same_fallthrough_effect || equal_at_entry ||
-                       used_x2_reconvergence);
+                       used_x2_reconvergence || value_equal_at_entry ||
+                       paired_reconvergence);
     }
     const bool stack_equivalent = direct.stack_effect == indirect.stack_effect;
     const bool address_shape_equivalent =
@@ -2995,6 +3310,7 @@ std::optional<CandidateArtifact> try_candidate(
     const std::vector<NaturalTargetAnchorCandidate>& anchors,
     const std::vector<std::size_t>& bounded_target_origins,
     const TraceGraph& original_trace,
+    ConvertedFlowEffectProofContext& flow_effect_proof_context,
     const std::vector<ExternalIdentity>& original_external,
     std::vector<std::string>* rejection_reasons) {
   const auto reject = [&](std::string reason) -> std::optional<CandidateArtifact> {
@@ -3024,10 +3340,18 @@ std::optional<CandidateArtifact> try_candidate(
     }
     return std::nullopt;
   };
+  const bool has_flow_anchor =
+      std::any_of(anchors.begin(), anchors.end(), [](const auto& anchor) {
+        return anchor.flow_sites > 0;
+      });
   const bool bounded_only =
-      anchors.empty() && options.allow_size_neutral_bounded_layout &&
+      !has_flow_anchor && options.allow_size_neutral_bounded_layout &&
       !bounded_target_origins.empty();
-  if (anchors.empty() && !bounded_only)
+  const bool absolute_only =
+      !has_flow_anchor && options.allow_size_neutral_absolute_layout &&
+      !options.required_absolute_targets.empty();
+  const bool layout_only = bounded_only || absolute_only;
+  if (!has_flow_anchor && !layout_only)
     return reject("candidate has no natural-target anchors");
   std::vector<NaturalTargetFlowRewrite> rewrites;
   std::vector<DisplacedIndirectFlowRewrite> displaced_flows;
@@ -3035,7 +3359,7 @@ std::optional<CandidateArtifact> try_candidate(
   std::set<std::size_t> excluded_direct_commands;
   std::vector<std::string> excluded_direct_failures;
   std::optional<std::vector<Cell>> converted;
-  if (bounded_only) {
+  if (layout_only) {
     converted = make_cells(items);
     if (!converted.has_value())
       return reject("bounded layout input cannot be represented as complete cells");
@@ -3061,7 +3385,8 @@ std::optional<CandidateArtifact> try_candidate(
       std::string failure;
       std::size_t failure_command = std::numeric_limits<std::size_t>::max();
       if (converted_flow_effects_equivalent(
-              items, anchors, rewrites, control_flow, original_trace, &failure,
+              items, anchors, rewrites, original_trace, flow_effect_proof_context,
+              &failure,
               &failure_command)) {
         break;
       }
@@ -3076,9 +3401,11 @@ std::optional<CandidateArtifact> try_candidate(
   std::size_t next_synthetic_origin =
       items.size() + displaced_flows.size() + 2U * trampolines.size();
   std::vector<TransparentSplitBridge> split_bridges;
+  std::string split_failure;
   if (!apply_transparent_segment_splits(segments, anchors, next_synthetic_origin,
-                                        split_bridges)) {
-    return reject("fallthrough segment split could not be proved");
+                                        split_bridges, &split_failure)) {
+    return reject("fallthrough segment split could not be proved: " +
+                  split_failure);
   }
 
   const std::optional<std::size_t> main = main_origin(control_flow);
@@ -3135,8 +3462,19 @@ std::optional<CandidateArtifact> try_candidate(
       placements.push_back(placement);
     }
   }
+  for (const NaturalTargetRequiredAbsoluteTarget& required :
+       options.required_absolute_targets) {
+    const auto target_location = locate_origin(segments, required.target_item);
+    if (!target_location.has_value())
+      return reject("absolute target component identity cannot be located");
+    placements.push_back(NaturalTargetPlacement{
+        .target_segment = target_location->first,
+        .target_offset = target_location->second,
+        .natural_target = required.target_address,
+    });
+  }
   const int maximum_padding =
-      bounded_only
+      layout_only
           ? 0
           : static_cast<int>(rewrites.size()) -
                 static_cast<int>(displaced_flows.size()) -
@@ -3146,9 +3484,9 @@ std::optional<CandidateArtifact> try_candidate(
     return reject("address-selector displacement cannot produce a smaller artifact");
   std::optional<NaturalTargetLayoutVariant> selected_layout;
   int flexible_target = -1;
-  if (bounded_only) {
+  if (layout_only) {
     selected_layout = layout_order_with_optional_split(
-        segments, main_location->first, {}, options.maximum_subset_states,
+        segments, main_location->first, placements, options.maximum_subset_states,
         maximum_padding, next_synthetic_origin, bounded_placements,
         options.maximum_bounded_target_address);
   } else if (flexible_placements.size() == 1U) {
@@ -3274,6 +3612,17 @@ std::optional<CandidateArtifact> try_candidate(
                   });
   if (!bounded_targets_proved)
     return reject("flattened component order missed a bounded target deadline");
+  const bool absolute_targets_proved =
+      std::all_of(options.required_absolute_targets.begin(),
+                  options.required_absolute_targets.end(),
+                  [&](const NaturalTargetRequiredAbsoluteTarget& required) {
+                    const auto target_address =
+                        new_address_by_origin.find(required.target_item);
+                    return target_address != new_address_by_origin.end() &&
+                           target_address->second == required.target_address;
+                  });
+  if (!absolute_targets_proved)
+    return reject("flattened component order missed an absolute target address");
   std::map<std::size_t, int> target_address_by_origin;
   for (const auto& [target_origin, anchor] : anchor_by_target_origin) {
     const std::optional<std::size_t> physical =
@@ -3419,13 +3768,18 @@ std::optional<CandidateArtifact> try_candidate(
   std::string converted_flow_failure;
   int x2_reconvergence_flows = 0;
   const bool converted_flow_effects_proved =
-      bounded_only || converted_flow_effects_equivalent(
-                          items, anchors, plan.flows, control_flow, original_trace,
-                          &converted_flow_failure, nullptr, &x2_reconvergence_flows);
+      layout_only || converted_flow_effects_equivalent(
+                          items, anchors, plan.flows, original_trace,
+                          flow_effect_proof_context, &converted_flow_failure,
+                          nullptr, &x2_reconvergence_flows);
   plan.x2_reconvergence_flows = x2_reconvergence_flows;
   plan.bounded_targets = static_cast<int>(bounded_target_origins.size());
   plan.bounded_targets_proved = bounded_targets_proved;
   plan.size_neutral_bounded_layout = bounded_only;
+  plan.absolute_targets =
+      static_cast<int>(options.required_absolute_targets.size());
+  plan.absolute_targets_proved = absolute_targets_proved;
+  plan.size_neutral_absolute_layout = absolute_only;
   plan.size_neutral_flow_rebind =
       !bounded_only && options.allow_size_neutral_flow_rebind &&
       plan.removed_cells == 0;
@@ -3446,7 +3800,7 @@ std::optional<CandidateArtifact> try_candidate(
       split_bridge_cells(split_bridges) -
       selected_layout->order.padding_cells;
   const bool size_goal_proved =
-      bounded_only ? plan.removed_cells == 0
+      layout_only ? plan.removed_cells == 0
                    : plan.removed_cells > 0 || plan.size_neutral_flow_rebind;
   plan.proved = plan.removed_cells == expected_removed_cells &&
                 size_goal_proved && plan.control_flow_equivalent &&
@@ -3462,8 +3816,8 @@ std::optional<CandidateArtifact> try_candidate(
     if (!bounded_only && plan.removed_cells <= 0 &&
         !plan.size_neutral_flow_rebind)
       reason += ": nonpositive-size-saving";
-    if (bounded_only && plan.removed_cells != 0)
-      reason += ": bounded-layout-size-changed";
+    if (layout_only && plan.removed_cells != 0)
+      reason += ": layout-only-size-changed";
     if (!plan.stack_and_x2_equivalent) {
       reason += ": stack-or-X2";
       if (!trampolines_proved)
@@ -3501,6 +3855,171 @@ bool better_candidate(const CandidateArtifact& left, const CandidateArtifact& ri
 }
 
 } // namespace
+
+std::optional<std::string> rebind_proved_natural_fractional_selector_preload(
+    const std::vector<MachineItem>& items, const PreloadReport& preload,
+    int old_target, int new_target, AddressSpaceModel model) {
+  if (!is_literal_runtime_preload(preload) ||
+      !preload.retunable_natural_fractional_prefix.has_value()) {
+    return std::nullopt;
+  }
+  int register_index_value = -1;
+  try {
+    register_index_value = register_index(register_from_text(preload.register_name));
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+  const std::optional<std::string> family =
+      proved_natural_fractional_selector_family(
+          items, register_index_value, preload.value,
+          *preload.retunable_natural_fractional_prefix);
+  if (!family.has_value() ||
+      !preload_value_targets(preload.register_name, preload.value, old_target, model)) {
+    return std::nullopt;
+  }
+  const std::optional<std::string> rebound =
+      natural_fractional_selector_family_value(*family, new_target);
+  if (!rebound.has_value() ||
+      !preload_value_targets(preload.register_name, *rebound, new_target, model)) {
+    return std::nullopt;
+  }
+  return rebound;
+}
+
+PreloadedIndirectFlowCellErasurePlan
+plan_preloaded_indirect_flow_cell_erasure(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    std::size_t erased_item_index, int erased_address,
+    AddressSpaceModel model) {
+  PreloadedIndirectFlowCellErasurePlan result;
+  result.preloads = preloads;
+  const auto reject = [&](std::string reason) {
+    result.reasons.push_back(std::move(reason));
+    return result;
+  };
+  if (!control_flow.proved)
+    return reject("cell-erasure selector proof requires authoritative control flow");
+  if (erased_item_index >= items.size() ||
+      items.at(erased_item_index).kind == MachineItemKind::Label) {
+    return reject("cell-erasure selector proof has no executable erased item");
+  }
+  int address = 0;
+  for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
+    if (item_index == erased_item_index && address != erased_address)
+      return reject("erased item does not occupy the claimed physical address");
+    if (items.at(item_index).kind != MachineItemKind::Label)
+      ++address;
+  }
+
+  bool unique_preloads = false;
+  const std::map<std::string, std::size_t> preload_by_register =
+      preload_index(result.preloads, unique_preloads);
+  if (!unique_preloads)
+    return reject("cell-erasure selector preloads are not unique by register");
+
+  struct RequiredRebind {
+    int old_target = -1;
+    int new_target = -1;
+  };
+  std::map<int, RequiredRebind> required_by_register;
+  for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
+    const MachineItem& item = items.at(item_index);
+    if (item.kind != MachineItemKind::Op || !is_indirect_flow(item.opcode))
+      continue;
+    const auto targets = control_flow.indirect_flow_targets.find(item_index);
+    if (targets == control_flow.indirect_flow_targets.end() ||
+        targets->second.empty()) {
+      return reject("an indirect command has no typed target before cell erasure");
+    }
+    std::vector<int> original_addresses;
+    std::vector<int> rebound_addresses;
+    bool target_moves = false;
+    for (const PostLayoutCommandIdentity& target : targets->second) {
+      if (target.item_index == erased_item_index || target.address == erased_address)
+        return reject("an indirect command targets the erased cell");
+      original_addresses.push_back(target.address);
+      rebound_addresses.push_back(target.address > erased_address
+                                       ? target.address - 1
+                                       : target.address);
+      target_moves = target_moves || target.address > erased_address;
+    }
+    result.original_targets[item_index] = std::move(original_addresses);
+    result.rebound_targets[item_index] = std::move(rebound_addresses);
+    if (!target_moves)
+      continue;
+    // Late-bound decimal consumers carry exact target identities, while their
+    // phase-local selector charges are materialized only after final layout.
+    // Moving all identities here is therefore sufficient; the existing final
+    // binder will derive each delivered decimal value from the new address.
+    if (is_late_bound_selector_consumer(item))
+      continue;
+    if (targets->second.size() != 1U) {
+      std::string detail = "a moving indirect command at item " +
+                           std::to_string(item_index) + " through R" +
+                           register_name(encoded_register(item.opcode)) +
+                           " has typed targets";
+      for (const PostLayoutCommandIdentity& target : targets->second)
+        detail += " " + std::to_string(target.address);
+      return reject(std::move(detail));
+    }
+    const PostLayoutCommandIdentity& target = targets->second.front();
+    const int rebound_address = target.address - 1;
+
+    const int reg = encoded_register(item.opcode);
+    const RequiredRebind required{target.address, rebound_address};
+    const auto [existing, inserted] = required_by_register.emplace(reg, required);
+    if (!inserted && (existing->second.old_target != required.old_target ||
+                      existing->second.new_target != required.new_target)) {
+      return reject("one stable selector register would require multiple targets after erasure");
+    }
+  }
+
+  for (const auto& [reg, required] : required_by_register) {
+    const std::string name = register_name(reg);
+    if (name.empty() || indirect_selector_mutation(name) !=
+                            IndirectSelectorMutation::Stable) {
+      return reject("cell-erasure target uses a mutating indirect selector");
+    }
+    if (register_is_written(items, control_flow, reg))
+      return reject("cell-erasure selector register is written at runtime");
+    const auto preload = preload_by_register.find(name);
+    if (preload == preload_by_register.end() ||
+        !is_literal_runtime_preload(result.preloads.at(preload->second))) {
+      return reject("cell-erasure selector has no literal runtime preload");
+    }
+    PreloadReport& report = result.preloads.at(preload->second);
+    const std::string old_value = report.value;
+    if (!preload_value_targets(name, old_value, required.old_target, model))
+      return reject("cell-erasure selector preload does not decode to its typed target");
+    if (required.old_target == required.new_target)
+      continue;
+
+    std::optional<std::string> rebound;
+    if (!register_has_nonflow_use(items, reg)) {
+      const std::string address_value = std::to_string(required.new_target);
+      if (preload_value_targets(name, address_value, required.new_target, model))
+        rebound = address_value;
+    } else {
+      rebound = rebind_proved_natural_fractional_selector_preload(
+          items, report, required.old_target, required.new_target, model);
+    }
+    if (!rebound.has_value()) {
+      return reject("cell-erasure selector cannot preserve its non-flow value while retargeting");
+    }
+    report.value = *rebound;
+    result.preload_rewrites.push_back(NaturalTargetPreloadRewrite{
+        .register_name = name,
+        .old_value = old_value,
+        .new_value = *rebound,
+        .fractional_projection_only = report.retunable_natural_fractional_prefix.has_value(),
+    });
+  }
+
+  result.proved = true;
+  return result;
+}
 
 std::optional<std::vector<MachineItem>> normalize_natural_target_overflow_formals(
     const std::vector<MachineItem>& items, AddressSpaceModel model) {
@@ -3555,6 +4074,13 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     add_reason(result.plan, "proof search cap is not positive");
     return result;
   }
+  if (options.require_size_neutral_absolute_layout &&
+      (!options.allow_size_neutral_absolute_layout ||
+       options.required_absolute_targets.empty())) {
+    add_reason(result.plan,
+               "required neutral absolute layout has no enabled absolute target");
+    return result;
+  }
   const ArtifactIndex index = index_artifact(logical_items);
   std::vector<std::size_t> bounded_target_origins;
   if (!options.required_bounded_target_labels.empty()) {
@@ -3595,7 +4121,22 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   }
   const std::vector<DirectFlowSite> flows =
       shortenable_direct_flows(*references, logical_items);
-  if (flows.empty() && bounded_target_origins.empty()) {
+  std::set<std::size_t> absolute_target_items;
+  for (const NaturalTargetRequiredAbsoluteTarget& required :
+       options.required_absolute_targets) {
+    if (required.target_item >= logical_items.size() ||
+        logical_items.at(required.target_item).kind != MachineItemKind::Op ||
+        required.target_address < 0 ||
+        required.target_address >
+            official_program_last_address(options.address_space_model) ||
+        !absolute_target_items.insert(required.target_item).second) {
+      add_reason(result.plan,
+                 "required absolute targets are invalid or duplicated");
+      return result;
+    }
+  }
+  if (flows.empty() && bounded_target_origins.empty() &&
+      options.required_absolute_targets.empty()) {
     add_reason(result.plan, "artifact contains no direct flow to shorten");
     return result;
   }
@@ -3643,6 +4184,9 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     add_reason(result.plan, "input identity trace or external-entry ledger is incomplete");
     return result;
   }
+  ConvertedFlowEffectProofContext flow_effect_proof_context =
+      build_converted_flow_effect_proof_context(logical_items, *logical_flow,
+                                                *original_trace);
 
   std::vector<SelectorCandidate> selectors = selector_candidates(
       logical_items, preloads, *logical_flow, options);
@@ -3900,7 +4444,8 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
 
   std::size_t expanded_states = 0;
   std::size_t searched_combinations = 0;
-  while (!pending.empty() && searched_combinations < maximum_combinations &&
+  while (!options.require_size_neutral_absolute_layout && !pending.empty() &&
+         searched_combinations < maximum_combinations &&
          expanded_states < maximum_expanded_states) {
     CombinationSearchState state = pending.top();
     pending.pop();
@@ -3920,7 +4465,8 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
         pending.push(std::move(next));
     }
   }
-  const bool combination_search_capped = !pending.empty();
+  const bool combination_search_capped =
+      !options.require_size_neutral_absolute_layout && !pending.empty();
   if (combination_search_capped)
     add_reason(result.plan, "best-first multi-anchor search reached its proof-search cap");
 
@@ -4024,7 +4570,8 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
         logical_items, preloads, *logical_flow, options, *references, flows,
         *complete_trial,
         bounded_target_origins,
-        *original_trace, *original_external, &result.plan.reasons);
+        *original_trace, flow_effect_proof_context, *original_external,
+        &result.plan.reasons);
     const bool required_flows_proved =
         candidate.has_value() &&
         std::all_of(required_selector_by_flow.begin(),
@@ -4045,6 +4592,8 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     }
   };
   for (const auto& anchors : combinations) {
+    if (options.require_size_neutral_absolute_layout)
+      break;
     if (best.has_value() && score(anchors) < best->plan.removed_cells)
       break;
     consider_trial(anchors, false);
@@ -4097,8 +4646,11 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   // A bounded-only layout never removes cells, so every proved natural-target
   // layout ranks ahead of it.  Keep this potentially exponential permutation
   // search as a true fallback instead of paying for a result that cannot win.
-  if (!best.has_value() && options.allow_size_neutral_bounded_layout &&
-      !bounded_target_origins.empty()) {
+  if (!best.has_value() &&
+      ((options.allow_size_neutral_bounded_layout &&
+        !bounded_target_origins.empty()) ||
+       (options.allow_size_neutral_absolute_layout &&
+        !options.required_absolute_targets.empty()))) {
     consider_trial({}, false);
   }
   if (transparent_jump_search_capped)
@@ -4117,7 +4669,9 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
       break;
     add_reason(result.plan, std::move(reason));
   }
-  result.applied = result.plan.size_neutral_bounded_layout
+  result.applied =
+      (result.plan.size_neutral_bounded_layout ||
+       result.plan.size_neutral_absolute_layout)
                        ? std::max(1, result.plan.moved_segments)
                        : static_cast<int>(result.plan.flows.size());
   result.removed_cells = result.plan.removed_cells;

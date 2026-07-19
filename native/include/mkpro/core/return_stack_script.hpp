@@ -92,6 +92,7 @@ struct ReturnStackIrTailLayoutSearch {
   int cfg_tail_repeated_chain_candidates = 0;
   int cfg_tail_nonterminal_chain_candidates = 0;
   std::vector<std::string> cfg_tail_nonterminal_break_labels;
+  int cfg_tail_external_entry_duplications = 0;
   int cfg_tail_external_entry_rejections = 0;
   std::vector<std::string> cfg_tail_external_entry_labels;
   std::vector<std::string> cfg_tail_external_predecessor_labels;

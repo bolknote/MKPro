@@ -596,9 +596,12 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
     const core::ReturnStackIrTailLayoutSearch search =
         core::analyze_return_stack_ir_tail_layout(ops);
-    require(!search.materialized &&
-                search.rejection_reason.find("external CFG entry") != std::string::npos,
-            "existing ПП reuse should reject external CFG entries into moved tails");
+    require(search.has_opportunity && search.materialized &&
+                search.cfg_tail_external_entry_duplications >= 1,
+            "existing ПП fallback should isolate external tail entries through suffix "
+            "duplication");
+    require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied >= 2,
+            "isolated existing ПП fallback should remain provable post-layout");
   }
 
   {
@@ -622,9 +625,11 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
     const core::ReturnStackIrTailLayoutSearch search =
         core::analyze_return_stack_ir_tail_layout(ops);
-    require(!search.materialized &&
-                search.rejection_reason.find("external CFG entry") != std::string::npos,
-            "IR CFG should treat raw addressed БП opcodes as external entries into moved tails");
+    require(search.has_opportunity && search.materialized &&
+                search.cfg_tail_external_entry_duplications >= 1,
+            "IR CFG should isolate raw addressed БП tail entries through suffix duplication");
+    require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied >= 2,
+            "isolated raw addressed fallback should remain provable post-layout");
   }
 
   {
@@ -833,7 +838,11 @@ void return_stack_script_matches_mk61_strategy_contract() {
                                              " cells vs current " +
                                              std::to_string(search.pipeline_current_final_cells) +
                                              " cells") != std::string::npos &&
-                search.rejection_reason.find("after measuring 1 materialized candidate") !=
+                search.pipeline_candidates_measured >= 1 &&
+                search.rejection_reason.find(
+                    "after measuring " + std::to_string(search.pipeline_candidates_measured) +
+                    " materialized candidate" +
+                    (search.pipeline_candidates_measured == 1 ? "" : "s")) !=
                     std::string::npos,
             "pipeline-aware IR scanner should explain materialized ties with the full-pipeline "
             "rejection, concrete candidate/current sizes, and measured candidate count, not the "
@@ -953,7 +962,8 @@ void return_stack_script_matches_mk61_strategy_contract() {
         core::analyze_return_stack_ir_tail_layout(ops);
     require(!search.materialized &&
                 search.rejection_reason.find("external CFG entry") != std::string::npos,
-            "CFG-derived existing ПП aliases should reject external entries into moved labels");
+            "CFG-derived existing ПП aliases should reject external entries when the only "
+            "candidate entry is callable");
   }
 
   {
@@ -1907,12 +1917,30 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
     const core::ReturnStackIrTailLayoutSearch search =
         core::analyze_return_stack_ir_tail_layout(ops);
-    require(!search.materialized && search.cfg_tail_external_entry_rejections >= 1 &&
+    require(search.has_opportunity && search.materialized &&
+                search.cfg_tail_external_entry_duplications >= 1 &&
                 search.cfg_tail_external_entry_labels == std::vector<std::string>({"t2"}) &&
                 search.cfg_tail_external_predecessor_labels ==
                     std::vector<std::string>({"external"}),
-            "embedded tail-chain scanner should treat semantic conditional jump targets as "
-            "external CFG entries into a candidate tail chain");
+            "embedded tail-chain scanner should duplicate a minimal suffix when a semantic "
+            "conditional jump externally enters a candidate tail chain");
+    const auto original_tail =
+        std::find_if(search.materialized_items.begin(), search.materialized_items.end(),
+                     [](const MachineItem& item) {
+                       return item.kind == MachineItemKind::Label && item.name == "t2";
+                     });
+    const auto duplicated_tail =
+        std::find_if(search.materialized_items.begin(), search.materialized_items.end(),
+                     [](const MachineItem& item) {
+                       return item.kind == MachineItemKind::Label &&
+                              item.name.starts_with("__return_stack_duplicated_tail_");
+                     });
+    require(original_tail != search.materialized_items.end() &&
+                duplicated_tail != search.materialized_items.end(),
+            "tail duplication must preserve the externally entered original while giving the "
+            "one-shot return-stack route a private copy");
+    require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 2,
+            "duplicated external-entry suffixes should remain provable post-layout");
   }
 
   {
@@ -2695,10 +2723,12 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
     const core::ReturnStackIrTailLayoutSearch search =
         core::analyze_return_stack_ir_tail_layout(ops);
-    require(!search.materialized && search.cfg_tail_valid_chain_candidates == 1 &&
-                search.cfg_tail_external_entry_rejections == 1,
-            "IR tail layout scanner should expose CFG blockers for valid-length chains with "
-            "external tail entries");
+    require(search.has_opportunity && search.materialized &&
+                search.cfg_tail_valid_chain_candidates == 1 &&
+                search.cfg_tail_external_entry_duplications == 1 &&
+                search.cfg_tail_external_entry_rejections == 0,
+            "IR tail layout scanner should recover valid-length chains with external tail "
+            "entries through suffix duplication");
   }
 
   {

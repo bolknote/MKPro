@@ -636,6 +636,31 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
             "cyclic failure must not fabricate its certificate or undo an independent terminal "
             "commit");
   }
+  {
+    const std::vector<MachineItem> startup_loop = {
+        MachineItem::op(0x01, "1"),
+        MachineItem::op(0x51, "БП"),
+        MachineItem::address(0),
+    };
+    core::PostLayoutControlFlowOptions startup_options;
+    startup_options.main_entry = 0;
+    startup_options.empty_return_target = 1;
+    const core::AuthoritativePostLayoutControlFlow startup_flow =
+        core::build_post_layout_control_flow(startup_loop, startup_options);
+    require(startup_flow.proved,
+            "synthetic empty-stack startup loop should have an authoritative CFG");
+    const std::vector<core::EmptyReturnStartupLayoutResult> normalized =
+        core::normalize_empty_return_startup_layouts(
+            startup_loop, {}, startup_flow);
+    require(normalized.size() == 1U && normalized.front().final_artifact_proved &&
+                cell_count(normalized.front().items) == cell_count(startup_loop) &&
+                normalized.front().items.front().kind == MachineItemKind::Op &&
+                normalized.front().items.front().opcode == 0x52 &&
+                normalized.front().control_flow.empty_return_target.has_value() &&
+                normalized.front().control_flow.empty_return_target->address == 1,
+            "startup normalization should replace BP 00 with two proved empty-stack returns "
+            "without changing size");
+  }
 }
 
 } // namespace mkpro::tests

@@ -161,6 +161,42 @@ bool contains_reason(const core::DarkSideSuffixHelperProof& proof, std::string_v
 } // namespace
 
 void dark_side_suffix_helper_rewrites_only_proved_layouts() {
+  {
+    std::vector<MachineItem> unplaced = {
+        MachineItem::op(0x52, "В/О"),
+        MachineItem::op(0x53, "ПП"),
+        MachineItem::address(std::string("unplaced_helper")),
+        MachineItem::op(0x50, "С/П"),
+        MachineItem::label("unplaced_helper"),
+    };
+    for (int index = 0; index < 9; ++index)
+      unplaced.push_back(MachineItem::op(0x31, "F|x|"));
+    unplaced.push_back(MachineItem::op(0x52, "В/О"));
+    const std::vector<core::DarkSideSuffixLayoutCandidate> candidates =
+        core::find_dark_side_suffix_layout_candidates(unplaced);
+    require(candidates.size() == 1U &&
+                candidates.front().helper_label == "unplaced_helper" &&
+                candidates.front().body_cells == 9 &&
+                candidates.front().required_start_address == 39,
+            "pre-layout discovery should derive the exact F9 anchor from opaque helper length");
+
+    unplaced.at(1) = MachineItem::op(0x51, "БП");
+    require(core::find_dark_side_suffix_layout_candidates(unplaced).empty(),
+            "pre-layout discovery should reject a helper without a direct ПП entry");
+  }
+
+  {
+    std::vector<MachineItem> numeric_entry = suffix_fixture();
+    numeric_entry.at(item_at_address(numeric_entry, 10)) = MachineItem::op(0x53, "ПП");
+    numeric_entry.at(item_at_address(numeric_entry, 11)) = MachineItem::address(45);
+    const core::DarkSideSuffixHelperResult rebound =
+        core::rewrite_dark_side_suffix_helper(numeric_entry, "whole_helper");
+    require(rebound.applied == 1 && rebound.proof.final_artifact_proved &&
+                rebound.items.at(item_at_address(rebound.items, 11)).formal_opcode == 0xf7,
+            "a direct numeric ПП into an unlabeled helper command should bind to its proved "
+            "side-space formal entry");
+  }
+
   const std::vector<MachineItem> baseline = suffix_fixture();
   const core::DarkSideSuffixHelperProof proof =
       core::verify_dark_side_suffix_helper(baseline, "whole_helper");
@@ -207,6 +243,58 @@ void dark_side_suffix_helper_rewrites_only_proved_layouts() {
   require(automatic.applied == 1 && automatic.proof.helper_label == "whole_helper" &&
               automatic.proof.final_artifact_proved,
           "post-layout candidate scan should select the same universally proved helper");
+
+  {
+    std::vector<MachineItem> shifted = suffix_fixture();
+    shifted.push_back(MachineItem::label("shifted_target"));
+    shifted.push_back(MachineItem::op(0x50, "С/П")); // original physical 49
+    shifted.at(item_at_address(shifted, 10)) = MachineItem::op(0x51, "БП");
+    shifted.at(item_at_address(shifted, 11)) = MachineItem::address(49);
+    const core::DarkSideSuffixHelperResult rebound =
+        core::rewrite_dark_side_suffix_helper(shifted, "whole_helper");
+    require(rebound.applied == 1 && rebound.proof.final_artifact_proved,
+            "a fixed direct target after physical 48 should rebind through its unique command "
+            "identity label");
+    const MachineItem& operand = rebound.items.at(item_at_address(rebound.items, 11));
+    require(operand.kind == MachineItemKind::Address &&
+                std::get<std::string>(operand.target) == "shifted_target" &&
+                !operand.formal_opcode.has_value(),
+            "shifted direct target should no longer retain a stale numeric/formal address");
+  }
+
+  {
+    std::vector<MachineItem> shifted = suffix_fixture();
+    shifted.push_back(MachineItem::op(0x50, "С/П")); // unlabeled original physical 49
+    shifted.at(item_at_address(shifted, 10)) = MachineItem::op(0x51, "БП");
+    shifted.at(item_at_address(shifted, 11)) = MachineItem::address(49);
+    const core::DarkSideSuffixHelperResult rebound =
+        core::rewrite_dark_side_suffix_helper(shifted, "whole_helper");
+    const MachineItem& operand = rebound.items.at(item_at_address(rebound.items, 11));
+    require(rebound.applied == 1 && rebound.proof.final_artifact_proved &&
+                std::get<int>(operand.target) == 48,
+            "an unlabeled fixed target after physical 48 should rebind numerically by exact "
+            "command identity");
+  }
+
+  {
+    std::vector<MachineItem> shifted = suffix_fixture();
+    shifted.push_back(MachineItem::op(0x50, "С/П")); // original physical 49
+    const std::size_t source = item_at_address(shifted, 10);
+    shifted.at(source) = MachineItem::op(0xa7, "К ПП 7");
+    shifted.at(source).indirect_flow_targets = std::vector<IrTarget>{49};
+    shifted.at(item_at_address(shifted, 11)) = MachineItem::op(0x00, "0");
+    core::DarkSideSuffixHelperOptions options;
+    options.proved_indirect_flow_targets[source] = {49};
+    options.proved_rebound_indirect_flow_targets[source] = {48};
+    const core::DarkSideSuffixHelperResult rebound =
+        core::rewrite_dark_side_suffix_helper(shifted, "whole_helper", options);
+    const MachineItem& final_source = rebound.items.at(source);
+    require(rebound.applied == 1 && rebound.proof.final_artifact_proved &&
+                final_source.indirect_flow_targets.has_value() &&
+                std::get<int>(final_source.indirect_flow_targets->front()) == 48,
+            "a separately proved stable indirect selector should retain command identity after "
+            "the explicit return cell is removed");
+  }
 
   // Some physical entries have two formal spellings (physical 39 is both EB
   // and F1).  The binder chooses the lowest, non-F spelling used by the compact
@@ -380,8 +468,10 @@ void dark_side_suffix_helper_rewrites_only_proved_layouts() {
     shifted_options.proved_indirect_flow_targets[flow_item] = {50};
     const core::DarkSideSuffixHelperResult shifted =
         core::rewrite_dark_side_suffix_helper(computed, "whole_helper", shifted_options);
-    require(shifted.applied == 0 && contains_reason(shifted.proof, "can enter or shift"),
-            "indirect targets crossing deleted physical48 must be rejected");
+    require(shifted.applied == 0 &&
+                contains_reason(shifted.proof, "no selector-rebind proof"),
+            "indirect targets crossing deleted physical48 must be rejected without a separate "
+            "selector proof");
   }
 }
 

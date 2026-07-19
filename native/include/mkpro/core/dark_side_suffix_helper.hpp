@@ -26,6 +26,14 @@ struct DarkSideSuffixCall {
   std::size_t call_item_index = 0;
   std::size_t operand_item_index = 0;
   std::string entry_label;
+  int entry_address = -1;
+  int formal_opcode = -1;
+};
+
+struct DarkSideShiftedDirectTarget {
+  std::size_t operand_item_index = 0;
+  std::size_t target_item_index = 0;
+  int original_target_address = -1;
 };
 
 // An external control-flow proof for the dual-mode F9 layout.  The named
@@ -39,8 +47,9 @@ struct DarkSideSuffixCall {
 //
 // The verifier accepts only the one immediate predecessor recorded here and
 // still rejects every official address operand or proved indirect-flow target
-// into the suffix.  Merely enabling the option therefore cannot turn an
-// unproved second entry into a natural path.
+// into the suffix. Targets after the removed return are accepted only with a
+// complete, independently proved selector rebinding map. Merely enabling the
+// option therefore cannot turn an unproved second entry into a natural path.
 struct DarkSideOfficialFallthroughEntry {
   std::size_t predecessor_item_index = 0;
   std::string entry_label;
@@ -58,6 +67,10 @@ struct DarkSideSuffixHelperOptions {
   // provide a complete set of resolved physical targets for every indirect
   // flow MachineItem.  Missing entries make the verifier fail closed.
   std::map<std::size_t, std::vector<int>> proved_indirect_flow_targets;
+  // Optional complete post-erasure targets, keyed by the original source item.
+  // A target after physical 48 must be exactly one lower; callers must prove
+  // the corresponding runtime selector preload separately.
+  std::map<std::size_t, std::vector<int>> proved_rebound_indirect_flow_targets;
 };
 
 struct DarkSideSuffixHelperProof {
@@ -79,6 +92,7 @@ struct DarkSideSuffixHelperProof {
   int official_continuation_opcode = -1;
   std::vector<DarkSideSuffixEntry> entries;
   std::vector<DarkSideSuffixCall> calls;
+  std::vector<DarkSideShiftedDirectTarget> shifted_direct_targets;
   std::vector<std::string> reasons;
 };
 
@@ -88,6 +102,21 @@ struct DarkSideSuffixHelperResult {
   std::vector<passes::AppliedOptimization> optimizations;
   int applied = 0;
 };
+
+struct DarkSideSuffixLayoutCandidate {
+  std::string helper_label;
+  std::size_t target_item_index = 0;
+  int body_cells = 0;
+  int required_start_address = -1;
+};
+
+// Finds only structural pre-layout opportunities: a label-rooted straight
+// line body ending in explicit В/О and reached by at least one direct ПП.
+// Names and op semantics inside the body are opaque. The result merely states
+// where the body would have to start to end at F9; component placement and the
+// full dark-side final-artifact proof remain separate mandatory stages.
+std::vector<DarkSideSuffixLayoutCandidate>
+find_dark_side_suffix_layout_candidates(const std::vector<MachineItem>& items);
 
 // Verifies the pre-rewrite artifact.  The helper must already be co-laid out:
 // its executable body occupies a suffix ending at physical cell 47 and its

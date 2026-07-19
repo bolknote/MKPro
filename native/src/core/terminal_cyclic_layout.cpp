@@ -919,6 +919,7 @@ struct AddedIndirectFlow {
 
 struct ReboundArtifact {
   std::vector<MachineItem> items;
+  std::optional<std::vector<PreloadReport>> preloads;
   AuthoritativePostLayoutControlFlow control_flow;
   bool proved = false;
   std::vector<std::string> reasons;
@@ -1608,6 +1609,7 @@ std::optional<TerminalCyclicLayoutResult> rewrite_terminal_semantic_return_alias
 
         TerminalCyclicLayoutResult result;
         result.items = std::move(rebound.items);
+        result.preloads = preloads;
         result.plan.return_alias_proved = true;
         result.plan.semantic_return_alias_proved = true;
         result.plan.final_artifact_proved = true;
@@ -1741,6 +1743,7 @@ std::optional<TerminalCyclicLayoutResult> rewrite_terminal_return_alias(
 
       TerminalCyclicLayoutResult result;
       result.items = std::move(rebound.items);
+      result.preloads = preloads;
       result.plan.return_alias_proved = true;
       result.plan.final_artifact_proved = true;
       result.plan.input_cells = index.cells;
@@ -1977,8 +1980,9 @@ std::vector<ReboundArtifact> normalize_inverted_terminal_tail_layouts(
 }
 
 
-std::vector<ReboundArtifact> normalize_empty_return_startup_layouts(
+std::vector<ReboundArtifact> build_empty_return_startup_layouts(
     const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
     const AuthoritativePostLayoutControlFlow& control_flow,
     const TerminalCyclicLayoutOptions& options,
     std::vector<std::string>* rejection_reasons) {
@@ -2099,22 +2103,89 @@ std::vector<ReboundArtifact> normalize_empty_return_startup_layouts(
       item.indirect_memory_targets.reset();
     }
     bool indirect_facts_rebound = true;
+    std::string indirect_rebind_failure;
+    struct PendingSelectorRetarget {
+      int old_target = -1;
+      int new_target = -1;
+      std::size_t preload_index = 0;
+      std::string value;
+    };
+    std::map<int, PendingSelectorRetarget> selector_retargets;
+    std::vector<PreloadReport> rebound_preloads = preloads;
     for (const auto& [old_source, old_targets] : control_flow.indirect_flow_targets) {
       if (!relocation.at(old_source).has_value()) {
         indirect_facts_rebound = false;
+        indirect_rebind_failure =
+            "indirect flow source item " + std::to_string(old_source) + " was removed";
         break;
       }
       std::vector<IrTarget> rebound_targets;
       for (const PostLayoutCommandIdentity& old_target : old_targets) {
         if (!relocation.at(old_target.item_index).has_value()) {
           indirect_facts_rebound = false;
+          indirect_rebind_failure =
+              "indirect flow target item " + std::to_string(old_target.item_index) +
+              " from source item " + std::to_string(old_source) + " was removed";
           break;
         }
         const int new_address =
             output_index.item_addresses.at(*relocation.at(old_target.item_index));
         if (new_address != old_target.address) {
-          indirect_facts_rebound = false;
-          break;
+          const std::optional<int> selector =
+              encoded_register(items.at(old_source).opcode);
+          std::optional<std::size_t> selector_preload;
+          if (selector.has_value()) {
+            for (std::size_t index = 0; index < preloads.size(); ++index) {
+              int preload_register = -1;
+              try {
+                preload_register =
+                    register_index(register_from_text(preloads.at(index).register_name));
+              } catch (const std::exception&) {
+                continue;
+              }
+              if (preload_register != *selector)
+                continue;
+              if (selector_preload.has_value()) {
+                selector_preload.reset();
+                break;
+              }
+              selector_preload = index;
+            }
+          }
+          const std::optional<std::string> rebound =
+              selector_preload.has_value()
+                  ? rebind_proved_natural_fractional_selector_preload(
+                        items, preloads.at(*selector_preload), old_target.address,
+                        new_address, options.address_space_model)
+                  : std::nullopt;
+          if (!selector.has_value() || !selector_preload.has_value() ||
+              !rebound.has_value()) {
+            indirect_facts_rebound = false;
+            indirect_rebind_failure =
+                "indirect flow target " + std::to_string(old_target.address) +
+                " from source item " + std::to_string(old_source) + " moved to " +
+                std::to_string(new_address) +
+                " without a proved retunable selector preload";
+            break;
+          }
+          const PendingSelectorRetarget retarget{
+              .old_target = old_target.address,
+              .new_target = new_address,
+              .preload_index = *selector_preload,
+              .value = *rebound,
+          };
+          const auto [existing, inserted] =
+              selector_retargets.emplace(*selector, retarget);
+          if (!inserted &&
+              (existing->second.old_target != retarget.old_target ||
+               existing->second.new_target != retarget.new_target ||
+               existing->second.preload_index != retarget.preload_index ||
+               existing->second.value != retarget.value)) {
+            indirect_facts_rebound = false;
+            indirect_rebind_failure =
+                "one selector register would require incompatible relocated targets";
+            break;
+          }
         }
         rebound_targets.emplace_back(new_address);
       }
@@ -2126,14 +2197,22 @@ std::vector<ReboundArtifact> normalize_empty_return_startup_layouts(
     for (const auto& [old_source, targets] : control_flow.indirect_memory_targets) {
       if (!relocation.at(old_source).has_value()) {
         indirect_facts_rebound = false;
+        indirect_rebind_failure =
+            "indirect memory source item " + std::to_string(old_source) + " was removed";
         break;
       }
       rewritten.at(*relocation.at(old_source)).indirect_memory_targets = targets;
     }
     if (!indirect_facts_rebound)
-      reject("startup layout moved an indirect target or lost typed indirect metadata");
+      reject("startup layout moved an indirect target or lost typed indirect metadata: " +
+             indirect_rebind_failure);
     if (!indirect_facts_rebound)
       continue;
+
+    for (const auto& [selector, retarget] : selector_retargets) {
+      (void)selector;
+      rebound_preloads.at(retarget.preload_index).value = retarget.value;
+    }
 
     const PostLayoutControlFlowOptions flow_options{
         .address_space_model = options.address_space_model,
@@ -2234,6 +2313,7 @@ std::vector<ReboundArtifact> normalize_empty_return_startup_layouts(
 
     candidates.push_back(ReboundArtifact{
         .items = std::move(rewritten),
+        .preloads = std::move(rebound_preloads),
         .control_flow = std::move(rewritten_flow),
         .proved = true,
     });
@@ -2249,6 +2329,27 @@ void append_reasons(std::vector<std::string>& destination, const std::vector<std
 }
 
 } // namespace
+
+std::vector<EmptyReturnStartupLayoutResult> normalize_empty_return_startup_layouts(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const TerminalCyclicLayoutOptions& options) {
+  std::vector<EmptyReturnStartupLayoutResult> results;
+  for (ReboundArtifact& candidate :
+       build_empty_return_startup_layouts(items, preloads, control_flow,
+                                          options, nullptr)) {
+    if (!candidate.proved || !candidate.preloads.has_value())
+      continue;
+    results.push_back(EmptyReturnStartupLayoutResult{
+        .items = std::move(candidate.items),
+        .preloads = std::move(*candidate.preloads),
+        .control_flow = std::move(candidate.control_flow),
+        .final_artifact_proved = true,
+    });
+  }
+  return results;
+}
 
 std::optional<std::vector<MachineItem>>
 symbolize_terminal_layout_direct_targets(const std::vector<MachineItem>& items,
@@ -3079,6 +3180,7 @@ optimize_terminal_cyclic_layout(const std::vector<MachineItem>& items,
                                 const TerminalCyclicLayoutOptions& options) {
   TerminalCyclicLayoutResult result;
   result.items = items;
+  result.preloads = preloads;
   result.plan = verify_terminal_cyclic_layout(items, preloads, control_flow, options);
   if (!result.plan.terminal_proved) {
     if (options.enable_return_alias) {
@@ -3110,10 +3212,12 @@ optimize_terminal_cyclic_layout(const std::vector<MachineItem>& items,
       }
     }
     std::vector<std::string> startup_rejections;
-    for (ReboundArtifact& startup : normalize_empty_return_startup_layouts(
-             items, control_flow, options, &startup_rejections)) {
+    for (ReboundArtifact& startup : build_empty_return_startup_layouts(
+             items, preloads, control_flow, options, &startup_rejections)) {
+      const std::vector<PreloadReport>& startup_preloads =
+          startup.preloads.has_value() ? *startup.preloads : preloads;
       TerminalCyclicLayoutResult candidate = optimize_terminal_cyclic_layout(
-          startup.items, preloads, startup.control_flow, options);
+          startup.items, startup_preloads, startup.control_flow, options);
       if (candidate.applied > 0 && candidate.plan.final_artifact_proved)
         return candidate;
       for (auto reason = candidate.plan.reasons.rbegin();

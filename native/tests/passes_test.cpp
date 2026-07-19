@@ -1557,6 +1557,44 @@ void pass_pipeline_matches_initial_typescript_contract() {
   }
 
   {
+    std::vector<IrOp> program = {
+        label("leaf_a"), recall("8"), recall("9"), recall("a"), recall("b"),
+        recall("c"),     recall("d"), recall("e"), ret(),
+        label("leaf_b"), recall("8"), recall("9"), recall("a"), recall("b"),
+        recall("c"),     recall("d"), recall("e"), ret(),
+        call_to("leaf_a"), call_to("leaf_a"), call_to("leaf_a"),
+        call_to("leaf_a"), call_to("leaf_a"), call_to("leaf_a"),
+        call_to("leaf_b"), call_to("leaf_b"), call_to("leaf_b"),
+        call_to("leaf_b"), call_to("leaf_b"), call_to("leaf_b"),
+    };
+    const core::passes::PassResult result = run_runtime_indirect_call_flow(program);
+    require(result.applied == 12,
+            "runtime-indirect-call-flow did not reuse one selector across leaf-call phases");
+    const int selector_charges =
+        static_cast<int>(std::count_if(result.ops.begin(), result.ops.end(), [](const IrOp& op) {
+          return op.kind == IrKind::Store && op.register_name == "7" &&
+                 op.meta.comment.has_value() &&
+                 op.meta.comment->starts_with("runtime indirect call selector ");
+        }));
+    require(selector_charges == 2,
+            "phase selector reuse should charge R7 once for each leaf-call phase");
+    const int indirect_calls =
+        static_cast<int>(std::count_if(result.ops.begin(), result.ops.end(), [](const IrOp& op) {
+          return op.kind == IrKind::IndirectCall && op.register_name == "7";
+        }));
+    require(indirect_calls == 12,
+            "phase selector reuse emitted calls through more than one stable register");
+    const auto phase_reuse =
+        std::find_if(result.optimizations.begin(), result.optimizations.end(),
+                     [](const core::passes::AppliedOptimization& optimization) {
+                       return optimization.name ==
+                              "runtime-indirect-call-phase-selector-reuse";
+                     });
+    require(phase_reuse != result.optimizations.end(),
+            "runtime-indirect-call-flow did not report phase selector reuse");
+  }
+
+  {
     auto x_argument_call_to = [](std::string target) {
       IrOp op = call_to(std::move(target));
       op.meta.roles.push_back("x-argument-call");

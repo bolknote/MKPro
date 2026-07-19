@@ -519,6 +519,33 @@ Fixture conditional_x2_reconvergence_fixture(bool restore_before_overwrite) {
   return result;
 }
 
+Fixture conditional_x2_value_equality_fixture() {
+  Fixture result;
+  const std::string sink = "unrelated_x2_value_equality_sink";
+
+  result.items.push_back(MachineItem::label("unrelated_x2_value_equality_entry"));
+  for (int branch = 0; branch < 2; ++branch) {
+    result.items.push_back(op(0x60));
+    result.items.push_back(op(0x60));
+    result.items.push_back(op(0x5e));
+    result.items.push_back(MachineItem::address(sink));
+    result.items.push_back(op(0x05));
+  }
+  result.visible_stop = result.items.size();
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label(sink));
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label("unrelated_x2_value_equality_padding"));
+  for (int cell = 1; cell < 9; ++cell)
+    result.items.push_back(op(0x54));
+  result.items.push_back(stop());
+
+  result.preloads.push_back(PreloadReport{.register_name = "8", .value = "18"});
+  return result;
+}
+
 Fixture address_selector_rebind_fixture() {
   Fixture result;
   const std::string helper = "unrelated_rebound_address_helper";
@@ -630,6 +657,46 @@ bool reason_contains(const core::NaturalTargetComponentLayoutPlan& plan,
 } // namespace
 
 void natural_target_component_layout_is_generic_and_proof_gated() {
+  {
+    Fixture input;
+    input.items.push_back(MachineItem::label("absolute_entry"));
+    input.items.push_back(stop());
+    input.items.push_back(MachineItem::label("absolute_leaf"));
+    const std::size_t leaf_item = input.items.size();
+    input.items.push_back(op(0x22));
+    input.items.push_back(op(0x52));
+    input.items.push_back(MachineItem::label("absolute_padding"));
+    input.items.push_back(op(0x0d));
+    input.items.push_back(op(0x0d));
+    input.items.push_back(op(0x0d));
+    input.items.push_back(stop());
+
+    core::NaturalTargetComponentLayoutOptions options;
+    options.required_absolute_targets.push_back(
+        core::NaturalTargetRequiredAbsoluteTarget{
+            .target_item = leaf_item,
+            .target_address = 5,
+        });
+    options.allow_size_neutral_absolute_layout = true;
+    options.require_size_neutral_absolute_layout = true;
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input), options);
+    require(rewritten.plan.proved && rewritten.applied > 0 &&
+                rewritten.removed_cells == 0 &&
+                rewritten.plan.size_neutral_absolute_layout &&
+                rewritten.plan.absolute_targets == 1 &&
+                rewritten.plan.absolute_targets_proved &&
+                rewritten.items.at(item_at_address(rewritten.items, 5)).opcode == 0x22 &&
+                cell_count(rewritten.items) == cell_count(input.items),
+            "absolute target layout should prove an exact size-neutral component reorder");
+
+    options.required_absolute_targets.front().target_address = 0;
+    const auto rejected = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input), options);
+    require(!rejected.plan.proved && rejected.applied == 0,
+            "absolute target layout should fail closed on a main-component conflict");
+  }
+
   {
     Fixture input;
     input.items.push_back(MachineItem::label("bounded_entry"));
@@ -761,9 +828,33 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
     const Fixture input = conditional_x2_reconvergence_fixture(true);
     const auto rewritten = core::optimize_natural_target_component_layout(
         input.items, input.preloads, flow(input));
-    require(rewritten.applied == 0 &&
-                reason_contains(rewritten.plan, "x2=0"),
-            "an X2 restore before overwrite must reject indirect conditional conversion");
+    if (rewritten.applied > 0) {
+      const Observation before = observe(input.items, input.preloads);
+      const Observation after = observe(rewritten.items, rewritten.preloads);
+      require(before.stopped && after.stopped && before.state == after.state,
+              "value equality must preserve a restored X2 before overwrite");
+    } else {
+      require(reason_contains(rewritten.plan, "x2=0"),
+              "an X2 restore before overwrite must reject indirect conditional conversion");
+    }
+  }
+
+  {
+    const Fixture input = conditional_x2_value_equality_fixture();
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    const int converted_conditionals = static_cast<int>(std::count_if(
+        rewritten.plan.flows.begin(), rewritten.plan.flows.end(), [](const auto& flow) {
+          return flow.original_opcode == 0x5e;
+        }));
+    require(rewritten.plan.proved && rewritten.removed_cells == 2 &&
+                converted_conditionals == 2,
+            "conditionals may share a selector when value flow proves X2 equals X at every "
+            "entry");
+    const Observation before = observe(input.items, input.preloads);
+    const Observation after = observe(rewritten.items, rewritten.preloads);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "value-proved conditional conversion must preserve observable machine state");
   }
 
   {
@@ -1426,6 +1517,107 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
                             }),
             "an exact signed eight-digit preload should retain its sign while serving as a "
             "proved natural-target selector");
+  }
+
+  {
+    const std::vector<MachineItem> uses = {
+        MachineItem::op(0x67, "П->X 7"),
+        MachineItem::op(0x12, "*"),
+    };
+    const PreloadReport retunable{
+        .register_name = "7",
+        .value = "2.2600021E-1",
+        .retunable_natural_fractional_prefix = "0.226000",
+    };
+    const std::optional<std::string> rebound =
+        core::rebind_proved_natural_fractional_selector_preload(
+            uses, retunable, 21, 22);
+    require(rebound == "2.2600022E-1",
+            "a proved natural fractional selector family should retarget its final BCD digits");
+
+    PreloadReport ordinary = retunable;
+    ordinary.retunable_natural_fractional_prefix.reset();
+    require(!core::rebind_proved_natural_fractional_selector_preload(
+                 uses, ordinary, 21, 22)
+                 .has_value(),
+            "an untagged numeric preload must not be retargeted");
+  }
+
+  {
+    std::vector<MachineItem> items;
+    items.push_back(MachineItem::label("erasure_entry"));
+    MachineItem indirect = MachineItem::op(0xa7, "К ПП 7");
+    indirect.indirect_flow_targets = std::vector<IrTarget>{"erasure_target"};
+    items.push_back(std::move(indirect));
+    items.push_back(MachineItem::op(0x00, "0"));
+    const std::size_t erased_item = items.size();
+    items.push_back(MachineItem::op(0x52, "В/О"));
+    items.push_back(MachineItem::label("erasure_target"));
+    const std::size_t target_item = items.size();
+    items.push_back(MachineItem::op(0x22, "F x^2"));
+    items.push_back(MachineItem::op(0x52, "В/О"));
+    const std::vector<PreloadReport> preloads = {
+        PreloadReport{.register_name = "7", .value = "3"},
+    };
+    core::AuthoritativePostLayoutControlFlow typed_flow;
+    typed_flow.proved = true;
+    typed_flow.indirect_flow_targets[1] = {
+        core::PostLayoutCommandIdentity{
+            .item_index = target_item,
+            .address = 3,
+            .labels = {"erasure_target"},
+        },
+    };
+    const core::PreloadedIndirectFlowCellErasurePlan rebound =
+        core::plan_preloaded_indirect_flow_cell_erasure(
+            items, preloads, typed_flow, erased_item, 2);
+    require(rebound.proved && rebound.preloads.front().value == "2" &&
+                rebound.original_targets.at(1) == std::vector<int>{3} &&
+                rebound.rebound_targets.at(1) == std::vector<int>{2},
+            "an address-only stable selector should follow its exact command identity across a "
+            "generic one-cell erasure");
+
+    items.push_back(MachineItem::op(0x67, "П->X 7"));
+    const core::PreloadedIndirectFlowCellErasurePlan unsafe =
+        core::plan_preloaded_indirect_flow_cell_erasure(
+            items, preloads, typed_flow, erased_item, 2);
+    require(!unsafe.proved,
+            "an untagged selector with a non-flow use must not be changed by cell erasure");
+
+    std::vector<MachineItem> late_items;
+    MachineItem late_consumer = MachineItem::op(0xae, "К ПП e");
+    late_consumer.roles.push_back("late-decimal-selector-consumer");
+    late_consumer.indirect_flow_targets =
+        std::vector<IrTarget>{"late_target_1", "late_target_2"};
+    late_items.push_back(std::move(late_consumer));
+    const std::size_t late_erased = late_items.size();
+    late_items.push_back(MachineItem::op(0x52, "В/О"));
+    late_items.push_back(MachineItem::label("late_target_1"));
+    const std::size_t late_target_1 = late_items.size();
+    late_items.push_back(MachineItem::op(0x00, "0"));
+    late_items.push_back(MachineItem::label("late_target_2"));
+    const std::size_t late_target_2 = late_items.size();
+    late_items.push_back(MachineItem::op(0x01, "1"));
+    core::AuthoritativePostLayoutControlFlow late_flow;
+    late_flow.proved = true;
+    late_flow.indirect_flow_targets[0] = {
+        core::PostLayoutCommandIdentity{
+            .item_index = late_target_1,
+            .address = 2,
+            .labels = {"late_target_1"},
+        },
+        core::PostLayoutCommandIdentity{
+            .item_index = late_target_2,
+            .address = 3,
+            .labels = {"late_target_2"},
+        },
+    };
+    const core::PreloadedIndirectFlowCellErasurePlan late =
+        core::plan_preloaded_indirect_flow_cell_erasure(
+            late_items, {}, late_flow, late_erased, 1);
+    require(late.proved && late.rebound_targets.at(0) == std::vector<int>({1, 2}),
+            "late-bound multi-target selector charges should follow their typed identities at "
+            "the final generic binding stage");
   }
 }
 
