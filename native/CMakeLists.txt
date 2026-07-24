@@ -99,6 +99,7 @@ add_library(mkpro_core STATIC
   src/core/passes/x2_noop_restore.cpp
   src/core/post_layout_control_flow.cpp
   src/core/post_layout_indirect_flow.cpp
+  src/core/runtime_cost.cpp
   src/core/raw_bcd_unary_selector.cpp
   src/core/register_allocator.cpp
   src/core/return_stack_script.cpp
@@ -194,6 +195,7 @@ add_executable(mkpro_tests
   tests/emulator_zagaday_tsifru_test.cpp
   tests/emulator_log_selector_premise_test.cpp
   tests/emulator_mk61_test.cpp
+  tests/emulator_nekromant_test.cpp
   tests/emulator_near_any_helper_test.cpp
   tests/emulator_number_entry_concat_test.cpp
   tests/emulator_indexed_packed_pow10_test.cpp
@@ -253,6 +255,7 @@ add_executable(mkpro_tests
   tests/residual_elseif_test.cpp
   tests/residual_temp_test.cpp
   tests/return_stack_script_test.cpp
+  tests/runtime_cost_test.cpp
   tests/register_allocator_test.cpp
   tests/register_coalesce_pass_test.cpp
   tests/rules_test.cpp
@@ -368,6 +371,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   emulator_interprocedural_equivalence_matches_typescript_contract
   emulator_log_selector_premise_matches_typescript_contract
   emulator_mk61_execution_matches_typescript_contract
+  emulator_nekromant_reference_and_source_contract
   emulator_near_any_helper_matches_typescript_contract
   emulator_number_entry_concat_matches_typescript_contract
   emulator_indexed_packed_pow10_y_stack_semantics
@@ -438,6 +442,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   recall_removal_engine_matches_initial_typescript_contract
   residual_elseif_matches_typescript_contract
   residual_temp_matches_typescript_contract
+  runtime_cost_model_prefers_faster_equal_size_candidates
   register_allocator_matches_typescript_contract
   register_coalesce_matches_typescript_contract
   rules_match_typescript_contract

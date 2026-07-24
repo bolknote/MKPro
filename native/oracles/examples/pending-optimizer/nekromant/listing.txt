@@ -1,0 +1,263 @@
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  00  | 0                       |
+   01 |  44  | X→П 4                   | setup R4
+   02 |  46  | X→П 6                   | setup R6
+   03 |  4A  | X→П a                   | setup Ra
+   04 |  40  | X→П 0                   | setup R0
+   05 |  47  | X→П 7                   | setup R7
+   06 |  03  | 3                       |
+   07 |  42  | X→П 2                   | setup R2
+   08 |  02  | 2                       |
+   09 |  05  | 5                       |
+   10 |  43  | X→П 3                   | setup R3
+   11 |  01  | 1                       |
+   12 |  00  | 0                       |
+   13 |  4D  | X→П d                   | setup Rd
+   14 |  01  | 1                       |
+   15 |  00  | 0                       |
+   16 |  00  | 0                       |
+   17 |  00  | 0                       |
+   18 |  4E  | X→П e                   | setup Re
+   19 |  01  | 1                       |
+   20 |  00  | 0                       |
+   21 |  00  | 0                       |
+   22 |  00  | 0                       |
+   23 |  00  | 0                       |
+   24 |  4B  | X→П b                   | setup Rb
+   25 |  08  | 8                       |
+   26 |  05  | 5                       |
+   27 |  00  | 0                       |
+   28 |  0B  | /-/                     | negative number
+   29 |  4C  | X→П c                   | setup Rc
+   30 |  01  | 1                       |
+   31 |  08  | 8                       |
+   32 |  48  | X→П 8                   | setup R8
+   33 |  3B  | К СЧ                    | random()
+   34 |  45  | X→П 5                   | setup random_state
+   35 |  50  | С/П                     | setup complete
+
+# Main Listing
+ Step | Code     | Command                 | Comment
+------+----------+-------------------------+----------------
+   00 | 02       | 2                       |
+   01 | 41       | X→П 1                   | arg scale for draw
+   02 | 53       | ПП                      | call function draw
+   03 | 9F       | >9F                     | call function draw; manual: not keyboard-enterable; use loader/hex
+   04 | 4A       | X→П a                   | set work
+   05 | 05       | 5                       |
+   06 | 41       | X→П 1                   | arg scale for draw
+   07 | 53       | ПП                      | call function draw
+   08 | 9F       | >9F                     | call function draw; manual: not keyboard-enterable; use loader/hex
+   09 | 41       | X→П 1                   | set scratch
+   10 | 6A       | П→X a                   | recall work
+   11 | E8       | К x=0 8                 | false branch for ==; preloaded R8=D0 indirect-target=18 shifted-forward indirect flow
+   12 | 64       | П→X 4                   | recall left
+   13 | 61       | П→X 1                   | recall scratch
+   14 | 10       | +                       | expr +
+   15 | 44       | X→П 4                   | set left
+   16 | 51       | БП                      | if end
+   17 | 22       | 22                      | if end
+   18 | 66       | П→X 6                   | recall right
+   19 | 61       | П→X 1                   | recall scratch
+   20 | 10       | +                       | expr +
+   21 | 46       | X→П 6                   | set right
+   22 | 63       | П→X 3                   | recall minutes
+   23 | 6D       | П→X d                   | recall __const_10
+   24 | 22       | F x²                    | constant 100
+   25 | 64       | П→X 4                   | recall left
+   26 | 6D       | П→X d                   | preload const 10
+   27 | 13       | ÷                       | expr /
+   28 | 35       | К {x}                   | frac()
+   29 | 6D       | П→X d                   | preload const 10
+   30 | 12       | ×                       | expr *
+   31 | 34       | К [x]                   | int()
+   32 | 12       | ×                       | expr *
+   33 | 6D       | П→X d                   | preload const 10
+   34 | 64       | П→X 4                   | recall left
+   35 | 6D       | П→X d                   | recall __const_10
+   36 | 22       | F x²                    | constant 100
+   37 | 13       | ÷                       | expr /
+   38 | 35       | К {x}                   | frac()
+   39 | 6D       | П→X d                   | preload const 10
+   40 | 12       | ×                       | expr *
+   41 | 34       | К [x]                   | int()
+   42 | 12       | ×                       | expr *
+   43 | 10       | +                       | expr +
+   44 | 64       | П→X 4                   | recall left
+   45 | 6E       | П→X e                   | preload const 1000
+   46 | 13       | ÷                       | expr /
+   47 | 35       | К {x}                   | frac()
+   48 | 6D       | П→X d                   | preload const 10
+   49 | 12       | ×                       | expr *
+   50 | 34       | К [x]                   | int()
+   51 | 10       | +                       | expr +
+   52 | 6B       | П→X b                   | preload const 10000
+   53 | 12       | ×                       | expr *
+   54 | 07 00 00 | 700                     |
+   57 | 66       | П→X 6                   | recall right
+   58 | 10       | +                       | expr +
+   59 | 3A       | К ИНВ                   | bit_not()
+   60 | 40       | X→П 0                   | set __display_expr_84_2
+   61 | 62       | П→X 2                   | display __inline_show_84_0 floor
+   62 | 60       | П→X 0                   | display __inline_show_84_0 packed row
+   63 | 14       | ↔                       | display packed row floor merge
+   64 | 25       | F reverse               | display packed row preserve
+   65 | 0C       | ВП                      | display packed row restore
+   66 | 50       | С/П                     | show __inline_show_84_0
+   67 | 50       | С/П                     | read work
+   68 | 4A       | X→П a                   | read work
+   69 | 5E       | F x=0                   | false branch for ==
+   70 | 87       | 87                      | false branch for ==
+   71 | 64       | П→X 4                   | recall left
+   72 | 41       | X→П 1                   | arg group for strike
+   73 | 01       | 1                       |
+   74 | 49       | X→П 9                   | arg strength for strike
+   75 | 53       | ПП                      | call function strike
+   76 | AA       | >AA                     | call function strike
+   77 | 44       | X→П 4                   | set left
+   78 | 66       | П→X 6                   | recall right
+   79 | 41       | X→П 1                   | arg group for strike
+   80 | 01       | 1                       |
+   81 | 49       | X→П 9                   | arg strength for strike
+   82 | 53       | ПП                      | call function strike
+   83 | AA       | >AA                     | call function strike
+   84 | 46       | X→П 6                   | set right
+   85 | 51       | БП                      | if end
+   86 | 69       | >69                     | if end
+   87 | 5C       | F x<0                   | false branch for <
+   88 | 98       | 98                      | false branch for <
+   89 | 64       | П→X 4                   | recall left
+   90 | 41       | X→П 1                   | arg group for strike
+   91 | 02       | 2                       |
+   92 | 49       | X→П 9                   | arg strength for strike
+   93 | 53       | ПП                      | call function strike
+   94 | AA       | >AA                     | call function strike
+   95 | 44       | X→П 4                   | set left
+   96 | 51       | БП                      | if end
+   97 | 69       | >69                     | if end
+   98 | 66       | П→X 6                   | recall right
+   99 | 41       | X→П 1                   | arg group for strike
+   A0 | 02       | 2                       |
+   A1 | 49       | X→П 9                   | arg strength for strike
+   A2 | 53       | ПП                      | call function strike
+   A3 | AA       | >AA                     | call function strike
+   A4 | 46       | X→П 6                   | set right
+  >69 | 64       | П→X 4                   | recall left
+  >6A | 6D       | П→X d                   | preload const 10
+  >6B | 12       | ×                       | expr *
+  >6C | 44       | X→П 4                   | set left
+  >6D | 66       | П→X 6                   | recall right
+  >6E | 6D       | П→X d                   | preload const 10
+  >6F | 12       | ×                       | expr *
+  >70 | 46       | X→П 6                   | set right
+  >71 | 64       | П→X 4                   | recall left
+  >72 | 6E       | П→X e                   | preload const 1000
+  >73 | 13       | ÷                       | expr /
+  >74 | 34       | К [x]                   | int()
+  >75 | 66       | П→X 6                   | recall right
+  >76 | 6E       | П→X e                   | preload const 1000
+  >77 | 13       | ÷                       | expr /
+  >78 | 34       | К [x]                   | int()
+  >79 | 10       | +                       | expr +
+  >7A | 4A       | X→П a                   | set work
+  >7B | 64       | П→X 4                   | recall left
+  >7C | 6E       | П→X e                   | preload const 1000
+  >7D | 13       | ÷                       | remainder quotient
+  >7E | 35       | К {x}                   | remainder fractional part
+  >7F | 6E       | П→X e                   | preload const 1000
+  >80 | 12       | ×                       | remainder scale
+  >81 | 44       | X→П 4                   | set left
+  >82 | 66       | П→X 6                   | recall right
+  >83 | 6E       | П→X e                   | preload const 1000
+  >84 | 13       | ÷                       | remainder quotient
+  >85 | 35       | К {x}                   | remainder fractional part
+  >86 | 6E       | П→X e                   | preload const 1000
+  >87 | 12       | ×                       | remainder scale
+  >88 | 46       | X→П 6                   | set right
+  >89 | 6A       | П→X a                   | recall work
+  >8A | 57       | F x≠0                   | false branch for !=
+  >8B | 96       | >96                     | false branch for !=
+  >8C | 6C       | П→X c                   | preload const -850
+  >8D | 50       | С/П                     | pause
+  >8E | 62       | П→X 2                   | recall lives
+  >8F | 01       | 1                       |
+  >90 | 11       | −                       | expr -
+  >91 | 0B       | /-/                     | negate lives for zero test
+  >92 | 59       | F x≥0                   | false branch for <=
+  >93 | 96       | >96                     | false branch for <=
+  >94 | 6C       | П→X c                   | preload const -850
+  >95 | 50       | С/П                     | halt
+  >96 | 63       | П→X 3                   | recall minutes
+  >97 | 01       | 1                       |
+  >98 | 11       | −                       | expr -
+  >99 | 43       | X→П 3                   | set minutes
+  >9A | 0B       | /-/                     | negate minutes for zero test
+  >9B | 97       | К x≥0 7                 | false branch for <=; preloaded R7=B2 indirect-target=0 indirect flow
+  >9C | 6E       | П→X e                   | preload const 1000
+  >9D | 50       | С/П                     | halt
+  >9E | 87       | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow
+  >9F | 07       | 7                       |
+  >A0 | 65       | П→X 5                   | recall random_state
+  >A1 | 12       | ×                       | expr *
+  >A2 | 20       | F π                     | pi()
+  >A3 | 10       | +                       | expr +
+  >A4 | 35       | К {x}                   | frac()
+  >A5 | 45       | X→П 5                   | set random_state
+  >A6 | 61       | П→X 1                   | recall scale
+  >A7 | 12       | ×                       | expr *
+  >A8 | 34       | К [x]                   | int()
+  >A9 | 52       | В/О                     | return value
+  >AA | 61       | П→X 1                   | recall group
+  >AB | 5E       | F x=0                   | false branch for ==
+  >AC | AE       | >AE                     | false branch for ==
+  >AD | 52       | В/О                     | return value
+  >AE | 0E       | В↑                      | preserve current-X left operand
+  >AF | 0E       | В↑                      | preserve current-X left operand
+  >B0 | 17       | F lg                    | current-X lg
+  >B1 | 34       | К [x]                   | current-X int
+  >B2 | 01       | 1                       |
+  >B3 | 10       | +                       | expr +
+  >B4 | 15       | F 10ˣ                   | pow10()
+  >B5 | 13       | ÷                       | expr /
+  >B6 | 35       | К {x}                   | frac()
+  >B7 | 6D       | П→X d                   | preload const 10
+  >B8 | 12       | ×                       | expr *
+  >B9 | 34       | К [x]                   | int()
+  >BA | 01       | 1                       |
+  >BB | 61       | П→X 1                   | recall group
+  >BC | 17       | F lg                    | lg()
+  >BD | 34       | К [x]                   | int()
+  >BE | 10       | +                       | expr +
+  >BF | 01       | 1                       |
+  >C0 | 11       | −                       | expr -
+  >C1 | 15       | F 10ˣ                   | pow10()
+  >C2 | 12       | ×                       | expr *
+  >C3 | 11       | −                       | expr -
+  >C4 | 61       | П→X 1                   | recall group
+  >C5 | 0E       | В↑                      | preserve current-X left operand
+  >C6 | 17       | F lg                    | current-X lg
+  >C7 | 34       | К [x]                   | current-X int
+  >C8 | 01       | 1                       |
+  >C9 | 10       | +                       | expr +
+  >CA | 15       | F 10ˣ                   | pow10()
+  >CB | 13       | ÷                       | expr /
+  >CC | 35       | К {x}                   | frac()
+  >CD | 6D       | П→X d                   | preload const 10
+  >CE | 12       | ×                       | expr *
+  >CF | 34       | К [x]                   | int()
+  >D0 | 69       | П→X 9                   | recall strength
+  >D1 | 11       | −                       | expr -
+  >D2 | 31       | К |x|                   | abs()
+  >D3 | 01       | 1                       |
+  >D4 | 61       | П→X 1                   | recall group
+  >D5 | 17       | F lg                    | lg()
+  >D6 | 34       | К [x]                   | int()
+  >D7 | 10       | +                       | expr +
+  >D8 | 01       | 1                       |
+  >D9 | 11       | −                       | expr -
+  >DA | 15       | F 10ˣ                   | pow10()
+  >DB | 12       | ×                       | expr *
+  >DC | 10       | +                       | expr +
+  >DD | 52       | В/О                     | return value

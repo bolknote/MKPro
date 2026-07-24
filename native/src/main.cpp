@@ -582,6 +582,22 @@ void print_json_emulator_facts(const std::vector<mkpro::EmulatorFactReport>& fac
   std::cout << indent.substr(0, indent.size() - 2U) << "]";
 }
 
+void print_json_runtime_cost(const mkpro::RuntimeCostReport& cost) {
+  std::cout << "{\"available\": " << (cost.available ? "true" : "false")
+            << ", \"score\": " << cost.score << ", \"unit\": ";
+  print_json_string(std::cout, cost.unit);
+  std::cout << ", \"entryCount\": " << cost.entry_count
+            << ", \"cfgStates\": " << cost.cfg_states
+            << ", \"branchPoints\": " << cost.branch_points
+            << ", \"cyclicSccs\": " << cost.cyclic_sccs
+            << ", \"loopTraversalBound\": " << cost.loop_traversal_bound
+            << ", \"policy\": ";
+  print_json_string(std::cout, cost.policy);
+  std::cout << ", \"reason\": ";
+  print_json_string(std::cout, cost.reason);
+  std::cout << "}";
+}
+
 void print_json_report(const mkpro::CompileResult& result) {
   std::cout << "{\n";
   std::cout << "    \"steps\": " << result.steps.size();
@@ -611,6 +627,8 @@ void print_json_report(const mkpro::CompileResult& result) {
             << ", \"intentNodes\": " << result.ir.intent_nodes
             << ", \"effectOps\": " << result.ir.effect_ops
             << ", \"layoutCells\": " << result.ir.layout_cells << "}";
+  std::cout << ",\n    \"runtimeCost\": ";
+  print_json_runtime_cost(result.runtime_cost);
   std::cout << ",\n    \"sizeAttribution\": ";
   print_json_size_attribution(result.size_attribution, "      ");
   std::cout << ",\n    \"candidates\": ";
@@ -870,6 +888,19 @@ void print_human_analysis_report(const mkpro::CompileResult& result) {
       std::cout << "\n";
     }
   }
+
+  std::cout << "\n### Runtime Cost\n";
+  std::cout << "available: " << yes_no(result.runtime_cost.available)
+            << ", score: " << result.runtime_cost.score << " "
+            << result.runtime_cost.unit
+            << ", entries: " << result.runtime_cost.entry_count
+            << ", cfg states: " << result.runtime_cost.cfg_states
+            << ", branches: " << result.runtime_cost.branch_points
+            << ", cyclic SCCs: " << result.runtime_cost.cyclic_sccs
+            << ", loop bound: " << result.runtime_cost.loop_traversal_bound
+            << "\n";
+  std::cout << "policy: " << result.runtime_cost.policy << "\n";
+  std::cout << "reason: " << result.runtime_cost.reason << "\n";
 
   std::cout << "\n### Candidate Paths\n";
   if (result.candidates.empty()) {

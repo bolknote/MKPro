@@ -6,7 +6,7 @@
     "budget": 999999,
     "analysis": true
   },
-  "exampleCount": 31,
+  "exampleCount": 32,
   "examples": [
     {
       "id": "99-bottles",
@@ -502,6 +502,22 @@
         "explain": "pending-optimizer/tic-tac-toe-4x4/explain.txt",
         "report": "pending-optimizer/tic-tac-toe-4x4/report.json",
         "variants": "pending-optimizer/tic-tac-toe-4x4/variants.txt"
+      }
+    },
+    {
+      "id": "pending-optimizer/nekromant",
+      "sourcePath": "examples/pending-optimizer/nekromant.mkpro",
+      "sourceSha256": "de628c6742de4ec1efc882f9330a34903c45d12cdc3f45dd16501c96863b8818",
+      "steps": 222,
+      "artifacts": {
+        "bytes": "pending-optimizer/nekromant/bytes.txt",
+        "hex": "pending-optimizer/nekromant/hex.txt",
+        "listing": "pending-optimizer/nekromant/listing.txt",
+        "keys": "pending-optimizer/nekromant/keys.txt",
+        "setup": "pending-optimizer/nekromant/setup.txt",
+        "explain": "pending-optimizer/nekromant/explain.txt",
+        "report": "pending-optimizer/nekromant/report.json",
+        "variants": "pending-optimizer/nekromant/variants.txt"
       }
     }
   ]

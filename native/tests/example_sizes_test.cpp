@@ -164,6 +164,7 @@ void example_sizes_match_typescript_baselines() {
       {"zagaday-tsifru", 100},
   };
   const std::map<std::string, std::size_t> PENDING_BASELINE{
+      {"nekromant", 222},
       {"tic-tac-toe-4x4", 137},
   };
 

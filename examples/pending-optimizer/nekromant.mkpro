@@ -1,0 +1,94 @@
+reference anvarov_nekromant
+
+// Высокоуровневый порт игры Сержа Анварова «Некромант».
+program Nekromant {
+  state {
+    left: packed = 0
+    right: packed = 0
+    lives: counter 0..9 = 3
+    minutes: counter 0..99 = 25
+    random_state: packed = random()
+    work: packed = 0
+    scratch: packed = 0
+  }
+
+  loop {
+    spawn()
+    render()
+    work = read()
+
+    if work == 0 {
+      left = strike(left, 1)
+      right = strike(right, 1)
+    }
+    else {
+      if work < 0 {
+        left = strike(left, 2)
+      }
+      else {
+        right = strike(right, 2)
+      }
+    }
+
+    advance()
+    if work != 0 {
+      show(-850)
+      lives--
+      if lives <= 0 {
+        halt(-850)
+      }
+    }
+
+    minutes--
+    if minutes <= 0 {
+      halt(1000)
+    }
+  }
+
+  fn spawn() {
+    work = draw(2)
+    scratch = draw(5)
+    if work == 0 {
+      left += scratch
+    }
+    else {
+      right += scratch
+    }
+  }
+
+  fn draw(scale) {
+    random_state = frac(7 * random_state + pi())
+    return int(random_state * scale)
+  }
+
+  fn strike(group, strength) {
+    if group == 0 {
+      return group
+    }
+    return digit_set(
+      group,
+      int(lg(group)) + 1,
+      abs(digit_at(group, int(lg(group)) + 1) - strength))
+  }
+
+  fn advance() {
+    left *= 10
+    right *= 10
+    work = int(left / 1000) + int(right / 1000)
+    left = left - int(left / 1000) * 1000
+    right = right - int(right / 1000) * 1000
+  }
+
+  fn render() {
+    preview(minutes)
+    show(
+      lives,
+      ".",
+      bit_not(
+        (digit_at(left, 1) * 100 +
+         digit_at(left, 2) * 10 +
+         digit_at(left, 3)) * 10000 +
+        7000 +
+        right))
+  }
+}

@@ -3191,3 +3191,26 @@ selector aliases are compared as aliases rather than normalized as numbers.
 For preloaded indirect flow, `preloaded Rn=...` and `indirect-target=...` must
 appear in that order in the same comment. Malformed, reordered, or embedded
 marker text is ignored or rejected by the static gate.
+
+## Runtime-cost tie-break
+
+Program size is the unconditional primary objective. Runtime cost is consulted
+only when two complete candidates occupy exactly the same number of cells and
+their required static proof gates have accepted the final artifacts. A faster
+candidate can never replace a smaller one.
+
+The model uses one context-free table of MK-61 opcode timing classes, expressed
+in centiseconds. Operand-dependent operations use their conservative general
+class. The score is deterministic and suitable for ordering alternatives; it
+is not a promise of wall-clock time for a particular calculator.
+
+The post-layout estimator consumes the authoritative final CFG. Every
+externally admitted entry is charged once. With no branch profile, a branch
+uses its maximum-cost successor. Every cyclic strongly connected component is
+charged for eight traversals. If indirect flow or an external entry cannot be
+proved exactly, the estimate is unavailable and cannot affect candidate
+selection.
+
+JSON and human `--analysis` output expose the score, unit, CFG counts, loop
+bound, policy, and availability reason. A selected equal-size alternative also
+records `runtime-cost-tie-break` with the two compared scores.

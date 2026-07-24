@@ -36,6 +36,7 @@
 #include "mkpro/core/terminal_cyclic_layout.hpp"
 #include "mkpro/core/register_allocator.hpp"
 #include "mkpro/core/return_stack_script.hpp"
+#include "mkpro/core/runtime_cost.hpp"
 #include "mkpro/core/rules.hpp"
 #include "mkpro/core/state_banks.hpp"
 #include "mkpro/core/stack_value_equivalence.hpp"
@@ -51793,6 +51794,14 @@ int estimated_startup_program_cost(const CompileResult& result) {
   return static_cast<int>(result.preloads.size()) * 2;
 }
 
+RuntimeCostReport runtime_cost_for_result(const CompileResult& result) {
+  if (result.runtime_cost.available || !result.runtime_cost.reason.empty())
+    return result.runtime_cost;
+  return core::estimate_runtime_cost(
+      result.items,
+      address_space_model_for_feature_profile(result.feature_profile));
+}
+
 bool candidate_beats_best(const CompileResult& candidate, const CompileResult& best,
                           const CompileOptions& options) {
   const std::size_t optimizer_program_limit = program_step_limit_size_for_options(options);
@@ -51812,6 +51821,13 @@ bool candidate_beats_best(const CompileResult& candidate, const CompileResult& b
     return true;
   if (candidate.steps.size() != best.steps.size())
     return false;
+  const RuntimeCostReport candidate_runtime_cost =
+      runtime_cost_for_result(candidate);
+  const RuntimeCostReport best_runtime_cost = runtime_cost_for_result(best);
+  if (candidate_runtime_cost.available && best_runtime_cost.available &&
+      candidate_runtime_cost.score != best_runtime_cost.score) {
+    return candidate_runtime_cost.score < best_runtime_cost.score;
+  }
   const bool candidate_manual_startup =
       candidate.manual_startup_sequence.has_value();
   const bool best_manual_startup = best.manual_startup_sequence.has_value();
@@ -66593,6 +66609,12 @@ CompileResult compile_source_for_optimizer_profile(
       if (!candidate_beats_best(result, best, options)) {
         continue;
       }
+      const std::optional<std::string> runtime_cost_reason =
+          best.implemented
+              ? core::runtime_cost_tie_break_reason(
+                    result.steps.size(), runtime_cost_for_result(result),
+                    best.steps.size(), runtime_cost_for_result(best))
+              : std::nullopt;
       const std::optional<std::string> rejection_reason =
           candidate_needs_static_proof_gate(candidate.options)
               ? optimizer_static_gate_rejection_reason(candidate.options, result)
@@ -66614,6 +66636,12 @@ CompileResult compile_source_for_optimizer_profile(
           std::cerr << "\n";
         }
         continue;
+      }
+      if (runtime_cost_reason.has_value()) {
+        result.optimizations.push_back(OptimizationReport{
+            .name = "runtime-cost-tie-break",
+            .detail = *runtime_cost_reason,
+        });
       }
       const std::string comparison = best.implemented
                                          ? std::to_string(result.steps.size()) + " vs " +
@@ -69847,6 +69875,7 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
   if (!feature_profile_has_rf_register(options.feature_profile) ||
       options.optimizer_feature_profile_override.has_value() ||
       has_explicit_lowering_variant(options)) {
+    expanded.runtime_cost = runtime_cost_for_result(expanded);
     return expanded;
   }
 
@@ -69857,15 +69886,37 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
     standard_options.budget = std::min(*standard_options.budget, standard_limit);
   CompileResult standard = compile_source_for_optimizer_profile(source, standard_options);
   if (!candidate_beats_best(standard, expanded, options)) {
+    const std::optional<std::string> runtime_cost_reason =
+        core::runtime_cost_tie_break_reason(
+            expanded.steps.size(), runtime_cost_for_result(expanded),
+            standard.steps.size(), runtime_cost_for_result(standard));
+    if (runtime_cost_reason.has_value()) {
+      expanded.optimizations.push_back(OptimizationReport{
+          .name = "runtime-cost-tie-break",
+          .detail = *runtime_cost_reason,
+      });
+    }
     append_feature_profile_search_report(expanded, standard, expanded,
                                          /*selected_standard=*/false, options);
+    expanded.runtime_cost = runtime_cost_for_result(expanded);
     return expanded;
   }
 
+  const std::optional<std::string> runtime_cost_reason =
+      core::runtime_cost_tie_break_reason(
+          standard.steps.size(), runtime_cost_for_result(standard),
+          expanded.steps.size(), runtime_cost_for_result(expanded));
+  if (runtime_cost_reason.has_value()) {
+    standard.optimizations.push_back(OptimizationReport{
+        .name = "runtime-cost-tie-break",
+        .detail = *runtime_cost_reason,
+    });
+  }
   standard.budget = options.budget;
   reformat_result_for_target_profile(standard, options.feature_profile);
   append_feature_profile_search_report(standard, standard, expanded,
                                        /*selected_standard=*/true, options);
+  standard.runtime_cost = runtime_cost_for_result(standard);
   return standard;
 }
 

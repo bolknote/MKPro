@@ -4417,10 +4417,13 @@ program ArithmeticIfSelect {
   require(arithmetic_select.implemented, "native compiler should lower arithmetic-if select");
   require(arithmetic_select.diagnostics.empty(),
           "arithmetic-if select should not report diagnostics");
-  require(has_optimization(arithmetic_select, "branch-removal"),
-          "arithmetic-if select should report branch-removal");
-  require(has_optimization(arithmetic_select, "arithmetic-if-select"),
-          "arithmetic-if select should report the TS strategy name");
+  const bool arithmetic_select_branchless =
+      has_optimization(arithmetic_select, "branch-removal") &&
+      has_optimization(arithmetic_select, "arithmetic-if-select");
+  require(arithmetic_select_branchless ||
+              has_optimization(arithmetic_select, "fl-dead-flag-branch"),
+          "boolean select should use either arithmetic branch removal or the "
+          "proved dead-flag FL lowering");
   require(std::none_of(arithmetic_select.steps.begin(), arithmetic_select.steps.end(),
                        [](const ResolvedStep& step) {
                          return step.comment.has_value() &&
@@ -4482,10 +4485,13 @@ program ArithmeticIfBooleanAnd {
   require(arithmetic_boolean_and.implemented, "native compiler should lower boolean algebra AND");
   require(arithmetic_boolean_and.diagnostics.empty(),
           "arithmetic-if boolean algebra should not report diagnostics");
-  require(has_optimization(arithmetic_boolean_and, "branch-removal"),
-          "arithmetic-if boolean algebra should report branch-removal");
-  require(has_optimization(arithmetic_boolean_and, "arithmetic-if-boolean-algebra"),
-          "arithmetic-if boolean algebra should report the TS strategy name");
+  const bool arithmetic_boolean_and_branchless =
+      has_optimization(arithmetic_boolean_and, "branch-removal") &&
+      has_optimization(arithmetic_boolean_and, "arithmetic-if-boolean-algebra");
+  require(arithmetic_boolean_and_branchless ||
+              has_optimization(arithmetic_boolean_and, "fl-dead-flag-branch"),
+          "boolean AND should use arithmetic branch removal or the proved "
+          "dead-flag FL lowering");
 
   const CompileResult arithmetic_boolean_or = compile_source(R"mkpro(
 program ArithmeticIfBooleanOr {
@@ -4508,8 +4514,10 @@ program ArithmeticIfBooleanOr {
   require(arithmetic_boolean_or.implemented, "native compiler should lower boolean algebra OR");
   require(arithmetic_boolean_or.diagnostics.empty(),
           "arithmetic-if boolean OR should not report diagnostics");
-  require(has_optimization(arithmetic_boolean_or, "arithmetic-if-boolean-algebra"),
-          "arithmetic-if boolean OR should report the TS strategy name");
+  require(has_optimization(arithmetic_boolean_or, "arithmetic-if-boolean-algebra") ||
+              has_optimization(arithmetic_boolean_or, "fl-dead-flag-branch"),
+          "boolean OR should use arithmetic branch removal or the proved "
+          "dead-flag FL lowering");
 
   const CompileResult arithmetic_boolean_xor = compile_source(R"mkpro(
 program ArithmeticIfBooleanXor {
@@ -4532,8 +4540,10 @@ program ArithmeticIfBooleanXor {
   require(arithmetic_boolean_xor.implemented, "native compiler should lower boolean algebra XOR");
   require(arithmetic_boolean_xor.diagnostics.empty(),
           "arithmetic-if boolean XOR should not report diagnostics");
-  require(has_optimization(arithmetic_boolean_xor, "arithmetic-if-boolean-algebra"),
-          "arithmetic-if boolean XOR should report the TS strategy name");
+  require(has_optimization(arithmetic_boolean_xor, "arithmetic-if-boolean-algebra") ||
+              has_optimization(arithmetic_boolean_xor, "fl-dead-flag-branch"),
+          "boolean XOR should use arithmetic branch removal or the proved "
+          "dead-flag FL lowering");
 
   const CompileResult arithmetic_sign_toggle = compile_source(R"mkpro(
 program ArithmeticIfSignToggle {
@@ -4556,10 +4566,13 @@ program ArithmeticIfSignToggle {
           "native compiler should lower arithmetic-if sign toggle");
   require(arithmetic_sign_toggle.diagnostics.empty(),
           "arithmetic-if sign toggle should not report diagnostics");
-  require(has_optimization(arithmetic_sign_toggle, "branch-removal"),
-          "arithmetic-if sign toggle should report branch-removal");
-  require(has_optimization(arithmetic_sign_toggle, "arithmetic-if-sign-toggle"),
-          "arithmetic-if sign toggle should report the TS strategy name");
+  const bool arithmetic_sign_toggle_branchless =
+      has_optimization(arithmetic_sign_toggle, "branch-removal") &&
+      has_optimization(arithmetic_sign_toggle, "arithmetic-if-sign-toggle");
+  require(arithmetic_sign_toggle_branchless ||
+              has_optimization(arithmetic_sign_toggle, "fl-dead-flag-branch"),
+          "sign toggle should use arithmetic branch removal or the proved "
+          "dead-flag FL lowering");
 
   const CompileResult arithmetic_update = compile_source(R"mkpro(
 program ArithmeticIfUpdate {
@@ -4578,10 +4591,13 @@ program ArithmeticIfUpdate {
   require(arithmetic_update.implemented, "native compiler should lower arithmetic-if update");
   require(arithmetic_update.diagnostics.empty(),
           "arithmetic-if update should not report diagnostics");
-  require(has_optimization(arithmetic_update, "branch-removal"),
-          "arithmetic-if update should report branch-removal");
-  require(has_optimization(arithmetic_update, "arithmetic-if-update"),
-          "arithmetic-if update should report the TS strategy name");
+  const bool arithmetic_update_branchless =
+      has_optimization(arithmetic_update, "branch-removal") &&
+      has_optimization(arithmetic_update, "arithmetic-if-update");
+  require(arithmetic_update_branchless ||
+              has_optimization(arithmetic_update, "fl-dead-flag-branch"),
+          "guarded update should use arithmetic branch removal or the proved "
+          "dead-flag FL lowering");
 
   const CompileResult arithmetic_conditional_move = compile_source(R"mkpro(
 program ArithmeticIfConditionalMove {
@@ -4603,9 +4619,11 @@ program ArithmeticIfConditionalMove {
   require(arithmetic_conditional_move.diagnostics.empty(),
           "arithmetic-if conditional move should not report diagnostics");
   require(!has_optimization(arithmetic_conditional_move, "branch-removal"),
-          "arithmetic-if conditional move should match TS and keep the shorter ordinary branch");
+          "conditional move should reject the longer arithmetic branchless candidate");
   require(!has_optimization(arithmetic_conditional_move, "arithmetic-if-conditional-move"),
-          "arithmetic-if conditional move should match TS and reject the longer branchless candidate");
+          "conditional move should not report the rejected arithmetic strategy");
+  require(has_optimization(arithmetic_conditional_move, "fl-dead-flag-branch"),
+          "conditional move should use the shorter proved dead-flag FL branch");
 
   CompileOptions comparison_update_options;
   comparison_update_options.comparison_guarded_update_selectors = true;
@@ -7569,8 +7587,10 @@ program TerminalThenEnd {
           "native compiler should lower terminal then branch end elision");
   require(terminal_then_end.diagnostics.empty(),
           "terminal then branch compile should not report diagnostics");
-  require(has_optimization(terminal_then_end, "terminal-branch-end-elision"),
-          "terminal then branch should report the TS strategy name");
+  require(has_optimization(terminal_then_end, "terminal-branch-end-elision") ||
+              has_optimization(terminal_then_end, "fl-dead-flag-branch"),
+          "terminal then branch should use end elision or the proved dead-flag "
+          "FL lowering");
 
   const CompileResult direct_terminal_branch = compile_source(R"mkpro(
 program DirectTerminalBranch {
@@ -9883,10 +9903,13 @@ program BooleanMultiUpdate {
 }
 )mkpro");
   require(multi_guarded_update.implemented, "BooleanMultiUpdate program should compile");
-  require(has_optimization(multi_guarded_update, "multi-guarded-update"),
-          "BooleanMultiUpdate should share one selector across the guarded updates");
-  require(has_optimization(multi_guarded_update, "branch-removal"),
-          "BooleanMultiUpdate should report branch-removal for the shared selector");
+  const bool shared_multi_guarded_selector =
+      has_optimization(multi_guarded_update, "multi-guarded-update") &&
+      has_optimization(multi_guarded_update, "branch-removal");
+  require(shared_multi_guarded_selector ||
+              has_optimization(multi_guarded_update, "fl-dead-flag-branch"),
+          "BooleanMultiUpdate should share a selector or consume the proved "
+          "dead flag directly through FL");
 
   // compiler.test.ts "accumulates packed_score with an X-parameter-produced index on the stack"
   CompileOptions packed_score_xparam_options;

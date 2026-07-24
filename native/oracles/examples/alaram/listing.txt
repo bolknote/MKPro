@@ -5,83 +5,78 @@
    01 |  01  | 1                       |
    02 |  1D  | F cos                   | expected_mode("grd") cosine
    03 |  18  | F ln                    | expected_mode("grd") domain guard
-   04 |  00  | 0                       |
-   05 |  42  | X→П 2                   | setup R2
-   06 |  40  | X→П 0                   | setup R0
-   07 |  41  | X→П 1                   | setup R1
-   08 |  03  | 3                       |
-   09 |  44  | X→П 4                   | setup R4
-   10 |  45  | X→П 5                   | setup R5
-   11 |  43  | X→П 3                   | setup R3
+   04 |  03  | 3                       |
+   05 |  00  | 0                       |
+   06 |  00  | 0                       |
+   07 |  0B  | /-/                     | negative number
+   08 |  46  | X→П 6                   | setup R6
+   09 |  00  | 0                       |
+   10 |  40  | X→П 0                   | setup R0
+   11 |  41  | X→П 1                   | setup R1
    12 |  03  | 3                       |
-   13 |  00  | 0                       |
-   14 |  00  | 0                       |
-   15 |  0B  | /-/                     | negative number
-   16 |  46  | X→П 6                   | setup R6
-   17 |  01  | 1                       |
-   18 |  00  | 0                       |
-   19 |  4A  | X→П a                   | setup Ra
+   13 |  45  | X→П 5                   | setup R5
+   14 |  01  | 1                       |
+   15 |  00  | 0                       |
+   16 |  4A  | X→П a                   | setup Ra
+   17 |  6A  | П→X a                   | setup constant 100 base 10
+   18 |  22  | F x²                    | setup constant 100
+   19 |  4C  | X→П c                   | setup Rc
    20 |  01  | 1                       |
-   21 |  00  | 0                       |
-   22 |  00  | 0                       |
-   23 |  4C  | X→П c                   | setup Rc
-   24 |  01  | 1                       |
-   25 |  03  | 3                       |
-   26 |  02  | 2                       |
-   27 |  00  | 0                       |
-   28 |  05  | 5                       |
-   29 |  08  | 8                       |
-   30 |  07  | 7                       |
-   31 |  4D  | X→П d                   | setup Rd
+   21 |  03  | 3                       |
+   22 |  02  | 2                       |
+   23 |  00  | 0                       |
+   24 |  05  | 5                       |
+   25 |  08  | 8                       |
+   26 |  07  | 7                       |
+   27 |  4D  | X→П d                   | setup Rd
+   28 |  01  | 1                       |
+   29 |  03  | 3                       |
+   30 |  02  | 2                       |
+   31 |  05  | 5                       |
    32 |  01  | 1                       |
-   33 |  03  | 3                       |
-   34 |  02  | 2                       |
-   35 |  05  | 5                       |
-   36 |  01  | 1                       |
-   37 |  05  | 5                       |
-   38 |  08  | 8                       |
-   39 |  07  | 7                       |
-   40 |  4E  | X→П e                   | setup Re
-   41 |  01  | 1                       |
-   42 |  00  | 0                       |
+   33 |  05  | 5                       |
+   34 |  08  | 8                       |
+   35 |  07  | 7                       |
+   36 |  4E  | X→П e                   | setup Re
+   37 |  01  | 1                       |
+   38 |  00  | 0                       |
+   39 |  00  | 0                       |
+   40 |  06  | 6                       |
+   41 |  02  | 2                       |
+   42 |  06  | 6                       |
    43 |  00  | 0                       |
-   44 |  06  | 6                       |
-   45 |  02  | 2                       |
-   46 |  06  | 6                       |
-   47 |  00  | 0                       |
-   48 |  00  | 0                       |
-   49 |  0E  | В↑                      | setup Rb body split
+   44 |  00  | 0                       |
+   45 |  0E  | В↑                      | setup Rb body split
+   46 |  09  | 9                       |
+   47 |  01  | 1                       |
+   48 |  06  | 6                       |
+   49 |  08  | 8                       |
    50 |  09  | 9                       |
-   51 |  01  | 1                       |
-   52 |  06  | 6                       |
-   53 |  08  | 8                       |
-   54 |  09  | 9                       |
-   55 |  09  | 9                       |
-   56 |  09  | 9                       |
-   57 |  01  | 1                       |
-   58 |  39  | К ⊕                     | setup Rb body
-   59 |  4B  | X→П b                   | setup Rb body scratch
-   60 |  01  | 1                       |
-   61 |  02  | 2                       |
-   62 |  3A  | К ИНВ                   | setup Rb first digit
-   63 |  35  | К {x}                   | setup Rb first digit
-   64 |  6B  | П→X b                   | setup Rb body scratch
-   65 |  14  | ↔                       | display sign-digit first-cell splice
-   66 |  54  | К НОП                   | display sign-digit first-cell splice
-   67 |  0C  | ВП                      | display sign-digit first-cell splice
-   68 |  0C  | ВП                      | setup Rb exponent
-   69 |  07  | 7                       | setup Rb exponent
-   70 |  4B  | X→П b                   | setup Rb
-   71 |  04  | 4                       |
-   72 |  09  | 9                       |
-   73 |  47  | X→П 7                   | setup R7
-   74 |  01  | 1                       |
-   75 |  05  | 5                       |
-   76 |  48  | X→П 8                   | setup R8
-   77 |  02  | 2                       |
-   78 |  04  | 4                       |
-   79 |  49  | X→П 9                   | setup R9
-   80 |  50  | С/П                     | setup complete
+   51 |  09  | 9                       |
+   52 |  09  | 9                       |
+   53 |  01  | 1                       |
+   54 |  39  | К ⊕                     | setup Rb body
+   55 |  4B  | X→П b                   | setup Rb body scratch
+   56 |  01  | 1                       |
+   57 |  02  | 2                       |
+   58 |  3A  | К ИНВ                   | setup Rb first digit
+   59 |  35  | К {x}                   | setup Rb first digit
+   60 |  6B  | П→X b                   | setup Rb body scratch
+   61 |  14  | ↔                       | display sign-digit first-cell splice
+   62 |  54  | К НОП                   | display sign-digit first-cell splice
+   63 |  0C  | ВП                      | display sign-digit first-cell splice
+   64 |  0C  | ВП                      | setup Rb exponent
+   65 |  07  | 7                       | setup Rb exponent
+   66 |  4B  | X→П b                   | setup Rb
+   67 |  04  | 4                       |
+   68 |  08  | 8                       |
+   69 |  47  | X→П 7                   | setup R7
+   70 |  00  | 0                       |
+   71 |  48  | X→П 8                   | setup R8
+   72 |  01  | 1                       |
+   73 |  05  | 5                       |
+   74 |  49  | X→П 9                   | setup R9
+   75 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
@@ -89,27 +84,27 @@
    00 |  6D  | П→X d                   | preload const 1320587
    01 |  3A  | К ИНВ                   | display literal video bytes
    02 |  50  | С/П                     | show __inline_show_42_0
-   03 |  E8  | К x=0 8                 | case mismatch; preloaded R8=C7 indirect-target=15 shifted-forward indirect flow
+   03 |  E9  | К x=0 9                 | case mismatch; preloaded R9=C7 indirect-target=15 shifted-forward indirect flow
    04 |  6A  | П→X a                   | preload const 10
    05 |  65  | П→X 5                   | recall level
    06 |  11  | −                       | expr -
    07 |  61  | П→X 1                   | recall angle
    08 |  31  | К |x|                   | abs()
    09 |  11  | −                       | condition compare
-   10 |  97  | К x≥0 7                 | false branch for <=; preloaded R7=49 indirect-target=49 shifted-forward indirect flow
+   10 |  97  | К x≥0 7                 | false branch for <=; preloaded R7=48 indirect-target=48 shifted-forward indirect flow
    11 |  6E  | П→X e                   | preload const 13251587
    12 |  3A  | К ИНВ                   | display literal video bytes
    13 |  50  | С/П                     | show __halt_literal_38
-   14 |  87  | К БП 7                  | dispatch end; preloaded R7=49 indirect-target=49 shifted-forward indirect flow
+   14 |  87  | К БП 7                  | dispatch end; preloaded R7=48 indirect-target=48 shifted-forward indirect flow
    15 |  02  | 2                       |
    16 |  11  | −                       | dispatch residual compare
-   17 |  E9  | К x=0 9                 | case mismatch; preloaded R9=D6 indirect-target=24 shifted-forward indirect flow
-   18 |  60  | П→X 0                   | recall altitude
-   19 |  6C  | П→X c                   | preload const 100
-   20 |  11  | −                       | expr -
-   21 |  40  | X→П 0                   | set altitude
+   17 |  5E  | F x=0                   | case mismatch
+   18 |  24  | 24                      | case mismatch
+   19 |  60  | П→X 0                   | recall altitude
+   20 |  6C  | П→X c                   | preload const 100
+   21 |  11  | −                       | expr -
    22 |  17  | F lg                    | domain-error guard trap
-   23 |  87  | К БП 7                  | dispatch end; preloaded R7=49 indirect-target=49 shifted-forward indirect flow
+   23 |  87  | К БП 7                  | dispatch end; preloaded R7=48 indirect-target=48 shifted-forward indirect flow
    24 |  02  | 2                       |
    25 |  11  | −                       | dispatch residual compare
    26 |  5E  | F x=0                   | case mismatch
@@ -118,7 +113,7 @@
    29 |  6A  | П→X a                   | preload const 10
    30 |  11  | −                       | expr -
    31 |  41  | X→П 1                   | set angle
-   32 |  87  | К БП 7                  | dispatch end; preloaded R7=49 indirect-target=49 shifted-forward indirect flow
+   32 |  87  | К БП 7                  | dispatch end; preloaded R7=48 indirect-target=48 shifted-forward indirect flow
    33 |  02  | 2                       |
    34 |  11  | −                       | dispatch residual compare
    35 |  5E  | F x=0                   | case mismatch
@@ -130,25 +125,25 @@
    41 |  31  | 31                      | shared terminal tail
    42 |  02  | 2                       |
    43 |  11  | −                       | dispatch residual compare
-   44 |  E7  | К x=0 7                 | case mismatch; reused preloaded R7=49 indirect-target=49 direct flow
+   44 |  E7  | К x=0 7                 | case mismatch; reused preloaded R7=48 indirect-target=48 direct flow
    45 |  6C  | П→X c                   | preload const 100
    46 |  60  | П→X 0                   | recall altitude
    47 |  10  | +                       | expr +
-   48 |  40  | X→П 0                   | set altitude
-   49 |  01  | 1                       |
-   50 |  66  | П→X 6                   | recall range
-   51 |  10  | +                       | expr +
-   52 |  46  | X→П 6                   | set range
-   53 |  3B  | К СЧ                    | random()
-   54 |  09  | 9                       |
-   55 |  12  | ×                       | expr *
-   56 |  0E  | В↑                      | random int keep scaled draw
-   57 |  35  | К {x}                   | random int fractional part
-   58 |  11  | −                       | random int floor
-   59 |  01  | 1                       |
-   60 |  10  | +                       | expr +
+   48 |  01  | 1                       |
+   49 |  66  | П→X 6                   | recall range
+   50 |  10  | +                       | expr +
+   51 |  46  | X→П 6                   | set range
+   52 |  3B  | К СЧ                    | random()
+   53 |  09  | 9                       |
+   54 |  12  | ×                       | expr *
+   55 |  0E  | В↑                      | random int keep scaled draw
+   56 |  35  | К {x}                   | random int fractional part
+   57 |  11  | −                       | random int floor
+   58 |  01  | 1                       |
+   59 |  10  | +                       | expr +
+   60 |  40  | X→П 0                   | set intruder_mark
    61 |  66  | П→X 6                   | recall range
-   62 |  9C  | К x≥0 c                 | false branch for >=; preloaded Rc=100 indirect-target=0 indirect flow
+   62 |  98  | К x≥0 8                 | false branch for >=; preloaded R8=B2 indirect-target=0 indirect flow
    63 |  6B  | П→X b                   | display __halt_literal_34 literal
    64 |  50  | С/П                     | show __halt_literal_34
-   65 |  8C  | К БП c                  | loop back; preloaded Rc=100 indirect-target=0 indirect flow
+   65 |  88  | К БП 8                  | loop back; preloaded R8=B2 indirect-target=0 indirect flow

@@ -87,6 +87,7 @@ void emulator_interprocedural_equivalence_matches_typescript_contract();
 void emulator_zagaday_tsifru_optimized_source_preserves_ui();
 void emulator_log_selector_premise_matches_typescript_contract();
 void emulator_mk61_execution_matches_typescript_contract();
+void emulator_nekromant_reference_and_source_contract();
 void emulator_near_any_helper_matches_typescript_contract();
 void emulator_number_entry_concat_matches_typescript_contract();
 void emulator_indexed_packed_pow10_y_stack_semantics();
@@ -165,6 +166,7 @@ void recall_removal_engine_matches_initial_typescript_contract();
 void residual_elseif_matches_typescript_contract();
 void residual_temp_matches_typescript_contract();
 void return_stack_script_matches_mk61_strategy_contract();
+void runtime_cost_model_prefers_faster_equal_size_candidates();
 void register_allocator_matches_typescript_contract();
 void register_coalesce_matches_typescript_contract();
 void rules_match_typescript_contract();
@@ -342,6 +344,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(emulator_zagaday_tsifru_optimized_source_preserves_ui),
       MKPRO_TEST(emulator_log_selector_premise_matches_typescript_contract),
       MKPRO_TEST(emulator_mk61_execution_matches_typescript_contract),
+      MKPRO_TEST(emulator_nekromant_reference_and_source_contract),
       MKPRO_TEST(emulator_near_any_helper_matches_typescript_contract),
       MKPRO_TEST(emulator_number_entry_concat_matches_typescript_contract),
       MKPRO_TEST(emulator_indexed_packed_pow10_y_stack_semantics),
@@ -416,6 +419,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(residual_elseif_matches_typescript_contract),
       MKPRO_TEST(residual_temp_matches_typescript_contract),
       MKPRO_TEST(return_stack_script_matches_mk61_strategy_contract),
+      MKPRO_TEST(runtime_cost_model_prefers_faster_equal_size_candidates),
       MKPRO_TEST(register_allocator_matches_typescript_contract),
       MKPRO_TEST(register_coalesce_matches_typescript_contract),
       MKPRO_TEST(rules_match_typescript_contract),

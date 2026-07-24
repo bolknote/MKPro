@@ -89,6 +89,19 @@ struct IrReport {
   int layout_cells = 0;
 };
 
+struct RuntimeCostReport {
+  bool available = false;
+  long long score = 0;
+  std::string unit = "centiseconds";
+  int entry_count = 0;
+  int cfg_states = 0;
+  int branch_points = 0;
+  int cyclic_sccs = 0;
+  int loop_traversal_bound = 8;
+  std::string policy;
+  std::string reason;
+};
+
 struct CandidateReport {
   std::string site;
   std::string variant;
@@ -456,6 +469,7 @@ struct CompileResult {
   std::optional<ReferenceReport> reference;
   OptimizerReport optimizer;
   IrReport ir;
+  RuntimeCostReport runtime_cost;
   SizeAttributionReport size_attribution;
   std::vector<CandidateReport> candidates;
   std::vector<MachineFeatureUseReport> machine_features_used;

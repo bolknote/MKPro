@@ -1,0 +1,501 @@
+## Listing
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  00  | 0                       |
+   01 |  44  | X→П 4                   | setup R4
+   02 |  46  | X→П 6                   | setup R6
+   03 |  4A  | X→П a                   | setup Ra
+   04 |  40  | X→П 0                   | setup R0
+   05 |  47  | X→П 7                   | setup R7
+   06 |  03  | 3                       |
+   07 |  42  | X→П 2                   | setup R2
+   08 |  02  | 2                       |
+   09 |  05  | 5                       |
+   10 |  43  | X→П 3                   | setup R3
+   11 |  01  | 1                       |
+   12 |  00  | 0                       |
+   13 |  4D  | X→П d                   | setup Rd
+   14 |  01  | 1                       |
+   15 |  00  | 0                       |
+   16 |  00  | 0                       |
+   17 |  00  | 0                       |
+   18 |  4E  | X→П e                   | setup Re
+   19 |  01  | 1                       |
+   20 |  00  | 0                       |
+   21 |  00  | 0                       |
+   22 |  00  | 0                       |
+   23 |  00  | 0                       |
+   24 |  4B  | X→П b                   | setup Rb
+   25 |  08  | 8                       |
+   26 |  05  | 5                       |
+   27 |  00  | 0                       |
+   28 |  0B  | /-/                     | negative number
+   29 |  4C  | X→П c                   | setup Rc
+   30 |  01  | 1                       |
+   31 |  08  | 8                       |
+   32 |  48  | X→П 8                   | setup R8
+   33 |  3B  | К СЧ                    | random()
+   34 |  45  | X→П 5                   | setup random_state
+   35 |  50  | С/П                     | setup complete
+
+# Main Listing
+ Step | Code     | Command                 | Comment
+------+----------+-------------------------+----------------
+   00 | 02       | 2                       |
+   01 | 41       | X→П 1                   | arg scale for draw
+   02 | 53       | ПП                      | call function draw
+   03 | 9F       | >9F                     | call function draw; manual: not keyboard-enterable; use loader/hex
+   04 | 4A       | X→П a                   | set work
+   05 | 05       | 5                       |
+   06 | 41       | X→П 1                   | arg scale for draw
+   07 | 53       | ПП                      | call function draw
+   08 | 9F       | >9F                     | call function draw; manual: not keyboard-enterable; use loader/hex
+   09 | 41       | X→П 1                   | set scratch
+   10 | 6A       | П→X a                   | recall work
+   11 | E8       | К x=0 8                 | false branch for ==; preloaded R8=D0 indirect-target=18 shifted-forward indirect flow
+   12 | 64       | П→X 4                   | recall left
+   13 | 61       | П→X 1                   | recall scratch
+   14 | 10       | +                       | expr +
+   15 | 44       | X→П 4                   | set left
+   16 | 51       | БП                      | if end
+   17 | 22       | 22                      | if end
+   18 | 66       | П→X 6                   | recall right
+   19 | 61       | П→X 1                   | recall scratch
+   20 | 10       | +                       | expr +
+   21 | 46       | X→П 6                   | set right
+   22 | 63       | П→X 3                   | recall minutes
+   23 | 6D       | П→X d                   | recall __const_10
+   24 | 22       | F x²                    | constant 100
+   25 | 64       | П→X 4                   | recall left
+   26 | 6D       | П→X d                   | preload const 10
+   27 | 13       | ÷                       | expr /
+   28 | 35       | К {x}                   | frac()
+   29 | 6D       | П→X d                   | preload const 10
+   30 | 12       | ×                       | expr *
+   31 | 34       | К [x]                   | int()
+   32 | 12       | ×                       | expr *
+   33 | 6D       | П→X d                   | preload const 10
+   34 | 64       | П→X 4                   | recall left
+   35 | 6D       | П→X d                   | recall __const_10
+   36 | 22       | F x²                    | constant 100
+   37 | 13       | ÷                       | expr /
+   38 | 35       | К {x}                   | frac()
+   39 | 6D       | П→X d                   | preload const 10
+   40 | 12       | ×                       | expr *
+   41 | 34       | К [x]                   | int()
+   42 | 12       | ×                       | expr *
+   43 | 10       | +                       | expr +
+   44 | 64       | П→X 4                   | recall left
+   45 | 6E       | П→X e                   | preload const 1000
+   46 | 13       | ÷                       | expr /
+   47 | 35       | К {x}                   | frac()
+   48 | 6D       | П→X d                   | preload const 10
+   49 | 12       | ×                       | expr *
+   50 | 34       | К [x]                   | int()
+   51 | 10       | +                       | expr +
+   52 | 6B       | П→X b                   | preload const 10000
+   53 | 12       | ×                       | expr *
+   54 | 07 00 00 | 700                     |
+   57 | 66       | П→X 6                   | recall right
+   58 | 10       | +                       | expr +
+   59 | 3A       | К ИНВ                   | bit_not()
+   60 | 40       | X→П 0                   | set __display_expr_84_2
+   61 | 62       | П→X 2                   | display __inline_show_84_0 floor
+   62 | 60       | П→X 0                   | display __inline_show_84_0 packed row
+   63 | 14       | ↔                       | display packed row floor merge
+   64 | 25       | F reverse               | display packed row preserve
+   65 | 0C       | ВП                      | display packed row restore
+   66 | 50       | С/П                     | show __inline_show_84_0
+   67 | 50       | С/П                     | read work
+   68 | 4A       | X→П a                   | read work
+   69 | 5E       | F x=0                   | false branch for ==
+   70 | 87       | 87                      | false branch for ==
+   71 | 64       | П→X 4                   | recall left
+   72 | 41       | X→П 1                   | arg group for strike
+   73 | 01       | 1                       |
+   74 | 49       | X→П 9                   | arg strength for strike
+   75 | 53       | ПП                      | call function strike
+   76 | AA       | >AA                     | call function strike
+   77 | 44       | X→П 4                   | set left
+   78 | 66       | П→X 6                   | recall right
+   79 | 41       | X→П 1                   | arg group for strike
+   80 | 01       | 1                       |
+   81 | 49       | X→П 9                   | arg strength for strike
+   82 | 53       | ПП                      | call function strike
+   83 | AA       | >AA                     | call function strike
+   84 | 46       | X→П 6                   | set right
+   85 | 51       | БП                      | if end
+   86 | 69       | >69                     | if end
+   87 | 5C       | F x<0                   | false branch for <
+   88 | 98       | 98                      | false branch for <
+   89 | 64       | П→X 4                   | recall left
+   90 | 41       | X→П 1                   | arg group for strike
+   91 | 02       | 2                       |
+   92 | 49       | X→П 9                   | arg strength for strike
+   93 | 53       | ПП                      | call function strike
+   94 | AA       | >AA                     | call function strike
+   95 | 44       | X→П 4                   | set left
+   96 | 51       | БП                      | if end
+   97 | 69       | >69                     | if end
+   98 | 66       | П→X 6                   | recall right
+   99 | 41       | X→П 1                   | arg group for strike
+   A0 | 02       | 2                       |
+   A1 | 49       | X→П 9                   | arg strength for strike
+   A2 | 53       | ПП                      | call function strike
+   A3 | AA       | >AA                     | call function strike
+   A4 | 46       | X→П 6                   | set right
+  >69 | 64       | П→X 4                   | recall left
+  >6A | 6D       | П→X d                   | preload const 10
+  >6B | 12       | ×                       | expr *
+  >6C | 44       | X→П 4                   | set left
+  >6D | 66       | П→X 6                   | recall right
+  >6E | 6D       | П→X d                   | preload const 10
+  >6F | 12       | ×                       | expr *
+  >70 | 46       | X→П 6                   | set right
+  >71 | 64       | П→X 4                   | recall left
+  >72 | 6E       | П→X e                   | preload const 1000
+  >73 | 13       | ÷                       | expr /
+  >74 | 34       | К [x]                   | int()
+  >75 | 66       | П→X 6                   | recall right
+  >76 | 6E       | П→X e                   | preload const 1000
+  >77 | 13       | ÷                       | expr /
+  >78 | 34       | К [x]                   | int()
+  >79 | 10       | +                       | expr +
+  >7A | 4A       | X→П a                   | set work
+  >7B | 64       | П→X 4                   | recall left
+  >7C | 6E       | П→X e                   | preload const 1000
+  >7D | 13       | ÷                       | remainder quotient
+  >7E | 35       | К {x}                   | remainder fractional part
+  >7F | 6E       | П→X e                   | preload const 1000
+  >80 | 12       | ×                       | remainder scale
+  >81 | 44       | X→П 4                   | set left
+  >82 | 66       | П→X 6                   | recall right
+  >83 | 6E       | П→X e                   | preload const 1000
+  >84 | 13       | ÷                       | remainder quotient
+  >85 | 35       | К {x}                   | remainder fractional part
+  >86 | 6E       | П→X e                   | preload const 1000
+  >87 | 12       | ×                       | remainder scale
+  >88 | 46       | X→П 6                   | set right
+  >89 | 6A       | П→X a                   | recall work
+  >8A | 57       | F x≠0                   | false branch for !=
+  >8B | 96       | >96                     | false branch for !=
+  >8C | 6C       | П→X c                   | preload const -850
+  >8D | 50       | С/П                     | pause
+  >8E | 62       | П→X 2                   | recall lives
+  >8F | 01       | 1                       |
+  >90 | 11       | −                       | expr -
+  >91 | 0B       | /-/                     | negate lives for zero test
+  >92 | 59       | F x≥0                   | false branch for <=
+  >93 | 96       | >96                     | false branch for <=
+  >94 | 6C       | П→X c                   | preload const -850
+  >95 | 50       | С/П                     | halt
+  >96 | 63       | П→X 3                   | recall minutes
+  >97 | 01       | 1                       |
+  >98 | 11       | −                       | expr -
+  >99 | 43       | X→П 3                   | set minutes
+  >9A | 0B       | /-/                     | negate minutes for zero test
+  >9B | 97       | К x≥0 7                 | false branch for <=; preloaded R7=B2 indirect-target=0 indirect flow
+  >9C | 6E       | П→X e                   | preload const 1000
+  >9D | 50       | С/П                     | halt
+  >9E | 87       | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow
+  >9F | 07       | 7                       |
+  >A0 | 65       | П→X 5                   | recall random_state
+  >A1 | 12       | ×                       | expr *
+  >A2 | 20       | F π                     | pi()
+  >A3 | 10       | +                       | expr +
+  >A4 | 35       | К {x}                   | frac()
+  >A5 | 45       | X→П 5                   | set random_state
+  >A6 | 61       | П→X 1                   | recall scale
+  >A7 | 12       | ×                       | expr *
+  >A8 | 34       | К [x]                   | int()
+  >A9 | 52       | В/О                     | return value
+  >AA | 61       | П→X 1                   | recall group
+  >AB | 5E       | F x=0                   | false branch for ==
+  >AC | AE       | >AE                     | false branch for ==
+  >AD | 52       | В/О                     | return value
+  >AE | 0E       | В↑                      | preserve current-X left operand
+  >AF | 0E       | В↑                      | preserve current-X left operand
+  >B0 | 17       | F lg                    | current-X lg
+  >B1 | 34       | К [x]                   | current-X int
+  >B2 | 01       | 1                       |
+  >B3 | 10       | +                       | expr +
+  >B4 | 15       | F 10ˣ                   | pow10()
+  >B5 | 13       | ÷                       | expr /
+  >B6 | 35       | К {x}                   | frac()
+  >B7 | 6D       | П→X d                   | preload const 10
+  >B8 | 12       | ×                       | expr *
+  >B9 | 34       | К [x]                   | int()
+  >BA | 01       | 1                       |
+  >BB | 61       | П→X 1                   | recall group
+  >BC | 17       | F lg                    | lg()
+  >BD | 34       | К [x]                   | int()
+  >BE | 10       | +                       | expr +
+  >BF | 01       | 1                       |
+  >C0 | 11       | −                       | expr -
+  >C1 | 15       | F 10ˣ                   | pow10()
+  >C2 | 12       | ×                       | expr *
+  >C3 | 11       | −                       | expr -
+  >C4 | 61       | П→X 1                   | recall group
+  >C5 | 0E       | В↑                      | preserve current-X left operand
+  >C6 | 17       | F lg                    | current-X lg
+  >C7 | 34       | К [x]                   | current-X int
+  >C8 | 01       | 1                       |
+  >C9 | 10       | +                       | expr +
+  >CA | 15       | F 10ˣ                   | pow10()
+  >CB | 13       | ÷                       | expr /
+  >CC | 35       | К {x}                   | frac()
+  >CD | 6D       | П→X d                   | preload const 10
+  >CE | 12       | ×                       | expr *
+  >CF | 34       | К [x]                   | int()
+  >D0 | 69       | П→X 9                   | recall strength
+  >D1 | 11       | −                       | expr -
+  >D2 | 31       | К |x|                   | abs()
+  >D3 | 01       | 1                       |
+  >D4 | 61       | П→X 1                   | recall group
+  >D5 | 17       | F lg                    | lg()
+  >D6 | 34       | К [x]                   | int()
+  >D7 | 10       | +                       | expr +
+  >D8 | 01       | 1                       |
+  >D9 | 11       | −                       | expr -
+  >DA | 15       | F 10ˣ                   | pow10()
+  >DB | 12       | ×                       | expr *
+  >DC | 10       | +                       | expr +
+  >DD | 52       | В/О                     | return value
+
+## Setup Hex
+00: 00 44 46 4A 40 47 03 42
+08: 02 05 43 01 00 4D 01 00
+16: 00 00 4E 01 00 00 00 00
+24: 4B 08 05 00 0B 4C 01 08
+32: 48 3B 45 50
+
+## Hex
+00: 02 41 53 9F 4A 05 41 53
+08: 9F 41 6A E8 64 61 10 44
+16: 51 22 66 61 10 46 63 6D
+24: 22 64 6D 13 35 6D 12 34
+32: 12 6D 64 6D 22 13 35 6D
+40: 12 34 12 10 64 6E 13 35
+48: 6D 12 34 10 6B 12 07 00
+56: 00 66 10 3A 40 62 60 14
+64: 25 0C 50 50 4A 5E 87 64
+72: 41 01 49 53 AA 44 66 41
+80: 01 49 53 AA 46 51 69 5C
+88: 98 64 41 02 49 53 AA 44
+96: 51 69 66 41 02 49 53 AA
+A4: 46 64 6D 12 44 66 6D 12
+>70: 46 64 6E 13 34 66 6E 13
+>78: 34 10 4A 64 6E 13 35 6E
+>80: 12 44 66 6E 13 35 6E 12
+>88: 46 6A 57 96 6C 50 62 01
+>90: 11 0B 59 96 6C 50 63 01
+>98: 11 43 0B 97 6E 50 87 07
+>A0: 65 12 20 10 35 45 61 12
+>A8: 34 52 61 5E AE 52 0E 0E
+>B0: 17 34 01 10 15 13 35 6D
+>B8: 12 34 01 61 17 34 10 01
+>C0: 11 15 12 11 61 0E 17 34
+>C8: 01 10 15 13 35 6D 12 34
+>D0: 69 11 31 01 61 17 34 10
+>D8: 01 11 15 12 10 52
+
+## Optimizer Report
+automatic: yes, active: 4, considered: 0, candidate: 9, planned: 0
+
+### Capabilities
+- x2-display-register [active] category=stack source=documented - Schedules values through the hidden X2 display register when display-state proofs hold.
+- r0-alias-indirect [candidate] category=flow source=undocumented requires=r0-fractional-sentinel - Uses R0 fractional/alias indirect effects only under explicit exact-machine proofs.
+- super-dark-dispatch [active] category=layout source=undocumented requires=super-dark-dispatch,indirect-flow - Considers FA..FF one-command dispatch only after layout and selector proofs.
+- code-data-overlay [candidate] category=layout source=undocumented requires=address-constants - Overlays code, address operands, and constants only after post-layout conflict checks.
+- stack-current-x-scheduling [active] category=stack source=documented - Reuses the current X value across lowering sites instead of spilling a temporary register.
+- ephemeral-input-dispatch [candidate] category=flow source=documented - Dispatches directly on one-shot input values without allocating persistent state.
+- computed-dispatch [candidate] category=flow source=undocumented requires=indirect-flow,address-formula-solver - Synthesizes indirect-flow targets with a solved address formula after layout.
+- dispatch-default-merge [candidate] category=flow source=documented - Merges dispatch cases whose bodies are identical to the default branch.
+- decimal-packed-state [candidate] category=state source=documented requires=decimal-digits - Packs several small non-negative hidden fields into decimal digits of one register.
+- sign-packed-state [candidate] category=state source=undocumented requires=sign-digits - Carries boolean state bits in signs of positive hidden counters.
+- preloaded-indirect-flow [active] category=flow source=undocumented requires=indirect-flow - Uses compiler-owned setup-time branch selectors for one-cell indirect flow.
+- return-trampoline [candidate] category=flow source=undocumented requires=indirect-flow - Routes branches to an existing В/О in physical cell 00 through one-cell indirect flow.
+- post-layout-stop-tail-reuse [candidate] category=layout source=undocumented requires=indirect-flow - Reuses post-layout stop tails and existing selectors after final address proofs.
+
+### Applied Optimizations
+- display-expression-materialization - Materialized 1 display expression field before show().
+- expression-constant-folder - Folded 8 constant expression nodes before code generation.
+- auto-preload-initial-state - Moved initial state into setup/preload values so official program cells stay focused on turn logic.
+- intent-domain-lowering - Lowered 11 state fields and 5 rules through the generic intent pipeline.
+- function-call - Called function draw.
+- function-call - Called function draw.
+- zero-condition-test - Tested == 0 without materializing a zero literal at line 51.
+- equality-zero-fallthrough - Reused the zero left in X by equality comparison at line 51.
+- single-use-rule-inline - Inlined single-use rule spawn at line 16.
+- running-display-preview - Prepared visible value without a calculator stop at line 83.
+- constant-synthesis - Built constant 100 by squared preloaded 10.
+- preloaded-constant - Used preloaded Rd for constant 10.
+- expression-constant-folder - Folded a compile-time expression to 10.
+- preloaded-constant - Used preloaded Rd for constant 10.
+- packed-grid-primitive-lowering - Lowered digit_at() to reusable 4x4 grid/packed-line arithmetic.
+- exact-decimal-digit-extraction - Lowered digit_at() through fractional scaling followed by К [x] truncation.
+- preloaded-constant - Used preloaded Rd for constant 10.
+- constant-synthesis - Built constant 100 by squared preloaded 10.
+- expression-constant-folder - Folded a compile-time expression to 100.
+- preloaded-constant - Used preloaded Rd for constant 10.
+- packed-grid-primitive-lowering - Lowered digit_at() to reusable 4x4 grid/packed-line arithmetic.
+- exact-decimal-digit-extraction - Lowered digit_at() through fractional scaling followed by К [x] truncation.
+- preloaded-constant - Used preloaded Re for constant 1000.
+- expression-constant-folder - Folded a compile-time expression to 1000.
+- preloaded-constant - Used preloaded Rd for constant 10.
+- packed-grid-primitive-lowering - Lowered digit_at() to reusable 4x4 grid/packed-line arithmetic.
+- exact-decimal-digit-extraction - Lowered digit_at() through fractional scaling followed by К [x] truncation.
+- preloaded-constant - Used preloaded Rb for constant 10000.
+- floor-packed-row-display - Spliced one-digit floor into a packed row display.
+- single-use-rule-inline - Inlined single-use rule render at line 17.
+- intent-read-lowering - Lowered read at line 18 to calculator stop plus register store.
+- zero-condition-test - Tested == 0 without materializing a zero literal at line 20.
+- equality-zero-fallthrough - Reused the zero left in X by equality comparison at line 20.
+- function-call - Called function strike.
+- function-call - Called function strike.
+- zero-condition-test - Tested < 0 without materializing a zero literal at line 25.
+- function-call - Called function strike.
+- function-call - Called function strike.
+- preloaded-constant - Used preloaded Rd for constant 10.
+- preloaded-constant - Used preloaded Rd for constant 10.
+- preloaded-constant - Used preloaded Re for constant 1000.
+- preloaded-constant - Used preloaded Re for constant 1000.
+- preloaded-constant - Used preloaded Re for constant 1000.
+- preloaded-constant - Used preloaded Re for constant 1000.
+- remainder-fraction-lowering - Lowered integer remainder without recomputing the dividend.
+- preloaded-constant - Used preloaded Re for constant 1000.
+- preloaded-constant - Used preloaded Re for constant 1000.
+- remainder-fraction-lowering - Lowered integer remainder without recomputing the dividend.
+- single-use-rule-inline - Inlined single-use rule advance at line 33.
+- zero-condition-test - Tested != 0 without materializing a zero literal at line 34.
+- preloaded-constant - Used preloaded Rc for constant -850.
+- expression-constant-folder - Folded a compile-time expression to -850.
+- stack-carried-update - Kept updated lives in X for the immediately following consumer instead of storing it.
+- current-x-negated-zero-test - Reused lives already in X and negated it for lives <= 0 at line 37.
+- preloaded-constant - Used preloaded Rc for constant -850.
+- expression-constant-folder - Folded a compile-time expression to -850.
+- current-x-negated-zero-test - Reused minutes already in X and negated it for minutes <= 0 at line 43.
+- preloaded-constant - Used preloaded Re for constant 1000.
+- stack-current-x-scheduling - Reused current X for commutative *.
+- zero-condition-test - Tested == 0 without materializing a zero literal at line 65.
+- equality-zero-fallthrough - Reused the zero left in X by equality comparison at line 65.
+- stack-current-x-scheduling - Reused current X for commutative +.
+- pow10-opcode-lowering - Lowered pow10() through F 10^x.
+- stack-current-x-scheduling - Preserved current X while evaluating a dependent right operand for /.
+- preloaded-constant - Used preloaded Rd for constant 10.
+- pow10-opcode-lowering - Lowered pow10() through F 10^x.
+- stack-current-x-scheduling - Preserved current X while evaluating a dependent right operand for -.
+- stack-current-x-scheduling - Reused current X for commutative +.
+- pow10-opcode-lowering - Lowered pow10() through F 10^x.
+- stack-current-x-scheduling - Preserved current X while evaluating a dependent right operand for /.
+- preloaded-constant - Used preloaded Rd for constant 10.
+- packed-grid-primitive-lowering - Lowered digit_at() to reusable 4x4 grid/packed-line arithmetic.
+- exact-decimal-digit-extraction - Lowered digit_at() through fractional scaling followed by К [x] truncation.
+- pow10-opcode-lowering - Lowered pow10() through F 10^x.
+- packed-grid-primitive-lowering - Lowered digit_set() to reusable 4x4 grid/packed-line arithmetic.
+- jump-thread - Threaded 1 direct control transfer(s) through trampoline labels to the final target.
+- flow-x-reuse - Dropped 3 recalls whose register value already reaches the point in X on every CFG predecessor.
+- constant-folding - Dropped 1 identity arithmetic operation(s) (0+ or 1*).
+- register-coalesce - Coalesced 2 non-overlapping register live range(s).
+- preloaded-indirect-flow - Activated post-layout: replaced 3 direct branch/call(s) with proven preloaded indirect flow.
+- dark-entry-layout - Pointed 2 branch(es) at an executable suffix through a proven dark-entry formal address (beyond the official program window).
+- helper-invariant-recall-hoist-rejected - __fn_draw: helper contains an unsupported stack/X2 command
+- shared-helper-terminal-wrapper-rejected - __fn_strike: helper body contains control flow
+- terminal-shared-return-selector-rejections - terminal shared-return selector: no exclusive K-AND/K-frac/Fx=0 terminal tail
+- terminal-cyclic-layout-rejected - empty-return startup layout: artifact contains no direct BP 00 startup loop candidate | artifact contains no structural terminal report tail | return alias: no structural tail with equivalent returns | semantic return alias: no typed helper contracts are available
+- generated-setup-program - Generated optimized setup program for compiler-owned preloads.
+- setup-duplicate-preload-store-reuse - Loaded setup constant 0 once and stored it into R4, R6, Ra, R0, R7.
+- late-final-layout-candidate-search - Compared 1 independently finalized candidate layout(s) and selected 222 cells.
+- fast-candidate-search - Completed the bounded size-rescue candidate pass and selected 222 cells.
+
+### Runtime Cost
+available: yes, score: 367224 centiseconds, entries: 4, cfg states: 371, branches: 10, cyclic SCCs: 1, loop bound: 8
+policy: sum each externally admitted entry once; unknown branch probabilities use the maximum-cost successor; each cyclic SCC is charged 8 traversals; unproved indirect flow makes the estimate unavailable
+reason: estimated from the authoritative bounded post-layout CFG
+
+### Candidate Paths
+- ir-pass :: preloaded-indirect-flow steps=1 selected=yes - compiler-owned address preload selected for one-cell indirect branch/call
+- layout :: dark-entry-layout steps=222 selected=yes - layout proved an executable suffix reachable through a formal dark entry
+
+### Rejected Candidate Paths
+- layout :: super-dark-dispatch steps=222 - considered only after layout proof; not selected without a proved FA..FF case
+
+### Size Attribution
+total cells: 222
+- listing :: preload const cells=20 occurrences=20 range=26..205
+- listing :: literal/input cell cells=17 occurrences=17 range=0..216
+- listing :: expr * cells=12 occurrences=12 range=30..219
+- helper-region :: draw cells=11 occurrences=1 range=159..169 - calls=2
+- listing :: expr + cells=11 occurrences=11 range=14..220
+- listing :: int() cells=9 occurrences=9 range=31..214
+- listing :: recall left cells=9 occurrences=9 range=12..123
+- helper-call-sites :: strike cells=8 occurrences=4 range=75..103 - target=>AA
+- listing :: expr / cells=7 occurrences=7 range=27..203
+- listing :: recall right cells=7 occurrences=7 range=18..130
+- listing :: expr - cells=6 occurrences=6 range=144..217
+- listing :: if end cells=6 occurrences=6 range=16..97
+- listing :: frac() cells=5 occurrences=5 range=28..204
+- listing :: set left cells=5 occurrences=5 range=15..129
+- listing :: set right cells=5 occurrences=5 range=21..136
+
+### Size Helpers
+- draw total=15 body=11 calls=4 callOccurrences=2 registerTraffic=3 recalls=2 stores=1 range=2..169 details={argumentRecallSitesByName=random_state:1@>A0;scale:1@>A6, registerRecallCells=2, registerStoreCells=1, registerTrafficAction=try-value-aware-stack-register-scheduling, registerTrafficBreakdown=random_state:2c/1r/1s@>A0..>A5;scale:1c/1r/0s@>A6..>A6, registerTrafficCells=3, registerTrafficEstimateKind=gross-local-helper-traffic, registerTrafficNames=random_state,scale, registerTrafficOccurrences=3, registerTrafficProofStatus=missing-callsite-stack-value-proof, valueAwareAllStackCapacityStatus=fits-x-y-z-t-capacity, valueAwareAllStackInputPressure=0, valueAwareArgumentRecallSitesByName=random_state:1@>A0;scale:1@>A6, valueAwareBestStackInputAdditionalRecallCellsToProfit=2, valueAwareBestStackInputCandidate=scale, valueAwareBestStackInputGrossCells=1, valueAwareBestStackInputNetCells=-1, valueAwareBestStackInputNextProofTarget=reduce-callsite-materialization-by-2,or-find-additional-helper-local-recall-savings-by-2, valueAwareBestStackInputPositiveGapReason=current-input-negative-after-callsite-materialization, valueAwareCallArgumentStoreCells=2, valueAwareCallArgumentStoreCellsByName=scale:2, valueAwareCallArgumentStoreSites=scale@call02<-arg-store01;scale@call07<-arg-store06, valueAwareCallerArgStoreAdjustedStackInputNetCells=1, valueAwareCallerArgStoreAdjustedStackInputProfitBreakdown=scale:1g/2m/2a/+1n, valueAwareCallerArgStorePlanStatus=positive-before-function-stack-entry-cost, valueAwareCallerArgStoreProofStatus=requires-stack-entry-function-abi-and-arg-expression-stack-preservation, valueAwareCallerArgStoreRequiredAction=model-stack-entry-function-abi-cost, valueAwareMixedStateAccessOrder=random_state:R@>A0/S@>A5, valueAwareMixedStateBreakdown=random_state:2c/1r/1s@>A0..>A5, valueAwareMixedStateCells=2, valueAwareMixedStateLifetimeStatus=local-to-helper-without-nested-calls, valueAwareMixedStateLocalLifetimeCells=2, valueAwareMixedStateLocalLifetimeNames=random_state, valueAwareMixedStateNames=random_state, valueAwareMixedStateProofAction=prove-local-stack-value-flow-through-mutating-ops, valueAwareMixedStateRequiredUpdateCells=2, valueAwareMixedStateRequiredUpdateNames=random_state, valueAwareMixedStateRequiredUpdateReason=recall-before-store traffic updates persistent state and is not direct scheduler savings, valueAwareProfitableStackInputCount=0, valueAwareProfitableStackInputGrossCells=0, valueAwareProfitableStackInputMaterializeCells=0, valueAwareProfitableStackInputNetCells=0, valueAwareProfitableStackInputPlanStatus=no-profitable-stack-input-materialization, valueAwareRegisterRecallCells=2, valueAwareRegisterStoreCells=1, valueAwareRegisterTrafficBreakdown=random_state:2c/1r/1s@>A0..>A5;scale:1c/1r/0s@>A6..>A6, valueAwareRegisterTrafficCells=3, valueAwareRegisterTrafficNames=random_state,scale, valueAwareRegisterTrafficOccurrences=3, valueAwareSchedulerPlanStatus=no-profitable-stack-input-materialization, valueAwareSchedulerTrafficShape=stack-inputs-and-deferred-state-outputs, valueAwareStackCapacity=4, valueAwareStackCapacityBasis=profitable-stack-inputs-after-materialization, valueAwareStackCapacityStatus=fits-x-y-z-t-capacity, valueAwareStackInputCells=1, valueAwareStackInputMaterializeCellsByName=scale:2m/0e/2c, valueAwareStackInputMaterializeCellsPerInput=2, valueAwareStackInputMaterializeCostModel=one-callsite-recall-per-input, valueAwareStackInputNames=scale, valueAwareStackInputPlanBasis=ranked-helper-local-recall-cells, valueAwareStackInputPlanStatus=no-profitable-stack-input-materialization, valueAwareStackInputPressure=0, valueAwareStackInputProfitBreakdown=scale:1g/2m/-1n, valueAwareStackInputRanking=scale:1, valueAwareStackInputUniqueCount=1, valueAwareSuggestedResidentInputCells=0, valueAwareSuggestedResidentInputNames=, valueAwareSymbolicEntryStackByCallSite=02:X=?,Y=?,Z=?,T=?;07:X=?,Y=?,Z=?,T=?, valueAwareSymbolicEntryStackSeed=X=?,Y=?,Z=?,T=?, valueAwareSymbolicEntryStackSeedStatus=unknown-callsite-stack, valueAwareUnprofitableStackInputNames=scale}
+- strike total=12 body=4 calls=8 callOccurrences=4 registerTraffic=1 recalls=1 stores=0 range=75..173 details={argumentRecallSitesByName=group:1@>AA, registerRecallCells=1, registerStoreCells=0, registerTrafficAction=try-value-aware-stack-register-scheduling, registerTrafficBreakdown=group:1c/1r/0s@>AA..>AA, registerTrafficCells=1, registerTrafficEstimateKind=gross-local-helper-traffic, registerTrafficNames=group, registerTrafficOccurrences=1, registerTrafficProofStatus=missing-callsite-stack-value-proof, valueAwareAllStackCapacityStatus=fits-x-y-z-t-capacity, valueAwareAllStackInputPressure=0, valueAwareArgumentRecallSitesByName=group:1@>AA, valueAwareBestStackInputAdditionalRecallCellsToProfit=4, valueAwareBestStackInputCandidate=group, valueAwareBestStackInputGrossCells=1, valueAwareBestStackInputNetCells=-3, valueAwareBestStackInputNextProofTarget=reduce-callsite-materialization-by-4,or-find-additional-helper-local-recall-savings-by-4, valueAwareBestStackInputPositiveGapReason=current-input-negative-after-callsite-materialization, valueAwareCallArgumentStoreCells=4, valueAwareCallArgumentStoreCellsByName=group:4, valueAwareCallArgumentStoreSites=strength@call75<-arg-store74;group@call75<-arg-store72;strength@call82<-arg-store81;group@call82<-arg-store79;strength@call93<-arg-store92;group@call93<-arg-store90;strength@callA2<-arg-storeA1;group@callA2<-arg-store99, valueAwareCallerArgStoreAdjustedStackInputNetCells=1, valueAwareCallerArgStoreAdjustedStackInputProfitBreakdown=group:1g/4m/4a/+1n, valueAwareCallerArgStorePlanStatus=positive-before-function-stack-entry-cost, valueAwareCallerArgStoreProofStatus=requires-stack-entry-function-abi-and-arg-expression-stack-preservation, valueAwareCallerArgStoreRequiredAction=model-stack-entry-function-abi-cost, valueAwareProfitableStackInputCount=0, valueAwareProfitableStackInputGrossCells=0, valueAwareProfitableStackInputMaterializeCells=0, valueAwareProfitableStackInputNetCells=0, valueAwareProfitableStackInputPlanStatus=no-profitable-stack-input-materialization, valueAwareRegisterRecallCells=1, valueAwareRegisterStoreCells=0, valueAwareRegisterTrafficBreakdown=group:1c/1r/0s@>AA..>AA, valueAwareRegisterTrafficCells=1, valueAwareRegisterTrafficNames=group, valueAwareRegisterTrafficOccurrences=1, valueAwareSchedulerPlanStatus=no-profitable-stack-input-materialization, valueAwareSchedulerTrafficShape=stack-inputs-only, valueAwareStackCapacity=4, valueAwareStackCapacityBasis=profitable-stack-inputs-after-materialization, valueAwareStackCapacityStatus=fits-x-y-z-t-capacity, valueAwareStackInputCells=1, valueAwareStackInputMaterializeCellsByName=group:4m/0e/4c, valueAwareStackInputMaterializeCellsPerInput=4, valueAwareStackInputMaterializeCostModel=one-callsite-recall-per-input, valueAwareStackInputNames=group, valueAwareStackInputPlanBasis=ranked-helper-local-recall-cells, valueAwareStackInputPlanStatus=no-profitable-stack-input-materialization, valueAwareStackInputPressure=0, valueAwareStackInputProfitBreakdown=group:1g/4m/-3n, valueAwareStackInputRanking=group:1, valueAwareStackInputUniqueCount=1, valueAwareSuggestedResidentInputCells=0, valueAwareSuggestedResidentInputNames=, valueAwareSymbolicEntryStackByCallSite=75:X=?,Y=?,Z=?,T=?;82:X=?,Y=?,Z=?,T=?;93:X=?,Y=?,Z=?,T=?;A2:X=?,Y=?,Z=?,T=?, valueAwareSymbolicEntryStackSeed=X=?,Y=?,Z=?,T=?, valueAwareSymbolicEntryStackSeedStatus=unknown-callsite-stack, valueAwareUnprofitableStackInputNames=group}
+
+### Size Helper Spills
+- draw :: random_state total=2 recalls=1 stores=1 occurrences=2 range=160..165
+- draw :: scale total=1 recalls=1 stores=0 occurrences=1 range=166..166
+- strike :: group total=1 recalls=1 stores=0 occurrences=1 range=170..170
+
+### Size ABI Blockers
+(none)
+
+### Size Selected Optimizations
+- flow :: preloaded-indirect-flow current=222 baseline=225 savings=3 estimateKind=gross-main-cell-direct-to-indirect-flow replacementCount=3 savingsModel=one-cell-saved-per-replaced-direct-branch-call baselineStepsStatus=estimated-gross-before-overlapping-layout-effects savingsAggregation=selected-optimization-not-necessarily-additive - Activated post-layout: replaced 3 direct branch/call(s) with proven preloaded indirect flow.
+
+### Size Opportunities
+- helper :: helper-register-traffic current=222 candidate=222 savings=0 blocker=value-aware-stack-register-scheduler helperLabel=draw registerTrafficNames=random_state,scale requiredAction=value-aware-stack-register-scheduling estimateKind=estimated-net-after-materialization candidateStepsStatus=not-a-positive-size-opportunity sizeImpactStatus=estimated-nonpositive-net valueAwareSchedulerPlanStatus=no-profitable-stack-input-materialization valueAwareStackInputPlanStatus=no-profitable-stack-input-materialization valueAwareStackInputProfitBreakdown=scale:1g/2m/-1n valueAwareBestStackInputCandidate=scale valueAwareBestStackInputNetCells=-1 valueAwareBestStackInputAdditionalRecallCellsToProfit=2 valueAwareStackInputPressure=0 registerTrafficBreakdown=random_state:2c/1r/1s@>A0..>A5;scale:1c/1r/0s@>A6..>A6 - helper-local register traffic requires value-aware stack/register scheduling proof before it can be removed
+- helper :: helper-register-traffic current=222 candidate=222 savings=0 blocker=value-aware-stack-register-scheduler helperLabel=strike registerTrafficNames=group requiredAction=value-aware-stack-register-scheduling estimateKind=estimated-net-after-materialization candidateStepsStatus=not-a-positive-size-opportunity sizeImpactStatus=estimated-nonpositive-net valueAwareSchedulerPlanStatus=no-profitable-stack-input-materialization valueAwareStackInputPlanStatus=no-profitable-stack-input-materialization valueAwareStackInputProfitBreakdown=group:1g/4m/-3n valueAwareBestStackInputCandidate=group valueAwareBestStackInputNetCells=-3 valueAwareBestStackInputAdditionalRecallCellsToProfit=4 valueAwareStackInputPressure=0 registerTrafficBreakdown=group:1c/1r/0s@>AA..>AA - helper-local register traffic requires value-aware stack/register scheduling proof before it can be removed
+- layout :: super-dark-dispatch current=222 candidate=222 savings=0 blocker=nonwinning-candidate requiredAction=prove-super-dark-fa-ff-case-layout estimateKind=measured-rejected-candidate-delta candidateStepsStatus=same-size-as-current sizeImpactStatus=neutral-rejected-candidate-delta - considered only after layout proof; not selected without a proved FA..FF case
+
+### Size Spills
+- left total=14 recalls=9 stores=5 occurrences=14 range=12..129
+- right total=12 recalls=7 stores=5 occurrences=12 range=18..136
+- work total=5 recalls=2 stores=3 occurrences=5 range=4..137
+- group total=4 recalls=4 stores=0 occurrences=4 range=170..212
+- minutes total=3 recalls=2 stores=1 occurrences=3 range=22..153
+- scratch total=3 recalls=2 stores=1 occurrences=3 range=9..19
+- __const_10 total=2 recalls=2 stores=0 occurrences=2 range=23..35
+- random_state total=2 recalls=1 stores=1 occurrences=2 range=160..165
+- lives total=1 recalls=1 stores=0 occurrences=1 range=142..142
+- scale total=1 recalls=1 stores=0 occurrences=1 range=166..166
+- strength total=1 recalls=1 stores=0 occurrences=1 range=208..208
+- __display_expr_84_2 total=1 recalls=0 stores=1 occurrences=1 range=60..60
+
+### Size Blockers
+(none)
+
+### Size Next Actions
+- costModelAction=find-profitable-stack-input-call-sites-or-reduce-materialization-cost status=stalled-nonpositive opportunities=2 potentialSavings=0 best=0 blocker=value-aware-stack-register-scheduler via helper-register-traffic at helper helperLabel=draw registerTrafficNames=random_state,scale registerTrafficBreakdown=random_state:2c/1r/1s@>A0..>A5;scale:1c/1r/0s@>A6..>A6 estimateKind=estimated-net-after-materialization candidateStepsStatus=not-a-positive-size-opportunity sizeImpactStatus=estimated-nonpositive-net valueAwareSchedulerPlanStatus=no-profitable-stack-input-materialization valueAwareStackInputPlanStatus=no-profitable-stack-input-materialization valueAwareStackInputProfitBreakdown=scale:1g/2m/-1n valueAwareBestStackInputCandidate=scale valueAwareBestStackInputNetCells=-1 valueAwareBestStackInputAdditionalRecallCellsToProfit=2 valueAwareStackInputPressure=0 - helper-local register traffic requires value-aware stack/register scheduling proof before it can be removed
+
+### Proofs
+- value-ranges [proved] - V2 state domains and expression ranges were tracked during lowering.
+- indirect-flow-targets [proved] - Final preload artifacts for indirect branch/call selectors match the annotated selector value and re-resolve to the annotated target.
+
+### Emulator Facts
+- return-empty-stack-jumps-to-01 [probed] - В/О with an empty return stack behaves as one-cell БП 01 in continuous execution.
+- resumable-error-skips-one-cell [probed] - A resumable explicit ЕГГ0Г trap stops with PC=addr+2; continuing executes the cell after exactly one skipped physical padding cell.
+- zggog-return-stack-preload [probed] - A normalized 3GG0G with exponent 200..299 deterministically sets PC 20..29 and loads five stored return addresses from the exponent suffix and eight mantissa digits; stack overflow then exposes a deterministic sixth target.
+- long-monster-return-stack-display [probed] - Applying F 1/x to a 3GG0G exposes the ten return-stack digits as a long monster; this is an observation oracle, not an execution primitive.
+- uniform-dirty-return-stack-restores-after-call [probed] - After 3GG0G stack exhaustion produces five equal stored addresses, a balanced leaf call restores that uniform stack and a later В/О selects the same dirty target.
+- r0-star-f-aliases [probed] - *F aliases behave like the corresponding *0 commands, including R0 transformation; they do not preserve R0.
+- super-dark-fa-ff-indirect [probed] - Indirect К БП R with R=FA..FF executes one command at 48..53, then continues at 01..06.
+- fa-direct-vs-indirect [probed] - Direct БП FA consumes/overwrites the following operand byte, while indirect К БП R leaves 01..06 usable as tail code.
+- r0-fractional-jump-99 [probed] - К БП 0 with R0 in fractional positive/small states jumps to 99 and leaves R0=-99999999.
+- r0-fractional-selects-r3 [probed] - К П->X 0 and К X->П 0 with 0<R0<1 access R3 and leave R0=-99999999.
+- x2-restore-boundaries [probed] - ВП, '.', '/-/', and digit-entry X2 restoration boundaries are modeled as display-state boundaries.
+- negative-zero-degree-threshold [probed] - With 1|-00 in Y, multiplying by X and then normalizing through В↑ yields a zero/nonzero threshold at |X|=1.
+- grd-angle-trig-identities [documented] - In ГРД angle mode, cos(100) is zero and acos(0) is 100; optimizer use must be guarded by expected_mode("grd").
+- step-vs-run-delta [probed] - Continuous-run behavior is the default profile; step-only divergences are explicit exact-machine facts.
+- raw-display-5f [probed] - Opcode 5F leaves internal X intact but mutates display/raw state; it is usable only as an explicit display-state trick.

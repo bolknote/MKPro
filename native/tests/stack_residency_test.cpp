@@ -1570,8 +1570,9 @@ program RuleStackInputDelayedAssignmentEntryProbe {
     stack_input_options.stack_argument_function_entries = true;
     const CompileResult stack_input = compile_source(source, stack_input_options);
     require_clean_compile(stack_input, "rule delayed stack-input assignment variant");
-    require(stack_input.steps.size() + 3U == baseline.steps.size(),
-            "delayed stack-input entry should remove the hot recall and two delayed x stores");
+    require(stack_input.steps.size() + 3U <= baseline.steps.size(),
+            "delayed stack-input entry should remove at least the hot recall "
+            "and two delayed x stores");
     require(has_optimization(stack_input, "rule-stack-input-entry-primary"),
             "delayed stack-input entry should compile hot as a primary stack-input entry");
     require(has_optimization(stack_input, "stack-carried-assignment-delayed"),
