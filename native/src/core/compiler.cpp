@@ -34670,6 +34670,305 @@ bool lower_function_rules(LoweringContext& context, const V2Program& program) {
   return true;
 }
 
+struct DeadFlagValueFlow {
+  bool unsafe_read = false;
+  bool reaches_end_live = true;
+};
+
+DeadFlagValueFlow dead_flag_value_flow_for_statements(
+    LoweringContext& context, const std::vector<V2Statement>& statements,
+    const std::string& name, std::set<std::string>& seen_rules);
+
+DeadFlagValueFlow dead_flag_value_flow_for_statement(
+    LoweringContext& context, const V2Statement& statement, const std::string& name,
+    std::set<std::string>& seen_rules) {
+  bool writes_name = false;
+  if ((statement.kind == "v2_assign" || statement.kind == "v2_update" ||
+       statement.kind == "v2_read") &&
+      statement.target.has_value()) {
+    try {
+      const Expression target = parse_expression(*statement.target, statement.line);
+      writes_name = target.kind == "identifier" && target.name == name;
+      if (!writes_name && expression_contains_identifier(target, name))
+        return {.unsafe_read = true};
+    } catch (const std::exception&) {
+      writes_name = trim_ascii(*statement.target) == name;
+      if (!writes_name && text_mentions_identifier(*statement.target, name))
+        return {.unsafe_read = true};
+    }
+    if (statement.kind == "v2_update" && writes_name)
+      return {.unsafe_read = true};
+  }
+
+  if (statement.expr.has_value() &&
+      expression_text_contains_identifier(*statement.expr, name, statement.line)) {
+    return {.unsafe_read = true};
+  }
+  if (writes_name)
+    return {.reaches_end_live = false};
+
+  if (statement.target.has_value() && statement.kind != "v2_assign" &&
+      statement.kind != "v2_update" && statement.kind != "v2_read" &&
+      expression_text_contains_identifier(*statement.target, name, statement.line)) {
+    return {.unsafe_read = true};
+  }
+  if (statement.predicate.has_value() &&
+      predicate_reads_identifier(*statement.predicate, name)) {
+    return {.unsafe_read = true};
+  }
+  for (const std::string& arg : statement.args) {
+    if (expression_text_contains_identifier(arg, name, statement.line))
+      return {.unsafe_read = true};
+  }
+  if (statement.items.has_value()) {
+    for (const DisplayItem& item : *statement.items) {
+      if (display_item_reads_identifier(item, name))
+        return {.unsafe_read = true};
+    }
+  }
+
+  if (statement.kind == "v2_raw") {
+    for (const V2RawInput& input : statement.inputs) {
+      if (text_mentions_identifier(input.slot, name) ||
+          expression_text_contains_identifier(input.expr, name, input.line)) {
+        return {.unsafe_read = true};
+      }
+    }
+    for (const V2RawOutput& output : statement.outputs) {
+      if (text_mentions_identifier(output.slot, name) ||
+          text_mentions_identifier(output.target, name)) {
+        return {.unsafe_read = true};
+      }
+    }
+    for (const std::string& clobber : statement.clobbers) {
+      if (clobber == name)
+        return {.unsafe_read = true};
+    }
+    for (const RawBlockLine& line : statement.lines) {
+      if (text_mentions_identifier(line.text, name))
+        return {.unsafe_read = true};
+    }
+  }
+
+  if (statement.kind == "v2_stop")
+    return {.reaches_end_live = false};
+  if (statement.kind == "v2_return" || statement.kind == "v2_break" ||
+      statement.kind == "v2_continue") {
+    return {.unsafe_read = true};
+  }
+  if (statement.kind == "v2_block")
+    return dead_flag_value_flow_for_statements(context, statement.body, name, seen_rules);
+  if (statement.kind == "v2_if") {
+    const DeadFlagValueFlow then_flow =
+        dead_flag_value_flow_for_statements(context, statement.then_body, name, seen_rules);
+    const DeadFlagValueFlow else_flow =
+        dead_flag_value_flow_for_statements(context, statement.else_body, name, seen_rules);
+    return {
+        .unsafe_read = then_flow.unsafe_read || else_flow.unsafe_read,
+        .reaches_end_live = then_flow.reaches_end_live || else_flow.reaches_end_live,
+    };
+  }
+  if (statement.kind == "v2_match") {
+    bool unsafe_read = false;
+    bool reaches_end_live = statement.otherwise == nullptr;
+    for (const V2MatchCase& match_case : statement.cases) {
+      for (const std::string& value : match_case.values) {
+        if (expression_text_contains_identifier(value, name, match_case.line))
+          return {.unsafe_read = true};
+      }
+      if (match_case.action == nullptr) {
+        reaches_end_live = true;
+        continue;
+      }
+      const DeadFlagValueFlow flow =
+          dead_flag_value_flow_for_statement(context, *match_case.action, name, seen_rules);
+      unsafe_read = unsafe_read || flow.unsafe_read;
+      reaches_end_live = reaches_end_live || flow.reaches_end_live;
+    }
+    if (statement.otherwise != nullptr) {
+      const DeadFlagValueFlow flow =
+          dead_flag_value_flow_for_statement(context, *statement.otherwise, name, seen_rules);
+      unsafe_read = unsafe_read || flow.unsafe_read;
+      reaches_end_live = reaches_end_live || flow.reaches_end_live;
+    }
+    return {.unsafe_read = unsafe_read, .reaches_end_live = reaches_end_live};
+  }
+  if (statement.kind == "v2_while") {
+    const DeadFlagValueFlow body =
+        dead_flag_value_flow_for_statements(context, statement.body, name, seen_rules);
+    return {.unsafe_read = body.unsafe_read, .reaches_end_live = true};
+  }
+  if (statement.kind == "v2_loop") {
+    const DeadFlagValueFlow body =
+        dead_flag_value_flow_for_statements(context, statement.body, name, seen_rules);
+    return {.unsafe_read = body.unsafe_read, .reaches_end_live = false};
+  }
+  if (statement.kind == "v2_invoke" && statement.name.has_value()) {
+    const auto rule_it = context.rules.find(*statement.name);
+    if (rule_it == context.rules.end() || rule_it->second == nullptr ||
+        seen_rules.contains(*statement.name)) {
+      return {.unsafe_read = true};
+    }
+    seen_rules.insert(*statement.name);
+    const DeadFlagValueFlow flow =
+        dead_flag_value_flow_for_statements(context, rule_it->second->body, name, seen_rules);
+    seen_rules.erase(*statement.name);
+    return flow;
+  }
+
+  if (!statement.body.empty() || !statement.then_body.empty() || !statement.else_body.empty() ||
+      !statement.cases.empty() || statement.otherwise != nullptr) {
+    return {.unsafe_read = true};
+  }
+  return {};
+}
+
+DeadFlagValueFlow dead_flag_value_flow_for_statements(
+    LoweringContext& context, const std::vector<V2Statement>& statements,
+    const std::string& name, std::set<std::string>& seen_rules) {
+  for (const V2Statement& statement : statements) {
+    const DeadFlagValueFlow flow =
+        dead_flag_value_flow_for_statement(context, statement, name, seen_rules);
+    if (flow.unsafe_read || !flow.reaches_end_live)
+      return flow;
+  }
+  return {};
+}
+
+bool emit_fl_one_zero_branch(LoweringContext& context, const std::pair<int, std::string>& fl,
+                             const std::string& logical_register,
+                             const std::vector<V2Statement>& one_body,
+                             const std::vector<V2Statement>& zero_body, int line,
+                             const std::string& comment, bool discard_logical_x_facts) {
+  const std::string zero_label = context.emitter.fresh_label("fl_zero");
+  const std::string end_label = context.emitter.fresh_label("fl_end");
+  context.emitter.emit_jump(fl.first, fl.second, zero_label, comment, line);
+  context.emitter.items.back().logical_register_name = logical_register;
+  if (discard_logical_x_facts)
+    clear_current_x_facts(context);
+  const bool one_stops = statements_always_stop(context, one_body);
+  if (!lower_statement_block(context, one_body))
+    return false;
+  if (!one_stops)
+    context.emitter.emit_jump(0x51, "БП", end_label, "if end", line);
+  context.emitter.emit_label(zero_label, {.hidden = true});
+  if (discard_logical_x_facts)
+    clear_current_x_facts(context);
+  if (!lower_statement_block(context, zero_body))
+    return false;
+  if (!one_stops)
+    context.emitter.emit_label(end_label, {.hidden = true});
+  if (discard_logical_x_facts)
+    clear_current_x_facts(context);
+  return true;
+}
+
+struct DeadFlagBranchCondition {
+  std::string name;
+  bool true_when_one = false;
+};
+
+std::optional<DeadFlagBranchCondition>
+dead_flag_branch_condition(const V2Statement& branch) {
+  if (branch.kind != "v2_if" || !branch.predicate.has_value() ||
+      branch.predicate->kind != "v2_compare") {
+    return std::nullopt;
+  }
+
+  const V2Predicate& predicate = *branch.predicate;
+  Expression left;
+  Expression right;
+  try {
+    left = parse_expression(predicate.left, branch.line);
+    right = parse_expression(predicate.right, branch.line);
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+
+  std::string name;
+  std::optional<int> value;
+  if (left.kind == "identifier") {
+    name = left.name;
+    value = integer_literal_value(predicate.right, branch.line);
+  } else if (right.kind == "identifier") {
+    name = right.name;
+    value = integer_literal_value(predicate.left, branch.line);
+  }
+  if (name.empty() || !value.has_value() || (*value != 0 && *value != 1))
+    return std::nullopt;
+
+  const std::string effective_op =
+      branch.negated ? invert_comparison_op(predicate.op) : predicate.op;
+  bool true_when_one = false;
+  if ((effective_op == "==" && *value == 1) ||
+      (effective_op == "!=" && *value == 0)) {
+    true_when_one = true;
+  } else if ((effective_op == "==" && *value == 0) ||
+             (effective_op == "!=" && *value == 1)) {
+    true_when_one = false;
+  } else {
+    return std::nullopt;
+  }
+  return DeadFlagBranchCondition{.name = std::move(name), .true_when_one = true_when_one};
+}
+
+bool lower_dead_flag_branch(LoweringContext& context, const V2Statement& branch,
+                            const std::vector<V2Statement>& continuation) {
+  const std::optional<DeadFlagBranchCondition> condition = dead_flag_branch_condition(branch);
+  if (!condition.has_value())
+    return false;
+
+  const auto field_it = context.state_fields.find(condition->name);
+  if (field_it == context.state_fields.end() || field_it->second == nullptr)
+    return false;
+  const V2StateField& field = *field_it->second;
+  const bool boolean_state =
+      field.type == "flag" ||
+      ((field.type == "counter" || field.type == "range") && field.min.has_value() &&
+       field.max.has_value() && *field.min == 0 && *field.max == 1);
+  if (!boolean_state)
+    return false;
+
+  const auto register_it = context.register_index_by_name.find(condition->name);
+  if (register_it == context.register_index_by_name.end())
+    return false;
+  const std::optional<std::pair<int, std::string>> fl =
+      fl_loop_opcode_for_register(register_it->second);
+  if (!fl.has_value())
+    return false;
+
+  std::vector<V2Statement> then_path = branch.then_body;
+  then_path.insert(then_path.end(), continuation.begin(), continuation.end());
+  std::vector<V2Statement> else_path = branch.else_body;
+  else_path.insert(else_path.end(), continuation.begin(), continuation.end());
+  std::set<std::string> seen_rules;
+  const DeadFlagValueFlow then_flow =
+      dead_flag_value_flow_for_statements(context, then_path, condition->name, seen_rules);
+  seen_rules.clear();
+  const DeadFlagValueFlow else_flow =
+      dead_flag_value_flow_for_statements(context, else_path, condition->name, seen_rules);
+  if (then_flow.unsafe_read || then_flow.reaches_end_live || else_flow.unsafe_read ||
+      else_flow.reaches_end_live) {
+    return false;
+  }
+
+  const std::vector<V2Statement>& one_body =
+      condition->true_when_one ? branch.then_body : branch.else_body;
+  const std::vector<V2Statement>& zero_body =
+      condition->true_when_one ? branch.else_body : branch.then_body;
+  if (!emit_fl_one_zero_branch(context, *fl, condition->name, one_body, zero_body, branch.line,
+                               "dead flag branch " + condition->name, true)) {
+    return false;
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = "fl-dead-flag-branch",
+      .detail = "Lowered dead boolean state " + condition->name + " in R" +
+                std::to_string(register_it->second) + " through " + fl->second +
+                " at line " + std::to_string(branch.line) + ".",
+  });
+  return true;
+}
+
 bool lower_decrement_test_pair(LoweringContext& context, const V2Statement& update,
                                const V2Statement& branch) {
   if (update.kind != "v2_update" || !update.target.has_value() || !update.op.has_value() ||
@@ -34708,21 +35007,11 @@ bool lower_decrement_test_pair(LoweringContext& context, const V2Statement& upda
     const std::optional<std::pair<int, std::string>> fl =
         fl_loop_opcode_for_register(register_it->second);
     if (fl.has_value()) {
-      const std::string else_label = context.emitter.fresh_label("decrement_else");
-      const std::string end_label = context.emitter.fresh_label("decrement_end");
-      context.emitter.emit_jump(fl->first, fl->second, else_label,
-                                "decrement/test " + *update.target, update.line);
-      context.emitter.items.back().logical_register_name = *update.target;
-      const bool then_stops = statements_always_stop(context, branch.then_body);
-      if (!lower_statement_block(context, branch.then_body))
+      if (!emit_fl_one_zero_branch(context, *fl, *update.target, branch.then_body,
+                                   branch.else_body, update.line,
+                                   "decrement/test " + *update.target, false)) {
         return false;
-      if (!then_stops)
-        context.emitter.emit_jump(0x51, "БП", end_label, "if end", branch.line);
-      context.emitter.emit_label(else_label, {.hidden = true});
-      if (!lower_statement_block(context, branch.else_body))
-        return false;
-      if (!then_stops)
-        context.emitter.emit_label(end_label, {.hidden = true});
+      }
       context.optimizations.push_back(OptimizationReport{
           .name = "fl-decrement-zero-branch",
           .detail = "Fused " + *update.target + " decrement and zero branch at lines " +
@@ -40766,6 +41055,17 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
       }
       context.emitter.next_op_manual_interaction = entered_anchor->second;
     }
+
+    {
+      const std::vector<V2Statement> continuation(
+          statements.begin() +
+              static_cast<std::vector<V2Statement>::difference_type>(index + 1U),
+          statements.end());
+      if (lower_dead_flag_branch(context, current_statement, continuation))
+        continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
 
     std::size_t coord_list_consumed = 0;
     if (lower_fused_coord_list_scan(context, statements, index, coord_list_consumed)) {

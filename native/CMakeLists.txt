@@ -213,6 +213,7 @@ add_executable(mkpro_tests
   tests/emulator_z_stack_derived_tail_test.cpp
   tests/example_parity_test.cpp
   tests/expression_helper_test.cpp
+  tests/fl_dead_flag_branch_test.cpp
   tests/expression_lowering_test.cpp
   tests/flow_structure_passes_test.cpp
   tests/flow_x_reuse_pass_test.cpp
@@ -350,6 +351,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   duplicate_failure_tail_matches_typescript_contract
   emitter_matches_initial_typescript_contract
   exact_decimal_arithmetic_matches_typescript_contract
+  fl_dead_flag_branch_compiler_contract
   emulator_bitmask_facts_match_typescript_contract
   emulator_constants_dual_use_matches_typescript_contract
   emulator_domain_error_guard_matches_typescript_contract
@@ -357,6 +359,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   emulator_fractional_r0_matches_typescript_contract
   emulator_hex_arithmetic_facts_match_typescript_contract
   emulator_function_equivalence_matches_typescript_contract
+  emulator_fl_dead_flag_branch_matches_source_contract
   emulator_fl_counter_facts_match_typescript_contract
   emulator_if_chain_dispatch_matches_typescript_contract
   emulator_indirect_flow_equivalence_matches_typescript_contract

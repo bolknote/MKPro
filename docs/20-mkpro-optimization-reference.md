@@ -314,7 +314,7 @@ implementation and tuning, many of those names fall into broader families:
   forms and supplies the counter initial value from inline source, setup, or
   state normalization. Includes `state-init-counted-loop`,
   `setup-only-counted-loop-init`, `initialized-counted-while-loop`,
-  `fl-decrement-zero-branch`, `indirect-incdec-counter`,
+  `fl-decrement-zero-branch`, `fl-dead-flag-branch`, `indirect-incdec-counter`,
   `indirect-underflow-decrement`, and
   `r0-indirect-counter`. `counted-loop-unroll` is a separate strategy for
   small constant-trip loops.
@@ -487,6 +487,13 @@ The control-flow family is where the largest byte savings are found.
 - `decrement-underflow-domain-guard` — fuses unit decrement and terminal `halt("ЕГГОГ")` underflow paths through `F sqrt` when the branch target is exactly a one-cell domain-error stop.
 - `indirect-underflow-decrement` — for `x--; if x < 0 { terminal... }` on counters allocated to R0..R3, uses the indirect pre-decrement side effect as the actual store, then recalls `x` for the branch test. The transform is gated as a rescue candidate because the indirect recall changes the stack shape and must compose with surrounding input/branch scheduling.
 - `fl-decrement-zero-branch` — a dedicated “decrement and test zero” sequence in one short block.
+- `fl-dead-flag-branch` — lowers `flag == 1` / `flag != 0` and their inverted
+  forms through `F L0`..`F L3` when the state domain is exactly `{0,1}`, the
+  flag is allocated to `R0`..`R3`, and structured control-flow proves that the
+  destructive FL register effect cannot be observed. Every continuing path
+  must overwrite the old flag before reading it; terminal paths need no
+  overwrite. Calls and nested branches are followed conservatively, while
+  unresolved, recursive, raw, or escaping control flow rejects the rewrite.
 - `one-based-modulo-normalization` — for a proved non-negative scalar, folds
   `x = frac(int(x) / N) * N; if x <= 0 { x += N }` into
   `frac((int(x) + N - 1) / N) * N + 1`. The non-negative range proof is required:
@@ -2737,7 +2744,7 @@ Feature flags are added only after successful candidate/optimization evidence:
 - `dark-entries` — added from cyclic formal dark-entry selection and related layout features.
 - `address-constants` — added when constants are reused as arithmetic/address-like data.
 - `x2-register` — added when X2/Xп/дисплей-byte scheduling relies on X2 boundaries across display-byte or ordinary hidden-temp paths; opcode metadata follows the reference distinction between X2-preserving, X2-syncing/normalizing, and X2-restoring commands, plus branch-specific effects for direct conditionals.
-- `fl-decrement-branch` — added when compact decrement/control forms are selected through optimizer-safe flow patterns (`fl-decrement-zero-branch`, `indirect-incdec-counter`, `indirect-underflow-decrement`, `r0-indirect-counter`).
+- `fl-decrement-branch` — added when compact decrement/control forms are selected through optimizer-safe flow patterns (`fl-decrement-zero-branch`, `fl-dead-flag-branch`, `indirect-incdec-counter`, `indirect-underflow-decrement`, `r0-indirect-counter`).
 - `stack-resident-temps` — added when any stack-temporary residency optimization is used (`stack-resident-temps`, `stack-resident-indexed-temp`, or `stack-resident-control-flow`); recall-removal proofs use the shared opcode stack-effect profile to avoid deleting `П->X` lifts that can still be observed downstream.
 - `negative-zero-degree` — added when `negative-zero-threshold-selector` proof uses the `1|-00` preload trick.
 - `x2-restore-boundaries` — added when `vp-fraction-restore` is active.
