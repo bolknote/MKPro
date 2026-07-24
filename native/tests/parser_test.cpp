@@ -459,7 +459,7 @@ void parser_accepts_all_example_sources() {
       ++parsed;
     }
   }
-  require(parsed == 31, "native parser should parse all 31 example sources");
+  require(parsed == 32, "native parser should parse all 32 example sources");
 }
 
 } // namespace mkpro::tests

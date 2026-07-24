@@ -86,6 +86,8 @@ void expression_helper_size_report_counts_entry_y_materialization_coverage() {
   CompileOptions options;
   options.analysis = true;
   options.budget = 999;
+  options.disable_candidate_search = true;
+  options.disable_interprocedural_opts = true;
   const CompileResult result = compile_source(R"mkpro(
 program EntrySlotCoverage {
   state {
@@ -98,6 +100,7 @@ program EntrySlotCoverage {
     x = read()
     y = read()
     out = mix(x, y)
+    out += mix(x, y)
     halt(out)
   }
 }
@@ -125,8 +128,11 @@ program EntrySlotCoverage {
           "materialization coverage should count non-X entry stack slots");
   require(mix->details.contains("valueAwareStackInputMaterializeCellsByName") &&
               mix->details.at("valueAwareStackInputMaterializeCellsByName") ==
-                  "x:0m/0e/1c;y:0m/0e/1c",
-          "entry-X/Y coverage should remove callsite materialization from both inputs");
+                  "x:0m/0e/2c;y:0m/0e/2c",
+          "entry-X/Y coverage should remove callsite materialization from both inputs; actual=" +
+              (mix->details.contains("valueAwareStackInputMaterializeCellsByName")
+                   ? mix->details.at("valueAwareStackInputMaterializeCellsByName")
+                   : std::string{"<missing>"}));
   require(mix->details.contains("valueAwareStackInputProfitBreakdown") &&
               mix->details.at("valueAwareStackInputProfitBreakdown") ==
                   "x:1g/0m/+1n;y:1g/0m/+1n",

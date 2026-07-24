@@ -57,6 +57,72 @@ void emulator_mk61_execution_matches_typescript_contract() {
   }
 
   {
+    std::vector<int> program(105, 0x50);
+    program.at(0) = 0x52;
+    program.at(1) = 0x52;
+    program.at(6) = 0x52;
+    program.at(24) = 0x52;
+    program.at(64) = 0x52;
+
+    emulator::MK61 calc;
+    calc.load_program(program);
+    calc.input_number("1E2", true);
+    calc.press("В↑");
+    calc.input_number("2.3230563E99");
+    calc.press("В↑");
+    calc.input_number("1E99");
+    calc.press_sequence({"*", "*"});
+    require(calc.program_counter() == "20" && calc.display_text().find("ГГ") != std::string::npos,
+            "3GG0G should select PC 20 after the exact three-factor setup");
+
+    calc.press_sequence({"F", ",", "В/О", "С/П"});
+    const emulator::RunResult run = calc.run_until_stable(1000, 5);
+    require(run.stopped && calc.program_counter() == "35",
+            "3GG0G should preload returns 01, 24, 24, 06, 64 and then dirty target 34");
+
+    emulator::MK61 direct;
+    direct.load_program(program);
+    direct.input_number("1E2", true);
+    direct.press("В↑");
+    direct.input_number("2.3230563E99");
+    direct.press("В↑");
+    direct.input_number("1E99");
+    direct.press_sequence({"*", "*"});
+    direct.press_sequence({"F", ",", "С/П"});
+    const emulator::RunResult direct_run =
+        direct.run_until_stable(1000, 5);
+    require(direct_run.stopped && direct.program_counter() == "21",
+            "3GG0G should permit direct С/П execution from its selected PC 20");
+
+    std::vector<int> call_program = program;
+    call_program.at(34) = 0x53;
+    call_program.at(35) = 0x50;
+    call_program.at(36) = 0x50;
+    call_program.at(37) = 0x52;
+    call_program.at(50) = 0x07;
+    call_program.at(51) = 0x52;
+    emulator::MK61 call_loop;
+    call_loop.load_program(call_program);
+    call_loop.input_number("1E2", true);
+    call_loop.press("В↑");
+    call_loop.input_number("2.3230563E99");
+    call_loop.press("В↑");
+    call_loop.input_number("1E99");
+    call_loop.press_sequence({"*", "*"});
+    call_loop.press_sequence({"F", ",", "В/О", "С/П"});
+    const emulator::RunResult first_call =
+        call_loop.run_until_stable(1000, 5);
+    require(first_call.stopped && call_loop.program_counter() == "37",
+            "a leaf call at dirty target 34 should return to its local stop");
+    call_loop.press("С/П");
+    const emulator::RunResult repeated_call =
+        call_loop.run_until_stable(1000, 5);
+    require(repeated_call.stopped && call_loop.program_counter() == "37",
+            "the restored uniform dirty stack should route a later В/О back "
+            "to target 34 across another leaf call");
+  }
+
+  {
     const std::vector<int> explicit_error_opcodes = {0x27, 0x28, 0x29, 0x2b,
                                                      0x2c, 0x2d, 0x2e, 0x3c};
     for (const int opcode : explicit_error_opcodes) {

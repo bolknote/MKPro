@@ -17,6 +17,8 @@ CompileResult compile_budget_999(const std::string& source) {
   // assertions keep targeting the mid-level lowering rather than its later
   // indirect-call packed form.
   options.disable_aggressive_post_layout = true;
+  options.disable_candidate_search = true;
+  options.disable_interprocedural_opts = true;
   return compile_source(source, options);
 }
 
@@ -93,6 +95,7 @@ program FunctionDemo {
   loop {
     x = read()
     result = double(x)
+    result = double(result)
     halt(result)
   }
 }
@@ -120,6 +123,7 @@ program Nested {
   loop {
     x = read()
     result = dbl(inc(x))
+    result = dbl(inc(result))
     halt(result)
   }
 }
@@ -128,8 +132,8 @@ program Nested {
     require_clean_compile(result, "nested function call");
     require(has_optimization(result, "function-call-lifting"),
             "nested function call should report function-call-lifting");
-    require(count_hex(result, "53") == 2,
-            "nested function call should emit two ПП calls, got " +
+    require(count_hex(result, "53") == 4,
+            "two nested function calls should emit four ПП calls, got " +
                 std::to_string(count_hex(result, "53")));
   }
 

@@ -25,6 +25,19 @@ const char* kSource = R"mkpro(program RepeatedQuotient {
   }
 })mkpro";
 
+const char* kDependentCommutativeSource = R"mkpro(program DependentCommutative {
+  state {
+    value: counter -99..99 = 5
+    unrelated: counter -99..99 = 0
+  }
+
+  loop {
+    unrelated = read()
+    value += sign(value - 3)
+    halt(value)
+  }
+})mkpro";
+
 std::vector<int> step_opcodes(const std::vector<ResolvedStep>& steps) {
   std::vector<int> codes;
   codes.reserve(steps.size());
@@ -81,6 +94,33 @@ void emulator_stack_dup_equivalence_matches_typescript_contract() {
   const std::string display = compact_display(calc.display_text());
   require(display.find("1") != std::string::npos,
           "stack-dup program should compute (3+4)/(3+4)=1, got " + display);
+
+  const CompileResult dependent = compile_source(kDependentCommutativeSource);
+  require(dependent.implemented, "dependent commutative source should compile");
+  require(dependent.diagnostics.empty(),
+          "dependent commutative source should compile without diagnostics");
+  require(has_optimization(dependent, "stack-current-x-scheduling"),
+          "dependent commutative source should report stack-current-x-scheduling");
+  require(count_opcode(dependent, 0x0e) == 0,
+          "dependent commutative source should schedule operands without В↑");
+
+  emulator::MK61 dependent_calc;
+  const emulator::ProgramLoadResult dependent_loaded =
+      dependent_calc.load_program(step_opcodes(dependent.steps));
+  require(dependent_loaded.diagnostics.empty(),
+          "dependent commutative program should load without diagnostics");
+  for (const PreloadReport& preload : dependent.preloads)
+    dependent_calc.set_register(preload.register_name, preload.value);
+
+  for (const std::string& key : {"В/О", "С/П", "0", "С/П"}) {
+    dependent_calc.press_sequence({key});
+    run = dependent_calc.run_until_stable(400, 3);
+  }
+  require(run.stopped, "dependent commutative program should stop after input");
+  const std::string dependent_display = compact_display(dependent_calc.display_text());
+  require(dependent_display.find("6") != std::string::npos,
+          "dependent commutative program should compute 5+sign(5-3)=6, got " +
+              dependent_display);
 }
 
 } // namespace mkpro::tests

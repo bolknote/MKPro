@@ -2796,6 +2796,9 @@ These are not independent optimizations; they gate whether the lowering strategy
 
 Profile facts in `report.emulatorFacts`:
 - `return-empty-stack-jumps-to-01` (`status: proved`) — `В/О` with an empty return stack behaves as one-cell `БП 01` during continuous execution.
+- `zggog-return-stack-preload` (`status: probed`) — a normalized `ЗГГОГ` with exponent `200..299` sets PC `20..29`, loads five stored return addresses from the exponent suffix and four mantissa byte pairs, and then exposes a deterministic sixth dirty target.
+- `long-monster-return-stack-display` (`status: probed`) — `F 1/x` applied to a `ЗГГОГ` exposes the ten return-stack digits as a long monster; this is used as an observation oracle only.
+- `uniform-dirty-return-stack-restores-after-call` (`status: probed`) — after exhaustion leaves five equal stored addresses, a balanced leaf call restores the uniform stack and a later `В/О` selects the same dirty target.
 - `r0-star-f-aliases` (`status: proved`) — `*F` aliases track as matching `*0` entries with explicit `R0` transformation; neither form preserves `R0`.
 - `super-dark-fa-ff-indirect` (`status: proved`) — `К БП R` with `R = FA..FF` executes one command at `48..53`, then continues at `01..06`.
 - `fa-direct-vs-indirect` (`status: proved`) — direct `БП FA` consumes/overwrites the next operand byte, while indirect `К БП R` leaves `01..06` bytes available as continuation space.
@@ -2816,6 +2819,7 @@ The optimizer does not blindly apply undocumented behavior. Several proofs are e
 - `display-byte-observable-boundary` proof for display-byte candidates when only display-observable boundaries allow the optimization.
 - `super-dark-suffix-layout` proof when FA..FF dispatch is selected.
 - `return-stack-empty` proof for `I/O` as `JP 01` behavior.
+- `zggog-return-stack-script` proof when two to six uniquely entered terminal jumps and an optional dirty-target self-loop are replaced by `В/О`; it includes post-layout target encoding, the exact sixth-and-later dirty-target formula when used, relocation-safe alignment padding, a terminating one-shot chain or exact stable dirty self-loop, and strict final-size reduction.
 
 If proofs are insufficient, those transformations are not activated.
 

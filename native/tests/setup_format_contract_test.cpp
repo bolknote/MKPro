@@ -34,8 +34,8 @@ void setup_formatting_matches_typescript_contract() {
     const std::optional<std::string> setup_block = format_setup_block(game.preloads);
     require(setup_block.has_value(), "setup-format should render setup registers for game-100-pig");
     require(*setup_block ==
-                "`R5=0; R0=0; R7=0; R4=0; R6=0; Ra=20; Rb=100; Rc=1E3; Rd=1E7; "
-                "Re=8,-00-000; R8=L3; R9=С4`",
+                "`R5=0; R0=0; R7=0; R4=0; R6=0; Ra=20; Rc=100; Rb=1E3; Rd=1E7; "
+                "Re=8,-00-000; R8=34; R9=L2`",
             "setup-format should render the same deterministic setup block; actual " +
                 *setup_block);
   }

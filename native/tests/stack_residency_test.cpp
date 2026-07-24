@@ -92,7 +92,11 @@ CompileResult compile_with_candidates(const std::string& source) {
 }
 
 void require_clean_compile(const CompileResult& result, const std::string& context) {
-  require(result.implemented, context + " should compile");
+  require(result.implemented,
+          context + " should compile" +
+              (result.diagnostics.empty()
+                   ? std::string{}
+                   : ": " + result.diagnostics.front().message));
   for (const Diagnostic& diagnostic : result.diagnostics) {
     require(diagnostic.severity != DiagnosticSeverity::Error,
             context + " should not report errors: " + diagnostic.message);

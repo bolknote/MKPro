@@ -383,6 +383,100 @@ bool terminal_stop_from(const std::vector<MachineItem>& items, const MachineLayo
   return false;
 }
 
+std::optional<int> deterministic_return_call_depth_from(
+    const std::vector<MachineItem>& items, const MachineLayout& layout,
+    int start_address, AddressSpaceModel model, std::set<int>& active_entries) {
+  if (!active_entries.insert(start_address).second)
+    return std::nullopt;
+  const auto finish = [&](std::optional<int> result) {
+    active_entries.erase(start_address);
+    return result;
+  };
+
+  std::set<int> seen;
+  int max_call_depth = 0;
+  int address = start_address;
+  for (int steps = 0; steps < machine_cell_count(items) + 1; ++steps) {
+    if (!seen.insert(address).second)
+      return finish(std::nullopt);
+    const auto item_it = layout.item_index_by_address.find(address);
+    if (item_it == layout.item_index_by_address.end())
+      return finish(std::nullopt);
+    const MachineItem& item =
+        items.at(static_cast<std::size_t>(item_it->second));
+    if (item.kind != MachineItemKind::Op || item.raw)
+      return finish(std::nullopt);
+    if (item.opcode == 0x52)
+      return finish(max_call_depth);
+    if (item.opcode == 0x53 ||
+        is_proven_indirect_call_opcode(item.opcode)) {
+      const std::optional<CallSite> call =
+          call_site_at_address(items, layout, address, model);
+      if (!call.has_value())
+        return finish(std::nullopt);
+      const std::optional<int> nested = deterministic_return_call_depth_from(
+          items, layout, call->target_address, model, active_entries);
+      if (!nested.has_value())
+        return finish(std::nullopt);
+      max_call_depth = std::max(max_call_depth, 1 + *nested);
+      address = call->continuation_address;
+      continue;
+    }
+    if (item.opcode == 0x50 || item.opcode == 0x51 ||
+        is_address_taking_opcode(item.opcode) ||
+        is_indirect_flow_opcode(item.opcode)) {
+      return finish(std::nullopt);
+    }
+    ++address;
+  }
+  return finish(std::nullopt);
+}
+
+std::optional<TerminalJump> terminal_jump_after_bounded_calls_from(
+    const std::vector<MachineItem>& items, const MachineLayout& layout,
+    int start_address, AddressSpaceModel model, int& max_call_depth) {
+  std::set<int> seen;
+  max_call_depth = 0;
+  int address = start_address;
+  for (int steps = 0; steps < machine_cell_count(items) + 1; ++steps) {
+    if (!seen.insert(address).second)
+      return std::nullopt;
+    const auto item_it = layout.item_index_by_address.find(address);
+    if (item_it == layout.item_index_by_address.end())
+      return std::nullopt;
+    const MachineItem& item =
+        items.at(static_cast<std::size_t>(item_it->second));
+    if (item.kind != MachineItemKind::Op || item.raw)
+      return std::nullopt;
+    if (item.opcode == 0x51)
+      return terminal_jump_from(items, layout, address);
+    if (item.opcode == 0x53 ||
+        is_proven_indirect_call_opcode(item.opcode)) {
+      const std::optional<CallSite> call =
+          call_site_at_address(items, layout, address, model);
+      if (!call.has_value())
+        return std::nullopt;
+      std::set<int> active_entries;
+      const std::optional<int> nested = deterministic_return_call_depth_from(
+          items, layout, call->target_address, model, active_entries);
+      if (!nested.has_value())
+        return std::nullopt;
+      max_call_depth = std::max(max_call_depth, 1 + *nested);
+      if (max_call_depth > kReturnStackDepth - 1)
+        return std::nullopt;
+      address = call->continuation_address;
+      continue;
+    }
+    if (item.opcode == 0x50 || item.opcode == 0x52 ||
+        is_address_taking_opcode(item.opcode) ||
+        is_indirect_flow_opcode(item.opcode)) {
+      return std::nullopt;
+    }
+    ++address;
+  }
+  return std::nullopt;
+}
+
 bool incoming_refs_are_exactly(const std::map<int, std::vector<FlowReference>>& incoming,
                                int target_address, const std::set<int>& allowed_op_indexes) {
   const auto incoming_it = incoming.find(target_address);
@@ -3066,6 +3160,445 @@ std::optional<DirtyReturnStackDispatchCellProof> first_unsafe_dirty_dispatch_cel
 }
 
 } // namespace
+
+ZggogReturnStackPreloadPlan plan_zggog_return_stack_preload(
+    int zggog_program_counter, const std::vector<int>& return_targets,
+    bool reset_program_counter) {
+  ZggogReturnStackPreloadPlan plan{
+      .reset_program_counter = reset_program_counter,
+      .zggog_program_counter = zggog_program_counter,
+      .requested_targets = return_targets,
+  };
+
+  auto reject = [&](std::string reason) {
+    plan.rejection_reason = std::move(reason);
+    return plan;
+  };
+  if (zggog_program_counter < 20 || zggog_program_counter > 29) {
+    return reject("3GG0G return-stack preload requires a program counter in 20..29");
+  }
+  if (return_targets.size() < 2U || return_targets.size() > 7U) {
+    return reject("3GG0G return-stack preload requires 2..7 scripted returns");
+  }
+  for (const int target : return_targets) {
+    if (target < 1 || target > 100) {
+      return reject("3GG0G return-stack targets must be in 01..100");
+    }
+  }
+
+  const int first_stored_address = return_targets.front() - 1;
+  if (first_stored_address % 10 != 0 || first_stored_address > 90) {
+    return reject("the exponent-encoded first return target must be one of "
+                  "01, 11, ..., 91");
+  }
+  const int second_stored_address = return_targets.at(1) - 1;
+  if (second_stored_address < 10) {
+    return reject("the first mantissa-encoded return target must be in 11..100 "
+                  "because a nonzero MK-61 mantissa is normalized");
+  }
+
+  plan.encoded_targets.assign(
+      return_targets.begin(),
+      return_targets.begin() +
+          static_cast<std::ptrdiff_t>(std::min<std::size_t>(5U, return_targets.size())));
+  plan.encoded_targets.resize(5U, 1);
+  if (return_targets.size() >= 6U) {
+    const int expected_dirty_target =
+        ((plan.encoded_targets.at(4) - 1) % 10) * 11 + 1;
+    for (std::size_t index = 5; index < return_targets.size(); ++index) {
+      if (return_targets.at(index) != expected_dirty_target) {
+        return reject("every 3GG0G return after the fifth must match the "
+                      "deterministic dirty return-stack target " +
+                      std::to_string(expected_dirty_target));
+      }
+    }
+    plan.dirty_target = expected_dirty_target;
+  }
+
+  std::vector<int> stored_pop_order;
+  stored_pop_order.reserve(5U);
+  for (const int target : plan.encoded_targets)
+    stored_pop_order.push_back(target - 1);
+
+  auto two_digits = [](int value) {
+    std::string result;
+    result.push_back(static_cast<char>('0' + value / 10));
+    result.push_back(static_cast<char>('0' + value % 10));
+    return result;
+  };
+
+  for (std::size_t index = 1; index < stored_pop_order.size(); ++index)
+    plan.mantissa_digits += two_digits(stored_pop_order.at(index));
+  plan.mantissa_literal =
+      plan.mantissa_digits.substr(0, 1) + "," + plan.mantissa_digits.substr(1);
+
+  plan.exponent =
+      zggog_program_counter * 10 + first_stored_address / 10;
+  plan.setup_factor_exponent =
+      plan.exponent <= 297 ? plan.exponent - 198 : plan.exponent - 297;
+
+  plan.stack_bottom_to_top.assign(stored_pop_order.rbegin(), stored_pop_order.rend());
+
+  plan.setup_steps = {
+      "Сx",
+      "1",
+      "ВП",
+      std::to_string(plan.setup_factor_exponent),
+      "В↑",
+      plan.mantissa_literal,
+      "ВП",
+      "99",
+      "В↑",
+      "1",
+      "ВП",
+      "99",
+  };
+  if (plan.exponent >= 298) {
+    plan.setup_steps.insert(plan.setup_steps.end(),
+                            {"В↑", "1", "ВП", "99", "×", "×", "×"});
+  } else {
+    plan.setup_steps.insert(plan.setup_steps.end(), {"×", "×"});
+  }
+  plan.setup_steps.push_back("F АВТ");
+  if (reset_program_counter)
+    plan.setup_steps.push_back("В/О");
+  plan.setup_steps.push_back("С/П");
+  plan.encodable = true;
+  return plan;
+}
+
+ZggogReturnStackRewriteResult optimize_post_layout_zggog_return_stack_script(
+    const std::vector<MachineItem>& items, const CompileOptions& options) {
+  std::optional<ZggogReturnStackRewriteResult> direct_entry_result;
+  ZggogReturnStackRewriteResult result{
+      .items = items,
+  };
+  auto reject = [&](std::string reason) {
+    if (direct_entry_result.has_value())
+      return *direct_entry_result;
+    result.rejection_reason = std::move(reason);
+    return result;
+  };
+  if (items.empty())
+    return reject("3GG0G return-stack rewrite requires a nonempty program");
+  if (options.feature_profile != FeatureProfile::Standard) {
+    return reject("3GG0G return-stack rewrite is proved only for the stock MK-61 "
+                  "feature profile");
+  }
+
+  const AddressSpaceModel model = address_space_model_for_options(options);
+  const MachineLayout layout = machine_layout(items);
+  if (!layout.item_index_by_address.contains(0))
+    return reject("3GG0G return-stack rewrite requires a physical address-00 entry");
+
+  const std::vector<FlowReference> refs = direct_flow_references(items, layout, model);
+  const std::map<int, std::vector<FlowReference>> incoming = incoming_by_target(refs);
+  std::vector<TerminalJump> jumps;
+  std::set<int> seen_blocks;
+  bool stable_dirty_self_loop = false;
+  bool stable_loop_uses_bounded_calls = false;
+  int cursor = 0;
+  for (int depth = 0; depth < kMaxScriptReturns + 3; ++depth) {
+    if (terminal_stop_from(items, layout, cursor, model))
+      break;
+    if (!seen_blocks.insert(cursor).second)
+      return reject("3GG0G return-stack rewrite rejects cyclic terminal-jump chains");
+    std::optional<TerminalJump> jump =
+        terminal_jump_from(items, layout, cursor);
+    if (!jump.has_value()) {
+      int loop_call_depth = 0;
+      const std::optional<TerminalJump> leaf_loop =
+          terminal_jump_after_bounded_calls_from(items, layout, cursor, model,
+                                                 loop_call_depth);
+      if (leaf_loop.has_value() && leaf_loop->target_address == cursor) {
+        jump = leaf_loop;
+        stable_loop_uses_bounded_calls = loop_call_depth > 0;
+      }
+    }
+    if (!jump.has_value()) {
+      return reject("3GG0G return-stack rewrite requires terminal direct jumps from entry");
+    }
+    jumps.push_back(*jump);
+    if (jump->target_address == cursor) {
+      stable_dirty_self_loop = true;
+      break;
+    }
+    cursor = jump->target_address;
+  }
+  if (!stable_dirty_self_loop &&
+      !terminal_stop_from(items, layout, cursor, model)) {
+    return reject("3GG0G return-stack rewrite requires the supported return "
+                  "script to reach a stop or a stable dirty-target self-loop");
+  }
+  if (jumps.size() < 2U) {
+    return reject("3GG0G return-stack rewrite requires at least two terminal jumps");
+  }
+  for (const TerminalJump& jump : jumps) {
+    std::set<int> allowed{jump.op_index};
+    if (stable_dirty_self_loop && jump.target_address == cursor) {
+      allowed.clear();
+      for (const TerminalJump& candidate : jumps) {
+        if (candidate.target_address == cursor)
+          allowed.insert(candidate.op_index);
+      }
+    }
+    if (!incoming_refs_are_exactly(incoming, jump.target_address, allowed)) {
+      return reject("3GG0G return-stack rewrite requires unique scripted "
+                    "predecessors, except for the proved dirty-target self-loop");
+    }
+  }
+  const auto stable_cycle_preload_proved =
+      [&](const ZggogReturnStackPreloadPlan& preload) {
+    if (!stable_dirty_self_loop)
+      return true;
+    const int probe_returns =
+        static_cast<int>(preload.requested_targets.size()) + kReturnStackDepth;
+    const std::vector<ReturnStackReturnStep> steps =
+        simulate_mk61_return_stack(preload.stack_bottom_to_top, probe_returns);
+    if (steps.size() != static_cast<std::size_t>(probe_returns) ||
+        preload.requested_targets.empty()) {
+      return false;
+    }
+    const std::size_t self_loop_return =
+        preload.requested_targets.size() - 1U;
+    const int target = preload.requested_targets.back();
+    if (stable_loop_uses_bounded_calls) {
+      if (self_loop_return == 0)
+        return false;
+      const std::vector<int>& stack_at_loop_entry =
+          steps.at(self_loop_return - 1U).stack_after_return;
+      if (stack_at_loop_entry.size() !=
+              static_cast<std::size_t>(kReturnStackDepth) ||
+          !std::all_of(stack_at_loop_entry.begin(),
+                       stack_at_loop_entry.end(), [&](const int stored) {
+                         return stored == stack_at_loop_entry.front();
+                       })) {
+        return false;
+      }
+    }
+    for (std::size_t index = self_loop_return; index < steps.size(); ++index) {
+      if (steps.at(index).target_address != target)
+        return false;
+    }
+    return true;
+  };
+
+  if (jumps.size() >= 3U && jumps.front().source_address == 0) {
+    bool relocation_closed = true;
+    for (const MachineItem& item : items) {
+      if (item.raw ||
+          (item.kind == MachineItemKind::Address &&
+           !std::holds_alternative<std::string>(item.target)) ||
+          (item.kind == MachineItemKind::Op &&
+           is_indirect_flow_opcode(item.opcode))) {
+        relocation_closed = false;
+        break;
+      }
+    }
+
+    const auto* entry_label =
+        std::get_if<std::string>(
+            &items.at(static_cast<std::size_t>(
+                          jumps.front().address_index))
+                 .target);
+    if (relocation_closed && entry_label != nullptr) {
+      const ScriptPlan direct_script{
+          .jumps = jumps,
+      };
+      std::vector<MachineItem> direct_candidate =
+          apply_script_plan(items, direct_script);
+      const MachineLayout replaced_layout = machine_layout(direct_candidate);
+      const auto first_op = replaced_layout.item_index_by_address.find(0);
+      if (first_op != replaced_layout.item_index_by_address.end() &&
+          direct_candidate.at(static_cast<std::size_t>(first_op->second)).kind ==
+              MachineItemKind::Op &&
+          direct_candidate.at(static_cast<std::size_t>(first_op->second)).opcode ==
+              0x52) {
+        direct_candidate.erase(direct_candidate.begin() + first_op->second);
+        const MachineLayout direct_layout = machine_layout(direct_candidate);
+        const auto entry = direct_layout.labels.find(*entry_label);
+        std::vector<int> direct_targets;
+        bool targets_resolved = entry != direct_layout.labels.end();
+        for (std::size_t index = 1; index < jumps.size() && targets_resolved;
+             ++index) {
+          const auto* label =
+              std::get_if<std::string>(
+                  &items.at(static_cast<std::size_t>(
+                                jumps.at(index).address_index))
+                       .target);
+          if (label == nullptr) {
+            targets_resolved = false;
+            break;
+          }
+          const auto target = direct_layout.labels.find(*label);
+          if (target == direct_layout.labels.end()) {
+            targets_resolved = false;
+            break;
+          }
+          direct_targets.push_back(target->second);
+        }
+        if (targets_resolved && direct_targets.size() >= 2U) {
+          ZggogReturnStackPreloadPlan direct_preload =
+              plan_zggog_return_stack_preload(entry->second, direct_targets,
+                                               false);
+          if (direct_preload.encodable &&
+              stable_cycle_preload_proved(direct_preload) &&
+              machine_cell_count(direct_candidate) <
+                  machine_cell_count(items)) {
+            direct_entry_result = ZggogReturnStackRewriteResult{
+                .items = std::move(direct_candidate),
+                .preload = std::move(direct_preload),
+                .applied = static_cast<int>(jumps.size()),
+                .eliminated_start_jumps = 1,
+            };
+          }
+        }
+      }
+    }
+  }
+
+  const ScriptPlan script{
+      .jumps = jumps,
+  };
+  const std::set<int> removed = removed_address_indexes_for_script_plan(script);
+  std::vector<int> adjusted_targets;
+  adjusted_targets.reserve(jumps.size());
+  for (const TerminalJump& jump : jumps) {
+    adjusted_targets.push_back(
+        adjusted_address_after_removing_indexes(layout, jump.target_address, removed));
+  }
+
+  std::vector<MachineItem> candidate = apply_script_plan(items, script);
+  ZggogReturnStackPreloadPlan preload =
+      plan_zggog_return_stack_preload(20, adjusted_targets);
+  if (preload.encodable && !stable_cycle_preload_proved(preload)) {
+    preload.encodable = false;
+    preload.rejection_reason =
+        "the terminal self-loop is reached before the return stack becomes "
+        "stable at its dirty target";
+  }
+  if (!preload.encodable) {
+    std::vector<std::string> target_labels;
+    target_labels.reserve(jumps.size());
+    for (const TerminalJump& jump : jumps) {
+      const auto* label =
+          std::get_if<std::string>(
+              &items.at(static_cast<std::size_t>(jump.address_index)).target);
+      if (label == nullptr) {
+        return reject("3GG0G return-stack rewrite found a one-shot chain, but "
+                      "alignment padding requires relocatable label targets: " +
+                      preload.rejection_reason);
+      }
+      target_labels.push_back(*label);
+    }
+
+    auto resolved_targets =
+        [&](const std::vector<MachineItem>& padded)
+        -> std::optional<std::vector<int>> {
+      const MachineLayout padded_layout = machine_layout(padded);
+      std::vector<int> targets;
+      targets.reserve(target_labels.size());
+      for (const std::string& label : target_labels) {
+        const auto found = padded_layout.labels.find(label);
+        if (found == padded_layout.labels.end())
+          return std::nullopt;
+        targets.push_back(found->second);
+      }
+      return targets;
+    };
+
+    const MachineLayout candidate_layout = machine_layout(candidate);
+    const std::optional<std::vector<int>> base_targets =
+        resolved_targets(candidate);
+    if (!base_targets.has_value()) {
+      return reject("3GG0G return-stack rewrite lost a scripted target label");
+    }
+
+    std::set<int> insertion_addresses{0};
+    for (const auto& [label, address] : candidate_layout.labels) {
+      (void)label;
+      if (address <= base_targets->front())
+        insertion_addresses.insert(address);
+    }
+
+    const int max_profitable_padding =
+        std::min(9, static_cast<int>(jumps.size()) - 1);
+    std::string relocation_rejection;
+    bool aligned = false;
+    for (int padding = 1; padding <= max_profitable_padding && !aligned;
+         ++padding) {
+      for (const int insertion_address : insertion_addresses) {
+        std::vector<MachineItem> padded = candidate;
+        bool relocation_proved = true;
+        for (int cell = 0; cell < padding; ++cell) {
+          std::string current_rejection;
+          if (!remap_shifted_absolute_targets_after_insertion(
+                  padded, insertion_address, current_rejection, model)) {
+            relocation_rejection = std::move(current_rejection);
+            relocation_proved = false;
+            break;
+          }
+          const MachineLayout padded_layout = machine_layout(padded);
+          const std::optional<int> insertion_index =
+              insertion_index_preserving_labels_at_address(
+                  padded, padded_layout, insertion_address);
+          if (!insertion_index.has_value()) {
+            relocation_rejection =
+                "could not preserve labels at the alignment-padding address";
+            relocation_proved = false;
+            break;
+          }
+          padded.insert(padded.begin() + *insertion_index,
+                        MachineItem::op(0x54, "КНОП"));
+        }
+        if (!relocation_proved)
+          continue;
+
+        const std::optional<std::vector<int>> padded_targets =
+            resolved_targets(padded);
+        if (!padded_targets.has_value())
+          continue;
+        ZggogReturnStackPreloadPlan padded_preload =
+            plan_zggog_return_stack_preload(20, *padded_targets);
+        if (!padded_preload.encodable ||
+            !stable_cycle_preload_proved(padded_preload) ||
+            machine_cell_count(padded) >= machine_cell_count(items)) {
+          continue;
+        }
+
+        candidate = std::move(padded);
+        preload = std::move(padded_preload);
+        result.padding_cells = padding;
+        aligned = true;
+        break;
+      }
+    }
+    if (!aligned) {
+      std::string reason =
+          "3GG0G return-stack rewrite found a one-shot chain, but its final "
+          "physical addresses are not encodable with profitable alignment "
+          "padding: " +
+          preload.rejection_reason;
+      if (!relocation_rejection.empty())
+        reason += "; " + relocation_rejection;
+      return reject(std::move(reason));
+    }
+  }
+
+  if (machine_cell_count(candidate) >= machine_cell_count(items)) {
+    return reject("3GG0G return-stack rewrite did not reduce the final artifact");
+  }
+
+  result.items = std::move(candidate);
+  result.preload = std::move(preload);
+  result.applied = static_cast<int>(jumps.size());
+  if (direct_entry_result.has_value() &&
+      machine_cell_count(direct_entry_result->items) <
+          machine_cell_count(result.items)) {
+    return *direct_entry_result;
+  }
+  return result;
+}
 
 std::vector<int> mk61_return_stack_after_call(std::vector<int> stack,
                                               int stored_return_address) {

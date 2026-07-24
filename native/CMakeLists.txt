@@ -177,7 +177,14 @@ add_executable(mkpro_tests
   tests/emulator_display_byte_test.cpp
   tests/emulator_fractional_r0_test.cpp
   tests/emulator_hex_arithmetic_facts_test.cpp
+  tests/emulator_clock_test.cpp
+  tests/emulator_fox_hunt_100_test.cpp
   tests/emulator_function_equivalence_test.cpp
+  tests/emulator_functions_demo_test.cpp
+  tests/emulator_jack_pot_test.cpp
+  tests/emulator_procedure_state_store_test.cpp
+  tests/emulator_teleport_test.cpp
+  tests/emulator_wumpus_test.cpp
   tests/emulator_fl_counter_test.cpp
   tests/emulator_if_chain_dispatch_test.cpp
   tests/emulator_indirect_flow_equivalence_test.cpp

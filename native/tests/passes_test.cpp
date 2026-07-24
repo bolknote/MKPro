@@ -514,9 +514,13 @@ void pass_pipeline_matches_initial_typescript_contract() {
     stale_alias_options.disable_interprocedural_opts = true;
     const core::passes::RunPassesResult stale_alias_result =
         core::passes::run_ir_passes(stale_alias_items, stale_alias_options);
-    require(stale_alias_result.pass_counts.at("dead-store-elimination") == 2,
+    const auto pass_count = [&](const std::string& name) {
+      const auto found = stale_alias_result.pass_counts.find(name);
+      return found == stale_alias_result.pass_counts.end() ? 0 : found->second;
+    };
+    require(pass_count("dead-store-elimination") == 2,
             "stale register memory alias fixture should match TS dead-store count");
-    require(stale_alias_result.pass_counts.at("store-recall-peephole") == 0,
+    require(pass_count("store-recall-peephole") == 0,
             "stale register memory alias fixture should not remove the live recall");
   }
 
@@ -1675,6 +1679,13 @@ void pass_pipeline_matches_initial_typescript_contract() {
     require(effect.hard_x2_overwrite_without_stack_use,
             "analyze_x2_stack_effect did not mark Cx as hard X2 overwrite");
     require(effect.stack_preserves, "analyze_x2_stack_effect did not preserve stack for Cx");
+  }
+
+  {
+    const core::passes::X2StackEffectAnalysis effect =
+        core::passes::analyze_x2_stack_effect(plain(0x32));
+    require(!effect.hard_x2_overwrite_without_stack_use,
+            "analyze_x2_stack_effect must not treat input-dependent K sign as a hard overwrite");
   }
 
   {

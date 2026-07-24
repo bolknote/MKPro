@@ -73,6 +73,17 @@ const MachineProfile& mk61_profile() {
               {"return-empty-stack-jumps-to-01", "probed",
                "В/О with an empty return stack behaves as one-cell БП 01 in continuous "
                "execution."},
+              {"zggog-return-stack-preload", "probed",
+               "A normalized 3GG0G with exponent 200..299 deterministically sets PC 20..29 "
+               "and loads five stored return addresses from the exponent suffix and eight "
+               "mantissa digits; stack overflow then exposes a deterministic sixth target."},
+              {"long-monster-return-stack-display", "probed",
+               "Applying F 1/x to a 3GG0G exposes the ten return-stack digits as a long "
+               "monster; this is an observation oracle, not an execution primitive."},
+              {"uniform-dirty-return-stack-restores-after-call", "probed",
+               "After 3GG0G stack exhaustion produces five equal stored addresses, a balanced "
+               "leaf call restores that uniform stack and a later В/О selects the same dirty "
+               "target."},
               {"r0-star-f-aliases", "probed",
                "*F aliases behave like the corresponding *0 commands, including R0 "
                "transformation; they do not preserve R0."},

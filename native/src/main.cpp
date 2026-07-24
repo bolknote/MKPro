@@ -689,6 +689,19 @@ void print_json(const mkpro::CompileResult& result) {
     print_json_steps(result.setup_program->steps, "    ");
     std::cout << "}";
   }
+  if (result.manual_startup_sequence.has_value()) {
+    std::cout << ",\n  \"manualStartupSequence\": {\"reason\": ";
+    print_json_string(std::cout, result.manual_startup_sequence->reason);
+    std::cout << ", \"steps\": [";
+    for (std::size_t index = 0;
+         index < result.manual_startup_sequence->steps.size(); ++index) {
+      if (index > 0)
+        std::cout << ", ";
+      print_json_string(std::cout,
+                        result.manual_startup_sequence->steps.at(index));
+    }
+    std::cout << "]}";
+  }
   std::cout << ",\n  \"report\": ";
   print_json_report(result);
   std::cout << ",\n  \"diagnostics\": " << result.diagnostics.size() << "\n}\n";

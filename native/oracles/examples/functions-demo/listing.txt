@@ -18,13 +18,10 @@
    03 |  46  | X→П 6                   | read y
    04 |  65  | П→X 5                   | recall x
    05 |  66  | П→X 6                   | recall y
-   06 |  53  | ПП                      | call function sum_of_squares stack entry
-   07 |  11  | 11                      | call function sum_of_squares stack entry
-   08 |  50  | С/П                     | halt
-   09 |  51  | БП                      | loop back
-   10 |  00  | 00                      | loop back
-   11 |  22  | F x²                    | current-X value square
-   12 |  14  | X↔Y                     | stack-resident value pipeline
-   13 |  22  | F x²                    | current-X value square
-   14 |  10  | +                       | expr +
-   15 |  52  | В/О                     | return value
+   06 |  22  | F x²                    | current-X value square
+   07 |  14  | X↔Y                     | stack-resident value pipeline
+   08 |  22  | F x²                    | current-X value square
+   09 |  10  | +                       | expr +
+   10 |  50  | С/П                     | halt
+   11 |  51  | БП                      | loop back
+   12 |  00  | 00                      | loop back

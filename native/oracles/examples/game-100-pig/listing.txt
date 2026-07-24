@@ -16,10 +16,10 @@
    12 |  4A  | X→П a                   | setup Ra
    13 |  02  | 2                       |
    14 |  15  | F 10ˣ                   | setup constant 100
-   15 |  4B  | X→П b                   | setup Rb
+   15 |  4C  | X→П c                   | setup Rc
    16 |  03  | 3                       |
    17 |  15  | F 10ˣ                   | setup constant 1000
-   18 |  4C  | X→П c                   | setup Rc
+   18 |  4B  | X→П b                   | setup Rb
    19 |  07  | 7                       |
    20 |  15  | F 10ˣ                   | setup constant 10000000
    21 |  4D  | X→П d                   | setup Rd
@@ -48,55 +48,55 @@
    44 |  0C  | ВП                      | setup Re exponent
    45 |  00  | 0                       | setup Re exponent
    46 |  4E  | X→П e                   | setup Re
-   47 |  01  | 1                       |
-   48 |  48  | X→П 8                   | setup R8
-   49 |  01  | 1                       |
-   50 |  02  | 2                       |
+   47 |  03  | 3                       |
+   48 |  04  | 4                       |
+   49 |  48  | X→П 8                   | setup R8
+   50 |  00  | 0                       |
    51 |  49  | X→П 9                   | setup R9
    52 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code     | Command                 | Comment
 ------+----------+-------------------------+----------------
-   00 | 89       | К БП 9                  | empty-stack tail call roll_player; reused preloaded R9=C4 indirect-target=12 direct flow
-   01 | D4       | К П→X 4                 | increment roll_count
-   02 | 3B       | К СЧ                    | random()
-   03 | 06       | 6                       |
-   04 | 12       | ×                       | expr *
-   05 | 0E       | В↑                      | random int keep scaled draw
-   06 | 35       | К {x}                   | random int fractional part
-   07 | 11       | −                       | random int floor
-   08 | 01       | 1                       |
-   09 | 10       | +                       | expr +
-   10 | 43       | X→П 3                   | set die
-   11 | 52       | В/О                     | implicit return from proc
-   12 | A8       | К ПП 8                  | proc call roll_die; preloaded R8=B3 indirect-target=1 indirect flow
-   13 | 01       | 1                       |
-   14 | 11       | −                       | condition compare
-   15 | 57       | F x≠0                   | false branch for !=
-   16 | 35       | 35                      | false branch for !=
-   17 | 67       | П→X 7                   | recall turn_score
-   18 | 63       | П→X 3                   | recall die
-   19 | 10       | +                       | expr +
-   20 | 47       | X→П 7                   | set turn_score
-   21 | 65       | П→X 5                   | recall player_total
-   22 | 10       | +                       | expr +
-   23 | 46       | X→П 6                   | set preview_total
-   24 | 53       | ПП                      | show __inline_show_82_0
-   25 | 69       | 69                      | show __inline_show_82_0
-   26 | E9       | К x=0 9                 | false branch for ==; preloaded R9=C4 indirect-target=12 indirect flow
-   27 | 66       | П→X 6                   | recall preview_total
-   28 | 45       | X→П 5                   | set player_total
-   29 | 6B       | П→X b                   | preload const 100
-   30 | 11       | −                       | condition compare
-   31 | 59       | F x≥0                   | false branch for >=
-   32 | 35       | 35                      | false branch for >=
-   33 | 6B       | П→X b                   | preload const 100
-   34 | 50       | С/П                     | halt
-   35 | 00       | 0                       |
-   36 | 47       | X→П 7                   | set turn_score
-   37 | 44       | X→П 4                   | set roll_count
-   38 | A8       | К ПП 8                  | proc call roll_die; preloaded R8=B3 indirect-target=1 indirect flow
+   00 | 53       | ПП                      | proc call roll_die
+   01 | 23       | 23                      | proc call roll_die
+   02 | 01       | 1                       |
+   03 | 11       | −                       | condition compare
+   04 | 78       | К x≠0 8                 | false branch for !=; preloaded R8=34 indirect-target=34 shifted-forward indirect flow
+   05 | 67       | П→X 7                   | recall turn_score
+   06 | 63       | П→X 3                   | recall die
+   07 | 10       | +                       | expr +
+   08 | 47       | X→П 7                   | set turn_score
+   09 | 65       | П→X 5                   | recall player_total
+   10 | 10       | +                       | expr +
+   11 | 46       | X→П 6                   | set preview_total
+   12 | 53       | ПП                      | show __inline_show_82_0
+   13 | 69       | 69                      | show __inline_show_82_0
+   14 | E9       | К x=0 9                 | false branch for ==; preloaded R9=B2 indirect-target=0 indirect flow
+   15 | 66       | П→X 6                   | recall preview_total
+   16 | 45       | X→П 5                   | set player_total
+   17 | 6C       | П→X c                   | preload const 100
+   18 | 11       | −                       | condition compare
+   19 | 98       | К x≥0 8                 | false branch for >=; preloaded R8=34 indirect-target=34 shifted-forward indirect flow
+   20 | 6C       | П→X c                   | preload const 100
+   21 | 50       | С/П                     | halt
+   22 | 88       | К БП 8                  | tail jump start_calculator_turn; preloaded R8=34 indirect-target=34 shifted-forward indirect flow
+   23 | D4       | К П→X 4                 | increment roll_count
+   24 | 3B       | К СЧ                    | random()
+   25 | 06       | 6                       |
+   26 | 12       | ×                       | expr *
+   27 | 0E       | В↑                      | random int keep scaled draw
+   28 | 35       | К {x}                   | random int fractional part
+   29 | 11       | −                       | random int floor
+   30 | 01       | 1                       |
+   31 | 10       | +                       | expr +
+   32 | 43       | X→П 3                   | set die
+   33 | 52       | В/О                     | implicit return from proc
+   34 | 00       | 0                       |
+   35 | 47       | X→П 7                   | set turn_score
+   36 | 44       | X→П 4                   | set roll_count
+   37 | 53       | ПП                      | proc call roll_die
+   38 | 23       | 23                      | proc call roll_die
    39 | 01       | 1                       |
    40 | 11       | −                       | condition compare
    41 | 57       | F x≠0                   | false branch for !=
@@ -114,10 +114,10 @@
    53 | 6A       | П→X a                   | preload const 20
    54 | 11       | −                       | condition compare
    55 | 59       | F x≥0                   | false branch for >=
-   56 | 38       | 38                      | false branch for >=
+   56 | 37       | 37                      | false branch for >=
    57 | 66       | П→X 6                   | recall preview_total
    58 | 40       | X→П 0                   | set calculator_total
-   59 | 6B       | П→X b                   | preload const 100
+   59 | 6C       | П→X c                   | preload const 100
    60 | 11       | −                       | condition compare
    61 | 59       | F x≥0                   | false branch for >=
    62 | 65       | 65                      | false branch for >=
@@ -126,9 +126,9 @@
    65 | 00       | 0                       |
    66 | 47       | X→П 7                   | set turn_score
    67 | 44       | X→П 4                   | set roll_count
-   68 | 89       | К БП 9                  | tail call roll_player; preloaded R9=C4 indirect-target=12 indirect flow
+   68 | 89       | К БП 9                  | tail call roll_player; preloaded R9=B2 indirect-target=0 indirect flow
    69 | 67       | П→X 7                   | display __inline_show_82_0 score
-   70 | 6C       | П→X c                   | preload const 1000
+   70 | 6B       | П→X b                   | preload const 1000
    71 | 13       | ÷                       | display template score shift
    72 | 66       | П→X 6                   | display __inline_show_82_0 total
    73 | 6D       | П→X d                   | preload const 10000000

@@ -20,7 +20,7 @@
    14 |  47  | X→П 7                   | setup R7
    15 |  02  | 2                       |
    16 |  15  | F 10ˣ                   | setup constant 100
-   17 |  4B  | X→П b                   | setup Rb
+   17 |  4A  | X→П a                   | setup Ra
    18 |  01  | 1                       |
    19 |  03  | 3                       |
    20 |  01  | 1                       |
@@ -42,7 +42,7 @@
    36 |  00  | 0                       |
    37 |  0A  | .                       |
    38 |  05  | 5                       |
-   39 |  4A  | X→П a                   | setup Ra
+   39 |  4B  | X→П b                   | setup Rb
    40 |  05  | 5                       |
    41 |  07  | 7                       |
    42 |  4E  | X→П e                   | setup Re
@@ -83,7 +83,7 @@
    20 |  12  | ×                       | remainder scale
    21 |  02  | 2                       |
    22 |  24  | F xʸ                    | pow()
-   23 |  6A  | П→X a                   | preload const 0.5
+   23 |  6B  | П→X b                   | preload const 0.5
    24 |  10  | +                       | expr +
    25 |  34  | К [x]                   | int()
    26 |  65  | П→X 5                   | recall player_shot
@@ -98,7 +98,7 @@
    35 |  37  | К ∧                     | bit_and()
    36 |  35  | К {x}                   | frac()
    37 |  32  | К ЗН                    | sign()
-   38 |  7A  | К x≠0 a                 | false branch for !=; preloaded Ra=0.5 indirect-target=0 indirect flow
+   38 |  7A  | К x≠0 a                 | false branch for !=; preloaded Ra=100 indirect-target=0 indirect flow
    39 |  3A  | К ИНВ                   | reuse membership mask for clear
    40 |  61  | П→X 1                   | recall enemy_fleet
    41 |  37  | К ∧                     | clear matched cell with reused mask
@@ -114,11 +114,11 @@
    51 |  3A  | К ИНВ                   | display literal video bytes
    52 |  0B  | /-/                     | display literal sign
    53 |  50  | С/П                     | show __inline_show_32_0
-   54 |  8A  | К БП a                  | if end; preloaded Ra=0.5 indirect-target=0 indirect flow
+   54 |  8A  | К БП a                  | if end; preloaded Ra=100 indirect-target=0 indirect flow
    55 |  50  | С/П                     | show __inline_show_79_2
-   56 |  8A  | К БП a                  | loop back; preloaded Ra=0.5 indirect-target=0 indirect flow
+   56 |  8A  | К БП a                  | loop back; preloaded Ra=100 indirect-target=0 indirect flow
    57 |  3B  | К СЧ                    | random()
-   58 |  6B  | П→X b                   | preload const 100
+   58 |  6A  | П→X a                   | preload const 100
    59 |  12  | ×                       | expr *
    60 |  0E  | В↑                      | random int keep scaled draw
    61 |  35  | К {x}                   | random int fractional part

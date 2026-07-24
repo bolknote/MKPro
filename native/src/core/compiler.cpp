@@ -2789,8 +2789,10 @@ void suppress_packed_score_inline_rules(LoweringContext& context, const V2Progra
   for (const V2Rule& rule : program.rules) {
     const auto calls = context.proc_call_counts.find(rule.name);
     const int uses = calls == context.proc_call_counts.end() ? 0 : calls->second;
-    if (uses > 1 && count_expression_calls_in_statements(rule.body, "packed_score") >= 4)
+    if (uses > 1 && context.use_packed_score_accumulator_helper &&
+        count_expression_calls_in_statements(rule.body, "packed_score") >= 4) {
       context.inline_statement_rules.erase(rule.name);
+    }
   }
 }
 
@@ -21175,10 +21177,133 @@ bool lower_packed_score_sequence_accumulator_run(LoweringContext& context,
   return lower_run(/*allow_signed_packed_score_terms=*/false);
 }
 
+bool statement_contains_assignment_source(const V2Statement& statement, int source_line,
+                                          const std::string& target) {
+  if (statement.kind == "v2_assign" && statement.line == source_line &&
+      statement.target == target) {
+    return true;
+  }
+  for (const std::vector<V2Statement>* block :
+       {&statement.body, &statement.then_body, &statement.else_body}) {
+    if (std::any_of(block->begin(), block->end(), [&](const V2Statement& child) {
+          return statement_contains_assignment_source(child, source_line, target);
+        })) {
+      return true;
+    }
+  }
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr &&
+        statement_contains_assignment_source(*match_case.action, source_line, target)) {
+      return true;
+    }
+  }
+  return statement.otherwise != nullptr &&
+         statement_contains_assignment_source(*statement.otherwise, source_line, target);
+}
+
+const V2Rule* assignment_source_rule(const LoweringContext& context, int source_line,
+                                     const std::string& target) {
+  if (context.program == nullptr)
+    return nullptr;
+  const auto found = std::find_if(
+      context.program->rules.begin(), context.program->rules.end(), [&](const V2Rule& rule) {
+        return std::any_of(rule.body.begin(), rule.body.end(), [&](const V2Statement& statement) {
+          return statement_contains_assignment_source(statement, source_line, target);
+        });
+      });
+  return found == context.program->rules.end() ? nullptr : &*found;
+}
+
+bool rule_invocation_has_live_target_continuation(
+    LoweringContext& context, const std::vector<V2Statement>& statements,
+    const std::string& source_rule_name, const std::string& target,
+    const std::vector<V2Statement>& continuation) {
+  for (std::size_t index = 0; index < statements.size(); ++index) {
+    const V2Statement& statement = statements.at(index);
+    std::vector<V2Statement> future;
+    if (index + 1U < statements.size()) {
+      future.insert(future.end(),
+                    statements.begin() +
+                        static_cast<std::vector<V2Statement>::difference_type>(index + 1U),
+                    statements.end());
+    }
+    future.insert(future.end(), continuation.begin(), continuation.end());
+
+    if (statement.kind == "v2_invoke" && statement.name.has_value() &&
+        *statement.name == source_rule_name &&
+        statements_read_identifier_before_write(context, future, target)) {
+      return true;
+    }
+
+    for (const std::vector<V2Statement>* block :
+         {&statement.body, &statement.then_body, &statement.else_body}) {
+      if (rule_invocation_has_live_target_continuation(context, *block, source_rule_name, target,
+                                                       future)) {
+        return true;
+      }
+    }
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.action != nullptr) {
+        const std::vector<V2Statement> action{*match_case.action};
+        if (rule_invocation_has_live_target_continuation(
+                context, action, source_rule_name, target, future)) {
+          return true;
+        }
+      }
+    }
+    if (statement.otherwise != nullptr) {
+      const std::vector<V2Statement> otherwise{*statement.otherwise};
+      if (rule_invocation_has_live_target_continuation(
+              context, otherwise, source_rule_name, target, future)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool assignment_must_escape_source_rule(LoweringContext& context, const V2Rule& source_rule,
+                                        const std::string& target) {
+  if (context.program == nullptr)
+    return false;
+
+  const std::vector<V2Statement> no_continuation;
+  if (rule_invocation_has_live_target_continuation(
+          context, context.program->body, source_rule.name, target, no_continuation)) {
+    return true;
+  }
+  return std::any_of(
+      context.program->rules.begin(), context.program->rules.end(), [&](const V2Rule& rule) {
+        return rule_invocation_has_live_target_continuation(
+            context, rule.body, source_rule.name, target, no_continuation);
+      });
+}
+
 bool stack_carried_assignment_future_safe(LoweringContext& context,
                                           const std::vector<V2Statement>& statements,
                                           std::size_t start, std::size_t consumer_index,
-                                          const std::string& target) {
+                                          const std::string& target, int source_line,
+                                          bool assignment_must_escape_block) {
+  if (assignment_must_escape_block && !context.stack_only_state_fields.contains(target) &&
+      context.program != nullptr) {
+    const V2Rule* source_rule = assignment_source_rule(context, source_line, target);
+    if (source_rule == nullptr && context.current_rule_name.has_value()) {
+      const auto rule_it = context.rules.find(*context.current_rule_name);
+      if (rule_it != context.rules.end())
+        source_rule = rule_it->second;
+    }
+    if (source_rule != nullptr &&
+        assignment_must_escape_source_rule(context, *source_rule, target)) {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "persistent-procedure-assignment-store",
+          .detail = "Kept the store to " + target + " at line " + std::to_string(source_line) +
+                    " because rule " + source_rule->name +
+                    " returns that value to a live caller continuation.",
+      });
+      return false;
+    }
+  }
+
   std::vector<V2Statement> future;
   if (consumer_index + 1U < statements.size()) {
     future.insert(future.end(), statements.begin() +
@@ -21393,7 +21518,8 @@ bool lower_stack_carried_assignment_run(LoweringContext& context,
     return false;
   if (stack_carried_consumer_requires_stored_state_after_entry(context, consumer, target.name))
     return false;
-  if (!stack_carried_assignment_future_safe(context, statements, start, start + 1U, target.name))
+  if (!stack_carried_assignment_future_safe(context, statements, start, start + 1U, target.name,
+                                            assignment.line, true))
     return false;
 
   if (!emit_predecrement_indexed_stack_producer_preload(context, assignment))
@@ -21552,7 +21678,7 @@ bool lower_delayed_stack_carried_assignment_run(LoweringContext& context,
   if (stack_carried_consumer_requires_stored_state_after_entry(context, consumer, target.name))
     return false;
   if (!stack_carried_assignment_future_safe(context, statements, start, consumer_index,
-                                            target.name)) {
+                                            target.name, assignment.line, true)) {
     return false;
   }
 
@@ -21635,8 +21761,10 @@ bool lower_stack_carried_update_run(LoweringContext& context,
     return false;
   if (stack_carried_consumer_requires_stored_state_after_entry(context, consumer, target.name))
     return false;
-  if (!stack_carried_assignment_future_safe(context, statements, start, start + 1U, target.name))
+  if (!stack_carried_assignment_future_safe(context, statements, start, start + 1U, target.name,
+                                            update.line, false)) {
     return false;
+  }
 
   if (!lower_stack_carried_update_expression_to_x(context, target.name, std::move(delta),
                                                   *update.op == "+=" ? "+" : "-", update.line)) {
@@ -21713,7 +21841,7 @@ bool lower_delayed_stack_carried_update_run(LoweringContext& context,
   if (stack_carried_consumer_requires_stored_state_after_entry(context, consumer, target.name))
     return false;
   if (!stack_carried_assignment_future_safe(context, statements, start, consumer_index,
-                                            target.name)) {
+                                            target.name, update.line, false)) {
     return false;
   }
 
@@ -29734,13 +29862,28 @@ bool emit_dispatch_residual_sign_expression(LoweringContext& context, const Expr
     emit_residual_compare_delta(context, matched->bound - compared_value,
                                 "dispatch default residual adjust", line);
   }
-  if (matched->negate)
+  const std::optional<double> factor_value =
+      matched->factor.has_value() ? numeric_expression_value(context, *matched->factor)
+                                  : std::nullopt;
+  const bool fold_direction_into_factor = matched->negate && factor_value.has_value();
+  if (matched->negate && !fold_direction_into_factor)
     context.emitter.emit_op(0x0b, "/-/", "dispatch default residual sign direction", line);
   context.emitter.emit_op(0x32, "К ЗН", "dispatch default residual sign", line);
   if (matched->factor.has_value()) {
-    if (!lower_expression_to_x(context, *matched->factor))
+    const Expression scaled_factor =
+        fold_direction_into_factor
+            ? parse_expression(format_number_literal(-*factor_value), line)
+            : *matched->factor;
+    if (!lower_expression_to_x(context, scaled_factor))
       return false;
     context.emitter.emit_op(0x12, "*", "dispatch default residual sign scale", line);
+  }
+  if (fold_direction_into_factor) {
+    context.optimizations.push_back(OptimizationReport{
+        .name = "dispatch-default-residual-sign-factor-fold",
+        .detail = "Folded the reversed dispatch-residual direction into the numeric scale of " +
+                  expression_to_source(expression) + " at line " + std::to_string(line) + ".",
+    });
   }
   context.optimizations.push_back(OptimizationReport{
       .name = "dispatch-default-residual-sign",
@@ -37756,6 +37899,7 @@ bool lower_repeated_assignment_value_run(LoweringContext& context,
   if (!expression_pure_for_substitution(first_expression))
     return false;
 
+  std::set<std::string> written_targets{first_target.name};
   std::size_t end = index + 1U;
   for (; end < statements.size(); ++end) {
     const V2Statement& candidate = statements.at(end);
@@ -37765,8 +37909,20 @@ bool lower_repeated_assignment_value_run(LoweringContext& context,
     const Expression candidate_expression = parse_expression(*candidate.expr, candidate.line);
     if (!expression_equals(candidate_expression, first_expression))
       break;
+    if (std::any_of(written_targets.begin(), written_targets.end(),
+                    [&](const std::string& target) {
+                      return expression_contains_identifier(candidate_expression, target);
+                    })) {
+      break;
+    }
     if (repeated_assignment_feeds_later_unit_decrement_loop(context, statements, end))
       break;
+    const Expression candidate_target = parse_expression(*candidate.target, candidate.line);
+    if (candidate_target.kind != "identifier" ||
+        !context.register_index_by_name.contains(candidate_target.name)) {
+      break;
+    }
+    written_targets.insert(candidate_target.name);
   }
 
   if (end - index <= 1U)
@@ -42948,6 +43104,20 @@ collect_manual_setup_inputs(const V2Program& program,
 }
 
 std::string combine_listing(const CompileResult& result, AddressSpaceModel model) {
+  const auto append_manual_startup = [&](std::string listing) {
+    if (!result.manual_startup_sequence.has_value())
+      return listing;
+    listing += "\n\n# Manual Startup Sequence\n";
+    listing += result.manual_startup_sequence->reason + "\n  ";
+    for (std::size_t index = 0;
+         index < result.manual_startup_sequence->steps.size(); ++index) {
+      if (index > 0)
+        listing += "  ";
+      listing += result.manual_startup_sequence->steps.at(index);
+    }
+    return listing;
+  };
+
   const std::optional<std::string> setup_block =
       !result.setup_program.has_value() && result.manual_setup_inputs.empty()
           ? format_setup_block(result.preloads)
@@ -42974,13 +43144,14 @@ std::string combine_listing(const CompileResult& result, AddressSpaceModel model
       listing += format_setup_listing_steps(result.manual_setup_inputs, {});
     }
     listing += "\n\n# Main Listing\n" + format_listing_steps(result.steps, model);
-    return listing;
+    return append_manual_startup(std::move(listing));
   }
 
   if (setup_block.has_value())
-    return "Setup Block:\n  " + *setup_block + "\n\n" + format_listing_steps(result.steps, model);
+    return append_manual_startup("Setup Block:\n  " + *setup_block + "\n\n" +
+                                 format_listing_steps(result.steps, model));
 
-  return format_listing_steps(result.steps, model);
+  return append_manual_startup(format_listing_steps(result.steps, model));
 }
 
 std::optional<std::string> executable_setup_value(const std::string& value,
@@ -51020,6 +51191,65 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   append_missing_preloaded_indirect_flow_comments(post_layout_items, annotation_preloads,
                                                   options);
 
+  const bool zggog_startup_output_supported =
+      options.output == OutputFormat::Listing ||
+      options.output == OutputFormat::Json ||
+      options.output == OutputFormat::All;
+  const std::size_t zggog_return_stack_budget =
+      options.budget.has_value() && *options.budget > 0
+          ? static_cast<std::size_t>(*options.budget)
+          : program_step_limit_size_for_options(options);
+  const bool zggog_needs_size_rescue =
+      core::machine_cell_count(post_layout_items) >
+      static_cast<int>(zggog_return_stack_budget);
+  if (options.return_stack_script && zggog_startup_output_supported &&
+      zggog_needs_size_rescue) {
+    const core::ZggogReturnStackRewriteResult zggog =
+        core::optimize_post_layout_zggog_return_stack_script(post_layout_items, options);
+    if (zggog.applied > 0 && zggog.preload.has_value()) {
+      post_layout_items = zggog.items;
+      result.manual_startup_sequence = ManualStartupSequenceReport{
+          .steps = zggog.preload->setup_steps,
+          .reason = zggog.preload->reset_program_counter
+                        ? "After loading the main listing, construct a 3GG0G "
+                          "value to preload the five-level MK-61 return stack, "
+                          "reset the program counter with В/О, and start with С/П."
+                        : "After loading the main listing, construct the reported "
+                          "3GG0G value to preload the five-level MK-61 return "
+                          "stack and retain its selected program counter; start "
+                          "directly with С/П without pressing В/О.",
+      };
+      const int scripted_returns =
+          zggog.applied - zggog.eliminated_start_jumps;
+      std::string zggog_detail;
+      if (zggog.eliminated_start_jumps > 0) {
+        zggog_detail =
+            "Eliminated the address-00 start jump by entering at the 3GG0G-selected "
+            "program counter and replaced " +
+            std::to_string(scripted_returns) + " terminal direct jump" +
+            (scripted_returns == 1 ? "" : "s") + " with В/О";
+      } else {
+        zggog_detail =
+            "Replaced " + std::to_string(scripted_returns) +
+            " terminal direct jump" + (scripted_returns == 1 ? "" : "s") +
+            " with В/О";
+      }
+      zggog_detail += " using a manually preloaded 3GG0G return stack";
+      if (zggog.padding_cells > 0) {
+        zggog_detail +=
+            "; inserted " + std::to_string(zggog.padding_cells) +
+            " relocatable КНОП alignment cell" +
+            (zggog.padding_cells == 1 ? "." : "s.");
+      } else {
+        zggog_detail += ".";
+      }
+      post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+          .name = "zggog-return-stack-preload",
+          .detail = std::move(zggog_detail),
+      });
+    }
+  }
+
   if (!has_errors(context.diagnostics) && options.collect_coalesce_shares) {
     std::set<std::string> allocated_registers;
     for (const auto& [unused_name, index] : context.register_index_by_name) {
@@ -51277,8 +51507,16 @@ bool candidate_beats_best(const CompileResult& candidate, const CompileResult& b
     return true;
   if (candidate.steps.size() < best.steps.size())
     return true;
-  return candidate.steps.size() == best.steps.size() && best.steps.size() > official_program_limit &&
-         estimated_startup_program_cost(candidate) < estimated_startup_program_cost(best);
+  if (candidate.steps.size() != best.steps.size())
+    return false;
+  const bool candidate_manual_startup =
+      candidate.manual_startup_sequence.has_value();
+  const bool best_manual_startup = best.manual_startup_sequence.has_value();
+  if (candidate_manual_startup != best_manual_startup)
+    return !candidate_manual_startup;
+  return best.steps.size() > official_program_limit &&
+         estimated_startup_program_cost(candidate) <
+             estimated_startup_program_cost(best);
 }
 
 bool has_return_stack_optimization(const CompileResult& result) {
@@ -51286,7 +51524,8 @@ bool has_return_stack_optimization(const CompileResult& result) {
                      [](const OptimizationReport& item) {
                        return item.name == "return-stack-startup-layout" ||
                               item.name == "return-stack-script" ||
-                              item.name == "return-stack-dirty-dispatch-allocator";
+                              item.name == "return-stack-dirty-dispatch-allocator" ||
+                              item.name == "zggog-return-stack-preload";
                      });
 }
 
@@ -55277,6 +55516,19 @@ std::vector<ProofReport> build_proof_report(const ProgramAst& ast,
         .detail = "Every borrowed setup-time selector is read only by its marked indirect-flow "
                   "sites before a definite write, including all reachable loop and return-stack "
                   "states.",
+    });
+  }
+  if (has_optimization_named(optimizations, "zggog-return-stack-preload")) {
+    proofs.push_back(ProofReport{
+        .id = "zggog-return-stack-script",
+        .status = "proved",
+        .detail =
+            "The final entry chain contains two to six scripted returns, optionally preceded "
+            "by an erased address-00 trampoline and direct entry at the 3GG0G-selected PC; "
+            "post-rewrite addresses, including the deterministic dirty sixth target when "
+            "present, are encoded by the reported setup, no call or other control transfer "
+            "can disturb the full return stack, every alignment insertion is relocatable, "
+            "and the final artifact is strictly smaller.",
     });
   }
   if (has_optimization_named(optimizations, "computed-dispatch") &&
@@ -65196,7 +65448,8 @@ std::optional<CompileResult>
 apply_finalization_dead_store_to_selected_result(
     const std::string& source, const CompileResult& selected,
     const CompileOptions& options) {
-  if (!selected.implemented || selected.items.empty())
+  if (!selected.implemented || selected.items.empty() ||
+      selected.manual_startup_sequence.has_value())
     return std::nullopt;
 
   const int initial_cells = core::machine_cell_count(selected.items);
@@ -65541,6 +65794,8 @@ std::optional<CompileResult>
 apply_absolute_dark_layout_to_selected_result(const std::string& source,
                                               const CompileResult& selected,
                                               const CompileOptions& options) {
+  if (selected.manual_startup_sequence.has_value())
+    return std::nullopt;
   const std::optional<SelectedAbsoluteDarkLayout> layout =
       select_absolute_dark_layout_for_final_artifact(selected, options);
   if (!layout.has_value())
@@ -65778,8 +66033,7 @@ CompileResult compile_source_for_optimizer_profile(
   const std::size_t candidate_search_input_cells =
       !best.steps.empty() ? best.steps.size() : official_program_limit;
   const auto scaled_candidate_search_cost_ms = [&](std::string_view name) {
-    const std::uint64_t cells = std::max(candidate_search_input_cells,
-                                         official_program_limit);
+    const std::uint64_t cells = std::max<std::size_t>(candidate_search_input_cells, 1U);
     const std::uint64_t limit = std::max<std::size_t>(official_program_limit, 1U);
     const std::uint64_t base =
         static_cast<std::uint64_t>(estimated_candidate_search_cost_ms(name));
@@ -69067,6 +69321,134 @@ CompileResult compile_source_for_optimizer_profile(
     best = std::move(fallback);
   }
 
+  // A reversed residual sign multiplied by a numeric factor is lowered as
+  // sign(residual) * -factor. If the preload planner selected +factor, ordinary
+  // constant synthesis recalls it and emits /-/, giving back the cell saved by
+  // the algebraic fold. Recompile the selected option set with the opposite
+  // preload polarity. This is a generic emitted-shape refinement: every
+  // positive-factor use is regenerated through normal constant lowering, and
+  // the candidate is retained only when the delivered preload and all risky
+  // control-flow rewrites pass their existing static proofs.
+  if (best.implemented &&
+      has_optimization_named(best.optimizations,
+                            "dispatch-default-residual-sign-factor-fold")) {
+    struct NegatedSignFactorPreload {
+      std::string register_name;
+      std::string value;
+      std::string opposite_value;
+    };
+    std::vector<NegatedSignFactorPreload> preload_candidates;
+    std::set<std::string> seen;
+    constexpr int kRecallFirst = 0x60;
+    constexpr int kRecallLast = 0x6e;
+    for (std::size_t index = 0; index + 3U < best.steps.size(); ++index) {
+      const ResolvedStep& sign = best.steps.at(index);
+      const ResolvedStep& recall = best.steps.at(index + 1U);
+      const ResolvedStep& negate = best.steps.at(index + 2U);
+      const ResolvedStep& multiply = best.steps.at(index + 3U);
+      if (sign.opcode != 0x32 || !sign.comment.has_value() ||
+          *sign.comment != "dispatch default residual sign" ||
+          recall.opcode < kRecallFirst || recall.opcode > kRecallLast ||
+          negate.opcode != 0x0b || !negate.comment.has_value() ||
+          !negate.comment->starts_with("constant ") || multiply.opcode != 0x12 ||
+          !multiply.comment.has_value() ||
+          *multiply.comment != "dispatch default residual sign scale") {
+        continue;
+      }
+
+      const std::string register_name =
+          core::register_name_for_index(recall.opcode - kRecallFirst);
+      const auto preload = std::find_if(
+          best.preloads.begin(), best.preloads.end(), [&](const PreloadReport& item) {
+            return item.register_name == register_name && !item.setup_expression &&
+                   !item.setup_target_name.has_value() && !item.setup_source_line.has_value();
+          });
+      if (preload == best.preloads.end() ||
+          options.preloaded_constant_registers.contains(register_name)) {
+        continue;
+      }
+
+      try {
+        const std::string normalized = normalize_number_key(preload->value);
+        std::size_t parsed = 0;
+        const long double numeric = std::stold(normalized, &parsed);
+        if (parsed != normalized.size() || !std::isfinite(static_cast<double>(numeric)) ||
+            numeric == 0.0L) {
+          continue;
+        }
+        const std::string opposite =
+            normalize_number_key(format_number_literal(static_cast<double>(-numeric)));
+        const std::string key = register_name + ":" + opposite;
+        if (seen.insert(key).second) {
+          preload_candidates.push_back(NegatedSignFactorPreload{
+              .register_name = register_name,
+              .value = opposite,
+              .opposite_value = normalized,
+          });
+        }
+      } catch (const std::exception&) {
+      }
+    }
+
+    for (const NegatedSignFactorPreload& preload : preload_candidates) {
+      try {
+        CompileOptions candidate_options = best_options;
+        candidate_options.preloaded_constant_registers[preload.register_name] = preload.value;
+        candidate_options.suppress_constant_preloads.insert(preload.opposite_value);
+        for (auto existing = candidate_options.preloaded_constant_registers.begin();
+             existing != candidate_options.preloaded_constant_registers.end();) {
+          const bool generated_opposite =
+              existing->first != preload.register_name &&
+              normalize_number_key(existing->second) == preload.opposite_value &&
+              !options.preloaded_constant_registers.contains(existing->first);
+          if (generated_opposite) {
+            existing = candidate_options.preloaded_constant_registers.erase(existing);
+          } else {
+            ++existing;
+          }
+        }
+        CompileOptions compile_options = candidate_options;
+        CompileResult candidate = compile_source_once(
+            source, compile_options, source_has_entered,
+            /*apply_final_layout_size_rescue=*/true);
+        if (!candidate.implemented &&
+            can_retry_lowering_attempt_in_analysis(candidate, compile_options)) {
+          compile_options.analysis = true;
+          candidate = compile_source_once(source, compile_options, source_has_entered,
+                                          /*apply_final_layout_size_rescue=*/true);
+        }
+        const bool preload_proved =
+            preloaded_constant_registers_proved(compile_options, candidate.preloads);
+        const bool static_proof_accepted =
+            !candidate_needs_static_proof_gate(compile_options) ||
+            !optimizer_static_gate_rejection_reason(compile_options, candidate).has_value();
+        if (trace_candidates) {
+          std::cerr << "[candidate-trace] negated-sign-factor-preload R"
+                    << preload.register_name << "=" << preload.value
+                    << " implemented=" << (candidate.implemented ? "yes" : "no")
+                    << " steps=" << candidate.steps.size()
+                    << " preload-proof=" << (preload_proved ? "yes" : "no")
+                    << " static-proof=" << (static_proof_accepted ? "yes" : "no") << "\n";
+        }
+        if (!candidate.implemented || !preload_proved || !static_proof_accepted ||
+            !candidate_beats_best(candidate, best, options)) {
+          continue;
+        }
+        candidate.optimizations.push_back(OptimizationReport{
+            .name = "negated-sign-factor-preload",
+            .detail = "Stored " + preload.value + " in R" + preload.register_name +
+                      " so a residual-sign scale no longer needs a synthesized /-/ (" +
+                      std::to_string(candidate.steps.size()) + " vs " +
+                      std::to_string(best.steps.size()) + " cells).",
+        });
+        best_options = std::move(candidate_options);
+        best = std::move(candidate);
+      } catch (const std::exception&) {
+        // Preload polarity refinement is opportunistic; retain the proved winner.
+      }
+    }
+  }
+
   // Candidate search has already paid for lowering and selected one complete
   // artifact. Try the proof-backed absolute/F9 transaction once on that exact
   // winner instead of recompiling every source candidate. Any preload change,
@@ -69089,6 +69471,17 @@ CompileResult compile_source_for_optimizer_profile(
     }
   }
 
+  if (options.fast_candidate_search &&
+      std::none_of(best.optimizations.begin(), best.optimizations.end(),
+                   [](const OptimizationReport& optimization) {
+                     return optimization.name == "fast-candidate-search";
+                   })) {
+    best.optimizations.push_back(OptimizationReport{
+        .name = "fast-candidate-search",
+        .detail = "Completed the bounded size-rescue candidate pass and selected " +
+                  std::to_string(best.steps.size()) + " cells.",
+    });
+  }
   attach_search_rejections_to_best();
   refresh_rejection_dependent_reports(best, options);
   write_compile_result_cache(source, options, best);

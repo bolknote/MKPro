@@ -445,6 +445,27 @@ void emulator_rom_tables_match_typescript_contract() {
             "fractional R0 memory should leave sentinel");
   }
 
+  {
+    const auto model =
+        core::evaluate_indirect_address("a", "-0.0000002", core::IndirectOperationKind::Flow);
+    require(model.has_value() && model->actual_flow_target == 0,
+            "negative fractional stable selector model should target actual cell 0");
+    std::vector<int> program(105, 0x50);
+    program[0] = 0x5e;
+    program[1] = 0x08;
+    program[2] = 0x0d;
+    program[3] = 0x8a;
+    program[4] = 0x09;
+    program[8] = 0x07;
+    program[9] = 0x50;
+    const ProgramRun result =
+        run_program_with_registers(program, {{"x", "1"}, {"a", "-0.0000002"}});
+    require(result.stopped && result.display.find("7") != std::string::npos,
+            "negative fractional stable selector should execute target cell 0");
+    require(result.display.find("9") == std::string::npos,
+            "negative fractional stable selector should skip fallthrough marker");
+  }
+
   for (int offset = 0; offset <= 5; ++offset) {
     const std::string value = hex_byte(0xfa + offset);
     const auto model =

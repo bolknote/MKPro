@@ -224,6 +224,11 @@ struct ProofReport {
   std::string detail;
 };
 
+struct ManualStartupSequenceReport {
+  std::vector<std::string> steps;
+  std::string reason;
+};
+
 struct SetupProgramReport {
   std::vector<ResolvedStep> steps;
   std::string reason;
@@ -446,6 +451,7 @@ struct CompileResult {
   std::map<std::string, std::string> labels;
   std::vector<PreloadReport> preloads;
   std::vector<ManualSetupInput> manual_setup_inputs;
+  std::optional<ManualStartupSequenceReport> manual_startup_sequence;
   std::vector<OptimizationReport> optimizations;
   std::optional<ReferenceReport> reference;
   OptimizerReport optimizer;

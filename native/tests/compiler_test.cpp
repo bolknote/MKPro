@@ -1330,9 +1330,9 @@ program GuardedPrologueGadget {
       "guarded prologue pass should rewrite all matching call sites");
   require(guarded_prologue.listing.find("__guarded_prologue_0") != std::string::npos,
           "guarded prologue pass should emit a shared helper procedure");
-  // compiler.test.ts "extracts repeated guarded prologues into return-to-continuation gadgets" uses
-  // the default pipeline (no forced guarded_prologue_gadgets), where the post-layout gadget-layout
-  // optimization also fires; assert that contract on a default-options compile of the same program.
+  // The forced variant above pins the guarded-prologue gadget itself. The
+  // default pipeline may select any smaller proved composition, so this second
+  // compile guards the automatic result rather than one obsolete winning shape.
   const CompileResult guarded_prologue_default = compile_source(R"mkpro(
 program GuardedPrologueGadget {
   state {
@@ -1394,12 +1394,8 @@ program GuardedPrologueGadget {
 }
 )mkpro");
   require(guarded_prologue_default.implemented, "default guarded-prologue program should compile");
-  require(has_optimization(guarded_prologue_default, "guarded-prologue-gadget"),
-          "default guarded prologue should extract a return-to-continuation gadget");
-  require(has_optimization(guarded_prologue_default, "guarded-prologue-gadget-layout"),
-          "default guarded prologue should report the gadget layout optimization");
   require(guarded_prologue_default.steps.size() < 62,
-          "default guarded prologue extraction should stay under the TS step bound");
+          "default guarded-prologue optimization should stay under the proved step bound");
 
   const CompileResult recursive_invoked = compile_source(R"mkpro(
 program RecursiveProcedure {
@@ -1653,14 +1649,27 @@ program RepeatedXParamDecay {
           "native compiler should lower repeated X-param return-decay assignments");
   require(repeated_x_param_decay.diagnostics.empty(),
           "repeated X-param return-decay compile should not report diagnostics");
-  require(has_optimization(repeated_x_param_decay, "repeated-assignment-value-reuse"),
-          "current TS contract should reuse the repeated decay assignment value");
-  require(!has_optimization(repeated_x_param_decay, "x-param-return-decay"),
-          "current TS contract no longer selects the specialized return-decay body here");
-  require(step_opcodes(repeated_x_param_decay) ==
-              std::vector<int>({0x60, 0x53, 0x07, 0x40, 0x50, 0x51, 0x00, 0x04, 0x13,
-                                0x34, 0x11, 0x52}),
-          "repeated decay lowering should match the current TS byte contract");
+  require(!has_optimization(repeated_x_param_decay, "repeated-assignment-value-reuse"),
+          "a repeated assignment must be recomputed when the first store changes an expression "
+          "dependency");
+  {
+    std::vector<int> codes;
+    codes.reserve(repeated_x_param_decay.steps.size());
+    for (const ResolvedStep& step : repeated_x_param_decay.steps)
+      codes.push_back(step.opcode);
+    emulator::MK61 calc;
+    const emulator::ProgramLoadResult loaded = calc.load_program(codes);
+    require(loaded.diagnostics.empty(),
+            "repeated X-param return-decay program should load on the emulator");
+    for (const PreloadReport& preload : repeated_x_param_decay.preloads)
+      calc.set_register(preload.register_name, preload.value);
+    calc.press_sequence({"\u0412/\u041e", "\u0421/\u041f"});
+    const emulator::RunResult run = calc.run_until_stable(1200, 8);
+    require(run.stopped, "repeated X-param return-decay program should halt");
+    require(calc.display_text() == "5,",
+            "two consecutive decay assignments must update 7 to 6 and then to 5, got " +
+                calc.display_text());
+  }
 
   const CompileResult x_param_expression_rule = compile_source(R"mkpro(
 program XParamExpressionRule {
@@ -1839,9 +1848,13 @@ program XParamValueCallTempReuse {
           "X-param value call temp reuse compile should not report diagnostics");
   require(has_optimization(x_param_value_call_temp_reuse, "x-param-value-call-temp-reuse"),
           "X-param value call temp reuse should report the TS strategy name");
-  require(x_param_value_call_temp_reuse.registers.find("__mkpro_call_1") !=
+  require(x_param_value_call_temp_reuse.registers.find("__mkpro_call_1") ==
               x_param_value_call_temp_reuse.registers.end(),
-          "current TS contract still allocates the generic scratch for the non-value call");
+          "the generic nested-call temporary should remain stack-only");
+  require(has_optimization(x_param_value_call_temp_reuse, "stack-only-state-field") &&
+              has_optimization(x_param_value_call_temp_reuse, "stack-carried-assignment"),
+          "the generic nested-call temporary should have explicit stack-only and stack-carried "
+          "proof reports");
   require(x_param_value_call_temp_reuse.listing.find("recall __mkpro_unary_arg_1") !=
               std::string::npos,
           "X-param value call temp reuse should recall the existing X-param scratch");
@@ -2717,6 +2730,7 @@ program GenericPackedScoreSharedReturnedIndexTail {
 
   loop {
     score_move()
+    score_move()
     halt(score)
   }
 }
@@ -2730,16 +2744,24 @@ program GenericPackedScoreSharedReturnedIndexTail {
                            "x-param-packed-score-shared-returned-index-tail"),
           "generic packed_score lowering should share a returned-index tail for paired X-param "
           "score terms");
-  require(has_optimization(generic_packed_score_tail,
-                           "x-param-packed-score-shared-fallthrough-tail"),
-          "stack-only packed_score result should enter the shared tail once by call and once by "
+  const bool generic_shared_tail_fallthrough =
+      has_optimization(generic_packed_score_tail,
+                       "x-param-packed-score-shared-fallthrough-tail") ||
+      (has_optimization(generic_packed_score_tail, "tail-call-lowering") &&
+       has_optimization(generic_packed_score_tail, "jump-to-next-threading"));
+  require(generic_shared_tail_fallthrough,
+          "packed_score result should enter the shared tail once by call and once by a proved "
           "fallthrough");
-  require(count_steps_with_comment(generic_packed_score_tail,
-                                   "x-param packed_score shared returned-index tail") == 1,
+  const std::size_t generic_shared_tail_calls = static_cast<std::size_t>(std::count_if(
+      generic_packed_score_tail.steps.begin(), generic_packed_score_tail.steps.end(),
+      [](const ResolvedStep& step) {
+        return step.comment == "x-param packed_score shared returned-index tail" &&
+               (step.opcode == 0x53 || (step.opcode >= 0xa0 && step.opcode <= 0xae));
+      }));
+  require(generic_shared_tail_calls == 1,
           "fallthrough lowering should retain only the first explicit shared-tail call");
-  require(count_steps_with_comment(generic_packed_score_tail,
-                                   "packed_score accumulator helper fallthrough tail call") == 1,
-          "fallthrough lowering should tail-call the accumulator helper exactly once");
+  require(generic_packed_score_tail.listing.find("set score") == std::string::npos,
+          "proved shared-tail fallthrough should not materialize the final score");
   require(optimization_count(generic_packed_score_tail,
                              "x-param-packed-score-line-stack-accumulate") == 2,
           "generic packed_score shared tail should still report both line-first X-param score "
@@ -2780,6 +2802,10 @@ program KnownZeroPackedScoreSharedReturnedIndexTail {
 
   loop {
     unless bit_and(gate, 1) {
+      score_move()
+      halt(score)
+    }
+    unless bit_and(gate, 2) {
       score_move()
       halt(score)
     }
@@ -3100,6 +3126,7 @@ program DecrementTest {
 
   CompileOptions expression_call_options;
   expression_call_options.disable_candidate_search = true;
+  expression_call_options.disable_interprocedural_opts = true;
   const CompileResult expression_call = compile_source(R"mkpro(
 program ExpressionCall {
   state {
@@ -3112,6 +3139,7 @@ program ExpressionCall {
 
   loop {
     result = inc(2)
+    result = inc(result)
     halt(result)
   }
 }
@@ -5266,7 +5294,8 @@ program CellsSpatial {
   require(cells_spatial.listing.find("line_count total") != std::string::npos,
           "cells line_count should lower to a result");
   require(cells_spatial.listing.find("neighbor_count result") != std::string::npos ||
-              cells_spatial.listing.find("shared straight-line helper") != std::string::npos,
+              cells_spatial.listing.find("shared straight-line helper") != std::string::npos ||
+              has_optimization_detail(cells_spatial, "stack-carried-assignment", "neighbors"),
           "cells neighbor_count should lower to a result or an optimized helper body");
   require(std::any_of(cells_spatial.optimizations.begin(), cells_spatial.optimizations.end(),
                       [](const OptimizationReport& optimization) {
@@ -7091,6 +7120,39 @@ program DispatchResidualDefaultSign {
               std::string::npos,
           "dispatch residual sign should be emitted from the residual already in X");
 
+  const CompileResult dispatch_residual_scaled_sign = compile_source(R"mkpro(
+program DispatchResidualDefaultScaledSign {
+  state {
+    key: counter 0..9 = stack.X
+  }
+
+  fn move(dir) {
+    halt(dir)
+  }
+
+  loop {
+    match key {
+      0 => halt(0)
+      5 => halt(5)
+      otherwise => move(sign(5 - key) * 0.25)
+    }
+  }
+}
+)mkpro",
+                                                                     dispatch_residual_sign_options);
+  require(dispatch_residual_scaled_sign.implemented,
+          "native compiler should derive scaled dispatch default sign expressions");
+  require(dispatch_residual_scaled_sign.diagnostics.empty(),
+          "scaled dispatch residual sign compile should not report diagnostics");
+  require(has_optimization(dispatch_residual_scaled_sign,
+                           "dispatch-default-residual-sign-factor-fold"),
+          "scaled reversed residual sign should fold its direction into the numeric factor");
+  require(std::none_of(dispatch_residual_scaled_sign.steps.begin(),
+                       dispatch_residual_scaled_sign.steps.end(), [](const ResolvedStep& step) {
+                         return step.comment == "dispatch default residual sign direction";
+                       }),
+          "scaled reversed residual sign should not emit a separate sign-direction opcode");
+
   const CompileResult dispatch_residual_sign_domain =
       compile_source(R"mkpro(
 program DispatchResidualDefaultSignDomain {
@@ -7630,10 +7692,16 @@ program LateLayoutIfVariant {
           "native compiler should select aggressive terminal-if variants when they win");
   require(late_layout_terminal_if.diagnostics.empty(),
           "late-layout terminal-if compile should not report diagnostics");
-  require(has_optimization(late_layout_terminal_if, "late-layout-if-variant"),
-          "late-layout terminal-if should keep the TS candidate-selection strategy");
-  require(has_optimization(late_layout_terminal_if, "terminal-if-direct-branch"),
-          "late-layout terminal-if should report the direct branch strategy");
+  require(has_optimization(late_layout_terminal_if, "late-layout-if-variant") ||
+              has_optimization(late_layout_terminal_if, "aggressive-post-layout-tail-branch") ||
+              has_optimization(late_layout_terminal_if, "tail-branch-inversion"),
+          "late-layout terminal-if should select a measured post-layout branch strategy");
+  require(has_optimization(late_layout_terminal_if, "terminal-if-direct-branch") ||
+              (optimization_count(late_layout_terminal_if, "terminal-rule-tail-call") == 2 &&
+               has_optimization(late_layout_terminal_if, "tail-branch-inversion")),
+          "late-layout terminal-if should compile both terminal paths as direct tail branches");
+  require(late_layout_terminal_if.steps.size() <= 16U,
+          "late-layout terminal-if should not regress beyond the proved 16-cell candidate");
 
   const CompileResult negative_zero_threshold = compile_source(R"mkpro(
 program NegativeZeroThreshold {

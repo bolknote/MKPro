@@ -14,6 +14,31 @@ struct ReturnStackReturnStep {
   std::vector<int> stack_after_return;
 };
 
+struct ZggogReturnStackPreloadPlan {
+  bool encodable = false;
+  bool reset_program_counter = true;
+  int zggog_program_counter = 0;
+  int exponent = 0;
+  int setup_factor_exponent = 0;
+  std::string mantissa_digits;
+  std::string mantissa_literal;
+  std::vector<int> requested_targets;
+  std::vector<int> encoded_targets;
+  std::optional<int> dirty_target;
+  std::vector<int> stack_bottom_to_top;
+  std::vector<std::string> setup_steps;
+  std::string rejection_reason;
+};
+
+struct ZggogReturnStackRewriteResult {
+  std::vector<MachineItem> items;
+  std::optional<ZggogReturnStackPreloadPlan> preload;
+  int applied = 0;
+  int eliminated_start_jumps = 0;
+  int padding_cells = 0;
+  std::string rejection_reason;
+};
+
 struct ReturnStackTailBlock {
   std::string label;
   std::vector<IrOp> body;
@@ -188,6 +213,17 @@ std::optional<ReturnStackReturnStep> mk61_return_stack_after_return(
     const std::vector<int>& stack);
 std::vector<ReturnStackReturnStep> simulate_mk61_return_stack(
     std::vector<int> stack, int return_count);
+// Encode 2..5 clean return targets, an optional deterministic dirty target,
+// and an optional repetition of that dirty target in the five-level MK-61
+// return stack using the side effect of a 3GG0G value. The requested program
+// counter is the 20..29 address selected by the first two exponent digits.
+// setup_steps is a calculator-mode key sequence and therefore costs no main
+// program cells.
+ZggogReturnStackPreloadPlan plan_zggog_return_stack_preload(
+    int zggog_program_counter, const std::vector<int>& return_targets,
+    bool reset_program_counter = true);
+ZggogReturnStackRewriteResult optimize_post_layout_zggog_return_stack_script(
+    const std::vector<MachineItem>& items, const CompileOptions& options = {});
 ReturnStackLayoutOpportunityAnalysis analyze_return_stack_layout_opportunity(
     ReturnStackLayoutOpportunity opportunity,
     const ReturnStackStartupLayoutOptions& options = {});

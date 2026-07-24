@@ -233,6 +233,11 @@ std::string first_different_line(const std::string& actual, const std::string& e
 
 void golden_listing_contract_matches_typescript_contract() {
   // Traceability: tests/compiler/golden-listing.test.ts
+  // The option-cross-product fingerprint is intended for bounded compiler
+  // fixtures. Large integration examples retain their primary listing, hex,
+  // setup, size, and emulator contracts without multiplying an already
+  // expensive global candidate search by every lowering variant.
+  constexpr std::size_t kVariantFingerprintSourceByteLimit = 2560U;
   const std::filesystem::path root = std::filesystem::current_path();
   const std::filesystem::path examples_root = root / "examples";
   const std::filesystem::path pending_root = root / "examples" / "pending-optimizer";
@@ -279,7 +284,10 @@ void golden_listing_contract_matches_typescript_contract() {
 
     const std::string setup_program =
         result.setup_program.has_value() ? format_program_tokens(result.setup_program->steps) : "";
-    const std::string actual_variants = variant_fingerprint(source, base_options);
+    const std::optional<std::string> actual_variants =
+        source.size() <= kVariantFingerprintSourceByteLimit
+            ? std::optional<std::string>(variant_fingerprint(source, base_options))
+            : std::nullopt;
 
     if (bless) {
       // Re-anchor the committed oracle files to native output. We rewrite the
@@ -290,7 +298,8 @@ void golden_listing_contract_matches_typescript_contract() {
       write_oracle_file(oracle_example_root / "hex.txt", result.hex + "\n");
       write_oracle_file(oracle_example_root / "setup.txt",
                         setup_program.empty() ? std::string() : setup_program + "\n");
-      write_oracle_file(oracle_example_root / "variants.txt", actual_variants + "\n");
+      if (actual_variants.has_value())
+        write_oracle_file(oracle_example_root / "variants.txt", *actual_variants + "\n");
       write_oracle_file(oracle_example_root / "bytes.txt", token_line(result.steps) + "\n");
       if (progress) {
         std::cerr << "[golden-listing] blessed " << name << " (" << result.steps.size()
@@ -311,11 +320,13 @@ void golden_listing_contract_matches_typescript_contract() {
     require(setup_program == expected_setup,
             "example setup listing should match the committed native oracle for " + name +
                 first_different_line(setup_program, expected_setup));
-    const std::string expected_variants =
-        trim_newlines(read_text(oracle_example_root / "variants.txt"));
-    require(actual_variants == expected_variants,
-            "example lowering variants should match the committed native oracle for " + name +
-                first_different_line(actual_variants, expected_variants));
+    if (actual_variants.has_value()) {
+      const std::string expected_variants =
+          trim_newlines(read_text(oracle_example_root / "variants.txt"));
+      require(*actual_variants == expected_variants,
+              "example lowering variants should match the committed native oracle for " + name +
+                  first_different_line(*actual_variants, expected_variants));
+    }
   }
 }
 

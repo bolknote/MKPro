@@ -1,0 +1,156 @@
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  09  | 9                       |
+   01 |  01  | 1                       |
+   02 |  1D  | F cos                   | expected_mode("grd") cosine
+   03 |  18  | F ln                    | expected_mode("grd") domain guard
+   04 |  08  | 8                       |
+   05 |  0A  | .                       |
+   06 |  00  | 0                       |
+   07 |  01  | 1                       |
+   08 |  02  | 2                       |
+   09 |  03  | 3                       |
+   10 |  04  | 4                       |
+   11 |  05  | 5                       |
+   12 |  06  | 6                       |
+   13 |  45  | X→П 5                   | setup R5
+   14 |  00  | 0                       |
+   15 |  47  | X→П 7                   | setup R7
+   16 |  46  | X→П 6                   | setup R6
+   17 |  4E  | X→П e                   | setup Re
+   18 |  49  | X→П 9                   | setup R9
+   19 |  4A  | X→П a                   | setup Ra
+   20 |  01  | 1                       |
+   21 |  00  | 0                       |
+   22 |  44  | X→П 4                   | setup R4
+   23 |  01  | 1                       |
+   24 |  40  | X→П 0                   | setup R0
+   25 |  08  | 8                       |
+   26 |  41  | X→П 1                   | setup R1
+   27 |  42  | X→П 2                   | setup R2
+   28 |  43  | X→П 3                   | setup R3
+   29 |  01  | 1                       |
+   30 |  09  | 9                       |
+   31 |  4C  | X→П c                   | setup Rc
+   32 |  07  | 7                       |
+   33 |  0A  | .                       |
+   34 |  07  | 7                       |
+   35 |  07  | 7                       |
+   36 |  07  | 7                       |
+   37 |  07  | 7                       |
+   38 |  07  | 7                       |
+   39 |  07  | 7                       |
+   40 |  07  | 7                       |
+   41 |  4D  | X→П d                   | setup Rd
+   42 |  08  | 8                       |
+   43 |  06  | 6                       |
+   44 |  48  | X→П 8                   | setup R8
+   45 |  09  | 9                       |
+   46 |  04  | 4                       |
+   47 |  4B  | X→П b                   | setup Rb
+   48 |  50  | С/П                     | setup complete
+
+# Main Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  03  | 3                       |
+   01 |  40  | X→П 0                   | packed BCD Horner counter
+   02 |  4E  | X→П e                   | packed BCD bank selector
+   03 |  DE  | К П→X e                 | packed BCD indexed value; indirect-memory-targets=1,2,3
+   04 |  65  | П→X 5                   | recall history
+   05 |  39  | К ⊕                     | packed BCD difference
+   06 |  A8  | К ПП 8                  | packed BCD first split; preloaded R8=86 indirect-target=86 shifted-forward indirect flow
+   07 |  A8  | К ПП 8                  | packed BCD second split; preloaded R8=86 indirect-target=86 shifted-forward indirect flow
+   08 |  35  | К {x}                   | packed BCD high bit plane
+   09 |  10  | +                       | packed BCD add middle bit plane
+   10 |  35  | К {x}                   | packed BCD merged high planes
+   11 |  10  | +                       | packed BCD add low bit plane
+   12 |  34  | К [x]                   | packed BCD horizontal pair
+   13 |  0F  | F Вx                    | packed BCD expose remaining pairs
+   14 |  35  | К {x}                   | packed BCD remaining pairs
+   15 |  64  | П→X 4                   | recall ones
+   16 |  12  | ×                       | packed BCD shift next pair
+   17 |  5E  | F x=0                   | packed BCD horizontal fold
+   18 |  12  | 12                      | packed BCD horizontal fold
+   19 |  10  | +                       | packed BCD finish horizontal sum
+   20 |  6C  | П→X c                   | preload const 19
+   21 |  13  | ÷                       | packed BCD threshold quotient
+   22 |  34  | К [x]                   | packed BCD threshold bit
+   23 |  02  | 2                       |
+   24 |  66  | П→X 6                   | recall prediction
+   25 |  12  | ×                       | packed BCD Horner shift
+   26 |  10  | +                       | packed BCD Horner append
+   27 |  46  | X→П 6                   | packed BCD Horner accumulator
+   28 |  5D  | F L0                    | packed BCD Horner loop
+   29 |  02  | 02                      | packed BCD Horner loop
+   30 |  67  | П→X 7                   | display __inline_show_59_0 source
+   31 |  50  | С/П                     | show __inline_show_59_0
+   32 |  49  | X→П 9                   | set digit
+   33 |  66  | П→X 6                   | recall prediction
+   34 |  0B  | /-/                     | unary minus
+   35 |  50  | С/П                     | show __inline_show_61_1
+   36 |  69  | П→X 9                   | recall digit
+   37 |  64  | П→X 4                   | recall ones
+   38 |  10  | +                       | encode packed binary value
+   39 |  49  | X→П 9                   | packed binary value
+   40 |  65  | П→X 5                   | recall history
+   41 |  35  | К {x}                   | drop packed history anchor
+   42 |  02  | 2                       |
+   43 |  10  | +                       | packed history anchor
+   44 |  38  | К ∨                     | prepend packed history digit
+   45 |  45  | X→П 5                   | packed history
+   46 |  66  | П→X 6                   | recall prediction
+   47 |  64  | П→X 4                   | recall ones
+   48 |  10  | +                       | encode packed binary prediction
+   49 |  69  | П→X 9                   | recall digit
+   50 |  39  | К ⊕                     | packed binary mismatch
+   51 |  4A  | X→П a                   | packed binary mismatch
+   52 |  35  | К {x}                   | packed mismatch nonzero fraction
+   53 |  08  | 8                       |
+   54 |  36  | К max                   | packed mismatch binary delta
+   55 |  07  | 7                       |
+   56 |  11  | −                       | packed mismatch score delta
+   57 |  67  | П→X 7                   | recall score
+   58 |  10  | +                       | packed mismatch score update
+   59 |  47  | X→П 7                   | packed mismatch score
+   60 |  03  | 3                       |
+   61 |  40  | X→П 0                   | packed one-hot counter
+   62 |  4E  | X→П e                   | packed BCD indexed bank selector
+   63 |  08  | 8                       |
+   64 |  44  | X→П 4                   | packed BCD advancing work selector
+   65 |  DE  | К П→X e                 | packed BCD current indexed value; indirect-memory-targets=1,2,3
+   66 |  65  | П→X 5                   | recall history
+   67 |  39  | К ⊕                     | packed BCD input/value difference
+   68 |  69  | П→X 9                   | recall digit
+   69 |  AB  | К ПП b                  | packed desired bit mask; preloaded Rb=94 indirect-target=94 shifted-forward indirect flow
+   70 |  39  | К ⊕                     | apply packed desired bit
+   71 |  6A  | П→X a                   | recall half
+   72 |  AB  | К ПП b                  | packed mismatch bit mask; preloaded Rb=94 indirect-target=94 shifted-forward indirect flow
+   73 |  37  | К ∧                     | gate packed mismatch
+   74 |  0E  | В↑                      | preserve packed correction
+   75 |  3B  | К СЧ                    | packed stochastic update
+   76 |  08  | 8                       |
+   77 |  10  | +                       | packed random mask anchor
+   78 |  37  | К ∧                     | apply packed random mask
+   79 |  DE  | К П→X e                 | packed BCD current indexed value; indirect-memory-targets=1,2,3
+   80 |  39  | К ⊕                     | update packed indexed value
+   81 |  BE  | К X→П e                 | store packed indexed value; indirect-memory-targets=1,2,3
+   82 |  5D  | F L0                    | packed one-hot loop
+   83 |  62  | 62                      | packed one-hot loop
+   84 |  46  | X→П 6                   | rotate packed loop zero initialization
+   85 |  86  | К БП 6                  | proved loop-rotated zero-address back edge
+   86 |  09  | 9                       |
+   87 |  23  | F 1/x                   | packed BCD repeated-one mask
+   88 |  37  | К ∧                     | packed BCD low bit plane
+   89 |  14  | X↔Y                     | packed BCD preserve low bit plane
+   90 |  39  | К ⊕                     | packed BCD clear low bit plane
+   91 |  02  | 2                       |
+   92 |  13  | ÷                       | packed BCD shift right
+   93 |  52  | В/О                     | packed BCD split return
+   94 |  A8  | К ПП 8                  | packed BCD split; preloaded R8=86 indirect-target=86 shifted-forward indirect flow
+   95 |  B4  | К X→П 4                 | store packed BCD quotient through advancing selector; indirect-memory-targets=9,a
+   96 |  25  | F reverse               | expose packed BCD low bit plane
+   97 |  6D  | П→X d                   | preload const 7.7777777
+   98 |  37  | К ∧                     | broadcast anchored packed BCD bit
+   99 |  52  | В/О                     | packed BCD broadcast return

@@ -944,9 +944,15 @@ X2StackEffectAnalysis analyze_x2_stack_effect(const IrOp* op) {
       stack_effect == StackEffect::ConsumeYDrop || stack_effect == StackEffect::ConsumeYKeep;
   const bool stack_barrier =
       stack_effect == StackEffect::Barrier || stack_effect == StackEffect::Unknown;
+  // Only nullary X producers may make a preceding X/X2 restore irrelevant.
+  // Unary transforms such as К ЗН also affect X2, but consume the current X
+  // value and therefore cannot terminate a removable restore run.
+  const bool plain_overwrites_x_without_input =
+      op != nullptr && op->kind == IrKind::Plain &&
+      (op->opcode == 0x0d || op->opcode == 0x3b);  // Cx, К СЧ
   const bool hard_x2_overwrite_without_stack_use =
-      op != nullptr && op->kind == IrKind::Plain && x2_effect == X2Effect::Affects &&
-      stack_effect == StackEffect::Preserves && !plain_preserves_x_value(*op);
+      plain_overwrites_x_without_input && x2_effect == X2Effect::Affects &&
+      stack_effect == StackEffect::Preserves;
 
   return X2StackEffectAnalysis{
       .x2_effect = x2_effect,
@@ -8514,8 +8520,19 @@ std::set<X2ValueFact> plain_x_value_after_non_preserving_op(const IrOp& op,
                                                             const X2ShapeSet* y_shape,
                                                             const X2ShapeSet* direct_y_shape,
                                                             const X2ShapeSet* direct_x_shape) {
+  const ConcreteEvaluationOptions options =
+      concrete_evaluation_options_for_stable_expression_opcode(op.opcode);
   std::set<X2ValueFact> output =
-      plain_produces_stable_expression_values(op, x, y, x_shape, y_shape, direct_y_shape, direct_x_shape);
+      plain_produces_concrete_decimal_values(op, x, x_shape, options, direct_x_shape);
+  for (const X2ValueFact& fact : plain_produces_concrete_binary_decimal_values(
+           op, y, x, y_shape, x_shape, options, direct_y_shape, direct_x_shape)) {
+    output.insert(fact);
+  }
+  for (const X2ValueFact& fact :
+       plain_produces_stable_expression_values(op, x, y, x_shape, y_shape,
+                                               direct_y_shape, direct_x_shape)) {
+    output.insert(fact);
+  }
   const std::optional<X2ValueFact> opaque = plain_produces_opaque_expression_value(op, producer_index);
   if (opaque.has_value())
     output.insert(*opaque);
@@ -8545,7 +8562,9 @@ std::optional<X2ValueFact> plain_produces_opaque_expression_value(const IrOp& op
   if (pure_opaque_expr_opcodes().count(op.opcode) == 0)
     return std::nullopt;
   const OpcodeInfo& info = opcode_by_code(op.opcode);
-  if (info.risk != OpcodeRisk::Documented || info.x2_effect != X2Effect::Preserves ||
+  if (info.risk != OpcodeRisk::Documented ||
+      (info.x2_effect != X2Effect::Preserves &&
+       info.x2_effect != X2Effect::Affects) ||
       info.stack_effect == StackEffect::Barrier || info.stack_effect == StackEffect::Unknown ||
       info.stack_effect == StackEffect::Exposes || info.stack_effect == StackEffect::Shifts)
     return std::nullopt;

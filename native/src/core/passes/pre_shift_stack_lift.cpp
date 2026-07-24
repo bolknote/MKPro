@@ -117,7 +117,7 @@ PassResult pre_shift_stack_lift(const std::vector<IrOp>& ops, const PassContext&
     if (remove.at(static_cast<std::size_t>(index)))
       continue;
     const IrOp& op = ops.at(static_cast<std::size_t>(index));
-    if (!is_stack_lift(op))
+    if (!is_stack_lift(op) || !op.meta.roles.empty())
       continue;
 
     auto mark_remove = [&]() {

@@ -148,6 +148,41 @@ std::vector<MachineItem> attach_finalization_flow_identity_labels(
   return result;
 }
 
+bool direct_flow_labels_resolve(const std::vector<IrOp>& ops) {
+  std::set<std::string> labels;
+  for (const IrOp& op : ops) {
+    if (op.kind == IrKind::Label)
+      labels.insert(op.name);
+  }
+
+  for (const IrOp& op : ops) {
+    switch (op.kind) {
+      case IrKind::Jump:
+      case IrKind::CondJump:
+      case IrKind::Loop:
+      case IrKind::Call:
+        break;
+      case IrKind::Label:
+      case IrKind::Store:
+      case IrKind::Recall:
+      case IrKind::IndirectStore:
+      case IrKind::IndirectRecall:
+      case IrKind::Plain:
+      case IrKind::IndirectJump:
+      case IrKind::IndirectCall:
+      case IrKind::IndirectCondJump:
+      case IrKind::Return:
+      case IrKind::Stop:
+      case IrKind::OrphanAddress:
+        continue;
+    }
+    const std::string* target = std::get_if<std::string>(&op.target);
+    if (target != nullptr && !labels.contains(*target))
+      return false;
+  }
+  return true;
+}
+
 RunOnIrResult run_passes_on_ir(std::vector<IrOp> initial, const CompileOptions& options,
                                bool layout_only) {
   std::vector<IrOp> current = std::move(initial);
@@ -165,10 +200,12 @@ RunOnIrResult run_passes_on_ir(std::vector<IrOp> initial, const CompileOptions& 
 
       const PassContext context{.options = options};
       PassResult result = pass.run(current, context);
-      aggregate.pass_counts[std::string(pass.name)] += result.applied;
       if (result.applied <= 0)
         continue;
+      if (!direct_flow_labels_resolve(result.ops))
+        continue;
 
+      aggregate.pass_counts[std::string(pass.name)] += result.applied;
       changed_in_iteration = true;
       aggregate.applied += result.applied;
       for (const AppliedOptimization& optimization : result.optimizations) {

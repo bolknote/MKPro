@@ -68,7 +68,14 @@ void emulator_domain_error_guard_matches_typescript_contract();
 void emulator_display_byte_facts_match_typescript_contract();
 void emulator_fractional_r0_matches_typescript_contract();
 void emulator_hex_arithmetic_facts_match_typescript_contract();
+void emulator_clock_optimized_source_preserves_tick();
+void emulator_fox_hunt_100_optimized_loop_returns_to_input();
 void emulator_function_equivalence_matches_typescript_contract();
+void emulator_functions_demo_inlined_calls_preserve_results();
+void emulator_jack_pot_random_digits_keep_advancing();
+void emulator_procedure_stack_carried_assignment_persists_state();
+void emulator_teleport_dependent_floor_update_preserves_value();
+void emulator_wumpus_winning_shot_reaches_terminal_display();
 void emulator_fl_counter_facts_match_typescript_contract();
 void emulator_if_chain_dispatch_matches_typescript_contract();
 void emulator_indirect_flow_equivalence_matches_typescript_contract();
@@ -314,7 +321,14 @@ int main(int argc, char** argv) {
       MKPRO_TEST(emulator_display_byte_facts_match_typescript_contract),
       MKPRO_TEST(emulator_fractional_r0_matches_typescript_contract),
       MKPRO_TEST(emulator_hex_arithmetic_facts_match_typescript_contract),
+      MKPRO_TEST(emulator_clock_optimized_source_preserves_tick),
+      MKPRO_TEST(emulator_fox_hunt_100_optimized_loop_returns_to_input),
       MKPRO_TEST(emulator_function_equivalence_matches_typescript_contract),
+      MKPRO_TEST(emulator_functions_demo_inlined_calls_preserve_results),
+      MKPRO_TEST(emulator_jack_pot_random_digits_keep_advancing),
+      MKPRO_TEST(emulator_procedure_stack_carried_assignment_persists_state),
+      MKPRO_TEST(emulator_teleport_dependent_floor_update_preserves_value),
+      MKPRO_TEST(emulator_wumpus_winning_shot_reaches_terminal_display),
       MKPRO_TEST(emulator_fl_counter_facts_match_typescript_contract),
       MKPRO_TEST(emulator_if_chain_dispatch_matches_typescript_contract),
       MKPRO_TEST(emulator_indirect_flow_equivalence_matches_typescript_contract),

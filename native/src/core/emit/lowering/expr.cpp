@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <limits>
 #include <map>
+#include <set>
 
 namespace mkpro::core::emit {
 
@@ -62,6 +63,38 @@ bool expression_is_deterministic(const Expression& expression) {
                        [](const Expression& arg) { return expression_is_deterministic(arg); });
   }
   return false;
+}
+
+bool expression_is_reorder_safe(const Expression& expression) {
+  if (expression.kind == "number" || expression.kind == "string" ||
+      expression.kind == "identifier") {
+    return true;
+  }
+  if (expression.kind == "indexed")
+    return expression.index == nullptr || expression_is_reorder_safe(*expression.index);
+  if (expression.kind == "unary")
+    return expression.expr != nullptr && expression_is_reorder_safe(*expression.expr);
+  if (expression.kind == "binary") {
+    return expression.left != nullptr && expression.right != nullptr &&
+           expression_is_reorder_safe(*expression.left) &&
+           expression_is_reorder_safe(*expression.right);
+  }
+  if (expression.kind != "call")
+    return false;
+
+  static const std::set<std::string> pure_builtins = {
+      "abs",        "acos",       "asin",      "atg",        "bit_and",
+      "bit_not",    "bit_or",     "bit_xor",   "cos",        "digit_at",
+      "e",          "eq_any",     "exp",        "frac",       "int",
+      "inv",        "lg",         "ln",         "max",        "min",
+      "near_any",   "packed_digit", "pi",       "pow",        "pow10",
+      "safe_max",   "safe_min",   "sign",       "sin",        "sqr",
+      "sqrt",       "tg",
+  };
+  if (!pure_builtins.contains(lower_ascii(expression.callee)))
+    return false;
+  return std::all_of(expression.args.begin(), expression.args.end(),
+                     [](const Expression& arg) { return expression_is_reorder_safe(arg); });
 }
 
 bool expression_equals(const Expression& left, const Expression& right) {
@@ -747,6 +780,100 @@ bool lower_binary_expression_to_x(ExpressionEmitApi& api, LoweringContext& conte
     return true;
   }
 
+  if (duplicated_opcode_it != arithmetic_opcodes.end() &&
+      (api.emitter.current_x_variable.has_value() ||
+       api.x_holds_expression(*expression.left) ||
+       api.x_holds_expression(*expression.right))) {
+    const bool left_is_current_x =
+        expression.left->kind == "identifier" &&
+        (current_x_holds_name(api, expression.left->name) ||
+         api.x_holds_expression(*expression.left));
+    const bool right_is_current_x =
+        expression.right->kind == "identifier" &&
+        (current_x_holds_name(api, expression.right->name) ||
+         api.x_holds_expression(*expression.right));
+    if (left_is_current_x &&
+        (expression_contains_current_x_name(api, *expression.right) ||
+         api.expression_contains_identifier(*expression.right, expression.left->name))) {
+      if ((expression.op == "+" || expression.op == "*") &&
+          expression_is_reorder_safe(*expression.right)) {
+        if (!api.lower_expression_to_x(*expression.right))
+          return false;
+        api.emitter.current_x_variable.reset();
+        api.emitter.current_x_aliases.clear();
+        if (!api.lower_expression_to_x(*expression.left))
+          return false;
+        api.emitter.emit_op(duplicated_opcode_it->second, expression.op,
+                            "expr " + expression.op);
+        api.emitter.current_x_variable.reset();
+        api.emitter.current_x_aliases.clear();
+        context.optimizations.push_back(OptimizationReport{
+            .name = "stack-current-x-scheduling",
+            .detail = "Scheduled a pure dependent operand before the current-X operand for " +
+                      expression.op + ".",
+        });
+        return true;
+      }
+      api.emitter.emit_op(0x0e, "В↑", "preserve current-X left operand");
+      api.emitter.items.back().roles.push_back("preserve-dependent-current-x");
+      api.emitter.current_x_variable = expression.left->name;
+      api.emitter.current_x_aliases = {expression.left->name};
+      if (!api.lower_expression_to_x(*expression.right))
+        return false;
+      api.emitter.emit_op(duplicated_opcode_it->second, expression.op,
+                          "expr " + expression.op);
+      api.emitter.current_x_variable.reset();
+      api.emitter.current_x_aliases.clear();
+      context.optimizations.push_back(OptimizationReport{
+          .name = "stack-current-x-scheduling",
+          .detail = "Preserved current X while evaluating a dependent right operand for " +
+                    expression.op + ".",
+      });
+      return true;
+    }
+    if (right_is_current_x &&
+        (expression_contains_current_x_name(api, *expression.left) ||
+         api.expression_contains_identifier(*expression.left, expression.right->name))) {
+      if ((expression.op == "+" || expression.op == "*") &&
+          expression_is_reorder_safe(*expression.left)) {
+        if (!api.lower_expression_to_x(*expression.left))
+          return false;
+        api.emitter.current_x_variable.reset();
+        api.emitter.current_x_aliases.clear();
+        if (!api.lower_expression_to_x(*expression.right))
+          return false;
+        api.emitter.emit_op(duplicated_opcode_it->second, expression.op,
+                            "expr " + expression.op);
+        api.emitter.current_x_variable.reset();
+        api.emitter.current_x_aliases.clear();
+        context.optimizations.push_back(OptimizationReport{
+            .name = "stack-current-x-scheduling",
+            .detail = "Scheduled a pure dependent operand before the current-X operand for " +
+                      expression.op + ".",
+        });
+        return true;
+      }
+      api.emitter.emit_op(0x0e, "В↑", "preserve current-X right operand");
+      api.emitter.items.back().roles.push_back("preserve-dependent-current-x");
+      api.emitter.current_x_variable = expression.right->name;
+      api.emitter.current_x_aliases = {expression.right->name};
+      if (!api.lower_expression_to_x(*expression.left))
+        return false;
+      if (expression.op == "-" || expression.op == "/")
+        api.emitter.emit_op(0x14, "<->", "dependent current-X operand order");
+      api.emitter.emit_op(duplicated_opcode_it->second, expression.op,
+                          "expr " + expression.op);
+      api.emitter.current_x_variable.reset();
+      api.emitter.current_x_aliases.clear();
+      context.optimizations.push_back(OptimizationReport{
+          .name = "stack-current-x-scheduling",
+          .detail = "Preserved current X while evaluating a dependent left operand for " +
+                    expression.op + ".",
+      });
+      return true;
+    }
+  }
+
   if ((expression.op == "+" || expression.op == "*") &&
       lower_commutative_with_current_x(api, context, expression,
                                        expression.op == "+" ? 0x10 : 0x12)) {
@@ -792,13 +919,73 @@ bool lower_binary_expression_to_x(ExpressionEmitApi& api, LoweringContext& conte
 
   const auto opcode_it = arithmetic_opcodes.find(expression.op);
   if (opcode_it != arithmetic_opcodes.end()) {
+    if ((expression.op == "+" || expression.op == "*") &&
+        expression.left->kind == "identifier" &&
+        api.expression_contains_identifier(*expression.right, expression.left->name) &&
+        expression_is_reorder_safe(*expression.right)) {
+      if (!api.lower_expression_to_x(*expression.right))
+        return false;
+      api.emitter.current_x_variable.reset();
+      api.emitter.current_x_aliases.clear();
+      if (!api.lower_expression_to_x(*expression.left))
+        return false;
+      api.emitter.emit_op(opcode_it->second, expression.op, "expr " + expression.op);
+      api.emitter.current_x_variable.reset();
+      api.emitter.current_x_aliases.clear();
+      context.optimizations.push_back(OptimizationReport{
+          .name = "stack-current-x-scheduling",
+          .detail = "Scheduled a pure dependent operand before its commutative identifier "
+                    "operand for " +
+                    expression.op + ".",
+      });
+      return true;
+    }
+    if ((expression.op == "+" || expression.op == "*") &&
+        expression.right->kind == "identifier" &&
+        api.expression_contains_identifier(*expression.left, expression.right->name) &&
+        expression_is_reorder_safe(*expression.left)) {
+      if (!api.lower_expression_to_x(*expression.left))
+        return false;
+      api.emitter.current_x_variable.reset();
+      api.emitter.current_x_aliases.clear();
+      if (!api.lower_expression_to_x(*expression.right))
+        return false;
+      api.emitter.emit_op(opcode_it->second, expression.op, "expr " + expression.op);
+      api.emitter.current_x_variable.reset();
+      api.emitter.current_x_aliases.clear();
+      context.optimizations.push_back(OptimizationReport{
+          .name = "stack-current-x-scheduling",
+          .detail = "Scheduled a pure dependent operand before its commutative identifier "
+                    "operand for " +
+                    expression.op + ".",
+      });
+      return true;
+    }
     if (!api.lower_expression_to_x(*expression.left))
       return false;
+    bool preserved_dependent_current_x = false;
+    if (expression.left->kind == "identifier" &&
+        (current_x_holds_name(api, expression.left->name) ||
+         api.x_holds_expression(*expression.left)) &&
+        api.expression_contains_identifier(*expression.right, expression.left->name)) {
+      api.emitter.emit_op(0x0e, "В↑", "preserve current-X left operand");
+      api.emitter.items.back().roles.push_back("preserve-dependent-current-x");
+      api.emitter.current_x_variable = expression.left->name;
+      api.emitter.current_x_aliases = {expression.left->name};
+      preserved_dependent_current_x = true;
+    }
     if (!api.lower_expression_to_x(*expression.right))
       return false;
     api.emitter.emit_op(opcode_it->second, expression.op, "expr " + expression.op);
     api.emitter.current_x_variable.reset();
     api.emitter.current_x_aliases.clear();
+    if (preserved_dependent_current_x) {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "stack-current-x-scheduling",
+          .detail = "Preserved current X while evaluating a dependent right operand for " +
+                    expression.op + ".",
+      });
+    }
     return true;
   }
   return false;

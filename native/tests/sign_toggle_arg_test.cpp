@@ -122,6 +122,7 @@ void alternating_sign_toggle_arg_matches_literal_semantics() {
   require(odd.implemented, "odd-count fixture should compile");
   require(!has_optimization(odd, "alternating-sign-toggle-arg"),
           "odd invoke count should not be rewritten into a sign toggle");
+
 }
 
 } // namespace mkpro::tests

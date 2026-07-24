@@ -81,6 +81,7 @@ CompileResult compile_segmented(std::string_view source) {
   options.analysis = true;
   options.budget = 999;
   options.segmented_bitplanes = true;
+  options.disable_candidate_search = true;
   return compile_source(std::string(source), options);
 }
 
@@ -90,6 +91,7 @@ CompileResult compile_segmented_scan(std::string_view source) {
   options.budget = 999;
   options.segmented_bitplanes = true;
   options.segmented_line_count_scan = true;
+  options.disable_candidate_search = true;
   return compile_source(std::string(source), options);
 }
 
@@ -194,8 +196,14 @@ program SegmentedDirectDispatch {
   }
 }
 )mkpro");
-  require(direct.implemented, "native compiler should lower direct segmented bitplane dispatch");
-  require(direct.diagnostics.empty(), "direct segmented bitplane dispatch should not diagnose");
+  require(!direct.implemented,
+          "oversized direct segmented bitplane dispatch must not claim to fit the MK-61");
+  require(std::any_of(direct.diagnostics.begin(), direct.diagnostics.end(),
+                      [](const Diagnostic& diagnostic) {
+                        return diagnostic.severity == DiagnosticSeverity::Error &&
+                               diagnostic.message.find("outside 00..A4") != std::string::npos;
+                      }),
+          "oversized direct segmented bitplane dispatch should diagnose the physical address");
   require(direct.registers.at("__seg_bitplane_selector") != "7",
           "reserved R7 should force direct four-plane segmented dispatch");
   require(has_optimization(direct, "segmented-bitplane-update"),

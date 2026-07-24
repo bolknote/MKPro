@@ -12,12 +12,12 @@
    06 |  1D  | F cos                   | expected_mode("grd") cosine
    07 |  18  | F ln                    | expected_mode("grd") domain guard
    08 |  01  | 1                       |
-   09 |  01  | 1                       |
-   10 |  43  | X→П 3                   | setup R3
-   11 |  01  | 1                       |
-   12 |  00  | 0                       |
-   13 |  42  | X→П 2                   | setup R2
-   14 |  4B  | X→П b                   | setup Rb
+   09 |  00  | 0                       |
+   10 |  42  | X→П 2                   | setup R2
+   11 |  4B  | X→П b                   | setup Rb
+   12 |  01  | 1                       |
+   13 |  01  | 1                       |
+   14 |  4A  | X→П a                   | setup Ra
    15 |  02  | 2                       |
    16 |  04  | 4                       |
    17 |  4C  | X→П c                   | setup Rc
@@ -29,48 +29,43 @@
    23 |  4E  | X→П e                   | setup Re
    24 |  00  | 0                       |
    25 |  47  | X→П 7                   | setup R7
-   26 |  08  | 8                       |
+   26 |  07  | 7                       |
    27 |  48  | X→П 8                   | setup R8
    28 |  01  | 1                       |
-   29 |  05  | 5                       |
+   29 |  02  | 2                       |
    30 |  49  | X→П 9                   | setup R9
-   31 |  01  | 1                       |
-   32 |  09  | 9                       |
-   33 |  4A  | X→П a                   | setup Ra
-   34 |  50  | С/П                     | setup complete
+   31 |  50  | С/П                     | setup complete
 
 # Main Listing
- Step | Code  | Command                 | Comment
-------+-------+-------------------------+----------------
-   00 | 65    | П→X 5                   | display __inline_show_20_0 source
-   01 | 6E    | П→X e                   | preload const 100
-   02 | 12    | ×                       | packed display field shift
-   03 | 64    | П→X 4                   | display __inline_show_20_0 source
-   04 | 10    | +                       | packed display field append
-   05 | 50    | С/П                     | show __inline_show_20_0
-   06 | 6B    | П→X b                   | preload const 10
-   07 | 42    | X→П 2                   | set outer_delay
-   08 | 62    | П→X 2                   | recall outer_delay
-   09 | 7A    | К x≠0 a                 | false branch for !=; preloaded Ra=D1 indirect-target=19 shifted-forward indirect flow
-   10 | 01    | 1                       |
-   11 | 11    | −                       | expr -
-   12 | 42    | X→П 2                   | set outer_delay
-   13 | 01 01 | 11                      |
-   15 | 78    | К x≠0 8                 | false branch for !=; preloaded R8=C0 indirect-target=8 indirect flow
-   16 | 01    | 1                       |
-   17 | 11    | −                       | expr -
-   18 | 89    | К БП 9                  | while loop back; preloaded R9=C7 indirect-target=15 indirect flow
-   19 | D4    | К П→X 4                 | increment minute
-   20 | 64    | П→X 4                   | recall minute
-   21 | 6D    | П→X d                   | preload const 60
-   22 | 11    | −                       | condition compare
-   23 | 97    | К x≥0 7                 | false branch for >=; preloaded R7=B2 indirect-target=0 indirect flow
-   24 | 00    | 0                       | set minute
-   25 | 44    | X→П 4                   | set minute
-   26 | D5    | К П→X 5                 | increment hour
-   27 | 6C    | П→X c                   | preload const 24
-   28 | 11    | −                       | condition compare
-   29 | 97    | К x≥0 7                 | false branch for >=; preloaded R7=B2 indirect-target=0 indirect flow
-   30 | 00    | 0                       | set hour
-   31 | 45    | X→П 5                   | set hour
-   32 | 87    | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  65  | П→X 5                   | display __inline_show_20_0 source
+   01 |  6E  | П→X e                   | preload const 100
+   02 |  12  | ×                       | packed display field shift
+   03 |  64  | П→X 4                   | display __inline_show_20_0 source
+   04 |  10  | +                       | packed display field append
+   05 |  50  | С/П                     | show __inline_show_20_0
+   06 |  6B  | П→X b                   | preload const 10
+   07 |  57  | F x≠0                   | false branch for !=
+   08 |  16  | 16                      | false branch for !=
+   09 |  01  | 1                       |
+   10 |  11  | −                       | expr -
+   11 |  6A  | П→X a                   | preload const 11
+   12 |  78  | К x≠0 8                 | false branch for !=; preloaded R8=B9 indirect-target=7 indirect flow
+   13 |  01  | 1                       |
+   14 |  11  | −                       | expr -
+   15 |  89  | К БП 9                  | while loop back; preloaded R9=C4 indirect-target=12 indirect flow
+   16 |  D4  | К П→X 4                 | increment minute
+   17 |  64  | П→X 4                   | recall minute
+   18 |  6D  | П→X d                   | preload const 60
+   19 |  11  | −                       | condition compare
+   20 |  97  | К x≥0 7                 | false branch for >=; preloaded R7=B2 indirect-target=0 indirect flow
+   21 |  00  | 0                       | set minute
+   22 |  44  | X→П 4                   | set minute
+   23 |  D5  | К П→X 5                 | increment hour
+   24 |  6C  | П→X c                   | preload const 24
+   25 |  11  | −                       | condition compare
+   26 |  97  | К x≥0 7                 | false branch for >=; preloaded R7=B2 indirect-target=0 indirect flow
+   27 |  00  | 0                       | set hour
+   28 |  45  | X→П 5                   | set hour
+   29 |  87  | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow

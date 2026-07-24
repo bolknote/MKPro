@@ -15,11 +15,11 @@
    11 |  44  | X→П 4                   | setup R4
    12 |  01  | 1                       |
    13 |  00  | 0                       |
-   14 |  4D  | X→П d                   | setup Rd
+   14 |  4E  | X→П e                   | setup Re
    15 |  00  | 0                       |
    16 |  0A  | .                       |
    17 |  01  | 1                       |
-   18 |  4E  | X→П e                   | setup Re
+   18 |  4D  | X→П d                   | setup Rd
    19 |  3B  | К СЧ                    | random coord seed
    20 |  4B  | X→П b                   | random coord seed
    21 |  05  | 5                       |
@@ -30,21 +30,21 @@
    26 |  12  | ×                       | random coord next seed
    27 |  35  | К {x}                   | random coord seed fraction
    28 |  4B  | X→П b                   | random coord seed
-   29 |  6D  | П→X d                   | preload const 10
+   29 |  6E  | П→X e                   | preload const 10
    30 |  12  | ×                       | random coord scaled seed
    31 |  34  | К [x]                   | random coord flat index
    32 |  40  | X→П 0                   | random coord flat index
    33 |  60  | П→X 0                   | recall __coord_list_current
-   34 |  6D  | П→X d                   | preload const 10
+   34 |  6E  | П→X e                   | preload const 10
    35 |  13  | ÷                       | expr /
    36 |  34  | К [x]                   | int()
    37 |  41  | X→П 1                   | random coord row
    38 |  60  | П→X 0                   | recall __coord_list_current
-   39 |  6D  | П→X d                   | preload const 10
+   39 |  6E  | П→X e                   | preload const 10
    40 |  61  | П→X 1                   | recall __coord_list_dx
    41 |  12  | ×                       | expr *
    42 |  11  | −                       | expr -
-   43 |  6D  | П→X d                   | preload const 10
+   43 |  6E  | П→X e                   | preload const 10
    44 |  01  | 1                       |
    45 |  61  | П→X 1                   | recall __coord_list_dx
    46 |  10  | +                       | expr +
@@ -78,7 +78,7 @@
  Step | Code  | Command                 | Comment
 ------+-------+-------------------------+----------------
    00 | 63    | П→X 3                   | display __inline_show_36_0 source
-   01 | 6D    | П→X d                   | preload const 10
+   01 | 6E    | П→X e                   | preload const 10
    02 | 12    | ×                       | packed display field shift
    03 | 6C    | П→X c                   | display __inline_show_36_0 source
    04 | 10    | +                       | packed display field append
@@ -126,10 +126,10 @@
    46 | 01 0B | -1                      | negative number
    48 | B6    | К X→П 6                 | coord_list remove current
    49 | 64    | П→X 4                   | recall __packed_counter_0
-   50 | 6D    | П→X d                   | preload const 10
+   50 | 6E    | П→X e                   | preload const 10
    51 | 11    | −                       | expr -
    52 | 44    | X→П 4                   | set __packed_counter_0
-   53 | 6D    | П→X d                   | preload const 10
+   53 | 6E    | П→X e                   | preload const 10
    54 | 11    | −                       | condition compare
    55 | 5C    | F x<0                   | false branch for <
    56 | 59    | 59                      | false branch for <
@@ -148,7 +148,7 @@
    69 | 51    | БП                      | terminal rule lost
    70 | 92    | 92                      | terminal rule lost
    71 | 3B    | К СЧ                    | random()
-   72 | 6D    | П→X d                   | preload const 10
+   72 | 6E    | П→X e                   | preload const 10
    73 | 12    | ×                       | expr *
    74 | 0E    | В↑                      | random int keep scaled draw
    75 | 35    | К {x}                   | random int fractional part
@@ -161,10 +161,10 @@
    82 | 01    | 1                       |
    83 | 11    | −                       | expr -
    84 | 44    | X→П 4                   | set __packed_counter_0
-   85 | 6D    | П→X d                   | preload const 10
+   85 | 6E    | П→X e                   | preload const 10
    86 | 13    | ÷                       | expr /
    87 | 35    | К {x}                   | frac()
-   88 | 6E    | П→X e                   | preload const 0.1
+   88 | 6D    | П→X d                   | preload const 0.1
    89 | 11    | −                       | condition compare
    90 | 5C    | F x<0                   | false branch for <
    91 | 00    | 00                      | false branch for <

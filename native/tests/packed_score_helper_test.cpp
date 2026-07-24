@@ -1796,7 +1796,7 @@ program PackedScoreMixedAccumulatorFallback {
   require(searched_mixed.diagnostics.empty(),
           "analysis candidate search should not report diagnostics for mixed packed_score");
   const CandidateReport* rejected_accumulator = find_candidate(
-      searched_mixed.rejected_candidates, "packed-score-accumulator-aggressive-post-layout");
+      searched_mixed.rejected_candidates, "packed-score-accumulator-helper");
   require(rejected_accumulator != nullptr,
           "analysis should keep the nonwinning packed_score accumulator candidate visible");
   require(rejected_accumulator->steps >= static_cast<int>(searched_mixed.steps.size()),
@@ -1804,7 +1804,7 @@ program PackedScoreMixedAccumulatorFallback {
   require(rejected_accumulator->reason.find("final candidate-search result") != std::string::npos,
           "reported packed_score accumulator candidate should explain that it lost final search");
   const SizeOpportunityReport* accumulator_opportunity =
-      find_size_opportunity(searched_mixed, "packed-score-accumulator-aggressive-post-layout");
+      find_size_opportunity(searched_mixed, "packed-score-accumulator-helper");
   require(accumulator_opportunity != nullptr,
           "size attribution should surface the nonwinning packed_score accumulator candidate");
   require(accumulator_opportunity->candidate_steps == rejected_accumulator->steps,

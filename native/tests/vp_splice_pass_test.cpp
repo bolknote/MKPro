@@ -1971,6 +1971,25 @@ void vp_splice_matches_typescript_contract() {
   }
 
   {
+    // K sign consumes the current X value, so the preceding sign change is
+    // semantic input rather than a disposable X2 restore.
+    const std::vector<IrOp> program = {
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      plain(0x32, "К ЗН"),
+      halt(),
+    };
+    const auto result = run(program);
+
+    check_applied(result.applied, 0,
+                  "vp-splice keeps current-X sign before input-dependent K sign");
+    check_ops_equal(result.ops, program,
+                    "vp-splice keeps current-X sign before input-dependent K sign");
+  }
+
+  {
     // vp-splice keeps a closed-context sign before a following ВП
     const std::vector<IrOp> program = {
       plain(0x02, "2"),

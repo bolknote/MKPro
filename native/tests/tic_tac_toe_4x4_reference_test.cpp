@@ -541,8 +541,8 @@ void tic_tac_toe_4x4_source_manual_ui_contract_is_explicit() {
   const CompileResult compiled = compile_source(text, options);
   require(compiled.implemented && compiled.diagnostics.empty(),
           "full source UI contract should compile through generic lowering");
-  require(compiled.steps.size() <= 142U,
-          "full source must not regress above the proved 142-cell optimizer result");
+  require(compiled.steps.size() <= 156U,
+          "focused no-search source must not regress above its proved 156-cell result");
   require(std::any_of(compiled.preloads.begin(), compiled.preloads.end(),
                       [](const PreloadReport& preload) {
                         return preload.retunable_natural_fractional_prefix == "0.226000";

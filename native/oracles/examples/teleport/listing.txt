@@ -125,15 +125,15 @@
    51 |  36  | К max                   | max()
    52 |  4D  | X→П d                   | arithmetic-if-max floor
    53 |  8A  | К БП a                  | if end; preloaded Ra=B2 indirect-target=0 indirect flow
-   54 |  6D  | П→X d                   | recall floor
-   55 |  DD  | К П→X d                 | indexed recall floors; indirect-memory-targets=1,2,3,4
-   56 |  68  | П→X 8                   | recall room
-   57 |  15  | F 10ˣ                   | pow10()
-   58 |  23  | F 1/x                   | reciprocal division
-   59 |  08  | 8                       |
-   60 |  10  | +                       | expr +
-   61 |  37  | К ∧                     | bit_and()
-   62 |  32  | К ЗН                    | sign()
+   54 |  DD  | К П→X d                 | indexed recall floors; indirect-memory-targets=1,2,3,4
+   55 |  68  | П→X 8                   | recall room
+   56 |  15  | F 10ˣ                   | pow10()
+   57 |  23  | F 1/x                   | reciprocal division
+   58 |  08  | 8                       |
+   59 |  10  | +                       | expr +
+   60 |  37  | К ∧                     | bit_and()
+   61 |  32  | К ЗН                    | sign()
+   62 |  6D  | П→X d                   | recall floor
    63 |  10  | +                       | expr +
    64 |  4D  | X→П d                   | set floor
    65 |  8A  | К БП a                  | if end; preloaded Ra=B2 indirect-target=0 indirect flow

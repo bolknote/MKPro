@@ -9,42 +9,40 @@
    04 |  01  | 1                       |
    05 |  1D  | F cos                   | expected_mode("grd") cosine
    06 |  18  | F ln                    | expected_mode("grd") domain guard
-   07 |  00  | 0                       |
-   08 |  40  | X→П 0                   | setup R0
-   09 |  01  | 1                       |
-   10 |  00  | 0                       |
-   11 |  4C  | X→П c                   | setup Rc
-   12 |  01  | 1                       |
+   07 |  01  | 1                       |
+   08 |  00  | 0                       |
+   09 |  4C  | X→П c                   | setup Rc
+   10 |  01  | 1                       |
+   11 |  01  | 1                       |
+   12 |  47  | X→П 7                   | setup R7
    13 |  01  | 1                       |
-   14 |  47  | X→П 7                   | setup R7
-   15 |  01  | 1                       |
-   16 |  09  | 9                       |
-   17 |  41  | X→П 1                   | setup R1
-   18 |  09  | 9                       |
-   19 |  09  | 9                       |
-   20 |  0B  | /-/                     | negative number
-   21 |  4B  | X→П b                   | setup Rb
-   22 |  08  | 8                       |
-   23 |  01  | 1                       |
-   24 |  0B  | /-/                     | negative number
-   25 |  4A  | X→П a                   | setup Ra
-   26 |  00  | 0                       |
-   27 |  0A  | .                       |
+   14 |  09  | 9                       |
+   15 |  41  | X→П 1                   | setup R1
+   16 |  00  | 0                       |
+   17 |  0A  | .                       |
+   18 |  05  | 5                       |
+   19 |  4B  | X→П b                   | setup Rb
+   20 |  09  | 9                       |
+   21 |  09  | 9                       |
+   22 |  0B  | /-/                     | negative number
+   23 |  4A  | X→П a                   | setup Ra
+   24 |  08  | 8                       |
+   25 |  01  | 1                       |
+   26 |  0B  | /-/                     | negative number
+   27 |  49  | X→П 9                   | setup R9
    28 |  05  | 5                       |
-   29 |  49  | X→П 9                   | setup R9
-   30 |  06  | 6                       |
-   31 |  00  | 0                       |
-   32 |  4E  | X→П e                   | setup Re
-   33 |  3B  | К СЧ                    | random()
+   29 |  09  | 9                       |
+   30 |  4E  | X→П e                   | setup Re
+   31 |  3B  | К СЧ                    | random()
+   32 |  09  | 9                       |
+   33 |  09  | 9                       |
    34 |  09  | 9                       |
-   35 |  09  | 9                       |
-   36 |  09  | 9                       |
-   37 |  12  | ×                       | expr *
-   38 |  0E  | В↑                      | random int keep scaled draw
-   39 |  35  | К {x}                   | random int fractional part
-   40 |  11  | −                       | random int floor
-   41 |  46  | X→П 6                   | setup foxes
-   42 |  50  | С/П                     | setup complete
+   35 |  12  | ×                       | expr *
+   36 |  0E  | В↑                      | random int keep scaled draw
+   37 |  35  | К {x}                   | random int fractional part
+   38 |  11  | −                       | random int floor
+   39 |  46  | X→П 6                   | setup foxes
+   40 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code     | Command                 | Comment
@@ -52,7 +50,7 @@
    00 | 50       | С/П                     | read cell
    01 | 45       | X→П 5                   | read cell
    02 | 53       | ПП                      | bit_mask helper
-   03 | 81       | 81                      | bit_mask helper
+   03 | 80       | 80                      | bit_mask helper
    04 | 66       | П→X 6                   | recall foxes
    05 | 37       | К ∧                     | bit membership test
    06 | 35       | К {x}                   | bit membership fraction
@@ -82,7 +80,7 @@
    31 | 01       | 1                       |
    32 | 44       | X→П 4                   | line_count step
    33 | 6C       | П→X c                   | preload const 10
-   34 | AE       | К ПП e                  | line_count progression; preloaded Re=60 indirect-target=60 shifted-forward indirect flow
+   34 | AE       | К ПП e                  | line_count progression; preloaded Re=59 indirect-target=59 shifted-forward indirect flow
    35 | 65       | П→X 5                   | recall cell
    36 | 6C       | П→X c                   | preload const 10
    37 | 13       | ÷                       | expr /
@@ -92,60 +90,59 @@
    41 | 48       | X→П 8                   | line_count offset
    42 | 6C       | П→X c                   | preload const 10
    43 | 44       | X→П 4                   | line_count step
-   44 | AE       | К ПП e                  | line_count progression; preloaded Re=60 indirect-target=60 shifted-forward indirect flow
-   45 | 6B       | П→X b                   | preload const -99
+   44 | AE       | К ПП e                  | line_count progression; preloaded Re=59 indirect-target=59 shifted-forward indirect flow
+   45 | 6A       | П→X a                   | preload const -99
    46 | 48       | X→П 8                   | line_count offset
    47 | 67       | П→X 7                   | preload const 11
    48 | 44       | X→П 4                   | line_count step
    49 | 61       | П→X 1                   | preload const 19
-   50 | AE       | К ПП e                  | line_count progression; preloaded Re=60 indirect-target=60 shifted-forward indirect flow
-   51 | 6A       | П→X a                   | preload const -81
+   50 | AE       | К ПП e                  | line_count progression; preloaded Re=59 indirect-target=59 shifted-forward indirect flow
+   51 | 69       | П→X 9                   | preload const -81
    52 | 48       | X→П 8                   | line_count offset
    53 | 09       | 9                       |
    54 | 44       | X→П 4                   | line_count step
    55 | 61       | П→X 1                   | preload const 19
-   56 | AE       | К ПП e                  | line_count progression; preloaded Re=60 indirect-target=60 shifted-forward indirect flow
+   56 | AE       | К ПП e                  | line_count progression; preloaded Re=59 indirect-target=59 shifted-forward indirect flow
    57 | 50       | С/П                     | show __inline_show_35_0
-   58 | 51       | БП                      | loop back
-   59 | 00       | 00                      | loop back
-   60 | 43       | X→П 3                   | line_count counter
-   61 | 65       | П→X 5                   | recall cell
-   62 | 68       | П→X 8                   | recall __spatial_count_offset
-   63 | 10       | +                       | expr +
-   64 | 53       | ПП                      | bit_mask helper
-   65 | 81       | 81                      | bit_mask helper
-   66 | 66       | П→X 6                   | spatial hit mask
-   67 | 37       | К ∧                     | spatial hit test
-   68 | 35       | К {x}                   | spatial hit membership fraction
-   69 | 32       | К ЗН                    | spatial hit to count
-   70 | 68       | П→X 8                   | line_count offset
-   71 | 64       | П→X 4                   | line_count step
-   72 | 10       | +                       | line_count next offset
-   73 | 48       | X→П 8                   | line_count offset
-   74 | 14       | X↔Y                     | line_count restore hit count
-   75 | 6D       | П→X d                   | line_count accumulator
-   76 | 10       | +                       | line_count add hit
-   77 | 4D       | X→П d                   | line_count accumulator
-   78 | 5A       | F L3                    | line_count loop
-   79 | 61       | 61                      | line_count loop
-   80 | 52       | В/О                     | line_count progression return
-   81 | 04       | 4                       |
-   82 | 13       | ÷                       | bit mask quotient
-   83 | 40       | X→П 0                   | bit mask quotient
-   84 | 35       | К {x}                   | bit mask remainder fraction
-   85 | 04       | 4                       |
-   86 | 12       | ×                       | bit mask remainder scale
-   87 | 02       | 2                       |
-   88 | 24       | F xʸ                    | bit mask power
-   89 | 00 0A 05 | 0.5                     |
-   92 | 10       | +                       | bit mask round bias
-   93 | 34       | К [x]                   | bit mask round
-   94 | 60       | П→X 0                   | bit mask quotient
-   95 | 34       | К [x]                   | bit mask digit index
-   96 | 01       | 1                       |
-   97 | 10       | +                       | bit mask decade index
-   98 | 15       | F 10ˣ                   | bit mask decade
-   99 | 13       | ÷                       | bit mask fractional place
-   A0 | 08       | 8                       |
-   A1 | 10       | +                       | bit mask anchor
-   A2 | 52       | В/О                     | bit_mask return
+   58 | 8B       | К БП b                  | loop back; preloaded Rb=0.5 indirect-target=0 shifted-forward indirect flow
+   59 | 43       | X→П 3                   | line_count counter
+   60 | 65       | П→X 5                   | recall cell
+   61 | 68       | П→X 8                   | recall __spatial_count_offset
+   62 | 10       | +                       | expr +
+   63 | 53       | ПП                      | bit_mask helper
+   64 | 80       | 80                      | bit_mask helper
+   65 | 66       | П→X 6                   | spatial hit mask
+   66 | 37       | К ∧                     | spatial hit test
+   67 | 35       | К {x}                   | spatial hit membership fraction
+   68 | 32       | К ЗН                    | spatial hit to count
+   69 | 68       | П→X 8                   | line_count offset
+   70 | 64       | П→X 4                   | line_count step
+   71 | 10       | +                       | line_count next offset
+   72 | 48       | X→П 8                   | line_count offset
+   73 | 14       | X↔Y                     | line_count restore hit count
+   74 | 6D       | П→X d                   | line_count accumulator
+   75 | 10       | +                       | line_count add hit
+   76 | 4D       | X→П d                   | line_count accumulator
+   77 | 5A       | F L3                    | line_count loop
+   78 | 60       | 60                      | line_count loop
+   79 | 52       | В/О                     | line_count progression return
+   80 | 04       | 4                       |
+   81 | 13       | ÷                       | bit mask quotient
+   82 | 40       | X→П 0                   | bit mask quotient
+   83 | 35       | К {x}                   | bit mask remainder fraction
+   84 | 04       | 4                       |
+   85 | 12       | ×                       | bit mask remainder scale
+   86 | 02       | 2                       |
+   87 | 24       | F xʸ                    | bit mask power
+   88 | 00 0A 05 | 0.5                     |
+   91 | 10       | +                       | bit mask round bias
+   92 | 34       | К [x]                   | bit mask round
+   93 | 60       | П→X 0                   | bit mask quotient
+   94 | 34       | К [x]                   | bit mask digit index
+   95 | 01       | 1                       |
+   96 | 10       | +                       | bit mask decade index
+   97 | 15       | F 10ˣ                   | bit mask decade
+   98 | 13       | ÷                       | bit mask fractional place
+   99 | 08       | 8                       |
+   A0 | 10       | +                       | bit mask anchor
+   A1 | 52       | В/О                     | bit_mask return

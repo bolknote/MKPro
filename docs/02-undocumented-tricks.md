@@ -26,6 +26,65 @@ The cheapest storage is the stack. If a value will be needed several times, comp
 
 With an empty return stack, `В/О` behaves like a jump to address `01`. That makes it a one-step replacement for `БП 01`. More elaborate layouts put setup code, a subroutine body, and the main loop around this fact so one subroutine call can be removed.
 
+### Preload a Return Script with `ЗГГОГ`
+
+On the ROM modeled by this project, a normalized `ЗГГОГ` with exponent
+`E = 200..299` writes five stored addresses into the return stack:
+
+1. `10 * (E mod 10)`;
+2. the first pair of mantissa digits;
+3. the second pair;
+4. the third pair;
+5. the fourth pair.
+
+`В/О` transfers control to one plus the stored address, so these fields encode
+five targets. After those five returns, overflow produces one more
+deterministic target:
+
+`11 * ((target5 - 1) mod 10) + 1`
+
+which is one of `01, 12, 23, ..., 100`. The calculator also leaves the program counter at
+`floor(E / 10)`, in `20..29`; a calculator-mode `В/О` resets it to `00` without
+destroying the prepared stack. The main program can then replace up to five
+arbitrary two-cell `БП address` continuations, plus a sixth continuation when
+its target satisfies the overflow formula, with one-cell `В/О` commands.
+After that return the stack contains the same stored address in all five
+levels, so further `В/О` commands keep selecting the same dirty target. MKPro
+can consequently replace a direct self-loop at that target as well. The
+current verifier also permits acyclic straight-line call trees inside that
+loop when every callee ends in `В/О` and the maximum nesting depth is four.
+The uniform stack is proved at loop entry and restored after every fully
+unwound call tree. Depth five is rejected because it discards the last original
+uniform stack cell.
+
+There are hard layout constraints. The first target must be one of
+`01, 11, ..., 91`. Normalization makes the first mantissa digit nonzero, so the
+second target must be in `11..100`; the remaining targets may be in `01..100`.
+MKPro may insert relocatable `КНОП` cells to satisfy the first constraint, but
+only when the complete final artifact still shrinks. It accepts only a
+one-shot chain from address `00`, two to six uniquely entered terminal jumps
+and optionally the proved dirty-target self-loop, a proved final stop or that
+exact self-loop, and targets recalculated after every removal and padding
+insertion. It never recognizes a particular source program.
+
+The compile result reports the mandatory calculator-mode startup sequence
+separately from the program listing. It must be performed after loading the
+main program. The optimization is therefore enabled only for output formats
+that preserve that protocol (`listing`, `json`, and `all`) and for the stock
+`mk61` feature profile on which the behavior was probed.
+
+The `PC = 20..29` side effect is also usable. If address `00` contains only a
+two-cell jump to an entry block that relocates into that range, MKPro compares
+two layouts. The ordinary layout resets PC with `В/О` and consumes the first
+prepared return. The direct-PC layout deletes the complete start jump, leaves
+the entry block at the selected PC, omits startup `В/О`, and uses the stack only
+for later continuations. It is selected only when all shifted flow is
+relocatable and its final program is smaller.
+
+Applying `F 1/x` to such a `ЗГГОГ` produces a long monster whose visible digits
+match the return-stack contents. MKPro uses that behavior only as a probe and
+test oracle, not as an additional code-generation primitive.
+
 ### Overlay an Address and an Instruction
 
 The address byte after a jump is also an opcode if execution reaches it from another path. For example, an address such as `4D` can simultaneously mean a jump target and the opcode `x->П d`. Program fragments can be rearranged so a branch operand is useful code for another path.

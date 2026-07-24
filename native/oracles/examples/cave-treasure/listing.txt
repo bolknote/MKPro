@@ -19,58 +19,59 @@
    14 |  01  | 1                       |
    15 |  01  | 1                       |
    16 |  49  | X→П 9                   | setup R9
-   17 |  00  | 0                       |
-   18 |  0A  | .                       |
-   19 |  00  | 0                       |
-   20 |  00  | 0                       |
-   21 |  00  | 0                       |
-   22 |  00  | 0                       |
+   17 |  02  | 2                       |
+   18 |  0C  | ВП                      | exponent
+   19 |  07  | 7                       |
+   20 |  0B  | /-/                     | negative exponent
+   21 |  0B  | /-/                     | negative number
+   22 |  4A  | X→П a                   | setup Ra
    23 |  00  | 0                       |
-   24 |  01  | 1                       |
-   25 |  4B  | X→П b                   | setup Rb
-   26 |  6B  | П→X b                   | setup constant -0.000001 base 0.000001
-   27 |  0B  | /-/                     | setup constant -0.000001
-   28 |  4E  | X→П e                   | setup Re
-   29 |  03  | 3                       |
-   30 |  0A  | .                       |
-   31 |  00  | 0                       |
-   32 |  00  | 0                       |
-   33 |  00  | 0                       |
-   34 |  00  | 0                       |
-   35 |  00  | 0                       |
-   36 |  00  | 0                       |
-   37 |  08  | 8                       |
-   38 |  4C  | X→П c                   | setup Rc
-   39 |  02  | 2                       |
-   40 |  0C  | ВП                      | exponent
-   41 |  07  | 7                       |
-   42 |  0B  | /-/                     | negative exponent
-   43 |  4A  | X→П a                   | setup Ra
-   44 |  09  | 9                       |
-   45 |  02  | 2                       |
-   46 |  47  | X→П 7                   | setup R7
-   47 |  03  | 3                       |
-   48 |  09  | 9                       |
-   49 |  48  | X→П 8                   | setup R8
-   50 |  3B  | К СЧ                    | random()
-   51 |  09  | 9                       |
+   24 |  0A  | .                       |
+   25 |  00  | 0                       |
+   26 |  00  | 0                       |
+   27 |  00  | 0                       |
+   28 |  00  | 0                       |
+   29 |  00  | 0                       |
+   30 |  01  | 1                       |
+   31 |  4B  | X→П b                   | setup Rb
+   32 |  6B  | П→X b                   | setup constant -0.000001 base 0.000001
+   33 |  0B  | /-/                     | setup constant -0.000001
+   34 |  4E  | X→П e                   | setup Re
+   35 |  03  | 3                       |
+   36 |  0A  | .                       |
+   37 |  00  | 0                       |
+   38 |  00  | 0                       |
+   39 |  00  | 0                       |
+   40 |  00  | 0                       |
+   41 |  00  | 0                       |
+   42 |  00  | 0                       |
+   43 |  08  | 8                       |
+   44 |  4C  | X→П c                   | setup Rc
+   45 |  09  | 9                       |
+   46 |  01  | 1                       |
+   47 |  47  | X→П 7                   | setup R7
+   48 |  03  | 3                       |
+   49 |  09  | 9                       |
+   50 |  48  | X→П 8                   | setup R8
+   51 |  3B  | К СЧ                    | random()
    52 |  09  | 9                       |
    53 |  09  | 9                       |
-   54 |  12  | ×                       | expr *
-   55 |  0E  | В↑                      | random int keep scaled draw
-   56 |  35  | К {x}                   | random int fractional part
-   57 |  11  | −                       | random int floor
-   58 |  46  | X→П 6                   | setup walls
-   59 |  3B  | К СЧ                    | random()
-   60 |  09  | 9                       |
+   54 |  09  | 9                       |
+   55 |  12  | ×                       | expr *
+   56 |  0E  | В↑                      | random int keep scaled draw
+   57 |  35  | К {x}                   | random int fractional part
+   58 |  11  | −                       | random int floor
+   59 |  46  | X→П 6                   | setup walls
+   60 |  3B  | К СЧ                    | random()
    61 |  09  | 9                       |
    62 |  09  | 9                       |
-   63 |  12  | ×                       | expr *
-   64 |  0E  | В↑                      | random int keep scaled draw
-   65 |  35  | К {x}                   | random int fractional part
-   66 |  11  | −                       | random int floor
-   67 |  44  | X→П 4                   | setup caches
-   68 |  50  | С/П                     | setup complete
+   63 |  09  | 9                       |
+   64 |  12  | ×                       | expr *
+   65 |  0E  | В↑                      | random int keep scaled draw
+   66 |  35  | К {x}                   | random int fractional part
+   67 |  11  | −                       | random int floor
+   68 |  44  | X→П 4                   | setup caches
+   69 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
@@ -92,7 +93,7 @@
    14 |  18  | 18                      | false branch for ==
    15 |  65  | П→X 5                   | recall key
    16 |  32  | К ЗН                    | sign()
-   17 |  87  | К БП 7                  | tail jump go; preloaded R7=92 indirect-target=92 shifted-forward indirect flow
+   17 |  87  | К БП 7                  | tail jump go; preloaded R7=91 indirect-target=91 shifted-forward indirect flow
    18 |  65  | П→X 5                   | recall key
    19 |  5E  | F x=0                   | case mismatch
    20 |  41  | 41                      | case mismatch
@@ -113,9 +114,9 @@
    35 |  4D  | X→П d                   | set pos
    36 |  00  | 0                       | set blocked
    37 |  40  | X→П 0                   | set blocked
-   38 |  8A  | К БП a                  | if end; preloaded Ra=2e-7 indirect-target=0 indirect flow
+   38 |  8B  | К БП b                  | if end; preloaded Rb=0.000001 indirect-target=0 indirect flow
    39 |  50  | С/П                     | pause
-   40 |  8A  | К БП a                  | dispatch end; preloaded Ra=2e-7 indirect-target=0 indirect flow
+   40 |  8B  | К БП b                  | dispatch end; preloaded Rb=0.000001 indirect-target=0 indirect flow
    41 |  04  | 4                       |
    42 |  11  | −                       | dispatch residual compare
    43 |  5E  | F x=0                   | case mismatch
@@ -128,7 +129,7 @@
    50 |  69  | П→X 9                   | preload const 11
    51 |  50  | С/П                     | halt
    52 |  6B  | П→X b                   | preload const 0.000001
-   53 |  87  | К БП 7                  | tail jump go; preloaded R7=92 indirect-target=92 shifted-forward indirect flow
+   53 |  87  | К БП 7                  | tail jump go; preloaded R7=91 indirect-target=91 shifted-forward indirect flow
    54 |  06  | 6                       |
    55 |  11  | −                       | dispatch residual compare
    56 |  5E  | F x=0                   | case mismatch
@@ -155,27 +156,26 @@
    77 |  12  | ×                       | risk combine
    78 |  34  | К [x]                   | risk integer result
    79 |  BD  | К X→П d                 | indexed set resources; indirect-selector-integer-part=pos; indirect-memory-targets=1,2,3
-   80 |  8A  | К БП a                  | if end; preloaded Ra=2e-7 indirect-target=0 indirect flow
+   80 |  8B  | К БП b                  | if end; preloaded Rb=0.000001 indirect-target=0 indirect flow
    81 |  88  | К БП 8                  | reuse stop tail at 39
    82 |  04  | 4                       |
    83 |  10  | +                       | dispatch residual compare
    84 |  5E  | F x=0                   | case mismatch
    85 |  88  | 88                      | case mismatch
    86 |  6E  | П→X e                   | preload const -0.000001
-   87 |  87  | К БП 7                  | tail jump go; preloaded R7=92 indirect-target=92 shifted-forward indirect flow
-   88 |  0B  | /-/                     | dispatch default residual sign direction
-   89 |  32  | К ЗН                    | dispatch default residual sign
-   90 |  6A  | П→X a                   | preload const 2e-7
-   91 |  12  | ×                       | dispatch default residual sign scale
-   92 |  6D  | П→X d                   | go blocked base
-   93 |  10  | +                       | go blocked from X parameter
-   94 |  40  | X→П 0                   | set blocked
-   95 |  35  | К {x}                   | current-X frac
-   96 |  66  | П→X 6                   | recall walls
-   97 |  37  | К ∧                     | bit_and()
-   98 |  5E  | F x=0                   | false branch for ==
-   99 |  A2  | A2                      | false branch for ==
-   A0 |  51  | БП                      | shared terminal tail
-   A1 |  34  | 34                      | shared terminal tail
-   A2 |  00  | 0                       | pause
-   A3 |  88  | К БП 8                  | zero then reuse stop tail at 39
+   87 |  87  | К БП 7                  | tail jump go; preloaded R7=91 indirect-target=91 shifted-forward indirect flow
+   88 |  32  | К ЗН                    | dispatch default residual sign
+   89 |  6A  | П→X a                   | preload const -2e-7
+   90 |  12  | ×                       | dispatch default residual sign scale
+   91 |  6D  | П→X d                   | go blocked base
+   92 |  10  | +                       | go blocked from X parameter
+   93 |  40  | X→П 0                   | set blocked
+   94 |  35  | К {x}                   | current-X frac
+   95 |  66  | П→X 6                   | recall walls
+   96 |  37  | К ∧                     | bit_and()
+   97 |  5E  | F x=0                   | false branch for ==
+   98 |  A1  | A1                      | false branch for ==
+   99 |  51  | БП                      | shared terminal tail
+   A0 |  34  | 34                      | shared terminal tail
+   A1 |  00  | 0                       | pause
+   A2 |  88  | К БП 8                  | zero then reuse stop tail at 39

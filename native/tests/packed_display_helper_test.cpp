@@ -24,7 +24,8 @@ int count_optimization(const CompileResult& result, const std::string& name) {
 int count_steps_with_comment(const CompileResult& result, const std::string& comment) {
   return static_cast<int>(
       std::count_if(result.steps.begin(), result.steps.end(), [&](const ResolvedStep& step) {
-        return step.comment.has_value() && *step.comment == comment;
+        return step.comment.has_value() &&
+               (step.comment->starts_with(comment + ";") || *step.comment == comment);
       }));
 }
 
@@ -33,6 +34,7 @@ int count_steps_with_comment(const CompileResult& result, const std::string& com
 CompileOptions pinned_options() {
   CompileOptions options;
   options.disable_aggressive_post_layout = true;
+  options.disable_return_stack_script = true;
   return options;
 }
 
@@ -69,8 +71,11 @@ program RepeatedPackedDisplay {
           "each repeated packed display site should call the shared helper");
   require(count_steps_with_comment(result, "show packed display helper") == 3,
           "each repeated packed display site should branch to the helper");
-  require(count_steps_with_comment(result, "packed display return") == 1,
-          "shared packed display helper should have one return continuation");
+  const int helper_returns = count_steps_with_comment(result, "packed display return");
+  require(helper_returns == 1 ||
+              (helper_returns == 0 && count_optimization(result, "tail-call-lowering") > 0),
+          "shared packed display helper should retain one return continuation or a proved "
+          "tail continuation");
 }
 
 } // namespace mkpro::tests

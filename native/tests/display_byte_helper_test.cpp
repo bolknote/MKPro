@@ -39,7 +39,7 @@ int count_display_byte_helper_returns(const CompileResult& result) {
       std::count_if(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
         return step.comment.has_value() &&
                step.comment->starts_with("display __inline_show_") &&
-               step.comment->ends_with(" return");
+               step.comment->find(" return") != std::string::npos;
       }));
 }
 
@@ -48,6 +48,7 @@ int count_display_byte_helper_returns(const CompileResult& result) {
 CompileOptions pinned_options() {
   CompileOptions options;
   options.disable_aggressive_post_layout = true;
+  options.disable_return_stack_script = true;
   return options;
 }
 
@@ -89,8 +90,11 @@ program RepeatedLiteralSeparatedScoreboard {
           "shared helper body should use an existing display-byte builder strategy");
   require(count_display_byte_helper_call_operands(result) == 2,
           "each repeated literal-separated display site should branch to the helper");
-  require(count_display_byte_helper_returns(result) == 1,
-          "shared display-byte helper should have one return continuation");
+  const int helper_returns = count_display_byte_helper_returns(result);
+  require(helper_returns == 1 ||
+              (helper_returns == 0 && has_optimization(result, "tail-call-lowering")),
+          "shared display-byte helper should retain one return continuation or a proved "
+          "tail continuation");
 }
 
 } // namespace mkpro::tests

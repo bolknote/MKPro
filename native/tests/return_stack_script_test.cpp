@@ -348,6 +348,260 @@ void return_stack_script_matches_mk61_strategy_contract() {
   }
 
   {
+    const core::ZggogReturnStackPreloadPlan plan =
+        core::plan_zggog_return_stack_preload(20, {1, 24, 24, 6, 64});
+    require(plan.encodable && plan.rejection_reason.empty(),
+            "3GG0G return-stack preload should encode the ROM-observed example");
+    require(plan.exponent == 200 && plan.setup_factor_exponent == 2,
+            "3GG0G return-stack preload should derive exponent 200 from PC 20 and return 01");
+    require(plan.mantissa_digits == "23230563" &&
+                plan.mantissa_literal == "2,3230563",
+            "3GG0G return-stack preload should pack four stored addresses into the mantissa");
+    require(plan.stack_bottom_to_top == std::vector<int>({63, 5, 23, 23, 0}),
+            "3GG0G return-stack preload should expose the physical bottom-to-top stack order");
+    const std::vector<core::ReturnStackReturnStep> steps =
+        core::simulate_mk61_return_stack(plan.stack_bottom_to_top, 5);
+    std::vector<int> targets;
+    for (const core::ReturnStackReturnStep& step : steps)
+      targets.push_back(step.target_address);
+    require(targets == std::vector<int>({1, 24, 24, 6, 64}),
+            "3GG0G preload and the existing return-stack model should agree on all five returns");
+    require(plan.setup_steps ==
+                std::vector<std::string>({"Сx", "1", "ВП", "2", "В↑", "2,3230563",
+                                          "ВП", "99", "В↑", "1", "ВП", "99", "×",
+                                          "×", "F АВТ", "В/О", "С/П"}),
+            "3GG0G return-stack preload should emit the exact three-factor setup sequence");
+  }
+
+  {
+    const core::ZggogReturnStackPreloadPlan plan =
+        core::plan_zggog_return_stack_preload(20, {31, 41}, false);
+    require(plan.encodable && !plan.reset_program_counter &&
+                std::find(plan.setup_steps.begin(), plan.setup_steps.end(),
+                          "В/О") == plan.setup_steps.end() &&
+                plan.setup_steps.back() == "С/П",
+            "direct-PC 3GG0G preload should start at PC 20 without resetting "
+            "the program counter");
+  }
+
+  {
+    const core::ZggogReturnStackPreloadPlan plan =
+        core::plan_zggog_return_stack_preload(20, {1, 24, 24, 6, 64, 34});
+    require(plan.encodable && plan.dirty_target == 34,
+            "3GG0G return-stack preload should expose the deterministic sixth dirty target");
+    const std::vector<core::ReturnStackReturnStep> steps =
+        core::simulate_mk61_return_stack(plan.stack_bottom_to_top, 6);
+    std::vector<int> targets;
+    for (const core::ReturnStackReturnStep& step : steps)
+      targets.push_back(step.target_address);
+    require(targets == std::vector<int>({1, 24, 24, 6, 64, 34}),
+            "3GG0G preload should agree with the return-stack model through the first dirty "
+            "return");
+    require(!core::plan_zggog_return_stack_preload(
+                 20, {1, 24, 24, 6, 64, 35})
+                 .encodable,
+            "3GG0G return-stack preload should reject an arbitrary sixth target");
+    require(core::plan_zggog_return_stack_preload(
+                20, {1, 24, 24, 6, 64, 34, 34})
+                .encodable,
+            "3GG0G return-stack preload should retain its dirty target after exhaustion");
+  }
+
+  {
+    const core::ZggogReturnStackPreloadPlan plan =
+        core::plan_zggog_return_stack_preload(29, {81, 100, 1});
+    require(plan.encodable && plan.exponent == 298 && plan.setup_factor_exponent == 1,
+            "3GG0G return-stack preload should encode exponent 298");
+    require(plan.mantissa_digits == "99000000" &&
+                std::count(plan.setup_steps.begin(), plan.setup_steps.end(), "×") == 3,
+            "exponent 298 should use the exact four-factor setup sequence");
+    require(plan.encoded_targets == std::vector<int>({81, 100, 1, 1, 1}),
+            "short 3GG0G scripts should receive harmless unused return-stack padding");
+  }
+
+  {
+    require(!core::plan_zggog_return_stack_preload(19, {1, 11}).encodable,
+            "3GG0G return-stack preload should reject counters outside 20..29");
+    require(!core::plan_zggog_return_stack_preload(20, {2, 11}).encodable,
+            "3GG0G return-stack preload should reject an unencodable first target");
+    require(!core::plan_zggog_return_stack_preload(20, {1, 6}).encodable,
+            "3GG0G return-stack preload should reject a normalized leading-zero mantissa pair");
+    require(!core::plan_zggog_return_stack_preload(20, {1, 11, 101}).encodable,
+            "3GG0G return-stack preload should reject targets above address 100");
+    require(!core::plan_zggog_return_stack_preload(20, {1}).encodable,
+            "3GG0G return-stack preload should reject scripts shorter than two returns");
+  }
+
+  {
+    std::vector<MachineItem> program;
+    append(program, jump("t1"));
+    for (int index = 0; index < 10; ++index)
+      program.push_back(digit(index % 10));
+    program.push_back(MachineItem::label("t1"));
+    program.push_back(digit(7));
+    append(program, jump("t2"));
+    for (int index = 0; index < 9; ++index)
+      program.push_back(digit(index % 10));
+    program.push_back(MachineItem::label("t2"));
+    program.push_back(stop());
+
+    const core::ZggogReturnStackRewriteResult rewritten =
+        core::optimize_post_layout_zggog_return_stack_script(program);
+    require(rewritten.applied == 2 && rewritten.preload.has_value(),
+            "3GG0G post-layout rewrite should replace a proved two-jump entry chain");
+    require(rewritten.preload->requested_targets == std::vector<int>({11, 22}) &&
+                rewritten.preload->mantissa_digits == "21000000",
+            "3GG0G post-layout rewrite should encode addresses after removing both operands");
+    require(core::machine_cell_count(rewritten.items) ==
+                core::machine_cell_count(program) - 2,
+            "3GG0G post-layout rewrite should save one cell per terminal jump");
+    require(std::count_if(rewritten.items.begin(), rewritten.items.end(),
+                          [](const MachineItem& item) {
+                            return item.kind == MachineItemKind::Op && item.opcode == 0x52;
+                          }) == 2,
+            "3GG0G post-layout rewrite should emit two physical returns");
+  }
+
+  {
+    std::vector<MachineItem> program;
+    append(program, jump("t1"));
+    for (int index = 0; index < 10; ++index)
+      program.push_back(digit(index % 10));
+    program.push_back(MachineItem::label("t1"));
+    append(program, jump("t2"));
+    for (int index = 0; index < 9; ++index)
+      program.push_back(digit(index % 10));
+    program.push_back(MachineItem::label("t2"));
+    append(program, jump("t3"));
+    for (int index = 0; index < 9; ++index)
+      program.push_back(digit(index % 10));
+    program.push_back(MachineItem::label("t3"));
+    append(program, jump("t4"));
+    program.push_back(digit(1));
+    program.push_back(digit(2));
+    program.push_back(MachineItem::label("t6"));
+    program.push_back(MachineItem::op(0x53, "ПП"));
+    program.push_back(MachineItem::address(std::string("leaf")));
+    append(program, jump("t6"));
+    for (int index = 0; index < 4; ++index)
+      program.push_back(digit(index % 10));
+    program.push_back(MachineItem::label("t4"));
+    append(program, jump("t5"));
+    for (int index = 0; index < 22; ++index)
+      program.push_back(digit(index % 10));
+    program.push_back(MachineItem::label("t5"));
+    append(program, jump("t6"));
+    program.push_back(MachineItem::label("leaf"));
+    program.push_back(MachineItem::op(0x53, "ПП"));
+    program.push_back(MachineItem::address(std::string("leaf2")));
+    program.push_back(MachineItem::op(0x52, "В/О"));
+    program.push_back(MachineItem::label("leaf2"));
+    program.push_back(digit(7));
+    program.push_back(MachineItem::op(0x52, "В/О"));
+
+    const core::ZggogReturnStackRewriteResult rewritten =
+        core::optimize_post_layout_zggog_return_stack_script(program);
+    require(rewritten.applied == 7 && rewritten.preload.has_value() &&
+                rewritten.preload->dirty_target == 34 &&
+                rewritten.preload->requested_targets ==
+                    std::vector<int>({11, 21, 31, 41, 64, 34, 34}),
+            "3GG0G post-layout rewrite should prove five encoded returns, "
+            "the dirty return, and its stable self-loop across bounded nested calls");
+    require(rewritten.padding_cells == 0 &&
+                core::machine_cell_count(rewritten.items) ==
+                    core::machine_cell_count(program) - 7,
+            "dirty-loop 3GG0G rewrite should save one cell per terminal jump");
+  }
+
+  {
+    std::vector<MachineItem> program;
+    append(program, jump("entry"));
+    for (int index = 0; index < 20; ++index)
+      program.push_back(digit(index % 10));
+    program.push_back(MachineItem::label("entry"));
+    append(program, jump("t2"));
+    for (int index = 0; index < 10; ++index)
+      program.push_back(digit(index % 10));
+    program.push_back(MachineItem::label("t2"));
+    append(program, jump("t3"));
+    for (int index = 0; index < 9; ++index)
+      program.push_back(digit(index % 10));
+    program.push_back(MachineItem::label("t3"));
+    program.push_back(stop());
+
+    const core::ZggogReturnStackRewriteResult rewritten =
+        core::optimize_post_layout_zggog_return_stack_script(program);
+    require(rewritten.applied == 3 && rewritten.eliminated_start_jumps == 1 &&
+                rewritten.preload.has_value() &&
+                !rewritten.preload->reset_program_counter &&
+                rewritten.preload->zggog_program_counter == 20 &&
+                rewritten.preload->requested_targets ==
+                    std::vector<int>({31, 41}),
+            "3GG0G direct-PC layout should erase an address-00 trampoline and "
+            "start at its relocated target");
+    require(core::machine_cell_count(rewritten.items) ==
+                core::machine_cell_count(program) - 4,
+            "direct-PC 3GG0G layout should save two start-jump cells and one "
+            "cell per remaining continuation");
+  }
+
+  {
+    std::vector<MachineItem> program;
+    append(program, jump("t1"));
+    for (int index = 0; index < 9; ++index)
+      program.push_back(digit(index % 10));
+    program.push_back(MachineItem::label("t1"));
+    append(program, jump("t2"));
+    for (int index = 0; index < 9; ++index)
+      program.push_back(digit(index % 10));
+    program.push_back(MachineItem::label("t2"));
+    program.push_back(stop());
+    const core::ZggogReturnStackRewriteResult rewritten =
+        core::optimize_post_layout_zggog_return_stack_script(program);
+    require(rewritten.applied == 2 && rewritten.preload.has_value() &&
+                rewritten.padding_cells == 1,
+            "3GG0G post-layout rewrite should align a final first target with one "
+            "profitable padding cell");
+    require(rewritten.preload->requested_targets == std::vector<int>({11, 21}) &&
+                core::machine_cell_count(rewritten.items) ==
+                    core::machine_cell_count(program) - 1,
+            "3GG0G alignment padding should be reflected in final addresses and "
+            "retain a strict net saving");
+  }
+
+  {
+    std::vector<MachineItem> program;
+    append(program, jump("t1"));
+    for (int index = 0; index < 11; ++index)
+      program.push_back(digit(index % 10));
+    program.push_back(MachineItem::label("t1"));
+    append(program, jump("t2"));
+    for (int index = 0; index < 9; ++index)
+      program.push_back(digit(index % 10));
+    program.push_back(MachineItem::label("t2"));
+    program.push_back(stop());
+    const core::ZggogReturnStackRewriteResult rejected =
+        core::optimize_post_layout_zggog_return_stack_script(program);
+    require(rejected.applied == 0 && !rejected.preload.has_value(),
+            "3GG0G post-layout rewrite should reject alignment whose padding "
+            "would cost at least the jump savings");
+  }
+
+  {
+    std::vector<MachineItem> program;
+    append(program, jump("loop"));
+    for (int index = 0; index < 10; ++index)
+      program.push_back(digit(index % 10));
+    program.push_back(MachineItem::label("loop"));
+    append(program, jump("loop"));
+    const core::ZggogReturnStackRewriteResult rejected =
+        core::optimize_post_layout_zggog_return_stack_script(program);
+    require(rejected.applied == 0 && !rejected.preload.has_value(),
+            "3GG0G post-layout rewrite should reject a self-loop reached "
+            "before hidden return-stack levels stabilize");
+  }
+
+  {
     const std::vector<core::ReturnStackReturnStep> steps =
         core::simulate_mk61_return_stack({19, 27, 35, 43, 51}, 6);
     std::vector<int> targets;
@@ -357,6 +611,36 @@ void return_stack_script_matches_mk61_strategy_contract() {
             "return-stack model should expose five scripted returns and then A0-ish dirty flow");
     require(steps.at(4).stack_after_return == std::vector<int>({99, 99, 99, 99, 99}),
             "return-stack model should duplicate the oldest low digit after stack exhaustion");
+  }
+
+  {
+    const std::vector<int> uniform_stack = {33, 33, 33, 33, 33};
+    const std::vector<int> called =
+        core::mk61_return_stack_after_call(uniform_stack, 57);
+    const std::optional<core::ReturnStackReturnStep> returned =
+        core::mk61_return_stack_after_return(called);
+    require(returned.has_value() && returned->target_address == 58 &&
+                returned->stack_after_return == uniform_stack,
+            "a balanced leaf call should restore a full uniform dirty return stack");
+
+    std::vector<int> depth_four = uniform_stack;
+    for (const int stored : {17, 28, 39, 40})
+      depth_four = core::mk61_return_stack_after_call(depth_four, stored);
+    for (int depth = 0; depth < 4; ++depth)
+      depth_four =
+          core::mk61_return_stack_after_return(depth_four)->stack_after_return;
+    require(depth_four == uniform_stack,
+            "four nested calls should restore a full uniform dirty return stack");
+
+    std::vector<int> depth_five = uniform_stack;
+    for (const int stored : {17, 28, 39, 40, 51})
+      depth_five = core::mk61_return_stack_after_call(depth_five, stored);
+    for (int depth = 0; depth < 5; ++depth)
+      depth_five =
+          core::mk61_return_stack_after_return(depth_five)->stack_after_return;
+    require(depth_five != uniform_stack,
+            "five nested calls should not be assumed to restore an arbitrary "
+            "uniform dirty return stack");
   }
 
   {
