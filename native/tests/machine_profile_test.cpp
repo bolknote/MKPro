@@ -34,6 +34,8 @@ void machine_profile_matches_typescript_contract() {
   require(has_fact("r0-fractional-jump-99"), "profile should record fractional jump fact");
   require(has_fact("r0-fractional-selects-r3"), "profile should record fractional R3 fact");
   require(has_fact("raw-display-5f"), "profile should record raw display 5F fact");
+  require(has_fact("resumable-error-skips-one-cell"),
+          "profile should record the exact resumable ЕГГ0Г padding skip");
 
   const EmulatorFactReport* alias = find_fact("r0-star-f-aliases");
   require(alias != nullptr, "profile should record R0 star-F aliases");

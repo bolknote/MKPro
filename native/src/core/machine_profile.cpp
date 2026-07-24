@@ -73,6 +73,9 @@ const MachineProfile& mk61_profile() {
               {"return-empty-stack-jumps-to-01", "probed",
                "В/О with an empty return stack behaves as one-cell БП 01 in continuous "
                "execution."},
+              {"resumable-error-skips-one-cell", "probed",
+               "A resumable explicit ЕГГ0Г trap stops with PC=addr+2; continuing executes "
+               "the cell after exactly one skipped physical padding cell."},
               {"zggog-return-stack-preload", "probed",
                "A normalized 3GG0G with exponent 200..299 deterministically sets PC 20..29 "
                "and loads five stored return addresses from the exponent suffix and eight "

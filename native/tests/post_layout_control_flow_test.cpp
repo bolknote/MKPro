@@ -104,6 +104,40 @@ std::vector<MachineItem> typed_indirect_program(std::size_t& condition, std::siz
 
 void post_layout_control_flow_matches_typed_contract() {
   {
+    MachineItem error = op(0x29, "К ÷");
+    error.stop_disposition = StopDisposition::Resumable;
+    MachineItem padding = op(0x54, "К НОП");
+    padding.roles.push_back(kResumableErrorPaddingRole);
+    const std::vector<MachineItem> resumable_error = {
+        error, padding, op(0x40, "X->П 0"),
+        stop(StopDisposition::Terminal),
+    };
+    const auto facts =
+        core::build_post_layout_control_flow(resumable_error);
+    require(facts.proved &&
+                has_entry(facts, 2, core::ExternalEntryKind::ResumableStop),
+            "typed resumable ЕГГ0Г should admit PC+2 as its external continuation");
+    require(std::none_of(
+                facts.execution_states.begin(), facts.execution_states.end(),
+                [](const core::PostLayoutExecutionState& state) {
+                  return state.address == 1;
+                }) &&
+                std::any_of(
+                    facts.execution_states.begin(), facts.execution_states.end(),
+                    [](const core::PostLayoutExecutionState& state) {
+                      return state.address == 2;
+                    }),
+            "typed resumable ЕГГ0Г must skip exactly its one physical padding cell");
+
+    std::vector<MachineItem> unknown = resumable_error;
+    unknown.front().stop_disposition = StopDisposition::Unknown;
+    const auto rejected = core::build_post_layout_control_flow(unknown);
+    require(!rejected.proved &&
+                reason_contains(rejected, "unknown disposition"),
+            "an untyped reachable error opcode must fail the exact CFG closed");
+  }
+
+  {
     std::vector<MachineItem> shifted_main = {
         op(0x52, "В/О"), MachineItem::label("opaque_entry"),
         stop(StopDisposition::Terminal)};

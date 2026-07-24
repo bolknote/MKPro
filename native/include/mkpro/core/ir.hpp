@@ -21,6 +21,11 @@ using CellRole = std::string;
 inline constexpr const char* kRetunableNaturalFractionalSelectorRolePrefix =
     "retunable-natural-fractional-selector:";
 
+// Compiler-owned marker for the physical cell skipped when a typed resumable
+// ЕГГ0Г trap continues at PC+2. The cell must remain present even when a
+// post-layout proof overlays separately addressed code onto it.
+inline constexpr const char* kResumableErrorPaddingRole = "resumable-error-padding";
+
 // Compiler-owned interaction semantics.  Comments and mnemonic text are
 // deliberately not part of this channel: post-layout proofs must be able to
 // distinguish a resumable prompt from source-level halt() after comments have

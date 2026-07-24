@@ -733,7 +733,7 @@ CompileOptions compile_options_for_feature_profile(FeatureProfile feature_profil
 int best_cell_count_with_address_overlay(const std::vector<MachineItem>& items,
                                          const CompileOptions& options) {
   const PostLayoutIndirectFlowResult overlay =
-      optimize_post_layout_address_code_overlay(items, {}, options);
+      optimize_post_layout_code_overlays(items, {}, options);
   return machine_cell_count(overlay.items);
 }
 
@@ -4658,7 +4658,7 @@ ReturnStackPostLayoutPipelineReport measure_return_stack_downstream_post_layout_
   };
 
   const PostLayoutIndirectFlowResult overlay =
-      optimize_post_layout_address_code_overlay(items, {}, options);
+      optimize_post_layout_code_overlays(items, {}, options);
   report.address_overlay_applied = overlay.applied;
 
   const PostLayoutIndirectFlowResult flow =

@@ -24,6 +24,7 @@ constexpr int kStopOpcode = 0x50;
 constexpr int kJumpOpcode = 0x51;
 constexpr int kReturnOpcode = 0x52;
 constexpr int kCallOpcode = 0x53;
+constexpr int kErrorStopOpcode = 0x29;
 
 struct ArtifactIndex {
   std::vector<int> item_addresses;
@@ -216,11 +217,11 @@ void validate_artifact_and_typed_targets(const std::vector<MachineItem>& items,
       add_reason(result, "artifact contains an invalid opcode");
       continue;
     }
-    if (item.opcode == kStopOpcode) {
+    if (item.opcode == kStopOpcode || item.opcode == kErrorStopOpcode) {
       if (item.stop_disposition == StopDisposition::Unknown)
-        add_reason(result, "STOP command has unknown disposition");
+        add_reason(result, "stop-like command has unknown disposition");
     } else if (item.stop_disposition != StopDisposition::Unknown) {
-      add_reason(result, "STOP disposition is attached to a non-STOP command");
+      add_reason(result, "stop disposition is attached to a non-stop command");
     }
 
     if (takes_address(item)) {
@@ -503,6 +504,31 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
       if (std::find(edges.begin(), edges.end(), *successor) == edges.end())
         edges.push_back(*successor);
     };
+
+    if (opcode == kErrorStopOpcode) {
+      if (item.stop_disposition == StopDisposition::Terminal)
+        continue;
+      if (item.stop_disposition != StopDisposition::Resumable) {
+        add_reason(result, "reachable error stop has unknown disposition");
+        continue;
+      }
+      const std::optional<int> padding_pc =
+          sequential_successor(index, state.pc, options.address_space_model);
+      if (!padding_pc.has_value() ||
+          !identity_at_address(items, index, *padding_pc).has_value()) {
+        add_reason(result, "resumable error stop has no physical padding cell");
+        continue;
+      }
+      const std::optional<int> resume_pc =
+          sequential_successor(index, *padding_pc, options.address_space_model);
+      if (!resume_pc.has_value()) {
+        add_reason(result, "resumable error stop has no executable continuation");
+      } else if (add_external_entry(result, items, index, *resume_pc, state.returns,
+                                    ExternalEntryKind::ResumableStop)) {
+        enqueue(*resume_pc, state.returns);
+      }
+      continue;
+    }
 
     if (opcode == kStopOpcode) {
       if (item.stop_disposition == StopDisposition::Terminal)

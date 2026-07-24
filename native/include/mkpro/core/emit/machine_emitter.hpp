@@ -59,6 +59,10 @@ public:
                  std::optional<std::string> mnemonic = std::nullopt,
                  std::optional<std::string> comment = std::nullopt,
                  std::optional<int> source_line = std::nullopt, bool raw = false);
+  void emit_error_stop(StopDisposition disposition,
+                       std::optional<std::string> mnemonic = std::nullopt,
+                       std::optional<std::string> comment = std::nullopt,
+                       std::optional<int> source_line = std::nullopt, bool raw = false);
   void record_label_edge(const std::string& label, std::optional<std::string> fact);
   void emit_label(std::string name, MachineEmitterLabelMetadata metadata = {});
   std::string fresh_label(std::string prefix);

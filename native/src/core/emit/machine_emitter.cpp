@@ -198,6 +198,14 @@ void MachineEmitter::emit_stop(StopDisposition disposition,
   items.back().stop_disposition = disposition;
 }
 
+void MachineEmitter::emit_error_stop(StopDisposition disposition,
+                                     std::optional<std::string> mnemonic,
+                                     std::optional<std::string> comment,
+                                     std::optional<int> source_line, bool raw) {
+  emit_op(0x29, std::move(mnemonic), std::move(comment), source_line, raw);
+  items.back().stop_disposition = disposition;
+}
+
 void MachineEmitter::record_label_edge(const std::string& label, std::optional<std::string> fact) {
   const auto it = label_edge_x.find(label);
   if (it == label_edge_x.end()) {

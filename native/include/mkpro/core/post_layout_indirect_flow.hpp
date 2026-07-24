@@ -31,6 +31,15 @@ optimize_post_layout_address_code_overlay(const std::vector<MachineItem>& items,
                                          const std::vector<PreloadReport>& preloads = {},
                                          const CompileOptions& options = {});
 PostLayoutIndirectFlowResult
+optimize_post_layout_error_padding_code_overlay(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads = {},
+    const CompileOptions& options = {});
+PostLayoutIndirectFlowResult
+optimize_post_layout_code_overlays(const std::vector<MachineItem>& items,
+                                   const std::vector<PreloadReport>& preloads = {},
+                                   const CompileOptions& options = {});
+PostLayoutIndirectFlowResult
 optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
                                      const std::vector<PreloadReport>& preloads,
                                      const CompileOptions& options = {});

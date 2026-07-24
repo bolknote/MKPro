@@ -860,8 +860,10 @@ bool emit_display_literal_program_to_x(MachineEmitter& emitter,
 bool emit_direct_display_literal_program(MachineEmitter& emitter,
                                          const DisplayLiteralProgram& program, int source_line) {
   if (program.kind == "error") {
-    emitter.emit_op(0x29, "К ÷", "show literal error", source_line, true);
+    emitter.emit_error_stop(StopDisposition::Resumable, "К ÷", "show literal error",
+                            source_line, true);
     emitter.emit_op(0x54, "К НОП", "show literal error padding", source_line, true);
+    emitter.items.back().roles.push_back(kResumableErrorPaddingRole);
     return true;
   }
   if (!emit_display_literal_program_to_x(emitter, program, source_line,

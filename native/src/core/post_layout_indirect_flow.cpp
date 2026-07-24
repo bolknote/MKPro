@@ -17,6 +17,7 @@
 #include <regex>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -249,6 +250,24 @@ std::set<std::string> referenced_machine_labels(const std::vector<MachineItem>& 
   return referenced;
 }
 
+std::set<std::string> referenced_machine_entry_labels(
+    const std::vector<MachineItem>& items) {
+  std::set<std::string> referenced = referenced_machine_labels(items);
+  for (const MachineItem& item : items) {
+    if (!item.indirect_flow_targets.has_value())
+      continue;
+    for (const IrTarget& target : *item.indirect_flow_targets) {
+      if (const auto* label = std::get_if<std::string>(&target))
+        referenced.insert(*label);
+    }
+  }
+  return referenced;
+}
+
+bool has_machine_role(const MachineItem& item, std::string_view role) {
+  return std::find(item.roles.begin(), item.roles.end(), role) != item.roles.end();
+}
+
 bool address_has_referenced_label(const std::map<int, std::vector<std::string>>& labels_by_address,
                                   const std::set<std::string>& referenced_labels, int address) {
   const auto labels_it = labels_by_address.find(address);
@@ -293,6 +312,20 @@ bool fixed_address_targets_survive_removal(const std::vector<MachineItem>& items
     const std::optional<int> fixed_target = fixed_address_actual_target(item, model);
     if (fixed_target.has_value() && *fixed_target >= removed_address)
       return false;
+  }
+  return true;
+}
+
+bool fixed_indirect_flow_targets_survive_removal(const std::vector<MachineItem>& items,
+                                                 int removed_address) {
+  for (const MachineItem& item : items) {
+    if (!item.indirect_flow_targets.has_value())
+      continue;
+    for (const IrTarget& target : *item.indirect_flow_targets) {
+      const auto* numeric = std::get_if<int>(&target);
+      if (numeric != nullptr && *numeric >= removed_address)
+        return false;
+    }
   }
   return true;
 }
@@ -358,6 +391,12 @@ struct MachineReturnAnalyzer {
     bool result = true;
     if (*opcode == 0x52) {
       result = true;
+    } else if (*opcode == 0x29 &&
+               item.stop_disposition == StopDisposition::Terminal) {
+      result = false;
+    } else if (*opcode == 0x29 &&
+               item.stop_disposition == StopDisposition::Resumable) {
+      result = may_return_from(address + 2);
     } else if (*opcode == 0x50) {
       result = false;
     } else if (*opcode == 0x51) {
@@ -840,6 +879,482 @@ apply_address_code_overlay(const std::vector<MachineItem>& items, AddressSpaceMo
     }
   }
 
+  return std::nullopt;
+}
+
+std::optional<int> resolved_operand_target(const MachineItem& item,
+                                           const MachineLayout& layout,
+                                           AddressSpaceModel model) {
+  if (item.kind != MachineItemKind::Address)
+    return std::nullopt;
+  if (item.formal_opcode.has_value()) {
+    try {
+      return formal_address_info(*item.formal_opcode, model).actual;
+    } catch (...) {
+      return std::nullopt;
+    }
+  }
+  return resolved_machine_target(item.target, layout.labels);
+}
+
+std::optional<int> mapped_machine_address(
+    int old_address, const MachineLayout& before_layout,
+    const MachineLayout& after_layout,
+    const std::vector<std::optional<std::size_t>>& old_to_new_item) {
+  const auto old_item = before_layout.item_index_by_address.find(old_address);
+  if (old_item == before_layout.item_index_by_address.end() ||
+      old_item->second < 0 ||
+      static_cast<std::size_t>(old_item->second) >= old_to_new_item.size()) {
+    return std::nullopt;
+  }
+  const std::optional<std::size_t> mapped =
+      old_to_new_item.at(static_cast<std::size_t>(old_item->second));
+  if (!mapped.has_value())
+    return std::nullopt;
+  const auto new_address =
+      after_layout.address_by_item_index.find(static_cast<int>(*mapped));
+  return new_address == after_layout.address_by_item_index.end()
+             ? std::nullopt
+             : std::optional<int>{new_address->second};
+}
+
+std::optional<std::vector<int>> mapped_return_addresses(
+    const std::vector<int>& addresses, const MachineLayout& before_layout,
+    const MachineLayout& after_layout,
+    const std::vector<std::optional<std::size_t>>& old_to_new_item) {
+  std::vector<int> mapped;
+  mapped.reserve(addresses.size());
+  for (const int address : addresses) {
+    const std::optional<int> next =
+        mapped_machine_address(address, before_layout, after_layout, old_to_new_item);
+    if (!next.has_value())
+      return std::nullopt;
+    mapped.push_back(*next);
+  }
+  return mapped;
+}
+
+bool same_conditional_x2_effect(const OpcodeInfo& left, const OpcodeInfo& right) {
+  if (left.conditional_x2_effect.has_value() !=
+      right.conditional_x2_effect.has_value()) {
+    return false;
+  }
+  return !left.conditional_x2_effect.has_value() ||
+         (left.conditional_x2_effect->fallthrough ==
+              right.conditional_x2_effect->fallthrough &&
+          left.conditional_x2_effect->jump ==
+              right.conditional_x2_effect->jump);
+}
+
+bool final_error_padding_overlay_artifact_matches(
+    const std::vector<MachineItem>& before,
+    const std::vector<MachineItem>& after,
+    const std::vector<std::optional<std::size_t>>& old_to_new_item,
+    int old_padding_index, int old_return_index, AddressSpaceModel model) {
+  if (machine_cell_count(after) + 1 != machine_cell_count(before))
+    return false;
+  const MachineLayout before_layout = machine_layout(before);
+  const MachineLayout after_layout = machine_layout(after);
+  const auto before_padding_address =
+      before_layout.address_by_item_index.find(old_padding_index);
+  const auto before_return_address =
+      before_layout.address_by_item_index.find(old_return_index);
+  if (before_padding_address == before_layout.address_by_item_index.end() ||
+      before_return_address == before_layout.address_by_item_index.end() ||
+      !old_to_new_item.at(static_cast<std::size_t>(old_return_index)).has_value()) {
+    return false;
+  }
+  const std::size_t moved_return_index =
+      *old_to_new_item.at(static_cast<std::size_t>(old_return_index));
+  const auto after_return_address =
+      after_layout.address_by_item_index.find(static_cast<int>(moved_return_index));
+  if (after_return_address == after_layout.address_by_item_index.end() ||
+      after_return_address->second != before_padding_address->second ||
+      before_return_address->second <= before_padding_address->second) {
+    return false;
+  }
+
+  for (std::size_t old_index = 0; old_index < before.size(); ++old_index) {
+    if (static_cast<int>(old_index) == old_padding_index)
+      continue;
+    if (!old_to_new_item.at(old_index).has_value())
+      return false;
+    const std::size_t new_index = *old_to_new_item.at(old_index);
+    if (new_index >= after.size())
+      return false;
+    const MachineItem& old_item = before.at(old_index);
+    const MachineItem& new_item = after.at(new_index);
+    if (old_item.kind != new_item.kind)
+      return false;
+    if (old_item.kind == MachineItemKind::Label && old_item.name != new_item.name)
+      return false;
+    if (old_item.kind == MachineItemKind::Op && old_item.opcode != new_item.opcode)
+      return false;
+  }
+
+  for (std::size_t old_index = 0; old_index < before.size(); ++old_index) {
+    const MachineItem& old_item = before.at(old_index);
+    if (old_item.kind == MachineItemKind::Label) {
+      const auto old_address = before_layout.labels.find(old_item.name);
+      const auto new_address = after_layout.labels.find(old_item.name);
+      if (old_address == before_layout.labels.end() ||
+          new_address == after_layout.labels.end()) {
+        return false;
+      }
+      const std::optional<int> mapped =
+          mapped_machine_address(old_address->second, before_layout, after_layout,
+                                 old_to_new_item);
+      if (!mapped.has_value() || *mapped != new_address->second)
+        return false;
+      continue;
+    }
+    if (old_item.kind == MachineItemKind::Address) {
+      const std::size_t new_index = *old_to_new_item.at(old_index);
+      const MachineItem& new_item = after.at(new_index);
+      const std::optional<int> old_target =
+          resolved_operand_target(old_item, before_layout, model);
+      const std::optional<int> new_target =
+          resolved_operand_target(new_item, after_layout, model);
+      if (!old_target.has_value() || !new_target.has_value())
+        return false;
+      const std::optional<int> mapped =
+          mapped_machine_address(*old_target, before_layout, after_layout,
+                                 old_to_new_item);
+      if (!mapped.has_value() || *mapped != *new_target)
+        return false;
+      continue;
+    }
+    if (!old_item.indirect_flow_targets.has_value())
+      continue;
+    const MachineItem& new_item =
+        after.at(*old_to_new_item.at(old_index));
+    if (!new_item.indirect_flow_targets.has_value() ||
+        new_item.indirect_flow_targets->size() !=
+            old_item.indirect_flow_targets->size()) {
+      return false;
+    }
+    for (std::size_t target_index = 0;
+         target_index < old_item.indirect_flow_targets->size(); ++target_index) {
+      const std::optional<int> old_target = resolved_machine_target(
+          old_item.indirect_flow_targets->at(target_index), before_layout.labels);
+      const std::optional<int> new_target = resolved_machine_target(
+          new_item.indirect_flow_targets->at(target_index), after_layout.labels);
+      if (!old_target.has_value() || !new_target.has_value())
+        return false;
+      const std::optional<int> mapped =
+          mapped_machine_address(*old_target, before_layout, after_layout,
+                                 old_to_new_item);
+      if (!mapped.has_value() || *mapped != *new_target)
+        return false;
+    }
+  }
+
+  PostLayoutControlFlowOptions control_options;
+  control_options.address_space_model = model;
+  const AuthoritativePostLayoutControlFlow before_control =
+      build_post_layout_control_flow(before, control_options);
+  const AuthoritativePostLayoutControlFlow after_control =
+      build_post_layout_control_flow(after, control_options);
+  if (!before_control.proved || !after_control.proved ||
+      before_control.maximum_observed_return_depth !=
+          after_control.maximum_observed_return_depth) {
+    return false;
+  }
+
+  using StateKey = std::tuple<std::size_t, std::vector<int>>;
+  const auto before_state_key =
+      [&](const PostLayoutExecutionState& state) -> std::optional<StateKey> {
+    if (state.item_index >= old_to_new_item.size() ||
+        !old_to_new_item.at(state.item_index).has_value()) {
+      return std::nullopt;
+    }
+    const std::optional<std::vector<int>> returns =
+        mapped_return_addresses(state.return_stack, before_layout, after_layout,
+                                old_to_new_item);
+    if (!returns.has_value())
+      return std::nullopt;
+    return StateKey{*old_to_new_item.at(state.item_index), *returns};
+  };
+  const auto after_state_key = [](const PostLayoutExecutionState& state) {
+    return StateKey{state.item_index, state.return_stack};
+  };
+
+  std::set<StateKey> before_states;
+  bool old_return_reachable = false;
+  for (const PostLayoutExecutionState& state : before_control.execution_states) {
+    if (static_cast<int>(state.item_index) == old_padding_index)
+      return false;
+    old_return_reachable =
+        old_return_reachable ||
+        static_cast<int>(state.item_index) == old_return_index;
+    const std::optional<StateKey> key = before_state_key(state);
+    if (!key.has_value())
+      return false;
+    const MachineItem& old_item = before.at(state.item_index);
+    const MachineItem& new_item = after.at(std::get<0>(*key));
+    if (old_item.kind != MachineItemKind::Op ||
+        new_item.kind != MachineItemKind::Op ||
+        old_item.opcode != new_item.opcode ||
+        old_item.stop_disposition != new_item.stop_disposition) {
+      return false;
+    }
+    const OpcodeInfo& old_info = opcode_by_code(old_item.opcode);
+    const OpcodeInfo& new_info = opcode_by_code(new_item.opcode);
+    if (old_info.stack_effect != new_info.stack_effect ||
+        old_info.x2_effect != new_info.x2_effect ||
+        !same_conditional_x2_effect(old_info, new_info)) {
+      return false;
+    }
+    before_states.insert(*key);
+  }
+  if (!old_return_reachable)
+    return false;
+
+  std::set<StateKey> after_states;
+  for (const PostLayoutExecutionState& state : after_control.execution_states)
+    after_states.insert(after_state_key(state));
+  if (before_states != after_states)
+    return false;
+
+  using EdgeKey = std::pair<StateKey, StateKey>;
+  std::set<EdgeKey> before_edges;
+  for (std::size_t state_index = 0;
+       state_index < before_control.execution_states.size(); ++state_index) {
+    const std::optional<StateKey> source =
+        before_state_key(before_control.execution_states.at(state_index));
+    if (!source.has_value())
+      return false;
+    for (const std::size_t successor :
+         before_control.execution_successors.at(state_index)) {
+      const std::optional<StateKey> target =
+          before_state_key(before_control.execution_states.at(successor));
+      if (!target.has_value())
+        return false;
+      before_edges.emplace(*source, *target);
+    }
+  }
+  std::set<EdgeKey> after_edges;
+  for (std::size_t state_index = 0;
+       state_index < after_control.execution_states.size(); ++state_index) {
+    const StateKey source =
+        after_state_key(after_control.execution_states.at(state_index));
+    for (const std::size_t successor :
+         after_control.execution_successors.at(state_index)) {
+      after_edges.emplace(
+          source, after_state_key(after_control.execution_states.at(successor)));
+    }
+  }
+  if (before_edges != after_edges)
+    return false;
+
+  using EntryKey =
+      std::tuple<std::size_t, std::vector<int>, int, bool, int, int, int>;
+  const auto manual_key = [](const std::optional<ManualInteractionAnchor>& manual) {
+    return std::tuple<bool, int, int, int>{
+        manual.has_value(),
+        manual.has_value() ? manual->protocol_id : -1,
+        manual.has_value() ? manual->phase : -1,
+        manual.has_value() ? static_cast<int>(manual->kind) : -1,
+    };
+  };
+  std::set<EntryKey> before_entries;
+  for (const PostLayoutExternalEntryState& entry :
+       before_control.external_entries) {
+    if (entry.entry.item_index >= old_to_new_item.size() ||
+        !old_to_new_item.at(entry.entry.item_index).has_value()) {
+      return false;
+    }
+    std::vector<int> returns;
+    returns.reserve(entry.return_stack.size());
+    for (const PostLayoutCommandIdentity& slot : entry.return_stack) {
+      const std::optional<int> mapped =
+          mapped_machine_address(slot.address, before_layout, after_layout,
+                                 old_to_new_item);
+      if (!mapped.has_value())
+        return false;
+      returns.push_back(*mapped);
+    }
+    const auto [has_manual, protocol, phase, kind] =
+        manual_key(entry.manual_interaction);
+    before_entries.emplace(
+        *old_to_new_item.at(entry.entry.item_index), std::move(returns),
+        static_cast<int>(entry.kind), has_manual, protocol, phase, kind);
+  }
+  std::set<EntryKey> after_entries;
+  for (const PostLayoutExternalEntryState& entry :
+       after_control.external_entries) {
+    std::vector<int> returns;
+    returns.reserve(entry.return_stack.size());
+    for (const PostLayoutCommandIdentity& slot : entry.return_stack)
+      returns.push_back(slot.address);
+    const auto [has_manual, protocol, phase, kind] =
+        manual_key(entry.manual_interaction);
+    after_entries.emplace(entry.entry.item_index, std::move(returns),
+                          static_cast<int>(entry.kind), has_manual, protocol,
+                          phase, kind);
+  }
+  return before_entries == after_entries;
+}
+
+std::optional<AddressCodeOverlayApplication>
+apply_error_padding_code_overlay(const std::vector<MachineItem>& items,
+                                 AddressSpaceModel model) {
+  bool has_candidate_padding = false;
+  for (int index = 0; index + 1 < static_cast<int>(items.size()); ++index) {
+    const MachineItem& error = items.at(static_cast<std::size_t>(index));
+    const MachineItem& padding = items.at(static_cast<std::size_t>(index + 1));
+    if (error.kind == MachineItemKind::Op && error.opcode == 0x29 &&
+        error.stop_disposition == StopDisposition::Resumable &&
+        padding.kind == MachineItemKind::Op &&
+        has_machine_role(padding, kResumableErrorPaddingRole)) {
+      has_candidate_padding = true;
+      break;
+    }
+  }
+  if (!has_candidate_padding)
+    return std::nullopt;
+
+  PostLayoutControlFlowOptions control_options;
+  control_options.address_space_model = model;
+  const AuthoritativePostLayoutControlFlow control =
+      build_post_layout_control_flow(items, control_options);
+  if (!control.proved)
+    return std::nullopt;
+
+  const MachineLayout layout = machine_layout(items);
+  MachineReturnAnalyzer target_may_return{
+      .items = items,
+      .layout = layout,
+      .model = model,
+  };
+  const std::set<std::string> referenced =
+      referenced_machine_entry_labels(items);
+
+  for (int error_index = 0;
+       error_index + 1 < static_cast<int>(items.size()); ++error_index) {
+    const MachineItem& error =
+        items.at(static_cast<std::size_t>(error_index));
+    const int padding_index = error_index + 1;
+    const MachineItem& padding =
+        items.at(static_cast<std::size_t>(padding_index));
+    if (error.kind != MachineItemKind::Op || error.opcode != 0x29 ||
+        error.stop_disposition != StopDisposition::Resumable ||
+        padding.kind != MachineItemKind::Op ||
+        !has_machine_role(padding, kResumableErrorPaddingRole)) {
+      continue;
+    }
+    const auto padding_address =
+        layout.address_by_item_index.find(padding_index);
+    if (padding_address == layout.address_by_item_index.end())
+      continue;
+    const bool padding_reachable =
+        std::any_of(control.execution_states.begin(),
+                    control.execution_states.end(),
+                    [&](const PostLayoutExecutionState& state) {
+                      return state.item_index ==
+                             static_cast<std::size_t>(padding_index);
+                    });
+    if (padding_reachable)
+      continue;
+
+    for (int labels_start = padding_index + 1;
+         labels_start < static_cast<int>(items.size()) - 1; ++labels_start) {
+      if (items.at(static_cast<std::size_t>(labels_start)).kind !=
+          MachineItemKind::Label) {
+        continue;
+      }
+      int return_index = labels_start;
+      std::vector<MachineItem> labels;
+      while (return_index < static_cast<int>(items.size()) &&
+             items.at(static_cast<std::size_t>(return_index)).kind ==
+                 MachineItemKind::Label) {
+        labels.push_back(items.at(static_cast<std::size_t>(return_index)));
+        ++return_index;
+      }
+      if (return_index >= static_cast<int>(items.size()))
+        continue;
+      const MachineItem& candidate_return =
+          items.at(static_cast<std::size_t>(return_index));
+      if (candidate_return.kind != MachineItemKind::Op ||
+          candidate_return.opcode != 0x52 ||
+          candidate_return.stop_disposition != StopDisposition::Unknown ||
+          candidate_return.manual_interaction.has_value()) {
+        continue;
+      }
+      const bool separately_addressed =
+          std::any_of(labels.begin(), labels.end(),
+                      [&](const MachineItem& label) {
+                        return referenced.contains(label.name);
+                      });
+      if (!separately_addressed ||
+          !labels_have_no_linear_fallthrough(items, labels_start,
+                                             target_may_return)) {
+        continue;
+      }
+      const bool return_reachable =
+          std::any_of(control.execution_states.begin(),
+                      control.execution_states.end(),
+                      [&](const PostLayoutExecutionState& state) {
+                        return state.item_index ==
+                               static_cast<std::size_t>(return_index);
+                      });
+      if (!return_reachable)
+        continue;
+      const auto return_address =
+          layout.address_by_item_index.find(return_index);
+      if (return_address == layout.address_by_item_index.end() ||
+          return_address->second <= padding_address->second ||
+          !fixed_address_targets_survive_removal(
+              items, return_address->second, model) ||
+          !fixed_indirect_flow_targets_survive_removal(
+              items, return_address->second)) {
+        continue;
+      }
+
+      std::vector<MachineItem> candidate;
+      candidate.reserve(items.size() - 1U);
+      std::vector<std::optional<std::size_t>> old_to_new_item(items.size());
+      for (int index = 0; index < static_cast<int>(items.size()); ++index) {
+        if (index == padding_index) {
+          for (int label_index = labels_start; label_index < return_index;
+               ++label_index) {
+            old_to_new_item.at(static_cast<std::size_t>(label_index)) =
+                candidate.size();
+            candidate.push_back(
+                items.at(static_cast<std::size_t>(label_index)));
+          }
+          MachineItem moved = candidate_return;
+          if (!has_machine_role(moved, kResumableErrorPaddingRole))
+            moved.roles.push_back(kResumableErrorPaddingRole);
+          const std::string overlay_comment =
+              "error padding/code overlay for " + moved.mnemonic;
+          if (moved.comment.has_value() && !moved.comment->empty())
+            moved.comment = *moved.comment + "; " + overlay_comment;
+          else
+            moved.comment = overlay_comment;
+          old_to_new_item.at(static_cast<std::size_t>(return_index)) =
+              candidate.size();
+          candidate.push_back(std::move(moved));
+          continue;
+        }
+        if (index >= labels_start && index <= return_index)
+          continue;
+        old_to_new_item.at(static_cast<std::size_t>(index)) =
+            candidate.size();
+        candidate.push_back(items.at(static_cast<std::size_t>(index)));
+      }
+      if (!final_error_padding_overlay_artifact_matches(
+              items, candidate, old_to_new_item, padding_index, return_index,
+              model)) {
+        continue;
+      }
+      return AddressCodeOverlayApplication{
+          .items = std::move(candidate),
+          .removed_cell_address = return_address->second,
+          .overlaid_cell_address = padding_address->second,
+      };
+    }
+  }
   return std::nullopt;
 }
 
@@ -3170,6 +3685,82 @@ optimize_post_layout_address_code_overlay(const std::vector<MachineItem>& items,
               },
           },
       .applied = applied,
+  };
+}
+
+PostLayoutIndirectFlowResult
+optimize_post_layout_error_padding_code_overlay(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const CompileOptions& options) {
+  const AddressSpaceModel model = address_space_model_for_options(options);
+  std::vector<MachineItem> current = items;
+  std::vector<PreloadReport> current_preloads = preloads;
+  int applied = 0;
+  for (int round = 0; round < 16; ++round) {
+    const std::optional<AddressCodeOverlayApplication> result =
+        apply_error_padding_code_overlay(current, model);
+    if (!result.has_value())
+      break;
+    const std::optional<std::vector<PreloadReport>> retargeted =
+        retarget_selector_preloads_after_overlay(
+            result->items, current_preloads, result->removed_cell_address,
+            result->overlaid_cell_address, model);
+    if (!retargeted.has_value())
+      break;
+    std::map<std::string, std::string> selector_by_register;
+    for (const PreloadReport& preload : *retargeted)
+      selector_by_register[preload.register_name] = preload.value;
+    current = retarget_machine_selector_comments(
+        std::move(result->items), selector_by_register, model);
+    current_preloads = *retargeted;
+    ++applied;
+  }
+
+  if (applied == 0) {
+    return PostLayoutIndirectFlowResult{
+        .items = items,
+        .preloads = preloads,
+    };
+  }
+  return PostLayoutIndirectFlowResult{
+      .items = std::move(current),
+      .preloads = std::move(current_preloads),
+      .optimizations =
+          {
+              passes::AppliedOptimization{
+                  .name = "error-padding-code-overlay",
+                  .detail =
+                      "Moved " + std::to_string(applied) +
+                      " separately addressed one-cell В/О command" +
+                      (applied == 1 ? "" : "s") +
+                      " into a retained resumable ЕГГ0Г padding cell after "
+                      "final CFG/address/stack/X2/return-stack proof.",
+              },
+          },
+      .applied = applied,
+  };
+}
+
+PostLayoutIndirectFlowResult
+optimize_post_layout_code_overlays(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const CompileOptions& options) {
+  PostLayoutIndirectFlowResult error_padding =
+      optimize_post_layout_error_padding_code_overlay(items, preloads, options);
+  PostLayoutIndirectFlowResult address =
+      optimize_post_layout_address_code_overlay(
+          error_padding.items, error_padding.preloads, options);
+  std::vector<passes::AppliedOptimization> optimizations =
+      std::move(error_padding.optimizations);
+  optimizations.insert(optimizations.end(), address.optimizations.begin(),
+                       address.optimizations.end());
+  return PostLayoutIndirectFlowResult{
+      .items = std::move(address.items),
+      .preloads = std::move(address.preloads),
+      .optimizations = std::move(optimizations),
+      .applied = error_padding.applied + address.applied,
   };
 }
 

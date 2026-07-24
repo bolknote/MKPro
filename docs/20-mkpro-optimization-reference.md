@@ -308,8 +308,10 @@ implementation and tuning, many of those names fall into broader families:
   `domain-error-guard`, `assign-zero-domain-guard`,
   `indexed-assign-zero-domain-guard`, `decrement-underflow-domain-guard`,
   `decrement-zero-domain-guard`, `error-stop`, and related literal stop paths.
-  Explicit `ЕГГ0Г` opcodes pause with `PC = addr + 2`; resumable screens need a
-  skipped padding cell, while terminal halts do not.
+  Explicit `ЕГГ0Г` opcodes pause with `PC = addr + 2`; the
+  `resumable-error-skips-one-cell` emulator fact pins that continuing executes
+  the cell after exactly one skipped physical padding cell. Terminal halts do
+  not need that padding.
 - **Counted-loop and decrement-counter lowering** — recognizes safe countdown
   forms and supplies the counter initial value from inline source, setup, or
   state normalization. Includes `state-init-counted-loop`,
@@ -828,6 +830,14 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
   again: the final address byte must still decode to the exact mnemonic that was
   removed, not merely remain executable. The regression fixture measures 55→54
   cells with ordinary indirect flow and 55→53 with the composed packing.
+- `error-padding-code-overlay` — retains the mandatory physical cell skipped by
+  a typed resumable `ЕГГ0Г`, but may replace its inert `К НОП` with a separately
+  addressed one-cell `В/О` and delete the old return cell. The source entry must
+  have no linear fallthrough. Direct/indirect targets and selector preloads are
+  rebound by the same infrastructure as `address-code-overlay`; the candidate
+  is kept only when final command identities, concrete addresses, CFG edges,
+  stack/X2 opcode effects, resumable continuation, and every return-stack state
+  match after relocation.
 - `computed-dispatch` — for eligible exhaustive match trees, emits one computed `К БП r` path using the solved affine mapping between selector value and case target instead of full branch chains.
 - `indirect-incdec-counter` — lowers a unit `x++`/`x--` through the indirect pre-increment (R4..R6) or pre-decrement (R0..R3) side effect of `К П->X r`. Unit increments are allowed for any proved nonnegative counter because the incidental recalled `X` value is discarded. Unit decrements are allowed when the source range proves the pre-decrement input is positive; the speculative `indirect-underflow-decrement` candidate also allows them when backward control-flow proves the possible zero-underflow sentinel reaches a terminal nonpositive guard before any observable read/write of the decremented value. That proof scans loop bodies and single-use procedure bodies, but a read of the counter before the guard remains a barrier.
 - `indirect-underflow-decrement` — extends the same R0..R3 pre-decrement fact to fused underflow guards by using `К П->X r` for the mutation and a direct `П->X r` for the observable `< 0` test; stored-input show/read variants restore the input from its register afterward.
@@ -2505,6 +2515,11 @@ The IR pipeline defined in `native/src/core/passes/index.cpp` runs repeatedly:
     result only when a final super-dark proof succeeds and the composition beats
     flow-only layout, so the address byte may simultaneously be direct-flow data
     and the executable 01..06 continuation of an FA..FF indirect transition.
+    The sibling `error-padding-code-overlay` uses the same relocation and
+    selector-retarget proof for a different physical dual-use cell: it leaves
+    the one cell skipped by resumable `ЕГГ0Г` in place, overlays an independently
+    entered `В/О` onto it, and removes only the return's former copy after exact
+    final CFG, address, stack/X2, and return-stack equivalence succeeds.
 28. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) only
     when the first `ВП` is entered from a proved active number-entry context
     (`active-mantissa`, decimal exponent-entry, or structural exponent-entry);

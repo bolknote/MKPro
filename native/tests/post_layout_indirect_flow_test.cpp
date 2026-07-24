@@ -4,6 +4,7 @@
 #include "mkpro/core/post_layout_control_flow.hpp"
 #include "mkpro/core/post_layout_indirect_flow.hpp"
 #include "mkpro/core/super_dark_layout.hpp"
+#include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
 
@@ -87,6 +88,32 @@ std::vector<MachineItem> super_dark_address_overlay_program() {
   return items;
 }
 
+std::vector<MachineItem> error_padding_overlay_program() {
+  std::vector<MachineItem> items = call("helper_return");
+  MachineItem error = MachineItem::op(0x29, "К ÷");
+  error.stop_disposition = StopDisposition::Resumable;
+  items.push_back(std::move(error));
+  MachineItem padding = MachineItem::op(0x54, "К НОП");
+  padding.roles.push_back(kResumableErrorPaddingRole);
+  items.push_back(std::move(padding));
+  items.push_back(MachineItem::op(0x40, "X->П 0"));
+  MachineItem stop = MachineItem::op(0x50, "С/П");
+  stop.stop_disposition = StopDisposition::Terminal;
+  items.push_back(std::move(stop));
+  items.push_back(MachineItem::label("helper_return"));
+  items.push_back(MachineItem::op(0x52, "В/О"));
+  return items;
+}
+
+std::vector<int> resolved_opcodes(const std::vector<MachineItem>& items) {
+  const ResolvedProgram resolved = resolve_machine_items(items);
+  std::vector<int> opcodes;
+  opcodes.reserve(resolved.steps.size());
+  for (const ResolvedStep& step : resolved.steps)
+    opcodes.push_back(step.opcode);
+  return opcodes;
+}
+
 } // namespace
 
 void post_layout_indirect_flow_matches_typescript_contract() {
@@ -94,6 +121,71 @@ void post_layout_indirect_flow_matches_typescript_contract() {
   options.delivery = DeliveryMode::Manual;
   options.budget = 999999;
   options.analysis = true;
+
+  {
+    const std::vector<MachineItem> program =
+        error_padding_overlay_program();
+    const core::PostLayoutIndirectFlowResult result =
+        core::optimize_post_layout_error_padding_code_overlay(program);
+    require(result.applied == 1 &&
+                core::machine_cell_count(program) == 7 &&
+                core::machine_cell_count(result.items) == 6,
+            "error-padding/code overlay size baseline should be exactly 7->6 cells");
+    require(!result.optimizations.empty() &&
+                result.optimizations.front().name ==
+                    "error-padding-code-overlay",
+            "error-padding/code overlay should report its own optimization");
+    const auto helper = std::find_if(
+        result.items.begin(), result.items.end(),
+        [](const MachineItem& item) {
+          return item.kind == MachineItemKind::Label &&
+                 item.name == "helper_return";
+        });
+    require(
+        helper != result.items.end() && std::next(helper) != result.items.end() &&
+            std::next(helper)->kind == MachineItemKind::Op &&
+            std::next(helper)->opcode == 0x52 &&
+            std::find(std::next(helper)->roles.begin(),
+                      std::next(helper)->roles.end(),
+                      kResumableErrorPaddingRole) !=
+                std::next(helper)->roles.end(),
+        "the separately addressed В/О should move onto the retained padding cell");
+
+    for (const std::vector<MachineItem>* variant :
+         {&program, &result.items}) {
+      emulator::MK61 calc;
+      calc.load_program(resolved_opcodes(*variant));
+      calc.set_register("x", "5");
+      calc.press("В/О");
+      calc.press("С/П");
+      const emulator::RunResult error_run =
+          calc.run_until_stable(300, 5);
+      require(error_run.stopped && calc.program_counter() == "04",
+              "both layouts should call the helper return and stop at ЕГГ0Г with PC 04");
+      calc.press("С/П");
+      const emulator::RunResult resumed =
+          calc.run_until_stable(300, 5);
+      require(resumed.stopped && calc.read_register("0") == "5,",
+              "continuing after ЕГГ0Г should skip the overlaid В/О and execute address 04");
+    }
+
+    std::vector<MachineItem> untyped_padding = program;
+    untyped_padding.at(3).roles.clear();
+    const core::PostLayoutIndirectFlowResult rejected_padding =
+        core::optimize_post_layout_error_padding_code_overlay(
+            untyped_padding);
+    require(rejected_padding.applied == 0 &&
+                core::machine_cell_count(rejected_padding.items) ==
+                    core::machine_cell_count(untyped_padding),
+            "an untyped ordinary cell after ЕГГ0Г must not be treated as padding");
+
+    std::vector<MachineItem> fallthrough = program;
+    fallthrough.at(5) = MachineItem::op(0x0d, "Cx");
+    const core::PostLayoutIndirectFlowResult rejected_fallthrough =
+        core::optimize_post_layout_error_padding_code_overlay(fallthrough);
+    require(rejected_fallthrough.applied == 0,
+            "a В/О entry with ordinary linear fallthrough must not move into error padding");
+  }
 
   {
     CompileOptions borrowed_options = options;

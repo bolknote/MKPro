@@ -17713,7 +17713,8 @@ bool lower_literal_terminal_stop(LoweringContext& context, const std::string& li
 
   if (const std::optional<DisplayLiteralProgram> program = display_literal_program(literal)) {
     if (program->kind == "error") {
-      context.emitter.emit_op(0x29, "К ÷", "halt literal ЕГГ0Г", line);
+      context.emitter.emit_error_stop(StopDisposition::Terminal, "К ÷",
+                                      "halt literal ЕГГ0Г", line);
       context.optimizations.push_back(OptimizationReport{
           .name = "error-stop",
           .detail = "Used one-cell error opcode for literal ЕГГ0Г stop at line " +
@@ -18447,7 +18448,8 @@ bool lower_dungeon_match(LoweringContext& context, const V2Statement& statement)
   context.emitter.emit_number("3");
   context.emitter.emit_op(0x11, "-", "condition compare", statement.line);
   context.emitter.emit_jump(0x59, "F x>=0", 74, "false branch for >=", statement.line);
-  context.emitter.emit_op(0x29, "К ÷", "halt literal ЕГГ0Г", statement.line);
+  context.emitter.emit_error_stop(StopDisposition::Terminal, "К ÷",
+                                  "halt literal ЕГГ0Г", statement.line);
   context.emitter.emit_op(0x52, "В/О", "implicit return from proc", statement.line);
   return true;
 }
@@ -35737,7 +35739,8 @@ bool lower_terminal_literal_show_halt(LoweringContext& context, const V2Statemen
   if (!program.has_value() || program->kind != "error")
     return false;
 
-  context.emitter.emit_op(0x29, "К ÷", "halt literal ЕГГ0Г", show.line);
+  context.emitter.emit_error_stop(StopDisposition::Terminal, "К ÷",
+                                  "halt literal ЕГГ0Г", show.line);
   context.optimizations.push_back(OptimizationReport{
       .name = "terminal-display-fusion",
       .detail = "Folded literal screen before halt at line " + std::to_string(halt.line) +
@@ -50111,7 +50114,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
 
     if (return_stack_post_layout_changed) {
       const core::PostLayoutIndirectFlowResult post_layout_overlay =
-          core::optimize_post_layout_address_code_overlay(post_layout_items, {}, pass_options);
+          core::optimize_post_layout_code_overlays(post_layout_items, {}, pass_options);
       post_layout_items = post_layout_overlay.items;
       post_layout_optimizations.insert(post_layout_optimizations.end(),
                                        post_layout_overlay.optimizations.begin(),
@@ -50450,8 +50453,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
         overlay_preloads.push_back(preload);
     }
     const core::PostLayoutIndirectFlowResult post_layout_overlay =
-        core::optimize_post_layout_address_code_overlay(post_layout_items, overlay_preloads,
-                                                        pass_options);
+        core::optimize_post_layout_code_overlays(post_layout_items, overlay_preloads,
+                                                 pass_options);
     post_layout_items = post_layout_overlay.items;
     if (post_layout_overlay.applied > 0) {
       // The overlay deletes cells and shifts helper addresses; it returns the

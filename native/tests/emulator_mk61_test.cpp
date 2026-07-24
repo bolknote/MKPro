@@ -138,6 +138,21 @@ void emulator_mk61_execution_matches_typescript_contract() {
       require(calc.read_register("x") == "5,", "explicit trap should preserve X");
       require(calc.read_register("x1") == "5,", "explicit trap should copy X to X1");
     }
+
+    emulator::MK61 exact_skip;
+    exact_skip.load_program({0x29, 0x01, 0x40, 0x50});
+    exact_skip.set_register("x", "5");
+    exact_skip.press("В/О");
+    exact_skip.press("С/П");
+    const emulator::RunResult trapped =
+        exact_skip.run_until_stable(200, 5);
+    require(trapped.stopped && exact_skip.program_counter() == "02",
+            "resumable ЕГГ0Г fact should stop at the cell after exactly one padding cell");
+    exact_skip.press("С/П");
+    const emulator::RunResult continued =
+        exact_skip.run_until_stable(200, 5);
+    require(continued.stopped && exact_skip.read_register("0") == "5,",
+            "continuing ЕГГ0Г should skip padding 01 but execute store 02");
   }
 
   require(contains_error_stop(run_trap(0x23, "0")), "F 1/x should trap on zero");

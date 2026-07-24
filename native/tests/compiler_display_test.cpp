@@ -374,6 +374,56 @@ program RepeatedLiteralScreenHelper {
                         return step.opcode == 0x52 && step.comment == "display literal return";
                       }),
           "repeated literal screen should return from the shared helper");
+
+  const CompileResult resumable_error = compile_pinned(R"mkpro(
+program ResumableErrorDisplay {
+  loop {
+    show("ЕГГ0Г")
+  }
+}
+)mkpro");
+  require(resumable_error.implemented && resumable_error.diagnostics.empty(),
+          "native compiler should lower a resumable ЕГГ0Г screen");
+  const auto error = std::find_if(
+      resumable_error.items.begin(), resumable_error.items.end(),
+      [](const MachineItem& item) {
+        return item.kind == MachineItemKind::Op && item.opcode == 0x29;
+      });
+  require(
+      error != resumable_error.items.end() &&
+          error->stop_disposition == StopDisposition::Resumable &&
+          std::next(error) != resumable_error.items.end() &&
+          std::next(error)->kind == MachineItemKind::Op &&
+          std::find(std::next(error)->roles.begin(),
+                    std::next(error)->roles.end(),
+                    kResumableErrorPaddingRole) !=
+              std::next(error)->roles.end(),
+      "resumable ЕГГ0Г should carry typed stop semantics and one typed padding cell");
+
+  const CompileResult terminal_error = compile_pinned(R"mkpro(
+program TerminalErrorDisplay {
+  loop {
+    halt("ЕГГ0Г")
+  }
+}
+)mkpro");
+  require(terminal_error.implemented && terminal_error.diagnostics.empty(),
+          "native compiler should lower a terminal ЕГГ0Г halt");
+  const auto terminal = std::find_if(
+      terminal_error.items.begin(), terminal_error.items.end(),
+      [](const MachineItem& item) {
+        return item.kind == MachineItemKind::Op && item.opcode == 0x29;
+      });
+  require(
+      terminal != terminal_error.items.end() &&
+          terminal->stop_disposition == StopDisposition::Terminal &&
+          std::none_of(
+              terminal_error.items.begin(), terminal_error.items.end(),
+              [](const MachineItem& item) {
+                return std::find(item.roles.begin(), item.roles.end(),
+                                 kResumableErrorPaddingRole) != item.roles.end();
+              }),
+      "terminal ЕГГ0Г should remain one typed cell without resumable padding");
 }
 
 } // namespace mkpro::tests
