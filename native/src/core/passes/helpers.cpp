@@ -4255,6 +4255,80 @@ bool known_return_call_returns_through_nested_transparent_range(
   return nested_return_call_range_is_transparent(ops, call, context, is_transparent, memo, active);
 }
 
+bool direct_callee_entry_stack_flow_is_modeled(
+    const std::vector<IrOp>& ops, const IrOp& call,
+    const DirectReturnAnalysisContext& context) {
+  const std::optional<int> target_index = direct_call_target_index(call, context);
+  if (!target_index.has_value())
+    return false;
+
+  // Number of temporaries lifted above the caller's entry stack. Drops may
+  // only consume these temporaries: a drop at depth zero digs below the entry
+  // stack and overwrites the caller's Y/Z/T in a way the seeding pass does not
+  // model, so it rejects the whole body.
+  constexpr int kMaxLiftDepth = 2;
+  int depth = 0;
+  const int start_index = ops.at(static_cast<std::size_t>(*target_index)).kind == IrKind::Label
+                              ? *target_index + 1
+                              : *target_index;
+  for (int index = start_index; index < static_cast<int>(ops.size()); ++index) {
+    const IrOp& op = ops.at(static_cast<std::size_t>(index));
+    if (op.kind == IrKind::Label) {
+      if (context.label_entries.contains(index))
+        return false;
+      continue;
+    }
+    if (has_rewrite_barrier(op) || is_display_focus_sensitive(op))
+      return false;
+    if (op.kind == IrKind::Return)
+      return true;
+    if (is_known_return_call_op(op)) {
+      if (!x2_known_return_call_preserves_stack_x_and_x2(ops, op, context))
+        return false;
+      continue;
+    }
+    switch (op.kind) {
+    case IrKind::Store:
+    case IrKind::IndirectStore:
+    case IrKind::OrphanAddress:
+      continue;
+    case IrKind::Recall:
+    case IrKind::IndirectRecall:
+      if (depth >= kMaxLiftDepth)
+        return false;
+      ++depth;
+      continue;
+    case IrKind::Plain:
+      break;
+    default:
+      return false;
+    }
+    if (x2_is_strict_stack_preserving_linear_op(op))
+      continue;
+    switch (analyze_x2_stack_effect(op).stack_effect) {
+    case StackEffect::Shifts:
+      if (depth >= kMaxLiftDepth)
+        return false;
+      ++depth;
+      continue;
+    case StackEffect::ConsumeYKeep:
+      continue;
+    case StackEffect::ConsumeYDrop:
+      if (depth == 0)
+        return false;
+      --depth;
+      continue;
+    case StackEffect::Preserves:
+    case StackEffect::Exposes:
+    case StackEffect::Barrier:
+    case StackEffect::Unknown:
+      return false;
+    }
+    return false;
+  }
+  return false;
+}
+
 std::vector<std::optional<RegisterValueSet>>
 compute_x2_register_states(const std::vector<IrOp>& ops) {
   if (ops.empty())

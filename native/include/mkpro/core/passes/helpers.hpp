@@ -364,6 +364,13 @@ bool known_return_call_returns_through_nested_transparent_range(
 bool x2_known_return_call_preserves_stack_x_and_x2(
     const std::vector<IrOp>& ops, const IrOp& call,
     const DirectReturnAnalysisContext& context);
+// Proof gate for seeding a direct callee with the caller's pre-call Y/Z/T facts.
+// It proves only that the linear callee path stays inside the supported transfer
+// model; it deliberately does not claim that the callee returns with an
+// unchanged stack. Return propagation is cleared by the dataflow itself.
+bool direct_callee_entry_stack_flow_is_modeled(
+    const std::vector<IrOp>& ops, const IrOp& call,
+    const DirectReturnAnalysisContext& context);
 std::vector<std::optional<RegisterValueSet>>
 compute_x2_register_states(const std::vector<IrOp>& ops);
 std::optional<RegisterValueSet>

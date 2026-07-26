@@ -61,6 +61,8 @@ void display_byte_helpers_match_typescript_contract();
 void display_lowering_helpers_match_typescript_contract();
 void duplicate_failure_tail_matches_typescript_contract();
 void emitter_matches_initial_typescript_contract();
+void entry_stack_input_reuse_removes_only_proved_entry_stack_recalls();
+void entry_stack_input_reuse_preserves_direct_call_contract();
 void exact_decimal_arithmetic_matches_typescript_contract();
 void fl_dead_flag_branch_compiler_contract();
 void emulator_bitmask_facts_match_typescript_contract();
@@ -320,6 +322,8 @@ int main(int argc, char** argv) {
       MKPRO_TEST(display_lowering_helpers_match_typescript_contract),
       MKPRO_TEST(duplicate_failure_tail_matches_typescript_contract),
       MKPRO_TEST(emitter_matches_initial_typescript_contract),
+      MKPRO_TEST(entry_stack_input_reuse_removes_only_proved_entry_stack_recalls),
+      MKPRO_TEST(entry_stack_input_reuse_preserves_direct_call_contract),
       MKPRO_TEST(exact_decimal_arithmetic_matches_typescript_contract),
       MKPRO_TEST(fl_dead_flag_branch_compiler_contract),
       MKPRO_TEST(emulator_bitmask_facts_match_typescript_contract),

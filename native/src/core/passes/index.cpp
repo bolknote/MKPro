@@ -10,6 +10,7 @@
 #include "mkpro/core/passes/dead_store_before_commutative.hpp"
 #include "mkpro/core/passes/dead_store_elimination.hpp"
 #include "mkpro/core/passes/duplicate_failure_tail.hpp"
+#include "mkpro/core/passes/entry_stack_input_reuse.hpp"
 #include "mkpro/core/passes/flow_x_reuse.hpp"
 #include "mkpro/core/passes/indirect_addressing.hpp"
 #include "mkpro/core/passes/indirect_selector_integer_part.hpp"
@@ -250,6 +251,7 @@ const std::vector<IrPass>& pass_pipeline() {
       jump_thread_pass(),
       flow_x_reuse_pass(),
       branch_target_x_reuse_pass(),
+      entry_stack_input_reuse_pass(),
       stable_indirect_flow_pass(),
       preloaded_indirect_flow_pass(),
       runtime_indirect_call_flow_pass(),

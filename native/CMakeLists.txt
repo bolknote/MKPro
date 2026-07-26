@@ -66,6 +66,7 @@ add_library(mkpro_core STATIC
   src/core/passes/dead_store_before_commutative.cpp
   src/core/passes/dead_store_elimination.cpp
   src/core/passes/duplicate_failure_tail.cpp
+  src/core/passes/entry_stack_input_reuse.cpp
   src/core/passes/flow_x_reuse.cpp
   src/core/passes/helpers.cpp
   src/core/passes/indirect_addressing.cpp
@@ -171,6 +172,8 @@ add_executable(mkpro_tests
   tests/display_lowering_test.cpp
   tests/duplicate_failure_tail_test.cpp
   tests/emitter_test.cpp
+  tests/entry_stack_input_reuse_test.cpp
+  tests/entry_stack_input_reuse_contract_test.cpp
   tests/exact_decimal_arithmetic_test.cpp
   tests/emulator_bitmask_facts_test.cpp
   tests/emulator_constants_dual_use_test.cpp
@@ -355,6 +358,8 @@ set(MKPRO_NATIVE_TEST_NAMES
   display_lowering_helpers_match_typescript_contract
   duplicate_failure_tail_matches_typescript_contract
   emitter_matches_initial_typescript_contract
+  entry_stack_input_reuse_removes_only_proved_entry_stack_recalls
+  entry_stack_input_reuse_preserves_direct_call_contract
   exact_decimal_arithmetic_matches_typescript_contract
   fl_dead_flag_branch_compiler_contract
   emulator_bitmask_facts_match_typescript_contract
