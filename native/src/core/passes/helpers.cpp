@@ -15433,6 +15433,8 @@ std::vector<X2HiddenTempReplacement> compute_x2_hidden_temp_restore(const std::v
   const std::vector<std::optional<RegisterValueSet>> register_states = compute_x2_register_states(ops);
   const std::vector<std::optional<X2ValueDataflowState>> value_states =
       compute_x2_value_states(ops, {.track_register_memory = true});
+  const std::vector<std::vector<RegisterValueEdge>> register_value_graph =
+      build_register_value_graph(ops);
   const std::vector<bool> dot_safe_states = compute_x2_dot_restore_gap_states(ops);
   const std::vector<bool> immediate_sync_states = compute_x2_immediate_sync_states(ops);
   const LivenessInfo liveness = compute_liveness(ops);
@@ -15449,6 +15451,63 @@ std::vector<X2HiddenTempReplacement> compute_x2_hidden_temp_restore(const std::v
   };
   const auto flag_at = [](const std::vector<bool>& flags, int i) -> bool {
     return i >= 0 && i < static_cast<int>(flags.size()) && flags[static_cast<std::size_t>(i)];
+  };
+  const auto op_may_write_register = [](const IrOp& candidate,
+                                        const std::string& register_name) -> bool {
+    if (candidate.kind == IrKind::Store)
+      return candidate.register_name == register_name;
+    if (candidate.kind == IrKind::Loop)
+      return loop_counter_register_name(candidate.counter) == register_name;
+    if (candidate.kind == IrKind::IndirectStore) {
+      const std::optional<std::string> target = known_indirect_memory_target(candidate);
+      if (!target.has_value() || *target == register_name)
+        return true;
+    }
+    if (candidate.kind == IrKind::IndirectStore ||
+        candidate.kind == IrKind::IndirectRecall ||
+        candidate.kind == IrKind::IndirectJump ||
+        candidate.kind == IrKind::IndirectCall ||
+        candidate.kind == IrKind::IndirectCondJump) {
+      return candidate.register_name == register_name &&
+             !mkpro::core::is_stable_indirect_selector(candidate.register_name);
+    }
+    return false;
+  };
+  std::map<std::string, std::vector<std::optional<bool>>> register_clobber_cache;
+  const auto register_unmodified_on_all_paths =
+      [&](int target_index, const std::string& register_name) -> bool {
+    if (ops.empty() || target_index < 0 || target_index >= static_cast<int>(ops.size()))
+      return false;
+    auto cached = register_clobber_cache.find(register_name);
+    if (cached == register_clobber_cache.end()) {
+      std::vector<std::optional<bool>> clobbered_at_entry(ops.size());
+      clobbered_at_entry.front() = false;
+      std::vector<std::size_t> worklist = {0U};
+      std::size_t cursor = 0;
+      while (cursor < worklist.size()) {
+        const std::size_t op_index = worklist[cursor++];
+        const bool outgoing =
+            *clobbered_at_entry[op_index] ||
+            op_may_write_register(ops[op_index], register_name);
+        for (const RegisterValueEdge& edge : register_value_graph[op_index]) {
+          const std::size_t target = static_cast<std::size_t>(edge.target);
+          const bool joined =
+              clobbered_at_entry[target].has_value()
+                  ? (*clobbered_at_entry[target] || outgoing)
+                  : outgoing;
+          if (!clobbered_at_entry[target].has_value() ||
+              *clobbered_at_entry[target] != joined) {
+            clobbered_at_entry[target] = joined;
+            worklist.push_back(target);
+          }
+        }
+      }
+      cached =
+          register_clobber_cache.emplace(register_name, std::move(clobbered_at_entry)).first;
+    }
+    const std::optional<bool>& clobbered =
+        cached->second.at(static_cast<std::size_t>(target_index));
+    return clobbered.has_value() && !*clobbered;
   };
 
   for (int index = 0; index < static_cast<int>(ops.size()); ++index) {
@@ -15467,13 +15526,21 @@ std::vector<X2HiddenTempReplacement> compute_x2_hidden_temp_restore(const std::v
         store_index.has_value()
             ? std::nullopt
             : htr_find_branch_merged_scratch_stores(ops, index, register_name);
-    if (!store_index.has_value() && !branch_stores.has_value())
+    const bool preloaded_value_fallback =
+        !store_index.has_value() && !branch_stores.has_value();
+    if (preloaded_value_fallback &&
+        (preloaded_constant_value_facts(&op).empty() ||
+         !register_unmodified_on_all_paths(index, register_name)))
       continue;
     if (liveness.live_out.at(static_cast<std::size_t>(index)).count(register_name) > 0)
       continue;
+    const std::optional<RegisterValueSet> recall_register_state =
+        preloaded_value_fallback
+            ? std::nullopt
+            : register_states.at(static_cast<std::size_t>(index));
     const std::optional<RecallRemovalAnalysis> removal = analyze_recall_removal(
-        ops, index, register_states.at(static_cast<std::size_t>(index)),
-        value_states.at(static_cast<std::size_t>(index)), &context);
+        ops, index, recall_register_state, value_states.at(static_cast<std::size_t>(index)),
+        &context);
     if (!removal.has_value())
       continue;
 
@@ -15500,6 +15567,12 @@ std::vector<X2HiddenTempReplacement> compute_x2_hidden_temp_restore(const std::v
     const X2ValueDataflowState* store_state =
         store_index.has_value() ? state_at(*store_index) : nullptr;
     const X2ValueDataflowState* recall_state = state_at(index);
+    const bool preloaded_value_proven =
+        preloaded_value_fallback && removal->value_proof.has_value() &&
+        removal->value_proof->x2_sync_value &&
+        x2_restore_safety(recall_state) == X2ShapeSafety::DotSafeDecimal;
+    if (preloaded_value_fallback && !preloaded_value_proven)
+      continue;
 
     const bool source_already_synced =
         branch_merged ||
@@ -15525,7 +15598,8 @@ std::vector<X2HiddenTempReplacement> compute_x2_hidden_temp_restore(const std::v
 
     const bool source_proves_free_standing_restore =
         source_already_dot_safe || source_restores_same_visible_decimal ||
-        source_restores_same_dot_safe_decimal_shape || source_restores_same_dot_safe_structural_shape;
+        source_restores_same_dot_safe_decimal_shape ||
+        source_restores_same_dot_safe_structural_shape || preloaded_value_proven;
 
     const bool can_use_source_dot_restore = x2_can_use_source_dot_restore_at(
         ops, index, recall_state, flag_at(dot_safe_states, index),

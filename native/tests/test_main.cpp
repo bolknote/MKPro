@@ -113,6 +113,7 @@ void emulator_super_dark_matches_typescript_contract();
 void emulator_vo_return_matches_typescript_contract();
 void emulator_vp_splice_equivalence_matches_typescript_contract();
 void emulator_x2_dead_restore_matches_typescript_contract();
+void emulator_x2_preloaded_constant_matches_source_contract();
 void emulator_x2_restore_context_matches_typescript_contract();
 void emulator_z_stack_derived_tail_matches_typescript_contract();
 void example_sizes_match_typescript_baselines();
@@ -214,6 +215,7 @@ void x2_join_matches_typescript_contract();
 void x2_noop_restore_matches_typescript_contract();
 void x2_hidden_temp_restore_matches_typescript_contract();
 void x2_literal_restore_matches_typescript_contract();
+void x2_preloaded_constant_matches_typescript_contract();
 void vp_x2_peephole_matches_typescript_contract();
 void vp_splice_matches_typescript_contract();
 void pre_shift_stack_lift_matches_typescript_contract();
@@ -367,6 +369,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(emulator_vo_return_matches_typescript_contract),
       MKPRO_TEST(emulator_vp_splice_equivalence_matches_typescript_contract),
       MKPRO_TEST(emulator_x2_dead_restore_matches_typescript_contract),
+      MKPRO_TEST(emulator_x2_preloaded_constant_matches_source_contract),
       MKPRO_TEST(emulator_x2_restore_context_matches_typescript_contract),
       MKPRO_TEST(emulator_z_stack_derived_tail_matches_typescript_contract),
       MKPRO_TEST(example_sizes_match_typescript_baselines),
@@ -468,6 +471,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(x2_noop_restore_matches_typescript_contract),
       MKPRO_TEST(x2_hidden_temp_restore_matches_typescript_contract),
       MKPRO_TEST(x2_literal_restore_matches_typescript_contract),
+      MKPRO_TEST(x2_preloaded_constant_matches_typescript_contract),
       MKPRO_TEST(vp_x2_peephole_matches_typescript_contract),
       MKPRO_TEST(vp_splice_matches_typescript_contract),
       MKPRO_TEST(pre_shift_stack_lift_matches_typescript_contract),

@@ -211,6 +211,7 @@ add_executable(mkpro_tests
   tests/emulator_vo_return_test.cpp
   tests/emulator_vp_splice_equivalence_test.cpp
   tests/emulator_x2_dead_restore_test.cpp
+  tests/emulator_x2_preloaded_constant_test.cpp
   tests/emulator_x2_restore_context_test.cpp
   tests/emulator_z_stack_derived_tail_test.cpp
   tests/example_parity_test.cpp
@@ -299,6 +300,7 @@ add_executable(mkpro_tests
   tests/x2_noop_restore_test.cpp
   tests/x2_hidden_temp_restore_test.cpp
   tests/x2_literal_restore_test.cpp
+  tests/x2_preloaded_constant_test.cpp
   tests/vp_x2_peephole_test.cpp
   tests/vp_splice_pass_test.cpp
   tests/pre_shift_stack_lift_pass_test.cpp
@@ -306,7 +308,7 @@ add_executable(mkpro_tests
 target_link_libraries(mkpro_tests PRIVATE mkpro_debug)
 
 add_executable(mkpro_validate_trig tools/validate_mk61_trig.cpp)
-target_link_libraries(mkpro_validate_trig PRIVATE mkpro_core)
+target_link_libraries(mkpro_validate_trig PRIVATE mkpro_debug)
 add_test(
   NAME mkpro.validate_trig
   COMMAND mkpro_validate_trig --source-root ${CMAKE_CURRENT_SOURCE_DIR}/..
@@ -394,6 +396,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   emulator_vo_return_matches_typescript_contract
   emulator_vp_splice_equivalence_matches_typescript_contract
   emulator_x2_dead_restore_matches_typescript_contract
+  emulator_x2_preloaded_constant_matches_source_contract
   emulator_x2_restore_context_matches_typescript_contract
   emulator_z_stack_derived_tail_matches_typescript_contract
   example_sizes_match_typescript_baselines
@@ -491,6 +494,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   x2_noop_restore_matches_typescript_contract
   x2_hidden_temp_restore_matches_typescript_contract
   x2_literal_restore_matches_typescript_contract
+  x2_preloaded_constant_matches_typescript_contract
   vp_x2_peephole_matches_typescript_contract
   vp_splice_matches_typescript_contract
   pre_shift_stack_lift_matches_typescript_contract
