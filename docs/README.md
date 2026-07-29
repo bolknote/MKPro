@@ -55,6 +55,7 @@ Hardware internals and chip-level detail live separately in
 | [17-sign-digits-and-zeroes.md](./17-sign-digits-and-zeroes.md) | Sign-digits, negative zero, and non-normal zeroes |
 | [18-f-opcodes-and-demo-program.md](./18-f-opcodes-and-demo-program.md) | F-opcode insertion methods and compact-game lessons |
 | [20-mkpro-optimization-reference.md](./20-mkpro-optimization-reference.md) | Comprehensive MK-Pro optimizer and strategy reference |
+| [22-game-catalog-organization.md](./22-game-catalog-organization.md) | Game catalog taxonomy, manifest metadata, and migration plan |
 
 ## Primary Sources
 
