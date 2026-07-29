@@ -543,6 +543,41 @@ Fixture single_flow_conditional_x2_reconvergence_fixture() {
   return result;
 }
 
+// A stable register written only by the exact toggle triple `П->X r; /-/;
+// X->П r`. `write` selects the runtime write shape: 0 keeps the proved
+// triple, 1 stores without the negate, 2 places a label between the negate
+// and the store so the triple is no longer uninterruptible.
+Fixture sign_toggle_selector_fixture(const std::string& preload_value,
+                                     int padding_cells, int write = 0) {
+  Fixture result;
+  const std::string sink = "sign_toggle_sink";
+
+  result.items.push_back(MachineItem::label("sign_toggle_entry"));
+  result.items.push_back(op(0x68)); // П->X 8
+  if (write == 0 || write == 2)
+    result.items.push_back(op(0x0b)); // /-/
+  if (write == 2)
+    result.items.push_back(MachineItem::label("sign_toggle_interrupt"));
+  result.items.push_back(op(0x48)); // X->П 8
+  result.items.push_back(op(0x51)); // БП
+  result.items.push_back(MachineItem::address(sink));
+  result.visible_stop = result.items.size();
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label(sink));
+  result.items.push_back(stop());
+
+  if (padding_cells > 0) {
+    result.items.push_back(MachineItem::label("sign_toggle_padding"));
+    for (int cell = 1; cell < padding_cells; ++cell)
+      result.items.push_back(op(0x54));
+    result.items.push_back(stop());
+  }
+
+  result.preloads.push_back(PreloadReport{.register_name = "8", .value = preload_value});
+  return result;
+}
+
 Fixture conditional_x2_value_equality_fixture() {
   Fixture result;
   const std::string sink = "unrelated_x2_value_equality_sink";
@@ -874,6 +909,77 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
     const Observation after = observe(rewritten.items, rewritten.preloads);
     require(before.stopped && after.stopped && before.state == after.state,
             "proved single-flow conditional X2 reconvergence must preserve observable state");
+  }
+
+  {
+    const Fixture input = sign_toggle_selector_fixture("99999918", 13);
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    std::string rejection;
+    for (const std::string& reason : rewritten.plan.reasons) {
+      if (!rejection.empty())
+        rejection += " | ";
+      rejection += reason;
+    }
+    const bool converted_jump = std::any_of(
+        rewritten.plan.flows.begin(), rewritten.plan.flows.end(), [](const auto& flow) {
+          return flow.original_opcode == 0x51 && flow.selector_register == "8";
+        });
+    require(rewritten.plan.proved && rewritten.removed_cells == 1 && converted_jump,
+            "a register written only by uninterruptible sign toggles with a sign-invariant "
+            "decode may anchor a natural target: applied=" +
+                std::to_string(rewritten.applied) +
+                ", removed=" + std::to_string(rewritten.removed_cells) +
+                ", reasons=" + rejection);
+    const bool sign_toggle_proof = std::any_of(
+        rewritten.plan.runtime_selectors.begin(), rewritten.plan.runtime_selectors.end(),
+        [](const core::NaturalTargetRuntimeSelectorProof& proof) {
+          return proof.register_name == "8" && !proof.selector_unwritten &&
+                 proof.selector_sign_toggle_invariant;
+        });
+    require(sign_toggle_proof,
+            "the runtime selector proof must record the sign-toggle invariance instead of "
+            "claiming the register is unwritten");
+    const Observation before = observe(input.items, input.preloads);
+    const Observation after = observe(rewritten.items, rewritten.preloads);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "a sign-toggled selector conversion must preserve observable machine state");
+  }
+
+  {
+    const Fixture input = sign_toggle_selector_fixture("5", 5);
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    require(rewritten.applied == 0,
+            "a sign-toggled single-digit preload decodes to different targets per sign and "
+            "must not anchor a natural target");
+  }
+
+  {
+    const Fixture input = sign_toggle_selector_fixture("18", 13);
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    require(rewritten.applied == 0,
+            "a sign-toggled preload whose negative phase is not a fixed point of the "
+            "selector write-back must not anchor a natural target");
+  }
+
+  {
+    const Fixture input = sign_toggle_selector_fixture("18", 14, 1);
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    require(rewritten.applied == 0,
+            "a store that is not part of an exact recall/negate/store triple must keep the "
+            "register rejected as a selector");
+  }
+
+  {
+    const Fixture input = sign_toggle_selector_fixture("18", 13, 2);
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    require(rewritten.applied == 0,
+            "a label between the negate and the store makes the toggle interruptible and "
+            "must keep the register rejected as a selector");
   }
 
   {

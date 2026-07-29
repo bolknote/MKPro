@@ -107,6 +107,10 @@ struct NaturalTargetRuntimeSelectorProof {
   int final_target_address = -1;
   bool stable_mutation_class = false;
   bool selector_unwritten = false;
+  // True when the selector register is written at runtime, but every write is
+  // a proved uninterruptible `П->X r; /-/; X->П r` toggle and both signed
+  // spellings of the preload decode to the same flow target.
+  bool selector_sign_toggle_invariant = false;
   bool typed_target_matches_runtime_decode = false;
 
   bool operator==(const NaturalTargetRuntimeSelectorProof&) const = default;
@@ -211,6 +215,17 @@ plan_preloaded_indirect_flow_cell_erasure(
 // interpreted.  The optimizer fails closed on dynamic/unproved indirect flow,
 // selector mutation, executable operands, unsupported preload encodings, or a
 // control/stack/X2 mismatch.
+//
+// A stable selector register is ordinarily required to be unwritten. The one
+// proved exception is a sign-toggled register: every runtime write is the
+// exact contiguous triple recall/negate/store of that same register, the
+// execution-state graph proves the two trailing triple commands are reachable
+// only by falling through the triple, and both signed spellings of the
+// literal preload decode to the same flow target while remaining fixed points
+// of the machine's selector write-back (for example, ±99999999 -> 99 and
+// ±99999918 -> 18, but not ±18, whose negative phase would be rewritten to
+// -99999918 on first use). Such a register keeps its exact preload value:
+// rebinding and retunable-family rewrites stay rejected for it.
 //
 // A compiler-owned preload's raw integer part may be rebound because raw
 // internal registers are not UI.  This is allowed only when every machine use

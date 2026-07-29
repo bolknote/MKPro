@@ -851,6 +851,132 @@ bool register_is_written(const std::vector<MachineItem>& items,
   return false;
 }
 
+std::string negated_literal_spelling(const std::string& value) {
+  if (!value.empty() && value.front() == '-')
+    return value.substr(1U);
+  return "-" + value;
+}
+
+// Sign-toggle write proof for a written selector register.  Every runtime
+// write must be the exact contiguous triple `П->X r; /-/; X->П r`, and the
+// authoritative execution-state graph must prove the two trailing triple
+// commands are only reachable by falling through from the preceding triple
+// command, so no path can store anything except the negated register value.
+// A proved register therefore always holds ±(preload magnitude); whether that
+// is enough for a selector is decided by the caller, which must additionally
+// prove the decode it relies on (for example, that both signed spellings
+// decode to the same flow target).
+bool register_written_only_by_uninterruptible_sign_toggles(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow, int register_index_value) {
+  if (!flow.proved || flow.execution_states.empty() ||
+      flow.execution_successors.size() != flow.execution_states.size()) {
+    return false;
+  }
+  std::map<std::size_t, std::size_t> expected_predecessor_item;
+  bool any_toggle = false;
+  for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
+    const MachineItem& item = items.at(item_index);
+    if (item.kind != MachineItemKind::Op)
+      continue;
+    if ((item.opcode == 0x58 && register_index_value == 2) ||
+        (item.opcode == 0x5a && register_index_value == 3) ||
+        (item.opcode == 0x5b && register_index_value == 1) ||
+        (item.opcode == 0x5d && register_index_value == 0)) {
+      return false;
+    }
+    if (is_indirect_memory(item.opcode) && (item.opcode & 0xf0) == 0xb0) {
+      const auto targets = flow.indirect_memory_targets.find(item_index);
+      if (targets == flow.indirect_memory_targets.end() ||
+          std::find(targets->second.begin(), targets->second.end(),
+                    register_index_value) != targets->second.end()) {
+        return false;
+      }
+    }
+    if (item.opcode >= 0x40 && item.opcode <= 0x4e &&
+        item.opcode - 0x40 == register_index_value) {
+      if (item_index < 2)
+        return false;
+      const MachineItem& negate = items.at(item_index - 1);
+      const MachineItem& recall = items.at(item_index - 2);
+      if (negate.kind != MachineItemKind::Op || negate.opcode != 0x0b ||
+          recall.kind != MachineItemKind::Op ||
+          recall.opcode != 0x60 + register_index_value) {
+        return false;
+      }
+      expected_predecessor_item.emplace(item_index - 1, item_index - 2);
+      expected_predecessor_item.emplace(item_index, item_index - 1);
+      any_toggle = true;
+    }
+  }
+  if (!any_toggle)
+    return false;
+
+  for (const PostLayoutExternalEntryState& entry : flow.external_entries) {
+    if (expected_predecessor_item.contains(entry.entry.item_index))
+      return false;
+    for (const PostLayoutCommandIdentity& slot : entry.return_stack) {
+      if (expected_predecessor_item.contains(slot.item_index))
+        return false;
+    }
+  }
+  if (flow.empty_return_target.has_value() &&
+      expected_predecessor_item.contains(flow.empty_return_target->item_index)) {
+    return false;
+  }
+  std::vector<char> has_predecessor(flow.execution_states.size(), 0);
+  for (std::size_t state = 0; state < flow.execution_successors.size(); ++state) {
+    for (const std::size_t successor : flow.execution_successors.at(state)) {
+      if (successor >= flow.execution_states.size())
+        return false;
+      has_predecessor.at(successor) = 1;
+      const auto expected = expected_predecessor_item.find(
+          flow.execution_states.at(successor).item_index);
+      if (expected != expected_predecessor_item.end() &&
+          flow.execution_states.at(state).item_index != expected->second) {
+        return false;
+      }
+    }
+  }
+  for (std::size_t state = 0; state < flow.execution_states.size(); ++state) {
+    if (expected_predecessor_item.contains(flow.execution_states.at(state).item_index) &&
+        !has_predecessor.at(state)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// A sign-toggled register alternates between +v and -v at runtime, so a flow
+// decode through it is trustworthy only when both signed spellings decode to
+// the same flow target (for example, ±99999918 -> 18 or ±99999999 -> 99).
+// The machine also writes the transformed selector value back into a stable
+// register on every indirect access; both spellings must therefore be fixed
+// points of that write-back, or the register's observable data value would
+// change on first use (for example, -18 would become -99999918).
+bool sign_toggle_decode_is_invariant(const std::string& register_name_value,
+                                     const std::string& value, int target,
+                                     AddressSpaceModel model) {
+  for (const std::string& spelling : {value, negated_literal_spelling(value)}) {
+    if (!has_proved_address_projection(spelling))
+      return false;
+    std::optional<IndirectAddressEvaluation> evaluated;
+    try {
+      evaluated = evaluate_indirect_address(register_name_value, spelling,
+                                            IndirectOperationKind::Flow, model);
+    } catch (const std::exception&) {
+      return false;
+    }
+    if (!evaluated.has_value() || !evaluated->actual_flow_target.has_value() ||
+        *evaluated->actual_flow_target != target) {
+      return false;
+    }
+    if (!evaluated->result_value.has_value() || *evaluated->result_value != spelling)
+      return false;
+  }
+  return true;
+}
+
 std::vector<std::size_t> indirect_flow_uses(const std::vector<MachineItem>& items,
                                             int register_index_value) {
   std::vector<std::size_t> result;
@@ -899,7 +1025,11 @@ std::vector<SelectorCandidate> selector_candidates(
 
   std::vector<SelectorCandidate> result;
   for (int index = 7; index <= 0x0e; ++index) {
-    if (register_is_written(items, flow, index))
+    const bool written = register_is_written(items, flow, index);
+    const bool sign_toggle_written =
+        written &&
+        register_written_only_by_uninterruptible_sign_toggles(items, flow, index);
+    if (written && !sign_toggle_written)
       continue;
     const std::string name = register_name(index);
     const auto preload = preload_by_register.find(name);
@@ -909,6 +1039,11 @@ std::vector<SelectorCandidate> selector_candidates(
         continue;
       const std::string& value = report.value;
       const auto append = [&](const std::string& delivered_value) {
+        // A sign-toggled register keeps its exact preload magnitude, so only
+        // the delivered preload spelling itself may anchor a target, and only
+        // when both signed spellings decode to that same target.
+        if (sign_toggle_written && delivered_value != value)
+          return;
         if (!has_proved_address_projection(delivered_value))
           return;
         std::optional<IndirectAddressEvaluation> evaluated;
@@ -922,6 +1057,11 @@ std::vector<SelectorCandidate> selector_candidates(
         if (!evaluated.has_value() || !evaluated->actual_flow_target.has_value())
           return;
         const int target = *evaluated->actual_flow_target;
+        if (sign_toggle_written &&
+            !sign_toggle_decode_is_invariant(name, delivered_value, target,
+                                             options.address_space_model)) {
+          return;
+        }
         if (std::any_of(result.begin(), result.end(), [&](const SelectorCandidate& candidate) {
               return candidate.register_index == index && candidate.fixed_target == target;
             })) {
@@ -963,6 +1103,11 @@ std::vector<SelectorCandidate> selector_candidates(
                     targets->second.front().address ==
                         *decoded_existing_flow->actual_flow_target;
            }));
+
+      // Rebindable variants rewrite the preload value; a sign-toggled register
+      // is admitted only with its exact runtime-proved ±magnitude.
+      if (sign_toggle_written)
+        continue;
 
       if (report.retunable_natural_fractional_prefix.has_value()) {
         const std::optional<std::string> family =
@@ -2107,7 +2252,11 @@ bool rebind_preloads(
   for (const auto& [reg, target_origins] : required_targets) {
     if (reg < 7 || reg > 0x0e || target_origins.size() != 1U)
       return reject("selector register does not have one required target");
-    if (register_is_written(original_items, original_flow, reg))
+    const bool written = register_is_written(original_items, original_flow, reg);
+    const bool sign_toggle_written =
+        written && register_written_only_by_uninterruptible_sign_toggles(
+                       original_items, original_flow, reg);
+    if (written && !sign_toggle_written)
       return reject("selector register is written at runtime");
     const std::string name = register_name(reg);
     const auto preload = preload_by_register.find(name);
@@ -2144,6 +2293,19 @@ bool rebind_preloads(
     if (had_original_flow_use) {
       if (!preload_value_targets(name, old_value, old_target->second, model))
         return reject("original preload does not decode to its typed target");
+    }
+    if (sign_toggle_written) {
+      // The register alternates between ±(preload magnitude) at runtime, so
+      // its decode must reach the (possibly relocated) target under both
+      // signs, and the preload value itself must never be rewritten.
+      if (had_original_flow_use &&
+          !preload_value_targets(name, negated_literal_spelling(old_value),
+                                 old_target->second, model)) {
+        return reject("sign-toggled selector does not decode to its typed target when negated");
+      }
+      if (!sign_toggle_decode_is_invariant(name, old_value, new_target->second, model))
+        return reject("sign-toggled selector preload cannot be rebound");
+      continue;
     }
     if (preload_value_targets(name, old_value, new_target->second, model))
       continue;
@@ -3096,7 +3258,16 @@ std::optional<std::vector<NaturalTargetRuntimeSelectorProof>> prove_runtime_sele
     const bool stable = indirect_selector_mutation(name) ==
                         IndirectSelectorMutation::Stable;
     const bool unwritten = !register_is_written(original_items, original_flow, reg);
-    if (!stable || !unwritten)
+    // A written selector remains provable only when both the original and the
+    // final artifact write it exclusively through uninterruptible sign
+    // toggles, and its decode is invariant under both signs.
+    const bool sign_toggle_written =
+        !unwritten &&
+        register_written_only_by_uninterruptible_sign_toggles(
+            original_items, original_flow, reg) &&
+        register_written_only_by_uninterruptible_sign_toggles(
+            final_items, final_flow, reg);
+    if (!stable || (!unwritten && !sign_toggle_written))
       return std::nullopt;
     const std::string& value = preloads.at(preload->second).value;
     if (!has_proved_address_projection(value))
@@ -3109,6 +3280,9 @@ std::optional<std::vector<NaturalTargetRuntimeSelectorProof>> prove_runtime_sele
     }
     if (!decoded.has_value() || !decoded->actual_flow_target.has_value() ||
         *decoded->actual_flow_target != targets.front().address)
+      return std::nullopt;
+    if (sign_toggle_written &&
+        !sign_toggle_decode_is_invariant(name, value, targets.front().address, model))
       return std::nullopt;
 
     // Existing indirect commands must retain the same target identity.  A
@@ -3130,6 +3304,7 @@ std::optional<std::vector<NaturalTargetRuntimeSelectorProof>> prove_runtime_sele
         .final_target_address = targets.front().address,
         .stable_mutation_class = stable,
         .selector_unwritten = unwritten,
+        .selector_sign_toggle_invariant = sign_toggle_written,
         .typed_target_matches_runtime_decode = true,
     });
   }
