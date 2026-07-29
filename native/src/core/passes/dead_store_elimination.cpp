@@ -196,14 +196,64 @@ bool exact_call_stack_proves_dead_store(
   return true;
 }
 
+enum class DeadStoreEliminationContext {
+  Ordinary,
+  EarlyExactStack,
+  Finalization,
+};
+
+// The early exact-stack pass changes instruction geometry before any
+// address-sensitive optimizer is allowed to run. It therefore accepts only an
+// IR whose complete control-flow surface is relocatable through symbolic
+// labels. Numeric operands, orphan address bytes, and already materialized
+// indirect flow must be handled by the finalization transaction, which has the
+// selector-retarget and final-CFG proof infrastructure needed to erase cells.
+bool early_exact_stack_layout_is_relocatable(const std::vector<IrOp>& ops) {
+  for (const IrOp& op : ops) {
+    switch (op.kind) {
+      case IrKind::Jump:
+      case IrKind::CondJump:
+      case IrKind::Loop:
+      case IrKind::Call:
+        if (std::get_if<std::string>(&op.target) == nullptr)
+          return false;
+        break;
+      case IrKind::IndirectJump:
+      case IrKind::IndirectCall:
+      case IrKind::IndirectCondJump:
+      case IrKind::OrphanAddress:
+        return false;
+      case IrKind::Label:
+      case IrKind::Store:
+      case IrKind::Recall:
+      case IrKind::IndirectStore:
+      case IrKind::IndirectRecall:
+      case IrKind::Plain:
+      case IrKind::Return:
+      case IrKind::Stop:
+        break;
+    }
+  }
+  return true;
+}
+
 } // namespace
 
 PassResult eliminate_dead_stores(const std::vector<IrOp>& ops,
-                                 const PassContext& context,
-                                 bool finalization_context) {
-  (void)context;
+                                  const PassContext& context,
+                                  DeadStoreEliminationContext elimination_context) {
   if (ops.empty())
     return PassResult{.ops = {}, .applied = 0, .optimizations = {}};
+
+  const bool early_exact_context =
+      elimination_context == DeadStoreEliminationContext::EarlyExactStack;
+  const bool finalization_context =
+      elimination_context == DeadStoreEliminationContext::Finalization;
+  if (early_exact_context &&
+      (!context.options.exact_stack_dead_store_elimination ||
+       !early_exact_stack_layout_is_relocatable(ops))) {
+    return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
+  }
 
   const LivenessInfo liveness =
       compute_liveness(ops, LivenessOptions{.unknown_indirect_flow_to_all = true});
@@ -223,8 +273,22 @@ PassResult eliminate_dead_stores(const std::vector<IrOp>& ops,
     if (op.meta.raw ||
         (op.meta.manual_interaction.has_value() && !is_continuous_resume_anchor(op)))
       continue;
-    if (liveness.live_out.at(index).contains(*target)) {
-      if (!finalization_context)
+    const bool live_after_store = liveness.live_out.at(index).contains(*target);
+    // This first pipeline phase exists only for the joined-return false
+    // positive. Ordinary dead stores remain the responsibility of the normal
+    // later DSE pass, preserving its established opportunity ordering.
+    if (early_exact_context && !live_after_store)
+      continue;
+    if (live_after_store) {
+      // Ordinary liveness joins every В/О with every call continuation, so a
+      // store that only feeds its own call's continuation looks live through
+      // the other call sites. For the narrow store→call→overwrite shape the
+      // bounded exact-return-stack proof below separates the continuations;
+      // it fails closed on unresolved edges. The early candidate additionally
+      // requires a wholly symbolic CFG; finalization may use resolved physical
+      // targets because its caller retargets selectors and re-proves the final
+      // artifact after the erasure.
+      if (elimination_context == DeadStoreEliminationContext::Ordinary)
         continue;
       const std::optional<std::size_t> call_index =
           call_following_store(ops, index);
@@ -305,25 +369,49 @@ PassResult eliminate_dead_stores(const std::vector<IrOp>& ops,
       .applied = static_cast<int>(removed.size()),
       .optimizations =
           {
-          AppliedOptimization{
-                  .name = finalization_context
-                              ? "finalization-dead-store-elimination"
-                              : "dead-store-elimination",
-                  .detail = "Removed " + std::to_string(removed.size()) +
-                            " store(s) to register(s) never read before the next assignment.",
+              AppliedOptimization{
+                  .name =
+                      finalization_context
+                          ? "finalization-dead-store-elimination"
+                          : early_exact_context
+                                ? "exact-stack-dead-store-elimination"
+                                : "dead-store-elimination",
+                  .detail =
+                      early_exact_context
+                          ? "Removed " + std::to_string(removed.size()) +
+                                " store(s) through symbolic calls after a bounded "
+                                "exact-return-stack proof."
+                          : "Removed " + std::to_string(removed.size()) +
+                                " store(s) to register(s) never read before the next assignment.",
               },
           },
   };
 }
 
+PassResult early_exact_stack_dead_store_elimination(
+    const std::vector<IrOp>& ops, const PassContext& context) {
+  return eliminate_dead_stores(
+      ops, context, DeadStoreEliminationContext::EarlyExactStack);
+}
+
 PassResult dead_store_elimination(const std::vector<IrOp>& ops,
                                   const PassContext& context) {
-  return eliminate_dead_stores(ops, context, false);
+  return eliminate_dead_stores(
+      ops, context, DeadStoreEliminationContext::Ordinary);
 }
 
 PassResult finalization_dead_store_elimination(
     const std::vector<IrOp>& ops, const PassContext& context) {
-  return eliminate_dead_stores(ops, context, true);
+  return eliminate_dead_stores(
+      ops, context, DeadStoreEliminationContext::Finalization);
+}
+
+IrPass early_exact_stack_dead_store_elimination_pass() {
+  return IrPass{
+      .name = "exact-stack-dead-store-elimination",
+      .run = early_exact_stack_dead_store_elimination,
+      .layout_safe = false,
+  };
 }
 
 IrPass dead_store_elimination_pass() {

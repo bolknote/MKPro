@@ -1544,7 +1544,9 @@ Display rewrites are separated into strategy selection + body lowering.
   stable-indirect `К X->П R7..Re` stores with proved memory targets, while
   keeping stores that are observable through number-entry, proved indirect-flow
   liveness, mutating `R0..R6` indirect selector side effects, or the `ВП`/X2
-  restore context.
+  restore context. A separate first-pass `exact-stack-dead-store-elimination`
+  candidate removes joined-return false positives only while every flow target
+  remains symbolic; it never shifts an already materialized numeric selector.
 - `repeated-assignment-value-reuse` — reuses the same computed value across multiple assignments, but yields to `initialized-counted-while-loop` when one of the repeated stores is the initializer for a following countdown loop. A one-cell literal reuse must not hide the much shorter `F Lx` loop shape.
 - `repeated-assignment-counted-loop-reuse` — bridges that conflict: prefix
   assignments sharing the counted-loop initializer literal are stored from the
@@ -1560,6 +1562,12 @@ Display rewrites are separated into strategy selection + body lowering.
 ## 13) IR pass pipeline (fixed-point)
 
 The IR pipeline defined in `native/src/core/passes/index.cpp` runs repeatedly:
+
+When enabled by candidate search, `exact-stack-dead-store-elimination` is the
+first phase in each iteration. It can change geometry only while all direct
+flow remains symbolic and no indirect or orphan address form exists; this
+ensures the first successful erasure precedes every address-sensitive pass,
+while later fixed-point iterations fail closed after targets are materialized.
 
 1. `redundant-prologue-elimination` — removes duplicate `display+HALT` prologues immediately before a jump target when an identical prologue is already at that jump target.
 2. `tail-call-lowering` — rewrites certain tail `call`s and trailing `return`s into direct `БП`/tail flow when the continuation is the same for all exits of that region. It can also replace a main-region `ПП proc; БП 00` shape with `БП proc` when the target has a normal `В/О` return, relying on the proved empty-return-stack path to resume at the loop head.
@@ -2494,7 +2502,7 @@ The IR pipeline defined in `native/src/core/passes/index.cpp` runs repeatedly:
     fact after a direct or proved-indirect recall of a previously stored
     literal-shaped decimal.
 22. `dead-store-before-commutative` — removes temporary stores that are followed by immediate `recall` + commutative ALU (`+` or `*`) and never read again before the next write of that register.
-23. `dead-store-elimination` — removes direct stores, plus stable-indirect stores with proved targets, whose target register is not live after the write in a CFG that follows proved indirect flow targets (`indirect-target=NN`) and does not affect number-entry/input finalization or the previous-command context consumed by `ВП` while it restores X2; mutating indirect selectors are kept.
+23. `dead-store-elimination` — removes direct stores, plus stable-indirect stores with proved targets, whose target register is not live after the write in a CFG that follows proved indirect flow targets (`indirect-target=NN`) and does not affect number-entry/input finalization or the previous-command context consumed by `ВП` while it restores X2; mutating indirect selectors are kept. The candidate-searched `exact-stack-dead-store-elimination` phase runs first and handles the narrower store→call→overwrite case hidden by joined-return liveness: a bounded concrete return-stack walk must prove that every path overwrites the register before reading it. This early phase accepts only a wholly symbolic direct-flow CFG and fails closed on numeric operands, orphan address cells, or materialized indirect flow; physical selectors are owned by the separately retargeted and final-CFG-verified finalization transaction.
 24. `last-x-reuse` — removes `П->X r` when `X` already contains `r` from the immediately preceding direct/proved-indirect `X->П`, a kept direct/stable recall, X2 decimal register-memory, decimal preload metadata, decimal display-shape memory such as `exponent:*:*:decimal`, or structural hex/super shape-memory proving that current X was rebuilt as the same concrete value/display shape, including exact decimal display-shape versus ordinary decimal-value equality after restored-visible normalization, possibly through documented empty operators `К НОП`/`К 1`/`К 2`, direct conditional fallthroughs, counted-loop `F L0`..`F L3` fallthroughs for non-counter registers, unreferenced compiler marker labels, and transparent direct/proved-indirect return helpers whose bodies are proved to preserve stack, visible X, and X2. Mutating `R0..R6` indirect-call selectors drop only the alias to the mutated selector register, so a later recall of that same selector is still kept. The pass preserves recalls that serve as the last X2 sync before `.`/`/-/`/`ВП` before the next X2-affecting op, including direct `В/О` returns. A stack lift that can reach a downstream consumer through direct or proved-indirect flow also keeps the recall unless a previous producer that this pass keeps already supplied the same visible value in `Y` and the shared scheduler proves the deeper stack difference is dead. Shape-memory proofs do not make decimal exponent, raw decimal mantissa, or structural `.`/`/-/` restores dot-safe; labels targeted by string, numeric, or proved-indirect flow plus procedure starts are entry barriers, and unknown indirect flow makes labels barriers too; mutating indirect stores can seed the X fact because the store remains, while mutating indirect recalls are not removed.
 25. `r0-fractional-sentinel` — drops redundant immediate `П->X 3`/`X->П 3`
     after fractional-R0 indirect access when `R0` liveness proves that the

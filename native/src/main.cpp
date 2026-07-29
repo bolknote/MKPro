@@ -68,6 +68,8 @@ IR and lowering optimizer switches:
                                   Canonicalize repeated unary update arguments.
   --alternating-sign-toggle-args  Replace proved alternating signed call arguments with state.
   --coalesce-copies               Coalesce copy-only register moves.
+  --exact-stack-dead-store-elimination
+                                  Remove call-separated dead stores before address lowering.
   --shared-straight-line-call-bodies
                                   Share duplicate straight-line call bodies.
   --callee-hole-straight-line-helper
@@ -1279,6 +1281,8 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       options.empty_stack_loop_return = true;
     } else if (arg == "--coalesce-copies") {
       options.coalesce_copies = true;
+    } else if (arg == "--exact-stack-dead-store-elimination") {
+      options.exact_stack_dead_store_elimination = true;
     } else if (arg == "--shared-straight-line-call-bodies") {
       options.shared_straight_line_call_bodies = true;
     } else if (arg == "--callee-hole-straight-line-helper") {

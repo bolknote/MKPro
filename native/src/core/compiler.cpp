@@ -52611,6 +52611,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";shared_straight_line_call_bodies=" << options.shared_straight_line_call_bodies
       << ";disable_interprocedural_opts=" << options.disable_interprocedural_opts
       << ";coalesce_copies=" << options.coalesce_copies
+      << ";exact_stack_dead_store_elimination=" << options.exact_stack_dead_store_elimination
       << ";aggressive_indirect_call_threshold=" << options.aggressive_indirect_call_threshold
       << ";aggressive_indirect_call=" << options.aggressive_indirect_call
       << ";dual_use_constant_indirect_flow=" << options.dual_use_constant_indirect_flow
@@ -52723,6 +52724,8 @@ enum class CandidateGate {
 };
 
 int estimated_candidate_search_cost_ms(std::string_view name) {
+  if (name == "exact-stack-dead-store")
+    return 20;
   if (name == "packed-score-accumulator-reverse-suffix-free-layout")
     return 100;
   if (name == "fractional-constant-selector" ||
@@ -66354,6 +66357,93 @@ std::optional<CompileResult> entered_contract_failure(const std::string& source,
 
 namespace {
 
+bool expression_invokes_named_rule(std::string_view expression,
+                                   const std::set<std::string>& rule_names) {
+  const auto is_identifier = [](char ch) {
+    const unsigned char byte = static_cast<unsigned char>(ch);
+    return std::isalnum(byte) != 0 || ch == '_';
+  };
+  for (const std::string& name : rule_names) {
+    std::size_t cursor = 0;
+    while ((cursor = expression.find(name, cursor)) != std::string_view::npos) {
+      const std::size_t after_name = cursor + name.size();
+      const bool left_boundary = cursor == 0 || !is_identifier(expression[cursor - 1U]);
+      const bool right_boundary =
+          after_name >= expression.size() || !is_identifier(expression[after_name]);
+      std::size_t open = after_name;
+      while (open < expression.size() &&
+             std::isspace(static_cast<unsigned char>(expression[open])) != 0) {
+        ++open;
+      }
+      if (left_boundary && right_boundary && open < expression.size() &&
+          expression[open] == '(') {
+        return true;
+      }
+      cursor = after_name;
+    }
+  }
+  return false;
+}
+
+// Cheap, source-structural admission check for the exact-stack DSE candidate.
+// It deliberately recognizes no program, helper, or data representation: an
+// adjacent write followed by a same-target value-function assignment is the
+// high-level shape that can lower to store→call→overwrite. False positives are
+// harmless because the IR proof remains authoritative.
+bool program_may_have_exact_stack_dead_store(const V2Program& program) {
+  std::set<std::string> rule_names;
+  for (const V2Rule& rule : program.rules)
+    rule_names.insert(rule.name);
+  if (rule_names.empty())
+    return false;
+
+  std::function<bool(const std::vector<V2Statement>&)> inspect_statements;
+  std::function<bool(const V2Statement&)> inspect_statement;
+  inspect_statement = [&](const V2Statement& statement) {
+    if (inspect_statements(statement.body) ||
+        inspect_statements(statement.then_body) ||
+        inspect_statements(statement.else_body)) {
+      return true;
+    }
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.action != nullptr &&
+          (inspect_statement(*match_case.action) ||
+           inspect_statements(match_case.action->body))) {
+        return true;
+      }
+    }
+    return statement.otherwise != nullptr &&
+           (inspect_statement(*statement.otherwise) ||
+            inspect_statements(statement.otherwise->body));
+  };
+  inspect_statements = [&](const std::vector<V2Statement>& statements) {
+    for (std::size_t index = 0; index < statements.size(); ++index) {
+      const V2Statement& statement = statements[index];
+      if (index + 1U < statements.size()) {
+        const V2Statement& next = statements[index + 1U];
+        const bool writes_target =
+            (statement.kind == "v2_assign" || statement.kind == "v2_read") &&
+            statement.target.has_value();
+        if (writes_target && next.kind == "v2_assign" &&
+            next.target == statement.target && next.expr.has_value() &&
+            expression_invokes_named_rule(*next.expr, rule_names)) {
+          return true;
+        }
+      }
+      if (inspect_statement(statement))
+        return true;
+    }
+    return false;
+  };
+
+  if (inspect_statements(program.body))
+    return true;
+  return std::any_of(program.rules.begin(), program.rules.end(),
+                     [&](const V2Rule& rule) {
+                       return inspect_statements(rule.body);
+                     });
+}
+
 CompileResult compile_source_for_optimizer_profile(
     std::string source, const CompileOptions& requested_options) {
   const CompileOptions options = apply_source_feature_profile_hint(source, requested_options);
@@ -66435,6 +66525,9 @@ CompileResult compile_source_for_optimizer_profile(
   const bool may_use_packed_score_accumulator =
       selector_probe_program.has_value() &&
       packed_score_accumulator_helper_has_cost_effective_family(*selector_probe_program);
+  const bool may_use_exact_stack_dead_store =
+      selector_probe_program.has_value() &&
+      program_may_have_exact_stack_dead_store(*selector_probe_program);
   const bool use_packed_score_seed =
       options.fast_candidate_search && may_use_packed_score_accumulator;
   CompileOptions initial_options = options;
@@ -67160,6 +67253,15 @@ CompileResult compile_source_for_optimizer_profile(
                 "Reused X for copy-equivalent variables at scalar sites (conditions, near_any)");
   add_candidate([](CompileOptions& candidate_options) { candidate_options.coalesce_copies = true; },
                 "coalesce-copies", "Coalesced copy-related registers that never diverge");
+  if (may_use_exact_stack_dead_store) {
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.exact_stack_dead_store_elimination = true;
+        },
+        "exact-stack-dead-store",
+        "Removed stores proved dead through a following symbolic call by the "
+        "bounded exact-return-stack walk before address-sensitive lowering");
+  }
   if (source_has_comparison_guarded_update(source)) {
     add_candidate(
         [](CompileOptions& candidate_options) {

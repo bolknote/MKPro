@@ -133,6 +133,13 @@ core::passes::PassResult run_dead_store_elimination(const std::vector<IrOp>& ops
   return core::passes::dead_store_elimination(ops, core::passes::PassContext{.options = options});
 }
 
+core::passes::PassResult run_exact_stack_dead_store_elimination(const std::vector<IrOp>& ops) {
+  CompileOptions options;
+  options.exact_stack_dead_store_elimination = true;
+  return core::passes::early_exact_stack_dead_store_elimination(
+      ops, core::passes::PassContext{.options = options});
+}
+
 int store_count(const std::vector<IrOp>& ops) {
   return static_cast<int>(std::count_if(ops.begin(), ops.end(), [](const IrOp& op) {
     return op.kind == IrKind::Store || op.kind == IrKind::IndirectStore;
@@ -252,17 +259,24 @@ void dead_store_elimination_matches_typescript_contract() {
     };
     const core::passes::PassResult ordinary =
         run_dead_store_elimination(program);
+    require(ordinary.applied == 0,
+            "without the exact-stack option the ordinary pass must keep the "
+            "store joined through the other call continuation");
+    const core::passes::PassResult exact =
+        run_exact_stack_dead_store_elimination(program);
     CompileOptions options;
     const core::passes::PassResult finalized =
         core::passes::finalization_dead_store_elimination(
             program, core::passes::PassContext{.options = options});
-    require(ordinary.applied == 0 && finalized.applied == 1 &&
-                finalized.ops.front().kind == IrKind::Call &&
-                finalized.ops.front().meta.manual_interaction.has_value() &&
-                finalized.ops.front().meta.manual_interaction->kind ==
-                    ManualInteractionAnchorKind::ContinuousResume,
-            "finalization DSE should ignore another call site's continuation and "
-            "transfer the continuous-resume anchor");
+    for (const core::passes::PassResult* result : {&exact, &finalized}) {
+      require(result->applied == 1 && result->ops.front().kind == IrKind::Call &&
+                  result->ops.front().meta.manual_interaction.has_value() &&
+                  result->ops.front().meta.manual_interaction->kind ==
+                      ManualInteractionAnchorKind::ContinuousResume,
+              "the exact-return-stack proof should ignore another call site's "
+              "continuation and transfer the continuous-resume anchor in both "
+              "the exact-stack ordinary pass and finalization DSE");
+    }
   }
 
   {
@@ -307,11 +321,10 @@ void dead_store_elimination_matches_typescript_contract() {
             "continuous-resume anchor must not move onto or across an address operand");
   }
 
-  // A raw store overwritten right after an indirect call to a register-free
-  // helper (the entered()-then-normalize input head shape): ordinary liveness
-  // keeps the store because the helper's В/О joins every call continuation,
-  // but the finalization exact-call-stack proof removes it through the
-  // resolved indirect edge.
+  // A physical indirect target is not relocatable by the early pass. Removing
+  // address 4 would move the helper from 13 to 12 while leaving the selector's
+  // `indirect-target=13` proof stale. Finalization may still remove it because
+  // its caller performs selector retargeting and a final-CFG proof.
   {
     const std::vector<IrOp> program = {
         recall("2"),                            // addr 0
@@ -334,15 +347,51 @@ void dead_store_elimination_matches_typescript_contract() {
         ret(),                                  // addr 16
     };
     const core::passes::PassResult ordinary = run_dead_store_elimination(program);
+    require(ordinary.applied == 0,
+            "without the exact-stack option the ordinary pass must keep the raw store");
+    const core::passes::PassResult exact = run_exact_stack_dead_store_elimination(program);
     CompileOptions options;
     const core::passes::PassResult finalized =
         core::passes::finalization_dead_store_elimination(
             program, core::passes::PassContext{.options = options});
-    require(ordinary.applied == 0,
-            "ordinary DSE must keep the raw store joined through the helper В/О");
+    require(exact.applied == 0 && exact.ops.size() == program.size(),
+            "early exact-stack DSE must not invalidate a materialized indirect target");
     require(finalized.applied == 1 && store_count(finalized.ops) == store_count(program) - 1,
             "finalization DSE should prove the raw store dead across the resolved "
             "indirect call to a register-free helper");
+  }
+
+  {
+    const std::vector<IrOp> program = {
+        store("2"),
+        numeric_call(5),
+        store("2"),
+        halt(),
+        halt(),
+        ret(),
+    };
+    const core::passes::PassResult exact =
+        run_exact_stack_dead_store_elimination(program);
+    require(exact.applied == 0 && exact.ops.size() == program.size(),
+            "early exact-stack DSE must fail closed on numeric direct targets");
+  }
+
+  // The same shape with a helper that reads the stored register on one branch
+  // must fail closed: the exact walk reaches the read before the overwrite.
+  {
+    const std::vector<IrOp> program = {
+        store("2"),                             // addr 0: NOT dead
+        known_target_indirect_call("b", 5),     // addr 1
+        store("2"),                             // addr 2
+        recall("2"),                            // addr 3
+        halt(),                                 // addr 4
+        label("reader"),
+        recall("2"),                            // addr 5
+        ret(),                                  // addr 6
+    };
+    const core::passes::PassResult exact = run_exact_stack_dead_store_elimination(program);
+    require(exact.applied == 0,
+            "the exact proof must keep a store the callee reads before the overwrite");
   }
 }
 

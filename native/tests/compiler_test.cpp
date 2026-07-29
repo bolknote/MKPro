@@ -2462,6 +2462,71 @@ program EnteredCurrentX {
   require(entered_current_x.interaction_protocols.empty(),
           "unbounded entered() without a preceding prompt should not invent a protocol fact");
 
+  const std::string exact_stack_dse_source = R"mkpro(
+program ExactStackDeadStore {
+  state {
+    probe: packed = 0
+    y: packed = 0
+  }
+
+  loop {
+    probe = normalize(probe)
+    show(y)
+    y = entered()
+    y = normalize(y)
+    halt(y)
+  }
+
+  fn normalize(value) {
+    return value + 1
+  }
+}
+)mkpro";
+  const CompileResult exact_stack_baseline =
+      compile_source(exact_stack_dse_source, entered_test_options);
+  CompileOptions exact_stack_options = entered_test_options;
+  exact_stack_options.exact_stack_dead_store_elimination = true;
+  const CompileResult exact_stack_dse =
+      compile_source(exact_stack_dse_source, exact_stack_options);
+  require(exact_stack_baseline.implemented && exact_stack_dse.implemented &&
+              exact_stack_baseline.diagnostics.empty() &&
+              exact_stack_dse.diagnostics.empty(),
+          "exact-stack DSE high-level fixture should compile in both forms");
+  require(exact_stack_dse.steps.size() + 1U == exact_stack_baseline.steps.size(),
+          "early exact-stack DSE should remove exactly the raw entered() store");
+  require(has_optimization(exact_stack_dse,
+                           "exact-stack-dead-store-elimination"),
+          "high-level exact-stack fixture should report the early proof");
+
+  const auto run_exact_stack_fixture = [](const CompileResult& result) {
+    std::vector<int> codes;
+    codes.reserve(result.steps.size());
+    for (const ResolvedStep& step : result.steps)
+      codes.push_back(step.opcode);
+    emulator::MK61 calc;
+    const emulator::ProgramLoadResult loaded = calc.load_program(codes);
+    require(loaded.diagnostics.empty(),
+            "exact-stack DSE fixture should load in the emulator");
+    for (const PreloadReport& preload : result.preloads)
+      calc.set_register(preload.register_name, preload.value);
+    calc.press_sequence({"\u0412/\u041e", "\u0421/\u041f"});
+    const emulator::RunResult prompt = calc.run_until_stable(1200, 8);
+    require(prompt.stopped && calc.display_text() == "0,",
+            "exact-stack DSE fixture should stop at its input prompt");
+    calc.press_sequence({"3", "\u0421/\u041f"});
+    const emulator::RunResult answer = calc.run_until_stable(1200, 8);
+    require(answer.stopped,
+            "exact-stack DSE fixture should halt after normalization");
+    return calc.display_text();
+  };
+  const std::string exact_stack_baseline_display =
+      run_exact_stack_fixture(exact_stack_baseline);
+  const std::string exact_stack_dse_display =
+      run_exact_stack_fixture(exact_stack_dse);
+  require(exact_stack_baseline_display == "4," &&
+              exact_stack_dse_display == exact_stack_baseline_display,
+          "early DSE must preserve entered() normalization and resumable-stop behavior");
+
   const CompileResult bounded_manual_entry = compile_source(R"mkpro(
 program BoundedManualEntry {
   state {

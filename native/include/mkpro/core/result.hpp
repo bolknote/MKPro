@@ -354,6 +354,12 @@ struct CompileOptions {
   bool callee_hole_straight_line_helper = false;
   bool disable_interprocedural_opts = false;
   bool coalesce_copies = false;
+  // Run a dedicated first IR phase that uses a bounded exact-return-stack
+  // proof for the store→symbolic-call→overwrite shape. It refuses numeric or
+  // already materialized indirect targets; the finalization transaction owns
+  // those forms. Removing the store can surrender more profitable layout
+  // coincidences, so candidate search decides per program.
+  bool exact_stack_dead_store_elimination = false;
   bool aggressive_indirect_call_threshold = false;
   bool dual_use_constant_indirect_flow = false;
   bool aggressive_post_layout_indirect_flow = false;

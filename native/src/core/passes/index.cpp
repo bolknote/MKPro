@@ -234,6 +234,11 @@ RunOnIrResult run_passes_on_ir(std::vector<IrOp> initial, const CompileOptions& 
 
 const std::vector<IrPass>& pass_pipeline() {
   static const std::vector<IrPass> pipeline = {
+      // Exact joined-return DSE must run before every transformation that can
+      // materialize physical flow targets. The pass itself also requires a
+      // wholly symbolic CFG, so later fixed-point iterations fail closed once
+      // address-sensitive forms have appeared.
+      early_exact_stack_dead_store_elimination_pass(),
       redundant_prologue_elimination_pass(),
       tail_call_lowering_pass(),
       tail_branch_inversion_pass(),

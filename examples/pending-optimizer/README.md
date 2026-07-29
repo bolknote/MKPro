@@ -159,6 +159,21 @@ mode may reject over-window programs earlier than the analysis path.
   stores anchor the manual-entry protocol or feed indexed line updates. The
   remaining 31-cell gap will not come from register traffic; it requires
   structural changes.
+- A dedicated first IR phase can use the bounded exact-return-stack proof
+  (`exact_stack_dead_store_elimination`, candidate `exact-stack-dead-store`)
+  before any address-sensitive lowering. It accepts only a wholly symbolic CFG:
+  numeric operands, orphan address cells, and materialized indirect targets fail
+  closed and remain the responsibility of the retargeted finalization
+  transaction. The phase removes the raw entered() store and reproduces the
+  original listing's input head: С/П resumes directly on the normalize call and
+  raw `y` lives only in X. On this artifact the removal is a proved
+  pessimization, which is why the option is candidate-searched rather than
+  unconditional: the freed cell shifts the helper zone and the natural-target
+  solver loses the `cell_mask` one-cell-call coincidence (three direct two-cell
+  `ПП` replace three `К ПП d`), landing at 137; combining it with the
+  empty-stack loop-return pad recovers the coincidences but loses the
+  charged-selector reuse, tying at 136 again. The committed size baseline pins
+  that 136-cell equilibrium.
 - Optimizer tests must use unrelated synthetic programs and local proof
   obligations. The tic-tac-toe fixture may lock only its size and observable
   UI; it must not select or justify an optimization by recognizing this game
