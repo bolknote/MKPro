@@ -394,6 +394,11 @@ struct CompileOptions {
   bool packed_score_accumulator_helpers = false;
   bool canonicalize_repeated_unary_update_args = false;
   bool alternating_sign_toggle_args = false;
+  // Close the main program loop with one-cell empty-stack В/О returns behind
+  // a В/О pad at physical 00 (the MK-61 continues at 01 after an empty-stack
+  // В/О; see emulator_vo_empty_continuation_facts). Only applies when the
+  // main loop head is the very first emitted command.
+  bool empty_stack_loop_return = false;
   bool x_param_value_functions = false;
   bool x_param_y_stack_stored_entry = false;
   bool stack_argument_helper_entries = false;

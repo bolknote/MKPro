@@ -3408,6 +3408,158 @@ find_branch_to_stop_tail_selector_rewrite(const std::vector<MachineItem>& items,
   return std::nullopt;
 }
 
+// Replace a direct `БП` to physical 01 with a one-cell `В/О` when every
+// execution state of the branch has an empty return stack. The MK-61
+// continues at physical 01 after an empty-stack В/О (pinned emulator fact),
+// so the converted command transfers to the same target with the same stack.
+// Deletion of the operand cell is admitted only when it cannot break any
+// non-retargetable address encoding: every numeric direct operand and every
+// typed indirect target must lie before the erased operand (this pass runs
+// before selector values exist, so no preload retargeting is attempted).
+std::optional<BranchRewrite>
+find_empty_stack_loop_return_rewrite(const std::vector<MachineItem>& raw_items,
+                                     AddressSpaceModel model) {
+  const std::optional<std::vector<MachineItem>> normalized =
+      normalize_natural_target_overflow_formals(raw_items, model);
+  if (!normalized.has_value() || normalized->size() != raw_items.size())
+    return std::nullopt;
+  const std::vector<MachineItem>& items = *normalized;
+  const std::vector<MachineCell> cells = machine_cells(items);
+  const std::map<std::string, int> labels = machine_label_addresses(items);
+  const std::map<int, std::vector<std::string>> labels_by_address =
+      machine_labels_by_address(items);
+  const std::set<std::string> referenced = referenced_machine_labels(items);
+
+  std::optional<AuthoritativePostLayoutControlFlow> flow;
+
+  for (std::size_t index = 0; index + 1 < cells.size(); ++index) {
+    const MachineCell& branch = cells.at(index);
+    const MachineCell& address = cells.at(index + 1);
+    if (branch.item == nullptr || address.item == nullptr ||
+        branch.item->kind != MachineItemKind::Op ||
+        address.item->kind != MachineItemKind::Address || branch.item->opcode != 0x51) {
+      continue;
+    }
+    const std::optional<int> target = resolved_machine_target(address.item->target, labels);
+    if (!target.has_value() || *target != 1)
+      continue;
+    if (address_has_referenced_label(labels_by_address, referenced, address.address))
+      continue;
+
+    if (!flow.has_value()) {
+      PostLayoutControlFlowOptions control_options;
+      control_options.address_space_model = model;
+      control_options.empty_return_target = 1;
+      flow = build_post_layout_control_flow(items, control_options);
+      if (!flow->proved) {
+        PostLayoutControlFlowOptions bare_options;
+        bare_options.address_space_model = model;
+        flow = build_post_layout_control_flow(items, bare_options);
+      }
+      if (!flow->proved) {
+        if (trace_post_layout_enabled()) {
+          std::cerr << "[empty-stack-loop-return] control flow not proved:";
+          for (const std::string& reason : flow->reasons)
+            std::cerr << " | " << reason;
+          std::cerr << "\n";
+        }
+        return std::nullopt;
+      }
+    }
+
+    // Every execution state of the branch must carry an empty return stack;
+    // an unexplored branch (no execution state) fails closed.
+    bool reachable = false;
+    bool always_empty_stack = true;
+    for (const PostLayoutExecutionState& state : flow->execution_states) {
+      if (state.item_index != static_cast<std::size_t>(branch.item_index))
+        continue;
+      reachable = true;
+      if (!state.return_stack.empty()) {
+        always_empty_stack = false;
+        break;
+      }
+    }
+    if (!reachable || !always_empty_stack) {
+      if (trace_post_layout_enabled()) {
+        std::cerr << "[empty-stack-loop-return] branch at " << branch.address
+                  << (reachable ? " has a non-empty return stack" : " is unexplored") << "\n";
+      }
+      continue;
+    }
+
+    const auto deletion_is_encoding_safe = [&]() {
+      for (const MachineItem& item : items) {
+        if (item.kind == MachineItemKind::Address &&
+            std::holds_alternative<int>(item.target) &&
+            std::get<int>(item.target) >= address.address) {
+          if (trace_post_layout_enabled()) {
+            std::cerr << "[empty-stack-loop-return] numeric operand target "
+                      << std::get<int>(item.target) << " blocks deletion at "
+                      << address.address << "\n";
+          }
+          return false;
+        }
+      }
+      for (const auto& [item_index, identities] : flow->indirect_flow_targets) {
+        // At this pre-binding stage a symbolic indirect flow names its targets
+        // by label only; the late binder and the retunable-selector machinery
+        // derive every encoded address from the final layout, so such targets
+        // follow the shifted labels. A source without complete label-typed
+        // target meta may carry an already-frozen numeric encoding and fails
+        // closed.
+        const MachineItem& source = items.at(item_index);
+        const bool symbolic =
+            source.indirect_flow_targets.has_value() &&
+            !source.indirect_flow_targets->empty() &&
+            std::all_of(source.indirect_flow_targets->begin(),
+                        source.indirect_flow_targets->end(), [](const IrTarget& target) {
+                          return std::holds_alternative<std::string>(target);
+                        });
+        if (symbolic)
+          continue;
+        for (const PostLayoutCommandIdentity& identity : identities) {
+          if (identity.address >= address.address) {
+            if (trace_post_layout_enabled()) {
+              std::cerr << "[empty-stack-loop-return] indirect target " << identity.address
+                        << " (labels:";
+              for (const std::string& label : identity.labels)
+                std::cerr << " " << label;
+              std::cerr << ") from opcode " << source.opcode << " comment "
+                        << source.comment.value_or("<none>") << " blocks deletion at "
+                        << address.address << "\n";
+            }
+            return false;
+          }
+        }
+      }
+      return true;
+    };
+    if (!deletion_is_encoding_safe()) {
+      if (trace_post_layout_enabled()) {
+        std::cerr << "[empty-stack-loop-return] deletion unsafe for operand at "
+                  << address.address << "\n";
+      }
+      continue;
+    }
+
+    // The exact comment is the ecosystem-wide marker (see
+    // return_acts_as_address_one_jump in the CFG helpers): a later
+    // machine-to-IR raise must keep modeling this В/О with its physical-01
+    // continuation instead of treating it as a terminal return.
+    return BranchRewrite{
+        .branch_index = branch.item_index,
+        .address_index = address.item_index,
+        .opcode = 0x52,
+        .mnemonic = "В/О",
+        .comment = "optimized БП 01",
+        .source_line = branch.item->source_line,
+        .target = address.item->target,
+    };
+  }
+  return std::nullopt;
+}
+
 // Replace a direct `ПП addr` / `БП addr` with a one-cell indirect flow through
 // a stable register whose exact value at the branch site is proved by the
 // flow-sensitive stable-register value analysis over the authoritative
@@ -3984,6 +4136,83 @@ optimize_post_layout_super_dark_address_overlay(const std::vector<MachineItem>& 
   combined.applied += overlay.applied;
   combined.optimizations = std::move(optimizations);
   return combined;
+}
+
+PostLayoutIndirectFlowResult
+optimize_post_layout_empty_stack_loop_return(const std::vector<MachineItem>& items,
+                                             const CompileOptions& options) {
+  const AddressSpaceModel model = address_space_model_for_options(options);
+  std::vector<MachineItem> current = items;
+  int applied = 0;
+
+  for (int round = 0; round < kMaxRewrites; ++round) {
+    const std::optional<BranchRewrite> rewrite =
+        find_empty_stack_loop_return_rewrite(current, model);
+    if (!rewrite.has_value())
+      break;
+
+    // Apply by hand: the converted command is a plain В/О, not indirect flow.
+    std::vector<MachineItem> candidate;
+    candidate.reserve(current.size() - 1);
+    for (int index = 0; index < static_cast<int>(current.size()); ++index) {
+      if (index == rewrite->address_index)
+        continue;
+      if (index == rewrite->branch_index) {
+        MachineItem item = MachineItem::op(rewrite->opcode, rewrite->mnemonic);
+        item.comment = rewrite->comment;
+        if (rewrite->source_line.has_value())
+          item.source_line = *rewrite->source_line;
+        candidate.push_back(std::move(item));
+        continue;
+      }
+      candidate.push_back(current.at(static_cast<std::size_t>(index)));
+    }
+    if (machine_cell_count(candidate) >= machine_cell_count(current))
+      break;
+
+    // The converted artifact must independently re-prove with the pinned
+    // empty-return continuation, and that continuation must still be the
+    // physical cell 01 the deleted operand named.
+    const std::optional<std::vector<MachineItem>> verified =
+        normalize_natural_target_overflow_formals(candidate, model);
+    if (!verified.has_value())
+      break;
+    PostLayoutControlFlowOptions verify_options;
+    verify_options.address_space_model = model;
+    verify_options.empty_return_target = 1;
+    const AuthoritativePostLayoutControlFlow verify =
+        build_post_layout_control_flow(*verified, verify_options);
+    if (!verify.proved || !verify.empty_return_target.has_value() ||
+        verify.empty_return_target->address != 1) {
+      if (trace_post_layout_enabled())
+        std::cerr << "[empty-stack-loop-return] converted artifact failed re-proof\n";
+      break;
+    }
+
+    current = std::move(candidate);
+    ++applied;
+  }
+
+  if (applied == 0) {
+    return PostLayoutIndirectFlowResult{
+        .items = items,
+    };
+  }
+  return PostLayoutIndirectFlowResult{
+      .items = std::move(current),
+      .optimizations =
+          {
+              passes::AppliedOptimization{
+                  .name = "post-layout-empty-stack-loop-return",
+                  .detail = "Replaced " + std::to_string(applied) + " direct jump" +
+                            (applied == 1 ? "" : "s") +
+                            " to physical 01 with one-cell В/О after proving an empty "
+                            "return stack in every execution state (the MK-61 continues "
+                            "at 01 after an empty-stack В/О).",
+              },
+          },
+      .applied = applied,
+  };
 }
 
 PostLayoutIndirectFlowResult

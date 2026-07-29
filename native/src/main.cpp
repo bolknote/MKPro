@@ -1275,6 +1275,8 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       options.canonicalize_repeated_unary_update_args = true;
     } else if (arg == "--alternating-sign-toggle-args") {
       options.alternating_sign_toggle_args = true;
+    } else if (arg == "--empty-stack-loop-return") {
+      options.empty_stack_loop_return = true;
     } else if (arg == "--coalesce-copies") {
       options.coalesce_copies = true;
     } else if (arg == "--shared-straight-line-call-bodies") {

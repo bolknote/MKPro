@@ -113,6 +113,7 @@ void emulator_stack_dup_equivalence_matches_typescript_contract();
 void emulator_stack_resident_equivalence_matches_typescript_contract();
 void emulator_super_dark_matches_typescript_contract();
 void emulator_vo_return_matches_typescript_contract();
+void emulator_vo_empty_continuation_facts();
 void emulator_vp_splice_equivalence_matches_typescript_contract();
 void emulator_x2_dead_restore_matches_typescript_contract();
 void emulator_x2_preloaded_constant_matches_source_contract();
@@ -371,6 +372,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(emulator_stack_resident_equivalence_matches_typescript_contract),
       MKPRO_TEST(emulator_super_dark_matches_typescript_contract),
       MKPRO_TEST(emulator_vo_return_matches_typescript_contract),
+      MKPRO_TEST(emulator_vo_empty_continuation_facts),
       MKPRO_TEST(emulator_vp_splice_equivalence_matches_typescript_contract),
       MKPRO_TEST(emulator_x2_dead_restore_matches_typescript_contract),
       MKPRO_TEST(emulator_x2_preloaded_constant_matches_source_contract),

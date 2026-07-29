@@ -1716,6 +1716,170 @@ void post_layout_indirect_flow_matches_typescript_contract() {
                          }),
             "a forward direct flow must stay direct even when the charged value is known");
   }
+
+  // Empty-stack loop return: a direct БП to physical 01 with a provably empty
+  // return stack becomes a one-cell В/О (the machine continues at 01 after an
+  // empty-stack В/О; pinned by emulator_vo_empty_continuation_facts).
+  {
+    const std::vector<MachineItem> loop_program = [] {
+      std::vector<MachineItem> program = {
+          MachineItem::op(0x54, "К НОП"),
+          MachineItem::label("loop_head"),
+          MachineItem::op(0x60, "П→X 0"),
+          [] {
+            MachineItem stop = MachineItem::op(0x50, "С/П");
+            stop.stop_disposition = StopDisposition::Resumable;
+            return stop;
+          }(),
+          MachineItem::op(0x40, "X→П 0"),
+          MachineItem::op(0x5e, "F x=0"),
+          MachineItem::address("loop_other"),
+          MachineItem::op(0x53, "ПП"),
+          MachineItem::address("loop_helper"),
+          MachineItem::op(0x51, "БП"),
+          MachineItem::address("loop_head"),
+          MachineItem::label("loop_other"),
+          MachineItem::op(0x01, "1"),
+          MachineItem::op(0x41, "X→П 1"),
+          MachineItem::op(0x51, "БП"),
+          MachineItem::address("loop_head"),
+          MachineItem::label("loop_helper"),
+          MachineItem::op(0x22, "F x²"),
+          MachineItem::op(0x52, "В/О"),
+      };
+      return program;
+    }();
+
+    const core::PostLayoutIndirectFlowResult result =
+        core::optimize_post_layout_empty_stack_loop_return(loop_program, {});
+    require(result.applied == 2,
+            "both main-level jumps to physical 01 should become one-cell В/О");
+    require(core::machine_cell_count(result.items) ==
+                core::machine_cell_count(loop_program) - 2,
+            "each converted loop return should save exactly one cell");
+    int converted = 0;
+    for (const MachineItem& item : result.items) {
+      if (item.kind == MachineItemKind::Op && item.opcode == 0x52 &&
+          item.comment == "optimized БП 01") {
+        ++converted;
+      }
+    }
+    require(converted == 2, "converted loop returns should carry the shared В/О marker");
+    require(std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                        [](const core::passes::AppliedOptimization& optimization) {
+                          return optimization.name == "post-layout-empty-stack-loop-return";
+                        }),
+            "the loop-return rewrite should report its own optimization name");
+
+    // Behavioral equivalence over one full loop iteration on the emulator.
+    std::vector<std::string> observed;
+    for (const std::vector<MachineItem>* variant : {&loop_program, &result.items}) {
+      emulator::MK61 calc;
+      calc.load_program(resolved_opcodes(*variant));
+      calc.press("В/О");
+      calc.press("С/П");
+      const emulator::RunResult first = calc.run_until_stable(300, 5);
+      require(first.stopped, "both loop-return layouts should reach the first stop");
+      calc.press("С/П");
+      const emulator::RunResult second = calc.run_until_stable(300, 5);
+      require(second.stopped, "both loop-return layouts should loop back to the stop");
+      observed.push_back(calc.read_register("x") + "|" + calc.read_register("0"));
+    }
+    require(observed.at(0) == observed.at(1),
+            "the loop-return rewrite should preserve the observable loop behavior");
+  }
+
+  // The loop-return rewrite must fail closed for every unproved shape: a jump
+  // to a head that is not physical 01, a jump reachable with a non-empty
+  // return stack, and a deletion that would break a numeric operand encoding.
+  {
+    // Head at physical 02: the empty-stack В/О continuation is pinned to 01.
+    std::vector<MachineItem> wrong_head = {
+        MachineItem::op(0x54, "К НОП"),
+        MachineItem::op(0x54, "К НОП"),
+        MachineItem::label("wrong_head"),
+        MachineItem::op(0x60, "П→X 0"),
+        [] {
+          MachineItem stop = MachineItem::op(0x50, "С/П");
+          stop.stop_disposition = StopDisposition::Resumable;
+          return stop;
+        }(),
+        MachineItem::op(0x40, "X→П 0"),
+        MachineItem::op(0x51, "БП"),
+        MachineItem::address("wrong_head"),
+    };
+    const core::PostLayoutIndirectFlowResult wrong_head_result =
+        core::optimize_post_layout_empty_stack_loop_return(wrong_head, {});
+    require(wrong_head_result.applied == 0,
+            "a loop head away from physical 01 must not be converted");
+
+    // The jump to 01 sits inside a called helper: its execution state carries
+    // a return frame, and В/О would pop that frame instead of looping.
+    std::vector<MachineItem> framed = {
+        MachineItem::op(0x54, "К НОП"),
+        MachineItem::label("framed_head"),
+        MachineItem::op(0x60, "П→X 0"),
+        [] {
+          MachineItem stop = MachineItem::op(0x50, "С/П");
+          stop.stop_disposition = StopDisposition::Resumable;
+          return stop;
+        }(),
+        MachineItem::op(0x53, "ПП"),
+        MachineItem::address("framed_helper"),
+        MachineItem::op(0x51, "БП"),
+        MachineItem::address("framed_head"),
+        MachineItem::label("framed_helper"),
+        MachineItem::op(0x22, "F x²"),
+        MachineItem::op(0x5e, "F x=0"),
+        MachineItem::address("framed_exit"),
+        MachineItem::op(0x51, "БП"),
+        MachineItem::address("framed_head"),
+        MachineItem::label("framed_exit"),
+        MachineItem::op(0x52, "В/О"),
+    };
+    const core::PostLayoutIndirectFlowResult framed_result =
+        core::optimize_post_layout_empty_stack_loop_return(framed, {});
+    for (const core::passes::AppliedOptimization& optimization :
+         framed_result.optimizations) {
+      require(optimization.name != "post-layout-empty-stack-loop-return" ||
+                  framed_result.applied <= 1,
+              "only the empty-stack jump may be converted in the framed program");
+    }
+    // The main-level jump converts; the in-helper jump must survive as БП.
+    int framed_direct_jumps = 0;
+    for (const MachineItem& item : framed_result.items) {
+      if (item.kind == MachineItemKind::Op && item.opcode == 0x51)
+        ++framed_direct_jumps;
+    }
+    require(framed_direct_jumps >= 1,
+            "the helper's jump to 01 must stay direct because its return stack is not empty");
+
+    // A numeric operand beyond the deleted cell pins every later address.
+    std::vector<MachineItem> pinned = {
+        MachineItem::op(0x54, "К НОП"),
+        MachineItem::label("pinned_head"),
+        MachineItem::op(0x60, "П→X 0"),
+        [] {
+          MachineItem stop = MachineItem::op(0x50, "С/П");
+          stop.stop_disposition = StopDisposition::Resumable;
+          return stop;
+        }(),
+        MachineItem::op(0x40, "X→П 0"),
+        MachineItem::op(0x51, "БП"),
+        MachineItem::address("pinned_head"),
+        MachineItem::op(0x5e, "F x=0"),
+        MachineItem::address(8),
+        [] {
+          MachineItem stop = MachineItem::op(0x50, "С/П");
+          stop.stop_disposition = StopDisposition::Terminal;
+          return stop;
+        }(),
+    };
+    const core::PostLayoutIndirectFlowResult pinned_result =
+        core::optimize_post_layout_empty_stack_loop_return(pinned, {});
+    require(pinned_result.applied == 0,
+            "a numeric operand beyond the deleted cell must reject the loop-return rewrite");
+  }
 }
 
 } // namespace mkpro::tests

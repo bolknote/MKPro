@@ -33193,6 +33193,22 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
     if (!entered_with_errors && has_errors(context.diagnostics))
       return false;
     const std::string label = context.emitter.fresh_label("loop");
+    // Empty-stack В/О loop return: the MK-61 continues at physical 01 after
+    // an empty-stack В/О, so a main loop whose head sits at physical 01
+    // behind a one-cell entry pad can close with one-cell В/О commands
+    // (pinned by emulator_vo_empty_continuation_facts). The pad must stay
+    // IR-neutral (a В/О at the program entry would make everything after it
+    // unreachable for the IR passes), so it is emitted as К НОП and the
+    // loop-backs stay ordinary direct jumps; the early post-layout pass
+    // converts every proved empty-stack jump to this head into В/О before
+    // any selector value or anchor address is solved.
+    const bool empty_stack_loop_return =
+        context.empty_stack_loop_return && context.emitter.items.empty();
+    if (empty_stack_loop_return) {
+      context.emitter.emit_op(0x54, "К НОП",
+                              "entry pad: empty-stack В/О loop returns land at 01",
+                              statement.line);
+    }
     context.emitter.emit_label(label);
     const std::optional<std::string> previous_loop_label = context.current_loop_label;
     context.current_loop_label = label;
@@ -49237,6 +49253,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   context.stack_argument_helper_entries = options.stack_argument_helper_entries;
   context.stack_argument_function_entries = options.stack_argument_function_entries;
   context.setup_only_counted_loop_init = options.setup_only_counted_loop_init;
+  context.empty_stack_loop_return = options.empty_stack_loop_return;
   context.x_param_value_functions = options.x_param_value_functions;
   context.x_param_y_stack_stored_entry = options.x_param_y_stack_stored_entry;
   context.packed_score_accumulator_helpers = options.packed_score_accumulator_helpers;
@@ -49726,6 +49743,20 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                   " single-use procedure" + (single_use_inline.inlined == 1 ? "" : "s") +
                   " after proving a unique direct call and terminal return.",
     });
+  }
+  // Convert proved empty-stack jumps to physical 01 into one-cell В/О before
+  // any selector value or anchor address is solved, so every later layout
+  // decision is made on the shrunk artifact. The `empty_stack_loop_return`
+  // lowering option manufactures this shape with a К НОП entry pad.
+  {
+    const core::PostLayoutIndirectFlowResult loop_return =
+        core::optimize_post_layout_empty_stack_loop_return(post_layout_items, options);
+    if (loop_return.applied > 0) {
+      post_layout_items = loop_return.items;
+      post_layout_optimizations.insert(post_layout_optimizations.end(),
+                                       loop_return.optimizations.begin(),
+                                       loop_return.optimizations.end());
+    }
   }
   if (!exact_decimal_series) {
     const int indirect_flow_rescue_above =
@@ -52612,6 +52643,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";canonicalize_repeated_unary_update_args="
       << options.canonicalize_repeated_unary_update_args
       << ";alternating_sign_toggle_args=" << options.alternating_sign_toggle_args
+      << ";empty_stack_loop_return=" << options.empty_stack_loop_return
       << ";callee_hole_straight_line_helper=" << options.callee_hole_straight_line_helper
       << ";x_param_value_functions=" << options.x_param_value_functions
       << ";x_param_y_stack_stored_entry=" << options.x_param_y_stack_stored_entry
@@ -67378,6 +67410,14 @@ CompileResult compile_source_for_optimizer_profile(
       },
       "alternating-sign-toggle-callee-hole-shared-call",
       "Combined the sign toggle, callee-hole skeleton, and shared call-body helpers",
+      CandidateGate::SizeRescue);
+  add_candidate(
+      [](CompileOptions& candidate_options) {
+        candidate_options.empty_stack_loop_return = true;
+      },
+      "empty-stack-loop-return",
+      "Closed the entry-anchored main loop with one-cell empty-stack В/О returns behind a "
+      "В/О pad at physical 00",
       CandidateGate::SizeRescue);
   add_candidate(
       [](CompileOptions& candidate_options) { candidate_options.x_param_value_functions = true; },

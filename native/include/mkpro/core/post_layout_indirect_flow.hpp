@@ -43,6 +43,18 @@ PostLayoutIndirectFlowResult
 optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
                                      const std::vector<PreloadReport>& preloads,
                                      const CompileOptions& options = {});
+// Converts a direct `БП` to physical 01 into a one-cell `В/О` when the branch
+// provably runs on an empty return stack in every execution state: the MK-61
+// continues at physical 01 after an empty-stack В/О (pinned by
+// emulator_vo_empty_continuation_facts). Intended to run before any selector
+// value or anchor address is solved, so later layout machinery rebuilds the
+// geometry of the shrunk artifact itself. The `empty_stack_loop_return`
+// lowering option manufactures this shape by placing a one-cell К НОП entry
+// pad in front of the main loop head.
+PostLayoutIndirectFlowResult
+optimize_post_layout_empty_stack_loop_return(const std::vector<MachineItem>& items,
+                                             const CompileOptions& options = {});
+
 // Converts direct `ПП addr` / `БП addr` into one-cell indirect flow through a
 // stable register whose exact value at the branch site is proved by the
 // flow-sensitive stable-register value analysis. Intended to run after every

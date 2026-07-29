@@ -135,6 +135,15 @@ mode may reject over-window programs earlier than the analysis path.
   callee-hole selector `Re=51` for the direct `ПП 51` next to the charge-entry
   call, reducing the verified result from 137 to 136 cells. The remaining gap
   is 31 cells.
+- The empty-stack loop-return machinery (a one-cell `К НОП` entry pad at
+  physical 00 plus a post-layout pass converting proved empty-stack `БП 01`
+  into one-cell `В/О`, exploiting the documented `В/О`-as-`БП 01` continuation
+  pinned by `emulator_vo_empty_continuation_facts`) is size-neutral on this
+  artifact: the pad costs one cell, the two converted loop returns save two,
+  and the shifted geometry displaces one other proved rewrite, so padded and
+  unpadded full-search winners tie at 136 cells. The pass and the
+  `--empty-stack-loop-return` option remain available for shapes with three or
+  more main-level loop returns, where the pad amortizes.
 - Optimizer tests must use unrelated synthetic programs and local proof
   obligations. The tic-tac-toe fixture may lock only its size and observable
   UI; it must not select or justify an optimization by recognizing this game

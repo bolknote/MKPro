@@ -316,6 +316,7 @@ struct LoweringContext {
   bool stack_resident_temps = false;
   bool stack_argument_helper_entries = false;
   bool setup_only_counted_loop_init = false;
+  bool empty_stack_loop_return = false;
   bool x_param_value_functions = false;
   bool x_param_y_stack_stored_entry = false;
   bool stack_argument_function_entries = false;
