@@ -65918,10 +65918,20 @@ apply_finalization_dead_store_to_selected_result(
       selected.manual_startup_sequence.has_value())
     return std::nullopt;
 
+  const bool trace_finalization =
+      std::getenv("MKPRO_NATIVE_TRACE_FINALIZATION") != nullptr;
   const int initial_cells = core::machine_cell_count(selected.items);
   const core::passes::RunPassesResult finalized =
       core::passes::run_finalization_dead_store_elimination(selected.items,
                                                             options);
+  if (trace_finalization) {
+    std::cerr << "[finalization-dse] applied=" << finalized.applied
+              << " removed_addresses=";
+    for (const int address : finalized.removed_cell_addresses)
+      std::cerr << address << " ";
+    std::cerr << "cells=" << initial_cells << "->"
+              << core::machine_cell_count(finalized.items) << "\n";
+  }
   if (finalized.applied <= 0 ||
       finalized.removed_cell_addresses.size() != 1U ||
       core::machine_cell_count(finalized.items) != initial_cells - 1)
@@ -65963,6 +65973,15 @@ apply_finalization_dead_store_to_selected_result(
       core::plan_preloaded_indirect_flow_cell_erasure(
           *original, selected.preloads, original_control, *erased_item,
           erased_address, model);
+  if (trace_finalization) {
+    std::cerr << "[finalization-dse] erased_address=" << erased_address
+              << " rebind_proved=" << (selector_rebind.proved ? "yes" : "no")
+              << " setup=" << (selected.setup_program.has_value() ? "yes" : "no")
+              << " identical_preloads="
+              << (identical_preloads(selector_rebind.preloads, selected.preloads) ? "yes"
+                                                                                  : "no")
+              << "\n";
+  }
   if (!selector_rebind.proved ||
       (selected.setup_program.has_value() &&
        !identical_preloads(selector_rebind.preloads, selected.preloads))) {

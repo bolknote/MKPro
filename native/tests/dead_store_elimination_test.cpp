@@ -306,6 +306,44 @@ void dead_store_elimination_matches_typescript_contract() {
     require(result.applied == 0 && result.ops.front().kind == IrKind::Store,
             "continuous-resume anchor must not move onto or across an address operand");
   }
+
+  // A raw store overwritten right after an indirect call to a register-free
+  // helper (the entered()-then-normalize input head shape): ordinary liveness
+  // keeps the store because the helper's В/О joins every call continuation,
+  // but the finalization exact-call-stack proof removes it through the
+  // resolved indirect edge.
+  {
+    const std::vector<IrOp> program = {
+        recall("2"),                            // addr 0
+        recall("1"),                            // addr 1
+        halt(),                                 // addr 2
+        store("1"),                             // addr 3
+        store("2"),                             // addr 4: dead raw store
+        known_target_indirect_call("b", 13),    // addr 5
+        store("2"),                             // addr 6
+        recall("1"),                            // addr 7
+        known_target_indirect_call("b", 13),    // addr 8
+        store("1"),                             // addr 9
+        recall("2"),                            // addr 10
+        recall("1"),                            // addr 11
+        halt(),                                 // addr 12
+        label("grid_norm"),
+        plain(0x34, "К [x]"),                   // addr 13
+        plain(0x04, "4"),                       // addr 14
+        plain(0x13, "÷"),                       // addr 15
+        ret(),                                  // addr 16
+    };
+    const core::passes::PassResult ordinary = run_dead_store_elimination(program);
+    CompileOptions options;
+    const core::passes::PassResult finalized =
+        core::passes::finalization_dead_store_elimination(
+            program, core::passes::PassContext{.options = options});
+    require(ordinary.applied == 0,
+            "ordinary DSE must keep the raw store joined through the helper В/О");
+    require(finalized.applied == 1 && store_count(finalized.ops) == store_count(program) - 1,
+            "finalization DSE should prove the raw store dead across the resolved "
+            "indirect call to a register-free helper");
+  }
 }
 
 } // namespace mkpro::tests

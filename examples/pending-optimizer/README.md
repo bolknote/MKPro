@@ -144,6 +144,21 @@ mode may reject over-window programs earlier than the analysis path.
   unpadded full-search winners tie at 136 cells. The pass and the
   `--empty-stack-loop-return` option remain available for shapes with three or
   more main-level loop returns, where the pad amortizes.
+- A register-traffic audit of the 136-cell winner found 47 cells of register
+  stores/recalls, of which exactly one is provably dead: the raw `y = entered()`
+  store, overwritten by the normalized value right after a `grid_norm` call that
+  touches no registers. The finalization dead-store pass already proves it (the
+  exact-call-stack proof walks the resolved indirect call; regression-tested on
+  a synthetic head shape), but the one-cell erasure fails closed in the selector
+  rebind: it would shift the callee-hole charge entry off physical 99, which the
+  layout deliberately pinned so the `-99999999` occupied-cell sentinel doubles
+  as its charge constant, and the sentinel value is part of the visible UI
+  contract. Every other register cell is live or protocol-pinned: the 22
+  coordinate recalls cross helper calls that destroy X, the eight save/restore
+  copies track the best move while both values stay live, and the remaining
+  stores anchor the manual-entry protocol or feed indexed line updates. The
+  remaining 31-cell gap will not come from register traffic; it requires
+  structural changes.
 - Optimizer tests must use unrelated synthetic programs and local proof
   obligations. The tic-tac-toe fixture may lock only its size and observable
   UI; it must not select or justify an optimization by recognizing this game
