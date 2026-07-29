@@ -2465,20 +2465,18 @@ program EnteredCurrentX {
   const std::string exact_stack_dse_source = R"mkpro(
 program ExactStackDeadStore {
   state {
-    probe: packed = 0
+    x: packed = 0
     y: packed = 0
   }
 
   loop {
-    probe = normalize(probe)
-    show(y)
+    preview(y)
+    show(x)
+    x = entered()
     y = entered()
-    y = normalize(y)
-    halt(y)
-  }
-
-  fn normalize(value) {
-    return value + 1
+    y = grid_norm(y)
+    x = grid_norm(x)
+    halt(x + y)
   }
 }
 )mkpro";
@@ -2513,7 +2511,13 @@ program ExactStackDeadStore {
     const emulator::RunResult prompt = calc.run_until_stable(1200, 8);
     require(prompt.stopped && calc.display_text() == "0,",
             "exact-stack DSE fixture should stop at its input prompt");
-    calc.press_sequence({"3", "\u0421/\u041f"});
+    calc.input_number("3", true);
+    calc.press("\u041f\u041f");
+    const emulator::RunResult x_phase = calc.run_until_stable(1200, 8);
+    require(x_phase.stopped,
+            "exact-stack DSE fixture should stop after the single-step X input");
+    calc.input_number("4", true);
+    calc.press("\u0421/\u041f");
     const emulator::RunResult answer = calc.run_until_stable(1200, 8);
     require(answer.stopped,
             "exact-stack DSE fixture should halt after normalization");
@@ -2523,7 +2527,7 @@ program ExactStackDeadStore {
       run_exact_stack_fixture(exact_stack_baseline);
   const std::string exact_stack_dse_display =
       run_exact_stack_fixture(exact_stack_dse);
-  require(exact_stack_baseline_display == "4," &&
+  require(exact_stack_baseline_display == "7," &&
               exact_stack_dse_display == exact_stack_baseline_display,
           "early DSE must preserve entered() normalization and resumable-stop behavior");
 

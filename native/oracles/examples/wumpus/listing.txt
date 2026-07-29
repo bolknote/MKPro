@@ -89,14 +89,14 @@
    23 |  26  | 26                      | false branch for >=
    24 |  03  | 3                       |
    25 |  45  | X→П 5                   | set clue
-   26 |  60  | П→X 0                   | display __inline_show_47_0 source
+   26 |  60  | П→X 0                   | display __inline_show_48_0 source
    27 |  6B  | П→X b                   | preload const 10
-   28 |  13  | ÷                       | display __inline_show_47_0 decimal point
-   29 |  66  | П→X 6                   | display __inline_show_47_0 integer part
-   30 |  10  | +                       | display __inline_show_47_0 integer append
-   31 |  50  | С/П                     | show __inline_show_47_0
-   32 |  65  | П→X 5                   | display __inline_show_48_1 source
-   33 |  50  | С/П                     | show __inline_show_48_1
+   28 |  13  | ÷                       | display __inline_show_48_0 decimal point
+   29 |  66  | П→X 6                   | display __inline_show_48_0 integer part
+   30 |  10  | +                       | display __inline_show_48_0 integer append
+   31 |  50  | С/П                     | show __inline_show_48_0
+   32 |  65  | П→X 5                   | display __inline_show_49_1 source
+   33 |  50  | С/П                     | show __inline_show_49_1
    34 |  47  | X→П 7                   | read target
    35 |  59  | F x≥0                   | false branch for >=
    36 |  42  | 42                      | false branch for >=
