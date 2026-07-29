@@ -59,6 +59,18 @@ void emulator_indirect_incdec_facts_match_typescript_contract() {
     require(std::stoi(after_indirect_access(r, "5")) == 5,
             "R7..RE should remain unchanged on indirect access");
 
+  // Stable registers still receive the transformed selector value back: a
+  // negative selector is rewritten to its nine-padded form on first use, and
+  // only the eight-digit form is a fixed point of that write-back.  This is
+  // why a sign-toggled selector must carry an eight-digit magnitude to keep
+  // its observable data value stable.
+  for (const int r : {7, 8})
+    require(std::stoi(after_indirect_access(r, "-18")) == -99999918,
+            "stable registers should normalize negative selectors to the nine-padded form");
+  for (const int r : {7, 8})
+    require(std::stoi(after_indirect_access(r, "-99999918")) == -99999918,
+            "the nine-padded negative form should be a write-back fixed point");
+
   for (const int r : {0, 1, 2, 3})
     require(std::stoi(after_indirect_access(r, "1")) == 0,
             "R0..R3 pre-decrement should reach zero from one");

@@ -201,9 +201,8 @@
   >7F | 67    | 67                      | false branch for ==
   >80 | 05 01 | 51                      | callee-hole selector-value=51 indirect-target=51
   >82 | AA    | К ПП a                  | callee-hole charge-entry call; proof=__callee_hole_helper_0; selector=e; preloaded Ra=-99999999 indirect-target=99 indirect flow
-  >83 | 53    | ПП                      | packed_score accumulator helper
-  >84 | 51    | 51                      | packed_score accumulator helper
-  >85 | 63    | П→X 3                   | recall best_score
-  >86 | 36    | К max                   | max-assignment update
-  >87 | 51    | БП                      |
-  >88 | 59    | 59                      |
+  >83 | AE    | К ПП e                  | packed_score accumulator helper; reused runtime-charged Re=51 indirect-target=51 direct flow
+  >84 | 63    | П→X 3                   | recall best_score
+  >85 | 36    | К max                   | max-assignment update
+  >86 | 51    | БП                      |
+  >87 | 59    | 59                      |

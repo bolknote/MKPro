@@ -15,7 +15,7 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 137 | 105 | +32 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 136 | 105 | +31 | pending optimizer |
 | `nekromant.mkpro` | 222 | 105 | +117 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
@@ -114,6 +114,27 @@ mode may reject over-window programs earlier than the analysis path.
   the generic natural-target layout then carries bounded helper entries through
   a proved fallthrough split and reduces the result to 137 cells. The remaining
   gap is 32 cells.
+- The natural-target layout now admits sign-toggled stable selectors: a
+  register written only by proved uninterruptible `П->X r; /-/; X->П r`
+  triples stays a valid flow anchor when both signed spellings decode to the
+  same target and are fixed points of the machine's selector write-back
+  (eight-digit magnitudes such as `±99999999` -> `99`). The pinned write-back
+  emulator fact also proves two-target sign selectors are unsound on stable
+  registers, closing that line of investigation. The current artifact contains
+  no toggle triple on a stable register, so this is enabling infrastructure
+  (for example, for carrying a runtime-toggled mark sign inside an existing
+  selector constant) rather than an immediate saving; the verified result
+  stays at 137 cells.
+- The charged-selector direct-flow reuse pass converts a direct `ПП addr` /
+  `БП addr` into a one-cell `К`-form when a flow-sensitive value analysis over
+  the execution-state graph proves a stable register holds exactly that
+  address on every reaching path (from a preload or a runtime charge the
+  program already performs for another indirect consumer), the value is a
+  write-back fixed point, and the one-cell deletion cannot break any
+  non-retargetable encoding. On this artifact it reuses the runtime-charged
+  callee-hole selector `Re=51` for the direct `ПП 51` next to the charge-entry
+  call, reducing the verified result from 137 to 136 cells. The remaining gap
+  is 31 cells.
 - Optimizer tests must use unrelated synthetic programs and local proof
   obligations. The tic-tac-toe fixture may lock only its size and observable
   UI; it must not select or justify an optimization by recognizing this game

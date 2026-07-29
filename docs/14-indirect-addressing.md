@@ -87,6 +87,21 @@ Use these registers when you want post-increment table traversal. Use
 For `R7`..`Re`, the selector is used without the `R0`..`R6` counter update.
 These registers are best for stable computed addresses.
 
+Note that "no counter update" does not mean "no write at all": every indirect
+access writes the transformed selector value back into the register. For a
+non-negative integer the transform is the identity, but a negative selector is
+rewritten to its nine-padded form on first use (`-18` becomes `-99999918`).
+Only eight-digit magnitudes are fixed points of that write-back. Emulator fact:
+`emulator_indirect_incdec_facts_match_typescript_contract`.
+
+One consequence: a register that alternates between `+v` and `-v` (a sign
+toggle) cannot serve as a *two-target* selector on `R7`..`Re`. Two distinct
+targets per sign require a short magnitude (`+5` -> `05`, `-5` -> `95`), but
+the first negative-phase access rewrites the value to `-99999995`, after which
+both phases decode to `95`. Sign-toggled selectors are therefore only sound in
+the sign-invariant form with an eight-digit magnitude (`±99999999` -> `99`,
+`±99999918` -> `18`), which the natural-target layout pass admits.
+
 This is especially useful with formal addresses containing hex digits. For
 example, if `R7` contains `FA`..`FF`, then `К БП 7` enters the super-dark branch
 family without consuming a following address byte. That leaves addresses

@@ -51405,6 +51405,56 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
     });
   }
 
+  // With every selector charge materialized (including late-bound decimal
+  // charges), a runtime-charged stable register may now serve additional
+  // direct flows to the address it already delivers. The pass proves the
+  // register value on every path through the execution-state graph and fails
+  // closed on anything it cannot retarget after the one-cell deletion.
+  {
+    std::vector<PreloadReport> charged_input;
+    const auto merge_preloads = [&](const std::vector<PreloadReport>& preloads) {
+      for (const PreloadReport& preload : preloads) {
+        const bool present =
+            std::any_of(charged_input.begin(), charged_input.end(),
+                        [&](const PreloadReport& existing) {
+                          return existing.register_name == preload.register_name;
+                        });
+        if (!present)
+          charged_input.push_back(preload);
+      }
+    };
+    if (final_layout_effective_preloads.has_value())
+      merge_preloads(*final_layout_effective_preloads);
+    merge_preloads(stop_tail_preloads);
+    merge_preloads(post_layout_flow_preloads);
+    const core::PostLayoutIndirectFlowResult charged_flow =
+        core::optimize_post_layout_charged_selector_flow(post_layout_items, charged_input,
+                                                         options);
+    if (charged_flow.applied > 0) {
+      post_layout_items = charged_flow.items;
+      std::map<std::string, std::string> retargeted_by_register;
+      for (const PreloadReport& preload : charged_flow.preloads)
+        retargeted_by_register[preload.register_name] = preload.value;
+      const auto apply_retarget = [&](std::vector<PreloadReport>& preloads) {
+        for (PreloadReport& preload : preloads) {
+          const auto it = retargeted_by_register.find(preload.register_name);
+          if (it != retargeted_by_register.end())
+            preload.value = it->second;
+        }
+      };
+      apply_retarget(post_layout_flow_preloads);
+      apply_retarget(stop_tail_preloads);
+      apply_retarget(setup_preloads);
+      if (final_layout_effective_preloads.has_value())
+        apply_retarget(*final_layout_effective_preloads);
+      for (const auto& [register_name, value] : retargeted_by_register)
+        post_layout_preload_overrides[register_name] = value;
+      post_layout_optimizations.insert(post_layout_optimizations.end(),
+                                       charged_flow.optimizations.begin(),
+                                       charged_flow.optimizations.end());
+    }
+  }
+
   const std::set<std::string> final_borrowed_entry_selector_registers =
       borrowed_entry_selector_registers_for(post_layout_items);
   if (!final_borrowed_entry_selector_registers.empty()) {
@@ -54016,6 +54066,7 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
   std::set<std::string> poisoned;
   bool all_poisoned = false;
   std::set<std::size_t> proved_charge_entry_calls;
+  std::vector<std::size_t> charged_reuse_calls;
   for (std::size_t index = 0; index < steps.size(); ++index) {
     if (resolved_flow.address_operand.at(index))
       continue;
@@ -54119,7 +54170,19 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
           core::register_name_for_index(step.opcode & 0x0f);
       const bool is_callee_hole = step.comment.has_value() &&
                                   step.comment->starts_with(kCalleeHoleCallMarker);
-      if (!is_callee_hole && !scoped_registers.contains(register_name))
+      // A post-layout charged-selector reuse reads the selector without
+      // changing it: for a stable register the two-digit nonnegative charge
+      // is a write-back fixed point, so the hole protocol stays intact. The
+      // claim itself is re-validated below against the independently derived
+      // charge inventory once every charge has been collected.
+      const bool is_charged_reuse =
+          (((step.opcode & 0xf0) == 0x80) || ((step.opcode & 0xf0) == 0xa0)) &&
+          step.comment.has_value() &&
+          step.comment->find("reused runtime-charged R" + register_name + "=") !=
+              std::string::npos;
+      if (is_charged_reuse)
+        charged_reuse_calls.push_back(index);
+      else if (!is_callee_hole && !scoped_registers.contains(register_name))
         poisoned.insert(register_name);
     }
     if (step.opcode >= 0xb0 && step.opcode <= 0xbe) {
@@ -54152,6 +54215,44 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
         if (!scoped_registers.contains(target))
           poisoned.insert(target);
       }
+    }
+  }
+
+  // Re-validate every charged-selector reuse against the charge inventory
+  // derived above: the annotated value must be a literal this program
+  // provably charges into that register, and for a stable selector the value
+  // must equal its own two-digit decode target, which also makes it a
+  // write-back fixed point that cannot disturb the hole protocol.
+  for (const std::size_t index : charged_reuse_calls) {
+    const ResolvedStep& step = steps.at(index);
+    const std::string register_name =
+        core::register_name_for_index(step.opcode & 0x0f);
+    const std::string value_marker = "reused runtime-charged R" + register_name + "=";
+    const std::size_t value_begin = step.comment->find(value_marker) + value_marker.size();
+    const std::size_t value_end = step.comment->find(' ', value_begin);
+    const std::optional<int> claimed_target = indirect_target_from_comment(step.comment, options);
+    std::optional<int> claimed_value;
+    if (value_end != std::string::npos) {
+      try {
+        std::size_t consumed = 0;
+        const std::string text = step.comment->substr(value_begin, value_end - value_begin);
+        const int parsed = std::stoi(text, &consumed);
+        if (consumed == text.size())
+          claimed_value = parsed;
+      } catch (const std::exception&) {
+      }
+    }
+    const bool stable_selector = (step.opcode & 0x0f) >= 7;
+    const auto register_charges = charged_values.find(register_name);
+    const bool charged =
+        claimed_value.has_value() && claimed_target.has_value() &&
+        register_charges != charged_values.end() &&
+        register_charges->second.contains(*claimed_target) &&
+        register_charges->second.at(*claimed_target).contains(*claimed_value);
+    if (!charged || !stable_selector || *claimed_value != *claimed_target ||
+        *claimed_value < 0 || *claimed_value > 99) {
+      return reject("charged-selector reuse at address " + std::to_string(step.address) +
+                    " does not match a proved charge of R" + register_name);
     }
   }
 
@@ -69270,6 +69371,13 @@ CompileResult compile_source_for_optimizer_profile(
                     << " implemented=" << (finalized.implemented ? "yes" : "no")
                     << " proved=" << (final_static_proof_accepted ? "yes" : "no")
                     << " steps=" << finalized.steps.size() << " ms=" << elapsed << "\n";
+          if (!final_static_proof_accepted && !finalist_group.equivalents.empty()) {
+            const std::optional<std::string> gate_reason =
+                optimizer_static_gate_rejection_reason(
+                    finalist_group.equivalents.front().options, finalized);
+            std::cerr << "[candidate-trace] final-gate-reason "
+                      << gate_reason.value_or("(none)") << "\n";
+          }
         }
         if (!finalized.implemented || !final_static_proof_accepted) {
           continue;

@@ -818,6 +818,7 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `post-layout-empty-stack-tail-call` — after post-layout indirect flow has proven a one-cell loop-back selector, replaces a terminal main-loop `ПП proc; К БП r` with `БП proc` when the deleted jump targets cell 0. The final `В/О` then returns through the empty stack to the same loop head, and generated selector preloads are retargeted if the deletion shifts later entries.
 - `post-layout-stop-tail-reuse` — after preloaded indirect-flow has proved a reusable stop tail, replaces repeated `С/П; loop` tails and direct branches to those shims with one-cell indirect jumps/conditionals to the existing stop tail, retargeting generated selector preloads when deleted cells shift later targets.
 - `runtime-indirect-call-flow` — for repeated backward helper calls with legal numeric targets, initializes a dead stable register once at runtime and replaces direct `ПП addr` pairs with one-cell `К ПП r` calls.
+- `post-layout-charged-selector-flow` — runs after every selector charge (including late-bound decimal charges) has been materialized. A flow-sensitive value analysis over the authoritative execution-state graph proves that a stable register holds one exact literal on every path reaching a direct `ПП addr` / `БП addr`; when that literal decodes to the same backward target and is a fixed point of the selector write-back, the two-cell direct flow becomes a one-cell `К ПП r` / `К БП r`. Value sources are deliberately narrow (literal preloads, uninterrupted integer digit entry stored via `X->П r`, recalls of tracked registers, `/-/` of a known X, and the machine's own write-back); everything else — arithmetic, fractional entry, indirect stores, manual external entries — poisons the tracked slot, and the deletion is admitted only when it cannot break a non-retargetable address encoding. The callee-hole static gate re-validates each such reuse against its independently derived charge inventory.
 - `preloaded-super-dark-flow` — super-dark path with a preloaded indirect target.
 - `super-dark-address-code-overlay` — compares ordinary post-layout indirect
   flow with the composed candidate `address-code-overlay` followed by
@@ -852,6 +853,17 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `destructive-selector-operand-order` — when a commutative expression has one operand that can use direct `bank[int(selector)]` indirect addressing and the other operand still needs the same selector's fractional tail, schedules the fractional operand first so the MK-61 selector mutation happens only after that tail is safely on the stack.
 - `r0-fractional-sentinel` — uses a fractional-state sentinel in R0 to steer tables and to replace proved direct flow to address 99 (`БП`, `ПП`, or `F x?0`, numeric or post-layout label-resolved) with one-cell `К БП/К ПП/К x?0 0` when the R0 mutation is dead. The R0-fractional proof is preserved through unrelated indirect memory operations, but not through indirect flow.
 - `super-dark-dispatch` — enables FA..FF range routing for shorter jumps with strictly valid address neighborhoods.
+- `sign-toggled-selector` — the natural-target component layout may admit a
+  stable `R7..Re` selector register that *is* written at runtime, when every
+  write is the exact uninterruptible triple `П->X r; /-/; X->П r` (proved on
+  the execution-state graph), both signed spellings decode to the same flow
+  target, and both are fixed points of the machine's selector write-back
+  (eight-digit magnitudes such as `±99999999` -> `99`). This lets one register
+  carry a runtime-toggled data sign and still anchor indirect flow. Two-target
+  sign selectors (`+5` -> `05` / `-5` -> `95`) are rejected as unsound: the
+  first negative-phase access rewrites the register to its nine-padded form
+  and permanently changes the positive-phase decode (see
+  `docs/14-indirect-addressing.md` and the pinned write-back emulator fact).
 
 ## 8) Spatial and coordinate-list optimization family
 

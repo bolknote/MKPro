@@ -43,6 +43,16 @@ PostLayoutIndirectFlowResult
 optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
                                      const std::vector<PreloadReport>& preloads,
                                      const CompileOptions& options = {});
+// Converts direct `ПП addr` / `БП addr` into one-cell indirect flow through a
+// stable register whose exact value at the branch site is proved by the
+// flow-sensitive stable-register value analysis. Intended to run after every
+// charge value (including late-bound decimal selector charges) has been
+// materialized, so runtime-charged registers can serve additional direct
+// flows to the address they already deliver.
+PostLayoutIndirectFlowResult
+optimize_post_layout_charged_selector_flow(const std::vector<MachineItem>& items,
+                                           const std::vector<PreloadReport>& preloads,
+                                           const CompileOptions& options = {});
 
 int machine_cell_count(const std::vector<MachineItem>& items);
 

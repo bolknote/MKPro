@@ -9,6 +9,7 @@
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <iostream>
 #include <map>
 #include <optional>
 #include <string>
@@ -1568,6 +1569,152 @@ void post_layout_indirect_flow_matches_typescript_contract() {
       require(machine_items_equal(result.items.at(index), program.at(index)),
               "x!=0 conditional rejection should preserve items exactly");
     }
+  }
+
+  // Runtime-charged selector reuse: a direct backward call to an address that
+  // a stable register provably holds on every path becomes a one-cell
+  // indirect call.
+  {
+    const auto charged_program = [](bool clobber) {
+      std::vector<MachineItem> program = {
+          MachineItem::op(0x51, "БП"),
+          MachineItem::address("charged_start"),
+          MachineItem::label("charged_helper"),
+          MachineItem::op(0x22, "F x²"),
+          MachineItem::op(0x52, "В/О"),
+          MachineItem::label("charged_start"),
+          MachineItem::op(0x00, "0"),
+          MachineItem::op(0x02, "2"),
+          MachineItem::op(0x48, "X→П 8"),
+      };
+      if (clobber) {
+        program.push_back(MachineItem::op(0x10, "+"));
+        program.push_back(MachineItem::op(0x48, "X→П 8"));
+      }
+      program.push_back(MachineItem::op(0x53, "ПП"));
+      program.push_back(MachineItem::address("charged_helper"));
+      MachineItem stop = MachineItem::op(0x50, "С/П");
+      stop.stop_disposition = StopDisposition::Terminal;
+      program.push_back(std::move(stop));
+      return program;
+    };
+
+    const std::vector<MachineItem> program = charged_program(false);
+    const core::PostLayoutIndirectFlowResult result =
+        core::optimize_post_layout_stop_tail_reuse(program, {});
+    require(result.applied == 1 &&
+                core::machine_cell_count(result.items) ==
+                    core::machine_cell_count(program) - 1,
+            "a runtime-charged stable register should shorten a backward direct call");
+    require(std::any_of(result.items.begin(), result.items.end(),
+                        [](const MachineItem& item) {
+                          return item.kind == MachineItemKind::Op && item.opcode == 0xa8;
+                        }),
+            "the charged rewrite should emit К ПП 8");
+    require(std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                        [](const core::passes::AppliedOptimization& optimization) {
+                          return optimization.name == "post-layout-charged-selector-flow";
+                        }),
+            "the charged rewrite should report its own optimization name");
+
+    // The machine may re-deliver the selector in its raw zero-padded BCD form
+    // (2 -> 00000002); that spelling is numerically identical and cannot be
+    // distinguished by any machine operation, so states are compared after
+    // numeric canonicalization.
+    const auto canonical_number = [](std::string text) {
+      std::erase(text, ' ');
+      std::replace(text.begin(), text.end(), ',', '.');
+      if (!text.empty() && text.back() == '.')
+        text.pop_back();
+      const std::size_t sign = !text.empty() && text.front() == '-' ? 1U : 0U;
+      std::size_t nonzero = sign;
+      while (nonzero + 1U < text.size() && text.at(nonzero) == '0' &&
+             std::isdigit(static_cast<unsigned char>(text.at(nonzero + 1U))) != 0) {
+        ++nonzero;
+      }
+      return text.substr(0, sign) + text.substr(nonzero);
+    };
+    std::vector<std::pair<std::string, std::string>> observed;
+    for (const std::vector<MachineItem>* variant : {&program, &result.items}) {
+      emulator::MK61 calc;
+      calc.load_program(resolved_opcodes(*variant));
+      calc.press("В/О");
+      calc.press("С/П");
+      const emulator::RunResult run = calc.run_until_stable(300, 5);
+      require(run.stopped, "both charged-selector layouts should stop");
+      observed.emplace_back(canonical_number(calc.read_register("x")),
+                            canonical_number(calc.read_register("8")));
+    }
+    require(observed.at(0) == observed.at(1),
+            "the charged-selector rewrite should preserve the numeric X and R8 state");
+
+    const std::vector<MachineItem> clobbered = charged_program(true);
+    const core::PostLayoutIndirectFlowResult rejected =
+        core::optimize_post_layout_stop_tail_reuse(clobbered, {});
+    require(rejected.applied == 0,
+            "an unknown overwrite between the charge and the call must reject the rewrite");
+  }
+
+  // A join of two different charged values must not prove either one, and a
+  // forward flow (target after the operand cell) stays direct even when the
+  // value is known.
+  {
+    std::vector<MachineItem> ambiguous = {
+        MachineItem::op(0x51, "БП"),
+        MachineItem::address("ambiguous_start"),
+        MachineItem::label("ambiguous_helper"),
+        MachineItem::op(0x22, "F x²"),
+        MachineItem::op(0x52, "В/О"),
+        MachineItem::label("ambiguous_start"),
+        MachineItem::op(0x5e, "F x=0"),
+        MachineItem::address("ambiguous_other"),
+        MachineItem::op(0x00, "0"),
+        MachineItem::op(0x02, "2"),
+        MachineItem::op(0x48, "X→П 8"),
+        MachineItem::op(0x51, "БП"),
+        MachineItem::address("ambiguous_join"),
+        MachineItem::label("ambiguous_other"),
+        MachineItem::op(0x00, "0"),
+        MachineItem::op(0x03, "3"),
+        MachineItem::op(0x48, "X→П 8"),
+        MachineItem::label("ambiguous_join"),
+        MachineItem::op(0x53, "ПП"),
+        MachineItem::address("ambiguous_helper"),
+    };
+    MachineItem stop = MachineItem::op(0x50, "С/П");
+    stop.stop_disposition = StopDisposition::Terminal;
+    ambiguous.push_back(std::move(stop));
+
+    const core::PostLayoutIndirectFlowResult result =
+        core::optimize_post_layout_stop_tail_reuse(ambiguous, {});
+    require(std::none_of(result.optimizations.begin(), result.optimizations.end(),
+                         [](const core::passes::AppliedOptimization& optimization) {
+                           return optimization.name == "post-layout-charged-selector-flow";
+                         }),
+            "joining two different charged values must not prove a selector");
+
+    std::vector<MachineItem> forward = {
+        MachineItem::op(0x00, "0"),
+        MachineItem::op(0x05, "5"),
+        MachineItem::op(0x48, "X→П 8"),
+        MachineItem::op(0x53, "ПП"),
+        MachineItem::address("forward_helper"),
+        MachineItem::label("forward_helper"),
+        MachineItem::op(0x22, "F x²"),
+        MachineItem::op(0x52, "В/О"),
+    };
+    MachineItem forward_stop = MachineItem::op(0x50, "С/П");
+    forward_stop.stop_disposition = StopDisposition::Terminal;
+    forward.push_back(std::move(forward_stop));
+
+    const core::PostLayoutIndirectFlowResult forward_result =
+        core::optimize_post_layout_stop_tail_reuse(forward, {});
+    require(std::none_of(forward_result.optimizations.begin(),
+                         forward_result.optimizations.end(),
+                         [](const core::passes::AppliedOptimization& optimization) {
+                           return optimization.name == "post-layout-charged-selector-flow";
+                         }),
+            "a forward direct flow must stay direct even when the charged value is known");
   }
 }
 

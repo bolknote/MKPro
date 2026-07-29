@@ -5,7 +5,9 @@
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/passes/helpers.hpp"
 #include "mkpro/core/passes/preloaded_indirect_flow.hpp"
+#include "mkpro/core/natural_target_component_layout.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
+#include "mkpro/core/stable_register_value_flow.hpp"
 
 #include <algorithm>
 #include <array>
@@ -3406,6 +3408,187 @@ find_branch_to_stop_tail_selector_rewrite(const std::vector<MachineItem>& items,
   return std::nullopt;
 }
 
+// Replace a direct `ПП addr` / `БП addr` with a one-cell indirect flow through
+// a stable register whose exact value at the branch site is proved by the
+// flow-sensitive stable-register value analysis over the authoritative
+// execution-state graph. Unlike the preloaded rewrites above, the selector
+// value here may come from a runtime charge (digit entry stored into the
+// register) that the program already performs for another indirect consumer.
+//
+// Conditionals are excluded (they would need the separate X2 equivalence
+// proof), and the deletion is admitted only when it cannot break any
+// non-retargetable address encoding: the converted flow must be backward
+// (target before the erased operand), every numeric direct operand and every
+// typed indirect target whose register has no retargetable preload must also
+// lie before the erased operand.
+std::optional<BranchRewrite>
+find_charged_selector_flow_rewrite(const std::vector<MachineItem>& raw_items,
+                                   const std::vector<PreloadReport>& preloads,
+                                   AddressSpaceModel model) {
+  // Beyond-window artifacts carry resolver-generated wrapped formal operands;
+  // recover their authoritative identities before building the execution
+  // graph, exactly like the natural-target layout pass does. The candidate
+  // scan uses the normalized items, while the caller deletes by item index,
+  // so the normalization must preserve the item sequence.
+  const std::optional<std::vector<MachineItem>> normalized =
+      normalize_natural_target_overflow_formals(raw_items, model);
+  if (!normalized.has_value() || normalized->size() != raw_items.size())
+    return std::nullopt;
+  const std::vector<MachineItem>& items = *normalized;
+  const std::vector<MachineCell> cells = machine_cells(items);
+  const std::map<std::string, int> labels = machine_label_addresses(items);
+  const std::map<int, std::vector<std::string>> labels_by_address =
+      machine_labels_by_address(items);
+  const std::set<std::string> referenced = referenced_machine_labels(items);
+  std::set<std::string> preloaded_registers;
+  for (const PreloadReport& preload : preloads)
+    preloaded_registers.insert(preload.register_name);
+
+  std::optional<AuthoritativePostLayoutControlFlow> flow;
+  std::optional<StableRegisterValueFlow> values;
+
+  for (std::size_t index = 0; index + 1 < cells.size(); ++index) {
+    const MachineCell& branch = cells.at(index);
+    const MachineCell& address = cells.at(index + 1);
+    if (branch.item == nullptr || address.item == nullptr ||
+        branch.item->kind != MachineItemKind::Op ||
+        address.item->kind != MachineItemKind::Address ||
+        (branch.item->opcode != 0x51 && branch.item->opcode != 0x53)) {
+      continue;
+    }
+    const std::optional<int> target = resolved_machine_target(address.item->target, labels);
+    if (!target.has_value() || *target >= address.address)
+      continue;
+    if (address_has_referenced_label(labels_by_address, referenced, address.address))
+      continue;
+
+    if (!flow.has_value()) {
+      // The MK-61 continues at physical 01 when В/О runs on an empty return
+      // stack. Artifacts whose cell 01 is an address operand can only be
+      // proved without that entry, which stays sound because the builder
+      // fails closed when an empty-stack В/О is actually reachable.
+      PostLayoutControlFlowOptions control_options;
+      control_options.address_space_model = model;
+      control_options.empty_return_target = 1;
+      flow = build_post_layout_control_flow(items, control_options);
+      if (!flow->proved) {
+        PostLayoutControlFlowOptions bare_options;
+        bare_options.address_space_model = model;
+        flow = build_post_layout_control_flow(items, bare_options);
+      }
+      if (!flow->proved) {
+        if (trace_post_layout_enabled())
+          std::cerr << "[charged-selector] control flow not proved\n";
+        return std::nullopt;
+      }
+      values = analyze_stable_register_value_flow(items, preloads, *flow, model);
+      if (!values->proved) {
+        if (trace_post_layout_enabled()) {
+          std::cerr << "[charged-selector] value flow not proved:";
+          for (const std::string& reason : values->reasons)
+            std::cerr << " " << reason;
+          std::cerr << "\n";
+        }
+        return std::nullopt;
+      }
+    }
+
+    // The deletion machinery retargets preloaded selectors, and label
+    // operands follow their items; everything else must stay put after this
+    // candidate's operand cell is erased.
+    const auto deletion_is_encoding_safe = [&]() {
+      for (const MachineItem& item : items) {
+        if (item.kind == MachineItemKind::Address &&
+            std::holds_alternative<int>(item.target) &&
+            std::get<int>(item.target) >= address.address) {
+          return false;
+        }
+      }
+      for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
+        const auto typed = flow->indirect_flow_targets.find(item_index);
+        if (typed == flow->indirect_flow_targets.end())
+          continue;
+        const std::optional<std::string> register_name =
+            register_from_indirect_opcode(items.at(item_index).opcode);
+        if (register_name.has_value() && preloaded_registers.contains(*register_name))
+          continue;
+        for (const PostLayoutCommandIdentity& identity : typed->second) {
+          if (identity.address >= address.address)
+            return false;
+        }
+      }
+      return true;
+    };
+    if (!deletion_is_encoding_safe()) {
+      if (trace_post_layout_enabled()) {
+        std::cerr << "[charged-selector] deletion unsafe for operand at "
+                  << address.address << "\n";
+      }
+      continue;
+    }
+
+    const auto known =
+        values->before_item.find(static_cast<std::size_t>(branch.item_index));
+    if (known == values->before_item.end()) {
+      if (trace_post_layout_enabled()) {
+        std::cerr << "[charged-selector] no value state at branch address "
+                  << branch.address << "\n";
+      }
+      continue;
+    }
+    if (trace_post_layout_enabled()) {
+      std::cerr << "[charged-selector] branch at " << branch.address << " target " << *target
+                << " values:";
+      for (std::size_t slot = 0; slot < known->second.size(); ++slot) {
+        if (known->second[slot].has_value())
+          std::cerr << " R" << "789abcde"[slot] << "=" << *known->second[slot];
+      }
+      std::cerr << "\n";
+    }
+    for (std::size_t slot = 0; slot < known->second.size(); ++slot) {
+      const std::optional<std::string>& value = known->second[slot];
+      if (!value.has_value())
+        continue;
+      const std::string register_name(1, "789abcde"[slot]);
+      std::optional<IndirectAddressEvaluation> decoded;
+      try {
+        decoded = evaluate_indirect_address(register_name, *value,
+                                            IndirectOperationKind::Flow, model);
+      } catch (const std::exception&) {
+        continue;
+      }
+      if (!decoded.has_value() || decoded->actual_flow_target != *target)
+        continue;
+      // The write-back must not change the observable register value.
+      if (!decoded->result_value.has_value() || *decoded->result_value != *value)
+        continue;
+      const std::optional<int> opcode =
+          indirect_branch_opcode_for_register(branch.item->opcode, register_name);
+      if (!opcode.has_value())
+        continue;
+      if (trace_post_layout_enabled()) {
+        std::cerr << "[charged-selector] converting branch at " << branch.address
+                  << " opcode " << branch.item->opcode << " through R" << register_name
+                  << "=" << *value << " target " << *target << "\n";
+      }
+      std::string comment = "reused runtime-charged R" + register_name + "=" + *value +
+                            " indirect-target=" + std::to_string(*target) + " direct flow";
+      if (branch.item->comment.has_value() && !branch.item->comment->empty())
+        comment = *branch.item->comment + "; " + comment;
+      return BranchRewrite{
+          .branch_index = branch.item_index,
+          .address_index = address.item_index,
+          .opcode = *opcode,
+          .mnemonic = indirect_branch_mnemonic(*opcode, register_name),
+          .comment = comment,
+          .source_line = branch.item->source_line,
+          .target = address.item->target,
+      };
+    }
+  }
+  return std::nullopt;
+}
+
 std::vector<MachineItem> apply_branch_rewrite(const std::vector<MachineItem>& items,
                                               const BranchRewrite& rewrite) {
   std::vector<MachineItem> result;
@@ -3804,6 +3987,58 @@ optimize_post_layout_super_dark_address_overlay(const std::vector<MachineItem>& 
 }
 
 PostLayoutIndirectFlowResult
+optimize_post_layout_charged_selector_flow(const std::vector<MachineItem>& items,
+                                           const std::vector<PreloadReport>& preloads,
+                                           const CompileOptions& options) {
+  const AddressSpaceModel model = address_space_model_for_options(options);
+  std::vector<MachineItem> current = items;
+  std::vector<PreloadReport> current_preloads = preloads;
+  int applied = 0;
+
+  for (int round = 0; round < kMaxRewrites; ++round) {
+    const std::optional<BranchRewrite> rewrite =
+        find_charged_selector_flow_rewrite(current, current_preloads, model);
+    if (!rewrite.has_value())
+      break;
+    std::vector<MachineItem> candidate = apply_branch_rewrite(current, *rewrite);
+    if (machine_cell_count(candidate) >= machine_cell_count(current))
+      break;
+    const std::optional<RetargetedMachine> retargeted =
+        retarget_selector_preloads_after_machine_deletion(
+            current, std::move(candidate), current_preloads, {rewrite->address_index},
+            rewrite->branch_index, model);
+    if (!retargeted.has_value())
+      break;
+    current = retargeted->items;
+    current_preloads = retargeted->preloads;
+    ++applied;
+  }
+
+  if (applied == 0) {
+    return PostLayoutIndirectFlowResult{
+        .items = items,
+        .preloads = preloads,
+    };
+  }
+  return PostLayoutIndirectFlowResult{
+      .items = std::move(current),
+      .preloads = std::move(current_preloads),
+      .optimizations =
+          {
+              passes::AppliedOptimization{
+                  .name = "post-layout-charged-selector-flow",
+                  .detail = "Replaced " + std::to_string(applied) + " direct branch/call" +
+                            (applied == 1 ? "" : "s") +
+                            " with indirect flow through a stable register whose "
+                            "runtime-charged value is proved on every path by the "
+                            "execution-state graph.",
+              },
+          },
+      .applied = applied,
+  };
+}
+
+PostLayoutIndirectFlowResult
 optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
                                      const std::vector<PreloadReport>& preloads,
                                      const CompileOptions& options) {
@@ -3812,6 +4047,7 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
   std::vector<PreloadReport> current_preloads = preloads;
   int stop_tail_applied = 0;
   int existing_selector_applied = 0;
+  int charged_selector_applied = 0;
   int empty_stack_tail_call_applied = 0;
   int empty_stack_tail_fallthrough_applied = 0;
 
@@ -3895,10 +4131,28 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
       continue;
     }
 
+    if (const std::optional<BranchRewrite> rewrite =
+            find_charged_selector_flow_rewrite(current, current_preloads, model)) {
+      std::vector<MachineItem> candidate = apply_branch_rewrite(current, *rewrite);
+      if (machine_cell_count(candidate) >= machine_cell_count(current))
+        break;
+      const std::optional<RetargetedMachine> retargeted =
+          retarget_selector_preloads_after_machine_deletion(
+              current, std::move(candidate), current_preloads, {rewrite->address_index},
+              rewrite->branch_index, model);
+      if (!retargeted.has_value())
+        break;
+      current = retargeted->items;
+      current_preloads = retargeted->preloads;
+      ++charged_selector_applied;
+      continue;
+    }
+
     break;
   }
 
-  const int applied = stop_tail_applied + existing_selector_applied + empty_stack_tail_call_applied;
+  const int applied = stop_tail_applied + existing_selector_applied +
+                      charged_selector_applied + empty_stack_tail_call_applied;
   if (applied == 0) {
     return PostLayoutIndirectFlowResult{
         .items = items,
@@ -3940,6 +4194,15 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
                   (existing_selector_applied == 1 ? "" : "s") +
                   " with already-proven preloaded selector flow after retargeting shifted "
                   "selectors.",
+    });
+  }
+  if (charged_selector_applied > 0) {
+    optimizations.push_back(passes::AppliedOptimization{
+        .name = "post-layout-charged-selector-flow",
+        .detail = "Replaced " + std::to_string(charged_selector_applied) + " direct branch/call" +
+                  (charged_selector_applied == 1 ? "" : "s") +
+                  " with indirect flow through a stable register whose runtime-charged value "
+                  "is proved on every path by the execution-state graph.",
     });
   }
 
