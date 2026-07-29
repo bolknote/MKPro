@@ -10,8 +10,8 @@ tests:
 
 - `rom.cjs` - ROM tables copied mechanically from `const ПЗУ`.
 - `mk61.cjs` - headless `MK61` wrapper around the ИР2/ИК13 microcode model.
-- `lordbss.cjs` - parser for local `games/*.txt` listings
-  and the original Lord_BSS HTML tables.
+- `lordbss.cjs` - parser for local manifest-relative `games/<section>/*.txt`
+  listings and the original Lord_BSS HTML tables.
 - `smoke-games.cjs` - smoke check against a few downloaded game pages,
   including the local Treasure Cave demo fixture.
 

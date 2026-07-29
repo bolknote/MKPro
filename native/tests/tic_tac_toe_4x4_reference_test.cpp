@@ -210,9 +210,10 @@ std::string read_text(const std::filesystem::path& path) {
 
 std::filesystem::path fixture_root() {
   const std::filesystem::path current = std::filesystem::current_path();
-  if (std::filesystem::exists(current / "games" / "tic-tac-toe-4x4.txt"))
+  if (std::filesystem::exists(current / "games" / "logic" / "tic-tac-toe-4x4.txt"))
     return current;
-  if (std::filesystem::exists(current.parent_path() / "games" / "tic-tac-toe-4x4.txt"))
+  if (std::filesystem::exists(current.parent_path() / "games" / "logic" /
+                              "tic-tac-toe-4x4.txt"))
     return current.parent_path();
   throw std::runtime_error("cannot locate the MK-Pro fixture root from " + current.string());
 }
@@ -397,7 +398,7 @@ void enter_manual_probe_pair(emulator::MK61& calc, const ManualProbeLayout& layo
 void tic_tac_toe_4x4_reference_transcript_matches_original_listing() {
   const std::filesystem::path root = fixture_root();
   const std::vector<int> reference =
-      parse_reference_listing(root / "games" / "tic-tac-toe-4x4.txt");
+      parse_reference_listing(root / "games" / "logic" / "tic-tac-toe-4x4.txt");
 
   emulator::MK61 calc({.extended = true, .angle_mode = "deg"});
   const emulator::ProgramLoadResult loaded = calc.load_program(reference);
@@ -456,7 +457,7 @@ void tic_tac_toe_4x4_reference_transcript_matches_original_listing() {
 void tic_tac_toe_4x4_reference_ui_normalizes_coordinates() {
   const std::filesystem::path root = fixture_root();
   const std::vector<int> reference =
-      parse_reference_listing(root / "games" / "tic-tac-toe-4x4.txt");
+      parse_reference_listing(root / "games" / "logic" / "tic-tac-toe-4x4.txt");
 
   const UiObservation one_one = play_reference_first_move(reference, "1", "1");
   for (const std::string& alias : {std::string("5"), std::string("9"), std::string("1.9")}) {

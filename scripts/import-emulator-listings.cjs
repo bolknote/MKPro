@@ -4,7 +4,9 @@ const fs = require('fs');
 const path = require('path');
 
 const BASE = 'https://sergeanvarov.github.io/russian/mk61';
-const OUT = path.resolve(__dirname, '../games/anvarov');
+// Imports are staged outside games/. Review and classify them before adding
+// their paths to the catalog manifest.
+const OUT = path.resolve(process.argv[2] || path.join(__dirname, '../tmp/imports/anvarov'));
 
 const CATALOG = [
   { slug: 'game-100-pig', section: 'games', rel: '100/100.html' },
@@ -254,6 +256,7 @@ async function fetchText(url) {
 }
 
 async function main() {
+  fs.mkdirSync(OUT, { recursive: true });
   const manifestRows = [
     'program\tdescription\ttitle\tauthor\tsource_url',
     'treasure-cave-demo.txt\ttreasure-cave-demo.md\tTreasure Cave Demo\tSerge Anvarov\thttps://sergeanvarov.github.io/russian/mk61/uf/demo.html',

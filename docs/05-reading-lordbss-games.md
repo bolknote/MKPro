@@ -24,10 +24,10 @@ The existing documents are good for the calculator itself:
 - [04-programming-cookbook.md](./04-programming-cookbook.md) gives enough
   workflow to write ordinary MK-61 programs.
 
-That is sufficient for programs like `games/lunar-landing.txt` ("Lunar
+That is sufficient for programs like `games/simulation/lunar-landing.txt` ("Lunar
 Landing"). The code uses direct register stores/recalls, basic arithmetic, a
 few direct conditionals, and stop points. The companion
-`games/lunar-landing.md` describes the game variables, so the listing can be
+`games/simulation/lunar-landing.md` describes the game variables, so the listing can be
 followed almost directly.
 
 ## Lord_BSS Listing Notation

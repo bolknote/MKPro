@@ -52863,23 +52863,37 @@ std::optional<int> resolve_reference_span(const std::string& reference_name) {
   if (std::filesystem::exists(manifest_path)) {
     std::ifstream manifest(manifest_path);
     std::string row;
-    bool first = true;
+    std::size_t program_column = 0;
+    std::optional<std::size_t> source_column;
+    if (std::getline(manifest, row)) {
+      const std::vector<std::string> header = split_tab_row(row);
+      for (std::size_t index = 0; index < header.size(); ++index) {
+        const std::string column = trim_ascii(header[index]);
+        if (column == "program")
+          program_column = index;
+        else if (column == "source_url")
+          source_column = index;
+      }
+    }
+
     const std::string reference_source_id = lower_ascii(slug);
     while (std::getline(manifest, row)) {
-      if (first) {
-        first = false;
-        continue;
-      }
       const std::vector<std::string> cells = split_tab_row(row);
-      if (cells.empty())
+      if (program_column >= cells.size())
         continue;
-      const std::string program = trim_ascii(cells.front());
-      const std::string source = cells.size() > 4U ? lower_ascii(trim_ascii(cells.at(4))) : "";
+      const std::string program = trim_ascii(cells[program_column]);
+      const std::string source =
+          source_column.has_value() && *source_column < cells.size()
+              ? lower_ascii(trim_ascii(cells[*source_column]))
+              : "";
       static const std::regex source_pattern(R"(/(pmk\d+)\.html(?:[#?].*)?$)");
       std::smatch source_match;
       const bool source_matches = std::regex_search(source, source_match, source_pattern) &&
                                   source_match[1].str() == reference_source_id;
-      if (program == program_file || source_matches) {
+      const bool program_matches =
+          program == program_file ||
+          std::filesystem::path(program).filename() == program_file;
+      if (program_matches || source_matches) {
         program_file = program;
         break;
       }

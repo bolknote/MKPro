@@ -103,9 +103,10 @@ std::vector<int> parse_reference_listing(const std::filesystem::path& path) {
 
 std::filesystem::path fixture_root() {
   const std::filesystem::path current = std::filesystem::current_path();
-  if (std::filesystem::exists(current / "games" / "nekromant.txt"))
+  if (std::filesystem::exists(current / "games" / "adventure" / "nekromant.txt"))
     return current;
-  if (std::filesystem::exists(current.parent_path() / "games" / "nekromant.txt"))
+  if (std::filesystem::exists(current.parent_path() / "games" / "adventure" /
+                              "nekromant.txt"))
     return current.parent_path();
   throw std::runtime_error("cannot locate Nekromant fixtures from " +
                            current.string());
@@ -187,7 +188,7 @@ void enter_spell_and_resume(emulator::MK61& calc, const std::string& spell,
 void emulator_nekromant_reference_and_source_contract() {
   const std::filesystem::path root = fixture_root();
   const std::vector<int> reference =
-      parse_reference_listing(root / "games" / "nekromant.txt");
+      parse_reference_listing(root / "games" / "adventure" / "nekromant.txt");
 
   emulator::MK61 contact = boot_reference(reference);
   contact.set_register("0", "0.4");

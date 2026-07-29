@@ -1,8 +1,8 @@
 # Game Catalog Organization
 
-This document defines the target organization of the repository's MK-61
-program catalog. It records the design before files are moved: the current tree
-under `games/` remains flat until the migration described below is completed.
+This document defines the current organization of the repository's MK-61
+program catalog. The layout was designed and reviewed before the files moved,
+then applied to the complete catalog.
 
 ## Goals
 
@@ -17,20 +17,20 @@ The catalog should:
 - keep program listings, descriptions, tools, and tests resolvable after files
   move.
 
-## Current-State Audit
+## Migration Audit
 
-At the time this design was recorded, the flat directory contained:
+Before migration, the flat directory contained:
 
 - 600 `.txt` program listings;
 - 600 `.md` description files, excluding `games/README.md`;
 - 594 data rows in `games/manifest.tsv`.
 
-The manifest and filesystem are not yet consistent:
+The audit found two inconsistencies:
 
-- `rally-xvadim.txt` and `rally-xvadim.md` remain in the manifest after their
+- `rally-xvadim.txt` and `rally-xvadim.md` still appeared in the manifest after
   duplicate content was merged into `rally.txt` and `rally.md` in commit
   `96e4695dfb437fb3a36c4a0fc2183cb538cd9313`;
-- seven program/description pairs are present on disk but absent from the
+- seven program/description pairs were present on disk but absent from the
   manifest:
   - `byki-i-korovy-geocities`;
   - `futbolnyy-match`;
@@ -40,8 +40,10 @@ The manifest and filesystem are not yet consistent:
   - `polet-shmelya`;
   - `razorvannaya-kniga`.
 
-These discrepancies must be resolved before classification or file moves.
-Counts in documentation must be generated or checked, not maintained by hand.
+The migration removed the stale row, retained the xvadim URL on `rally`, and
+indexed all seven pairs. The resulting manifest has 600 rows and covers all 600
+program/description pairs. Current counts are derived by the catalog validator,
+not maintained manually in overview documentation.
 
 ## Classification Model
 
@@ -119,15 +121,15 @@ as follows:
 | `Космос` | `space` theme tag |
 | `Экономика` | normally `simulation/` plus the `economy` tag |
 | `Аркада` | `arcade/` |
-| `Исследование` | normally `educational/` plus the `experimental` tag |
+| `Исследование` | normally `educational/`, with `kind=experiment` where appropriate |
 | `От Геннадия` | no section; source or collection metadata only |
 
 This avoids arbitrary choices such as making a lunar lander either classic or
 space-themed but not both.
 
-## Planned Manifest Schema
+## Manifest Schema
 
-The existing columns remain valid and new fields are appended:
+The original columns remain valid and the classification fields are appended:
 
 ```text
 program
@@ -172,17 +174,19 @@ source. It must not be inferred merely from a familiar title.
 
 | Entry | Kind | Section | Tags | Collection or series |
 | --- | --- | --- | --- | --- |
-| `lunar-landing` | `game` | `simulation` | `classic;space` | lunar-landing series |
-| `rally` | `game` | `sports` | `classic;racing` | magazine provenance |
-| `black-jack-dolgushin-notebook` | `game` | `gambling` | `cards;manuscript` | Dolgushin notebook |
-| `triangle-three-sides-gaishtut-1988` | `utility` | `utilities` | `geometry;math` | Gaishtut 1988 |
-| `trenirovka-pamyati` | `trainer` | `educational` | `memory` | source metadata |
+| `lunar-landing` | `game` | `simulation` | `classic;magazine;space` | `tekhnika-molodezhi`; `lunar-landing` series |
+| `rally` | `game` | `sports` | `classic;magazine;racing` | `tekhnika-molodezhi` |
+| `black-jack-dolgushin-notebook` | `game` | `gambling` | `manuscript` | `dolgushin-notebook` |
+| `triangle-three-sides-gaishtut-1988` | `utility` | `utilities` | `book;classic` | `gaishtut-1988` |
+| `trenirovka-pamyati-kibernetika-1986` | `trainer` | `educational` | `book;classic` | `kibernetika-1986` |
 
 Variants remain separate entries when their byte-code listings or documented
 behavior differ. Identical transcriptions from several sources are one entry
 with all relevant provenance recorded in metadata.
 
-## Migration Plan
+## Applied Migration
+
+The migration used this sequence:
 
 1. Reconcile `manifest.tsv` with the filesystem:
    - remove the stale `rally-xvadim` row;
@@ -202,9 +206,15 @@ with all relevant provenance recorded in metadata.
 7. Run catalog validation, native tests, emulator smoke tests, and repository
    link checks.
 
-## Completion Checks
+## Validation
 
-The migration is complete only when:
+Run the repository validator after every catalog change:
+
+```sh
+node scripts/validate-games-catalog.cjs
+```
+
+It verifies that:
 
 - every manifest program and description path exists;
 - every catalog `.txt` and `.md` file is represented exactly once;
@@ -213,5 +223,9 @@ The migration is complete only when:
 - no program or description file remains directly under `games/`;
 - `uncategorized/` is absent or empty;
 - tags use only documented identifiers;
-- no consumer assumes `games/<basename>.txt`;
-- documentation links and the relevant test suites pass.
+- every local link in a catalog description resolves, including its program
+  link.
+
+Consumer paths are covered separately by the native and emulator tests. The
+native reference resolver reads manifest-relative paths, and import scripts
+write only to staging directories outside `games/`.

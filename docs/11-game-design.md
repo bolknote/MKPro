@@ -177,9 +177,9 @@ Smoke tests for packaged games live under `tests/emulator/`.
 
 | Path | Content |
 | --- | --- |
-| `games/` | Packaged program `.txt` listings and per-program `.md` descriptions; currently flat pending the documented catalog migration |
-| `games/manifest.tsv` | Unified game index with source links and authorship metadata |
-| `docs/22-game-catalog-organization.md` | Target catalog taxonomy, manifest schema, and migration checks |
+| `games/` | Packaged `.txt`/`.md` pairs organized by one primary section |
+| `games/manifest.tsv` | Unified index with nested paths, classification, source, and authorship metadata |
+| `docs/22-game-catalog-organization.md` | Current catalog taxonomy, manifest schema, and validation rules |
 | `examples/tiny-game.mkpro` | Minimal MK-Pro game sketch |
 | `examples/alaram.mkpro` | Lord_BSS cockpit interceptor port that fits the original |
 | `examples/cave-sketch.mkpro` | compact cave sketch/baseline |

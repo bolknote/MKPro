@@ -5,7 +5,9 @@ const fs = require('fs');
 const path = require('path');
 
 const SOURCE_ROOT = path.resolve(process.argv[2] || '/private/tmp/pmk61-programms-xvadim');
-const OUT = path.resolve(__dirname, '../games/xvadim');
+// The optional second argument is a staging directory. Imported entries must
+// be reviewed and assigned a primary catalog section before publication.
+const OUT = path.resolve(process.argv[3] || path.join(__dirname, '../tmp/imports/xvadim'));
 const REPO_URL = 'https://github.com/xvadim/pmk61-programms';
 
 const PAGE_EXTENDED_PHASE_1 = [10, 11, 6, 7, 2, 3, 4, 5, 0, 1, 14, 13, 12, 8, 9];

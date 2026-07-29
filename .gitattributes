@@ -1,0 +1,2 @@
+# Empty final TSV fields are encoded as trailing tab separators.
+games/manifest.tsv whitespace=-blank-at-eol

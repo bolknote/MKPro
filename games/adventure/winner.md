@@ -13,7 +13,7 @@ respond automatically. The goat starts near the center and tries to reach the
 top row (horizontal 9); the wolves begin on fields 91, 93, 97, and 99.
 
 The coordinate system matches the one used in
-[`treasure-cave.md`](./treasure-cave.md): a packed value `floor.000000N` where
+[`treasure-cave.md`](treasure-cave.md): a packed value `floor.000000N` where
 the integer part is the row, the last fractional digit is the column, and its
 position encodes the horizontal coordinate.
 

@@ -6,7 +6,11 @@ const { MK61, parseProgramText } = require('./mk61.cjs');
 const { parseMany } = require('./lordbss.cjs');
 
 const root = path.resolve(__dirname, '../../games');
-const games = parseMany(root, ['lunar-landing.txt', 'boxing.txt', 'kazino.txt']);
+const games = parseMany(root, [
+  'simulation/lunar-landing.txt',
+  'sports/boxing.txt',
+  'gambling/kazino.txt',
+]);
 
 for (const game of games) {
   const calc = new MK61();
@@ -52,7 +56,7 @@ console.log(`  speed stop: ${speedStop.stopped ? 'stable' : 'not stable'} after 
 console.log(`  fuel stop: ${fuelStop.stopped ? 'stable' : 'not stable'} after ${fuelStop.frames} frames, display ${JSON.stringify(fuel)}`);
 console.log(`  program counter: ${lunar.programCounter()}`);
 
-const demoPath = path.join(root, 'treasure-cave-demo.txt');
+const demoPath = path.join(root, 'adventure/treasure-cave-demo.txt');
 const demoText = require('fs').readFileSync(demoPath, 'utf8');
 const demo = new MK61();
 const demoParsed = demo.loadProgram(demoText);

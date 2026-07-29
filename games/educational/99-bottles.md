@@ -28,7 +28,7 @@ The source article gives this setup sequence before switching to program mode:
 8112000 хПc 8 + КИНВ хПb FВx 10 ÷ К[x] хПd 8 + КИНВ хПe В/О ПРГ
 ```
 
-The listing in [99-bottles.txt](./99-bottles.txt) starts after `ПРГ`.
+The listing in [99-bottles.txt](99-bottles.txt) starts after `ПРГ`.
 
 ## Notes
 

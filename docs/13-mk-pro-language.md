@@ -984,7 +984,7 @@ their actual AST nodes through ordinary IR. Board/cell queries lower into
 the same expression and control-flow IR as the rest of the language.
 
 `reference` is report metadata only and must not change code generation. For
-known `games/*` references, the report resolves the original listing, counts the
+known catalog references, the report resolves the manifest path, counts the
 real addressed span (`max(address)+1`), occupied entries, and gaps, and keeps
 `referenceSteps` equal to that span for existing report consumers. Missing
 listings fall back to the budget with a warning.

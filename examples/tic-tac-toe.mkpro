@@ -1,4 +1,4 @@
-// Direct port of games/tic-tac-toe.txt from Fink's "Papa, Mama, Ya i
+// Direct port of games/logic/tic-tac-toe.txt from Fink's "Papa, Mama, Ya i
 // Mikrokalkulyator". The original is an address-dispatch tree: the calculator
 // opens with 5, then each expected human reply either continues the line or
 // stops on the calculator's winning move scaled by 1,000,000.
