@@ -1,4 +1,5 @@
-// Full Hunt the Wumpus, kept inside the 105-cell MK-61 window.
+// Wumpus variant by Evgeny Stepanischev, dated 2026-06-28.
+// Kept inside the 105-cell MK-61 window.
 //
 // Display: room, arrows, clue.
 // Clues are prioritized: 5 (5ilence) = quiet, 3 = Wumpus nearby, 0 = pit draft,
