@@ -2986,10 +2986,6 @@ bool converted_flow_effects_equivalent(
     const OpcodeInfo& direct = opcode_by_code(flow.original_opcode);
     const OpcodeInfo& indirect =
         opcode_by_code(*indirect_family + anchor->selector.register_index);
-    const int flows_to_same_target = static_cast<int>(std::count_if(
-        flows.begin(), flows.end(), [&](const NaturalTargetFlowRewrite& candidate) {
-          return candidate.original_target_item == flow.original_target_item;
-        }));
     bool x2_equivalent = direct.x2_effect == indirect.x2_effect;
     bool used_x2_reconvergence = false;
     if (is_direct_conditional(flow.original_opcode)) {
@@ -3002,7 +2998,6 @@ bool converted_flow_effects_equivalent(
           entry_has_x2_equal_x(flow.original_command_item);
       used_x2_reconvergence =
           !same_fallthrough_effect && !equal_at_entry &&
-          flows_to_same_target >= 2 &&
           fallthrough_x2_difference_reconverges(flow.original_command_item);
       const bool value_equal_at_entry =
           !same_fallthrough_effect && !equal_at_entry && !used_x2_reconvergence &&

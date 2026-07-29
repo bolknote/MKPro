@@ -519,6 +519,30 @@ Fixture conditional_x2_reconvergence_fixture(bool restore_before_overwrite) {
   return result;
 }
 
+Fixture single_flow_conditional_x2_reconvergence_fixture() {
+  Fixture result;
+  const std::string sink = "unrelated_single_flow_x2_sink";
+
+  result.items.push_back(MachineItem::label("unrelated_single_flow_x2_entry"));
+  result.items.push_back(op(0x60));
+  result.items.push_back(op(0x5e));
+  result.items.push_back(MachineItem::address(sink));
+  result.items.push_back(op(0x61));
+  result.visible_stop = result.items.size();
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label(sink));
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label("unrelated_single_flow_x2_padding"));
+  for (int cell = 1; cell < 14; ++cell)
+    result.items.push_back(op(0x54));
+  result.items.push_back(stop());
+
+  result.preloads.push_back(PreloadReport{.register_name = "8", .value = "18"});
+  return result;
+}
+
 Fixture conditional_x2_value_equality_fixture() {
   Fixture result;
   const std::string sink = "unrelated_x2_value_equality_sink";
@@ -822,6 +846,34 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
     const Observation after = observe(rewritten.items, rewritten.preloads);
     require(before.stopped && after.stopped && before.state == after.state,
             "proved conditional X2 reconvergence must preserve observable state");
+  }
+
+  {
+    const Fixture input = single_flow_conditional_x2_reconvergence_fixture();
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    const int converted_conditionals = static_cast<int>(std::count_if(
+        rewritten.plan.flows.begin(), rewritten.plan.flows.end(), [](const auto& flow) {
+          return flow.original_opcode == 0x5e;
+        }));
+    std::string rejection;
+    for (const std::string& reason : rewritten.plan.reasons) {
+      if (!rejection.empty())
+        rejection += " | ";
+      rejection += reason;
+    }
+    require(rewritten.plan.proved && rewritten.removed_cells == 1 &&
+                converted_conditionals == 1 &&
+                rewritten.plan.x2_reconvergence_flows == 1,
+            "a single conditional flow may use the reconvergence proof when its changed "
+            "fallthrough X2 value is overwritten before it can be observed: applied=" +
+                std::to_string(rewritten.applied) +
+                ", removed=" + std::to_string(rewritten.removed_cells) +
+                ", reasons=" + rejection);
+    const Observation before = observe(input.items, input.preloads);
+    const Observation after = observe(rewritten.items, rewritten.preloads);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "proved single-flow conditional X2 reconvergence must preserve observable state");
   }
 
   {

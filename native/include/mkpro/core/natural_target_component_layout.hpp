@@ -199,8 +199,11 @@ plan_preloaded_indirect_flow_cell_erasure(
 // converted direct PP, BP, or compatible conditional keeps its flow identity
 // and is replaced by the corresponding one-cell indirect opcode. Only direct
 // x!=0, x>=0, x<0, and x=0 conditionals with exact indirect counterparts are
-// eligible. Their entry must also prove X2=X on every path when direct and
-// indirect fallthrough effects differ; FL0..FL3 are not rewritten. Numeric direct targets,
+// eligible. When direct and indirect fallthrough X2 effects differ, each
+// converted conditional (independently of how many flows share its target)
+// must prove X2=X at entry, or that every fallthrough path overwrites the
+// changed X2 value before it can be observed, or full paired direct/indirect
+// dataflow equality; FL0..FL3 are not rewritten. Numeric direct targets,
 // complete indirect facts, external entries, and return-stack slots are rebound
 // by command identity and the final artifact is independently reconstructed.
 //
