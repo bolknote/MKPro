@@ -3513,8 +3513,8 @@ find_empty_stack_loop_return_rewrite(const std::vector<MachineItem>& raw_items,
             source.indirect_flow_targets.has_value() &&
             !source.indirect_flow_targets->empty() &&
             std::all_of(source.indirect_flow_targets->begin(),
-                        source.indirect_flow_targets->end(), [](const IrTarget& target) {
-                          return std::holds_alternative<std::string>(target);
+                        source.indirect_flow_targets->end(), [](const IrTarget& flow_target) {
+                          return std::holds_alternative<std::string>(flow_target);
                         });
         if (symbolic)
           continue;
