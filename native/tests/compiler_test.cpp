@@ -3468,6 +3468,57 @@ program DigitAtCall {
                       }),
           "digit_at should end extraction with integer truncation, not a rounding shortcut");
 
+  const CompileResult leading_digit_rmw = compile_source(R"mkpro(
+program LeadingDigitRmw {
+  state {
+    value: packed = 12345678
+    strength: counter 0..9 = 1
+  }
+
+  loop {
+    strength = read()
+    value = digit_set(
+      value,
+      int(lg(value)) + 1,
+      abs(digit_at(value, 1 + int(lg(value))) - strength))
+    show(value)
+  }
+}
+)mkpro");
+  require(leading_digit_rmw.implemented,
+          "native compiler should lower a generic leading-digit RMW expression");
+  require(leading_digit_rmw.diagnostics.empty(),
+          "leading-digit RMW compile should not report diagnostics");
+  require(has_optimization(leading_digit_rmw, "packed-digit-rmw-fusion"),
+          "leading-digit update should report generic packed RMW fusion");
+  require(has_optimization(leading_digit_rmw, "leading-digit-x2-lowering"),
+          "leading-digit update should report proof-gated X2 lowering");
+  require(std::count_if(leading_digit_rmw.steps.begin(), leading_digit_rmw.steps.end(),
+                        [](const ResolvedStep& step) {
+                          return step.opcode == 0x25 && step.mnemonic == "F reverse";
+                        }) >= 2,
+          "leading-digit RMW should contain extraction and update X2 splices");
+
+  const CompileResult mismatched_digit_rmw = compile_source(R"mkpro(
+program MismatchedDigitRmw {
+  state {
+    value: packed = 12345678
+  }
+
+  loop {
+    value = digit_set(value, int(lg(value)) + 1, digit_at(value, 1))
+    show(value)
+  }
+}
+)mkpro");
+  require(mismatched_digit_rmw.implemented,
+          "native compiler should retain the generic mismatched-index fallback");
+  require(mismatched_digit_rmw.diagnostics.empty(),
+          "mismatched-index fallback should not report diagnostics");
+  require(!has_optimization(mismatched_digit_rmw, "packed-digit-rmw-fusion") &&
+              !has_optimization(mismatched_digit_rmw, "leading-digit-x2-lowering"),
+          "mismatched digit indexes must not use leading packed RMW fusion");
+
   const CompileResult small_set_call = compile_source(R"mkpro(
 program SmallSetCalls {
   state {

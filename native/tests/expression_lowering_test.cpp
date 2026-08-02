@@ -382,6 +382,67 @@ void expression_lowering_helpers_match_typescript_contract() {
   }
 
   {
+    const auto width = [](const std::string& value, bool one_first) {
+      Expression lg = call_expr("lg", {identifier_expr(value)});
+      Expression integer = call_expr("int", {std::move(lg)});
+      return one_first
+                 ? binary_expr(number_expr("1"), "+", std::move(integer))
+                 : binary_expr(std::move(integer), "+", number_expr("1"));
+    };
+
+    ExpressionHarness harness;
+    Expression old_digit = call_expr(
+        "digit_at", {identifier_expr("group"), width("group", true)});
+    Expression replacement = call_expr(
+        "abs", {binary_expr(std::move(old_digit), "-", identifier_expr("strength"))});
+    Expression update = call_expr(
+        "digit_set",
+        {identifier_expr("group"), width("group", false), std::move(replacement)});
+    require(harness.lower(update), "leading packed digit RMW should lower");
+
+    const std::vector<int> expected = {
+        0x60, 0x01, 0x14, 0x25, 0x0c, 0x60,
+        0x11, 0x31, 0x60, 0x14, 0x25, 0x0c,
+    };
+    std::vector<int> actual;
+    for (const MachineItem& item : harness.context.emitter.items)
+      actual.push_back(item.opcode);
+    require(actual == expected,
+            "leading packed digit RMW should use two register-backed X2 splices");
+    require(std::any_of(harness.context.optimizations.begin(),
+                        harness.context.optimizations.end(),
+                        [](const OptimizationReport& report) {
+                          return report.name == "packed-digit-rmw-fusion";
+                        }),
+            "leading packed digit update should report generic RMW fusion");
+    require(std::any_of(harness.context.optimizations.begin(),
+                        harness.context.optimizations.end(),
+                        [](const OptimizationReport& report) {
+                          return report.name == "leading-digit-x2-lowering";
+                        }),
+            "leading packed digit update should report proof-gated X2 lowering");
+  }
+
+  {
+    ExpressionHarness harness;
+    Expression width = binary_expr(
+        call_expr("int", {call_expr("lg", {identifier_expr("group")})}), "+",
+        number_expr("1"));
+    Expression update = call_expr(
+        "digit_set",
+        {identifier_expr("group"), std::move(width),
+         call_expr("digit_at", {identifier_expr("group"), number_expr("1")})});
+    require(harness.lower(update), "non-leading packed digit update should still lower");
+    require(std::none_of(harness.context.optimizations.begin(),
+                         harness.context.optimizations.end(),
+                         [](const OptimizationReport& report) {
+                           return report.name == "packed-digit-rmw-fusion" ||
+                                  report.name == "leading-digit-x2-lowering";
+                         }),
+            "mismatched digit indexes must reject leading packed RMW fusion");
+  }
+
+  {
     ExpressionHarness harness;
     std::vector<Expression> args;
     args.push_back(identifier_expr("left"));

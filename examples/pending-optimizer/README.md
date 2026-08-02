@@ -16,7 +16,7 @@ with a raw listing: the goal is to make the high-level source fit.
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
 | `tic-tac-toe-4x4.mkpro` | 136 | 105 | +31 | pending optimizer |
-| `nekromant.mkpro` | 222 | 105 | +117 | pending optimizer |
+| `nekromant.mkpro` | 186 | 105 | +81 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
@@ -178,3 +178,11 @@ mode may reject over-window programs earlier than the analysis path.
   obligations. The tic-tac-toe fixture may lock only its size and observable
   UI; it must not select or justify an optimization by recognizing this game
   or its whole-program architecture.
+- Generic packed-digit read-modify-write fusion now recognizes a single pure
+  `digit_at(value, index)` transformed and written back through
+  `digit_set(value, index, ...)`. When both indexes are proved to select the
+  leading significant digit of a physical register-backed value, two
+  register-synchronized X2 splices replace the repeated decimal-place
+  arithmetic. This reduces `nekromant.mkpro` from 222 to 186 cells without
+  changing its source; computed values, stack-only values, mismatched indexes,
+  extra digit reads, and impure transforms retain the generic fallback.

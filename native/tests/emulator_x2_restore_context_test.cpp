@@ -139,6 +139,15 @@ void expect_different_runs(const std::vector<int>& left, const std::vector<int>&
 
 void emulator_x2_restore_context_matches_typescript_contract() {
   {
+    require(run_x_with_registers({0x61, 0x01, 0x14, 0x25, 0x0c, 0x50},
+                                 {{"1", "7234"}}) == "7,",
+            "register-backed X2 splice should extract the first significant digit");
+    require(run_x_with_registers({0x05, 0x61, 0x14, 0x25, 0x0c, 0x50},
+                                 {{"1", "7234"}}) == "5234,",
+            "register-backed X2 splice should replace the first significant digit");
+  }
+
+  {
     const std::vector<int> with_store = {0x20, 0x35, 0x41, 0x0c, 0x50};
     const std::vector<int> without_store = {0x20, 0x35, 0x0c, 0x50};
     expect_x(with_store, "1,", "X->P before VP changes restored X2");

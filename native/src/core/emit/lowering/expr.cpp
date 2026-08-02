@@ -107,6 +107,204 @@ bool is_numeric_value(const LoweringContext& context, const Expression& expressi
   return value.has_value() && std::fabs(*value - expected) < 1e-12;
 }
 
+bool is_decimal_width_term(const Expression& expression, const Expression& value) {
+  if (expression.kind != "call" || lower_ascii(expression.callee) != "int" ||
+      expression.args.size() != 1U) {
+    return false;
+  }
+  const Expression& logarithm = expression.args.front();
+  return logarithm.kind == "call" && lower_ascii(logarithm.callee) == "lg" &&
+         logarithm.args.size() == 1U && expression_equals(logarithm.args.front(), value);
+}
+
+bool is_decimal_width_index(const LoweringContext& context, const Expression& value,
+                            const Expression& index) {
+  if (index.kind != "binary" || index.op != "+" || index.left == nullptr ||
+      index.right == nullptr) {
+    return false;
+  }
+  return (is_decimal_width_term(*index.left, value) &&
+          is_numeric_value(context, *index.right, 1.0)) ||
+         (is_numeric_value(context, *index.left, 1.0) &&
+          is_decimal_width_term(*index.right, value));
+}
+
+bool digit_indexes_are_equivalent(const LoweringContext& context, const Expression& value,
+                                  const Expression& left, const Expression& right) {
+  return expression_equals(left, right) ||
+         (is_decimal_width_index(context, value, left) &&
+          is_decimal_width_index(context, value, right));
+}
+
+bool is_matching_digit_read(const LoweringContext& context, const Expression& expression,
+                            const Expression& value, const Expression& index) {
+  return expression.kind == "call" && lower_ascii(expression.callee) == "digit_at" &&
+         expression.args.size() == 2U && expression_equals(expression.args.at(0), value) &&
+         digit_indexes_are_equivalent(context, value, expression.args.at(1), index);
+}
+
+void inspect_digit_reads(const LoweringContext& context, const Expression& expression,
+                         const Expression& value, const Expression& index,
+                         std::size_t& total_reads, std::size_t& matching_reads,
+                         const Expression*& matching_read) {
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "digit_at") {
+    ++total_reads;
+    if (is_matching_digit_read(context, expression, value, index)) {
+      ++matching_reads;
+      matching_read = &expression;
+    }
+  }
+  if (expression.index != nullptr) {
+    inspect_digit_reads(context, *expression.index, value, index, total_reads, matching_reads,
+                        matching_read);
+  }
+  if (expression.expr != nullptr) {
+    inspect_digit_reads(context, *expression.expr, value, index, total_reads, matching_reads,
+                        matching_read);
+  }
+  if (expression.left != nullptr) {
+    inspect_digit_reads(context, *expression.left, value, index, total_reads, matching_reads,
+                        matching_read);
+  }
+  if (expression.right != nullptr) {
+    inspect_digit_reads(context, *expression.right, value, index, total_reads, matching_reads,
+                        matching_read);
+  }
+  for (const Expression& arg : expression.args) {
+    inspect_digit_reads(context, arg, value, index, total_reads, matching_reads, matching_read);
+  }
+}
+
+Expression replace_matching_digit_read(const LoweringContext& context,
+                                       const Expression& expression,
+                                       const Expression& value, const Expression& index,
+                                       const std::string& replacement) {
+  if (is_matching_digit_read(context, expression, value, index)) {
+    Expression result;
+    result.kind = "identifier";
+    result.name = replacement;
+    return result;
+  }
+
+  Expression result = expression;
+  if (expression.index != nullptr) {
+    result.index = std::make_shared<Expression>(replace_matching_digit_read(
+        context, *expression.index, value, index, replacement));
+  }
+  if (expression.expr != nullptr) {
+    result.expr = std::make_shared<Expression>(replace_matching_digit_read(
+        context, *expression.expr, value, index, replacement));
+  }
+  if (expression.left != nullptr) {
+    result.left = std::make_shared<Expression>(replace_matching_digit_read(
+        context, *expression.left, value, index, replacement));
+  }
+  if (expression.right != nullptr) {
+    result.right = std::make_shared<Expression>(replace_matching_digit_read(
+        context, *expression.right, value, index, replacement));
+  }
+  for (std::size_t arg = 0; arg < expression.args.size(); ++arg) {
+    result.args.at(arg) = replace_matching_digit_read(
+        context, expression.args.at(arg), value, index, replacement);
+  }
+  return result;
+}
+
+struct PackedDigitRmwMatch {
+  Expression value;
+  Expression index;
+  Expression replacement;
+  Expression digit_read;
+};
+
+std::optional<PackedDigitRmwMatch> match_leading_packed_digit_rmw(
+    const LoweringContext& context, const Expression& expression) {
+  if (expression.kind != "call" || lower_ascii(expression.callee) != "digit_set" ||
+      expression.args.size() != 3U) {
+    return std::nullopt;
+  }
+
+  const Expression& value = expression.args.at(0);
+  const Expression& index = expression.args.at(1);
+  const Expression& replacement = expression.args.at(2);
+  if (value.kind != "identifier" || context.constants.contains(value.name) ||
+      (context.program != nullptr && !context.registers.contains(value.name)) ||
+      context.stack_only_state_fields.contains(value.name) ||
+      !is_decimal_width_index(context, value, index) ||
+      !expression_is_reorder_safe(value) || !expression_is_reorder_safe(index) ||
+      !expression_is_reorder_safe(replacement)) {
+    return std::nullopt;
+  }
+
+  std::size_t total_reads = 0;
+  std::size_t matching_reads = 0;
+  const Expression* digit_read = nullptr;
+  inspect_digit_reads(context, replacement, value, index, total_reads, matching_reads,
+                      digit_read);
+  if (total_reads != 1U || matching_reads != 1U || digit_read == nullptr)
+    return std::nullopt;
+
+  return PackedDigitRmwMatch{
+      .value = value,
+      .index = index,
+      .replacement = replacement,
+      .digit_read = *digit_read,
+  };
+}
+
+void emit_leading_digit_x2_splice(ExpressionEmitApi& api, const std::string& purpose) {
+  api.emitter.emit_op(0x14, "<->", purpose + " swap");
+  api.emitter.emit_op(0x25, "F reverse", purpose + " expose");
+  api.emitter.emit_op(0x0c, "ВП", purpose + " splice");
+}
+
+std::optional<bool> lower_leading_packed_digit_rmw_to_x(ExpressionEmitApi& api,
+                                                        LoweringContext& context,
+                                                        const Expression& expression) {
+  const std::optional<PackedDigitRmwMatch> match =
+      match_leading_packed_digit_rmw(context, expression);
+  if (!match.has_value())
+    return std::nullopt;
+
+  // A physical register recall establishes value in X2.  Splicing its leading
+  // digit into 1 extracts that digit as an ordinary one-digit number.  The
+  // source lg(value) establishes the same strictly-positive domain required by
+  // this X2 operation.
+  api.emit_recall(match->value.name);
+  api.emit_number_or_preload("1", "packed leading digit extraction anchor", std::nullopt,
+                             std::nullopt);
+  emit_leading_digit_x2_splice(api, "packed leading digit extraction");
+  context.current_y_variable.reset();
+
+  const std::string current_digit = api.emitter.fresh_label("packed_digit_rmw_x");
+  api.emitter.current_x_variable = current_digit;
+  api.emitter.current_x_aliases = {current_digit};
+  api.emitter.current_x_expression = std::make_shared<Expression>(match->digit_read);
+  api.emitter.current_x_known_zero = false;
+
+  const Expression replacement = replace_matching_digit_read(
+      context, match->replacement, match->value, match->index, current_digit);
+  if (!api.lower_expression_to_x(replacement))
+    return false;
+  api.emit_recall(match->value.name);
+  emit_leading_digit_x2_splice(api, "packed leading digit update");
+  context.current_y_variable.reset();
+
+  api.emitter.current_x_variable.reset();
+  api.emitter.current_x_aliases.clear();
+  api.emitter.current_x_expression = std::make_shared<Expression>(expression);
+  api.emitter.current_x_known_zero = false;
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-digit-rmw-fusion",
+      .detail = "Fused one pure digit_at()/digit_set() read-modify-write operation.",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = "leading-digit-x2-lowering",
+      .detail = "Lowered a proved leading-digit update through two X2 splices.",
+  });
+  return true;
+}
+
 bool current_x_holds_name(ExpressionEmitApi& api, const std::string& name) {
   return api.emitter.current_x_variable == name || api.emitter.current_x_aliases.contains(name);
 }
@@ -1131,6 +1329,12 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
                    std::to_string(expression.args.size()) + ".",
     });
     return false;
+  }
+
+  if (const std::optional<bool> packed_rmw =
+          lower_leading_packed_digit_rmw_to_x(api, context, expression);
+      packed_rmw.has_value()) {
+    return *packed_rmw;
   }
 
   if (const std::optional<Expression> macro =
