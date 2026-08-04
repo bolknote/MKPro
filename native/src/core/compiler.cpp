@@ -26693,6 +26693,127 @@ bool lower_int_frac_shared_tail(LoweringContext& context, const V2Statement& fir
   return true;
 }
 
+struct DivmodPair {
+  const V2Statement* remainder_statement = nullptr;
+  std::string value;
+  Expression divisor;
+};
+
+bool collect_divmod_quotient_terms(const LoweringContext& context, const Expression& expression,
+                                   std::vector<DivmodPair>& pairs) {
+  if (expression.kind == "binary" && expression.op == "+" && expression.left != nullptr &&
+      expression.right != nullptr) {
+    return collect_divmod_quotient_terms(context, *expression.left, pairs) &&
+           collect_divmod_quotient_terms(context, *expression.right, pairs);
+  }
+
+  const std::optional<IntOrFracCall> call = match_int_or_frac_call(expression);
+  if (!call.has_value() || call->fn != "int" || call->arg.kind != "binary" ||
+      call->arg.op != "/" || call->arg.left == nullptr || call->arg.right == nullptr ||
+      call->arg.left->kind != "identifier" ||
+      !context.register_index_by_name.contains(call->arg.left->name)) {
+    return false;
+  }
+
+  const std::optional<double> divisor = numeric_literal_value(*call->arg.right);
+  if (!divisor.has_value() || !std::isfinite(*divisor) || std::fabs(*divisor) < 1e-12)
+    return false;
+
+  pairs.push_back(DivmodPair{
+      .value = call->arg.left->name,
+      .divisor = *call->arg.right,
+  });
+  return true;
+}
+
+bool lower_divmod_pair_fusion_run(LoweringContext& context,
+                                  const std::vector<V2Statement>& statements,
+                                  std::size_t start, std::size_t& consumed) {
+  consumed = 0;
+  if (start >= statements.size())
+    return false;
+
+  const V2Statement& quotient_statement = statements.at(start);
+  if (!scalar_register_assignment(context, quotient_statement))
+    return false;
+
+  const Expression quotient_expression =
+      parse_expression(*quotient_statement.expr, quotient_statement.line);
+  std::vector<DivmodPair> pairs;
+  if (!collect_divmod_quotient_terms(context, quotient_expression, pairs) || pairs.size() < 2U ||
+      start + pairs.size() >= statements.size()) {
+    return false;
+  }
+
+  const std::string& target = *quotient_statement.target;
+  std::set<std::string> values;
+  std::set<int> physical_registers;
+  const auto target_register = context.register_index_by_name.find(target);
+  if (target_register == context.register_index_by_name.end())
+    return false;
+  physical_registers.insert(target_register->second);
+
+  for (std::size_t pair_index = 0; pair_index < pairs.size(); ++pair_index) {
+    DivmodPair& pair = pairs.at(pair_index);
+    if (pair.value == target || !values.insert(pair.value).second)
+      return false;
+    const auto value_register = context.register_index_by_name.find(pair.value);
+    if (value_register == context.register_index_by_name.end() ||
+        !physical_registers.insert(value_register->second).second) {
+      return false;
+    }
+
+    const V2Statement& remainder_statement = statements.at(start + pair_index + 1U);
+    if (!scalar_register_assignment(context, remainder_statement) ||
+        *remainder_statement.target != pair.value ||
+        context.entered_interaction_anchors.contains(&remainder_statement)) {
+      return false;
+    }
+    const Expression remainder_expression =
+        parse_expression(*remainder_statement.expr, remainder_statement.line);
+    const std::optional<core::emit::RemainderByConstantMatch> remainder =
+        match_remainder_by_constant(remainder_expression);
+    if (!remainder.has_value() || remainder->value.kind != "identifier" ||
+        remainder->value.name != pair.value ||
+        !expression_equals(remainder->divisor, pair.divisor)) {
+      return false;
+    }
+    pair.remainder_statement = &remainder_statement;
+  }
+
+  for (std::size_t pair_index = 0; pair_index < pairs.size(); ++pair_index) {
+    const DivmodPair& pair = pairs.at(pair_index);
+    const int line = pair.remainder_statement->line;
+    emit_recall(context, pair.value);
+    if (!lower_expression_to_x(context, pair.divisor))
+      return false;
+    context.emitter.emit_op(0x13, "/", "divmod quotient", quotient_statement.line);
+    context.emitter.emit_op(0x0e, "В↑", "preserve divmod quotient", quotient_statement.line);
+    context.emitter.emit_op(0x35, "К {x}", "divmod fractional remainder", line);
+    if (!lower_expression_to_x(context, pair.divisor))
+      return false;
+    context.emitter.emit_op(0x12, "*", "divmod remainder", line);
+    clear_current_x_facts(context);
+    emit_store(context, pair.value, "set divmod remainder " + pair.value);
+    context.emitter.emit_op(0x25, "F reverse", "restore divmod quotient", line);
+    context.emitter.emit_op(0x34, "К [x]", "divmod integer quotient", quotient_statement.line);
+    clear_current_x_facts(context);
+    if (pair_index != 0U) {
+      context.emitter.emit_op(0x10, "+", "sum divmod quotients", quotient_statement.line);
+      clear_current_x_facts(context);
+    }
+  }
+
+  emit_store(context, target, "set " + target);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "divmod-pair-fusion",
+      .detail = "Fused " + std::to_string(pairs.size()) +
+                " integer quotients with their matching remainder stores.",
+  });
+  consumed = pairs.size() + 1U;
+  return true;
+}
+
 struct StackUnaryDerivationCall {
   std::string fn;
   int opcode = 0;
@@ -41261,6 +41382,13 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (lower_repeated_assignment_value_run(context, statements, index,
                                             repeated_assignment_consumed)) {
       index += repeated_assignment_consumed - 1U;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    std::size_t divmod_pair_consumed = 0;
+    if (lower_divmod_pair_fusion_run(context, statements, index, divmod_pair_consumed)) {
+      index += divmod_pair_consumed - 1U;
       continue;
     }
     if (has_errors(context.diagnostics))

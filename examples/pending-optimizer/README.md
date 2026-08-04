@@ -16,7 +16,7 @@ with a raw listing: the goal is to make the high-level source fit.
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
 | `tic-tac-toe-4x4.mkpro` | 136 | 105 | +31 | pending optimizer |
-| `nekromant.mkpro` | 186 | 105 | +81 | pending optimizer |
+| `nekromant.mkpro` | 178 | 105 | +73 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
@@ -186,3 +186,8 @@ mode may reject over-window programs earlier than the analysis path.
   arithmetic. This reduces `nekromant.mkpro` from 222 to 186 cells without
   changing its source; computed values, stack-only values, mismatched indexes,
   extra digit reads, and impure transforms retain the generic fallback.
+- Generic `divmod-pair-fusion` shares each division between an integer-quotient
+  sum and the immediately following matching remainder stores. Together with
+  ordinary straight-line helper sharing, this reduces `nekromant.mkpro` from
+  186 to 178 cells; aliases, reordered stores, mismatched divisors, and
+  nonnumeric divisors retain the independent lowering.

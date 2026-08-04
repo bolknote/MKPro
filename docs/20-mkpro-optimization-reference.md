@@ -805,6 +805,7 @@ committed example oracles under `native/oracles/`.
 - `local-terminal-tail` — shares a tail block for local calls.
 - `local-terminal-tail-branch` — shares a branching tail similarly.
 - `int-frac-shared-tail` — one common tail for int/frac returns reduces duplication.
+- `divmod-pair-fusion` — adjacent quotient-sum and matching remainder assignments share each division.
 - `function-tail-recursion` — recognizes tail recursion and turns it into a loop.
 - `function-tail-call` — converts function tail recursion into a direct jump to entry, skipping the final call.
 
@@ -1554,6 +1555,13 @@ Display rewrites are separated into strategy selection + body lowering.
   same current X, and the loop still lowers through the normal `F Lx` counted
   tail.
 - `int-frac-shared-tail` — a shared int/frac return tail reduces duplication.
+- `divmod-pair-fusion` — fuses a sum of two or more `int(value / divisor)` terms
+  with the immediately following, same-order assignments of
+  `value - int(value / divisor) * divisor`. Each numeric nonzero divisor is
+  evaluated once per quotient/remainder pair; the quotient is preserved on the
+  MK-61 stack while the remainder is stored. The matcher rejects aliases,
+  repeated source registers, reordered or mismatched remainder stores, and
+  nonnumeric divisors.
 - `subroutine-part-shared-tail` — computes one shared pure operand once and
   derives both `К [x]` and `К {x}` through one stack-tail, matching the same
   reduced-unary-return pattern used by `int-frac-shared-tail`.
