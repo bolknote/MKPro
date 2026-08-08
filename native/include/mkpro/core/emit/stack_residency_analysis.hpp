@@ -26,6 +26,19 @@ struct StackResidentFusionSite {
   bool crosses_control_flow = false;
 };
 
+struct ForwardableValueDefinition {
+  V2Statement statement;
+  std::string target;
+  Expression value;
+  std::size_t statement_index = 0;
+};
+
+struct ForwardableValueRegion {
+  std::vector<ForwardableValueDefinition> definitions;
+  std::size_t consumer_begin = 0;
+  std::size_t consumer_end = 0;
+};
+
 struct StackResidencySummary {
   int max_live_temps = 0;
   int fusion_sites = 0;
@@ -44,6 +57,11 @@ bool statement_preserves_stack_residency(const V2Statement& statement,
                                          const std::set<std::string>& protected_temps);
 std::optional<StackResidentFusionSite> find_stack_resident_fusion_site(
     const std::vector<V2Statement>& statements, std::size_t start);
+std::optional<ForwardableValueRegion> analyze_forwardable_value_region(
+    const std::vector<V2Statement>& statements, std::size_t definition_begin,
+    std::size_t consumer_begin, std::size_t consumer_end);
+std::optional<ForwardableValueRegion> find_forwardable_value_region(
+    const std::vector<V2Statement>& statements, std::size_t definition_begin);
 StackResidencySummary summarize_stack_residency_candidates_in_block(
     const std::vector<V2Statement>& statements);
 

@@ -43,20 +43,29 @@ bool expression_pure_for_substitution(const Expression& expression) {
 bool stack_temp_source_is_safe(const Expression& expression) {
   if (!expression_pure_for_substitution(expression))
     return false;
-  if (expression.kind != "call")
-    return true;
-
-  // User rules may mutate state, so calls are not generally substitutable.  These
-  // builtins are pure unary transforms, however, and computing one into a
-  // short-lived temporary is no different from computing an arithmetic expression.
   static const std::set<std::string> kPureUnaryBuiltins = {
       "abs",      "acos",     "asin", "atg",  "cos",      "exp",
       "frac",     "from_min", "from_sec", "int", "inv",  "lg",
       "ln",       "sign",     "sin",  "sqr",  "sqrt",     "tg",
       "to_min",   "to_sec",
   };
-  return expression.args.size() == 1U &&
-         kPureUnaryBuiltins.contains(lower_ascii(expression.callee));
+  std::function<bool(const Expression&)> calls_are_safe = [&](const Expression& current) {
+    if (current.kind == "call" &&
+        (current.args.size() != 1U ||
+         !kPureUnaryBuiltins.contains(lower_ascii(current.callee)))) {
+      return false;
+    }
+    if (current.index != nullptr && !calls_are_safe(*current.index))
+      return false;
+    if (current.expr != nullptr && !calls_are_safe(*current.expr))
+      return false;
+    if (current.left != nullptr && !calls_are_safe(*current.left))
+      return false;
+    if (current.right != nullptr && !calls_are_safe(*current.right))
+      return false;
+    return std::all_of(current.args.begin(), current.args.end(), calls_are_safe);
+  };
+  return calls_are_safe(expression);
 }
 
 std::optional<Expression> parse_expression_or_none(const std::optional<std::string>& text,
@@ -102,7 +111,8 @@ bool target_text_reads_identifier(const std::optional<std::string>& text,
 }
 
 bool statement_writes_identifier(const V2Statement& statement, const std::string& name) {
-  if (statement.kind != "v2_assign" || !statement.target.has_value())
+  if ((statement.kind != "v2_assign" && statement.kind != "v2_update") ||
+      !statement.target.has_value())
     return false;
   const std::optional<Expression> target = parse_expression_or_none(*statement.target,
                                                                     statement.line);
@@ -116,6 +126,12 @@ bool statements_read_identifier_before_write(const std::vector<V2Statement>& sta
                                              const std::string& name);
 
 bool statement_reads_identifier(const V2Statement& statement, const std::string& name) {
+  if (statement.kind == "v2_update" && statement.target.has_value()) {
+    const std::optional<Expression> target =
+        parse_expression_or_none(*statement.target, statement.line);
+    if (target.has_value() && target->kind == "identifier" && target->name == name)
+      return true;
+  }
   if (target_text_reads_identifier(statement.target, name, statement.line) ||
       expression_text_references_identifier(statement.expr, name, statement.line)) {
     return true;
@@ -440,6 +456,68 @@ int peak_live_assign_temps_in_block(const std::vector<V2Statement>& statements) 
   return defs.empty() ? 0 : static_cast<int>(used_defs.size());
 }
 
+std::optional<std::string> arithmetic_update_operator(const V2Statement& statement) {
+  if (!statement.op.has_value())
+    return std::nullopt;
+  if (*statement.op == "+=")
+    return "+";
+  if (*statement.op == "-=")
+    return "-";
+  if (*statement.op == "*=")
+    return "*";
+  if (*statement.op == "/=")
+    return "/";
+  return std::nullopt;
+}
+
+std::optional<ForwardableValueDefinition>
+forwardable_value_definition(const V2Statement& statement, std::size_t statement_index) {
+  if ((statement.kind != "v2_assign" && statement.kind != "v2_update") ||
+      !statement.target.has_value() || !statement.expr.has_value()) {
+    return std::nullopt;
+  }
+  const std::optional<Expression> target =
+      parse_expression_or_none(*statement.target, statement.line);
+  if (!target.has_value() || target->kind != "identifier")
+    return std::nullopt;
+
+  std::optional<Expression> value;
+  if (statement.kind == "v2_assign") {
+    value = parse_expression_or_none(statement.expr, statement.line);
+  } else {
+    const std::optional<std::string> arithmetic = arithmetic_update_operator(statement);
+    if (!arithmetic.has_value())
+      return std::nullopt;
+    value = parse_expression_or_none("(" + target->name + ") " + *arithmetic + " (" +
+                                         *statement.expr + ")",
+                                     statement.line);
+  }
+  if (!value.has_value() || !stack_temp_source_is_safe(*value))
+    return std::nullopt;
+  return ForwardableValueDefinition{
+      .statement = statement,
+      .target = target->name,
+      .value = std::move(*value),
+      .statement_index = statement_index,
+  };
+}
+
+void collect_expression_identifiers(const Expression& expression,
+                                    std::set<std::string>& identifiers) {
+  if (expression.kind == "identifier")
+    identifiers.insert(expression.name);
+  if (expression.index != nullptr)
+    collect_expression_identifiers(*expression.index, identifiers);
+  if (expression.expr != nullptr)
+    collect_expression_identifiers(*expression.expr, identifiers);
+  if (expression.left != nullptr)
+    collect_expression_identifiers(*expression.left, identifiers);
+  if (expression.right != nullptr)
+    collect_expression_identifiers(*expression.right, identifiers);
+  for (const Expression& arg : expression.args)
+    collect_expression_identifiers(arg, identifiers);
+}
+
 } // namespace
 
 bool expression_references_identifier(const Expression& expression, const std::string& name) {
@@ -459,6 +537,166 @@ int count_identifier_reads(const Expression& expression, const std::string& name
   for (const Expression& arg : expression.args)
     count += count_identifier_reads(arg, name);
   return count;
+}
+
+std::optional<ForwardableValueRegion> analyze_forwardable_value_region(
+    const std::vector<V2Statement>& statements, std::size_t definition_begin,
+    std::size_t consumer_begin, std::size_t consumer_end) {
+  if (definition_begin >= consumer_begin || consumer_begin >= consumer_end ||
+      consumer_end > statements.size()) {
+    return std::nullopt;
+  }
+
+  std::vector<ForwardableValueDefinition> definitions;
+  std::set<std::string> targets;
+  for (std::size_t index = definition_begin; index < consumer_begin; ++index) {
+    const std::optional<ForwardableValueDefinition> definition =
+        forwardable_value_definition(statements.at(index), index);
+    if (!definition.has_value() || !targets.insert(definition->target).second)
+      return std::nullopt;
+    definitions.push_back(*definition);
+  }
+
+  for (const ForwardableValueDefinition& definition : definitions) {
+    for (const std::string& target : targets) {
+      if (target != definition.target &&
+          expression_references_identifier(definition.value, target)) {
+        return std::nullopt;
+      }
+    }
+  }
+
+  for (std::size_t index = consumer_begin; index < consumer_end; ++index) {
+    const V2Statement& statement = statements.at(index);
+    if ((statement.kind != "v2_assign" && statement.kind != "v2_update") ||
+        !statement.expr.has_value()) {
+      return std::nullopt;
+    }
+    const std::optional<Expression> expression =
+        parse_expression_or_none(statement.expr, statement.line);
+    if (!expression.has_value() || !stack_temp_source_is_safe(*expression))
+      return std::nullopt;
+  }
+
+  for (const ForwardableValueDefinition& definition : definitions) {
+    bool read_before_overwrite = false;
+    std::optional<std::size_t> first_overwrite;
+    for (std::size_t index = consumer_begin; index < consumer_end; ++index) {
+      const V2Statement& statement = statements.at(index);
+      if (statement_reads_identifier(statement, definition.target))
+        read_before_overwrite = true;
+      if (statement_writes_identifier(statement, definition.target)) {
+        first_overwrite = index;
+        break;
+      }
+    }
+    if (!read_before_overwrite || !first_overwrite.has_value())
+      return std::nullopt;
+
+    std::set<std::string> source_identifiers;
+    collect_expression_identifiers(definition.value, source_identifiers);
+    source_identifiers.erase(definition.target);
+    for (const std::string& source : source_identifiers) {
+      for (std::size_t index = consumer_begin; index <= *first_overwrite; ++index) {
+        if (statement_writes_identifier(statements.at(index), source))
+          return std::nullopt;
+      }
+    }
+  }
+
+  return ForwardableValueRegion{
+      .definitions = std::move(definitions),
+      .consumer_begin = consumer_begin,
+      .consumer_end = consumer_end,
+  };
+}
+
+std::optional<ForwardableValueRegion> find_forwardable_value_region(
+    const std::vector<V2Statement>& statements, std::size_t definition_begin) {
+  if (definition_begin >= statements.size())
+    return std::nullopt;
+
+  std::vector<ForwardableValueDefinition> definitions;
+  std::set<std::string> targets;
+  std::size_t consumer_begin = definition_begin;
+  for (; consumer_begin < statements.size(); ++consumer_begin) {
+    const V2Statement& statement = statements.at(consumer_begin);
+    const bool reads_prior = std::any_of(
+        targets.begin(), targets.end(), [&](const std::string& target) {
+          return statement_reads_identifier(statement, target);
+        });
+    if (reads_prior)
+      break;
+
+    const std::optional<ForwardableValueDefinition> definition =
+        forwardable_value_definition(statement, consumer_begin);
+    if (!definition.has_value() || !targets.insert(definition->target).second)
+      break;
+    definitions.push_back(*definition);
+  }
+  if (definitions.empty() || consumer_begin >= statements.size())
+    return std::nullopt;
+
+  // Definitions in one delayed group may read their own old value, but not a
+  // sibling's value: otherwise moving their materialization independently
+  // would change the source-level evaluation order.
+  for (const ForwardableValueDefinition& definition : definitions) {
+    for (const std::string& target : targets) {
+      if (target != definition.target &&
+          expression_references_identifier(definition.value, target)) {
+        return std::nullopt;
+      }
+    }
+  }
+
+  std::size_t consumer_end = consumer_begin;
+  for (const ForwardableValueDefinition& definition : definitions) {
+    std::set<std::string> dependencies;
+    collect_expression_identifiers(definition.value, dependencies);
+    dependencies.erase(definition.target);
+
+    bool found_read = false;
+    bool found_overwrite = false;
+    for (std::size_t index = consumer_begin; index < statements.size(); ++index) {
+      const V2Statement& statement = statements.at(index);
+      if ((statement.kind != "v2_assign" && statement.kind != "v2_update") ||
+          !statement.expr.has_value()) {
+        return std::nullopt;
+      }
+      const std::optional<Expression> expression =
+          parse_expression_or_none(statement.expr, statement.line);
+      if (!expression.has_value() || !stack_temp_source_is_safe(*expression))
+        return std::nullopt;
+
+      // The RHS is evaluated before its target is written. Continue through
+      // every pure reader until the first overwrite: lowering may fuse several
+      // source reads into one actual recall, so the store decision belongs to
+      // the emitted def-use stream rather than the source read count.
+      if (!found_read && statement_reads_identifier(statement, definition.target))
+        found_read = true;
+      if (statement_writes_identifier(statement, definition.target)) {
+        if (!found_read)
+          return std::nullopt;
+        found_overwrite = true;
+        consumer_end = std::max(consumer_end, index + 1U);
+        break;
+      }
+      if (!found_read) {
+        for (const std::string& dependency : dependencies) {
+          if (statement_writes_identifier(statement, dependency))
+            return std::nullopt;
+        }
+      }
+    }
+    if (!found_read || !found_overwrite)
+      return std::nullopt;
+  }
+
+  return ForwardableValueRegion{
+      .definitions = std::move(definitions),
+      .consumer_begin = consumer_begin,
+      .consumer_end = consumer_end,
+  };
 }
 
 bool can_lower_stack_resident_expression(const Expression& expression,

@@ -806,6 +806,7 @@ committed example oracles under `native/oracles/`.
 - `local-terminal-tail-branch` — shares a branching tail similarly.
 - `int-frac-shared-tail` — one common tail for int/frac returns reduces duplication.
 - `divmod-pair-fusion` — adjacent quotient-sum and matching remainder assignments share each division.
+- `single-use-producer-forwarding` — extends the shared stack-residency def-use analysis from adjacent temporaries to straight-line expression lifetimes. Independent pure definitions are delayed until their first actual lowering-time recall. The recall path computes the value and records a possible store point without emitting it: a second real recall backpatches the store, while an overwrite first discards it. Thus fused and ordinary consumers participate automatically without relying on conservative call-crossing DSE. No consumer, formula, constant, or game recognizer is involved.
 - `function-tail-recursion` — recognizes tail recursion and turns it into a loop.
 - `function-tail-call` — converts function tail recursion into a direct jump to entry, skipping the final call.
 
@@ -1563,6 +1564,18 @@ Display rewrites are separated into strategy selection + body lowering.
   MK-61 stack while the remainder is stored. The matcher rejects aliases,
   repeated source registers, reordered or mismatched remainder stores, and
   nonnumeric divisors.
+- `single-use-producer-forwarding` — uses the common stack-residency def-use
+  analysis to discover scalar assignments or arithmetic updates and their first
+  safe reads without being told what the consumer is. It derives each complete
+  value expression, rejects changed dependencies, control/interaction barriers,
+  impure calls, and cross-producer dependencies, then records the definitions in
+  the ordinary lowering context. The first `emit_recall` computes the pending
+  definition and records a legal store insertion point while consuming current
+  `X` directly. A second emitted recall backpatches the store at that point; a
+  destructive overwrite first discards it. Stack-only or unsynchronised current-X
+  dependencies fail closed. Consequently arithmetic, helper, and fused consumers
+  all use the same mechanism; `divmod-pair-fusion` has no forwarding parameter or
+  adapter.
 - `packed-digit-permutation-fusion` — replaces a complete width-3..8 decimal
   reversal assembled from `digit_at()` terms with one `F L0..L3` extraction
   loop. A dedicated logical counter is fixed to the required register class and

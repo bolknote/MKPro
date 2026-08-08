@@ -3515,6 +3515,151 @@ program NonPermutationDigits {
   require(!has_optimization(non_permutation_digits, "packed-digit-permutation-fusion"),
           "non-reversal digit weights must not use packed digit permutation fusion");
 
+  const CompileResult forwarded_divmod_producers = compile_source(R"mkpro(
+program ForwardedDivmodProducers {
+  state {
+    left: packed = 12
+    right: packed = 34
+    quotient: packed = 0
+  }
+
+  loop {
+    left = (left + 3) * 10
+    right *= 10
+    quotient = int(left / 1000) + int(right / 1000)
+    left = left - int(left / 1000) * 1000
+    right = right - int(right / 1000) * 1000
+    halt(quotient + left + right)
+  }
+}
+)mkpro");
+  require(forwarded_divmod_producers.implemented,
+          "native compiler should forward pure producers into a destructive consumer");
+  require(forwarded_divmod_producers.diagnostics.empty(),
+          "single-use producer forwarding should not report diagnostics");
+  require(has_optimization(forwarded_divmod_producers, "single-use-producer-forwarding") &&
+              has_optimization(forwarded_divmod_producers, "divmod-pair-fusion"),
+          "forwarded divmod producers should retain the generic consumer fusion report");
+  require(std::none_of(forwarded_divmod_producers.steps.begin(),
+                       forwarded_divmod_producers.steps.end(), [](const ResolvedStep& step) {
+                         return step.comment == "set left" || step.comment == "set right";
+                       }),
+          "forwarded producers should not materialize their intermediate state values");
+
+  CompileOptions generic_forwarding_options;
+  generic_forwarding_options.budget = 999999;
+  generic_forwarding_options.disable_candidate_search = true;
+  const CompileResult forwarded_arithmetic_producers = compile_source(R"mkpro(
+program ForwardedArithmeticProducers {
+  state {
+    left: packed = 12
+    right: packed = 34
+    total: packed = 0
+  }
+
+  loop {
+    left = (left + 3) * 10
+    right *= 10
+    total = left + right
+    left = 0
+    right = 0
+    halt(total)
+  }
+}
+)mkpro",
+                                                                      generic_forwarding_options);
+  require(forwarded_arithmetic_producers.implemented &&
+              forwarded_arithmetic_producers.diagnostics.empty(),
+          "generic expression-lifetime forwarding should compile cleanly");
+  require(has_optimization(forwarded_arithmetic_producers,
+                           "single-use-producer-forwarding"),
+          "ordinary arithmetic consumers should use the shared expression-lifetime scheduler");
+  require(!has_optimization(forwarded_arithmetic_producers, "divmod-pair-fusion"),
+          "generic expression-lifetime forwarding must not depend on divmod recognition");
+
+  const CompileResult forwarded_repeated_read = compile_source(R"mkpro(
+program ForwardedRepeatedRead {
+  state {
+    value: packed = 2
+    out: packed = 0
+  }
+
+  loop {
+    value *= 10
+    out = value + 1
+    out += value
+    value = 0
+    halt(out)
+  }
+}
+)mkpro",
+                                                               generic_forwarding_options);
+  require(forwarded_repeated_read.implemented &&
+              forwarded_repeated_read.diagnostics.empty(),
+          "repeated-read expression-lifetime forwarding should compile cleanly");
+  require(has_optimization(forwarded_repeated_read, "single-use-producer-forwarding"),
+          "repeated-read consumers should use the shared expression-lifetime scheduler");
+  require(std::count_if(forwarded_repeated_read.steps.begin(),
+                        forwarded_repeated_read.steps.end(), [](const ResolvedStep& step) {
+                          return step.comment == "materialize deferred value";
+                        }) == 1,
+          "a second lowering-time read must backpatch exactly one deferred store");
+
+  const CompileResult dependent_divmod_producers = compile_source(R"mkpro(
+program DependentDivmodProducers {
+  state {
+    left: packed = 12
+    right: packed = 34
+    quotient: packed = 0
+  }
+
+  loop {
+    left *= 10
+    right *= left
+    quotient = int(left / 1000) + int(right / 1000)
+    left = left - int(left / 1000) * 1000
+    right = right - int(right / 1000) * 1000
+    halt(quotient + left + right)
+  }
+}
+)mkpro");
+  require(dependent_divmod_producers.implemented,
+          "native compiler should lower dependent producer lifetimes safely");
+  require(dependent_divmod_producers.diagnostics.empty(),
+          "dependent producer forwarding should not report diagnostics");
+  require(has_optimization(dependent_divmod_producers, "single-use-producer-forwarding"),
+          "a producer may move to its immediately dependent first read without reordering either expression");
+
+  const CompileResult impure_divmod_producers = compile_source(R"mkpro(
+program ImpureDivmodProducers {
+  state {
+    left: packed = 12
+    right: packed = 34
+    quotient: packed = 0
+  }
+
+  loop {
+    left = random() * 10
+    right *= 10
+    quotient = int(left / 1000) + int(right / 1000)
+    left = left - int(left / 1000) * 1000
+    right = right - int(right / 1000) * 1000
+    halt(quotient + left + right)
+  }
+}
+)mkpro");
+  require(impure_divmod_producers.implemented,
+          "native compiler should retain ordinary lowering for impure producers");
+  require(impure_divmod_producers.diagnostics.empty(),
+          "impure producer fallback should not report diagnostics");
+  require(has_optimization(impure_divmod_producers, "single-use-producer-forwarding"),
+          "an independent pure producer should still be forwarded beside an impure definition");
+  require(std::any_of(impure_divmod_producers.steps.begin(),
+                      impure_divmod_producers.steps.end(), [](const ResolvedStep& step) {
+                        return step.comment == "set left";
+                      }),
+          "the random() producer itself must remain materialized at its original statement");
+
   const CompileResult leading_digit_rmw = compile_source(R"mkpro(
 program LeadingDigitRmw {
   state {

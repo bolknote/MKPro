@@ -11628,6 +11628,7 @@ void mark_current_x(LoweringContext& context, const std::string& name) {
   context.emitter.current_x_formatted_coord_report_body.reset();
   context.emitter.current_x_aliases.clear();
   context.emitter.current_x_aliases.insert(name);
+  context.current_x_memory_aliases.clear();
 }
 
 void clear_current_x_facts(LoweringContext& context) {
@@ -11636,6 +11637,7 @@ void clear_current_x_facts(LoweringContext& context) {
   context.emitter.current_x_formatted_coord_report_body.reset();
   context.emitter.current_x_aliases.clear();
   context.emitter.current_x_known_zero = false;
+  context.current_x_memory_aliases.clear();
 }
 
 void mark_dispatch_case_match_zero(LoweringContext& context) {
@@ -11644,9 +11646,73 @@ void mark_dispatch_case_match_zero(LoweringContext& context) {
   context.emitter.current_x_formatted_coord_report_body.reset();
   context.emitter.current_x_aliases.clear();
   context.emitter.current_x_known_zero = true;
+  context.current_x_memory_aliases.clear();
+}
+
+bool lower_expression_to_x(LoweringContext& context, const Expression& expression,
+                           bool allow_constant_fold);
+void emit_store(LoweringContext& context, const std::string& name, std::string comment);
+
+void insert_deferred_materialization_store(LoweringContext& context,
+                                           const std::string& name,
+                                           std::size_t insertion_index,
+                                           int source_line) {
+  const int index = register_index_for(context, name);
+  MachineItem store = MachineItem::op(0x40 + index, "X->П " + register_text_for(context, name));
+  store.comment = "materialize deferred " + name;
+  store.source_line = source_line;
+  store.logical_register_name = name;
+  context.emitter.items.insert(
+      context.emitter.items.begin() +
+          static_cast<std::vector<MachineItem>::difference_type>(insertion_index),
+      std::move(store));
+  for (auto& [other_name, deferred] : context.deferred_values) {
+    (void)other_name;
+    if (deferred.evaluated && deferred.store_insertion_index >= insertion_index)
+      ++deferred.store_insertion_index;
+  }
+}
+
+bool materialize_deferred_value_through(LoweringContext& context,
+                                        const std::string& requested_name) {
+  const auto requested = context.deferred_values.find(requested_name);
+  if (requested == context.deferred_values.end())
+    return false;
+
+  while (!context.deferred_value_order.empty()) {
+    const std::string name = context.deferred_value_order.front();
+    context.deferred_value_order.erase(context.deferred_value_order.begin());
+    const auto found = context.deferred_values.find(name);
+    if (found == context.deferred_values.end())
+      continue;
+
+    DeferredValueMaterialization deferred = std::move(found->second);
+    context.deferred_values.erase(found);
+    if (!lower_expression_to_x(context, deferred.value, true))
+      return true;
+    if (name == requested_name) {
+      mark_current_x(context, name);
+      deferred.evaluated = true;
+      deferred.store_insertion_index = context.emitter.items.size();
+      context.deferred_values.emplace(name, std::move(deferred));
+      return true;
+    }
+    emit_store(context, name, "materialize deferred " + name);
+  }
+  return true;
 }
 
 void emit_recall(LoweringContext& context, const std::string& name) {
+  const auto deferred = context.deferred_values.find(name);
+  if (deferred != context.deferred_values.end() && deferred->second.evaluated) {
+    const std::size_t insertion_index = deferred->second.store_insertion_index;
+    const int source_line = deferred->second.source_line;
+    insert_deferred_materialization_store(context, name, insertion_index, source_line);
+    context.deferred_values.erase(name);
+    context.current_x_memory_aliases.insert(name);
+  }
+  if (materialize_deferred_value_through(context, name))
+    return;
   if (context.emitter.current_x_variable == name ||
       context.emitter.current_x_aliases.contains(name)) {
     return;
@@ -11656,6 +11722,7 @@ void emit_recall(LoweringContext& context, const std::string& name) {
                           "recall " + name);
   context.emitter.items.back().logical_register_name = name;
   mark_current_x(context, name);
+  context.current_x_memory_aliases.insert(name);
 }
 
 void invalidate_bank_selector_cache_for_store(LoweringContext& context, const std::string& name,
@@ -11673,6 +11740,10 @@ void invalidate_bank_selector_cache_for_store(LoweringContext& context, const st
 }
 
 void emit_store(LoweringContext& context, const std::string& name, std::string comment) {
+  // A write before another lowering-time recall is the destructive consumer
+  // promised by the source lifetime proof. The old deferred value no longer
+  // needs a memory copy.
+  context.deferred_values.erase(name);
   const int index = register_index_for(context, name);
   invalidate_bank_selector_cache_for_store(context, name, index);
   const bool known_zero = context.emitter.current_x_known_zero;
@@ -11685,6 +11756,7 @@ void emit_store(LoweringContext& context, const std::string& name, std::string c
   context.emitter.current_x_formatted_coord_report_body.reset();
   aliases.insert(name);
   context.emitter.current_x_aliases = std::move(aliases);
+  context.current_x_memory_aliases.insert(name);
   context.emitter.current_x_known_zero = known_zero;
 }
 
@@ -24471,6 +24543,10 @@ bool lower_logical_packed_field_extract_to_x(LoweringContext& context,
 
 bool lower_expression_to_x(LoweringContext& context, const Expression& expression,
                            bool allow_constant_fold) {
+  if (expression.kind == "identifier" && context.deferred_values.contains(expression.name)) {
+    emit_recall(context, expression.name);
+    return !has_errors(context.diagnostics);
+  }
   if (context.emitter.current_x_expression != nullptr &&
       expression_equals(*context.emitter.current_x_expression, expression)) {
     if (expression.kind == "indexed") {
@@ -27060,23 +27136,29 @@ bool collect_divmod_quotient_terms(const LoweringContext& context, const Express
   return true;
 }
 
-bool lower_divmod_pair_fusion_run(LoweringContext& context,
-                                  const std::vector<V2Statement>& statements,
-                                  std::size_t start, std::size_t& consumed) {
-  consumed = 0;
+struct DivmodPairFusionMatch {
+  const V2Statement* quotient_statement = nullptr;
+  std::string target;
+  std::vector<DivmodPair> pairs;
+  std::size_t consumed = 0;
+};
+
+std::optional<DivmodPairFusionMatch>
+match_divmod_pair_fusion_run(LoweringContext& context,
+                             const std::vector<V2Statement>& statements, std::size_t start) {
   if (start >= statements.size())
-    return false;
+    return std::nullopt;
 
   const V2Statement& quotient_statement = statements.at(start);
   if (!scalar_register_assignment(context, quotient_statement))
-    return false;
+    return std::nullopt;
 
   const Expression quotient_expression =
       parse_expression(*quotient_statement.expr, quotient_statement.line);
   std::vector<DivmodPair> pairs;
   if (!collect_divmod_quotient_terms(context, quotient_expression, pairs) || pairs.size() < 2U ||
       start + pairs.size() >= statements.size()) {
-    return false;
+    return std::nullopt;
   }
 
   const std::string& target = *quotient_statement.target;
@@ -27084,24 +27166,24 @@ bool lower_divmod_pair_fusion_run(LoweringContext& context,
   std::set<int> physical_registers;
   const auto target_register = context.register_index_by_name.find(target);
   if (target_register == context.register_index_by_name.end())
-    return false;
+    return std::nullopt;
   physical_registers.insert(target_register->second);
 
   for (std::size_t pair_index = 0; pair_index < pairs.size(); ++pair_index) {
     DivmodPair& pair = pairs.at(pair_index);
     if (pair.value == target || !values.insert(pair.value).second)
-      return false;
+      return std::nullopt;
     const auto value_register = context.register_index_by_name.find(pair.value);
     if (value_register == context.register_index_by_name.end() ||
         !physical_registers.insert(value_register->second).second) {
-      return false;
+      return std::nullopt;
     }
 
     const V2Statement& remainder_statement = statements.at(start + pair_index + 1U);
     if (!scalar_register_assignment(context, remainder_statement) ||
         *remainder_statement.target != pair.value ||
         context.entered_interaction_anchors.contains(&remainder_statement)) {
-      return false;
+      return std::nullopt;
     }
     const Expression remainder_expression =
         parse_expression(*remainder_statement.expr, remainder_statement.line);
@@ -27110,13 +27192,26 @@ bool lower_divmod_pair_fusion_run(LoweringContext& context,
     if (!remainder.has_value() || remainder->value.kind != "identifier" ||
         remainder->value.name != pair.value ||
         !expression_equals(remainder->divisor, pair.divisor)) {
-      return false;
+      return std::nullopt;
     }
     pair.remainder_statement = &remainder_statement;
   }
 
-  for (std::size_t pair_index = 0; pair_index < pairs.size(); ++pair_index) {
-    const DivmodPair& pair = pairs.at(pair_index);
+  const std::size_t consumed = pairs.size() + 1U;
+  return DivmodPairFusionMatch{
+      .quotient_statement = &quotient_statement,
+      .target = target,
+      .pairs = std::move(pairs),
+      .consumed = consumed,
+  };
+}
+
+bool lower_divmod_pair_fusion_match(LoweringContext& context,
+                                    const DivmodPairFusionMatch& match) {
+  const V2Statement& quotient_statement = *match.quotient_statement;
+
+  for (std::size_t pair_index = 0; pair_index < match.pairs.size(); ++pair_index) {
+    const DivmodPair& pair = match.pairs.at(pair_index);
     const int line = pair.remainder_statement->line;
     emit_recall(context, pair.value);
     if (!lower_expression_to_x(context, pair.divisor))
@@ -27138,13 +27233,86 @@ bool lower_divmod_pair_fusion_run(LoweringContext& context,
     }
   }
 
-  emit_store(context, target, "set " + target);
+  emit_store(context, match.target, "set " + match.target);
   context.optimizations.push_back(OptimizationReport{
       .name = "divmod-pair-fusion",
-      .detail = "Fused " + std::to_string(pairs.size()) +
+      .detail = "Fused " + std::to_string(match.pairs.size()) +
                 " integer quotients with their matching remainder stores.",
   });
-  consumed = pairs.size() + 1U;
+  return true;
+}
+
+bool lower_deferred_value_materialization_run(
+    LoweringContext& context, const std::vector<V2Statement>& statements,
+    std::size_t start, std::size_t& consumed) {
+  consumed = 0;
+  if (!context.deferred_values.empty())
+    return false;
+  const std::optional<core::emit::ForwardableValueRegion> region =
+      core::emit::find_forwardable_value_region(statements, start);
+  if (!region.has_value())
+    return false;
+
+  for (std::size_t index = start; index < region->consumer_end; ++index) {
+    const V2Statement* statement = &statements.at(index);
+    if (context.entered_interaction_anchors.contains(statement) ||
+        context.prompt_interaction_anchors.contains(statement)) {
+      return false;
+    }
+  }
+  for (const core::emit::ForwardableValueDefinition& definition : region->definitions) {
+    // Stack-only implicit locals deliberately have no physical register. Their
+    // existing stack scheduler must remain responsible for them; deferred
+    // materialization promises an ordinary register store for later readers.
+    if (!context.register_index_by_name.contains(definition.target))
+      return false;
+    // A stack-only dependency may have a nominal register allocation whose
+    // memory value is intentionally stale: its authoritative value exists only
+    // in X/Y/Z/T until the original immediate consumer. Delaying an expression
+    // that reads it would silently turn that stack contract into a memory read.
+    for (const std::string& stack_only : context.stack_only_state_fields) {
+      if (core::emit::expression_references_identifier(definition.value, stack_only))
+        return false;
+    }
+    for (const std::string& current_x_alias : context.emitter.current_x_aliases) {
+      if (!context.current_x_memory_aliases.contains(current_x_alias) &&
+          core::emit::expression_references_identifier(definition.value, current_x_alias))
+        return false;
+    }
+  }
+  for (const core::emit::ForwardableValueDefinition& definition : region->definitions) {
+    context.deferred_values.emplace(
+        definition.target,
+        DeferredValueMaterialization{
+            .value = definition.value,
+            .source_line = definition.statement.line,
+        });
+    context.deferred_value_order.push_back(definition.target);
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = "single-use-producer-forwarding",
+      .detail = "Deferred " + std::to_string(region->definitions.size()) +
+                " independent pure definition" +
+                (region->definitions.size() == 1U ? "" : "s") +
+                " to the first lowering-time use.",
+  });
+  context.deferred_value_block = &statements;
+  context.deferred_value_region_end = region->consumer_end;
+  consumed = region->definitions.size();
+  return true;
+}
+
+bool lower_divmod_pair_fusion_run(LoweringContext& context,
+                                  const std::vector<V2Statement>& statements,
+                                  std::size_t start, std::size_t& consumed) {
+  consumed = 0;
+  const std::optional<DivmodPairFusionMatch> match =
+      match_divmod_pair_fusion_run(context, statements, start);
+  if (!match.has_value())
+    return false;
+  if (!lower_divmod_pair_fusion_match(context, *match))
+    return false;
+  consumed = match->consumed;
   return true;
 }
 
@@ -41502,6 +41670,19 @@ bool lower_fused_coord_list_scan(LoweringContext& context,
 }
 
 bool lower_statement_block(LoweringContext& context, const std::vector<V2Statement>& statements) {
+  struct DeferredValueBlockCleanup {
+    LoweringContext& context;
+    const std::vector<V2Statement>* block;
+    ~DeferredValueBlockCleanup() {
+      if (context.deferred_value_block != block)
+        return;
+      context.deferred_values.clear();
+      context.deferred_value_order.clear();
+      context.deferred_value_block = nullptr;
+      context.deferred_value_region_end = 0;
+    }
+  } deferred_cleanup{context, &statements};
+
   if (has_errors(context.diagnostics)) {
     for (std::size_t index = 0; index < statements.size(); ++index) {
       const V2Statement* next = index + 1U < statements.size() ? &statements.at(index + 1U) : nullptr;
@@ -41511,6 +41692,13 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
   }
 
   for (std::size_t index = 0; index < statements.size(); ++index) {
+    if (context.deferred_value_block == &statements &&
+        index >= context.deferred_value_region_end) {
+      context.deferred_values.clear();
+      context.deferred_value_order.clear();
+      context.deferred_value_block = nullptr;
+      context.deferred_value_region_end = 0;
+    }
     const V2Statement& current_statement = statements.at(index);
     const auto entered_anchor = context.entered_interaction_anchors.find(&current_statement);
     if (entered_anchor != context.entered_interaction_anchors.end()) {
@@ -41716,6 +41904,14 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (lower_repeated_assignment_value_run(context, statements, index,
                                             repeated_assignment_consumed)) {
       index += repeated_assignment_consumed - 1U;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    std::size_t deferred_materialization_consumed = 0;
+    if (lower_deferred_value_materialization_run(context, statements, index,
+                                                 deferred_materialization_consumed)) {
+      index += deferred_materialization_consumed - 1U;
       continue;
     }
     if (has_errors(context.diagnostics))

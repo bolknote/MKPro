@@ -180,6 +180,8 @@ const SizeNextActionSummaryReport* find_size_next_action(const CompileResult& re
 
 void stack_residency_matches_typescript_contract() {
   using core::emit::can_lower_stack_resident_expression;
+  using core::emit::analyze_forwardable_value_region;
+  using core::emit::find_forwardable_value_region;
   using core::emit::find_stack_resident_fusion_site;
   using core::emit::stack_resident_restore_ops;
   using core::emit::StackResidentRestoreOp;
@@ -221,6 +223,53 @@ void stack_residency_matches_typescript_contract() {
     const Expression expr = binary(id("a"), "-", id("b"));
     require(can_lower_stack_resident_expression(expr, {"a", "b"}),
             "stack-residency should accept a binary consumer over two temps");
+  }
+
+  {
+    const std::vector<V2Statement> body = {
+        update("left", "*=", "10", 1),
+        update("right", "*=", "10", 2),
+        assign("quotient", "int(left / 1000) + int(right / 1000)", 3),
+        assign("left", "left - int(left / 1000) * 1000", 4),
+        assign("right", "right - int(right / 1000) * 1000", 5),
+    };
+    const std::optional<core::emit::ForwardableValueRegion> region =
+        analyze_forwardable_value_region(body, 0, 2, 5);
+    require(region.has_value(),
+            "value-lifetime analysis should accept independent self-update producers");
+    require(region->definitions.size() == 2 &&
+                region->definitions.at(0).target == "left" &&
+                region->definitions.at(1).target == "right",
+            "value-lifetime analysis should preserve producer order and normalized targets");
+    const std::optional<core::emit::ForwardableValueRegion> discovered =
+        find_forwardable_value_region(body, 0);
+    require(discovered.has_value() && discovered->consumer_begin == 2 &&
+                discovered->consumer_end == 5 && discovered->definitions.size() == 2,
+            "value-lifetime analysis should discover the first-use-through-overwrite region without a consumer adapter");
+  }
+
+  {
+    const std::vector<V2Statement> body = {
+        update("left", "*=", "10", 1),
+        update("right", "*=", "left", 2),
+        assign("quotient", "int(left / 1000) + int(right / 1000)", 3),
+        assign("left", "left - int(left / 1000) * 1000", 4),
+        assign("right", "right - int(right / 1000) * 1000", 5),
+    };
+    require(!analyze_forwardable_value_region(body, 0, 2, 5).has_value(),
+            "value-lifetime analysis must reject cross-dependent producers");
+  }
+
+  {
+    const std::vector<V2Statement> body = {
+        assign("left", "random() * 10", 1),
+        update("right", "*=", "10", 2),
+        assign("quotient", "int(left / 1000) + int(right / 1000)", 3),
+        assign("left", "left - int(left / 1000) * 1000", 4),
+        assign("right", "right - int(right / 1000) * 1000", 5),
+    };
+    require(!analyze_forwardable_value_region(body, 0, 2, 5).has_value(),
+            "value-lifetime analysis must reject impure producers");
   }
 
   {
@@ -341,6 +390,8 @@ program UpdateStack {
     require_clean_compile(baseline, "baseline stack-resident update consumer");
     const CompileResult result = compile_stack_variant(update_stack);
     require_clean_compile(result, "stack-resident update consumer");
+    const CompileResult selected = compile_with_candidates(update_stack);
+    require_clean_compile(selected, "candidate-selected stack-resident update consumer");
     require(has_optimization(result, "stack-resident-temps"),
             "update consumer should keep both temps on the X/Y/Z/T stack");
     require(count_steps_with_comment(result, "set x") == 0 &&
@@ -351,8 +402,8 @@ program UpdateStack {
             "stack-resident update consumer should not recall temporary operands");
     require(count_steps_with_comment(result, "stack-resident update +=") == 1,
             "stack-resident update consumer should accumulate directly into the target");
-    require(result.steps.size() + 3U <= baseline.steps.size(),
-            "stack-resident update consumer should reduce the program size");
+    require(selected.steps.size() <= std::min(baseline.steps.size(), result.steps.size()),
+            "candidate search should select the smaller generic or stack-resident update lowering");
   }
 
   const std::string subtract_update_stack = R"mkpro(
@@ -1561,10 +1612,10 @@ program RuleStackInputDelayedAssignmentEntryProbe {
     baseline_options.disable_candidate_search = true;
     const CompileResult baseline = compile_source(source, baseline_options);
     require_clean_compile(baseline, "rule delayed stack-input assignment baseline");
-    require(count_steps_with_comment(baseline, "set x") == 3,
-            "baseline should materialize all x assignments");
-    require(count_steps_with_comment(baseline, "recall x") >= 2,
-            "baseline should recall x from helpers");
+    require(count_steps_with_comment(baseline, "set x") == 2,
+            "generic lifetime forwarding should eliminate the final inline use_x store");
+    require(count_steps_with_comment(baseline, "recall x") >= 1,
+            "baseline should retain the ordinary hot helper recall");
 
     CompileOptions stack_input_options = baseline_options;
     stack_input_options.stack_argument_function_entries = true;
@@ -1580,8 +1631,8 @@ program RuleStackInputDelayedAssignmentEntryProbe {
     require(count_steps_with_comment_prefix_and_opcode(
                 stack_input, "proc call hot stack-input entry", 0x53) == 2,
             "both delayed hot calls should use the stack-input entry");
-    require(count_steps_with_comment(stack_input, "set x") == 1,
-            "delayed stack-input calls should leave only the persistent x store for use_x()");
+    require(count_steps_with_comment(stack_input, "set x") == 0,
+            "stack-input calls and generic inline forwarding should eliminate every x store");
     require(count_steps_with_comment(stack_input, "recall x") + 1 ==
                 count_steps_with_comment(baseline, "recall x"),
             "hot should no longer recall x inside its helper body");

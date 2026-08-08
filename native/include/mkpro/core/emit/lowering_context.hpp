@@ -169,6 +169,13 @@ struct BankSelectorCacheEntry {
   int offset = 0;
 };
 
+struct DeferredValueMaterialization {
+  Expression value;
+  int source_line = 0;
+  bool evaluated = false;
+  std::size_t store_insertion_index = 0;
+};
+
 struct LoweringContext {
   MachineEmitter emitter;
   const V2Program* program = nullptr;
@@ -198,6 +205,18 @@ struct LoweringContext {
   std::map<std::string, XParamProcLowering> x_param_procs;
   std::map<std::string, XParamYStackProcLowering> x_param_y_stack_procs;
   std::optional<std::string> current_y_variable;
+  // Subset of MachineEmitter::current_x_aliases whose register memory is
+  // proved to contain the same value. A plain mark_current_x() is only a stack
+  // fact; emit_recall()/emit_store() establish memory synchronization.
+  std::set<std::string> current_x_memory_aliases;
+  // Pure definitions whose evaluation is delayed until the first real
+  // lowering-time recall. The register is materialized at that point, so all
+  // later readers retain ordinary semantics; generic IR DSE removes the store
+  // when that first reader is also the last one before an overwrite.
+  std::map<std::string, DeferredValueMaterialization> deferred_values;
+  std::vector<std::string> deferred_value_order;
+  const std::vector<V2Statement>* deferred_value_block = nullptr;
+  std::size_t deferred_value_region_end = 0;
   std::set<std::string> ephemeral_input_targets;
   std::map<std::string, Expression> loop_prompt_initials;
   std::map<int, std::string> loop_prompt_by_line;
