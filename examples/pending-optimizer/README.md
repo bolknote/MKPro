@@ -16,7 +16,7 @@ with a raw listing: the goal is to make the high-level source fit.
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
 | `tic-tac-toe-4x4.mkpro` | 136 | 105 | +31 | pending optimizer |
-| `nekromant.mkpro` | 163 | 105 | +58 | pending optimizer |
+| `nekromant.mkpro` | 159 | 105 | +54 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
@@ -191,3 +191,9 @@ mode may reject over-window programs earlier than the analysis path.
   ordinary straight-line helper sharing, this reduces `nekromant.mkpro` from
   186 to 178 cells; aliases, reordered stores, mismatched divisors, and
   nonnumeric divisors retain the independent lowering.
+- Generic interprocedural stack-through lowering keeps a one-parameter
+  function argument below an independent pure producer and forwards both to
+  the return expression. An exact finite CFG proof requires every caller
+  continuation to erase the changed lower stack before it is observed. In
+  combination with existing finalization passes this reduces `nekromant.mkpro`
+  from 163 to 159 cells without changing the source.

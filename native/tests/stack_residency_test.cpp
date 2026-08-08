@@ -1436,6 +1436,93 @@ program GuardedValueFunctionStackEntryProbe {
 
   {
     const std::string source = R"mkpro(
+program StackThroughFunctionEntryProbe {
+  state {
+    seed: packed = 0.25
+    left: packed = 0
+    right: packed = 0
+    pad1: packed = 0
+    pad2: packed = 0
+    pad3: packed = 0
+  }
+
+  fn scaled(scale) {
+    seed = frac(7 * seed + pi())
+    return int(seed * scale)
+  }
+
+  loop {
+    left = scaled(2)
+    right = scaled(5)
+    pad1 = 1
+    pad2 = 2
+    pad3 = 3
+    halt(left + right + pad1 + pad2 + pad3)
+  }
+}
+)mkpro";
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.stack_resident_temps = true;
+    baseline_options.stack_argument_function_entries = true;
+    baseline_options.disable_candidate_search = true;
+    const CompileResult baseline = compile_source(source, baseline_options);
+    require_clean_compile(baseline, "materialized single-parameter function entry baseline");
+    require(has_optimization(baseline, "function-stack-entry-materialized-params"),
+            "baseline should materialize the carried parameter in the shared callee");
+
+    CompileOptions stack_through_options = baseline_options;
+    stack_through_options.stack_through_function_entries = true;
+    const CompileResult stack_through = compile_source(source, stack_through_options);
+    require_clean_compile(stack_through, "stack-through function entry");
+    require(stack_through.steps.size() < baseline.steps.size(),
+            "stack-through entry should remove the shared parameter spill and recall");
+    require(has_optimization(stack_through, "function-stack-through-param"),
+            "independent producer should carry the entry parameter through Y");
+    require(count_steps_with_comment(stack_through, "stack-entry param scale") == 0,
+            "stack-through entry should not materialize its parameter");
+  }
+
+  {
+    const std::string source = R"mkpro(
+program StackThroughObservableTailNegativeProbe {
+  state {
+    seed: packed = 0.25
+    out: packed = 0
+  }
+
+  fn scaled(scale) {
+    seed = frac(7 * seed + pi())
+    return int(seed * scale)
+  }
+
+  loop {
+    out = scaled(2)
+    halt(out)
+  }
+}
+)mkpro";
+    CompileOptions options;
+    options.budget = 999999;
+    options.stack_resident_temps = true;
+    options.stack_argument_function_entries = true;
+    options.stack_through_function_entries = true;
+    options.disable_candidate_search = true;
+    const CompileResult result = compile_source(source, options);
+    require(!result.implemented,
+            "stack-through entry must fail closed when halt observes a lower-stack difference");
+    require(std::any_of(result.diagnostics.begin(), result.diagnostics.end(),
+                        [](const Diagnostic& diagnostic) {
+                          return diagnostic.severity == DiagnosticSeverity::Error &&
+                                 diagnostic.message.find(
+                                     "Stack-through function entry rejected") !=
+                                     std::string::npos;
+                        }),
+            "unsafe stack-through continuation should report its failed proof");
+  }
+
+  {
+    const std::string source = R"mkpro(
 program MaterializedFunctionStackEntryProbe {
   state {
     left: packed = 7

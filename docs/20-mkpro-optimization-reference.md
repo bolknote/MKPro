@@ -811,6 +811,16 @@ committed example oracles under `native/oracles/`.
 - `single-use-producer-forwarding` — extends the shared stack-residency def-use analysis from adjacent temporaries to straight-line expression lifetimes. Independent pure definitions are delayed until their first actual lowering-time recall. The recall path computes the value and records a possible store point without emitting it: a second real recall backpatches the store, while an overwrite first discards it. Thus fused and ordinary consumers participate automatically without relying on conservative call-crossing DSE. No consumer, formula, constant, or game recognizer is involved.
 - `function-stack-entry-guarded-return` — extends the stack-argument value-function ABI to pure zero-guarded returns. The guarded parameter is staged at the top of X/Y/Z/T; `== 0` and `!= 0` conditionals preserve the complete entry stack, and both return expressions are lowered independently from that same proved signature. Caller parameter stores and callee recalls disappear without recognizing a formula or application.
 - `function-stack-entry-materialized-params` — passes one or two simple function arguments through X/Y and materializes them once in a shared callee prologue when direct stack-expression lowering is unavailable. The two-argument prologue restores X/Y order before the ordinary body, direct tail calls are excluded, and the rewrite is selected only when removed call-site stores exceed the shared prologue cost.
+- `function-stack-through-param` — for a one-parameter function, keeps the entry
+  argument in `Y` while an independent pure assignment is evaluated in `X`,
+  then feeds both values directly to the return expression. Eligibility is
+  derived from ordinary def-use and stack-effect analysis rather than a named
+  formula. A post-lowering finite CFG proof starts each rewritten return with
+  equal `X` but unknown lower stack and `X2`, models decimal-entry state,
+  branches, calls, and cycles, and accepts only when every continuation erases
+  the difference before `С/П`, `В/О`, raw interaction, or another observer.
+  Unknown flow and alternate entries fail closed. The automatic candidate is
+  reported as `stack-through-function-entry`.
 - `function-tail-recursion` — recognizes tail recursion and turns it into a loop.
 - `function-tail-call` — converts function tail recursion into a direct jump to entry, skipping the final call.
 

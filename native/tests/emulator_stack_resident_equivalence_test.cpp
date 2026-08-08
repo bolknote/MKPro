@@ -477,6 +477,82 @@ program StackFunctionPackedScorePairSumEq {
             "packed_score pair-sum stack-entry out register should match baseline");
   }
 
+  const std::string stack_through_function_entry_source = R"mkpro(
+program StackThroughFunctionEntryEq {
+  state {
+    seed: packed = 0.25
+    left: packed = 0
+    right: packed = 0
+    pad1: packed = 0
+    pad2: packed = 0
+    pad3: packed = 0
+  }
+
+  fn scaled(scale) {
+    seed = frac(7 * seed + pi())
+    return int(seed * scale)
+  }
+
+  loop {
+    left = scaled(2)
+    right = scaled(5)
+    pad1 = 1
+    pad2 = 2
+    pad3 = 3
+    halt(left + right + pad1 + pad2 + pad3)
+  }
+}
+)mkpro";
+
+  {
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.stack_resident_temps = true;
+    baseline_options.stack_argument_function_entries = true;
+    baseline_options.disable_candidate_search = true;
+    const CompileResult baseline =
+        compile_source(stack_through_function_entry_source, baseline_options);
+
+    CompileOptions optimized_options = baseline_options;
+    optimized_options.stack_through_function_entries = true;
+    const CompileResult optimized =
+        compile_source(stack_through_function_entry_source, optimized_options);
+
+    require(baseline.implemented, "stack-through function-entry baseline should compile");
+    require(optimized.implemented, "stack-through function-entry variant should compile");
+    require(has_optimization(optimized, "function-stack-through-param"),
+            "stack-through function-entry variant should carry its parameter in Y");
+    require(optimized.steps.size() < baseline.steps.size(),
+            "stack-through function-entry variant should shrink the program");
+
+    const std::array<const char*, 6> logical_registers{
+        "seed", "left", "right", "pad1", "pad2", "pad3"};
+    std::set<std::string> baseline_registers;
+    std::set<std::string> optimized_registers;
+    for (const char* name : logical_registers) {
+      baseline_registers.insert(baseline.registers.at(name));
+      optimized_registers.insert(optimized.registers.at(name));
+    }
+    const Observation before =
+        observe(step_opcodes(baseline.steps), {"В/О", "С/П"}, baseline.preloads,
+                baseline_registers, true);
+    const Observation after =
+        observe(step_opcodes(optimized.steps), {"В/О", "С/П"}, optimized.preloads,
+                optimized_registers, true);
+    require(after.stopped == before.stopped,
+            "stack-through function-entry stopped state should match");
+    require(after.display == before.display,
+            "stack-through function-entry display should match");
+    require(after.stack == before.stack,
+            "stack-through function-entry X1/X/Y/Z/T state should match");
+    for (const char* name : logical_registers) {
+      require(after.registers.at(optimized.registers.at(name)) ==
+                  before.registers.at(baseline.registers.at(name)),
+              "stack-through function-entry logical register " + std::string(name) +
+                  " should match");
+    }
+  }
+
   const std::string materialized_function_stack_entry_source = R"mkpro(
 program MaterializedFunctionStackEntryEq {
   state {

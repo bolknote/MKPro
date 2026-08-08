@@ -29,6 +29,7 @@
 #include "mkpro/core/packed_bcd_popcount.hpp"
 #include "mkpro/core/parser.hpp"
 #include "mkpro/core/passes/index.hpp"
+#include "mkpro/core/passes/cfg.hpp"
 #include "mkpro/core/passes/register_coalesce.hpp"
 #include "mkpro/core/post_layout_indirect_flow.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
@@ -10515,6 +10516,10 @@ std::optional<Expression> stack_analysis_packed_score_accumulator_by_index(
 bool expression_preserves_previous_x_as_y_for_stack_analysis(const Expression& expression) {
   if (analysis_simple_stack_load(expression))
     return true;
+  if (expression.kind == "call" && expression.args.empty() &&
+      lower_ascii(expression.callee) == "pi") {
+    return true;
+  }
   if (expression.kind == "unary")
     return expression.op == "-" && expression.expr != nullptr &&
            expression_preserves_previous_x_as_y_for_stack_analysis(*expression.expr);
@@ -19412,6 +19417,75 @@ struct StackEntryValueFunctionShape {
   std::optional<StackEntryGuardedReturnShape> guarded_result;
 };
 
+struct StackThroughFunctionShape {
+  std::string param;
+  std::string prefix_target;
+  V2Statement prefix;
+  Expression returned;
+  int return_line = 0;
+};
+
+bool stack_through_binary_return_shape(const Expression& expression,
+                                       const std::string& param,
+                                       const std::string& prefix_target) {
+  const Expression* binary = &expression;
+  while (true) {
+    if (binary->kind == "unary" && binary->op == "-" && binary->expr != nullptr) {
+      binary = binary->expr.get();
+      continue;
+    }
+    const std::optional<StackUnaryTransformCall> transform =
+        stack_unary_transform_call(*binary);
+    if (!transform.has_value() || transform->arg == nullptr)
+      break;
+    binary = transform->arg;
+  }
+  if (binary->kind != "binary" || binary->left == nullptr ||
+      binary->right == nullptr ||
+      (binary->op != "+" && binary->op != "-" && binary->op != "*" &&
+       binary->op != "/")) {
+    return false;
+  }
+  const auto is_identifier = [](const Expression& candidate, const std::string& name) {
+    return candidate.kind == "identifier" && candidate.name == name;
+  };
+  return (is_identifier(*binary->left, prefix_target) &&
+          is_identifier(*binary->right, param)) ||
+         (is_identifier(*binary->left, param) &&
+          is_identifier(*binary->right, prefix_target));
+}
+
+std::optional<StackThroughFunctionShape> stack_through_function_shape(
+    const LoweringContext& context, const V2Rule& rule) {
+  if (rule.params.size() != 1U || rule.body.size() != 2U)
+    return std::nullopt;
+  const V2Statement& prefix = rule.body.front();
+  const V2Statement& ret = rule.body.back();
+  if (prefix.kind != "v2_assign" || !prefix.target.has_value() ||
+      !prefix.expr.has_value() || ret.kind != "v2_return" || !ret.expr.has_value()) {
+    return std::nullopt;
+  }
+  const Expression target = parse_expression(*prefix.target, prefix.line);
+  const Expression value = parse_expression(*prefix.expr, prefix.line);
+  const Expression returned = parse_expression(*ret.expr, ret.line);
+  const std::string& param = rule.params.front();
+  if (target.kind != "identifier" || target.name == param ||
+      expression_contains_identifier(value, param) ||
+      !expression_pure_for_substitution(value) ||
+      !expression_preserves_previous_x_as_y_for_stack_analysis(value) ||
+      !stack_through_binary_return_shape(returned, param, target.name) ||
+      !can_lower_stack_entry_value_expression(context, returned, {param, target.name})) {
+    return std::nullopt;
+  }
+  return StackThroughFunctionShape{
+      .param = param,
+      .prefix_target = target.name,
+      .prefix = prefix,
+      .returned = returned,
+      .return_line = ret.line,
+  };
+}
+
 std::optional<std::vector<std::string>> stack_entry_active_param_suffix(
     const Expression& expression, const std::vector<std::string>& stack_params) {
   std::optional<std::size_t> first_used;
@@ -19530,6 +19604,8 @@ bool lower_stack_argument_function_call(LoweringContext& context, const V2Rule& 
                                                     : function_stack_entry_label(rule.name),
                             std::string(comment_prefix) + rule.name + " stack entry", line);
   mark_last_emitted_call_role(context, "stack-argument-function-call");
+  if (plan_it->second.stack_through_param)
+    mark_last_emitted_call_role(context, "stack-through-function-call");
   mark_function_call_result_x(context, rule);
   context.optimizations.push_back(OptimizationReport{
       .name = "function-call",
@@ -19753,6 +19829,21 @@ void plan_stack_argument_function_entries(LoweringContext& context, const V2Prog
     }
     const bool has_direct_tail_call =
         program_contains_direct_tail_call_to(program, rule.name);
+    const std::optional<StackThroughFunctionShape> stack_through =
+        context.stack_through_function_entries && !has_direct_tail_call &&
+                safe_it->second == total_calls
+            ? stack_through_function_shape(context, rule)
+            : std::nullopt;
+    if (stack_through.has_value()) {
+      context.stack_entry_functions[rule.name] = FunctionStackEntryPlan{
+          .params = rule.params,
+          .call_sites = safe_it->second,
+          .total_call_sites = total_calls,
+          .primary = true,
+          .stack_through_param = true,
+      };
+      continue;
+    }
     const std::optional<StackEntryValueFunctionShape> shape =
         !has_direct_tail_call && stack_entry_value_function_rule_eligible(context, rule)
             ? stack_entry_value_function_shape(context, rule)
@@ -34428,6 +34519,33 @@ bool emit_stack_argument_function_entry_prefix(LoweringContext& context, const V
   const auto plan_it = context.stack_entry_functions.find(rule.name);
   if (plan_it == context.stack_entry_functions.end())
     return true;
+  if (plan_it->second.stack_through_param) {
+    const std::optional<StackThroughFunctionShape> shape =
+        stack_through_function_shape(context, rule);
+    if (!shape.has_value())
+      return false;
+    mark_current_x(context, shape->param);
+    if (!lower_statement(context, shape->prefix, nullptr))
+      return false;
+    context.current_y_variable = shape->param;
+    if (!lower_stack_resident_expression_to_x(
+            context, shape->returned, {shape->param, shape->prefix_target},
+            shape->return_line)) {
+      context.current_y_variable.reset();
+      return false;
+    }
+    context.current_y_variable.reset();
+    context.emitter.emit_op(0x52, "В/О", "stack-through parameter return",
+                            shape->return_line);
+    clear_current_x_facts(context);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "function-stack-through-param",
+        .detail = "Carried parameter " + shape->param + " of " + rule.name +
+                  " through an independent assignment on the calculator stack for " +
+                  std::to_string(plan_it->second.call_sites) + " call site(s).",
+    });
+    return true;
+  }
   if (plan_it->second.materialize_params) {
     const std::vector<std::string>& params = plan_it->second.params;
     if (params.size() == 1U) {
@@ -40572,8 +40690,10 @@ bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expres
     const std::size_t left_index = static_cast<std::size_t>(left - temps.begin());
     const std::size_t right_index = static_cast<std::size_t>(right - temps.begin());
     if (temps.size() == 2U) {
-      if (left_index == 1U && right_index == 0U)
+      if (left_index == 1U && right_index == 0U &&
+          expression.op != "+" && expression.op != "*") {
         context.emitter.emit_op(0x14, "X↔Y", "stack-resident operand order", line);
+      }
       context.emitter.emit_op(opcode->first, opcode->second, "expr " + opcode->second, line);
       context.emitter.current_x_variable.reset();
       context.emitter.current_x_aliases.clear();
@@ -43966,6 +44086,259 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
     add_preload(name, register_it->second, std::to_string(address_it->second));
   }
   return preloads;
+}
+
+bool stack_through_function_continuations_proved(const std::vector<MachineItem>& items,
+                                                 FeatureProfile feature_profile,
+                                                 std::string& reason) {
+  const std::vector<IrOp> ops = raise_machine_to_ir(items, feature_profile);
+  const auto has_role = [](const IrOp& op, std::string_view role) {
+    return std::find(op.meta.roles.begin(), op.meta.roles.end(), role) !=
+           op.meta.roles.end();
+  };
+
+  std::set<int> special_calls;
+  std::set<std::string> special_targets;
+  for (std::size_t index = 0; index < ops.size(); ++index) {
+    const IrOp& op = ops.at(index);
+    if (!has_role(op, "stack-through-function-call"))
+      continue;
+    const auto* target = std::get_if<std::string>(&op.target);
+    if (op.kind != IrKind::Call || target == nullptr) {
+      reason = "stack-through call lost its direct symbolic target";
+      return false;
+    }
+    special_calls.insert(static_cast<int>(index));
+    special_targets.insert(*target);
+  }
+  if (special_calls.empty())
+    return true;
+
+  const auto targets_special_entry = [&](const IrOp& op) {
+    if (const auto* target = std::get_if<std::string>(&op.target);
+        target != nullptr && special_targets.contains(*target)) {
+      return true;
+    }
+    if (!op.meta.indirect_flow_targets.has_value())
+      return false;
+    return std::any_of(op.meta.indirect_flow_targets->begin(),
+                       op.meta.indirect_flow_targets->end(), [&](const IrTarget& target) {
+                         const auto* label = std::get_if<std::string>(&target);
+                         return label != nullptr && special_targets.contains(*label);
+                       });
+  };
+  for (std::size_t index = 0; index < ops.size(); ++index) {
+    const IrOp& op = ops.at(index);
+    if (!targets_special_entry(op))
+      continue;
+    if (op.kind != IrKind::Call || !special_calls.contains(static_cast<int>(index))) {
+      reason = "stack-through function has an unproved alternate entry";
+      return false;
+    }
+  }
+
+  const core::passes::ControlFlowGraph cfg = core::passes::build_control_flow_graph(
+      ops, core::passes::BuildCfgOptions{
+               .indirect_call_fallthrough = false,
+               .unknown_indirect_flow_to_all = false,
+               .unresolved_direct_flow_to_all = false,
+           });
+  std::set<int> uncertain_sources;
+  for (const core::passes::CfgUncertainty& uncertainty : cfg.uncertainties)
+    uncertain_sources.insert(uncertainty.source);
+
+  const auto state_key = [](const core::StackValueEqualityState& state,
+                            bool number_entry_open) {
+    int key = state.x2_equal ? 16 : 0;
+    for (std::size_t index = 0; index < state.stack_equal.size(); ++index) {
+      if (state.stack_equal.at(index))
+        key |= 1 << static_cast<int>(index);
+    }
+    if (number_entry_open)
+      key |= 32;
+    return key;
+  };
+  const auto apply_x2 = [](core::StackValueEqualityState& state, X2Effect effect) {
+    switch (effect) {
+    case X2Effect::Affects:
+      state.x2_equal = state.stack_equal.at(0);
+      return true;
+    case X2Effect::Preserves:
+      return true;
+    case X2Effect::Restores:
+    case X2Effect::Unknown:
+      return false;
+    }
+    return false;
+  };
+
+  struct WorkState {
+    int index = 0;
+    core::StackValueEqualityState equality;
+    bool number_entry_open = false;
+  };
+  std::vector<WorkState> work;
+  for (const int call : special_calls) {
+    if (call + 1 >= static_cast<int>(ops.size())) {
+      reason = "stack-through call has no continuation";
+      return false;
+    }
+    core::StackValueEqualityState initial;
+    initial.stack_equal = {true, false, false, false};
+    initial.x2_equal = false;
+    work.push_back(WorkState{.index = call + 1, .equality = initial});
+  }
+
+  std::set<std::pair<int, int>> visited;
+  int explored = 0;
+  while (!work.empty()) {
+    WorkState current = work.back();
+    work.pop_back();
+    if (core::stack_values_fully_equal(current.equality))
+      continue;
+    if (current.index < 0 || current.index >= static_cast<int>(ops.size()) ||
+        ++explored > 4096) {
+      reason = "stack-through continuation exceeded its bounded CFG proof";
+      return false;
+    }
+    if (!visited.insert(
+            {current.index, state_key(current.equality, current.number_entry_open)})
+             .second)
+      continue;
+    if (uncertain_sources.contains(current.index)) {
+      reason = "stack-through difference reaches unresolved control flow";
+      return false;
+    }
+
+    const IrOp& op = ops.at(static_cast<std::size_t>(current.index));
+    if (special_calls.contains(current.index)) {
+      if (!current.equality.stack_equal.at(0) || current.index + 1 >= static_cast<int>(ops.size())) {
+        reason = "nested stack-through call can observe unequal X";
+        return false;
+      }
+      current.equality.stack_equal = {true, false, false, false};
+      current.equality.x2_equal = false;
+      current.number_entry_open = false;
+      work.push_back(WorkState{.index = current.index + 1,
+                               .equality = current.equality,
+                               .number_entry_open = false});
+      continue;
+    }
+    if (op.kind == IrKind::Call || op.kind == IrKind::IndirectCall) {
+      reason = "non-converged stack-through continuation reaches another call";
+      return false;
+    }
+    if (op.kind == IrKind::Stop || op.kind == IrKind::Return) {
+      reason = "non-converged stack-through continuation reaches an observable stop or return";
+      return false;
+    }
+    if (op.meta.raw || op.meta.manual_interaction.has_value()) {
+      reason = "non-converged stack-through continuation reaches an opaque interaction";
+      return false;
+    }
+
+    const std::vector<core::passes::CfgEdge>& edges =
+        cfg.edges.at(static_cast<std::size_t>(current.index));
+    if (op.kind == IrKind::Label) {
+      if (edges.empty()) {
+        reason = "stack-through continuation reaches a terminal label";
+        return false;
+      }
+      for (const core::passes::CfgEdge& edge : edges) {
+        work.push_back(WorkState{.index = edge.target,
+                                 .equality = current.equality,
+                                 .number_entry_open = current.number_entry_open});
+      }
+      continue;
+    }
+    if (op.kind == IrKind::Plain && op.opcode >= 0x00 && op.opcode <= 0x09) {
+      if (!current.equality.stack_equal.at(0)) {
+        reason = "decimal entry can observe unequal X";
+        return false;
+      }
+      if (!current.number_entry_open) {
+        const std::array<bool, 4> old = current.equality.stack_equal;
+        current.equality.stack_equal = {true, old.at(0), old.at(1), old.at(2)};
+      }
+      current.equality.x2_equal = true;
+      current.number_entry_open = true;
+      if (core::stack_values_fully_equal(current.equality))
+        continue;
+      if (edges.empty()) {
+        reason = "decimal entry reaches the end of the artifact";
+        return false;
+      }
+      for (const core::passes::CfgEdge& edge : edges) {
+        work.push_back(WorkState{.index = edge.target,
+                                 .equality = current.equality,
+                                 .number_entry_open = true});
+      }
+      continue;
+    }
+    if (op.kind == IrKind::Jump || op.kind == IrKind::IndirectJump ||
+        op.kind == IrKind::CondJump || op.kind == IrKind::IndirectCondJump ||
+        op.kind == IrKind::Loop) {
+      const bool x_conditional =
+          op.kind == IrKind::CondJump || op.kind == IrKind::IndirectCondJump;
+      if (x_conditional && !current.equality.stack_equal.at(0)) {
+        reason = "stack-through difference reaches a branch with unequal X";
+        return false;
+      }
+      if (edges.empty()) {
+        reason = "stack-through flow has no proved successor";
+        return false;
+      }
+      const OpcodeInfo& info = opcode_by_code(op.opcode);
+      for (const core::passes::CfgEdge& edge : edges) {
+        core::StackValueEqualityState next = current.equality;
+        X2Effect effect = info.x2_effect;
+        if (info.conditional_x2_effect.has_value()) {
+          effect = edge.kind == core::passes::CfgEdgeKind::Jump
+                       ? info.conditional_x2_effect->jump
+                       : info.conditional_x2_effect->fallthrough;
+        }
+        if (!apply_x2(next, effect)) {
+          reason = "stack-through flow can restore or obscure unequal X2";
+          return false;
+        }
+        work.push_back(WorkState{.index = edge.target,
+                                 .equality = next,
+                                 .number_entry_open = false});
+      }
+      continue;
+    }
+    if (op.kind == IrKind::OrphanAddress) {
+      reason = "stack-through difference reaches an orphan address cell";
+      return false;
+    }
+
+    core::StackValueEqualityStepKind step_kind =
+        core::StackValueEqualityStepKind::Plain;
+    if (op.kind == IrKind::Recall || op.kind == IrKind::IndirectRecall)
+      step_kind = core::StackValueEqualityStepKind::Recall;
+    else if (op.kind == IrKind::Store || op.kind == IrKind::IndirectStore)
+      step_kind = core::StackValueEqualityStepKind::Store;
+    const core::StackValueEqualityTransfer transfer = core::transfer_stack_value_equality(
+        current.equality, op.opcode, step_kind);
+    if (transfer == core::StackValueEqualityTransfer::Rejected) {
+      reason = "stack-through continuation observes an unequal stack value at " +
+               opcode_by_code(op.opcode).name;
+      return false;
+    }
+    if (transfer == core::StackValueEqualityTransfer::Converged)
+      continue;
+    current.number_entry_open = op.opcode >= 0x00 && op.opcode <= 0x0c;
+    if (edges.empty()) {
+      reason = "stack-through difference reaches the end of the artifact";
+      return false;
+    }
+    for (const core::passes::CfgEdge& edge : edges) {
+      work.push_back(WorkState{.index = edge.target,
+                               .equality = current.equality,
+                               .number_entry_open = current.number_entry_open});
+    }
+  }
+  return true;
 }
 
 inline constexpr std::string_view kPhysicalRegisterAnchorPrefix = "__mkpro_physical_register_";
@@ -50182,6 +50555,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   context.stack_resident_temps = options.stack_resident_temps;
   context.stack_argument_helper_entries = options.stack_argument_helper_entries;
   context.stack_argument_function_entries = options.stack_argument_function_entries;
+  context.stack_through_function_entries = options.stack_through_function_entries;
   context.setup_only_counted_loop_init = options.setup_only_counted_loop_init;
   context.empty_stack_loop_return = options.empty_stack_loop_return;
   context.x_param_value_functions = options.x_param_value_functions;
@@ -50562,6 +50936,16 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   merge_planned_preloaded_constant_registers(pass_options, context);
 
   std::vector<MachineItem> ir_pass_input = context.emitter.items;
+  if (!has_errors(context.diagnostics) && options.stack_through_function_entries) {
+    std::string stack_through_reason;
+    if (!stack_through_function_continuations_proved(
+            ir_pass_input, optimizer_feature_profile_for_options(options),
+            stack_through_reason)) {
+      context.diagnostics.push_back(diagnostic(
+          DiagnosticSeverity::Error, "native-unsupported",
+          "Stack-through function entry rejected: " + stack_through_reason + "."));
+    }
+  }
   std::map<std::string, std::string> pre_pass_coalesce_shares;
   if (!has_errors(context.diagnostics) && options.collect_coalesce_shares) {
     pre_pass_coalesce_shares = core::passes::compute_non_overlapping_register_mapping(
@@ -52771,6 +53155,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.runtime_indirect_call_flow ||
          options.general_constant_preloads || options.stack_resident_temps ||
          options.stack_argument_helper_entries || options.stack_argument_function_entries ||
+         options.stack_through_function_entries ||
          options.share_random_cell || options.startup_aware_constant_preloads ||
          options.guarded_prologue_gadgets || options.shared_bit_mask_helper_calls ||
          options.compact_bit_mask_helper_body || options.signed_abs_match_pairs ||
@@ -53559,6 +53944,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";stack_resident_temps=" << options.stack_resident_temps
       << ";stack_argument_helper_entries=" << options.stack_argument_helper_entries
       << ";stack_argument_function_entries=" << options.stack_argument_function_entries
+      << ";stack_through_function_entries=" << options.stack_through_function_entries
       << ";share_random_cell=" << options.share_random_cell
       << ";startup_aware_constant_preloads=" << options.startup_aware_constant_preloads
       << ";guarded_prologue_gadgets=" << options.guarded_prologue_gadgets
@@ -53656,7 +54042,8 @@ enum class CandidateGate {
 int estimated_candidate_search_cost_ms(std::string_view name) {
   if (name == "exact-stack-dead-store")
     return 20;
-  if (name == "materialized-function-stack-entry")
+  if (name == "materialized-function-stack-entry" ||
+      name == "stack-through-function-entry")
     return 20;
   if (name == "packed-score-accumulator-reverse-suffix-free-layout")
     return 100;
@@ -68582,6 +68969,16 @@ CompileResult compile_source_for_optimizer_profile(
         "materialized-function-stack-entry",
         "Moved repeated simple function-argument stores into one shared stack-entry prologue",
         CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.stack_resident_temps = true;
+          candidate_options.stack_argument_function_entries = true;
+          candidate_options.stack_through_function_entries = true;
+        },
+        "stack-through-function-entry",
+        "Carried a single function parameter through an independent assignment on the stack "
+        "when every caller continuation proved the resulting stack difference dead",
+        CandidateGate::SizeRescue);
   }
   add_candidate(
       [](CompileOptions& candidate_options) {
@@ -70246,6 +70643,7 @@ CompileResult compile_source_for_optimizer_profile(
           [](CompileOptions& o) { o.general_constant_preloads = true; },
           [](CompileOptions& o) { o.stack_resident_temps = true; },
           [](CompileOptions& o) { o.stack_argument_function_entries = true; },
+          [](CompileOptions& o) { o.stack_through_function_entries = true; },
           [](CompileOptions& o) { o.share_random_cell = true; },
           [](CompileOptions& o) { o.startup_aware_constant_preloads = true; },
           [](CompileOptions& o) { o.guarded_prologue_gadgets = true; },
