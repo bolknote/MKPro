@@ -34,6 +34,9 @@ bool lower_binary_expression_to_x(ExpressionEmitApi& api, LoweringContext& conte
 std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
                                                        LoweringContext& context,
                                                        const Expression& expression);
+std::optional<bool> lower_current_xy_leading_packed_digit_rmw_to_x(
+    ExpressionEmitApi& api, LoweringContext& context, const Expression& expression,
+    const std::string& current_y_name);
 std::optional<std::size_t> packed_grid_macro_arity(const std::string& name);
 std::optional<Expression> packed_grid_expression_macro(const std::string& name,
                                                        const std::vector<Expression>& args);

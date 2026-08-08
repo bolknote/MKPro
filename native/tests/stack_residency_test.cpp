@@ -1436,6 +1436,101 @@ program GuardedValueFunctionStackEntryProbe {
 
   {
     const std::string source = R"mkpro(
+program StackSsaGuardedPackedDigitProbe {
+  state {
+    changed: packed = 0
+    unchanged: packed = 0
+    pad1: packed = 0
+    pad2: packed = 0
+    pad3: packed = 0
+  }
+
+  fn adjust(packet, delta) {
+    if packet == 0 {
+      return packet
+    }
+    return digit_set(
+      packet,
+      int(lg(packet)) + 1,
+      abs(digit_at(packet, int(lg(packet)) + 1) - delta))
+  }
+
+  loop {
+    changed = adjust(12345678, 4)
+    unchanged = adjust(0, 7)
+    pad1 = 1
+    pad2 = 2
+    pad3 = 3
+    halt(changed + unchanged + pad1 + pad2 + pad3)
+  }
+}
+)mkpro";
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.stack_resident_temps = true;
+    baseline_options.stack_argument_function_entries = true;
+    baseline_options.disable_candidate_search = true;
+    const CompileResult baseline = compile_source(source, baseline_options);
+    require_clean_compile(baseline, "guarded stack-SSA function-entry baseline");
+
+    CompileOptions optimized_options = baseline_options;
+    optimized_options.stack_through_function_entries = true;
+    optimized_options.stack_ssa_function_entries = true;
+    const CompileResult optimized = compile_source(source, optimized_options);
+    require_clean_compile(optimized, "guarded stack-SSA function entry");
+    require(optimized.steps.size() < baseline.steps.size(),
+            "guarded stack-SSA entry should remove the deferred parameter spill");
+    require(has_optimization(optimized, "function-stack-ssa-guarded-entry"),
+            "guarded function should use the generic stack-SSA ABI");
+    require(has_optimization(optimized, "current-xy-packed-digit-rmw"),
+            "packed-digit RMW should consume its single-use operand from Y");
+    require(count_steps_with_comment(optimized,
+                                     "stack-ssa false-path spill param delta") == 0,
+            "single-use Y operand should not be materialized");
+    require(count_steps_with_comment(optimized, "recall delta") == 0,
+            "single-use Y operand should not be recalled");
+  }
+
+  {
+    const std::string source = R"mkpro(
+program StackSsaThreeParameterNegativeProbe {
+  state {
+    out: packed = 0
+  }
+
+  fn adjust(packet, delta, bias) {
+    if packet == 0 {
+      return packet
+    }
+    return digit_set(
+      packet,
+      int(lg(packet)) + 1,
+      abs(digit_at(packet, int(lg(packet)) + 1) - delta)) + bias
+  }
+
+  loop {
+    out = adjust(12345678, 4, 1)
+    halt(out)
+  }
+}
+)mkpro";
+    CompileOptions options;
+    options.budget = 999999;
+    options.stack_resident_temps = true;
+    options.stack_argument_function_entries = true;
+    options.stack_through_function_entries = true;
+    options.stack_ssa_function_entries = true;
+    options.disable_candidate_search = true;
+    const CompileResult result = compile_source(source, options);
+    require_clean_compile(result, "three-parameter guarded stack-SSA negative probe");
+    require(!has_optimization(result, "function-stack-ssa-guarded-entry"),
+            "guarded stack-SSA ABI must fail closed for unsupported arity");
+    require(!has_optimization(result, "current-xy-packed-digit-rmw"),
+            "current-X/Y packed lowering must not run without a proved two-value ABI");
+  }
+
+  {
+    const std::string source = R"mkpro(
 program StackThroughFunctionEntryProbe {
   state {
     seed: packed = 0.25

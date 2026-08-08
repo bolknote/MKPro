@@ -110,6 +110,7 @@ struct FunctionStackEntryPlan {
   bool primary = false;
   bool materialize_params = false;
   bool stack_through_param = false;
+  bool stack_ssa_guarded_params = false;
 };
 
 struct RuleStackInputEntryPlan {
@@ -342,6 +343,7 @@ struct LoweringContext {
   bool x_param_y_stack_stored_entry = false;
   bool stack_argument_function_entries = false;
   bool stack_through_function_entries = false;
+  bool stack_ssa_function_entries = false;
   bool shared_bit_mask_helper_calls = false;
   bool compact_bit_mask_helper_body = false;
   bool domain_error_guards = false;

@@ -16,7 +16,7 @@ with a raw listing: the goal is to make the high-level source fit.
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
 | `tic-tac-toe-4x4.mkpro` | 136 | 105 | +31 | pending optimizer |
-| `nekromant.mkpro` | 159 | 105 | +54 | pending optimizer |
+| `nekromant.mkpro` | 155 | 105 | +50 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
@@ -197,3 +197,8 @@ mode may reject over-window programs earlier than the analysis path.
   continuation to erase the changed lower stack before it is observed. In
   combination with existing finalization passes this reduces `nekromant.mkpro`
   from 163 to 159 cells without changing the source.
+- Generic guarded stack-SSA lowering keeps a two-parameter zero-guarded
+  function call in `X:Y`. Its packed-digit composition consumes one binary
+  operand directly from `Y` while the leading digit is produced in `X`, with a
+  conservative fallback for every unproved expression or continuation. This
+  reduces `nekromant.mkpro` from 159 to 155 cells without changing the source.

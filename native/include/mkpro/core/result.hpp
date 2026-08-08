@@ -410,6 +410,7 @@ struct CompileOptions {
   bool stack_argument_helper_entries = false;
   bool stack_argument_function_entries = false;
   bool stack_through_function_entries = false;
+  bool stack_ssa_function_entries = false;
   bool inline_floor_packed_row_expressions = false;
   bool unroll_counted_loops = false;
   bool setup_only_counted_loop_init = false;

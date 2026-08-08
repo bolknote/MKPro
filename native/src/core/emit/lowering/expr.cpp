@@ -325,6 +325,174 @@ const std::map<std::string, std::pair<int, std::string>>& current_x_unary_opcode
   return opcodes;
 }
 
+struct CurrentXUnaryStep {
+  int opcode = 0;
+  std::string display;
+};
+
+struct CurrentXYBinaryReplacement {
+  std::string op;
+  int opcode = 0;
+  bool left_is_current_x = false;
+  std::vector<CurrentXUnaryStep> current_x_steps;
+  std::vector<CurrentXUnaryStep> current_y_steps;
+  std::vector<CurrentXUnaryStep> result_steps;
+};
+
+struct PeeledCurrentXUnaryChain {
+  const Expression* terminal = nullptr;
+  std::vector<CurrentXUnaryStep> steps;
+};
+
+std::optional<PeeledCurrentXUnaryChain> peel_current_x_unary_chain(
+    const Expression& expression) {
+  const Expression* cursor = &expression;
+  std::vector<CurrentXUnaryStep> steps;
+  while (true) {
+    if (cursor->kind == "unary" && cursor->op == "-" && cursor->expr != nullptr) {
+      steps.push_back(CurrentXUnaryStep{.opcode = 0x0b, .display = "/-/"});
+      cursor = cursor->expr.get();
+      continue;
+    }
+    if (cursor->kind != "call" || cursor->args.size() != 1U)
+      break;
+    const auto opcode = current_x_unary_opcodes().find(lower_ascii(cursor->callee));
+    if (opcode == current_x_unary_opcodes().end())
+      break;
+    steps.push_back(
+        CurrentXUnaryStep{.opcode = opcode->second.first, .display = opcode->second.second});
+    cursor = &cursor->args.front();
+  }
+  std::reverse(steps.begin(), steps.end());
+  return PeeledCurrentXUnaryChain{.terminal = cursor, .steps = std::move(steps)};
+}
+
+std::optional<CurrentXYBinaryReplacement> match_current_xy_binary_replacement(
+    const Expression& expression, const std::string& current_x_name,
+    const std::string& current_y_name) {
+  const std::optional<PeeledCurrentXUnaryChain> result =
+      peel_current_x_unary_chain(expression);
+  if (!result.has_value() || result->terminal == nullptr ||
+      result->terminal->kind != "binary" || result->terminal->left == nullptr ||
+      result->terminal->right == nullptr) {
+    return std::nullopt;
+  }
+
+  static const std::map<std::string, int> binary_opcodes = {
+      {"+", 0x10}, {"-", 0x11}, {"*", 0x12}, {"/", 0x13},
+  };
+  const auto opcode = binary_opcodes.find(result->terminal->op);
+  if (opcode == binary_opcodes.end())
+    return std::nullopt;
+
+  const std::optional<PeeledCurrentXUnaryChain> left =
+      peel_current_x_unary_chain(*result->terminal->left);
+  const std::optional<PeeledCurrentXUnaryChain> right =
+      peel_current_x_unary_chain(*result->terminal->right);
+  if (!left.has_value() || !right.has_value() || left->terminal == nullptr ||
+      right->terminal == nullptr || left->terminal->kind != "identifier" ||
+      right->terminal->kind != "identifier") {
+    return std::nullopt;
+  }
+
+  const bool left_is_x = left->terminal->name == current_x_name;
+  const bool left_is_y = left->terminal->name == current_y_name;
+  const bool right_is_x = right->terminal->name == current_x_name;
+  const bool right_is_y = right->terminal->name == current_y_name;
+  if (!((left_is_x && right_is_y) || (left_is_y && right_is_x)))
+    return std::nullopt;
+
+  return CurrentXYBinaryReplacement{
+      .op = result->terminal->op,
+      .opcode = opcode->second,
+      .left_is_current_x = left_is_x,
+      .current_x_steps = left_is_x ? left->steps : right->steps,
+      .current_y_steps = left_is_y ? left->steps : right->steps,
+      .result_steps = result->steps,
+  };
+}
+
+void emit_current_x_unary_steps(ExpressionEmitApi& api,
+                                const std::vector<CurrentXUnaryStep>& steps,
+                                const std::string& purpose) {
+  for (const CurrentXUnaryStep& step : steps)
+    api.emitter.emit_op(step.opcode, step.display, purpose);
+}
+
+std::optional<bool> lower_current_xy_leading_packed_digit_rmw_to_x_impl(
+    ExpressionEmitApi& api, LoweringContext& context, const Expression& expression,
+    const std::string& current_y_name) {
+  const std::optional<PackedDigitRmwMatch> packed =
+      match_leading_packed_digit_rmw(context, expression);
+  if (!packed.has_value() || packed->value.kind != "identifier" ||
+      !current_x_holds_name(api, packed->value.name) ||
+      !context.current_x_memory_aliases.contains(packed->value.name) ||
+      context.current_y_variable != current_y_name) {
+    return std::nullopt;
+  }
+
+  const std::string current_digit = api.emitter.fresh_label("packed_digit_rmw_xy_x");
+  const Expression replacement = replace_matching_digit_read(
+      context, packed->replacement, packed->value, packed->index, current_digit);
+  const std::optional<CurrentXYBinaryReplacement> replacement_match =
+      match_current_xy_binary_replacement(replacement, current_digit, current_y_name);
+  if (!replacement_match.has_value())
+    return std::nullopt;
+
+  // X2 is synchronized by the proved store/recall represented by
+  // current_x_memory_aliases.  The leading-digit splice consumes current X but
+  // leaves the caller's deferred operand in Y.
+  api.emit_number_or_preload("1", "packed leading digit extraction anchor", std::nullopt,
+                             std::nullopt);
+  emit_leading_digit_x2_splice(api, "packed leading digit extraction");
+  api.emitter.current_x_variable = current_digit;
+  api.emitter.current_x_aliases = {current_digit};
+  api.emitter.current_x_expression = std::make_shared<Expression>(packed->digit_read);
+  api.emitter.current_x_known_zero = false;
+  context.current_x_memory_aliases.clear();
+  context.current_y_variable = current_y_name;
+
+  emit_current_x_unary_steps(api, replacement_match->current_x_steps,
+                             "stack-SSA packed digit operand");
+  api.emitter.emit_op(0x14, "<->", "stack-SSA expose deferred packed digit operand");
+  emit_current_x_unary_steps(api, replacement_match->current_y_steps,
+                             "stack-SSA deferred packed digit operand");
+  if (!replacement_match->left_is_current_x &&
+      (replacement_match->op == "-" || replacement_match->op == "/")) {
+    api.emitter.emit_op(0x14, "<->", "stack-SSA packed digit operand order");
+  }
+  api.emitter.emit_op(replacement_match->opcode, replacement_match->op,
+                      "stack-SSA packed digit expression");
+  emit_current_x_unary_steps(api, replacement_match->result_steps,
+                             "stack-SSA packed digit result");
+  context.current_y_variable.reset();
+
+  api.emitter.current_x_variable.reset();
+  api.emitter.current_x_aliases.clear();
+  api.emitter.current_x_expression.reset();
+  api.emit_recall(packed->value.name);
+  emit_leading_digit_x2_splice(api, "packed leading digit update");
+
+  api.emitter.current_x_variable.reset();
+  api.emitter.current_x_aliases.clear();
+  api.emitter.current_x_expression = std::make_shared<Expression>(expression);
+  api.emitter.current_x_known_zero = false;
+  context.current_x_memory_aliases.clear();
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-digit-rmw-fusion",
+      .detail = "Fused one pure digit_at()/digit_set() read-modify-write operation.",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = "leading-digit-x2-lowering",
+      .detail = "Lowered a proved leading-digit update through two X2 splices.",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = "current-xy-packed-digit-rmw",
+      .detail = "Consumed one single-use packed-digit operand directly from Y.",
+  });
+  return true;
+}
+
 bool expression_preserves_previous_x_as_y_for_current_x_operand(const Expression& expression) {
   if (is_simple_stack_load(expression))
     return true;
@@ -753,6 +921,13 @@ std::optional<Expression> packed_grid_expression_macro_impl(const std::string& n
 }
 
 } // namespace
+
+std::optional<bool> lower_current_xy_leading_packed_digit_rmw_to_x(
+    ExpressionEmitApi& api, LoweringContext& context, const Expression& expression,
+    const std::string& current_y_name) {
+  return lower_current_xy_leading_packed_digit_rmw_to_x_impl(
+      api, context, expression, current_y_name);
+}
 
 std::optional<std::size_t> packed_grid_macro_arity(const std::string& name) {
   return packed_grid_macro_arity_impl(name);

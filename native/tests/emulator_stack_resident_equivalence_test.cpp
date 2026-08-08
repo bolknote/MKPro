@@ -477,6 +477,89 @@ program StackFunctionPackedScorePairSumEq {
             "packed_score pair-sum stack-entry out register should match baseline");
   }
 
+  const std::string stack_ssa_guarded_packed_digit_source = R"mkpro(
+program StackSsaGuardedPackedDigitEq {
+  state {
+    changed: packed = 0
+    unchanged: packed = 0
+    pad1: packed = 0
+    pad2: packed = 0
+    pad3: packed = 0
+  }
+
+  fn adjust(packet, delta) {
+    if packet == 0 {
+      return packet
+    }
+    return digit_set(
+      packet,
+      int(lg(packet)) + 1,
+      abs(digit_at(packet, int(lg(packet)) + 1) - delta))
+  }
+
+  loop {
+    changed = adjust(12345678, 4)
+    unchanged = adjust(0, 7)
+    pad1 = 1
+    pad2 = 2
+    pad3 = 3
+    halt(changed + unchanged + pad1 + pad2 + pad3)
+  }
+}
+)mkpro";
+
+  {
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.stack_resident_temps = true;
+    baseline_options.stack_argument_function_entries = true;
+    baseline_options.disable_candidate_search = true;
+    const CompileResult baseline =
+        compile_source(stack_ssa_guarded_packed_digit_source, baseline_options);
+
+    CompileOptions optimized_options = baseline_options;
+    optimized_options.stack_through_function_entries = true;
+    optimized_options.stack_ssa_function_entries = true;
+    const CompileResult optimized =
+        compile_source(stack_ssa_guarded_packed_digit_source, optimized_options);
+
+    require(baseline.implemented, "guarded stack-SSA baseline should compile");
+    require(optimized.implemented, "guarded stack-SSA variant should compile");
+    require(has_optimization(optimized, "function-stack-ssa-guarded-entry"),
+            "guarded stack-SSA variant should use its shared stack entry");
+    require(has_optimization(optimized, "current-xy-packed-digit-rmw"),
+            "guarded stack-SSA variant should consume the deferred operand from Y");
+    require(optimized.steps.size() < baseline.steps.size(),
+            "guarded stack-SSA variant should shrink the program");
+
+    const std::array<const char*, 2> logical_registers{"changed", "unchanged"};
+    std::set<std::string> baseline_registers;
+    std::set<std::string> optimized_registers;
+    for (const char* name : logical_registers) {
+      baseline_registers.insert(baseline.registers.at(name));
+      optimized_registers.insert(optimized.registers.at(name));
+    }
+    const Observation before =
+        observe(step_opcodes(baseline.steps), {"В/О", "С/П"}, baseline.preloads,
+                baseline_registers, true);
+    const Observation after =
+        observe(step_opcodes(optimized.steps), {"В/О", "С/П"}, optimized.preloads,
+                optimized_registers, true);
+    require(after.stopped == before.stopped,
+            "guarded stack-SSA stopped state should match");
+    require(after.display == before.display,
+            "guarded stack-SSA display should match");
+    require(after.stack == before.stack,
+            "guarded stack-SSA X1/X/Y/Z/T state should match");
+    for (const char* name : logical_registers) {
+      const std::string& actual = after.registers.at(optimized.registers.at(name));
+      const std::string& expected = before.registers.at(baseline.registers.at(name));
+      require(actual == expected,
+              std::string("guarded stack-SSA register ") + name +
+                  " should match: expected " + expected + ", got " + actual);
+    }
+  }
+
   const std::string stack_through_function_entry_source = R"mkpro(
 program StackThroughFunctionEntryEq {
   state {

@@ -821,6 +821,18 @@ committed example oracles under `native/oracles/`.
   the difference before `С/П`, `В/О`, raw interaction, or another observer.
   Unknown flow and alternate entries fail closed. The automatic candidate is
   reported as `stack-through-function-entry`.
+- `function-stack-ssa-guarded-entry` — keeps both parameters of a proved
+  zero-guarded value function in stack SSA form. The guard stays in `X`, the
+  other parameter in `Y`, and only the branch that cannot consume them directly
+  materializes registers. `current-xy-packed-digit-rmw` composes this ABI with
+  the generic leading-digit `digit_at`/`digit_set` fusion: after an X2-synced
+  store or recall, the leading digit is produced in `X` while a single-use
+  binary operand survives in `Y`. Either operand may have supported unary
+  transforms and either binary order is handled; unsupported arity, extra
+  operands, nested binary trees, stale X2, or an observable caller continuation
+  retains the ordinary lowering. No function, formula, constant, or application
+  name participates in the proof. The automatic candidate is reported as
+  `stack-ssa-function-entry`.
 - `function-tail-recursion` — recognizes tail recursion and turns it into a loop.
 - `function-tail-call` — converts function tail recursion into a direct jump to entry, skipping the final call.
 

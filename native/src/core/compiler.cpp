@@ -19425,6 +19425,13 @@ struct StackThroughFunctionShape {
   int return_line = 0;
 };
 
+struct StackSsaGuardedFunctionShape {
+  StackEntryGuardedReturnShape guarded;
+  std::vector<std::string> stack_params;
+  std::vector<std::string> true_stack_params;
+  std::vector<std::string> false_materialized_params;
+};
+
 bool stack_through_binary_return_shape(const Expression& expression,
                                        const std::string& param,
                                        const std::string& prefix_target) {
@@ -19546,6 +19553,46 @@ std::optional<StackEntryValueFunctionShape> stack_entry_value_function_shape(
   };
 }
 
+std::optional<StackSsaGuardedFunctionShape> stack_ssa_guarded_function_shape(
+    const LoweringContext& context, const V2Rule& rule) {
+  if (rule.params.size() != 2U)
+    return std::nullopt;
+  std::optional<StackEntryGuardedReturnShape> guarded =
+      stack_entry_guarded_return_shape(rule);
+  if (!guarded.has_value())
+    return std::nullopt;
+
+  std::vector<std::string> stack_params;
+  stack_params.reserve(rule.params.size());
+  for (const std::string& param : rule.params) {
+    if (param != guarded->guard_param)
+      stack_params.push_back(param);
+  }
+  stack_params.push_back(guarded->guard_param);
+
+  const std::optional<std::vector<std::string>> true_params =
+      stack_entry_active_param_suffix(guarded->true_result, stack_params);
+  if (!true_params.has_value() ||
+      !can_lower_stack_entry_value_expression(context, guarded->true_result, *true_params)) {
+    return std::nullopt;
+  }
+
+  std::vector<std::string> false_materialized_params;
+  for (const std::string& param : rule.params) {
+    if (count_identifier_reads(guarded->false_result, param) > 0)
+      false_materialized_params.push_back(param);
+  }
+  if (false_materialized_params.empty())
+    return std::nullopt;
+
+  return StackSsaGuardedFunctionShape{
+      .guarded = *guarded,
+      .stack_params = std::move(stack_params),
+      .true_stack_params = *true_params,
+      .false_materialized_params = std::move(false_materialized_params),
+  };
+}
+
 bool stack_entry_value_function_rule_eligible(const LoweringContext& context,
                                               const V2Rule& rule) {
   if (!context.stack_argument_function_entries)
@@ -19606,6 +19653,8 @@ bool lower_stack_argument_function_call(LoweringContext& context, const V2Rule& 
   mark_last_emitted_call_role(context, "stack-argument-function-call");
   if (plan_it->second.stack_through_param)
     mark_last_emitted_call_role(context, "stack-through-function-call");
+  if (plan_it->second.stack_ssa_guarded_params)
+    mark_last_emitted_call_role(context, "stack-ssa-function-call");
   mark_function_call_result_x(context, rule);
   context.optimizations.push_back(OptimizationReport{
       .name = "function-call",
@@ -19854,6 +19903,21 @@ void plan_stack_argument_function_entries(LoweringContext& context, const V2Prog
           .call_sites = safe_it->second,
           .total_call_sites = total_calls,
           .primary = safe_it->second == total_calls,
+      };
+      continue;
+    }
+    const std::optional<StackSsaGuardedFunctionShape> stack_ssa_guarded =
+        context.stack_ssa_function_entries && !has_direct_tail_call &&
+                safe_it->second == total_calls
+            ? stack_ssa_guarded_function_shape(context, rule)
+            : std::nullopt;
+    if (stack_ssa_guarded.has_value()) {
+      context.stack_entry_functions[rule.name] = FunctionStackEntryPlan{
+          .params = stack_ssa_guarded->stack_params,
+          .call_sites = safe_it->second,
+          .total_call_sites = total_calls,
+          .primary = true,
+          .stack_ssa_guarded_params = true,
       };
       continue;
     }
@@ -27567,6 +27631,11 @@ bool lower_deferred_value_materialization_run(
     }
   }
   for (const core::emit::ForwardableValueDefinition& definition : region->definitions) {
+    if (definition.statement.kind == "v2_update" &&
+        (is_cells_state_name(context, definition.target) ||
+         is_coord_list_state_name(context, definition.target))) {
+      return false;
+    }
     // Stack-only implicit locals deliberately have no physical register. Their
     // existing stack scheduler must remain responsible for them; deferred
     // materialization promises an ordinary register store for later readers.
@@ -34543,6 +34612,76 @@ bool emit_stack_argument_function_entry_prefix(LoweringContext& context, const V
         .detail = "Carried parameter " + shape->param + " of " + rule.name +
                   " through an independent assignment on the calculator stack for " +
                   std::to_string(plan_it->second.call_sites) + " call site(s).",
+    });
+    return true;
+  }
+  if (plan_it->second.stack_ssa_guarded_params) {
+    const std::optional<StackSsaGuardedFunctionShape> shape =
+        stack_ssa_guarded_function_shape(context, rule);
+    if (!shape.has_value() || shape->stack_params.size() != 2U)
+      return false;
+    const StackEntryGuardedReturnShape& guarded = shape->guarded;
+    const std::string& lower_param = shape->stack_params.front();
+    const auto false_uses = [&](const std::string& param) {
+      return std::find(shape->false_materialized_params.begin(),
+                       shape->false_materialized_params.end(), param) !=
+             shape->false_materialized_params.end();
+    };
+
+    const bool guard_memory_synced = false_uses(guarded.guard_param);
+    if (guard_memory_synced) {
+      emit_store(context, guarded.guard_param,
+                 "stack-ssa guarded spill param " + guarded.guard_param);
+    } else {
+      mark_current_x(context, guarded.guard_param);
+    }
+    context.current_y_variable = lower_param;
+
+    const std::string false_label = function_label(rule.name) + "_stack_ssa_guard_false";
+    context.emitter.emit_jump(guarded.guard_op == "==" ? 0x5e : 0x57,
+                              guarded.guard_op == "==" ? "F x=0" : "F x!=0", false_label,
+                              "stack-ssa guard false branch", guarded.line);
+    if (!lower_stack_resident_expression_to_x(context, guarded.true_result,
+                                              shape->true_stack_params, guarded.line)) {
+      context.current_y_variable.reset();
+      return false;
+    }
+    context.emitter.emit_op(0x52, "В/О", "stack-ssa guarded return value", guarded.line);
+
+    context.emitter.emit_label(false_label, {.hidden = true});
+    clear_current_x_facts(context);
+    mark_current_x(context, guarded.guard_param);
+    if (guard_memory_synced)
+      context.current_x_memory_aliases.insert(guarded.guard_param);
+    context.current_y_variable = lower_param;
+    bool false_result_lowered = false;
+    if (false_uses(lower_param)) {
+      core::emit::ExpressionEmitApi api = expression_emit_api(context);
+      const std::optional<bool> stack_lowered =
+          core::emit::lower_current_xy_leading_packed_digit_rmw_to_x(
+              api, context, guarded.false_result, lower_param);
+      if (stack_lowered.has_value()) {
+        if (!*stack_lowered)
+          return false;
+        false_result_lowered = true;
+      } else {
+        context.emitter.emit_op(0x14, "X<->Y", "stack-ssa expose deferred param",
+                                guarded.line);
+        mark_current_x(context, lower_param);
+        context.current_y_variable = guarded.guard_param;
+        emit_store(context, lower_param, "stack-ssa false-path spill param " + lower_param);
+      }
+    }
+    if (!false_result_lowered)
+      context.current_y_variable.reset();
+    if (!false_result_lowered && !lower_expression_to_x(context, guarded.false_result))
+      return false;
+    context.emitter.emit_op(0x52, "В/О", "stack-ssa guarded return value", guarded.line);
+    clear_current_x_facts(context);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "function-stack-ssa-guarded-entry",
+        .detail = "Kept the parameters of guarded function " + rule.name +
+                  " in stack SSA form and delayed register spills to the path that reads them.",
     });
     return true;
   }
@@ -44101,7 +44240,8 @@ bool stack_through_function_continuations_proved(const std::vector<MachineItem>&
   std::set<std::string> special_targets;
   for (std::size_t index = 0; index < ops.size(); ++index) {
     const IrOp& op = ops.at(index);
-    if (!has_role(op, "stack-through-function-call"))
+    if (!has_role(op, "stack-through-function-call") &&
+        !has_role(op, "stack-ssa-function-call"))
       continue;
     const auto* target = std::get_if<std::string>(&op.target);
     if (op.kind != IrKind::Call || target == nullptr) {
@@ -50556,6 +50696,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   context.stack_argument_helper_entries = options.stack_argument_helper_entries;
   context.stack_argument_function_entries = options.stack_argument_function_entries;
   context.stack_through_function_entries = options.stack_through_function_entries;
+  context.stack_ssa_function_entries = options.stack_ssa_function_entries;
   context.setup_only_counted_loop_init = options.setup_only_counted_loop_init;
   context.empty_stack_loop_return = options.empty_stack_loop_return;
   context.x_param_value_functions = options.x_param_value_functions;
@@ -50936,7 +51077,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   merge_planned_preloaded_constant_registers(pass_options, context);
 
   std::vector<MachineItem> ir_pass_input = context.emitter.items;
-  if (!has_errors(context.diagnostics) && options.stack_through_function_entries) {
+  if (!has_errors(context.diagnostics) &&
+      (options.stack_through_function_entries || options.stack_ssa_function_entries)) {
     std::string stack_through_reason;
     if (!stack_through_function_continuations_proved(
             ir_pass_input, optimizer_feature_profile_for_options(options),
@@ -53155,7 +53297,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.runtime_indirect_call_flow ||
          options.general_constant_preloads || options.stack_resident_temps ||
          options.stack_argument_helper_entries || options.stack_argument_function_entries ||
-         options.stack_through_function_entries ||
+         options.stack_through_function_entries || options.stack_ssa_function_entries ||
          options.share_random_cell || options.startup_aware_constant_preloads ||
          options.guarded_prologue_gadgets || options.shared_bit_mask_helper_calls ||
          options.compact_bit_mask_helper_body || options.signed_abs_match_pairs ||
@@ -53945,6 +54087,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";stack_argument_helper_entries=" << options.stack_argument_helper_entries
       << ";stack_argument_function_entries=" << options.stack_argument_function_entries
       << ";stack_through_function_entries=" << options.stack_through_function_entries
+      << ";stack_ssa_function_entries=" << options.stack_ssa_function_entries
       << ";share_random_cell=" << options.share_random_cell
       << ";startup_aware_constant_preloads=" << options.startup_aware_constant_preloads
       << ";guarded_prologue_gadgets=" << options.guarded_prologue_gadgets
@@ -54043,7 +54186,7 @@ int estimated_candidate_search_cost_ms(std::string_view name) {
   if (name == "exact-stack-dead-store")
     return 20;
   if (name == "materialized-function-stack-entry" ||
-      name == "stack-through-function-entry")
+      name == "stack-through-function-entry" || name == "stack-ssa-function-entry")
     return 20;
   if (name == "packed-score-accumulator-reverse-suffix-free-layout")
     return 100;
@@ -68979,6 +69122,17 @@ CompileResult compile_source_for_optimizer_profile(
         "Carried a single function parameter through an independent assignment on the stack "
         "when every caller continuation proved the resulting stack difference dead",
         CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.stack_resident_temps = true;
+          candidate_options.stack_argument_function_entries = true;
+          candidate_options.stack_through_function_entries = true;
+          candidate_options.stack_ssa_function_entries = true;
+        },
+        "stack-ssa-function-entry",
+        "Kept guarded function parameters in stack SSA form and delayed spills to their "
+        "first reading branch",
+        CandidateGate::SizeRescue);
   }
   add_candidate(
       [](CompileOptions& candidate_options) {
@@ -70644,6 +70798,7 @@ CompileResult compile_source_for_optimizer_profile(
           [](CompileOptions& o) { o.stack_resident_temps = true; },
           [](CompileOptions& o) { o.stack_argument_function_entries = true; },
           [](CompileOptions& o) { o.stack_through_function_entries = true; },
+          [](CompileOptions& o) { o.stack_ssa_function_entries = true; },
           [](CompileOptions& o) { o.share_random_cell = true; },
           [](CompileOptions& o) { o.startup_aware_constant_preloads = true; },
           [](CompileOptions& o) { o.guarded_prologue_gadgets = true; },
