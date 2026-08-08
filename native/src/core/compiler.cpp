@@ -13092,6 +13092,14 @@ std::optional<std::pair<int, std::string>> fl_loop_opcode_for_register(int index
   }
 }
 
+void mark_last_emitted_loop_logical_register(LoweringContext& context,
+                                             const std::string& logical_register) {
+  if (context.emitter.items.size() < 2U)
+    return;
+  context.emitter.items.at(context.emitter.items.size() - 2U).logical_register_name =
+      logical_register;
+}
+
 bool lower_packed_digit_permutation_to_x(LoweringContext& context,
                                          const Expression& expression) {
   const std::optional<PackedDigitPermutationMatch> match =
@@ -13136,7 +13144,7 @@ bool lower_packed_digit_permutation_to_x(LoweringContext& context,
   context.emitter.emit_op(0x10, "+", "packed digit append", line);
   context.emitter.emit_jump(fl_counter->first, fl_counter->second, loop,
                             "packed digit permutation loop", line);
-  context.emitter.items.back().logical_register_name = counter;
+  mark_last_emitted_loop_logical_register(context, counter);
 
   clear_current_x_facts(context);
   context.emitter.current_x_expression = std::make_shared<Expression>(expression);
@@ -15793,7 +15801,7 @@ bool lower_segmented_bitplane_line_count_scan_to_x(LoweringContext& context,
   context.emitter.emit_label(next, {.hidden = true});
   context.emitter.emit_jump(fl_counter->first, fl_counter->second, start, "line_count scan loop",
                             source_line);
-  context.emitter.items.back().logical_register_name = counter;
+  mark_last_emitted_loop_logical_register(context, counter);
   emit_recall(context, total);
   context.emitter.items.back().comment = "line_count scan result";
   context.optimizations.push_back(OptimizationReport{
@@ -16246,7 +16254,7 @@ bool lower_spatial_progression_count_inline_loops(
             : fl_loop_opcode_for_register(counter_it->second);
     if (fl.has_value()) {
       context.emitter.emit_jump(fl->first, fl->second, start, operation + " loop", source_line);
-      context.emitter.items.back().logical_register_name = counter;
+      mark_last_emitted_loop_logical_register(context, counter);
       context.optimizations.push_back(OptimizationReport{
           .name = "spatial-count-fl-loop",
           .detail = "Used " + fl->second + " for " + operation + " loop counter.",
@@ -33794,7 +33802,7 @@ bool lower_packed_bcd_horner_threshold(LoweringContext& context,
   const std::optional<std::pair<int, std::string>> fl = fl_loop_opcode_for_register(0x0);
   context.emitter.emit_jump(fl->first, fl->second, loop, "packed BCD Horner loop",
                             statement.line);
-  context.emitter.items.back().logical_register_name = counter;
+  mark_last_emitted_loop_logical_register(context, counter);
   context.optimizations.push_back(OptimizationReport{
       .name = "packed-bcd-horner-threshold-lowering",
       .detail = "Emitted a shared packed-BCD split and horizontal threshold fold.",
@@ -33940,7 +33948,7 @@ bool lower_packed_bcd_one_hot_update(LoweringContext& context,
                                  "store packed indexed value", bank_targets);
   const std::optional<std::pair<int, std::string>> fl = fl_loop_opcode_for_register(0x0);
   context.emitter.emit_jump(fl->first, fl->second, loop, "packed one-hot loop", statement.line);
-  context.emitter.items.back().logical_register_name = counter;
+  mark_last_emitted_loop_logical_register(context, counter);
   context.optimizations.push_back(OptimizationReport{
       .name = "packed-bcd-one-hot-lowering",
       .detail = "Emitted a generic indexed one-hot update through two shared packed bit masks.",
@@ -35749,7 +35757,7 @@ bool emit_fl_one_zero_branch(LoweringContext& context, const std::pair<int, std:
   const std::string zero_label = context.emitter.fresh_label("fl_zero");
   const std::string end_label = context.emitter.fresh_label("fl_end");
   context.emitter.emit_jump(fl.first, fl.second, zero_label, comment, line);
-  context.emitter.items.back().logical_register_name = logical_register;
+  mark_last_emitted_loop_logical_register(context, logical_register);
   if (discard_logical_x_facts)
     clear_current_x_facts(context);
   const bool one_stops = statements_always_stop(context, one_body);
@@ -38813,7 +38821,7 @@ bool emit_counted_while_body(LoweringContext& context, const V2Statement& loop,
   if (!lower_statement_block(context, body_tail))
     return false;
   context.emitter.emit_jump(fl.first, fl.second, start_label, jump_comment, loop.line);
-  context.emitter.items.back().logical_register_name = counter;
+  mark_last_emitted_loop_logical_register(context, counter);
   return true;
 }
 
@@ -42967,7 +42975,7 @@ bool lower_spatial_line_progression_helpers(LoweringContext& context) {
             : fl_loop_opcode_for_register(counter_it->second);
     if (fl.has_value()) {
       context.emitter.emit_jump(fl->first, fl->second, start, helper.operation + " line loop");
-      context.emitter.items.back().logical_register_name = helper.counter;
+      mark_last_emitted_loop_logical_register(context, helper.counter);
       context.optimizations.push_back(OptimizationReport{
           .name = "spatial-count-fl-loop",
           .detail =
@@ -43060,7 +43068,7 @@ bool lower_spatial_sum_helpers(LoweringContext& context) {
             : fl_loop_opcode_for_register(counter_it->second);
     if (fl.has_value()) {
       context.emitter.emit_jump(fl->first, fl->second, start, helper.operation + " loop");
-      context.emitter.items.back().logical_register_name = helper.counter;
+      mark_last_emitted_loop_logical_register(context, helper.counter);
       context.optimizations.push_back(OptimizationReport{
           .name = "spatial-count-fl-loop",
           .detail = "Used " + fl->second + " for " + helper.operation + " loop counter.",

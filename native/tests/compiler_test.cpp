@@ -3468,7 +3468,7 @@ program DigitAtCall {
                       }),
           "digit_at should end extraction with integer truncation, not a rounding shortcut");
 
-  const CompileResult packed_digit_permutation = compile_source(R"mkpro(
+  const std::string packed_digit_permutation_source = R"mkpro(
 program PackedDigitPermutation {
   state {
     value: packed = 123
@@ -3481,7 +3481,9 @@ program PackedDigitPermutation {
        digit_at(value, 3)) * 10000 + 7))
   }
 }
-)mkpro");
+)mkpro";
+  const CompileResult packed_digit_permutation =
+      compile_source(packed_digit_permutation_source);
   require(packed_digit_permutation.implemented,
           "native compiler should lower a generic packed digit permutation");
   require(packed_digit_permutation.diagnostics.empty(),
@@ -3494,6 +3496,16 @@ program PackedDigitPermutation {
                                step.opcode == 0x58 || step.opcode == 0x5a;
                       }),
           "packed digit permutation fusion should use a physical F L0..L3 counter");
+
+  CompileOptions packed_digit_logical_options;
+  packed_digit_logical_options.disable_candidate_search = true;
+  packed_digit_logical_options.collect_logical_register_allocation = true;
+  const CompileResult packed_digit_logical =
+      compile_source(packed_digit_permutation_source, packed_digit_logical_options);
+  require(packed_digit_logical.implemented && packed_digit_logical.diagnostics.empty(),
+          "logical allocator should retain the source identity of an F L0..L3 counter");
+  require(!packed_digit_logical.logical_register_assignments.empty(),
+          "packed digit permutation logical probe should produce register assignments");
 
   const CompileResult non_permutation_digits = compile_source(R"mkpro(
 program NonPermutationDigits {

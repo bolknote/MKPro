@@ -744,7 +744,9 @@ committed example oracles under `native/oracles/`.
   complete CFG interference graph, exactly colors it against the target's
   precolored hardware registers, and lowers again with that assignment. The
   regenerated program is independently re-verified before it can become a
-  candidate.
+  candidate. Generated `F L0..L3` loops attach their logical counter identity
+  to the opcode cell rather than its address operand, so fixed loop registers
+  do not appear as conflicting duplicate physical anchors in that graph.
 - `demote-constant-indirect-flow` — recompiles with selective setup-enterable
   numeric constant inlining to free registers for post-layout indirect-flow
   rescue; probe bases include existing-constant dual-use selectors when that
