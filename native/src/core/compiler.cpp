@@ -804,6 +804,173 @@ bool expression_pure_for_substitution(const Expression& expression) {
                      [](const Expression& arg) { return expression_pure_for_substitution(arg); });
 }
 
+constexpr std::string_view kPackedDigitPermutationCounter =
+    "__packed_digit_permutation_counter";
+
+struct PackedDigitPermutationMatch {
+  std::string source;
+  int width = 0;
+};
+
+struct PackedDigitPermutationTerm {
+  std::string source;
+  int source_index = 0;
+  int target_exponent = 0;
+};
+
+std::optional<int> exact_small_integer(const LoweringContext& context,
+                                       const Expression& expression) {
+  const std::optional<double> value = numeric_value_of_expression(context, expression);
+  if (!value.has_value() || !std::isfinite(*value) ||
+      std::fabs(*value - std::round(*value)) >= 1e-12 || *value < 0.0 || *value > 9.0) {
+    return std::nullopt;
+  }
+  return static_cast<int>(std::llround(*value));
+}
+
+std::optional<int> exact_decimal_power_exponent(const LoweringContext& context,
+                                                const Expression& expression) {
+  const std::optional<double> value = numeric_value_of_expression(context, expression);
+  if (!value.has_value() || !std::isfinite(*value) || *value <= 0.0)
+    return std::nullopt;
+  double power = 1.0;
+  for (int exponent = 0; exponent <= 7; ++exponent) {
+    if (std::fabs(*value - power) <= 1e-12 * std::max(1.0, power))
+      return exponent;
+    power *= 10.0;
+  }
+  return std::nullopt;
+}
+
+std::optional<std::pair<std::string, int>>
+match_packed_digit_at(const LoweringContext& context, const Expression& expression) {
+  if (expression.kind != "call" || lower_ascii(expression.callee) != "digit_at" ||
+      expression.args.size() != 2U || expression.args.front().kind != "identifier") {
+    return std::nullopt;
+  }
+  const std::optional<int> index = exact_small_integer(context, expression.args.at(1));
+  if (!index.has_value() || *index < 1 || *index > 8)
+    return std::nullopt;
+  return std::pair{expression.args.front().name, *index};
+}
+
+void collect_multiplication_factors(const Expression& expression,
+                                    std::vector<const Expression*>& factors) {
+  if (expression.kind == "binary" && expression.op == "*" && expression.left != nullptr &&
+      expression.right != nullptr) {
+    collect_multiplication_factors(*expression.left, factors);
+    collect_multiplication_factors(*expression.right, factors);
+    return;
+  }
+  factors.push_back(&expression);
+}
+
+std::optional<PackedDigitPermutationTerm>
+match_packed_digit_permutation_term(const LoweringContext& context,
+                                    const Expression& expression) {
+  std::vector<const Expression*> factors;
+  collect_multiplication_factors(expression, factors);
+
+  std::optional<std::pair<std::string, int>> digit;
+  double coefficient = 1.0;
+  for (const Expression* factor : factors) {
+    if (const std::optional<std::pair<std::string, int>> candidate =
+            match_packed_digit_at(context, *factor);
+        candidate.has_value()) {
+      if (digit.has_value())
+        return std::nullopt;
+      digit = candidate;
+      continue;
+    }
+    const std::optional<double> value = numeric_value_of_expression(context, *factor);
+    if (!value.has_value() || !std::isfinite(*value))
+      return std::nullopt;
+    coefficient *= *value;
+  }
+  if (!digit.has_value() || !std::isfinite(coefficient))
+    return std::nullopt;
+
+  const Expression coefficient_expression = number_expression(js_number_string(coefficient));
+  const std::optional<int> exponent =
+      exact_decimal_power_exponent(context, coefficient_expression);
+  if (!exponent.has_value())
+    return std::nullopt;
+  return PackedDigitPermutationTerm{
+      .source = digit->first,
+      .source_index = digit->second,
+      .target_exponent = *exponent,
+  };
+}
+
+void collect_additive_terms(const Expression& expression,
+                            std::vector<const Expression*>& terms) {
+  if (expression.kind == "binary" && expression.op == "+" && expression.left != nullptr &&
+      expression.right != nullptr) {
+    collect_additive_terms(*expression.left, terms);
+    collect_additive_terms(*expression.right, terms);
+    return;
+  }
+  terms.push_back(&expression);
+}
+
+std::optional<PackedDigitPermutationMatch>
+match_packed_digit_permutation(const LoweringContext& context, const Expression& expression) {
+  if (!expression_pure_for_substitution(expression))
+    return std::nullopt;
+
+  std::vector<const Expression*> terms;
+  collect_additive_terms(expression, terms);
+  if (terms.size() < 3U || terms.size() > 8U)
+    return std::nullopt;
+
+  std::vector<PackedDigitPermutationTerm> digits;
+  digits.reserve(terms.size());
+  for (const Expression* term : terms) {
+    const std::optional<PackedDigitPermutationTerm> digit =
+        match_packed_digit_permutation_term(context, *term);
+    if (!digit.has_value())
+      return std::nullopt;
+    digits.push_back(*digit);
+  }
+
+  const std::string& source = digits.front().source;
+  const int width = static_cast<int>(digits.size());
+  std::set<int> source_indices;
+  std::set<int> target_exponents;
+  for (const PackedDigitPermutationTerm& digit : digits) {
+    if (digit.source != source || !source_indices.insert(digit.source_index).second ||
+        !target_exponents.insert(digit.target_exponent).second) {
+      return std::nullopt;
+    }
+    if (digit.source_index < 1 || digit.source_index > width ||
+        digit.target_exponent != width - digit.source_index) {
+      return std::nullopt;
+    }
+  }
+  return PackedDigitPermutationMatch{.source = source, .width = width};
+}
+
+bool expression_contains_packed_digit_permutation(const LoweringContext& context,
+                                                  const Expression& expression) {
+  if (match_packed_digit_permutation(context, expression).has_value())
+    return true;
+  if (expression.index != nullptr &&
+      expression_contains_packed_digit_permutation(context, *expression.index))
+    return true;
+  if (expression.expr != nullptr &&
+      expression_contains_packed_digit_permutation(context, *expression.expr))
+    return true;
+  if (expression.left != nullptr &&
+      expression_contains_packed_digit_permutation(context, *expression.left))
+    return true;
+  if (expression.right != nullptr &&
+      expression_contains_packed_digit_permutation(context, *expression.right))
+    return true;
+  return std::any_of(expression.args.begin(), expression.args.end(), [&](const Expression& arg) {
+    return expression_contains_packed_digit_permutation(context, arg);
+  });
+}
+
 bool x_param_grid_norm_call(const Expression& expression, const std::string& parameter) {
   if (expression.kind != "call")
     return false;
@@ -11047,6 +11214,113 @@ void apply_predecrement_indexed_stack_rule_hints(LoweringContext& context,
                                                  RegisterHints& hints);
 void finalize_predecrement_indexed_stack_rules(LoweringContext& context);
 
+bool expression_text_contains_packed_digit_permutation(const LoweringContext& context,
+                                                       const std::optional<std::string>& text,
+                                                       int source_line) {
+  if (!text.has_value() || trim_ascii(*text).empty())
+    return false;
+  try {
+    return expression_contains_packed_digit_permutation(
+        context, parse_expression(*text, source_line));
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+bool statement_contains_packed_digit_permutation(const LoweringContext& context,
+                                                 const V2Statement& statement);
+
+bool statements_contain_packed_digit_permutation(const LoweringContext& context,
+                                                 const std::vector<V2Statement>& statements) {
+  return std::any_of(statements.begin(), statements.end(), [&](const V2Statement& statement) {
+    return statement_contains_packed_digit_permutation(context, statement);
+  });
+}
+
+bool statement_contains_packed_digit_permutation(const LoweringContext& context,
+                                                 const V2Statement& statement) {
+  if (expression_text_contains_packed_digit_permutation(context, statement.target,
+                                                        statement.line) ||
+      expression_text_contains_packed_digit_permutation(context, statement.expr,
+                                                        statement.line)) {
+    return true;
+  }
+  if (statement.predicate.has_value() &&
+      (expression_text_contains_packed_digit_permutation(context, statement.predicate->left,
+                                                         statement.line) ||
+       expression_text_contains_packed_digit_permutation(context, statement.predicate->right,
+                                                         statement.line) ||
+       expression_text_contains_packed_digit_permutation(context,
+                                                         statement.predicate->collection,
+                                                         statement.line) ||
+       expression_text_contains_packed_digit_permutation(context, statement.predicate->item,
+                                                         statement.line))) {
+    return true;
+  }
+  if (statement.items.has_value()) {
+    for (const DisplayItem& item : *statement.items) {
+      if (item.expr.has_value() &&
+          expression_contains_packed_digit_permutation(context, *item.expr)) {
+        return true;
+      }
+    }
+  }
+  for (const V2RawInput& input : statement.inputs) {
+    if (expression_text_contains_packed_digit_permutation(context, input.expr, input.line))
+      return true;
+  }
+  for (const std::string& arg : statement.args) {
+    if (expression_text_contains_packed_digit_permutation(context, arg, statement.line))
+      return true;
+  }
+  for (const V2MatchCase& match_case : statement.cases) {
+    for (const std::string& value : match_case.values) {
+      if (expression_text_contains_packed_digit_permutation(context, value, match_case.line))
+        return true;
+    }
+    if (match_case.action != nullptr &&
+        statement_contains_packed_digit_permutation(context, *match_case.action)) {
+      return true;
+    }
+  }
+  if (statement.otherwise != nullptr &&
+      statement_contains_packed_digit_permutation(context, *statement.otherwise)) {
+    return true;
+  }
+  return statements_contain_packed_digit_permutation(context, statement.body) ||
+         statements_contain_packed_digit_permutation(context, statement.then_body) ||
+         statements_contain_packed_digit_permutation(context, statement.else_body);
+}
+
+bool program_contains_packed_digit_permutation(const LoweringContext& context,
+                                               const V2Program& program) {
+  for (const V2StateField& field : program.state) {
+    if (expression_text_contains_packed_digit_permutation(context, field.initial, field.line))
+      return true;
+  }
+  if (statements_contain_packed_digit_permutation(context, program.body))
+    return true;
+  return std::any_of(program.rules.begin(), program.rules.end(), [&](const V2Rule& rule) {
+    return statements_contain_packed_digit_permutation(context, rule.body);
+  });
+}
+
+void reserve_packed_digit_permutation_counter(LoweringContext& context,
+                                              const V2Program& program,
+                                              RegisterCollection& collection,
+                                              RegisterHints& hints) {
+  if (!program_contains_packed_digit_permutation(context, program))
+    return;
+  for (int index = 0; index <= 3; ++index) {
+    if (physical_register_in_use(context, index) || hint_register_is_used(hints, index))
+      continue;
+    const std::string counter{kPackedDigitPermutationCounter};
+    add_register_variable(collection, counter);
+    hints[counter] = RegisterHint{.mode = RegisterHintMode::Fixed, .index = index};
+    return;
+  }
+}
+
 void collect_registers(LoweringContext& context, const V2Program& program) {
   context.tiny_game_shape = is_tiny_game_shape(program);
   context.human_game_shape = is_human_game_shape(program);
@@ -11316,6 +11590,7 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   apply_scaled_coord_register_hints(context, collection, hints);
   apply_segmented_bitplane_register_hints(context, collection, hints);
   apply_predecrement_indexed_stack_rule_hints(context, hints);
+  reserve_packed_digit_permutation_counter(context, program, collection, hints);
   allocate_collected_registers(context, collection, hints);
   finalize_predecrement_indexed_stack_rules(context);
 }
@@ -12743,6 +13018,62 @@ std::optional<std::pair<int, std::string>> fl_loop_opcode_for_register(int index
   default:
     return std::nullopt;
   }
+}
+
+bool lower_packed_digit_permutation_to_x(LoweringContext& context,
+                                         const Expression& expression) {
+  const std::optional<PackedDigitPermutationMatch> match =
+      match_packed_digit_permutation(context, expression);
+  if (!match.has_value())
+    return false;
+  const std::string counter{kPackedDigitPermutationCounter};
+  const auto counter_register = context.register_index_by_name.find(counter);
+  const auto source_register = context.register_index_by_name.find(match->source);
+  if (counter_register == context.register_index_by_name.end() ||
+      source_register == context.register_index_by_name.end() ||
+      counter_register->second == source_register->second) {
+    return false;
+  }
+  const std::optional<std::pair<int, std::string>> fl_counter =
+      fl_loop_opcode_for_register(counter_register->second);
+  if (!fl_counter.has_value())
+    return false;
+
+  const int line = 0;
+  const std::string loop = context.emitter.fresh_label("packed_digit_permutation");
+  emit_number_or_preload(context, std::to_string(match->width),
+                         "packed digit permutation width", line);
+  emit_store(context, counter, "packed digit permutation counter");
+  emit_number_or_preload(context, "0", "packed digit permutation accumulator", line);
+  context.emitter.emit_label(loop, {.hidden = true});
+  emit_recall(context, match->source);
+  emit_recall(context, counter);
+  context.emitter.emit_op(0x0b, "/-/", "packed digit source exponent", line);
+  emit_number_or_preload(context, std::to_string(match->width + 1),
+                         "packed digit source exponent bias", line);
+  context.emitter.emit_op(0x10, "+", "packed digit source exponent", line);
+  context.emitter.emit_op(0x15, "F 10^x", "packed digit divisor", line);
+  context.emitter.emit_op(0x13, "/", "packed digit scaled source", line);
+  context.emitter.emit_op(0x35, "К {x}", "packed digit fractional tail", line);
+  emit_number_or_preload(context, "10", "packed digit scale", line);
+  context.emitter.emit_op(0x12, "*", "packed digit scale", line);
+  context.emitter.emit_op(0x34, "К [x]", "packed digit integer", line);
+  context.emitter.emit_op(0x14, "X↔Y", "packed digit accumulator", line);
+  emit_number_or_preload(context, "10", "packed digit accumulator scale", line);
+  context.emitter.emit_op(0x12, "*", "packed digit accumulator scale", line);
+  context.emitter.emit_op(0x10, "+", "packed digit append", line);
+  context.emitter.emit_jump(fl_counter->first, fl_counter->second, loop,
+                            "packed digit permutation loop", line);
+  context.emitter.items.back().logical_register_name = counter;
+
+  clear_current_x_facts(context);
+  context.emitter.current_x_expression = std::make_shared<Expression>(expression);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-digit-permutation-fusion",
+      .detail = "Lowered a contiguous " + std::to_string(match->width) +
+                "-digit decimal reversal through one F L counter loop.",
+  });
+  return true;
 }
 
 std::optional<std::vector<std::string>> coord_list_items_for(LoweringContext& context,
@@ -24150,6 +24481,9 @@ bool lower_expression_to_x(LoweringContext& context, const Expression& expressio
     }
     return true;
   }
+
+  if (lower_packed_digit_permutation_to_x(context, expression))
+    return true;
 
   if (const RandomCellHelperRequest* helper = shared_random_cell_helper(context, expression);
       helper != nullptr) {

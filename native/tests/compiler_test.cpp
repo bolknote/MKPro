@@ -3468,6 +3468,53 @@ program DigitAtCall {
                       }),
           "digit_at should end extraction with integer truncation, not a rounding shortcut");
 
+  const CompileResult packed_digit_permutation = compile_source(R"mkpro(
+program PackedDigitPermutation {
+  state {
+    value: packed = 123
+  }
+
+  loop {
+    show(bit_not(
+      (digit_at(value, 1) * 100 +
+       10 * digit_at(value, 2) +
+       digit_at(value, 3)) * 10000 + 7))
+  }
+}
+)mkpro");
+  require(packed_digit_permutation.implemented,
+          "native compiler should lower a generic packed digit permutation");
+  require(packed_digit_permutation.diagnostics.empty(),
+          "packed digit permutation compile should not report diagnostics");
+  require(has_optimization(packed_digit_permutation, "packed-digit-permutation-fusion"),
+          "contiguous decimal reversal should use packed digit permutation fusion");
+  require(std::any_of(packed_digit_permutation.steps.begin(),
+                      packed_digit_permutation.steps.end(), [](const ResolvedStep& step) {
+                        return step.opcode == 0x5d || step.opcode == 0x5b ||
+                               step.opcode == 0x58 || step.opcode == 0x5a;
+                      }),
+          "packed digit permutation fusion should use a physical F L0..L3 counter");
+
+  const CompileResult non_permutation_digits = compile_source(R"mkpro(
+program NonPermutationDigits {
+  state {
+    value: packed = 123
+  }
+
+  loop {
+    show(digit_at(value, 1) +
+         digit_at(value, 2) * 10 +
+         digit_at(value, 3) * 100)
+  }
+}
+)mkpro");
+  require(non_permutation_digits.implemented,
+          "native compiler should retain ordinary digit extraction for non-reversal shapes");
+  require(non_permutation_digits.diagnostics.empty(),
+          "non-reversal digit extraction should not report diagnostics");
+  require(!has_optimization(non_permutation_digits, "packed-digit-permutation-fusion"),
+          "non-reversal digit weights must not use packed digit permutation fusion");
+
   const CompileResult leading_digit_rmw = compile_source(R"mkpro(
 program LeadingDigitRmw {
   state {
