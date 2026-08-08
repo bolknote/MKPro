@@ -108,6 +108,7 @@ struct FunctionStackEntryPlan {
   int call_sites = 0;
   int total_call_sites = 0;
   bool primary = false;
+  bool materialize_params = false;
 };
 
 struct RuleStackInputEntryPlan {

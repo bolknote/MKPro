@@ -91,11 +91,13 @@ struct Observation {
   std::string display;
   bool stopped = false;
   std::map<std::string, std::string> registers;
+  std::map<std::string, std::string> stack;
 };
 
 Observation observe(const std::vector<int>& codes, const std::vector<std::string>& keys,
                    const std::vector<PreloadReport>& preloads,
-                   const std::set<std::string>& registers_to_compare) {
+                   const std::set<std::string>& registers_to_compare,
+                   bool compare_stack = false) {
   emulator::MK61 calc;
   for (const PreloadReport& preload : preloads)
     calc.set_register(preload.register_name, mk61_hex_literal(preload.value));
@@ -108,10 +110,17 @@ Observation observe(const std::vector<int>& codes, const std::vector<std::string
   for (const std::string& register_name : registers_to_compare)
     register_values[register_name] = trim_ascii(calc.read_register(register_name));
 
+  std::map<std::string, std::string> stack_values;
+  if (compare_stack) {
+    for (const std::string& stack_name : {"X1", "X", "Y", "Z", "T"})
+      stack_values[stack_name] = trim_ascii(calc.read_register(stack_name));
+  }
+
   return Observation{
       .display = trim_ascii(calc.display_text()),
       .stopped = run.stopped,
       .registers = std::move(register_values),
+      .stack = std::move(stack_values),
   };
 }
 
@@ -121,6 +130,7 @@ void require_same_observation(const Observation& actual, const Observation& expe
   require(actual.display == expected.display,
           context + " expected display " + expected.display + ", got " + actual.display);
   require(actual.registers == expected.registers, context + " registers should match");
+  require(actual.stack == expected.stack, context + " X1/X/Y/Z/T stack should match");
 }
 
 CompileResult compile_variant(const std::string& source, bool stack_resident, bool canonicalize_arg_temps) {
@@ -465,6 +475,64 @@ program StackFunctionPackedScorePairSumEq {
             "packed_score pair-sum stack-entry stop state should match baseline");
     require(after.registers.at(optimized_out) == before.registers.at(baseline_out),
             "packed_score pair-sum stack-entry out register should match baseline");
+  }
+
+  const std::string materialized_function_stack_entry_source = R"mkpro(
+program MaterializedFunctionStackEntryEq {
+  state {
+    left: packed = 7
+    right: packed = 3
+    score: packed = 0
+  }
+
+  fn apply(value, delta) {
+    score += value
+    return value - delta
+  }
+
+  loop {
+    left = apply(left, 1)
+    right = apply(right, 2)
+    left = apply(left, 1)
+    halt(left + right + score)
+  }
+}
+)mkpro";
+
+  {
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.disable_candidate_search = true;
+    const CompileResult baseline =
+        compile_source(materialized_function_stack_entry_source, baseline_options);
+
+    CompileOptions optimized_options = baseline_options;
+    optimized_options.stack_resident_temps = true;
+    optimized_options.stack_argument_function_entries = true;
+    const CompileResult optimized =
+        compile_source(materialized_function_stack_entry_source, optimized_options);
+
+    require(baseline.implemented, "materialized function stack-entry baseline should compile");
+    require(optimized.implemented,
+            "materialized function stack-entry optimized variant should compile");
+    require(has_optimization(optimized, "function-stack-entry-materialized-params"),
+            "materialized function stack-entry variant should use the shared prologue");
+    require(optimized.steps.size() < baseline.steps.size(),
+            "materialized function stack-entry variant should shrink the program");
+
+    const std::set<std::string> baseline_registers{
+        baseline.registers.at("left"), baseline.registers.at("right"),
+        baseline.registers.at("score")};
+    const std::set<std::string> optimized_registers{
+        optimized.registers.at("left"), optimized.registers.at("right"),
+        optimized.registers.at("score")};
+    const Observation before =
+        observe(step_opcodes(baseline.steps), {"В/О", "С/П"}, baseline.preloads,
+                baseline_registers, true);
+    const Observation after =
+        observe(step_opcodes(optimized.steps), {"В/О", "С/П"}, optimized.preloads,
+                optimized_registers, true);
+    require_same_observation(after, before, "materialized function stack entry");
   }
 
   const std::filesystem::path root = std::filesystem::current_path();

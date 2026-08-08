@@ -1391,6 +1391,135 @@ program RuleStackInputPredicateEntryProbe {
 
   {
     const std::string source = R"mkpro(
+program GuardedValueFunctionStackEntryProbe {
+  state {
+    left: packed = 7
+    right: packed = 0
+  }
+
+  fn reduce(value, delta) {
+    if value == 0 {
+      return value
+    }
+    return abs(value - delta)
+  }
+
+  loop {
+    left = reduce(left, 1)
+    right = reduce(right, 2)
+    halt(left + right)
+  }
+}
+)mkpro";
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.stack_resident_temps = true;
+    baseline_options.disable_candidate_search = true;
+    const CompileResult baseline = compile_source(source, baseline_options);
+    require_clean_compile(baseline, "guarded value function stack-entry baseline");
+
+    CompileOptions stack_entry_options = baseline_options;
+    stack_entry_options.stack_argument_function_entries = true;
+    const CompileResult stack_entry = compile_source(source, stack_entry_options);
+    require_clean_compile(stack_entry, "guarded value function stack entry");
+    require(stack_entry.steps.size() + 5U <= baseline.steps.size(),
+            "guarded stack entry should remove parameter stores and callee recalls");
+    require(has_optimization(stack_entry, "function-stack-entry-guarded-return"),
+            "guarded value function should preserve its arguments across both return paths");
+    require(count_steps_with_comment(stack_entry, "arg value for reduce") == 0 &&
+                count_steps_with_comment(stack_entry, "arg delta for reduce") == 0,
+            "guarded stack-entry calls should not materialize parameter registers");
+    require(count_steps_with_comment_prefix_and_opcode(
+                stack_entry, "call function reduce stack entry", 0x53) == 2,
+            "both guarded value function calls should use the stack entry");
+  }
+
+  {
+    const std::string source = R"mkpro(
+program MaterializedFunctionStackEntryProbe {
+  state {
+    left: packed = 7
+    right: packed = 3
+    score: packed = 0
+  }
+
+  fn apply(value, delta) {
+    score += value
+    return value - delta
+  }
+
+  loop {
+    left = apply(left, 1)
+    right = apply(right, 2)
+    left = apply(left, 1)
+    halt(left + right + score)
+  }
+}
+)mkpro";
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.stack_resident_temps = true;
+    baseline_options.disable_candidate_search = true;
+    const CompileResult baseline = compile_source(source, baseline_options);
+    require_clean_compile(baseline, "materialized function stack-entry baseline");
+
+    CompileOptions stack_entry_options = baseline_options;
+    stack_entry_options.stack_argument_function_entries = true;
+    const CompileResult stack_entry = compile_source(source, stack_entry_options);
+    require_clean_compile(stack_entry, "materialized function stack entry");
+    require(stack_entry.steps.size() + 2U == baseline.steps.size(),
+            "shared two-parameter materialization should save two cells across three calls");
+    require(has_optimization(stack_entry, "function-stack-entry-materialized-params"),
+            "general function body should use the materialized stack-entry ABI");
+    require(count_steps_with_comment(stack_entry, "arg value for apply") == 0 &&
+                count_steps_with_comment(stack_entry, "arg delta for apply") == 0,
+            "materialized stack-entry calls should remove caller parameter stores");
+    require(count_steps_with_comment(stack_entry, "stack-entry param value") == 1 &&
+                count_steps_with_comment(stack_entry, "stack-entry param delta") == 1,
+            "shared stack-entry prologue should materialize each parameter exactly once");
+  }
+
+  {
+    const std::string source = R"mkpro(
+program TailCallFunctionStackEntryNegativeProbe {
+  state {
+    x: packed = 7
+    y: packed = 3
+    out: packed = 0
+  }
+
+  fn target(value, delta) {
+    return value - delta
+  }
+
+  fn forward(value, delta) {
+    return target(value, delta)
+  }
+
+  loop {
+    out = target(x, y)
+    out += target(x, 1)
+    out += forward(x, 2)
+    halt(out)
+  }
+}
+)mkpro";
+    CompileOptions options;
+    options.budget = 999999;
+    options.stack_resident_temps = true;
+    options.stack_argument_function_entries = true;
+    options.disable_candidate_search = true;
+    const CompileResult result = compile_source(source, options);
+    require_clean_compile(result, "tail-call function stack-entry negative");
+    require(count_steps_with_comment_prefix_and_opcode(
+                result, "call function target stack entry", 0x53) == 0,
+            "a direct tail-call target must retain its register entry ABI");
+    require(count_steps_with_comment(result, "arg value for target") > 0,
+            "tail-call target arguments must remain materialized for every entry path");
+  }
+
+  {
+    const std::string source = R"mkpro(
 program RuleStackInputEntryRetainedStateReadProbe {
   state {
     x: packed = 3
