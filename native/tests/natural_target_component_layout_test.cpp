@@ -630,6 +630,46 @@ Fixture address_selector_rebind_fixture() {
   return result;
 }
 
+Fixture companion_address_selector_rebind_fixture(bool data_visible = false) {
+  Fixture result;
+  const std::string helper = "companion_rebind_helper";
+  const std::string sink = "companion_rebind_sink";
+
+  result.items.push_back(MachineItem::label("companion_rebind_entry"));
+  for (int call = 0; call < 3; ++call) {
+    result.items.push_back(op(0x53));
+    result.items.push_back(MachineItem::address(helper));
+  }
+  if (data_visible)
+    result.items.push_back(op(0x69));
+  MachineItem existing_jump = op(0x89);
+  existing_jump.indirect_flow_targets = std::vector<IrTarget>{sink};
+  result.items.push_back(std::move(existing_jump));
+
+  result.items.push_back(MachineItem::label(helper));
+  result.items.push_back(op(0x22));
+  result.items.push_back(op(0x52));
+
+  result.items.push_back(MachineItem::label("companion_rebind_before_sink"));
+  const int before_sink_cells = data_visible ? 5 : 6;
+  for (int cell = 1; cell < before_sink_cells; ++cell)
+    result.items.push_back(op(0x54));
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label(sink));
+  result.visible_stop = result.items.size();
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label("companion_rebind_tail"));
+  for (int cell = 1; cell < 13; ++cell)
+    result.items.push_back(op(0x54));
+  result.items.push_back(stop());
+
+  result.preloads.push_back(PreloadReport{.register_name = "8", .value = "18"});
+  result.preloads.push_back(PreloadReport{.register_name = "9", .value = "C7"});
+  return result;
+}
+
 core::AuthoritativePostLayoutControlFlow flow(const Fixture& fixture_value) {
   return core::build_post_layout_control_flow(fixture_value.items);
 }
@@ -1164,6 +1204,43 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
         data_visible.items, data_visible.preloads, flow(data_visible));
     require(rejected.plan.rebound_indirect_flows == 0,
             "a selector with an ordinary data recall must not be reassigned");
+  }
+
+  {
+    const Fixture input = companion_address_selector_rebind_fixture();
+    core::NaturalTargetComponentLayoutOptions options;
+    options.maximum_anchors = 1;
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input), options);
+    const std::map<std::string, std::string> final_preloads =
+        preload_map(rewritten.preloads);
+    require(rewritten.plan.proved && rewritten.applied == 3 &&
+                rewritten.removed_cells == 3 && final_preloads.at("8") == "18" &&
+                final_preloads.at("9") != "C7" &&
+                std::any_of(rewritten.plan.preloads.begin(), rewritten.plan.preloads.end(),
+                            [](const core::NaturalTargetPreloadRewrite& preload) {
+                              return preload.register_name == "9" &&
+                                     preload.old_value == "C7";
+                            }),
+            "natural-target layout should retarget an independent existing raw-BCD "
+            "address-only selector after moving another helper");
+    const Observation before = observe(input.items, input.preloads);
+    const Observation after = observe(rewritten.items, rewritten.preloads);
+    std::map<std::string, std::string> before_observable = before.state;
+    std::map<std::string, std::string> after_observable = after.state;
+    before_observable.erase("9");
+    after_observable.erase("9");
+    require(before.stopped && after.stopped &&
+                before_observable == after_observable,
+            "companion address-only selector rebinding must preserve machine state");
+
+    const Fixture data_visible = companion_address_selector_rebind_fixture(true);
+    const auto rejected = core::optimize_natural_target_component_layout(
+        data_visible.items, data_visible.preloads, flow(data_visible), options);
+    require(!rejected.plan.proved && rejected.applied == 0 &&
+                preload_map(rejected.preloads).at("9") == "C7",
+            "an independently observed selector must not be rebound merely to enable "
+            "another natural target");
   }
 
   {

@@ -16,7 +16,7 @@ with a raw listing: the goal is to make the high-level source fit.
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
 | `tic-tac-toe-4x4.mkpro` | 136 | 105 | +31 | pending optimizer |
-| `nekromant.mkpro` | 155 | 105 | +50 | pending optimizer |
+| `nekromant.mkpro` | 150 | 105 | +45 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
@@ -202,3 +202,11 @@ mode may reject over-window programs earlier than the analysis path.
   operand directly from `Y` while the leading digit is produced in `X`, with a
   conservative fallback for every unproved expression or continuation. This
   reduces `nekromant.mkpro` from 159 to 155 cells without changing the source.
+- Generic natural-target layout now retargets every independent compiler-owned
+  address-only selector whose target moves with a selected component, including
+  raw-BCD selector spellings. Each companion selector must already have one
+  authoritative flow target, no ordinary data use, a stable unwritten register,
+  and a literal runtime preload; final CFG, return-stack, data-stack, X2, command
+  identity, and selector decoding are then proved again as one transaction. This
+  lets the stack-SSA function layout compose with existing indirect branches and
+  reduces `nekromant.mkpro` from 155 to 150 cells without changing its source.

@@ -654,6 +654,17 @@ committed example oracles under `native/oracles/`.
 - `free-residual-dispatch-scratch` — frees residual dispatch scratch in a candidate pass.
 - `dual-use-constant-indirect-flow` — lets existing setup constant preloads double as immutable indirect-flow selectors in a candidate pass. For positive subunit constants the selector can also use the normalized mantissa shape directly: e.g. `0.22600029` may be preloaded as `2.2600029E-1`, whose stable indirect target is `29`, so numeric recalls do not need a `К{x}` recovery cell. That natural form is only credited when the target remains stable without retargeting; if deleting an address byte would move the target, the optimizer keeps the prefix form because retargeting the mantissa would change the numeric constant. When the requested target is not the mantissa-tail target, the older integer-prefix form is still used and numeric recalls recover the fractional part explicitly. The full selector/layout cross-product remains reserved for slow candidate search.
 - `retunable-natural-fractional-selector` — lets a compiler-generated numeric lowering certify that the final two mantissa digits are unobservable to every data use. The preload keeps the mathematical base value during lowering; natural-target component layout fills those digits from the final helper address and then repeats the numeric indirect decoder, ordinary-recall provenance, CFG, return-stack, data-stack, X2, selector-stability, and final-size proofs. The certificate is attached to the generated AST number and all emitted uses, so an ordinary user literal with the same numeric value cannot inherit it through helper deduplication or constant preloading.
+- `natural-target-companion-selector-rebind` — when component placement for one
+  natural target relocates an unrelated existing indirect-flow target, rebinds
+  that companion selector in the same transaction. The selector must already
+  be certified as address-only from a literal runtime preload, have one
+  authoritative target, use a stable unwritten register, and have no ordinary
+  data or indirect-memory use. Decimal, canonical raw-BCD, and certified
+  fractional address encodings are decoded again after relocation; generated
+  setup expressions, visible data projections, ambiguous targets, and mutable
+  selectors fail closed. The final artifact repeats command-identity, CFG,
+  return-stack, X/Y/Z/T, X2, indirect-memory, and runtime-selector proofs, so the
+  rule composes with any lowering ABI without recognizing a function or source.
 - `dual-use-constant-tail-branch-layout` — combines dual-use constant indirect-flow selectors with tail-branch inversion before layout scoring.
 - `alias-x-reuse` — tests value reuse of X at scalar sites for cleaner candidate control-flow.
 - `coalesce-copies` — enables copy coalescing candidate before final layout scoring.

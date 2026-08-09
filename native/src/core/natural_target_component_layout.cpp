@@ -2186,6 +2186,7 @@ bool rebind_preloads(
     const AuthoritativePostLayoutControlFlow& original_flow,
     const std::map<std::size_t, int>& original_address_by_origin,
     const std::map<std::size_t, int>& new_address_by_origin,
+    const std::vector<SelectorCandidate>& selectors,
     const std::vector<NaturalTargetAnchorCandidate>& anchors,
     const std::vector<DisplacedIndirectFlowRewrite>& displaced_flows,
     const std::vector<TransparentTrampoline>& trampolines,
@@ -2278,6 +2279,21 @@ bool rebind_preloads(
       return reject("selector target identity was lost during layout");
     }
     const std::string old_value = preloads.at(preload->second).value;
+    const SelectorCandidate* relocation_selector =
+        selected == selected_by_register.end() ? nullptr : &selected->second->selector;
+    // Moving one anchored component can also relocate targets of unrelated
+    // indirect flows that were already present in the artifact. Reuse their
+    // independently proved flexible selector facts instead of treating them
+    // as fixed decimal preloads merely because they are not selected anchors
+    // in this transaction.
+    if (relocation_selector == nullptr) {
+      const auto rebindable = std::find_if(
+          selectors.begin(), selectors.end(), [&](const SelectorCandidate& candidate) {
+            return candidate.register_index == reg && selector_is_flexible(candidate);
+          });
+      if (rebindable != selectors.end())
+        relocation_selector = &*rebindable;
+    }
 
     // Existing typed facts must describe the exact delivered selector before
     // relocation; otherwise a preload report cannot be elevated into a proof.
@@ -2310,8 +2326,7 @@ bool rebind_preloads(
     if (preload_value_targets(name, old_value, new_target->second, model))
       continue;
 
-    if (selected != selected_by_register.end() &&
-        selected->second->selector.rebindable_address) {
+    if (relocation_selector != nullptr && relocation_selector->rebindable_address) {
       if (register_has_nonflow_use(original_items, reg))
         return reject("an address-only selector has a non-flow use");
       const std::string rebound = std::to_string(new_target->second);
@@ -2328,8 +2343,8 @@ bool rebind_preloads(
       });
       continue;
     }
-    if (selected != selected_by_register.end() &&
-        selected->second->selector.rebindable_natural_fractional_prefix.has_value()) {
+    if (relocation_selector != nullptr &&
+        relocation_selector->rebindable_natural_fractional_prefix.has_value()) {
       const std::optional<std::string> proved_family =
           preloads.at(preload->second).retunable_natural_fractional_prefix.has_value()
               ? proved_natural_fractional_selector_family(
@@ -2339,7 +2354,7 @@ bool rebind_preloads(
               : std::nullopt;
       if (!proved_family.has_value() ||
           *proved_family !=
-              *selected->second->selector.rebindable_natural_fractional_prefix) {
+              *relocation_selector->rebindable_natural_fractional_prefix) {
         return reject("natural fractional selector family was not proved");
       }
       const std::optional<std::string> rebound =
@@ -3477,6 +3492,7 @@ std::optional<CandidateArtifact> try_candidate(
     const NaturalTargetComponentLayoutOptions& options,
     const std::vector<DirectReference>& references,
     const std::vector<DirectFlowSite>& flows,
+    const std::vector<SelectorCandidate>& selectors,
     const std::vector<NaturalTargetAnchorCandidate>& anchors,
     const std::vector<std::size_t>& bounded_target_origins,
     const TraceGraph& original_trace,
@@ -3850,7 +3866,7 @@ std::optional<CandidateArtifact> try_candidate(
   std::vector<NaturalTargetPreloadRewrite> preload_rewrites;
   std::string preload_failure;
   if (!rebind_preloads(items, control_flow, original_address_by_origin,
-                       new_address_by_origin, anchors,
+                       new_address_by_origin, selectors, anchors,
                        displaced_flows, trampolines,
                        options.address_space_model, candidate.preloads,
                        preload_rewrites, &preload_failure)) {
@@ -4738,7 +4754,7 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
       return;
     const std::optional<CandidateArtifact> candidate = try_candidate(
         logical_items, preloads, *logical_flow, options, *references, flows,
-        *complete_trial,
+        selectors, *complete_trial,
         bounded_target_origins,
         *original_trace, flow_effect_proof_context, *original_external,
         &result.plan.reasons);
