@@ -36140,6 +36140,88 @@ bool lower_dead_flag_branch(LoweringContext& context, const V2Statement& branch,
   return true;
 }
 
+struct GuardedCountdownMutationScan {
+  int matching_updates = 0;
+  bool other_write = false;
+  bool unknown_raw_effect = false;
+};
+
+void scan_guarded_countdown_mutations(const std::vector<V2Statement>& statements,
+                                      const std::string& name, int update_line,
+                                      GuardedCountdownMutationScan& scan);
+
+void scan_guarded_countdown_mutation(const V2Statement& statement, const std::string& name,
+                                     int update_line, GuardedCountdownMutationScan& scan) {
+  if (statement.target.has_value() && trim_ascii(*statement.target) == name) {
+    const bool matching_update =
+        statement.kind == "v2_update" && statement.line == update_line &&
+        statement.op.has_value() && *statement.op == "-=" && statement.expr.has_value() &&
+        trim_ascii(*statement.expr) == "1";
+    if (matching_update)
+      ++scan.matching_updates;
+    else
+      scan.other_write = true;
+  }
+
+  for (const V2RawOutput& output : statement.outputs) {
+    if (trim_ascii(output.target) == name)
+      scan.other_write = true;
+  }
+  if (std::any_of(statement.clobbers.begin(), statement.clobbers.end(),
+                  [&](const std::string& clobber) { return trim_ascii(clobber) == name; })) {
+    scan.other_write = true;
+  }
+  if (!statement.lines.empty() &&
+      std::none_of(statement.preserves.begin(), statement.preserves.end(),
+                   [&](const std::string& preserved) {
+                     return trim_ascii(preserved) == name;
+                   })) {
+    scan.unknown_raw_effect = true;
+  }
+
+  scan_guarded_countdown_mutations(statement.body, name, update_line, scan);
+  scan_guarded_countdown_mutations(statement.then_body, name, update_line, scan);
+  scan_guarded_countdown_mutations(statement.else_body, name, update_line, scan);
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr)
+      scan_guarded_countdown_mutation(*match_case.action, name, update_line, scan);
+  }
+  if (statement.otherwise != nullptr)
+    scan_guarded_countdown_mutation(*statement.otherwise, name, update_line, scan);
+}
+
+void scan_guarded_countdown_mutations(const std::vector<V2Statement>& statements,
+                                      const std::string& name, int update_line,
+                                      GuardedCountdownMutationScan& scan) {
+  for (const V2Statement& statement : statements)
+    scan_guarded_countdown_mutation(statement, name, update_line, scan);
+}
+
+bool guarded_countdown_proves_positive_entry(LoweringContext& context,
+                                             const V2StateField& field,
+                                             const V2Statement& update,
+                                             const V2Statement& terminal_branch) {
+  if (context.program == nullptr || !field.initial.has_value() ||
+      !statements_always_stop(context, terminal_branch.then_body)) {
+    return false;
+  }
+
+  const std::optional<int> initial = integer_literal_value(*field.initial, field.line);
+  if (!initial.has_value() || *initial < 1)
+    return false;
+
+  GuardedCountdownMutationScan scan;
+  scan_guarded_countdown_mutations(context.program->body, field.name, update.line, scan);
+  for (const V2Rule& rule : context.program->rules)
+    scan_guarded_countdown_mutations(rule.body, field.name, update.line, scan);
+
+  // With one unit decrement in the complete program, a positive initializer,
+  // and a terminal non-positive edge, induction proves that every execution
+  // reaching the pair starts with a positive integer. Any other write or an
+  // opaque raw block invalidates that induction.
+  return scan.matching_updates == 1 && !scan.other_write && !scan.unknown_raw_effect;
+}
+
 bool lower_decrement_test_pair(LoweringContext& context, const V2Statement& update,
                                const V2Statement& branch) {
   if (update.kind != "v2_update" || !update.target.has_value() || !update.op.has_value() ||
@@ -36170,10 +36252,16 @@ bool lower_decrement_test_pair(LoweringContext& context, const V2Statement& upda
 
   if ((effective_op == "<=" || effective_op == "==")) {
     const auto field_it = context.state_fields.find(*update.target);
-    if (field_it == context.state_fields.end() || field_it->second == nullptr ||
-        !field_it->second->min.has_value() || *field_it->second->min < 1) {
+    if (field_it == context.state_fields.end() || field_it->second == nullptr) {
       return false;
     }
+    const V2StateField& field = *field_it->second;
+    const bool declared_positive = field.min.has_value() && *field.min >= 1;
+    const bool flow_proved_positive =
+        !declared_positive &&
+        guarded_countdown_proves_positive_entry(context, field, update, branch);
+    if (!declared_positive && !flow_proved_positive)
+      return false;
 
     const std::optional<std::pair<int, std::string>> fl =
         fl_loop_opcode_for_register(register_it->second);
@@ -36186,7 +36274,8 @@ bool lower_decrement_test_pair(LoweringContext& context, const V2Statement& upda
       context.optimizations.push_back(OptimizationReport{
           .name = "fl-decrement-zero-branch",
           .detail = "Fused " + *update.target + " decrement and zero branch at lines " +
-                    std::to_string(update.line) + "/" + std::to_string(branch.line) + ".",
+                    std::to_string(update.line) + "/" + std::to_string(branch.line) +
+                    (flow_proved_positive ? " using a guarded countdown range proof." : "."),
       });
       return true;
     }

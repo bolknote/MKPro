@@ -488,7 +488,7 @@ The control-flow family is where the largest byte savings are found.
 - `decrement-underflow-branch` — decrements and immediately handles underflow in one step.
 - `decrement-underflow-domain-guard` — fuses unit decrement and terminal `halt("ЕГГОГ")` underflow paths through `F sqrt` when the branch target is exactly a one-cell domain-error stop.
 - `indirect-underflow-decrement` — for `x--; if x < 0 { terminal... }` on counters allocated to R0..R3, uses the indirect pre-decrement side effect as the actual store, then recalls `x` for the branch test. The transform is gated as a rescue candidate because the indirect recall changes the stack shape and must compose with surrounding input/branch scheduling.
-- `fl-decrement-zero-branch` — a dedicated “decrement and test zero” sequence in one short block.
+- `fl-decrement-zero-branch` — a dedicated “decrement and test zero” sequence in one short block. Besides fields whose declared minimum is positive, it accepts `counter 0..N` when a positive literal initializer, a unique unit decrement, a terminal non-positive edge, and the absence of other writes or opaque raw effects prove by induction that the value is positive whenever the pair is reached.
 - `fl-dead-flag-branch` — lowers `flag == 1` / `flag != 0` and their inverted
   forms through `F L0`..`F L3` when the state domain is exactly `{0,1}`, the
   flag is allocated to `R0`..`R3`, and structured control-flow proves that the

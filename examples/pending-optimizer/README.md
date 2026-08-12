@@ -16,7 +16,7 @@ with a raw listing: the goal is to make the high-level source fit.
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
 | `tic-tac-toe-4x4.mkpro` | 136 | 105 | +31 | pending optimizer |
-| `nekromant.mkpro` | 150 | 105 | +45 | pending optimizer |
+| `nekromant.mkpro` | 145 | 105 | +40 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
@@ -210,3 +210,10 @@ mode may reject over-window programs earlier than the analysis path.
   identity, and selector decoding are then proved again as one transaction. This
   lets the stack-SSA function layout compose with existing indirect branches and
   reduces `nekromant.mkpro` from 155 to 150 cells without changing its source.
+- Generic guarded-countdown range analysis now proves a `counter 0..N` positive
+  whenever it reaches its sole unit decrement: the field must have a positive
+  literal initializer, its non-positive edge must terminate, and no other write
+  or opaque raw effect may exist. This enables the existing `F L0`..`F L3`
+  decrement-and-zero lowering without changing source semantics and reduces
+  `nekromant.mkpro` from 150 to 145 cells. The same proof reduces the unrelated
+  top-level `river-battle.mkpro` example from 95 to 90 cells.

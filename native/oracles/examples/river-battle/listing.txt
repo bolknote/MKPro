@@ -84,89 +84,84 @@
    04 | 10    | +                       | packed display field append
    05 | 50    | С/П                     | show __inline_show_36_0
    06 | 45    | X→П 5                   | read shot
-   07 | 63    | П→X 3                   | recall shells
-   08 | 01    | 1                       |
-   09 | 11    | −                       | expr -
-   10 | 43    | X→П 3                   | set shells
-   11 | 0B    | /-/                     | negate shells for zero test
-   12 | 59    | F x≥0                   | false branch for <=
-   13 | 16    | 16                      | false branch for <=
-   14 | 51    | БП                      | terminal rule lost
-   15 | 92    | 92                      | terminal rule lost
-   16 | 06    | 6                       |
-   17 | 46    | X→П 6                   | coord_list pointer
-   18 | 05    | 5                       |
-   19 | 42    | X→П 2                   | coord_list counter
-   20 | 65    | П→X 5                   | recall shot
-   21 | D6    | К П→X 6                 | coord_list candidate; indirect-memory-targets=7,8,9,a,b
-   22 | 11    | −                       | coord_list hit compare
-   23 | 57    | F x≠0                   | coord_list hit
-   24 | 29    | 29                      | coord_list hit
-   25 | 58    | F L2                    | coord_list has loop
-   26 | 20    | 20                      | coord_list has loop
-   27 | 51    | БП                      | coord_list miss
-   28 | 63    | 63                      | coord_list miss
-   29 | 06    | 6                       |
-   30 | 46    | X→П 6                   | coord_list pointer
-   31 | 05    | 5                       |
-   32 | 42    | X→П 2                   | coord_list counter
-   33 | 65    | П→X 5                   | recall shot
-   34 | D6    | К П→X 6                 | coord_list remove candidate; indirect-memory-targets=7,8,9,a,b
-   35 | 11    | −                       | coord_list remove compare
-   36 | 57    | F x≠0                   | coord_list remove hit
-   37 | 42    | 42                      | coord_list remove hit
-   38 | 58    | F L2                    | coord_list remove loop
-   39 | 33    | 33                      | coord_list remove loop
-   40 | 51    | БП                      | coord_list remove miss
-   41 | 49    | 49                      | coord_list remove miss
-   42 | 66    | П→X 6                   | coord_list remove pointer
-   43 | 01    | 1                       |
-   44 | 11    | −                       | coord_list remove current pointer
-   45 | 46    | X→П 6                   | coord_list remove current pointer
-   46 | 01 0B | -1                      | negative number
-   48 | B6    | К X→П 6                 | coord_list remove current
-   49 | 64    | П→X 4                   | recall __packed_counter_0
-   50 | 6E    | П→X e                   | preload const 10
-   51 | 11    | −                       | expr -
-   52 | 44    | X→П 4                   | set __packed_counter_0
-   53 | 6E    | П→X e                   | preload const 10
-   54 | 11    | −                       | condition compare
-   55 | 5C    | F x<0                   | false branch for <
-   56 | 59    | 59                      | false branch for <
-   57 | 09    | 9                       |
-   58 | 50    | С/П                     | halt
-   59 | 01    | 1                       |
-   60 | 4C    | X→П c                   | set report
-   61 | 51    | БП                      | if end
-   62 | 65    | 65                      | if end
-   63 | 00    | 0                       | set report
-   64 | 4C    | X→П c                   | set report
-   65 | 63    | П→X 3                   | recall shells
-   66 | 0B    | /-/                     | negate shells for zero test
-   67 | 59    | F x≥0                   | false branch for <=
-   68 | 71    | 71                      | false branch for <=
-   69 | 51    | БП                      | terminal rule lost
-   70 | 92    | 92                      | terminal rule lost
-   71 | 3B    | К СЧ                    | random()
-   72 | 6E    | П→X e                   | preload const 10
-   73 | 12    | ×                       | expr *
-   74 | 0E    | В↑                      | random int keep scaled draw
-   75 | 35    | К {x}                   | random int fractional part
-   76 | 11    | −                       | random int floor
-   77 | 50    | С/П                     | show __inline_show_70_1
-   78 | 0B    | /-/                     | negate response for zero test
-   79 | 5C    | F x<0                   | false branch for >
-   80 | 00    | 00                      | false branch for >
-   81 | 64    | П→X 4                   | recall __packed_counter_0
-   82 | 01    | 1                       |
-   83 | 11    | −                       | expr -
-   84 | 44    | X→П 4                   | set __packed_counter_0
-   85 | 6E    | П→X e                   | preload const 10
-   86 | 13    | ÷                       | expr /
-   87 | 35    | К {x}                   | frac()
-   88 | 6D    | П→X d                   | preload const 0.1
-   89 | 11    | −                       | condition compare
-   90 | 5C    | F x<0                   | false branch for <
-   91 | 00    | 00                      | false branch for <
-   92 | 07 0B | -7                      | negative number
-   94 | 50    | С/П                     | halt
+   07 | 5A    | F L3                    | decrement/test shells
+   08 | 11    | 11                      | decrement/test shells
+   09 | 51    | БП                      | terminal rule lost
+   10 | 87    | 87                      | terminal rule lost
+   11 | 06    | 6                       |
+   12 | 46    | X→П 6                   | coord_list pointer
+   13 | 05    | 5                       |
+   14 | 42    | X→П 2                   | coord_list counter
+   15 | 65    | П→X 5                   | recall shot
+   16 | D6    | К П→X 6                 | coord_list candidate; indirect-memory-targets=7,8,9,a,b
+   17 | 11    | −                       | coord_list hit compare
+   18 | 57    | F x≠0                   | coord_list hit
+   19 | 24    | 24                      | coord_list hit
+   20 | 58    | F L2                    | coord_list has loop
+   21 | 15    | 15                      | coord_list has loop
+   22 | 51    | БП                      | coord_list miss
+   23 | 58    | 58                      | coord_list miss
+   24 | 06    | 6                       |
+   25 | 46    | X→П 6                   | coord_list pointer
+   26 | 05    | 5                       |
+   27 | 42    | X→П 2                   | coord_list counter
+   28 | 65    | П→X 5                   | recall shot
+   29 | D6    | К П→X 6                 | coord_list remove candidate; indirect-memory-targets=7,8,9,a,b
+   30 | 11    | −                       | coord_list remove compare
+   31 | 57    | F x≠0                   | coord_list remove hit
+   32 | 37    | 37                      | coord_list remove hit
+   33 | 58    | F L2                    | coord_list remove loop
+   34 | 28    | 28                      | coord_list remove loop
+   35 | 51    | БП                      | coord_list remove miss
+   36 | 44    | 44                      | coord_list remove miss
+   37 | 66    | П→X 6                   | coord_list remove pointer
+   38 | 01    | 1                       |
+   39 | 11    | −                       | coord_list remove current pointer
+   40 | 46    | X→П 6                   | coord_list remove current pointer
+   41 | 01 0B | -1                      | negative number
+   43 | B6    | К X→П 6                 | coord_list remove current
+   44 | 64    | П→X 4                   | recall __packed_counter_0
+   45 | 6E    | П→X e                   | preload const 10
+   46 | 11    | −                       | expr -
+   47 | 44    | X→П 4                   | set __packed_counter_0
+   48 | 6E    | П→X e                   | preload const 10
+   49 | 11    | −                       | condition compare
+   50 | 5C    | F x<0                   | false branch for <
+   51 | 54    | 54                      | false branch for <
+   52 | 09    | 9                       |
+   53 | 50    | С/П                     | halt
+   54 | 01    | 1                       |
+   55 | 4C    | X→П c                   | set report
+   56 | 51    | БП                      | if end
+   57 | 60    | 60                      | if end
+   58 | 00    | 0                       | set report
+   59 | 4C    | X→П c                   | set report
+   60 | 63    | П→X 3                   | recall shells
+   61 | 0B    | /-/                     | negate shells for zero test
+   62 | 59    | F x≥0                   | false branch for <=
+   63 | 66    | 66                      | false branch for <=
+   64 | 51    | БП                      | terminal rule lost
+   65 | 87    | 87                      | terminal rule lost
+   66 | 3B    | К СЧ                    | random()
+   67 | 6E    | П→X e                   | preload const 10
+   68 | 12    | ×                       | expr *
+   69 | 0E    | В↑                      | random int keep scaled draw
+   70 | 35    | К {x}                   | random int fractional part
+   71 | 11    | −                       | random int floor
+   72 | 50    | С/П                     | show __inline_show_70_1
+   73 | 0B    | /-/                     | negate response for zero test
+   74 | 5C    | F x<0                   | false branch for >
+   75 | 00    | 00                      | false branch for >
+   76 | 64    | П→X 4                   | recall __packed_counter_0
+   77 | 01    | 1                       |
+   78 | 11    | −                       | expr -
+   79 | 44    | X→П 4                   | set __packed_counter_0
+   80 | 6E    | П→X e                   | preload const 10
+   81 | 13    | ÷                       | expr /
+   82 | 35    | К {x}                   | frac()
+   83 | 6D    | П→X d                   | preload const 0.1
+   84 | 11    | −                       | condition compare
+   85 | 5C    | F x<0                   | false branch for <
+   86 | 00    | 00                      | false branch for <
+   87 | 07 0B | -7                      | negative number
+   89 | 50    | С/П                     | halt

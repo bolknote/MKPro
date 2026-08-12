@@ -154,7 +154,7 @@ void example_sizes_match_typescript_baselines() {
       {"minesweeper-9x9", 76},
       {"raja-yoga", 77},
       {"rambo-iii", 104},
-      {"river-battle", 95},
+      {"river-battle", 90},
       {"sea-battle", 65},
       {"teleport", 96},
       {"tic-tac-toe", 99},
@@ -164,7 +164,7 @@ void example_sizes_match_typescript_baselines() {
       {"zagaday-tsifru", 100},
   };
   const std::map<std::string, std::size_t> PENDING_BASELINE{
-      {"nekromant", 150},
+      {"nekromant", 145},
       {"tic-tac-toe-4x4", 136},
   };
 

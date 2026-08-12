@@ -57,6 +57,26 @@ CompileResult compile_dead_flag_probe(const std::string& predicate,
   return compile_probe_source(source);
 }
 
+CompileResult compile_guarded_countdown_probe(int initial, const std::string& extra_write = "") {
+  const std::string source =
+      "program FlGuardedCountdownProbe {\n"
+      "  state {\n"
+      "    count: counter 0..9 = " +
+      std::to_string(initial) +
+      "\n"
+      "  }\n"
+      "  loop {\n" +
+      extra_write +
+      "    count--\n"
+      "    if count <= 0 {\n"
+      "      halt(90)\n"
+      "    }\n"
+      "    show(count)\n"
+      "  }\n"
+      "}\n";
+  return compile_probe_source(source);
+}
+
 std::string multi_flag_source(int flag_count) {
   std::string source = "program FlDeadFlagSet {\n  state {\n";
   for (int index = 0; index < flag_count; ++index)
@@ -122,6 +142,17 @@ int run_dead_flag_probe(const CompileResult& compiled, int flag) {
   const std::size_t separator = display.find_first_of(",.");
   require(separator != std::string::npos,
           "dead-flag probe should expose an integer display, got " + display);
+  return std::stoi(display.substr(0, separator));
+}
+
+int displayed_integer(const emulator::MK61& calculator) {
+  std::string display = calculator.display_text();
+  display.erase(std::remove_if(display.begin(), display.end(),
+                               [](unsigned char ch) { return ch == ' ' || ch == '\t'; }),
+                display.end());
+  const std::size_t separator = display.find_first_of(",.");
+  require(separator != std::string::npos,
+          "countdown probe should expose an integer display, got " + display);
   return std::stoi(display.substr(0, separator));
 }
 
@@ -198,6 +229,26 @@ program FlDeadFlagOnePath {
           "one-path overwrite negative probe should compile normally");
   require(!has_optimization(overwritten_one_path, "fl-dead-flag-branch"),
           "an overwrite on only one path must not prove the old flag dead");
+
+  const CompileResult guarded_countdown = compile_guarded_countdown_probe(3);
+  require(guarded_countdown.implemented && guarded_countdown.diagnostics.empty(),
+          "guarded countdown probe should compile");
+  require(has_optimization(guarded_countdown, "fl-decrement-zero-branch"),
+          "positive initialized counter 0..N should use guarded FL countdown proof");
+
+  const CompileResult zero_initialized_countdown = compile_guarded_countdown_probe(0);
+  require(zero_initialized_countdown.implemented &&
+              zero_initialized_countdown.diagnostics.empty(),
+          "zero-initialized countdown negative probe should compile normally");
+  require(!has_optimization(zero_initialized_countdown, "fl-decrement-zero-branch"),
+          "zero initializer must reject guarded FL countdown proof");
+
+  const CompileResult rewritten_countdown =
+      compile_guarded_countdown_probe(3, "    count = 3\n");
+  require(rewritten_countdown.implemented && rewritten_countdown.diagnostics.empty(),
+          "rewritten countdown negative probe should compile normally");
+  require(!has_optimization(rewritten_countdown, "fl-decrement-zero-branch"),
+          "an additional state write must reject guarded FL countdown proof");
 }
 
 void emulator_fl_dead_flag_branch_matches_source_contract() {
@@ -230,6 +281,25 @@ void emulator_fl_dead_flag_branch_matches_source_contract() {
           "ordinary false-path fallback should preserve the live flag");
   require(run_dead_flag_probe(live_fallback, 1) == 12,
           "ordinary true-path fallback should preserve the live flag");
+
+  const CompileResult countdown = compile_guarded_countdown_probe(3);
+  require(countdown.implemented && countdown.diagnostics.empty() &&
+              has_optimization(countdown, "fl-decrement-zero-branch"),
+          "countdown emulator probe should select guarded FL lowering");
+  emulator::MK61 calculator;
+  for (const PreloadReport& preload : countdown.preloads)
+    calculator.set_register(preload.register_name, preload.value);
+  const emulator::ProgramLoadResult loaded = calculator.load_program(opcodes(countdown));
+  require(loaded.diagnostics.empty(), "countdown probe should load without truncation");
+  calculator.press_sequence({"В/О", "С/П"});
+  require(calculator.run_until_stable(1000, 5).stopped && displayed_integer(calculator) == 2,
+          "guarded FL countdown should expose 2 after its first decrement");
+  calculator.press_sequence({"С/П"});
+  require(calculator.run_until_stable(1000, 5).stopped && displayed_integer(calculator) == 1,
+          "guarded FL countdown should expose 1 after its second decrement");
+  calculator.press_sequence({"С/П"});
+  require(calculator.run_until_stable(1000, 5).stopped && displayed_integer(calculator) == 90,
+          "guarded FL countdown should take the terminal edge at zero");
 }
 
 } // namespace mkpro::tests
