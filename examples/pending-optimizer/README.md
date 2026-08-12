@@ -16,7 +16,7 @@ with a raw listing: the goal is to make the high-level source fit.
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
 | `tic-tac-toe-4x4.mkpro` | 136 | 105 | +31 | pending optimizer |
-| `nekromant.mkpro` | 145 | 105 | +40 | pending optimizer |
+| `nekromant.mkpro` | 140 | 105 | +35 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
@@ -217,3 +217,21 @@ mode may reject over-window programs earlier than the analysis path.
   decrement-and-zero lowering without changing source semantics and reduces
   `nekromant.mkpro` from 150 to 145 cells. The same proof reduces the unrelated
   top-level `river-battle.mkpro` example from 95 to 90 cells.
+- Destructive decrement/test lowering now runs before generic temporary-X
+  forwarding, including inside nested control-flow blocks. Branch-consumer
+  forwarding also refuses a purely X-resident register-backed value with any
+  source-level read outside the proved producer/consumer run. Hardware
+  `К П->X r` increments/decrements remain eligible because their side effect has
+  already persisted the new register value. This prevents a nested update from
+  being lost at its enclosing continuation and lets `lives--; if lives <= 0`
+  use `F L2`, reducing `nekromant.mkpro` from 145 to 141 cells. Independent
+  compiler and emulator probes exercise the same nested countdown shape without
+  recognizing the game.
+- Generic `branch-y-payload-forwarding` recognizes a two-way CFG diamond in
+  which both arms consume the same single-use value through a commutative scalar
+  update. Recalling the zero-tested guard after producing the value places the
+  guard in `X` and the payload in `Y`; each arm then consumes `Y` directly, so
+  the payload store and both recalls disappear. Def-use checks reject later
+  reads, noncommutative consumers, and raw stack interaction. Composed with the
+  existing stack function entries and final layout, this reduces
+  `nekromant.mkpro` from 141 to 140 cells without changing its source.

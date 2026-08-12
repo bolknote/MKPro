@@ -1493,6 +1493,96 @@ program StackSsaGuardedPackedDigitProbe {
 
   {
     const std::string source = R"mkpro(
+program BranchCarriedPayloadProbe {
+  state {
+    seed: packed = 0.25
+    guard: packed = 0
+    payload: packed = 0
+    left: packed = 10
+    right: packed = 20
+  }
+
+  fn draw(scale) {
+    seed = frac(seed * 7 + pi())
+    return int(seed * scale)
+  }
+
+  fn distribute() {
+    guard = draw(2)
+    payload = draw(5)
+    if guard == 0 {
+      left += payload
+    }
+    else {
+      right += payload
+    }
+  }
+
+  loop {
+    distribute()
+    halt(left + right)
+  }
+}
+)mkpro";
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.disable_candidate_search = true;
+    const CompileResult baseline = compile_source(source, baseline_options);
+    require_clean_compile(baseline, "branch-carried payload baseline");
+
+    CompileOptions optimized_options = baseline_options;
+    optimized_options.branch_y_payload_forwarding = true;
+    const CompileResult optimized = compile_source(source, optimized_options);
+    require_clean_compile(optimized, "branch-carried payload forwarding");
+    require(has_optimization(optimized, "branch-y-payload-forwarding"),
+            "two-way single-use payload should remain below its zero-tested guard");
+    require(optimized.steps.size() < baseline.steps.size(),
+            "branch-carried payload forwarding should reduce machine cells");
+    require(count_steps_with_comment(optimized, "set payload") == 0 &&
+                count_steps_with_comment(optimized, "recall payload") == 0,
+            "branch-carried payload should not be materialized or recalled");
+
+    const CompileResult impure_payload = compile_source(R"mkpro(
+program BranchCarriedPayloadNonCommutativeNegative {
+  state {
+    seed: packed = 0.25
+    guard: packed = 0
+    payload: packed = 0
+    left: packed = 10
+    right: packed = 20
+  }
+
+  fn draw(scale) {
+    seed = frac(seed * 7 + pi())
+    return int(seed * scale)
+  }
+
+  fn distribute() {
+    guard = draw(2)
+    payload = random()
+    if guard == 0 {
+      left -= payload
+    }
+    else {
+      right += payload
+    }
+  }
+
+  loop {
+    distribute()
+    halt(left + right)
+  }
+}
+)mkpro",
+                                                        optimized_options);
+    require_clean_compile(impure_payload,
+                          "branch-carried noncommutative payload negative probe");
+    require(!has_optimization(impure_payload, "branch-y-payload-forwarding"),
+            "noncommutative branch payload consumption must fail closed");
+  }
+
+  {
+    const std::string source = R"mkpro(
 program StackSsaThreeParameterNegativeProbe {
   state {
     out: packed = 0

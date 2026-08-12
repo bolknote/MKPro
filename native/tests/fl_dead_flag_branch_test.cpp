@@ -249,6 +249,83 @@ program FlDeadFlagOnePath {
           "rewritten countdown negative probe should compile normally");
   require(!has_optimization(rewritten_countdown, "fl-decrement-zero-branch"),
           "an additional state write must reject guarded FL countdown proof");
+
+  const CompileResult nested_countdown = compile_probe_source(R"mkpro(
+program FlNestedGuardedCountdownProbe {
+  state {
+    enabled: flag = 1
+    count: counter 0..9 = 3
+  }
+  loop {
+    if enabled != 0 {
+      count--
+      if count <= 0 {
+        halt(90)
+      }
+    }
+    show(count)
+  }
+}
+)mkpro");
+  require(nested_countdown.implemented && nested_countdown.diagnostics.empty(),
+          "nested guarded countdown probe should compile");
+  require(has_optimization(nested_countdown, "fl-decrement-zero-branch"),
+          "a nested persistent countdown must prefer destructive FL lowering");
+  require(!has_optimization(nested_countdown, "stack-carried-update"),
+          "temporary X forwarding must not intercept a persistent decrement/test pair");
+
+  const CompileResult branch_continuation = compile_probe_source(R"mkpro(
+program StackCarriedBranchContinuationProbe {
+  state {
+    enabled: flag = 1
+    score: packed = 5
+  }
+  loop {
+    if enabled != 0 {
+      score += 2
+      if score > 0 {
+        preview(1)
+      }
+    }
+    halt(score)
+  }
+}
+)mkpro");
+  require(branch_continuation.implemented && branch_continuation.diagnostics.empty(),
+          "branch continuation state probe should compile");
+  require(!has_optimization(branch_continuation, "stack-carried-update"),
+          "branch-local forwarding must retain state read by an enclosing continuation");
+  require(std::any_of(branch_continuation.steps.begin(), branch_continuation.steps.end(),
+                      [](const ResolvedStep& step) { return step.comment == "set score"; }),
+          "branch-local update must store score before the enclosing continuation");
+
+  const CompileResult mutating_branch_continuation = compile_probe_source(R"mkpro(
+program StackCarriedMutatingBranchContinuationProbe {
+  state {
+    enabled: flag = 1
+    score: counter 0..9 = 5
+  }
+  loop {
+    if enabled != 0 {
+      score++
+      if score > 0 {
+        preview(1)
+      }
+    }
+    halt(score)
+  }
+}
+)mkpro");
+  require(mutating_branch_continuation.implemented &&
+              mutating_branch_continuation.diagnostics.empty(),
+          "register-mutating branch continuation probe should compile");
+  require(has_optimization(mutating_branch_continuation, "indirect-incdec-counter") &&
+              has_optimization(mutating_branch_continuation, "stack-carried-update"),
+          "an indirect increment may forward X because it already persists the register state");
+  require(std::none_of(mutating_branch_continuation.steps.begin(),
+                       mutating_branch_continuation.steps.end(),
+                       [](const ResolvedStep& step) { return step.comment == "set score"; }),
+          "an indirect register-mutating increment must not add a redundant score store");
 }
 
 void emulator_fl_dead_flag_branch_matches_source_contract() {
@@ -300,6 +377,46 @@ void emulator_fl_dead_flag_branch_matches_source_contract() {
   calculator.press_sequence({"С/П"});
   require(calculator.run_until_stable(1000, 5).stopped && displayed_integer(calculator) == 90,
           "guarded FL countdown should take the terminal edge at zero");
+
+  const CompileResult nested = compile_probe_source(R"mkpro(
+program FlNestedGuardedCountdownEmulatorProbe {
+  state {
+    enabled: flag = 1
+    count: counter 0..9 = 3
+  }
+  loop {
+    if enabled != 0 {
+      count--
+      if count <= 0 {
+        halt(90)
+      }
+    }
+    show(count)
+  }
+}
+)mkpro");
+  require(nested.implemented && nested.diagnostics.empty() &&
+              has_optimization(nested, "fl-decrement-zero-branch"),
+          "nested countdown emulator probe should select guarded FL lowering");
+  emulator::MK61 nested_calculator;
+  for (const PreloadReport& preload : nested.preloads)
+    nested_calculator.set_register(preload.register_name, preload.value);
+  const emulator::ProgramLoadResult nested_loaded =
+      nested_calculator.load_program(opcodes(nested));
+  require(nested_loaded.diagnostics.empty(),
+          "nested countdown probe should load without truncation");
+  nested_calculator.press_sequence({"В/О", "С/П"});
+  require(nested_calculator.run_until_stable(1000, 5).stopped &&
+              displayed_integer(nested_calculator) == 2,
+          "nested guarded countdown should persist its first decrement");
+  nested_calculator.press_sequence({"С/П"});
+  require(nested_calculator.run_until_stable(1000, 5).stopped &&
+              displayed_integer(nested_calculator) == 1,
+          "nested guarded countdown should persist its second decrement");
+  nested_calculator.press_sequence({"С/П"});
+  require(nested_calculator.run_until_stable(1000, 5).stopped &&
+              displayed_integer(nested_calculator) == 90,
+          "nested guarded countdown should take its terminal zero edge");
 }
 
 } // namespace mkpro::tests

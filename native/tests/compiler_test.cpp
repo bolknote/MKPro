@@ -3609,8 +3609,8 @@ program ForwardedRepeatedRead {
   require(forwarded_repeated_read.implemented &&
               forwarded_repeated_read.diagnostics.empty(),
           "repeated-read expression-lifetime forwarding should compile cleanly");
-  require(has_optimization(forwarded_repeated_read, "single-use-producer-forwarding"),
-          "repeated-read consumers should use the shared expression-lifetime scheduler");
+  require(has_optimization(forwarded_repeated_read, "regional-value-placement"),
+          "repeated-read consumers should use the regional expression-lifetime scheduler");
   require(std::count_if(forwarded_repeated_read.steps.begin(),
                         forwarded_repeated_read.steps.end(), [](const ResolvedStep& step) {
                           return step.comment == "materialize deferred value";
@@ -3639,8 +3639,32 @@ program DependentDivmodProducers {
           "native compiler should lower dependent producer lifetimes safely");
   require(dependent_divmod_producers.diagnostics.empty(),
           "dependent producer forwarding should not report diagnostics");
-  require(has_optimization(dependent_divmod_producers, "single-use-producer-forwarding"),
-          "a producer may move to its immediately dependent first read without reordering either expression");
+  require(has_optimization(dependent_divmod_producers, "regional-value-placement"),
+          "an acyclic producer DAG should use regional demand-driven value placement");
+
+  const CompileResult forward_dependent_producers = compile_source(R"mkpro(
+program ForwardDependentProducers {
+  state {
+    left: packed = 12
+    right: packed = 34
+    total: packed = 0
+  }
+
+  loop {
+    left *= right
+    right *= 10
+    total = left + right
+    left = 0
+    right = 0
+    halt(total)
+  }
+}
+)mkpro");
+  require(forward_dependent_producers.implemented &&
+              forward_dependent_producers.diagnostics.empty(),
+          "a forward-dependent producer region should compile without reordering");
+  require(!has_optimization(forward_dependent_producers, "regional-value-placement"),
+          "regional placement must reject a definition that reads a later producer's old value");
 
   const CompileResult impure_divmod_producers = compile_source(R"mkpro(
 program ImpureDivmodProducers {

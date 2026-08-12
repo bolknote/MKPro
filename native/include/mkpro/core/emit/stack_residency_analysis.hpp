@@ -30,6 +30,7 @@ struct ForwardableValueDefinition {
   V2Statement statement;
   std::string target;
   Expression value;
+  std::vector<std::string> dependencies;
   std::size_t statement_index = 0;
 };
 
@@ -37,6 +38,7 @@ struct ForwardableValueRegion {
   std::vector<ForwardableValueDefinition> definitions;
   std::size_t consumer_begin = 0;
   std::size_t consumer_end = 0;
+  bool has_internal_dependencies = false;
 };
 
 struct StackResidencySummary {

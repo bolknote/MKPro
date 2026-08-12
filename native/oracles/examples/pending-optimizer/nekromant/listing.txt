@@ -25,13 +25,13 @@
    21 |  0B  | /-/                     | negative number
    22 |  4C  | X→П c                   | setup Rc
    23 |  01  | 1                       |
-   24 |  04  | 4                       |
+   24 |  03  | 3                       |
    25 |  48  | X→П 8                   | setup R8
-   26 |  07  | 7                       |
-   27 |  06  | 6                       |
+   26 |  05  | 5                       |
+   27 |  04  | 4                       |
    28 |  49  | X→П 9                   | setup R9
    29 |  02  | 2                       |
-   30 |  04  | 4                       |
+   30 |  03  | 3                       |
    31 |  4A  | X→П a                   | setup Ra
    32 |  3B  | К СЧ                    | random()
    33 |  46  | X→П 6                   | setup random_state
@@ -41,145 +41,140 @@
  Step | Code     | Command                 | Comment
 ------+----------+-------------------------+----------------
    00 | 02       | 2                       |
-   01 | A8       | К ПП 8                  | call function draw stack entry; preloaded R8=14 indirect-target=14 shifted-forward indirect flow
+   01 | A8       | К ПП 8                  | call function draw stack entry; preloaded R8=13 indirect-target=13 shifted-forward indirect flow
    02 | 4B       | X→П b                   | set work
    03 | 05       | 5                       |
-   04 | A8       | К ПП 8                  | call function draw stack entry; preloaded R8=14 indirect-target=14 shifted-forward indirect flow
-   05 | 40       | X→П 0                   | set scratch
-   06 | 6B       | П→X b                   | recall work
-   07 | E9       | К x=0 9                 | false branch for ==; preloaded R9=76 indirect-target=76 shifted-forward indirect flow
+   04 | A8       | К ПП 8                  | call function draw stack entry; preloaded R8=13 indirect-target=13 shifted-forward indirect flow
+   05 | 6B       | П→X b                   | recall work
+   06 | E9       | К x=0 9                 | false branch for ==; preloaded R9=54 indirect-target=54 shifted-forward indirect flow
+   07 | 14       | X↔Y                     | expose branch-carried payload
    08 | 65       | П→X 5                   | recall left
-   09 | 60       | П→X 0                   | recall scratch
-   10 | 10       | +                       | expr +
-   11 | 45       | X→П 5                   | set left
-   12 | 51       | БП                      | if end
-   13 | 80       | 80                      |
-   14 | 07       | 7                       |
-   15 | 66       | П→X 6                   | recall random_state
-   16 | 12       | ×                       | expr *
-   17 | 20       | F π                     | pi()
-   18 | 10       | +                       | expr +
-   19 | 35       | К {x}                   | frac()
-   20 | 46       | X→П 6                   | set random_state
-   21 | 12       | ×                       | expr *
-   22 | 34       | К [x]                   | stack-resident int
-   23 | 52       | В/О                     | stack-through parameter return
-   24 | 44       | X→П 4                   | stack-ssa guarded spill param group
-   25 | 5E       | F x=0                   | stack-ssa guard false branch
-   26 | 35       | 35                      | stack-ssa guard false branch
-   27 | 52       | В/О                     | stack-ssa guarded return value
-   28 | 5C       | F x<0                   | false branch for <
-   29 | 46       | 46                      | false branch for <
-   30 | 02       | 2                       |
-   31 | 65       | П→X 5                   | recall left
-   32 | AA       | К ПП a                  | call function strike stack entry; preloaded Ra=24 indirect-target=24 indirect flow
-   33 | 45       | X→П 5                   | set left
-   34 | 8C       | К БП c                  | if end; preloaded Rc=-850 indirect-target=50 shifted-forward indirect flow
-   35 | 01       | 1                       | packed leading digit extraction anchor
-   36 | 53       | ПП                      | proc call return suffix gadget
-   37 | 42       | 42                      | return suffix gadget target
-   38 | 14       | ↔                       | stack-SSA expose deferred packed digit operand
-   39 | 11       | −                       | stack-SSA packed digit expression
-   40 | 31       | К |x|                   | stack-SSA packed digit result
-   41 | 64       | П→X 4                   | recall group
-   42 | 14       | ↔                       | packed leading digit update swap
-   43 | 25       | F reverse               | packed leading digit update expose
-   44 | 0C       | ВП                      | packed leading digit update splice
-   45 | 52       | В/О                     | stack-ssa guarded return value
-   46 | 02       | 2                       |
-   47 | 67       | П→X 7                   | recall right
-   48 | AA       | К ПП a                  | call function strike stack entry; preloaded Ra=24 indirect-target=24 indirect flow
-   49 | 47       | X→П 7                   | set right
-   50 | 65       | П→X 5                   | recall left
-   51 | 53       | ПП                      | shared straight-line helper
-   52 | 88       | >88                     | shared straight-line helper
-   53 | 45       | X→П 5                   | set divmod remainder left
-   54 | 25       | F reverse               | restore divmod quotient
-   55 | 34       | К [x]                   | divmod integer quotient
-   56 | 67       | П→X 7                   | recall right
-   57 | 53       | ПП                      | shared straight-line helper
-   58 | 88       | >88                     | shared straight-line helper
-   59 | 47       | X→П 7                   | set divmod remainder right
-   60 | 25       | F reverse               | restore divmod quotient
-   61 | 34       | К [x]                   | divmod integer quotient
-   62 | 10       | +                       | sum divmod quotients
-   63 | 4B       | X→П b                   | set work
-   64 | 57       | F x≠0                   | false branch for !=
-   65 | 82       | >82                     | false branch for !=
-   66 | 6C       | П→X c                   | preload const -850
-   67 | 50       | С/П                     | pause
-   68 | 62       | П→X 2                   | recall lives
-   69 | 01       | 1                       |
-   70 | 11       | −                       | expr -
-   71 | 0B       | /-/                     | negate lives for zero test
-   72 | 59       | F x≥0                   | false branch for <=
-   73 | 82       | >82                     | false branch for <=
-   74 | 6C       | П→X c                   | preload const -850
-   75 | 50       | С/П                     | halt
-   76 | 67       | П→X 7                   | recall right
-   77 | 60       | П→X 0                   | recall scratch
-   78 | 10       | +                       | expr +
-   79 | 47       | X→П 7                   | set right
-   80 | 63       | П→X 3                   | recall minutes
-   81 | 03       | 3                       | packed digit permutation width
-   82 | 40       | X→П 0                   | packed digit permutation counter
-   83 | 00       | 0                       | packed digit permutation accumulator
-   84 | 65       | П→X 5                   | recall left
-   85 | 60       | П→X 0                   | recall __packed_digit_permutation_counter
-   86 | 0B       | /-/                     | packed digit source exponent
-   87 | 0E       | В↑                      | separate adjacent number entry
-   88 | 04       | 4                       | packed digit source exponent bias
-   89 | 10       | +                       | packed digit source exponent
-   90 | 15       | F 10ˣ                   | packed digit divisor
-   91 | 13       | ÷                       | packed digit scaled source
-   92 | 35       | К {x}                   | packed digit fractional tail
-   93 | 6D       | П→X d                   | packed digit scale
-   94 | 12       | ×                       | packed digit scale
-   95 | 34       | К [x]                   | packed digit integer
-   96 | 14       | X↔Y                     | packed digit accumulator
-   97 | 6D       | П→X d                   | packed digit accumulator scale
-   98 | 12       | ×                       | packed digit accumulator scale
-   99 | 10       | +                       | packed digit append
-   A0 | 5D       | F L0                    | packed digit permutation loop
-   A1 | 84       | 84                      | packed digit permutation loop
-   A2 | 04       | 4                       |
-   A3 | 15       | F 10ˣ                   | constant 10000
-   A4 | 12       | ×                       | expr *
-  >69 | 07 00 00 | 700                     |
-  >6C | 67       | П→X 7                   | recall right
-  >6D | 10       | +                       | expr +
-  >6E | 3A       | К ИНВ                   | bit_not()
-  >6F | 41       | X→П 1                   | set __display_expr_84_2
-  >70 | 62       | П→X 2                   | display __inline_show_84_0 floor
-  >71 | 61       | П→X 1                   | display __inline_show_84_0 packed row
-  >72 | 53       | ПП                      | proc call return suffix gadget
-  >73 | 42       | 42                      | return suffix gadget target
-  >74 | 50       | С/П                     | show __inline_show_84_0
-  >75 | 50       | С/П                     | read work
-  >76 | 4B       | X→П b                   | read work
-  >77 | 5E       | F x=0                   | false branch for ==
-  >78 | 28       | 28                      | false branch for ==
-  >79 | 01       | 1                       |
-  >7A | 65       | П→X 5                   | recall left
-  >7B | AA       | К ПП a                  | call function strike stack entry; preloaded Ra=24 indirect-target=24 indirect flow
-  >7C | 45       | X→П 5                   | set left
-  >7D | 01       | 1                       |
-  >7E | 67       | П→X 7                   | recall right
-  >7F | AA       | К ПП a                  | call function strike stack entry; preloaded Ra=24 indirect-target=24 indirect flow
-  >80 | 47       | X→П 7                   | set right
-  >81 | 8C       | К БП c                  | if end; preloaded Rc=-850 indirect-target=50 indirect flow
-  >82 | 5A       | F L3                    | decrement/test minutes
-  >83 | 86       | >86                     | decrement/test minutes
-  >84 | 6E       | П→X e                   | preload const 1000
+   09 | 10       | +                       | branch-carried payload update
+   10 | 45       | X→П 5                   | set left
+   11 | 51       | БП                      | branch-carried payload end
+   12 | 58       | 58                      |
+   13 | 07       | 7                       |
+   14 | 66       | П→X 6                   | recall random_state
+   15 | 12       | ×                       | expr *
+   16 | 20       | F π                     | pi()
+   17 | 10       | +                       | expr +
+   18 | 35       | К {x}                   | frac()
+   19 | 46       | X→П 6                   | set random_state
+   20 | 12       | ×                       | expr *
+   21 | 34       | К [x]                   | stack-resident int
+   22 | 52       | В/О                     | stack-through parameter return
+   23 | 44       | X→П 4                   | stack-ssa guarded spill param group
+   24 | 5E       | F x=0                   | stack-ssa guard false branch
+   25 | 44       | 44                      | stack-ssa guard false branch
+   26 | 52       | В/О                     | stack-ssa guarded return value
+   27 | 5C       | F x<0                   | false branch for <
+   28 | 6C       | >6C                     | false branch for <
+   29 | 02       | 2                       |
+   30 | 65       | П→X 5                   | recall left
+   31 | AA       | К ПП a                  | call function strike stack entry; preloaded Ra=23 indirect-target=23 indirect flow
+   32 | 45       | X→П 5                   | set left
+   33 | 51       | БП                      | if end
+   34 | 70       | >70                     | if end
+   35 | 6D       | П→X d                   | preload const 10
+   36 | 12       | ×                       | expr *
+   37 | 6E       | П→X e                   | preload const 1000
+   38 | 13       | ÷                       | divmod quotient
+   39 | 0E       | В↑                      | preserve divmod quotient
+   40 | 35       | К {x}                   | divmod fractional remainder
+   41 | 6E       | П→X e                   | preload const 1000
+   42 | 12       | ×                       | divmod remainder
+   43 | 52       | В/О                     | shared straight-line helper return
+   44 | 01       | 1                       | packed leading digit extraction anchor
+   45 | AC       | К ПП c                  | proc call return suffix gadget; preloaded Rc=-850 indirect-target=50 shifted-forward indirect flow
+   46 | 14       | ↔                       | stack-SSA expose deferred packed digit operand
+   47 | 11       | −                       | stack-SSA packed digit expression
+   48 | 31       | К |x|                   | stack-SSA packed digit result
+   49 | 64       | П→X 4                   | recall group
+   50 | 14       | ↔                       | packed leading digit update swap
+   51 | 25       | F reverse               | packed leading digit update expose
+   52 | 0C       | ВП                      | packed leading digit update splice
+   53 | 52       | В/О                     | stack-ssa guarded return value
+   54 | 14       | X↔Y                     | expose branch-carried payload
+   55 | 67       | П→X 7                   | recall right
+   56 | 10       | +                       | branch-carried payload update
+   57 | 47       | X→П 7                   | set right
+   58 | 63       | П→X 3                   | recall minutes
+   59 | 03       | 3                       | packed digit permutation width
+   60 | 40       | X→П 0                   | packed digit permutation counter
+   61 | 00       | 0                       | packed digit permutation accumulator
+   62 | 65       | П→X 5                   | recall left
+   63 | 60       | П→X 0                   | recall __packed_digit_permutation_counter
+   64 | 0B       | /-/                     | packed digit source exponent
+   65 | 0E       | В↑                      | separate adjacent number entry
+   66 | 04       | 4                       | packed digit source exponent bias
+   67 | 10       | +                       | packed digit source exponent
+   68 | 15       | F 10ˣ                   | packed digit divisor
+   69 | 13       | ÷                       | packed digit scaled source
+   70 | 35       | К {x}                   | packed digit fractional tail
+   71 | 6D       | П→X d                   | packed digit scale
+   72 | 12       | ×                       | packed digit scale
+   73 | 34       | К [x]                   | packed digit integer
+   74 | 14       | X↔Y                     | packed digit accumulator
+   75 | 6D       | П→X d                   | packed digit accumulator scale
+   76 | 12       | ×                       | packed digit accumulator scale
+   77 | 10       | +                       | packed digit append
+   78 | 5D       | F L0                    | packed digit permutation loop
+   79 | 62       | 62                      | packed digit permutation loop
+   80 | 04       | 4                       |
+   81 | 15       | F 10ˣ                   | constant 10000
+   82 | 12       | ×                       | expr *
+   83 | 07 00 00 | 700                     |
+   86 | 67       | П→X 7                   | recall right
+   87 | 10       | +                       | expr +
+   88 | 3A       | К ИНВ                   | bit_not()
+   89 | 41       | X→П 1                   | set __display_expr_84_2
+   90 | 62       | П→X 2                   | display __inline_show_84_0 floor
+   91 | 61       | П→X 1                   | display __inline_show_84_0 packed row
+   92 | AC       | К ПП c                  | proc call return suffix gadget; preloaded Rc=-850 indirect-target=50 indirect flow
+   93 | 50       | С/П                     | show __inline_show_84_0
+   94 | 50       | С/П                     | read work
+   95 | 4B       | X→П b                   | read work
+   96 | 5E       | F x=0                   | false branch for ==
+   97 | 27       | 27                      | false branch for ==
+   98 | 01       | 1                       |
+   99 | 65       | П→X 5                   | recall left
+   A0 | AA       | К ПП a                  | call function strike stack entry; preloaded Ra=23 indirect-target=23 indirect flow
+   A1 | 45       | X→П 5                   | set left
+   A2 | 01       | 1                       |
+   A3 | 67       | П→X 7                   | recall right
+   A4 | AA       | К ПП a                  | call function strike stack entry; preloaded Ra=23 indirect-target=23 indirect flow
+  >69 | 47       | X→П 7                   | set right
+  >6A | 51       | БП                      | if end
+  >6B | 70       | >70                     | if end
+  >6C | 02       | 2                       |
+  >6D | 67       | П→X 7                   | recall right
+  >6E | AA       | К ПП a                  | call function strike stack entry; preloaded Ra=23 indirect-target=23 indirect flow
+  >6F | 47       | X→П 7                   | set right
+  >70 | 65       | П→X 5                   | recall left
+  >71 | 53       | ПП                      | shared straight-line helper
+  >72 | 35       | 35                      | shared straight-line helper
+  >73 | 45       | X→П 5                   | set divmod remainder left
+  >74 | 25       | F reverse               | restore divmod quotient
+  >75 | 34       | К [x]                   | divmod integer quotient
+  >76 | 67       | П→X 7                   | recall right
+  >77 | 53       | ПП                      | shared straight-line helper
+  >78 | 35       | 35                      | shared straight-line helper
+  >79 | 47       | X→П 7                   | set divmod remainder right
+  >7A | 25       | F reverse               | restore divmod quotient
+  >7B | 34       | К [x]                   | divmod integer quotient
+  >7C | 10       | +                       | sum divmod quotients
+  >7D | 4B       | X→П b                   | set work
+  >7E | 57       | F x≠0                   | false branch for !=
+  >7F | 86       | >86                     | false branch for !=
+  >80 | 6C       | П→X c                   | preload const -850
+  >81 | 50       | С/П                     | pause
+  >82 | 58       | F L2                    | decrement/test lives
+  >83 | 86       | >86                     | decrement/test lives
+  >84 | 6C       | П→X c                   | preload const -850
   >85 | 50       | С/П                     | halt
-  >86 | 51       | БП                      | loop back
-  >87 | 00       | 00                      |
-  >88 | 6D       | П→X d                   | preload const 10
-  >89 | 12       | ×                       | expr *
-  >8A | 6E       | П→X e                   | preload const 1000
-  >8B | 13       | ÷                       | divmod quotient
-  >8C | 0E       | В↑                      | preserve divmod quotient
-  >8D | 35       | К {x}                   | divmod fractional remainder
-  >8E | 6E       | П→X e                   | preload const 1000
-  >8F | 12       | ×                       | divmod remainder
-  >90 | 52       | В/О                     | shared straight-line helper return
+  >86 | 5A       | F L3                    | decrement/test minutes
+  >87 | 8A       | >8A                     | decrement/test minutes
+  >88 | 6E       | П→X e                   | preload const 1000
+  >89 | 50       | С/П                     | halt
+  >8A | 51       | БП                      | loop back
+  >8B | 00       | 00                      |

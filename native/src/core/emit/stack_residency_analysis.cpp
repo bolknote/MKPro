@@ -621,31 +621,49 @@ std::optional<ForwardableValueRegion> find_forwardable_value_region(
   std::size_t consumer_begin = definition_begin;
   for (; consumer_begin < statements.size(); ++consumer_begin) {
     const V2Statement& statement = statements.at(consumer_begin);
-    const bool reads_prior = std::any_of(
-        targets.begin(), targets.end(), [&](const std::string& target) {
-          return statement_reads_identifier(statement, target);
-        });
-    if (reads_prior)
-      break;
-
     const std::optional<ForwardableValueDefinition> definition =
         forwardable_value_definition(statement, consumer_begin);
-    if (!definition.has_value() || !targets.insert(definition->target).second)
+    if (!definition.has_value() || targets.contains(definition->target))
       break;
+
+    bool future_read = false;
+    bool future_overwrite = false;
+    for (std::size_t lookahead = consumer_begin + 1U; lookahead < statements.size();
+         ++lookahead) {
+      const V2Statement& future = statements.at(lookahead);
+      if (statement_reads_identifier(future, definition->target))
+        future_read = true;
+      if (statement_writes_identifier(future, definition->target)) {
+        future_overwrite = future_read;
+        break;
+      }
+    }
+    if (!future_read || !future_overwrite)
+      break;
+
+    targets.insert(definition->target);
     definitions.push_back(*definition);
   }
   if (definitions.empty() || consumer_begin >= statements.size())
     return std::nullopt;
 
-  // Definitions in one delayed group may read their own old value, but not a
-  // sibling's value: otherwise moving their materialization independently
-  // would change the source-level evaluation order.
-  for (const ForwardableValueDefinition& definition : definitions) {
-    for (const std::string& target : targets) {
-      if (target != definition.target &&
-          expression_references_identifier(definition.value, target)) {
-        return std::nullopt;
+  // A definition may consume an earlier delayed definition. References to a
+  // later definition would observe that variable's old value and therefore
+  // cannot be reordered into the same demand-driven region.
+  bool has_internal_dependencies = false;
+  for (std::size_t definition_index = 0; definition_index < definitions.size();
+       ++definition_index) {
+    ForwardableValueDefinition& definition = definitions.at(definition_index);
+    for (std::size_t target_index = 0; target_index < definitions.size(); ++target_index) {
+      const std::string& target = definitions.at(target_index).target;
+      if (target == definition.target ||
+          !expression_references_identifier(definition.value, target)) {
+        continue;
       }
+      if (target_index >= definition_index)
+        return std::nullopt;
+      definition.dependencies.push_back(target);
+      has_internal_dependencies = true;
     }
   }
 
@@ -654,10 +672,13 @@ std::optional<ForwardableValueRegion> find_forwardable_value_region(
     std::set<std::string> dependencies;
     collect_expression_identifiers(definition.value, dependencies);
     dependencies.erase(definition.target);
+    for (const std::string& target : targets)
+      dependencies.erase(target);
 
     bool found_read = false;
     bool found_overwrite = false;
-    for (std::size_t index = consumer_begin; index < statements.size(); ++index) {
+    for (std::size_t index = definition.statement_index + 1U; index < statements.size();
+         ++index) {
       const V2Statement& statement = statements.at(index);
       if ((statement.kind != "v2_assign" && statement.kind != "v2_update") ||
           !statement.expr.has_value()) {
@@ -681,7 +702,7 @@ std::optional<ForwardableValueRegion> find_forwardable_value_region(
         consumer_end = std::max(consumer_end, index + 1U);
         break;
       }
-      if (!found_read) {
+      {
         for (const std::string& dependency : dependencies) {
           if (statement_writes_identifier(statement, dependency))
             return std::nullopt;
@@ -696,6 +717,7 @@ std::optional<ForwardableValueRegion> find_forwardable_value_region(
       .definitions = std::move(definitions),
       .consumer_begin = consumer_begin,
       .consumer_end = consumer_end,
+      .has_internal_dependencies = has_internal_dependencies,
   };
 }
 

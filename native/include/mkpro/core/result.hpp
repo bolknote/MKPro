@@ -411,6 +411,7 @@ struct CompileOptions {
   bool stack_argument_function_entries = false;
   bool stack_through_function_entries = false;
   bool stack_ssa_function_entries = false;
+  bool branch_y_payload_forwarding = false;
   bool inline_floor_packed_row_expressions = false;
   bool unroll_counted_loops = false;
   bool setup_only_counted_loop_init = false;

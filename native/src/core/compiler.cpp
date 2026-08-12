@@ -11680,30 +11680,46 @@ void insert_deferred_materialization_store(LoweringContext& context,
 
 bool materialize_deferred_value_through(LoweringContext& context,
                                         const std::string& requested_name) {
-  const auto requested = context.deferred_values.find(requested_name);
-  if (requested == context.deferred_values.end())
+  const auto found = context.deferred_values.find(requested_name);
+  if (found == context.deferred_values.end())
     return false;
 
-  while (!context.deferred_value_order.empty()) {
-    const std::string name = context.deferred_value_order.front();
-    context.deferred_value_order.erase(context.deferred_value_order.begin());
-    const auto found = context.deferred_values.find(name);
-    if (found == context.deferred_values.end())
-      continue;
+  if (!found->second.demand_driven) {
+    while (!context.deferred_value_order.empty()) {
+      const std::string name = context.deferred_value_order.front();
+      context.deferred_value_order.erase(context.deferred_value_order.begin());
+      const auto queued = context.deferred_values.find(name);
+      if (queued == context.deferred_values.end())
+        continue;
 
-    DeferredValueMaterialization deferred = std::move(found->second);
-    context.deferred_values.erase(found);
-    if (!lower_expression_to_x(context, deferred.value, true))
-      return true;
-    if (name == requested_name) {
-      mark_current_x(context, name);
-      deferred.evaluated = true;
-      deferred.store_insertion_index = context.emitter.items.size();
-      context.deferred_values.emplace(name, std::move(deferred));
-      return true;
+      DeferredValueMaterialization deferred = std::move(queued->second);
+      context.deferred_values.erase(queued);
+      if (!lower_expression_to_x(context, deferred.value, true))
+        return true;
+      if (name == requested_name) {
+        mark_current_x(context, name);
+        deferred.evaluated = true;
+        deferred.store_insertion_index = context.emitter.items.size();
+        context.deferred_values.emplace(name, std::move(deferred));
+        return true;
+      }
+      emit_store(context, name, "materialize deferred " + name);
     }
-    emit_store(context, name, "materialize deferred " + name);
+    return true;
   }
+
+  DeferredValueMaterialization deferred = std::move(found->second);
+  context.deferred_values.erase(found);
+  context.deferred_value_order.erase(
+      std::remove(context.deferred_value_order.begin(), context.deferred_value_order.end(),
+                  requested_name),
+      context.deferred_value_order.end());
+  if (!lower_expression_to_x(context, deferred.value, true))
+    return true;
+  mark_current_x(context, requested_name);
+  deferred.evaluated = true;
+  deferred.store_insertion_index = context.emitter.items.size();
+  context.deferred_values.emplace(requested_name, std::move(deferred));
   return true;
 }
 
@@ -22059,7 +22075,23 @@ bool stack_carried_assignment_future_safe(LoweringContext& context,
                                           const std::vector<V2Statement>& statements,
                                           std::size_t start, std::size_t consumer_index,
                                           const std::string& target, int source_line,
-                                          bool assignment_must_escape_block) {
+                                          bool assignment_must_escape_block,
+                                          bool update_persists_in_register = false) {
+  const V2Statement& consumer = statements.at(consumer_index);
+  if ((consumer.kind == "v2_if" || consumer.kind == "v2_match") &&
+      !update_persists_in_register && !context.stack_only_state_fields.contains(target) &&
+      context.program != nullptr) {
+    int local_reads = 0;
+    for (std::size_t index = start; index <= consumer_index; ++index)
+      local_reads += count_identifier_reads_in_statement(statements.at(index), target);
+    if (count_identifier_reads_in_program(*context.program, target) > local_reads) {
+      // A branch can leave the current lexical block along more than one path.
+      // The local tail alone cannot prove a register-backed update dead when
+      // another source-level read exists outside the producer/consumer run.
+      return false;
+    }
+  }
+
   if (assignment_must_escape_block && !context.stack_only_state_fields.contains(target) &&
       context.program != nullptr) {
     const V2Rule* source_rule = assignment_source_rule(context, source_line, target);
@@ -22498,6 +22530,20 @@ bool lower_stack_carried_update_expression_to_x(LoweringContext& context,
   return lower_expression_to_x(context, update_expression);
 }
 
+bool stack_carried_update_persists_in_register(LoweringContext& context,
+                                               const std::string& target,
+                                               const Expression& delta,
+                                               const std::string& op, int line) {
+  if (!is_numeric_literal_value(delta, 1))
+    return false;
+  if (op == "+") {
+    const int index = register_index_for(context, target);
+    return target_range_fits_indirect_increment(context, target) &&
+           core::emit::lowering::is_preincrement_indirect_register(index);
+  }
+  return op == "-" && can_lower_indirect_decrement_update(context, target, line);
+}
+
 bool lower_stack_carried_update_run(LoweringContext& context,
                                     const std::vector<V2Statement>& statements,
                                     std::size_t start, std::size_t& consumed) {
@@ -22537,8 +22583,10 @@ bool lower_stack_carried_update_run(LoweringContext& context,
     return false;
   if (stack_carried_consumer_requires_stored_state_after_entry(context, consumer, target.name))
     return false;
+  const bool update_persists = stack_carried_update_persists_in_register(
+      context, target.name, delta, *update.op == "+=" ? "+" : "-", update.line);
   if (!stack_carried_assignment_future_safe(context, statements, start, start + 1U, target.name,
-                                            update.line, false)) {
+                                            update.line, false, update_persists)) {
     return false;
   }
 
@@ -22616,8 +22664,10 @@ bool lower_delayed_stack_carried_update_run(LoweringContext& context,
     return false;
   if (stack_carried_consumer_requires_stored_state_after_entry(context, consumer, target.name))
     return false;
+  const bool update_persists = stack_carried_update_persists_in_register(
+      context, target.name, delta, *update.op == "+=" ? "+" : "-", update.line);
   if (!stack_carried_assignment_future_safe(context, statements, start, consumer_index,
-                                            target.name, update.line, false)) {
+                                            target.name, update.line, false, update_persists)) {
     return false;
   }
 
@@ -27661,13 +27711,16 @@ bool lower_deferred_value_materialization_run(
         DeferredValueMaterialization{
             .value = definition.value,
             .source_line = definition.statement.line,
+            .demand_driven = region->has_internal_dependencies,
         });
     context.deferred_value_order.push_back(definition.target);
   }
   context.optimizations.push_back(OptimizationReport{
-      .name = "single-use-producer-forwarding",
+      .name = region->has_internal_dependencies ? "regional-value-placement"
+                                                : "single-use-producer-forwarding",
       .detail = "Deferred " + std::to_string(region->definitions.size()) +
-                " independent pure definition" +
+                (region->has_internal_dependencies ? " dependent" : " independent") +
+                " pure definition" +
                 (region->definitions.size() == 1U ? "" : "s") +
                 " to the first lowering-time use.",
   });
@@ -41938,6 +41991,213 @@ bool lower_stack_resident_consumer(LoweringContext& context, const V2Statement& 
   return false;
 }
 
+struct BranchCarriedPayloadUpdate {
+  std::string target;
+  int opcode = 0;
+  std::string mnemonic;
+  int line = 0;
+};
+
+bool statements_contain_branch_payload_raw_stack_use(
+    const std::vector<V2Statement>& statements) {
+  for (const V2Statement& statement : statements) {
+    if (statement.kind == "v2_raw" ||
+        statements_contain_branch_payload_raw_stack_use(statement.body) ||
+        statements_contain_branch_payload_raw_stack_use(statement.then_body) ||
+        statements_contain_branch_payload_raw_stack_use(statement.else_body)) {
+      return true;
+    }
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.action != nullptr &&
+          statements_contain_branch_payload_raw_stack_use({*match_case.action})) {
+        return true;
+      }
+    }
+    if (statement.otherwise != nullptr &&
+        statements_contain_branch_payload_raw_stack_use({*statement.otherwise})) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool program_contains_branch_payload_raw_stack_use(const V2Program& program) {
+  if (statements_contain_branch_payload_raw_stack_use(program.body))
+    return true;
+  return std::any_of(program.rules.begin(), program.rules.end(), [&](const V2Rule& rule) {
+    return statements_contain_branch_payload_raw_stack_use(rule.body);
+  });
+}
+
+bool predicate_compares_branch_payload_guard_with_zero(LoweringContext& context,
+                                                       const V2Predicate& predicate,
+                                                       const std::string& guard, int line) {
+  if (predicate.kind != "v2_compare" || (predicate.op != "==" && predicate.op != "!="))
+    return false;
+  const Expression left = parse_expression(predicate.left, line);
+  const Expression right = parse_expression(predicate.right, line);
+  return (left.kind == "identifier" && left.name == guard &&
+          is_zero_expression(context, right)) ||
+         (right.kind == "identifier" && right.name == guard &&
+          is_zero_expression(context, left));
+}
+
+std::optional<BranchCarriedPayloadUpdate> match_branch_carried_payload_update(
+    LoweringContext& context, const V2Statement& statement, const std::string& payload,
+    const std::string& guard) {
+  if (!statement.target.has_value())
+    return std::nullopt;
+  const Expression target = parse_expression(*statement.target, statement.line);
+  if (target.kind != "identifier" || target.name == payload || target.name == guard ||
+      !context.register_index_by_name.contains(target.name) ||
+      context.stack_only_state_fields.contains(target.name) ||
+      is_coord_list_state_name(context, target.name) || is_cells_state_name(context, target.name) ||
+      is_segmented_cells_name(context, target.name) ||
+      context.scaled_coord_cell_names.contains(target.name)) {
+    return std::nullopt;
+  }
+
+  std::string op;
+  if (statement.kind == "v2_update" && statement.op.has_value() &&
+      statement.expr.has_value()) {
+    const Expression operand = parse_expression(*statement.expr, statement.line);
+    if (operand.kind != "identifier" || operand.name != payload)
+      return std::nullopt;
+    op = *statement.op;
+  } else if (statement.kind == "v2_assign" && statement.expr.has_value()) {
+    const Expression value = parse_expression(*statement.expr, statement.line);
+    if (value.kind != "binary" || value.left == nullptr || value.right == nullptr)
+      return std::nullopt;
+    const bool direct = value.left->kind == "identifier" && value.left->name == target.name &&
+                        value.right->kind == "identifier" && value.right->name == payload;
+    const bool commuted = value.right->kind == "identifier" &&
+                          value.right->name == target.name &&
+                          value.left->kind == "identifier" && value.left->name == payload;
+    if (!direct && !commuted)
+      return std::nullopt;
+    op = value.op + "=";
+  } else {
+    return std::nullopt;
+  }
+
+  if (op == "+=") {
+    return BranchCarriedPayloadUpdate{
+        .target = target.name, .opcode = 0x10, .mnemonic = "+", .line = statement.line};
+  }
+  if (op == "*=") {
+    return BranchCarriedPayloadUpdate{
+        .target = target.name, .opcode = 0x12, .mnemonic = "*", .line = statement.line};
+  }
+  return std::nullopt;
+}
+
+bool lower_branch_carried_payload_update(LoweringContext& context,
+                                         const BranchCarriedPayloadUpdate& update,
+                                         const std::string& payload,
+                                         const std::string& guard) {
+  context.emitter.emit_op(0x14, "X<->Y", "expose branch-carried payload", update.line);
+  mark_current_x(context, payload);
+  context.current_y_variable = guard;
+  emit_recall(context, update.target);
+  context.current_y_variable = payload;
+  context.emitter.emit_op(update.opcode, update.mnemonic, "branch-carried payload update",
+                          update.line);
+  clear_current_x_facts(context);
+  context.current_y_variable = guard;
+  emit_store(context, update.target, "set " + update.target);
+  return true;
+}
+
+bool lower_branch_carried_payload_run(LoweringContext& context,
+                                      const std::vector<V2Statement>& statements,
+                                      std::size_t start, std::size_t& consumed) {
+  consumed = 0;
+  if (!context.branch_y_payload_forwarding || context.program == nullptr ||
+      start + 2U >= statements.size() ||
+      program_contains_branch_payload_raw_stack_use(*context.program)) {
+    return false;
+  }
+  const V2Statement& guard_assign = statements.at(start);
+  const V2Statement& payload_assign = statements.at(start + 1U);
+  const V2Statement& branch = statements.at(start + 2U);
+  if (!scalar_register_assignment(context, guard_assign) ||
+      !scalar_register_assignment(context, payload_assign) ||
+      !guard_assign.target.has_value() || !guard_assign.expr.has_value() ||
+      !payload_assign.target.has_value() || !payload_assign.expr.has_value() ||
+      *guard_assign.target == *payload_assign.target || branch.kind != "v2_if" ||
+      !branch.predicate.has_value() || branch.then_body.size() != 1U ||
+      branch.else_body.size() != 1U ||
+      context.entered_interaction_anchors.contains(&guard_assign) ||
+      context.entered_interaction_anchors.contains(&payload_assign) ||
+      context.prompt_interaction_anchors.contains(&guard_assign) ||
+      context.prompt_interaction_anchors.contains(&payload_assign)) {
+    return false;
+  }
+
+  const std::string& guard = *guard_assign.target;
+  const std::string& payload = *payload_assign.target;
+  const Expression guard_value = parse_expression(*guard_assign.expr, guard_assign.line);
+  const Expression payload_value = parse_expression(*payload_assign.expr, payload_assign.line);
+  if (core::emit::expression_references_identifier(payload_value, guard) ||
+      core::emit::expression_references_identifier(payload_value, payload) ||
+      !predicate_compares_branch_payload_guard_with_zero(context, *branch.predicate, guard,
+                                                         branch.line)) {
+    return false;
+  }
+  const std::optional<BranchCarriedPayloadUpdate> then_update =
+      match_branch_carried_payload_update(context, branch.then_body.front(), payload, guard);
+  const std::optional<BranchCarriedPayloadUpdate> else_update =
+      match_branch_carried_payload_update(context, branch.else_body.front(), payload, guard);
+  if (!then_update.has_value() || !else_update.has_value() ||
+      count_identifier_reads_in_program(*context.program, payload) != 2) {
+    return false;
+  }
+  const std::vector<V2Statement> tail(
+      statements.begin() + static_cast<std::ptrdiff_t>(start + 3U), statements.end());
+  if (statements_read_identifier_before_write(context, tail, payload))
+    return false;
+
+  if (!lower_expression_to_x(context, guard_value))
+    return false;
+  emit_store(context, guard, "set " + guard);
+  if (!lower_expression_to_x(context, payload_value))
+    return false;
+  mark_current_x(context, payload);
+  emit_recall(context, guard);
+  mark_current_x(context, guard);
+  context.current_y_variable = payload;
+
+  const std::string false_label = context.emitter.fresh_label("branch_payload_else");
+  const std::string end_label = context.emitter.fresh_label("branch_payload_end");
+  if (!lower_condition_false_branch(context, *branch.predicate, branch.negated, false_label,
+                                    branch.line)) {
+    return false;
+  }
+  mark_current_x(context, guard);
+  context.current_y_variable = payload;
+  if (!lower_branch_carried_payload_update(context, *then_update, payload, guard))
+    return false;
+  context.emitter.emit_jump(0x51, "БП", end_label, "branch-carried payload end", branch.line);
+
+  context.emitter.emit_label(false_label, {.hidden = true});
+  clear_current_x_facts(context);
+  mark_current_x(context, guard);
+  context.current_y_variable = payload;
+  if (!lower_branch_carried_payload_update(context, *else_update, payload, guard))
+    return false;
+  context.emitter.emit_label(end_label, {.hidden = true});
+  clear_current_x_facts(context);
+  context.current_y_variable.reset();
+  context.optimizations.push_back(OptimizationReport{
+      .name = "branch-y-payload-forwarding",
+      .detail = "Kept single-use value " + payload +
+                " below a zero-tested guard and consumed it directly in both branches at line " +
+                std::to_string(branch.line) + ".",
+  });
+  consumed = 3U;
+  return true;
+}
+
 bool lower_stack_resident_temps(LoweringContext& context,
                                 const std::vector<V2Statement>& statements, std::size_t start,
                                 std::size_t& consumed) {
@@ -42402,6 +42662,14 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (has_errors(context.diagnostics))
       return false;
 
+    if (index + 1U < statements.size() &&
+        lower_decrement_test_pair(context, statements.at(index), statements.at(index + 1U))) {
+      ++index;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+
     std::size_t stack_carried_update_consumed = 0;
     if (lower_delayed_stack_carried_update_run(context, statements, index,
                                                stack_carried_update_consumed)) {
@@ -42466,6 +42734,15 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (lower_prior_random_branch_stack_reuse_run(context, statements, index,
                                                   prior_random_consumed)) {
       index += prior_random_consumed - 1U;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+
+    std::size_t branch_payload_consumed = 0;
+    if (lower_branch_carried_payload_run(context, statements, index,
+                                         branch_payload_consumed)) {
+      index += branch_payload_consumed - 1U;
       continue;
     }
     if (has_errors(context.diagnostics))
@@ -42596,13 +42873,6 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (index + 1U < statements.size() &&
         lower_branch_local_delayed_unit_decrement_guard(context, statements.at(index),
                                                         statements.at(index + 1U))) {
-      ++index;
-      continue;
-    }
-    if (has_errors(context.diagnostics))
-      return false;
-    if (index + 1U < statements.size() &&
-        lower_decrement_test_pair(context, statements.at(index), statements.at(index + 1U))) {
       ++index;
       continue;
     }
@@ -50786,6 +51056,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   context.stack_argument_function_entries = options.stack_argument_function_entries;
   context.stack_through_function_entries = options.stack_through_function_entries;
   context.stack_ssa_function_entries = options.stack_ssa_function_entries;
+  context.branch_y_payload_forwarding = options.branch_y_payload_forwarding;
   context.setup_only_counted_loop_init = options.setup_only_counted_loop_init;
   context.empty_stack_loop_return = options.empty_stack_loop_return;
   context.x_param_value_functions = options.x_param_value_functions;
@@ -53397,6 +53668,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.alternating_sign_toggle_args ||
          options.x_param_value_functions ||
          options.x_param_y_stack_stored_entry ||
+         options.branch_y_payload_forwarding ||
          options.inline_floor_packed_row_expressions || options.unroll_counted_loops ||
          options.setup_only_counted_loop_init || options.domain_error_guards ||
          options.show_read_guarded_transfer || options.comparison_guarded_update_selectors ||
@@ -54177,6 +54449,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";stack_argument_function_entries=" << options.stack_argument_function_entries
       << ";stack_through_function_entries=" << options.stack_through_function_entries
       << ";stack_ssa_function_entries=" << options.stack_ssa_function_entries
+      << ";branch_y_payload_forwarding=" << options.branch_y_payload_forwarding
       << ";share_random_cell=" << options.share_random_cell
       << ";startup_aware_constant_preloads=" << options.startup_aware_constant_preloads
       << ";guarded_prologue_gadgets=" << options.guarded_prologue_gadgets
@@ -54275,7 +54548,9 @@ int estimated_candidate_search_cost_ms(std::string_view name) {
   if (name == "exact-stack-dead-store")
     return 20;
   if (name == "materialized-function-stack-entry" ||
-      name == "stack-through-function-entry" || name == "stack-ssa-function-entry")
+      name == "stack-through-function-entry" || name == "stack-ssa-function-entry" ||
+      name == "branch-y-payload-forwarding" ||
+      name == "branch-y-payload-stack-function-entries")
     return 20;
   if (name == "packed-score-accumulator-reverse-suffix-free-layout")
     return 100;
@@ -68011,6 +68286,86 @@ bool program_may_have_profitable_materialized_function_stack_entry(
   return false;
 }
 
+bool statement_may_consume_commutative_branch_payload(
+    const V2Statement& statement, const std::string& payload) {
+  if (!statement.target.has_value() || !statement.expr.has_value())
+    return false;
+  Expression target;
+  Expression value;
+  try {
+    target = parse_expression(*statement.target, statement.line);
+    value = parse_expression(*statement.expr, statement.line);
+  } catch (const std::exception&) {
+    return false;
+  }
+  if (target.kind != "identifier")
+    return false;
+  const auto is_payload = [&](const Expression& expression) {
+    return expression.kind == "identifier" && expression.name == payload;
+  };
+  if (statement.kind == "v2_update") {
+    return statement.op.has_value() &&
+           (*statement.op == "+=" || *statement.op == "*=") && is_payload(value);
+  }
+  if (statement.kind != "v2_assign" || value.kind != "binary" ||
+      value.left == nullptr || value.right == nullptr ||
+      (value.op != "+" && value.op != "*")) {
+    return false;
+  }
+  const auto is_target = [&](const Expression& expression) {
+    return expression.kind == "identifier" && expression.name == target.name;
+  };
+  return (is_target(*value.left) && is_payload(*value.right)) ||
+         (is_payload(*value.left) && is_target(*value.right));
+}
+
+bool program_may_have_branch_y_payload_forwarding(const V2Program& program) {
+  std::function<bool(const std::vector<V2Statement>&)> inspect;
+  inspect = [&](const std::vector<V2Statement>& statements) {
+    for (std::size_t index = 0; index < statements.size(); ++index) {
+      if (index + 2U < statements.size()) {
+        const V2Statement& guard = statements.at(index);
+        const V2Statement& payload = statements.at(index + 1U);
+        const V2Statement& branch = statements.at(index + 2U);
+        if (guard.kind == "v2_assign" && guard.target.has_value() &&
+            guard.expr.has_value() && payload.kind == "v2_assign" &&
+            payload.target.has_value() && payload.expr.has_value() &&
+            *guard.target != *payload.target && branch.kind == "v2_if" &&
+            branch.predicate.has_value() && branch.predicate->kind == "v2_compare" &&
+            (branch.predicate->op == "==" || branch.predicate->op == "!=") &&
+            ((trim_ascii(branch.predicate->left) == *guard.target &&
+              trim_ascii(branch.predicate->right) == "0") ||
+             (trim_ascii(branch.predicate->right) == *guard.target &&
+              trim_ascii(branch.predicate->left) == "0")) &&
+            branch.then_body.size() == 1U && branch.else_body.size() == 1U &&
+            statement_may_consume_commutative_branch_payload(
+                branch.then_body.front(), *payload.target) &&
+            statement_may_consume_commutative_branch_payload(
+                branch.else_body.front(), *payload.target)) {
+          return true;
+        }
+      }
+      const V2Statement& statement = statements.at(index);
+      if (inspect(statement.body) || inspect(statement.then_body) ||
+          inspect(statement.else_body)) {
+        return true;
+      }
+      for (const V2MatchCase& match_case : statement.cases) {
+        if (match_case.action != nullptr && inspect({*match_case.action}))
+          return true;
+      }
+      if (statement.otherwise != nullptr && inspect({*statement.otherwise}))
+        return true;
+    }
+    return false;
+  };
+
+  if (inspect(program.body))
+    return true;
+  return std::any_of(program.rules.begin(), program.rules.end(),
+                     [&](const V2Rule& rule) { return inspect(rule.body); });
+}
+
 CompileResult compile_source_for_optimizer_profile(
     std::string source, const CompileOptions& requested_options) {
   const CompileOptions options = apply_source_feature_profile_hint(source, requested_options);
@@ -68098,6 +68453,9 @@ CompileResult compile_source_for_optimizer_profile(
   const bool may_use_materialized_function_stack_entry =
       selector_probe_program.has_value() &&
       program_may_have_profitable_materialized_function_stack_entry(*selector_probe_program);
+  const bool may_use_branch_y_payload_forwarding =
+      selector_probe_program.has_value() &&
+      program_may_have_branch_y_payload_forwarding(*selector_probe_program);
   const bool use_packed_score_seed =
       options.fast_candidate_search && may_use_packed_score_accumulator;
   CompileOptions initial_options = options;
@@ -69184,6 +69542,15 @@ CompileResult compile_source_for_optimizer_profile(
       "stack-resident-temps",
       "Kept short-lived single-use temporaries on the X/Y/Z/T stack instead of spilling them to "
       "registers");
+  if (may_use_branch_y_payload_forwarding) {
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.branch_y_payload_forwarding = true;
+        },
+        "branch-y-payload-forwarding",
+        "Kept a single-use branch payload below its zero-tested guard when both branch consumers "
+        "proved the payload dead");
+  }
   add_candidate(
       [](CompileOptions& candidate_options) {
         candidate_options.stack_resident_temps = true;
@@ -69222,6 +69589,19 @@ CompileResult compile_source_for_optimizer_profile(
         "Kept guarded function parameters in stack SSA form and delayed spills to their "
         "first reading branch",
         CandidateGate::SizeRescue);
+    if (may_use_branch_y_payload_forwarding) {
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.stack_resident_temps = true;
+            candidate_options.stack_argument_function_entries = true;
+            candidate_options.stack_through_function_entries = true;
+            candidate_options.stack_ssa_function_entries = true;
+            candidate_options.branch_y_payload_forwarding = true;
+          },
+          "branch-y-payload-stack-function-entries",
+          "Combined stack-through value-function entries with two-way branch payload forwarding",
+          CandidateGate::SizeRescue);
+    }
   }
   add_candidate(
       [](CompileOptions& candidate_options) {

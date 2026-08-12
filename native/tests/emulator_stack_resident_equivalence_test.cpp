@@ -452,7 +452,6 @@ program StackFunctionPackedScorePairSumEq {
     const CompileResult baseline = compile_source(packed_score_pair_sum_source, baseline_options);
 
     CompileOptions optimized_options = baseline_options;
-    optimized_options.stack_resident_temps = true;
     optimized_options.stack_argument_function_entries = true;
     const CompileResult optimized = compile_source(packed_score_pair_sum_source, optimized_options);
 
@@ -475,6 +474,71 @@ program StackFunctionPackedScorePairSumEq {
             "packed_score pair-sum stack-entry stop state should match baseline");
     require(after.registers.at(optimized_out) == before.registers.at(baseline_out),
             "packed_score pair-sum stack-entry out register should match baseline");
+  }
+
+  {
+    const std::string source = R"mkpro(
+program BranchCarriedPayloadEquivalence {
+  state {
+    seed: packed = 0.25
+    guard: packed = 0
+    payload: packed = 0
+    left: packed = 10
+    right: packed = 20
+  }
+
+  fn draw(scale) {
+    seed = frac(seed * 7 + pi())
+    return int(seed * scale)
+  }
+
+  fn distribute() {
+    guard = draw(2)
+    payload = draw(5)
+    if guard == 0 {
+      left += payload
+    }
+    else {
+      right += payload
+    }
+  }
+
+  loop {
+    distribute()
+    halt(left + right)
+  }
+}
+)mkpro";
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.disable_candidate_search = true;
+    const CompileResult baseline = compile_source(source, baseline_options);
+    CompileOptions optimized_options = baseline_options;
+    optimized_options.stack_resident_temps = true;
+    optimized_options.stack_argument_function_entries = true;
+    optimized_options.stack_through_function_entries = true;
+    optimized_options.branch_y_payload_forwarding = true;
+    const CompileResult optimized = compile_source(source, optimized_options);
+    require(baseline.implemented && optimized.implemented,
+            "branch-carried payload equivalence variants should compile");
+    require(has_optimization(optimized, "branch-y-payload-forwarding"),
+            "branch-carried payload equivalence variant should use Y forwarding");
+
+    const std::set<std::string> baseline_registers{baseline.registers.at("left"),
+                                                   baseline.registers.at("right")};
+    const std::set<std::string> optimized_registers{optimized.registers.at("left"),
+                                                    optimized.registers.at("right")};
+    const Observation before = observe(step_opcodes(baseline.steps), {"В/О", "С/П"},
+                                       baseline.preloads, baseline_registers);
+    const Observation after = observe(step_opcodes(optimized.steps), {"В/О", "С/П"},
+                                      optimized.preloads, optimized_registers);
+    require(after.display == before.display && after.stopped == before.stopped,
+            "branch-carried payload forwarding should preserve terminal behavior");
+    require(after.registers.at(optimized.registers.at("left")) ==
+                before.registers.at(baseline.registers.at("left")) &&
+                after.registers.at(optimized.registers.at("right")) ==
+                    before.registers.at(baseline.registers.at("right")),
+            "branch-carried payload forwarding should preserve both branch targets");
   }
 
   const std::string stack_ssa_guarded_packed_digit_source = R"mkpro(

@@ -175,6 +175,7 @@ struct BankSelectorCacheEntry {
 struct DeferredValueMaterialization {
   Expression value;
   int source_line = 0;
+  bool demand_driven = false;
   bool evaluated = false;
   std::size_t store_insertion_index = 0;
 };
@@ -344,6 +345,7 @@ struct LoweringContext {
   bool stack_argument_function_entries = false;
   bool stack_through_function_entries = false;
   bool stack_ssa_function_entries = false;
+  bool branch_y_payload_forwarding = false;
   bool shared_bit_mask_helper_calls = false;
   bool compact_bit_mask_helper_body = false;
   bool domain_error_guards = false;
