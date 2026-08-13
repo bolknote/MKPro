@@ -161,7 +161,7 @@ void example_sizes_match_typescript_baselines() {
       {"tiny-game", 23},
       {"treasure-hunter-2", 98},
       {"wumpus", 105},
-      {"zagaday-tsifru", 100},
+      {"zagaday-tsifru", 105},
   };
   const std::map<std::string, std::size_t> PENDING_BASELINE{
       {"nekromant", 140},
@@ -220,43 +220,41 @@ void example_sizes_match_typescript_baselines() {
       continue;
     if (name == "zagaday-tsifru") {
       const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
-      require(result.steps.size() == 100U,
-              "zagaday-tsifru should fit in addresses 00..99");
+      require(result.steps.size() == 105U,
+              "final zagaday-tsifru semantic source should fit in addresses 00..A4");
       require(!has_optimization(result, "borrowed-entry-phase-selector"),
               "zagaday-tsifru must not borrow R9 only for its first iteration: input overwrites "
               "R9 before the program loops back to the same branch");
       require(has_optimization(result, "packed-bcd-horner-threshold-loop") &&
-                  has_optimization(result, "packed-bcd-history-prepend") &&
-                  has_optimization(
-                      result,
-                      "cheap-constant-materialization-aggressive-post-layout"),
-              "zagaday-tsifru should select the proved biased-threshold, direct-history, and "
-              "combined final-layout optimizations");
+                  has_optimization(result, "current-x-unary-derivation"),
+              "zagaday-tsifru should select the proved majority threshold and reuse the "
+              "correction mask in X for F sin");
       require(std::any_of(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
-                return step.comment == "preload const 19";
+                return step.opcode == 0x1c && step.comment == "current-X sin";
               }) &&
                   std::none_of(result.steps.begin(), result.steps.end(),
-                               [](const ResolvedStep& step) {
-                                 return step.comment == "packed BCD remove anchor";
-                               }),
-              "biased threshold lowering should divide its anchored fold by 19 without an "
-              "extra anchor-removal pair");
+                               [](const ResolvedStep& step) { return step.opcode == 0x3b; }),
+              "final zagaday-tsifru learning should contain F sin and no K random command");
       require(std::any_of(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
-                return step.comment == "drop packed history anchor";
-              }),
-              "direct fractional history should lower without recalling and ANDing FULL_BITS");
-      require(std::any_of(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
-                return step.opcode == 0xbe && step.comment.has_value() &&
-                       step.comment->find("indirect-memory-targets=1,2,3") !=
-                           std::string::npos;
+                return step.comment == "set correction";
               }) &&
                   std::any_of(result.steps.begin(), result.steps.end(),
                               [](const ResolvedStep& step) {
-                                return step.opcode == 0xb4 && step.comment.has_value() &&
-                                       step.comment->find("indirect-memory-targets=9,a") !=
-                                           std::string::npos;
+                                return step.comment == "recall correction";
                               }),
-              "packed BCD indirect stores should retain exact memory-target proof facts");
+              "final zagaday-tsifru should materialize the deterministic correction mask once");
+      require(std::none_of(result.steps.begin(), result.steps.end(),
+                           [](const ResolvedStep& step) {
+                             return step.comment == "packed BCD remove anchor";
+                           }),
+              "biased threshold lowering should divide its anchored fold by 19 without an "
+              "extra anchor-removal pair");
+      require(std::any_of(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
+                return step.comment.has_value() &&
+                       step.comment->find("indirect-memory-targets=1,2,3") !=
+                           std::string::npos;
+              }),
+              "packed BCD indexed weights should retain exact memory-target proof facts");
 
       int resumable_stops = 0;
       int prompt_anchors = 0;
@@ -281,10 +279,10 @@ void example_sizes_match_typescript_baselines() {
           break;
         }
       }
-      const std::array<int, 6> expected_ui_opcodes{0x67, 0x50, 0x49, 0x66, 0x0b, 0x50};
+      const std::array<int, 5> expected_ui_opcodes{0x69, 0x50, 0x4e, 0x68, 0x50};
       const bool expected_ui_sequence =
           std::equal(expected_ui_opcodes.begin(), expected_ui_opcodes.end(),
-                     result.steps.begin() + 30,
+                     result.steps.begin() + 33,
                      [](int opcode, const ResolvedStep& step) { return opcode == step.opcode; });
       require(resumable_stops == 2 && prompt_anchors == 1 && single_step_anchors == 0 &&
                   continuous_resume_anchors == 1 && expected_ui_sequence &&
@@ -294,7 +292,8 @@ void example_sizes_match_typescript_baselines() {
                       0 &&
                   result.interaction_protocols.front().phases.front().admitted_domain.maximum ==
                       7,
-              "zagaday-tsifru should preserve its score/input/prediction UI protocol");
+              "zagaday-tsifru semantic source should show a positive octal prediction after "
+              "bounded input");
 
       std::string unsafe_source = read_file(path);
       const std::string proved_threshold = "return int((ones + 8) / 19)";

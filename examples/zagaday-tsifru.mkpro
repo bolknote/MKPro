@@ -1,19 +1,20 @@
 // Neural number-guessing game published by Hs On in the Telegram chat
 // "МК61 / МК52 / МК85" on 2026-07-14.
 //
-// Seven previous octal digits form 21 binary inputs. Three binary threshold
-// neurons predict bits 4, 2, and 1. Their bipolar weights are packed as seven
-// octal digits; the leading 8 keeps every BCD nibble aligned on the MK-61.
+// Semantic counterpart of the final 105-cell handwritten revision in
+// games/logic/zagaday-tsifru-hs-on.txt. Seven previous octal digits form 21
+// binary inputs. Three binary threshold neurons predict bits 4, 2, and 1.
 
 program ZagadayTsifru {
   const FULL_BITS = 7.7777777
-  const HISTORY_DIVISOR = 10000000
+  const PUBLISHED_THRESHOLD_FACTOR = 0.054000098
+  const HISTORY_SHIFT = 1.9999996
 
   state {
     expected_mode_only("grd")
 
-    weights: packed[1..3] = [8, 8, 8]
-    history: packed = 8.0123456
+    weights: packed[1..3] = [0, 0, 0]
+    history: packed = 0
 
     score: counter -999..999 = 0
     prediction: counter 0..7 = 0
@@ -24,6 +25,7 @@ program ZagadayTsifru {
     neuron_index: counter 1..3 = 1
     digit: counter 0..7 = 0
     half: counter 0..3 = 0
+    correction: packed = 0
   }
 
   // Count differing bits in the seven octal digits. Each decimal digit is in
@@ -43,6 +45,9 @@ program ZagadayTsifru {
       remaining--
     }
 
+    // For integer ones in 0..21 this is exactly the published
+    // int((ones + 8) * PUBLISHED_THRESHOLD_FACTOR), while exposing the
+    // majority threshold directly to the compiler.
     return int((ones + 8) / 19)
   }
 
@@ -54,39 +59,38 @@ program ZagadayTsifru {
       neuron_index--
     }
 
-    // Input protocol: show the score; enter 0..7 and press С/П; then the
-    // calculator shows its already-computed prediction with a minus sign.
+    // The semantic source uses two ordinary resumable screens. The handwritten
+    // listing packs the same phases into "digit ПП, prediction С/П" by keeping
+    // the entered digit on the calculator stack.
     show(score)
     player = entered(0, 7)
-    show(-prediction)
+    show(prediction)
 
     score += 8 * abs(sign(player - prediction)) - 7
 
     // Form the correction mask for every neuron. A matching output bit makes
-    // its mismatch mask zero; random() is still advanced once per neuron, as
-    // in the published branchless formula.
+    // its mismatch mask zero. The final revision replaces К СЧ with a
+    // deterministic BCD mask obtained from sin(correction).
     ones = 4
     neuron_index = 3
     while neuron_index >= 1 {
+      correction = bit_and(
+        bit_xor(
+          bit_xor(history, weights[neuron_index]),
+          bit_and(player, ones) / ones * FULL_BITS
+        ),
+        bit_and(bit_xor(player, prediction), ones) / ones * FULL_BITS
+      )
       weights[neuron_index] = bit_xor(
         weights[neuron_index],
-        bit_and(
-          bit_and(
-            bit_xor(
-              bit_xor(history, weights[neuron_index]),
-              bit_and(player, ones) / ones * FULL_BITS
-            ),
-            bit_and(bit_xor(player, prediction), ones) / ones * FULL_BITS
-          ),
-          8 + random()
-        )
+        bit_and(correction, sin(correction))
       )
       ones /= 2
       neuron_index--
     }
 
-    // Keep seven inputs from newest to oldest: insert the new digit at the
-    // left and discard the oldest right digit.
-    history = bit_or(2 + frac(history), 10 + player)
+    // The 1.9999996 carry trick inserts the new digit and advances the packed
+    // seven-turn history without a separately initialized history register.
+    history = bit_or(history + HISTORY_SHIFT, player)
   }
 }
