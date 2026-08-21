@@ -832,6 +832,16 @@ committed example oracles under `native/oracles/`.
   the difference before `С/П`, `В/О`, raw interaction, or another observer.
   Unknown flow and alternate entries fail closed. The automatic candidate is
   reported as `stack-through-function-entry`.
+- `interprocedural-y-value-forwarding` — composes the same typed stack-entry
+  contract with adjacent producer lifetimes. If a one-argument stack-through
+  call is proved to consume its argument into one result, the caller's previous
+  `X` survives as the new `Y`; a following branch may therefore exchange `X:Y`
+  instead of recalling that producer from a register. Transitive source access
+  analysis rejects a callee that reads or writes the carried value. The machine
+  continuation proof independently tracks the certified `Y` equality through
+  nested calls, branches, decimal entry, `X2`, and return-stack flow, while
+  ordinary DSE removes the producer store only when no later register path
+  needs it. The proof uses only call ABI, def-use, stack effects, and CFG state.
 - `function-stack-ssa-guarded-entry` — keeps both parameters of a proved
   zero-guarded value function in stack SSA form. The guard stays in `X`, the
   other parameter in `Y`, and only the branch that cannot consume them directly
@@ -1556,7 +1566,7 @@ Display rewrites are separated into strategy selection + body lowering.
   splice proofs aligned with both immediate and delayed stack-copy contexts.
 - `stack-resident-temps` — keeps up to four consecutive single-use temps on the stack, using `В↑` lifts and restore sequences (`X↔Y` / `F reverse`) before direct stack-based consumers. The stack expression lowerer handles `sum(...)` as the same addition tree, can duplicate one repeated stack-resident operand through `В↑` or `F x^2`, and applies one-argument calculator transforms such as `frac(a)` directly after restoring the temp instead of recalling it from memory.
 - `stack-resident-indexed-temp` — keeps a single-use temp in X across one indexed compound store `cells[i] op= temp` when the temp is consumed exactly once and selector/index setup is not temp-dependent.
-- `stack-resident-control-flow` — marks stack-temp fusion that crosses stack-preserving `if` / `while` / `dispatch` regions; these regions cannot clobber live temps and the lowering rebuilds stack state if the region requires it. `branch-y-payload-forwarding` handles the complementary two-definition diamond: after computing a single-use payload, recalling its zero-tested guard pushes that payload into `Y`, where either branch consumes it directly instead of storing and recalling it twice. The proof is source-name-independent, requires one commutative scalar update on each branch, and rejects later payload reads and any program with raw stack access.
+- `stack-resident-control-flow` — marks stack-temp fusion that crosses stack-preserving `if` / `while` / `dispatch` regions; these regions cannot clobber live temps and the lowering rebuilds stack state if the region requires it. `branch-y-payload-forwarding` handles the complementary two-definition diamond: after computing a single-use payload, its zero-tested guard is placed in `X` while the payload remains in `Y`, where either branch consumes it directly instead of storing and recalling it twice. A locally stack-preserving expression can supply this arrangement directly; a proved one-result stack-entry call may additionally carry the preceding producer through its ABI via `interprocedural-y-value-forwarding`. The proof is source-name-independent, requires one commutative scalar update on each branch, and rejects later payload reads, guard access by the intervening producer, and any program with raw stack access.
 - `dead-temp-store` — removes temporary stores after their last read when no longer needed.
 - `store-recall-peephole` — collapses direct or stable-indirect proved
   same-cell `store` then immediate `recall` pairs, and adjacent recalls to

@@ -16,7 +16,7 @@ with a raw listing: the goal is to make the high-level source fit.
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
 | `tic-tac-toe-4x4.mkpro` | 136 | 105 | +31 | pending optimizer |
-| `nekromant.mkpro` | 140 | 105 | +35 | pending optimizer |
+| `nekromant.mkpro` | 136 | 105 | +31 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
@@ -235,3 +235,7 @@ mode may reject over-window programs earlier than the analysis path.
   reads, noncommutative consumers, and raw stack interaction. Composed with the
   existing stack function entries and final layout, this reduces
   `nekromant.mkpro` from 141 to 140 cells without changing its source.
+- Generic interprocedural caller-X-to-Y forwarding carries a proved-live caller
+  value through one-argument stack-entry calls. Ordinary dead-store elimination
+  then removes the redundant register materializations, reducing
+  `nekromant.mkpro` from 140 to 136 cells without changing its source.

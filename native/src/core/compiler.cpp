@@ -42108,6 +42108,54 @@ bool lower_branch_carried_payload_update(LoweringContext& context,
   return true;
 }
 
+bool stack_through_call_preserves_caller_x_in_y(const LoweringContext& context,
+                                                const Expression& expression) {
+  if (context.program == nullptr || expression.kind != "call" ||
+      expression.args.size() != 1U ||
+      !expression_preserves_previous_x_as_y_for_stack_analysis(expression.args.front())) {
+    return false;
+  }
+
+  const auto rule_it =
+      std::find_if(context.program->rules.begin(), context.program->rules.end(),
+                   [&](const V2Rule& rule) { return rule.name == expression.callee; });
+  if (rule_it == context.program->rules.end())
+    return false;
+  const auto plan_it = context.stack_entry_functions.find(rule_it->name);
+  if (plan_it == context.stack_entry_functions.end() ||
+      !plan_it->second.stack_through_param || plan_it->second.params.size() != 1U ||
+      !stack_entry_function_call_arguments_safe(*rule_it, expression.args)) {
+    return false;
+  }
+  return stack_through_function_shape(context, *rule_it).has_value();
+}
+
+bool stack_through_call_may_access_identifier(LoweringContext& context,
+                                              const Expression& expression,
+                                              const std::string& name) {
+  if (context.program == nullptr || expression.kind != "call")
+    return false;
+  const auto rule_it = context.rules.find(expression.callee);
+  if (rule_it == context.rules.end() || rule_it->second == nullptr)
+    return false;
+
+  std::set<std::string> seen_rules{expression.callee};
+  if (first_identifier_access(context, rule_it->second->body, name, seen_rules) !=
+      IdentifierAccess::None) {
+    return true;
+  }
+
+  // first_identifier_access follows statement-style invokes. Expression calls
+  // need an explicit call-graph edge; until a nested callee has its own effect
+  // summary, reject it rather than assuming that it preserves the carried SSA
+  // value.
+  return std::any_of(context.program->rules.begin(), context.program->rules.end(),
+                     [&](const V2Rule& nested) {
+                       return count_expression_calls_in_statements(rule_it->second->body,
+                                                                   nested.name) > 0;
+                     });
+}
+
 bool lower_branch_carried_payload_run(LoweringContext& context,
                                       const std::vector<V2Statement>& statements,
                                       std::size_t start, std::size_t& consumed) {
@@ -42157,15 +42205,46 @@ bool lower_branch_carried_payload_run(LoweringContext& context,
   if (statements_read_identifier_before_write(context, tail, payload))
     return false;
 
+  const bool payload_accesses_guard =
+      statements_read_identifier_before_write_for_y_stack(
+          *context.program, std::vector<V2Statement>{payload_assign}, guard) ||
+      statement_writes_identifier_for_y_stack_analysis(*context.program, payload_assign,
+                                                       guard) ||
+      stack_through_call_may_access_identifier(context, payload_value, guard);
+  const bool stack_through_guard_carry =
+      !payload_accesses_guard &&
+      stack_through_call_preserves_caller_x_in_y(context, payload_value);
+  const bool local_guard_carry =
+      !payload_accesses_guard &&
+      expression_preserves_previous_x_as_y_for_stack_analysis(payload_value);
+
   if (!lower_expression_to_x(context, guard_value))
     return false;
   emit_store(context, guard, "set " + guard);
   if (!lower_expression_to_x(context, payload_value))
     return false;
   mark_current_x(context, payload);
-  emit_recall(context, guard);
-  mark_current_x(context, guard);
-  context.current_y_variable = payload;
+  if (stack_through_guard_carry || local_guard_carry) {
+    if (stack_through_guard_carry)
+      mark_last_emitted_call_role(context, "stack-through-caller-x-to-y");
+    context.emitter.emit_op(0x14, "X<->Y", "expose stack-carried guard",
+                            branch.line);
+    mark_current_x(context, guard);
+    context.current_y_variable = payload;
+    if (stack_through_guard_carry) {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "interprocedural-y-value-forwarding",
+          .detail = "Forwarded " + guard +
+                    " from caller X through a proved one-result stack-entry call and consumed "
+                    "it from Y at line " +
+                    std::to_string(branch.line) + ".",
+      });
+    }
+  } else {
+    emit_recall(context, guard);
+    mark_current_x(context, guard);
+    context.current_y_variable = payload;
+  }
 
   const std::string false_label = context.emitter.fresh_label("branch_payload_else");
   const std::string end_label = context.emitter.fresh_label("branch_payload_end");
@@ -44596,6 +44675,7 @@ bool stack_through_function_continuations_proved(const std::vector<MachineItem>&
   };
 
   std::set<int> special_calls;
+  std::set<int> caller_x_to_y_calls;
   std::set<std::string> special_targets;
   for (std::size_t index = 0; index < ops.size(); ++index) {
     const IrOp& op = ops.at(index);
@@ -44608,6 +44688,13 @@ bool stack_through_function_continuations_proved(const std::vector<MachineItem>&
       return false;
     }
     special_calls.insert(static_cast<int>(index));
+    if (has_role(op, "stack-through-caller-x-to-y")) {
+      if (!has_role(op, "stack-through-function-call")) {
+        reason = "caller-X-to-Y fact is attached to a non-stack-through call";
+        return false;
+      }
+      caller_x_to_y_calls.insert(static_cast<int>(index));
+    }
     special_targets.insert(*target);
   }
   if (special_calls.empty())
@@ -44683,7 +44770,7 @@ bool stack_through_function_continuations_proved(const std::vector<MachineItem>&
       return false;
     }
     core::StackValueEqualityState initial;
-    initial.stack_equal = {true, false, false, false};
+    initial.stack_equal = {true, caller_x_to_y_calls.contains(call), false, false};
     initial.x2_equal = false;
     work.push_back(WorkState{.index = call + 1, .equality = initial});
   }
@@ -44715,7 +44802,8 @@ bool stack_through_function_continuations_proved(const std::vector<MachineItem>&
         reason = "nested stack-through call can observe unequal X";
         return false;
       }
-      current.equality.stack_equal = {true, false, false, false};
+      current.equality.stack_equal = {
+          true, caller_x_to_y_calls.contains(current.index), false, false};
       current.equality.x2_equal = false;
       current.number_entry_open = false;
       work.push_back(WorkState{.index = current.index + 1,

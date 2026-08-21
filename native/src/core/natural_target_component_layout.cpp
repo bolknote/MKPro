@@ -487,11 +487,10 @@ bool split_segment_with_bridge(
   Segment suffix;
   suffix.ordinal = segments.size();
   Segment& prefix = segments.at(segment_index);
-  while (prefix.cells.size() > prefix_cells) {
-    suffix.cells.push_back(std::move(prefix.cells.at(prefix_cells)));
-    prefix.cells.erase(prefix.cells.begin() +
-                       static_cast<std::ptrdiff_t>(prefix_cells));
-  }
+  suffix.cells.reserve(prefix.cells.size() - prefix_cells);
+  for (std::size_t cell = prefix_cells; cell < prefix.cells.size(); ++cell)
+    suffix.cells.push_back(std::move(prefix.cells.at(cell)));
+  prefix.cells.resize(prefix_cells);
   if (suffix.cells.empty())
     return false;
   bridge = TransparentSplitBridge{

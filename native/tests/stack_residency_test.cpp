@@ -1542,6 +1542,62 @@ program BranchCarriedPayloadProbe {
                 count_steps_with_comment(optimized, "recall payload") == 0,
             "branch-carried payload should not be materialized or recalled");
 
+    CompileOptions stack_call_options = optimized_options;
+    stack_call_options.stack_resident_temps = true;
+    stack_call_options.stack_argument_function_entries = true;
+    stack_call_options.stack_through_function_entries = true;
+    const CompileResult stack_call = compile_source(source, stack_call_options);
+    require_clean_compile(stack_call, "interprocedural Y-value forwarding");
+    require(has_optimization(stack_call, "interprocedural-y-value-forwarding"),
+            "a proved one-result stack call should preserve the previous producer in Y");
+    require(count_steps_with_comment(stack_call, "recall guard") == 0,
+            "a guard carried through a stack call should not be recalled");
+    require(count_steps_with_comment(stack_call, "set guard") == 0,
+            "ordinary DSE should remove the now-unread guard store");
+
+    const CompileResult guard_clobber = compile_source(R"mkpro(
+program BranchCarriedGuardClobberNegative {
+  state {
+    guard: packed = 0
+    payload: packed = 0
+    left: packed = 10
+    right: packed = 20
+  }
+
+  fn first(scale) {
+    return scale - 2
+  }
+
+  fn rewrite_guard(scale) {
+    guard = 1
+    return guard + scale
+  }
+
+  fn distribute() {
+    guard = first(2)
+    payload = rewrite_guard(5)
+    if guard == 0 {
+      left += payload
+    }
+    else {
+      right += payload
+    }
+  }
+
+  loop {
+    distribute()
+    halt(left + right)
+  }
+}
+)mkpro",
+                                                       stack_call_options);
+    require_clean_compile(guard_clobber,
+                          "interprocedural Y-value guard-clobber negative probe");
+    require(!has_optimization(guard_clobber, "interprocedural-y-value-forwarding"),
+            "a payload call that accesses the guard must not forward its caller value through Y");
+    require(count_steps_with_comment(guard_clobber, "recall guard") == 1,
+            "a clobbered guard must still be recalled from its authoritative register");
+
     const CompileResult impure_payload = compile_source(R"mkpro(
 program BranchCarriedPayloadNonCommutativeNegative {
   state {

@@ -523,6 +523,13 @@ program BranchCarriedPayloadEquivalence {
             "branch-carried payload equivalence variants should compile");
     require(has_optimization(optimized, "branch-y-payload-forwarding"),
             "branch-carried payload equivalence variant should use Y forwarding");
+    require(has_optimization(optimized, "interprocedural-y-value-forwarding"),
+            "branch-carried payload equivalence variant should carry the first call result in Y");
+    require(std::none_of(optimized.steps.begin(), optimized.steps.end(),
+                         [](const ResolvedStep& step) {
+                           return step.comment == "set guard" || step.comment == "recall guard";
+                         }),
+            "interprocedural Y forwarding should remove guard register traffic");
 
     const std::set<std::string> baseline_registers{baseline.registers.at("left"),
                                                    baseline.registers.at("right")};
