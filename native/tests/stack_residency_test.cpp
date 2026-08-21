@@ -3963,6 +3963,86 @@ program StackResidentUnaryCallControlFlow {
   }
 
   {
+    CompileOptions options;
+    options.budget = 999999;
+    options.disable_candidate_search = true;
+    options.stack_resident_temps = true;
+    options.stack_argument_function_entries = true;
+    options.branch_y_payload_forwarding = true;
+    const CompileResult result = compile_source(R"mkpro(
+program DirectStackAbiCallerY {
+  state {
+    seed: packed = 4
+    left: packed = 0
+    right: packed = 0
+  }
+
+  fn adjust(value) {
+    return value + 3
+  }
+
+  loop {
+    guard = seed
+    payload = adjust(5)
+    if guard == 0 {
+      left += payload
+    } else {
+      right += payload
+    }
+    halt(left + right)
+  }
+}
+)mkpro", options);
+    require_clean_compile(result, "direct stack ABI caller-Y forwarding");
+    require(has_optimization(result, "function-stack-abi-caller-y"),
+            "direct stack-expression ABI should expose its proved caller-Y fact");
+    require(!has_optimization(result, "interprocedural-y-value-forwarding"),
+            "caller-Y alone must not imply recall-equivalent X1/Z/T effects");
+    require(count_steps_with_comment(result, "recall guard") == 1,
+            "direct stack ABI must retain recall until the full stack signature is proved");
+  }
+
+  {
+    CompileOptions options;
+    options.budget = 999999;
+    options.disable_candidate_search = true;
+    options.stack_resident_temps = true;
+    options.stack_argument_function_entries = true;
+    options.branch_y_payload_forwarding = true;
+    const CompileResult result = compile_source(R"mkpro(
+program DirectStackAbiCallerYNegative {
+  state {
+    seed: packed = 4
+    left: packed = 0
+    right: packed = 0
+  }
+
+  fn reverse_subtract(value) {
+    return 3 - value
+  }
+
+  loop {
+    guard = seed
+    payload = reverse_subtract(5)
+    if guard == 0 {
+      left += payload
+    } else {
+      right += payload
+    }
+    halt(left + right)
+  }
+}
+)mkpro", options);
+    require_clean_compile(result, "direct stack ABI caller-Y negative");
+    require(!has_optimization(result, "function-stack-abi-caller-y"),
+            "operand reversal must not claim caller-Y preservation");
+    require(!has_optimization(result, "interprocedural-y-value-forwarding"),
+            "an operand-reversing ABI must not claim caller-Y preservation");
+    require(count_steps_with_comment(result, "recall guard") == 1,
+            "an unproved caller Y must retain the ordinary guard recall");
+  }
+
+  {
     const CompileResult result = compile_stack_variant(R"mkpro(
 program IndexedSubtractIndirectYReuse {
   state {

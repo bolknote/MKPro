@@ -103,14 +103,20 @@ struct ExpressionHelperStackEntryRequest {
   int call_sites = 0;
 };
 
+enum class FunctionStackEntryAbi {
+  StackExpression,
+  MaterializedRegisters,
+  StackThrough,
+  StackSsaGuarded,
+};
+
 struct FunctionStackEntryPlan {
   std::vector<std::string> params;
   int call_sites = 0;
   int total_call_sites = 0;
   bool primary = false;
-  bool materialize_params = false;
-  bool stack_through_param = false;
-  bool stack_ssa_guarded_params = false;
+  FunctionStackEntryAbi abi = FunctionStackEntryAbi::StackExpression;
+  bool preserves_caller_y = false;
 };
 
 struct RuleStackInputEntryPlan {

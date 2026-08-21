@@ -646,7 +646,7 @@ committed example oracles under `native/oracles/`.
 - `late-layout-if-variant` — re-runs lowering with an aggressive terminal-if lowering variant after full layout.
 - `late-layout-branch-order` — re-runs with swapped terminal-if branch order after full layout.
 - `late-layout-if-branch-order` — combines aggressive terminal-if and branch-order re-runs after full layout.
-- `fast-candidate-search` — enables early candidate-search termination when the base implementation already meets rescue limit or the threshold is hit, with a `fast-candidate-search` optimization marker recording the stop reason.
+- `fast-candidate-search` — when the prioritized size-rescue batch produces an implementation within the rescue limit, `fast-rescue-candidate-pruning` skips unrelated ordinary candidate families but retains final proof/layout and preload-demotion refinement. This is intentionally not an immediate return: a boundary result can still shrink when a setup constant is inlined to release an indirect-flow register. Expensive final-frontier composition must satisfy the configured fast-search cost threshold unless the ordinary search has constructed a multi-constant register-releasing chain whose benefit depends on final layout. Merely reaching exactly 105 cells does not bypass the threshold. A `fast-candidate-search` optimization marker records completion.
 - `break-even-indirect-call` — hoists procs/shared helpers and evaluates a guarded indirect-call candidate to collapse repeated direct calls into one-cell indirect flow.
 - `hoisted-helper-indirect-layout` — hoists shared helpers before re-layout and recompiles for better preloaded indirect flow.
 - `hoisted-proc-indirect-layout` — additionally hoists ordinary procedures before re-layout for tighter call/jump sequences.
@@ -822,6 +822,15 @@ committed example oracles under `native/oracles/`.
 - `single-use-producer-forwarding` — extends the shared stack-residency def-use analysis from adjacent temporaries to straight-line expression lifetimes. Independent pure definitions are delayed until their first actual lowering-time recall. The recall path computes the value and records a possible store point without emitting it: a second real recall backpatches the store, while an overwrite first discards it. Thus fused and ordinary consumers participate automatically without relying on conservative call-crossing DSE. No consumer, formula, constant, or game recognizer is involved.
 - `function-stack-entry-guarded-return` — extends the stack-argument value-function ABI to pure zero-guarded returns. The guarded parameter is staged at the top of X/Y/Z/T; `== 0` and `!= 0` conditionals preserve the complete entry stack, and both return expressions are lowered independently from that same proved signature. Caller parameter stores and callee recalls disappear without recognizing a formula or application.
 - `function-stack-entry-materialized-params` — passes one or two simple function arguments through X/Y and materializes them once in a shared callee prologue when direct stack-expression lowering is unavailable. The two-argument prologue restores X/Y order before the ordinary body, direct tail calls are excluded, and the rewrite is selected only when removed call-site stores exceed the shared prologue cost.
+- `function-stack-abi-selection` — represents stack-expression, shared
+  register-materialization, stack-through, and guarded stack-SSA entries as one
+  typed function ABI family. Each plan records its exact argument order and any
+  proved preservation of caller `Y`; whole-program candidates are still ranked
+  by final cell count first and the common runtime-cost model only breaks equal
+  sizes. This lets later liveness passes consume ABI facts without identifying a
+  function, formula, or application. A preserved caller `Y` is deliberately
+  weaker than recall equivalence: replacing `П→X` also requires matching `X1`,
+  `Z`, and `T`, so consumers must request the complete signature they need.
 - `function-stack-through-param` — for a one-parameter function, keeps the entry
   argument in `Y` while an independent pure assignment is evaluated in `X`,
   then feeds both values directly to the return expression. Eligibility is
@@ -834,8 +843,9 @@ committed example oracles under `native/oracles/`.
   reported as `stack-through-function-entry`.
 - `interprocedural-y-value-forwarding` — composes the same typed stack-entry
   contract with adjacent producer lifetimes. If a one-argument stack-through
-  call is proved to consume its argument into one result, the caller's previous
-  `X` survives as the new `Y`; a following branch may therefore exchange `X:Y`
+  call is proved to consume its argument into one result with the complete
+  recall-equivalent `X1/X/Y/Z/T` signature, the caller's previous `X` survives
+  in `Y`; a following branch may therefore exchange `X:Y`
   instead of recalling that producer from a register. Transitive source access
   analysis rejects a callee that reads or writes the carried value. The machine
   continuation proof independently tracks the certified `Y` equality through

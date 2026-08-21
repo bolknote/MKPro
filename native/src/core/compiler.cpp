@@ -19667,10 +19667,12 @@ bool lower_stack_argument_function_call(LoweringContext& context, const V2Rule& 
                                                     : function_stack_entry_label(rule.name),
                             std::string(comment_prefix) + rule.name + " stack entry", line);
   mark_last_emitted_call_role(context, "stack-argument-function-call");
-  if (plan_it->second.stack_through_param)
+  if (plan_it->second.abi == FunctionStackEntryAbi::StackThrough)
     mark_last_emitted_call_role(context, "stack-through-function-call");
-  if (plan_it->second.stack_ssa_guarded_params)
+  if (plan_it->second.abi == FunctionStackEntryAbi::StackSsaGuarded)
     mark_last_emitted_call_role(context, "stack-ssa-function-call");
+  if (plan_it->second.preserves_caller_y)
+    mark_last_emitted_call_role(context, "function-call-preserves-caller-y");
   mark_function_call_result_x(context, rule);
   context.optimizations.push_back(OptimizationReport{
       .name = "function-call",
@@ -19681,6 +19683,13 @@ bool lower_stack_argument_function_call(LoweringContext& context, const V2Rule& 
       .detail = "Entered value function " + rule.name +
                 " with its arguments already staged on the X/Y/Z/T stack.",
   });
+  if (plan_it->second.preserves_caller_y) {
+    context.optimizations.push_back(OptimizationReport{
+        .name = "function-stack-abi-caller-y",
+        .detail = "The selected stack ABI for " + rule.name +
+                  " preserves the caller's previous X value in Y.",
+    });
+  }
   return true;
 }
 
@@ -19905,7 +19914,8 @@ void plan_stack_argument_function_entries(LoweringContext& context, const V2Prog
           .call_sites = safe_it->second,
           .total_call_sites = total_calls,
           .primary = true,
-          .stack_through_param = true,
+          .abi = FunctionStackEntryAbi::StackThrough,
+          .preserves_caller_y = true,
       };
       continue;
     }
@@ -19914,11 +19924,17 @@ void plan_stack_argument_function_entries(LoweringContext& context, const V2Prog
             ? stack_entry_value_function_shape(context, rule)
             : std::nullopt;
     if (shape.has_value()) {
+      const bool preserves_caller_y =
+          shape->stack_params.size() == 1U && shape->direct_result.has_value() &&
+          x_param_expression_preserves_caller_y_for_stack_analysis(
+              *shape->direct_result, shape->stack_params.front());
       context.stack_entry_functions[rule.name] = FunctionStackEntryPlan{
           .params = shape->stack_params,
           .call_sites = safe_it->second,
           .total_call_sites = total_calls,
           .primary = safe_it->second == total_calls,
+          .abi = FunctionStackEntryAbi::StackExpression,
+          .preserves_caller_y = preserves_caller_y,
       };
       continue;
     }
@@ -19933,7 +19949,7 @@ void plan_stack_argument_function_entries(LoweringContext& context, const V2Prog
           .call_sites = safe_it->second,
           .total_call_sites = total_calls,
           .primary = true,
-          .stack_ssa_guarded_params = true,
+          .abi = FunctionStackEntryAbi::StackSsaGuarded,
       };
       continue;
     }
@@ -19957,7 +19973,7 @@ void plan_stack_argument_function_entries(LoweringContext& context, const V2Prog
         .call_sites = safe_it->second,
         .total_call_sites = total_calls,
         .primary = true,
-        .materialize_params = true,
+        .abi = FunctionStackEntryAbi::MaterializedRegisters,
     };
   }
 }
@@ -34641,7 +34657,7 @@ bool emit_stack_argument_function_entry_prefix(LoweringContext& context, const V
   const auto plan_it = context.stack_entry_functions.find(rule.name);
   if (plan_it == context.stack_entry_functions.end())
     return true;
-  if (plan_it->second.stack_through_param) {
+  if (plan_it->second.abi == FunctionStackEntryAbi::StackThrough) {
     const std::optional<StackThroughFunctionShape> shape =
         stack_through_function_shape(context, rule);
     if (!shape.has_value())
@@ -34668,7 +34684,7 @@ bool emit_stack_argument_function_entry_prefix(LoweringContext& context, const V
     });
     return true;
   }
-  if (plan_it->second.stack_ssa_guarded_params) {
+  if (plan_it->second.abi == FunctionStackEntryAbi::StackSsaGuarded) {
     const std::optional<StackSsaGuardedFunctionShape> shape =
         stack_ssa_guarded_function_shape(context, rule);
     if (!shape.has_value() || shape->stack_params.size() != 2U)
@@ -34738,7 +34754,7 @@ bool emit_stack_argument_function_entry_prefix(LoweringContext& context, const V
     });
     return true;
   }
-  if (plan_it->second.materialize_params) {
+  if (plan_it->second.abi == FunctionStackEntryAbi::MaterializedRegisters) {
     const std::vector<std::string>& params = plan_it->second.params;
     if (params.size() == 1U) {
       emit_store(context, params.front(), "stack-entry param " + params.front());
@@ -34833,7 +34849,7 @@ bool stack_argument_function_entry_is_primary(const LoweringContext& context,
                                               const V2Rule& rule) {
   const auto plan_it = context.stack_entry_functions.find(rule.name);
   return plan_it != context.stack_entry_functions.end() && plan_it->second.primary &&
-         !plan_it->second.materialize_params;
+         plan_it->second.abi != FunctionStackEntryAbi::MaterializedRegisters;
 }
 
 bool lower_stack_input_rule_update_prefix(LoweringContext& context, const V2Statement& statement,
@@ -42108,8 +42124,8 @@ bool lower_branch_carried_payload_update(LoweringContext& context,
   return true;
 }
 
-bool stack_through_call_preserves_caller_x_in_y(const LoweringContext& context,
-                                                const Expression& expression) {
+bool stack_entry_call_supports_caller_x_to_y_recall_elision(
+    const LoweringContext& context, const Expression& expression) {
   if (context.program == nullptr || expression.kind != "call" ||
       expression.args.size() != 1U ||
       !expression_preserves_previous_x_as_y_for_stack_analysis(expression.args.front())) {
@@ -42123,16 +42139,17 @@ bool stack_through_call_preserves_caller_x_in_y(const LoweringContext& context,
     return false;
   const auto plan_it = context.stack_entry_functions.find(rule_it->name);
   if (plan_it == context.stack_entry_functions.end() ||
-      !plan_it->second.stack_through_param || plan_it->second.params.size() != 1U ||
+      !plan_it->second.preserves_caller_y || plan_it->second.params.size() != 1U ||
+      plan_it->second.abi != FunctionStackEntryAbi::StackThrough ||
       !stack_entry_function_call_arguments_safe(*rule_it, expression.args)) {
     return false;
   }
   return stack_through_function_shape(context, *rule_it).has_value();
 }
 
-bool stack_through_call_may_access_identifier(LoweringContext& context,
-                                              const Expression& expression,
-                                              const std::string& name) {
+bool stack_entry_call_may_access_identifier(LoweringContext& context,
+                                            const Expression& expression,
+                                            const std::string& name) {
   if (context.program == nullptr || expression.kind != "call")
     return false;
   const auto rule_it = context.rules.find(expression.callee);
@@ -42210,10 +42227,11 @@ bool lower_branch_carried_payload_run(LoweringContext& context,
           *context.program, std::vector<V2Statement>{payload_assign}, guard) ||
       statement_writes_identifier_for_y_stack_analysis(*context.program, payload_assign,
                                                        guard) ||
-      stack_through_call_may_access_identifier(context, payload_value, guard);
-  const bool stack_through_guard_carry =
+      stack_entry_call_may_access_identifier(context, payload_value, guard);
+  const bool stack_entry_guard_carry =
       !payload_accesses_guard &&
-      stack_through_call_preserves_caller_x_in_y(context, payload_value);
+      stack_entry_call_supports_caller_x_to_y_recall_elision(context,
+                                                             payload_value);
   const bool local_guard_carry =
       !payload_accesses_guard &&
       expression_preserves_previous_x_as_y_for_stack_analysis(payload_value);
@@ -42224,14 +42242,14 @@ bool lower_branch_carried_payload_run(LoweringContext& context,
   if (!lower_expression_to_x(context, payload_value))
     return false;
   mark_current_x(context, payload);
-  if (stack_through_guard_carry || local_guard_carry) {
-    if (stack_through_guard_carry)
-      mark_last_emitted_call_role(context, "stack-through-caller-x-to-y");
+  if (stack_entry_guard_carry || local_guard_carry) {
+    if (stack_entry_guard_carry)
+      mark_last_emitted_call_role(context, "stack-entry-caller-x-to-y");
     context.emitter.emit_op(0x14, "X<->Y", "expose stack-carried guard",
                             branch.line);
     mark_current_x(context, guard);
     context.current_y_variable = payload;
-    if (stack_through_guard_carry) {
+    if (stack_entry_guard_carry) {
       context.optimizations.push_back(OptimizationReport{
           .name = "interprocedural-y-value-forwarding",
           .detail = "Forwarded " + guard +
@@ -44665,9 +44683,9 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
   return preloads;
 }
 
-bool stack_through_function_continuations_proved(const std::vector<MachineItem>& items,
-                                                 FeatureProfile feature_profile,
-                                                 std::string& reason) {
+bool stack_entry_function_continuations_proved(const std::vector<MachineItem>& items,
+                                               FeatureProfile feature_profile,
+                                               std::string& reason) {
   const std::vector<IrOp> ops = raise_machine_to_ir(items, feature_profile);
   const auto has_role = [](const IrOp& op, std::string_view role) {
     return std::find(op.meta.roles.begin(), op.meta.roles.end(), role) !=
@@ -44680,7 +44698,8 @@ bool stack_through_function_continuations_proved(const std::vector<MachineItem>&
   for (std::size_t index = 0; index < ops.size(); ++index) {
     const IrOp& op = ops.at(index);
     if (!has_role(op, "stack-through-function-call") &&
-        !has_role(op, "stack-ssa-function-call"))
+        !has_role(op, "stack-ssa-function-call") &&
+        !has_role(op, "stack-entry-caller-x-to-y"))
       continue;
     const auto* target = std::get_if<std::string>(&op.target);
     if (op.kind != IrKind::Call || target == nullptr) {
@@ -44688,9 +44707,10 @@ bool stack_through_function_continuations_proved(const std::vector<MachineItem>&
       return false;
     }
     special_calls.insert(static_cast<int>(index));
-    if (has_role(op, "stack-through-caller-x-to-y")) {
-      if (!has_role(op, "stack-through-function-call")) {
-        reason = "caller-X-to-Y fact is attached to a non-stack-through call";
+    if (has_role(op, "stack-entry-caller-x-to-y")) {
+      if (!has_role(op, "stack-argument-function-call") ||
+          !has_role(op, "function-call-preserves-caller-y")) {
+        reason = "caller-X-to-Y fact is attached without a proved stack-entry ABI";
         return false;
       }
       caller_x_to_y_calls.insert(static_cast<int>(index));
@@ -44718,7 +44738,7 @@ bool stack_through_function_continuations_proved(const std::vector<MachineItem>&
     if (!targets_special_entry(op))
       continue;
     if (op.kind != IrKind::Call || !special_calls.contains(static_cast<int>(index))) {
-      reason = "stack-through function has an unproved alternate entry";
+      reason = "stack-entry function has an unproved alternate entry";
       return false;
     }
   }
@@ -51528,7 +51548,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   if (!has_errors(context.diagnostics) &&
       (options.stack_through_function_entries || options.stack_ssa_function_entries)) {
     std::string stack_through_reason;
-    if (!stack_through_function_continuations_proved(
+    if (!stack_entry_function_continuations_proved(
             ir_pass_input, optimizer_feature_profile_for_options(options),
             stack_through_reason)) {
       context.diagnostics.push_back(diagnostic(
@@ -68626,6 +68646,7 @@ CompileResult compile_source_for_optimizer_profile(
       implemented_candidate_key(options), implemented_candidate_key(best_options)};
   const std::size_t candidate_search_input_cells =
       !best.steps.empty() ? best.steps.size() : official_program_limit;
+  bool prioritized_fast_rescue_fit = false;
   const auto scaled_candidate_search_cost_ms = [&](std::string_view name) {
     const std::uint64_t cells = std::max<std::size_t>(candidate_search_input_cells, 1U);
     const std::uint64_t limit = std::max<std::size_t>(official_program_limit, 1U);
@@ -68637,6 +68658,10 @@ CompileResult compile_source_for_optimizer_profile(
         scaled, static_cast<std::uint64_t>(std::numeric_limits<int>::max())));
   };
   auto fast_candidate_allowed = [&](std::string_view name) {
+    if (options.fast_candidate_search && prioritized_fast_rescue_fit &&
+        name != "demote-constant-indirect-flow") {
+      return false;
+    }
     return !options.fast_candidate_search ||
            scaled_candidate_search_cost_ms(name) <= options.fast_candidate_threshold_ms;
   };
@@ -68995,6 +69020,16 @@ CompileResult compile_source_for_optimizer_profile(
         "reverse-proc-layout", "Emitted procedures in reverse source order",
         CandidateGate::SizeRescue);
     evaluate_queued_candidates();
+    if (best.implemented && !selected_still_overflows_now()) {
+      prioritized_fast_rescue_fit = true;
+      best.optimizations.push_back(OptimizationReport{
+          .name = "fast-rescue-candidate-pruning",
+          .detail = "The prioritized rescue pass reached " +
+                    std::to_string(best.steps.size()) + " cells; skipped unrelated ordinary "
+                    "candidate families while retaining final proof/layout and preload-demotion "
+                    "refinement.",
+      });
+    }
   }
 
   add_candidate(
@@ -71675,10 +71710,16 @@ CompileResult compile_source_for_optimizer_profile(
       composition_bases.push_back(candidate);
       return true;
     };
+    const bool has_register_releasing_chain = std::any_of(
+        ranked_finalists.begin(), ranked_finalists.end(), [](const RankedFinalist& finalist) {
+          return finalist.candidate.name == "demote-constant-chain-indirect-flow" &&
+                 finalist.candidate.options.suppress_constant_preloads.size() > 1U;
+        });
     const bool compose_final_layout_frontier =
         fast_candidate_allowed("final-layout-frontier-composition") ||
         (should_finish_boundary_candidate && finalized_best.has_value() &&
-         finalized_best->steps.size() == official_program_limit);
+         finalized_best->steps.size() == official_program_limit &&
+         has_register_releasing_chain);
     if (!compose_final_layout_frontier && trace_candidates) {
       std::cerr << "[candidate-trace] skip-fast final-layout-frontier-composition estimated_ms="
                 << scaled_candidate_search_cost_ms("final-layout-frontier-composition")

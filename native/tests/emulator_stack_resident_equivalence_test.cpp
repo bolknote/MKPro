@@ -130,7 +130,21 @@ void require_same_observation(const Observation& actual, const Observation& expe
   require(actual.display == expected.display,
           context + " expected display " + expected.display + ", got " + actual.display);
   require(actual.registers == expected.registers, context + " registers should match");
-  require(actual.stack == expected.stack, context + " X1/X/Y/Z/T stack should match");
+  std::string stack_difference;
+  if (actual.stack != expected.stack) {
+    for (const std::string& name : {"X1", "X", "Y", "Z", "T"}) {
+      const auto actual_value = actual.stack.find(name);
+      const auto expected_value = expected.stack.find(name);
+      if (actual_value == actual.stack.end() || expected_value == expected.stack.end() ||
+          actual_value->second == expected_value->second) {
+        continue;
+      }
+      stack_difference += " " + name + "=" + actual_value->second +
+                          " (expected " + expected_value->second + ")";
+    }
+  }
+  require(actual.stack == expected.stack,
+          context + " X1/X/Y/Z/T stack should match:" + stack_difference);
 }
 
 CompileResult compile_variant(const std::string& source, bool stack_resident, bool canonicalize_arg_temps) {
@@ -705,6 +719,62 @@ program StackThroughFunctionEntryEq {
               "stack-through function-entry logical register " + std::string(name) +
                   " should match");
     }
+  }
+
+  const std::string direct_stack_abi_caller_y_source = R"mkpro(
+program DirectStackAbiCallerYEq {
+  state {
+    seed: packed = 4
+    left: packed = 0
+    right: packed = 0
+  }
+
+  fn adjust(value) {
+    return value + 3
+  }
+
+  loop {
+    guard = seed
+    payload = adjust(5)
+    if guard == 0 {
+      left += payload
+    } else {
+      right += payload
+    }
+    halt(left + right)
+  }
+}
+)mkpro";
+
+  {
+    CompileOptions baseline_options;
+    baseline_options.budget = 999999;
+    baseline_options.disable_candidate_search = true;
+    baseline_options.stack_resident_temps = true;
+    baseline_options.stack_argument_function_entries = true;
+    const CompileResult baseline =
+        compile_source(direct_stack_abi_caller_y_source, baseline_options);
+
+    CompileOptions optimized_options = baseline_options;
+    optimized_options.branch_y_payload_forwarding = true;
+    const CompileResult optimized =
+        compile_source(direct_stack_abi_caller_y_source, optimized_options);
+
+    require(baseline.implemented, "direct stack ABI caller-Y baseline should compile");
+    require(optimized.implemented, "direct stack ABI caller-Y variant should compile");
+    require(has_optimization(optimized, "function-stack-abi-caller-y"),
+            "direct stack ABI should publish its caller-Y fact");
+    require(!has_optimization(optimized, "interprocedural-y-value-forwarding"),
+            "direct stack ABI must reject recall elision without X1/Z/T proof");
+    require(optimized.steps.size() <= baseline.steps.size(),
+            "a proved direct stack ABI must not enlarge the program when recall elision is "
+            "rejected");
+
+    const Observation before =
+        observe(step_opcodes(baseline.steps), {"В/О", "С/П"}, baseline.preloads, {}, true);
+    const Observation after =
+        observe(step_opcodes(optimized.steps), {"В/О", "С/П"}, optimized.preloads, {}, true);
+    require_same_observation(after, before, "direct stack ABI recall-elision rejection");
   }
 
   const std::string materialized_function_stack_entry_source = R"mkpro(

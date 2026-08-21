@@ -29,90 +29,91 @@
    25 |  0B  | /-/                     | negative exponent
    26 |  0B  | /-/                     | negative number
    27 |  4A  | X→П a                   | setup Ra
-   28 |  03  | 3                       |
+   28 |  00  | 0                       |
    29 |  0A  | .                       |
    30 |  00  | 0                       |
    31 |  00  | 0                       |
    32 |  00  | 0                       |
    33 |  00  | 0                       |
    34 |  00  | 0                       |
-   35 |  00  | 0                       |
-   36 |  08  | 8                       |
+   35 |  01  | 1                       |
+   36 |  0B  | /-/                     | negative number
    37 |  4E  | X→П e                   | setup Re
-   38 |  00  | 0                       |
+   38 |  03  | 3                       |
    39 |  0A  | .                       |
    40 |  00  | 0                       |
    41 |  00  | 0                       |
    42 |  00  | 0                       |
    43 |  00  | 0                       |
    44 |  00  | 0                       |
-   45 |  01  | 1                       |
-   46 |  4C  | X→П c                   | setup Rc
-   47 |  01  | 1                       |
-   48 |  48  | X→П 8                   | setup R8
-   49 |  47  | X→П 7                   | setup R7
-   50 |  01  | 1                       |
-   51 |  0A  | .                       |
-   52 |  00  | 0                       |
+   45 |  00  | 0                       |
+   46 |  08  | 8                       |
+   47 |  4C  | X→П c                   | setup Rc
+   48 |  01  | 1                       |
+   49 |  48  | X→П 8                   | setup R8
+   50 |  47  | X→П 7                   | setup R7
+   51 |  01  | 1                       |
+   52 |  0A  | .                       |
    53 |  00  | 0                       |
-   54 |  08  | 8                       |
-   55 |  00  | 0                       |
-   56 |  08  | 8                       |
-   57 |  00  | 0                       |
-   58 |  08  | 8                       |
-   59 |  0E  | В↑                      | separate adjacent number entry
-   60 |  01  | 1                       |
-   61 |  0A  | .                       |
-   62 |  07  | 7                       |
-   63 |  00  | 0                       |
-   64 |  06  | 6                       |
-   65 |  02  | 2                       |
+   54 |  00  | 0                       |
+   55 |  08  | 8                       |
+   56 |  00  | 0                       |
+   57 |  08  | 8                       |
+   58 |  00  | 0                       |
+   59 |  08  | 8                       |
+   60 |  0E  | В↑                      | separate adjacent number entry
+   61 |  01  | 1                       |
+   62 |  0A  | .                       |
+   63 |  07  | 7                       |
+   64 |  00  | 0                       |
+   65 |  06  | 6                       |
    66 |  02  | 2                       |
-   67 |  06  | 6                       |
-   68 |  04  | 4                       |
-   69 |  38  | К ∨                     | bit_or()
-   70 |  41  | X→П 1                   | setup passages_1
-   71 |  01  | 1                       |
-   72 |  0A  | .                       |
-   73 |  08  | 8                       |
-   74 |  00  | 0                       |
-   75 |  08  | 8                       |
-   76 |  0E  | В↑                      | separate adjacent number entry
-   77 |  01  | 1                       |
-   78 |  0A  | .                       |
-   79 |  06  | 6                       |
-   80 |  07  | 7                       |
-   81 |  01  | 1                       |
-   82 |  05  | 5                       |
-   83 |  04  | 4                       |
-   84 |  00  | 0                       |
-   85 |  01  | 1                       |
-   86 |  38  | К ∨                     | bit_or()
-   87 |  42  | X→П 2                   | setup passages_2
-   88 |  01  | 1                       |
-   89 |  0A  | .                       |
-   90 |  08  | 8                       |
-   91 |  00  | 0                       |
-   92 |  08  | 8                       |
+   67 |  02  | 2                       |
+   68 |  06  | 6                       |
+   69 |  04  | 4                       |
+   70 |  38  | К ∨                     | bit_or()
+   71 |  41  | X→П 1                   | setup passages_1
+   72 |  01  | 1                       |
+   73 |  0A  | .                       |
+   74 |  08  | 8                       |
+   75 |  00  | 0                       |
+   76 |  08  | 8                       |
+   77 |  0E  | В↑                      | separate adjacent number entry
+   78 |  01  | 1                       |
+   79 |  0A  | .                       |
+   80 |  06  | 6                       |
+   81 |  07  | 7                       |
+   82 |  01  | 1                       |
+   83 |  05  | 5                       |
+   84 |  04  | 4                       |
+   85 |  00  | 0                       |
+   86 |  01  | 1                       |
+   87 |  38  | К ∨                     | bit_or()
+   88 |  42  | X→П 2                   | setup passages_2
+   89 |  01  | 1                       |
+   90 |  0A  | .                       |
+   91 |  08  | 8                       |
+   92 |  00  | 0                       |
    93 |  08  | 8                       |
-   94 |  00  | 0                       |
-   95 |  08  | 8                       |
+   94 |  08  | 8                       |
+   95 |  00  | 0                       |
    96 |  08  | 8                       |
-   97 |  0E  | В↑                      | separate adjacent number entry
-   98 |  01  | 1                       |
-   99 |  0A  | .                       |
-   A0 |  02  | 2                       |
+   97 |  08  | 8                       |
+   98 |  0E  | В↑                      | separate adjacent number entry
+   99 |  01  | 1                       |
+   A0 |  0A  | .                       |
    A1 |  02  | 2                       |
-   A2 |  06  | 6                       |
-   A3 |  00  | 0                       |
-   A4 |  03  | 3                       |
+   A2 |  02  | 2                       |
+   A3 |  06  | 6                       |
+   A4 |  00  | 0                       |
   >69 |  03  | 3                       |
-  >6A |  05  | 5                       |
-  >6B |  38  | К ∨                     | bit_or()
-  >6C |  43  | X→П 3                   | setup passages_3
-  >6D |  20  | F π                     | pi()
-  >6E |  40  | X→П 0                   | setup caches
-  >6F |  50  | С/П                     | setup complete
+  >6A |  03  | 3                       |
+  >6B |  05  | 5                       |
+  >6C |  38  | К ∨                     | bit_or()
+  >6D |  43  | X→П 3                   | setup passages_3
+  >6E |  20  | F π                     | pi()
+  >6F |  40  | X→П 0                   | setup caches
+  >70 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code  | Command                 | Comment
@@ -188,23 +189,23 @@
    68 | 04    | 4                       |
    69 | 11    | −                       | dispatch compare
    70 | 5E    | F x=0                   | case mismatch
-   71 | 83    | 83                      | case mismatch
+   71 | 84    | 84                      | case mismatch
    72 | 69    | П→X 9                   | recall player
-   73 | 6E    | П→X e                   | preload const 3.0000008
+   73 | 6C    | П→X c                   | preload const 3.0000008
    74 | 11    | −                       | condition compare
    75 | 5E    | F x=0                   | false branch for ==
    76 | 80    | 80                      | false branch for ==
    77 | 01 01 | 11                      |
    79 | 50    | С/П                     | halt
-   80 | 6C    | П→X c                   | preload const 0.000001
-   81 | 51    | БП                      | tail jump go
-   82 | 94    | 94                      | proc call go
-   83 | 02    | 2                       |
-   84 | 11    | −                       | dispatch residual compare
-   85 | 5E    | F x=0                   | case mismatch
-   86 | 91    | 91                      | case mismatch
-   87 | 6C    | П→X c                   | constant -0.000001 base 0.000001
-   88 | 0B    | /-/                     | constant -0.000001
+   80 | 6E    | П→X e                   | constant 0.000001 base -0.000001
+   81 | 0B    | /-/                     | constant 0.000001
+   82 | 51    | БП                      | tail jump go
+   83 | 94    | 94                      | proc call go
+   84 | 02    | 2                       |
+   85 | 11    | −                       | dispatch residual compare
+   86 | 5E    | F x=0                   | case mismatch
+   87 | 91    | 91                      | case mismatch
+   88 | 6E    | П→X e                   | preload const -0.000001
    89 | 51    | БП                      | tail jump go
    90 | 94    | 94                      | proc call go
    91 | 32    | К ЗН                    | dispatch default residual sign

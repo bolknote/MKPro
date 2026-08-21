@@ -381,6 +381,8 @@ void compiler_examples_match_typescript_contract() {
             "fast wumpus compile should use the static dual-use rescue");
     require(has_optimization(result, "fast-candidate-search"),
             "fast wumpus compile should report fast candidate search");
+    require(has_optimization(result, "fast-rescue-candidate-pruning"),
+            "fast wumpus compile should prune unrelated candidates after the prioritized rescue");
   }
 
   {
