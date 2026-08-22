@@ -438,6 +438,69 @@ program SentinelDecimalPack {
   require(indirect_jump_display.find("94,") != std::string::npos,
           "sentinel dual mask/scale indirect jump should execute address 53 before 06, got " +
               indirect_jump_display);
+
+  CompileOptions tuple_options = logical_options;
+  tuple_options.bounded_decimal_tuple_pack = true;
+  tuple_options.bounded_decimal_tuple_pack_names = {"phase", "score"};
+  const CompileResult tuple = compile_source(R"mkpro(
+program BoundedDecimalTuple {
+  state {
+    phase: counter 0..9 = 2
+    score: counter 0..9 = 3
+  }
+
+  loop {
+    phase = 4
+    if phase == 4 {
+      score = 7
+    }
+    else {
+      score = 1
+    }
+    halt(score)
+  }
+}
+)mkpro",
+                                             tuple_options);
+  require(tuple.implemented,
+          "bounded decimal tuple should compile: " + diagnostics_text(tuple));
+  require(tuple.diagnostics.empty(),
+          "bounded decimal tuple should be diagnostic-free: " + diagnostics_text(tuple));
+  require(has_optimization(tuple, "bounded-decimal-tuple-pack"),
+          "bounded replacement assignments should use decimal tuple packing");
+  require(tuple.registers.contains("__bounded_tuple_0"),
+          "bounded decimal tuple should allocate one hidden carrier");
+  require(!tuple.registers.contains("phase") && !tuple.registers.contains("score"),
+          "bounded decimal tuple should remove both original scalar registers");
+  const std::string tuple_display = run_compiled_with_preloads(tuple);
+  require(tuple_display.find("7,") != std::string::npos,
+          "bounded decimal tuple should preserve replacement/update behavior, got " +
+              tuple_display);
+
+  CompileOptions unsafe_tuple_options = tuple_options;
+  unsafe_tuple_options.bounded_decimal_tuple_pack_names = {"signed_value", "other"};
+  const CompileResult unsafe_tuple = compile_source(R"mkpro(
+program UnsafeBoundedDecimalTuple {
+  state {
+    signed_value: counter -1..9 = 0
+    other: counter 0..9 = 2
+  }
+
+  loop {
+    signed_value++
+    halt(other)
+  }
+}
+)mkpro",
+                                                    unsafe_tuple_options);
+  require(unsafe_tuple.implemented,
+          "rejected signed tuple candidate should leave the ordinary program compilable");
+  require(!has_optimization(unsafe_tuple, "bounded-decimal-tuple-pack"),
+          "decimal tuple packing must reject a field whose range includes negatives");
+  const std::string unsafe_tuple_display = run_compiled_with_preloads(unsafe_tuple);
+  require(unsafe_tuple_display.find("2,") != std::string::npos,
+          "rejected tuple candidate must preserve ordinary execution, got " +
+              unsafe_tuple_display);
 }
 
 } // namespace mkpro::tests
