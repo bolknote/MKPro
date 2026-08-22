@@ -58,6 +58,25 @@ int run_with_input(const std::string& source, int value) {
   return display_integer(calc);
 }
 
+int run_compiled_with_input(const CompileResult& result, int value) {
+  require(result.implemented, "parametric function program should compile");
+  for (const Diagnostic& diagnostic : result.diagnostics) {
+    require(diagnostic.severity != DiagnosticSeverity::Error,
+            "parametric function program should not report errors: " + diagnostic.message);
+  }
+  emulator::MK61 calc;
+  for (const PreloadReport& preload : result.preloads)
+    calc.set_register(preload.register_name, preload.value);
+  const emulator::ProgramLoadResult loaded = calc.load_program(step_opcodes(result.steps));
+  require(loaded.diagnostics.empty(), "parametric function program should load");
+  calc.press_sequence({"В/О", "С/П"});
+  calc.input_number(std::to_string(value));
+  calc.press_sequence({"С/П"});
+  const emulator::RunResult run = calc.run_until_stable(800, 5);
+  require(run.stopped, "parametric function program should stop");
+  return display_integer(calc);
+}
+
 void require_result(const std::string& source, int input, int expected,
                     const std::string& context) {
   const int actual = run_with_input(source, input);
@@ -69,6 +88,94 @@ void require_result(const std::string& source, int input, int expected,
 } // namespace
 
 void emulator_function_equivalence_matches_typescript_contract() {
+  {
+    const std::string source = R"mkpro(
+program ParametricSiblings {
+  state {
+    result: packed = 0
+  }
+  fn first(n) {
+    return ((((((n * 2 + 3) * 4 + 5) * 6 + 7) + 1) * 8 + 9) * 2 + 3)
+  }
+  fn second(n) {
+    return ((((((n * 2 + 3) * 4 + 5) * 6 + 7) + 2) * 8 + 9) * 2 + 3)
+  }
+  fn third(n) {
+    return ((((((n * 2 + 3) * 4 + 5) * 6 + 7) + 3) * 8 + 9) * 2 + 3)
+  }
+  fn fourth(n) {
+    return ((((((n * 2 + 3) * 4 + 5) * 6 + 7) + 4) * 8 + 9) * 2 + 3)
+  }
+  fn fifth(n) {
+    return ((((((n * 2 + 3) * 4 + 5) * 6 + 7) + 5) * 8 + 9) * 2 + 3)
+  }
+  fn sixth(n) {
+    return ((((((n * 2 + 3) * 4 + 5) * 6 + 7) + 6) * 8 + 9) * 2 + 3)
+  }
+  fn seventh(n) {
+    return ((((((n * 2 + 3) * 4 + 5) * 6 + 7) + 7) * 8 + 9) * 2 + 3)
+  }
+  fn eighth(n) {
+    return ((((((n * 2 + 3) * 4 + 5) * 6 + 7) + 8) * 8 + 9) * 2 + 3)
+  }
+  loop {
+    x = read()
+    result = first(x) + second(x) + third(x) + fourth(x) + fifth(x) + sixth(x) +
+             seventh(x) + eighth(x)
+    halt(result)
+  }
+}
+)mkpro";
+    CompileOptions options;
+    options.budget = 999;
+    const CompileResult result = compile_source(source, options);
+    CompileOptions baseline_options = options;
+    baseline_options.disable_candidate_search = true;
+    const CompileResult baseline = compile_source(source, baseline_options);
+    require(std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                        [](const OptimizationReport& optimization) {
+                          return optimization.name == "parametric-sibling-function";
+                        }),
+            "structurally equivalent functions should synthesize one numeric parameter");
+    require(std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                        [](const OptimizationReport& optimization) {
+                          return optimization.name.starts_with("parametric-sibling-proc");
+                        }),
+            "candidate search should select the profitable parametric sibling ABI");
+    require(result.steps.size() < baseline.steps.size(),
+            "parametric sibling synthesis should reduce a repeated expression family (" +
+                std::to_string(result.steps.size()) + " vs " +
+                std::to_string(baseline.steps.size()) + ")");
+    require(run_compiled_with_input(result, 2) == 26984,
+            "parametric sibling synthesis should preserve both differing constants");
+
+    CompileOptions rejected_options;
+    rejected_options.budget = 999;
+    rejected_options.disable_candidate_search = true;
+    rejected_options.synthesize_parametric_siblings = true;
+    const CompileResult rejected = compile_source(R"mkpro(
+program NonParametricSiblings {
+  fn first(n) {
+    return (n + 1) * 2
+  }
+  fn second(n) {
+    return (n + 2) * 3
+  }
+  loop {
+    halt(first(4) + second(4))
+  }
+}
+)mkpro",
+                                                  rejected_options);
+    require(rejected.implemented,
+            "two-difference sibling functions should remain ordinarily compilable");
+    require(std::none_of(rejected.optimizations.begin(), rejected.optimizations.end(),
+                         [](const OptimizationReport& optimization) {
+                           return optimization.name == "parametric-sibling-function";
+                         }),
+            "structural anti-unification must reject functions with two differing leaves");
+  }
+
   {
     const std::string source = R"mkpro(
 program Double {

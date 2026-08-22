@@ -51313,6 +51313,314 @@ inline_single_use_procedures(std::vector<MachineItem> items) {
   return result;
 }
 
+Expression clone_parametric_expression(const Expression& source) {
+  Expression result = source;
+  if (source.index != nullptr)
+    result.index = std::make_shared<Expression>(clone_parametric_expression(*source.index));
+  if (source.expr != nullptr)
+    result.expr = std::make_shared<Expression>(clone_parametric_expression(*source.expr));
+  if (source.left != nullptr)
+    result.left = std::make_shared<Expression>(clone_parametric_expression(*source.left));
+  if (source.right != nullptr)
+    result.right = std::make_shared<Expression>(clone_parametric_expression(*source.right));
+  result.args.clear();
+  result.args.reserve(source.args.size());
+  for (const Expression& arg : source.args)
+    result.args.push_back(clone_parametric_expression(arg));
+  return result;
+}
+
+void collect_parametric_numeric_paths(const Expression& expression,
+                                      std::vector<std::size_t>& prefix,
+                                      std::vector<std::vector<std::size_t>>& paths) {
+  if (expression.kind == "number") {
+    paths.push_back(prefix);
+    return;
+  }
+  const auto visit = [&](const ExpressionPtr& child, std::size_t edge) {
+    if (child == nullptr)
+      return;
+    prefix.push_back(edge);
+    collect_parametric_numeric_paths(*child, prefix, paths);
+    prefix.pop_back();
+  };
+  visit(expression.index, 0U);
+  visit(expression.expr, 1U);
+  visit(expression.left, 2U);
+  visit(expression.right, 3U);
+  for (std::size_t index = 0; index < expression.args.size(); ++index) {
+    prefix.push_back(4U + index);
+    collect_parametric_numeric_paths(expression.args.at(index), prefix, paths);
+    prefix.pop_back();
+  }
+}
+
+Expression* parametric_expression_at_path(Expression& expression,
+                                          const std::vector<std::size_t>& path) {
+  Expression* current = &expression;
+  for (const std::size_t edge : path) {
+    if (edge == 0U)
+      current = current->index.get();
+    else if (edge == 1U)
+      current = current->expr.get();
+    else if (edge == 2U)
+      current = current->left.get();
+    else if (edge == 3U)
+      current = current->right.get();
+    else if (edge - 4U < current->args.size())
+      current = &current->args.at(edge - 4U);
+    else
+      return nullptr;
+    if (current == nullptr)
+      return nullptr;
+  }
+  return current;
+}
+
+int parametric_expression_node_count(const Expression& expression) {
+  int result = 1;
+  if (expression.index != nullptr)
+    result += parametric_expression_node_count(*expression.index);
+  if (expression.expr != nullptr)
+    result += parametric_expression_node_count(*expression.expr);
+  if (expression.left != nullptr)
+    result += parametric_expression_node_count(*expression.left);
+  if (expression.right != nullptr)
+    result += parametric_expression_node_count(*expression.right);
+  for (const Expression& arg : expression.args)
+    result += parametric_expression_node_count(arg);
+  return result;
+}
+
+struct ParametricSiblingMember {
+  std::size_t rule_index = 0;
+  std::string literal;
+  Expression templated_expression;
+};
+
+struct ParametricSiblingSynthesis {
+  std::string helper;
+  std::vector<std::string> siblings;
+};
+
+std::optional<ParametricSiblingSynthesis>
+synthesize_parametric_sibling_functions(V2Program& program) {
+  constexpr std::string_view kTemplateHole = "__mkpro_parametric_numeric_hole";
+  std::map<std::string, std::vector<ParametricSiblingMember>> groups;
+  for (std::size_t rule_index = 0; rule_index < program.rules.size(); ++rule_index) {
+    const V2Rule& rule = program.rules.at(rule_index);
+    if (rule.body.size() != 1U || rule.body.front().kind != "v2_return" ||
+        !rule.body.front().expr.has_value()) {
+      continue;
+    }
+    Expression expression;
+    try {
+      expression = parse_expression(*rule.body.front().expr, rule.body.front().line);
+    } catch (const std::exception&) {
+      continue;
+    }
+    std::vector<std::vector<std::size_t>> paths;
+    std::vector<std::size_t> prefix;
+    collect_parametric_numeric_paths(expression, prefix, paths);
+    for (const std::vector<std::size_t>& path : paths) {
+      Expression templated = clone_parametric_expression(expression);
+      Expression* hole = parametric_expression_at_path(templated, path);
+      const Expression* literal = parametric_expression_at_path(expression, path);
+      if (hole == nullptr || literal == nullptr || literal->kind != "number")
+        continue;
+      const std::string literal_text = expression_to_source(*literal);
+      *hole = identifier_expression(std::string(kTemplateHole));
+      std::string key = rule.kind + "|";
+      for (const std::string& param : rule.params)
+        key += std::to_string(param.size()) + ":" + param + "|";
+      key += expression_to_json(templated);
+      groups[key].push_back(ParametricSiblingMember{
+          .rule_index = rule_index,
+          .literal = literal_text,
+          .templated_expression = std::move(templated),
+      });
+    }
+  }
+
+  std::vector<ParametricSiblingMember> selected;
+  int selected_score = -1;
+  std::string selected_key;
+  for (auto& [key, members] : groups) {
+    std::map<std::size_t, ParametricSiblingMember> unique;
+    std::set<std::string> values;
+    for (ParametricSiblingMember& member : members) {
+      values.insert(normalize_number_key(member.literal));
+      unique.try_emplace(member.rule_index, std::move(member));
+    }
+    if (unique.size() < 2U || values.size() < 2U)
+      continue;
+    std::vector<ParametricSiblingMember> candidate;
+    for (auto& [unused_index, member] : unique) {
+      (void)unused_index;
+      candidate.push_back(std::move(member));
+    }
+    const int score = static_cast<int>(candidate.size() - 1U) *
+                      parametric_expression_node_count(candidate.front().templated_expression);
+    if (score > selected_score || (score == selected_score && key < selected_key)) {
+      selected = std::move(candidate);
+      selected_score = score;
+      selected_key = key;
+    }
+  }
+  if (selected.empty())
+    return std::nullopt;
+
+  std::set<std::string> used_names;
+  for (const V2StateField& field : program.state)
+    used_names.insert(field.name);
+  for (const V2Rule& rule : program.rules) {
+    used_names.insert(rule.name);
+    used_names.insert(rule.params.begin(), rule.params.end());
+  }
+  const auto fresh_name = [&](const std::string& prefix) {
+    for (int index = 0;; ++index) {
+      const std::string candidate = prefix + std::to_string(index);
+      if (!used_names.contains(candidate))
+        return candidate;
+    }
+  };
+  const std::string helper_name = fresh_name("__parametric_sibling_");
+  used_names.insert(helper_name);
+  const std::string parameter_name = fresh_name("__parametric_value_");
+
+  std::map<std::string, std::pair<std::string, std::string>> replacements;
+  std::set<std::size_t> removed_rule_indexes;
+  std::vector<std::string> sibling_names;
+  for (const ParametricSiblingMember& member : selected) {
+    const V2Rule& rule = program.rules.at(member.rule_index);
+    replacements[rule.name] = {helper_name, member.literal};
+    removed_rule_indexes.insert(member.rule_index);
+    sibling_names.push_back(rule.name);
+  }
+
+  V2Rule helper = program.rules.at(selected.front().rule_index);
+  helper.name = helper_name;
+  helper.params.push_back(parameter_name);
+  Expression helper_expression = clone_parametric_expression(
+      selected.front().templated_expression);
+  const auto replace_template_hole = [&](Expression& expression, const auto& self) -> void {
+    if (expression.kind == "identifier" && expression.name == kTemplateHole) {
+      expression.name = parameter_name;
+      return;
+    }
+    if (expression.index != nullptr)
+      self(*expression.index, self);
+    if (expression.expr != nullptr)
+      self(*expression.expr, self);
+    if (expression.left != nullptr)
+      self(*expression.left, self);
+    if (expression.right != nullptr)
+      self(*expression.right, self);
+    for (Expression& arg : expression.args)
+      self(arg, self);
+  };
+  replace_template_hole(helper_expression, replace_template_hole);
+  helper.body.front().expr = expression_to_source(helper_expression);
+
+  const auto rewrite_calls = [&](Expression expression, const auto& self) -> Expression {
+    if (expression.index != nullptr)
+      expression.index = std::make_shared<Expression>(self(*expression.index, self));
+    if (expression.expr != nullptr)
+      expression.expr = std::make_shared<Expression>(self(*expression.expr, self));
+    if (expression.left != nullptr)
+      expression.left = std::make_shared<Expression>(self(*expression.left, self));
+    if (expression.right != nullptr)
+      expression.right = std::make_shared<Expression>(self(*expression.right, self));
+    for (Expression& arg : expression.args)
+      arg = self(std::move(arg), self);
+    if (expression.kind == "call") {
+      const auto replacement = replacements.find(expression.callee);
+      if (replacement != replacements.end()) {
+        expression.callee = replacement->second.first;
+        expression.args.push_back(parse_expression(replacement->second.second));
+      }
+    }
+    return expression;
+  };
+  const auto rewrite_text = [&](std::string& text, int line) {
+    try {
+      Expression expression = parse_expression(text, line);
+      expression = rewrite_calls(std::move(expression), rewrite_calls);
+      text = expression_to_source(expression);
+    } catch (const std::exception&) {
+    }
+  };
+  const auto rewrite_statement = [&](V2Statement& statement, const auto& self) -> void {
+    if (statement.target.has_value())
+      rewrite_text(*statement.target, statement.line);
+    if (statement.expr.has_value())
+      rewrite_text(*statement.expr, statement.line);
+    for (std::string& arg : statement.args)
+      rewrite_text(arg, statement.line);
+    if (statement.kind == "v2_invoke" && statement.name.has_value()) {
+      const auto replacement = replacements.find(*statement.name);
+      if (replacement != replacements.end()) {
+        statement.name = replacement->second.first;
+        statement.args.push_back(replacement->second.second);
+      }
+    }
+    if (statement.predicate.has_value()) {
+      rewrite_text(statement.predicate->left, statement.line);
+      rewrite_text(statement.predicate->right, statement.line);
+      rewrite_text(statement.predicate->collection, statement.line);
+      rewrite_text(statement.predicate->item, statement.line);
+    }
+    if (statement.items.has_value()) {
+      for (DisplayItem& item : *statement.items) {
+        if (item.expr.has_value())
+          item.expr = rewrite_calls(std::move(*item.expr), rewrite_calls);
+      }
+    }
+    for (V2RawInput& input : statement.inputs)
+      rewrite_text(input.expr, input.line);
+    for (V2Statement& child : statement.body)
+      self(child, self);
+    for (V2Statement& child : statement.then_body)
+      self(child, self);
+    for (V2Statement& child : statement.else_body)
+      self(child, self);
+    for (V2MatchCase& match_case : statement.cases) {
+      for (std::string& value : match_case.values)
+        rewrite_text(value, match_case.line);
+      if (match_case.action != nullptr)
+        self(*match_case.action, self);
+    }
+    if (statement.otherwise != nullptr)
+      self(*statement.otherwise, self);
+  };
+
+  for (V2Const& constant : program.consts)
+    rewrite_text(constant.expr, constant.line);
+  for (V2StateField& field : program.state) {
+    if (field.initial.has_value())
+      rewrite_text(*field.initial, field.line);
+  }
+  for (V2Statement& statement : program.body)
+    rewrite_statement(statement, rewrite_statement);
+
+  std::vector<V2Rule> rules;
+  for (std::size_t index = 0; index < program.rules.size(); ++index) {
+    if (!removed_rule_indexes.contains(index))
+      rules.push_back(std::move(program.rules.at(index)));
+  }
+  rules.push_back(std::move(helper));
+  program.rules = std::move(rules);
+  for (V2Rule& rule : program.rules) {
+    for (V2Statement& statement : rule.body)
+      rewrite_statement(statement, rewrite_statement);
+  }
+
+  return ParametricSiblingSynthesis{
+      .helper = helper_name,
+      .siblings = std::move(sibling_names),
+  };
+}
+
 CompileResult compile_source_once(std::string source, const CompileOptions& requested_options,
                                   bool source_has_entered,
                                   bool apply_final_layout_size_rescue = false,
@@ -51375,6 +51683,10 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
     return result;
   }
   lower_small_case_matches(*ast.v2);
+  const std::optional<ParametricSiblingSynthesis> parametric_siblings =
+      options.synthesize_parametric_siblings
+          ? synthesize_parametric_sibling_functions(*ast.v2)
+          : std::nullopt;
   materialize_rule_param_state_fields(*ast.v2);
 
   LoweringContext context;
@@ -51421,6 +51733,15 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   context.indirect_underflow_decrement = options.indirect_underflow_decrement;
   context.recall_stored_input_after_decrement = options.recall_stored_input_after_decrement;
   context.dead_source_residual_temp_reuse = options.dead_source_residual_temp_reuse;
+  if (parametric_siblings.has_value()) {
+    context.optimizations.push_back(OptimizationReport{
+        .name = "parametric-sibling-function",
+        .detail = "Merged structurally equivalent functions " +
+                  join_strings(parametric_siblings->siblings, ", ") + " into " +
+                  parametric_siblings->helper +
+                  " with one synthesized numeric parameter.",
+    });
+  }
   context.single_bit_mask_op_copy_reuse = options.single_bit_mask_op_copy_reuse;
   context.share_random_cell = options.share_random_cell;
   context.hoist_shared_helpers = options.hoist_shared_helpers;
@@ -68820,6 +69141,12 @@ CompileResult compile_source_for_optimizer_profile(
   const bool may_use_branch_y_payload_forwarding =
       selector_probe_program.has_value() &&
       program_may_have_branch_y_payload_forwarding(*selector_probe_program);
+  const bool may_use_parametric_siblings = [&]() {
+    if (!selector_probe_program.has_value())
+      return false;
+    V2Program probe = *selector_probe_program;
+    return synthesize_parametric_sibling_functions(probe).has_value();
+  }();
   const bool use_packed_score_seed =
       options.fast_candidate_search && may_use_packed_score_accumulator;
   CompileOptions initial_options = options;
@@ -69002,6 +69329,49 @@ CompileResult compile_source_for_optimizer_profile(
           "Packed simultaneously-live bounded values " + join_strings(names, ", ") +
               " into one fixed-width decimal tuple");
     }
+  };
+  auto add_parametric_sibling_candidates = [&]() {
+    if (!may_use_parametric_siblings)
+      return;
+    const auto add = [&](const std::function<void(CompileOptions&)>& configure,
+                         const std::string& suffix, const std::string& abi) {
+      add_candidate(
+          [configure](CompileOptions& candidate_options) {
+            candidate_options.synthesize_parametric_siblings = true;
+            configure(candidate_options);
+          },
+          "parametric-sibling-proc" + suffix,
+          "Synthesized a structurally anti-unified numeric-parameter helper" + abi);
+    };
+    add([](CompileOptions&) {}, "", "");
+    add([](CompileOptions& candidate_options) {
+          candidate_options.stack_argument_function_entries = true;
+        },
+        "-stack-argument", " with stack-argument function entry");
+    add([](CompileOptions& candidate_options) {
+          candidate_options.stack_through_function_entries = true;
+        },
+        "-stack-through", " with stack-through function entry");
+    add([](CompileOptions& candidate_options) {
+          candidate_options.stack_ssa_function_entries = true;
+        },
+        "-stack-ssa", " with stack-SSA function entry");
+    add([](CompileOptions& candidate_options) {
+          candidate_options.x_param_value_functions = true;
+        },
+        "-x-param", " with X-parameter value-function lowering");
+    add([](CompileOptions& candidate_options) {
+          candidate_options.x_param_value_functions = true;
+          candidate_options.x_param_y_stack_stored_entry = true;
+        },
+        "-x-param-y", " with X/Y stack-stored parameter entry");
+    add([](CompileOptions& candidate_options) {
+          candidate_options.stack_argument_function_entries = true;
+          candidate_options.stack_through_function_entries = true;
+          candidate_options.stack_ssa_function_entries = true;
+          candidate_options.stack_resident_temps = true;
+        },
+        "-stack-abi", " with liveness-selected stack ABI lowering");
   };
   const bool has_repeated_one_mask_preload =
       std::any_of(best.preloads.begin(), best.preloads.end(), [](const PreloadReport& preload) {
@@ -69760,12 +70130,7 @@ CompileResult compile_source_for_optimizer_profile(
       },
       "signed-abs-shared-bit-helper-hoisted-proc-layout",
       "Combined signed match-pair lowering with hoisted shared bit-mask helpers and procedures");
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.synthesize_parametric_siblings = true;
-      },
-      "parametric-sibling-proc",
-      "Synthesized a shared one-parameter helper for sibling dispatch procedure arms");
+  add_parametric_sibling_candidates();
   add_candidate(
       [](CompileOptions& candidate_options) { candidate_options.pack_counter_stripes = true; },
       "packed-counter-stripes",
@@ -70411,12 +70776,7 @@ CompileResult compile_source_for_optimizer_profile(
         },
         "signed-abs-shared-bit-helper-hoisted-proc-layout",
         "Combined signed match-pair lowering with hoisted shared bit-mask helpers and procedures");
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.synthesize_parametric_siblings = true;
-        },
-        "parametric-sibling-proc",
-        "Synthesized a shared one-parameter helper for sibling dispatch procedure arms");
+    add_parametric_sibling_candidates();
     add_candidate(
         [](CompileOptions& candidate_options) { candidate_options.pack_counter_stripes = true; },
         "packed-counter-stripes",

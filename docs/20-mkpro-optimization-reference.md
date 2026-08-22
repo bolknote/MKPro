@@ -668,7 +668,7 @@ committed example oracles under `native/oracles/`.
 - `dual-use-constant-tail-branch-layout` — combines dual-use constant indirect-flow selectors with tail-branch inversion before layout scoring.
 - `alias-x-reuse` — tests value reuse of X at scalar sites for cleaner candidate control-flow.
 - `coalesce-copies` — enables copy coalescing candidate before final layout scoring.
-- `parametric-sibling-proc` — synthesizes one-parameter sibling helpers and reruns full layout around them.
+- `parametric-sibling-proc` — structurally anti-unifies sibling value functions whose single `return` expressions have identical AST shape and differ at one numeric leaf. It synthesizes one additional parameter, rewrites every typed call, removes the old sibling bodies, and reruns ordinary lowering/layout. Matching is independent of function names and formulas; multi-statement bodies, differing parameter lists, nonnumeric holes, and multiple structural differences fail closed, while final candidate selection still requires a real emitted-size win.
 - `free-residual-dispatch-scratch-with-if-chain` — combines scratch-freeing and if-chain canonicalization as one candidate.
 - `share-random-cell-helper` — candidates around shared random-cell helper extraction.
 - `share-random-cell-helper-hoisted` — same random-cell-sharing candidate with front-hoisted helpers enabled.
