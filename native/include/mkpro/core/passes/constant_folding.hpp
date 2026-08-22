@@ -7,4 +7,8 @@ namespace mkpro::core::passes {
 PassResult constant_folding(const std::vector<IrOp>& ops, const PassContext& context);
 IrPass constant_folding_pass();
 
+PassResult bounded_symbolic_superoptimizer(const std::vector<IrOp>& ops,
+                                           const PassContext& context);
+IrPass bounded_symbolic_superoptimizer_pass();
+
 } // namespace mkpro::core::passes

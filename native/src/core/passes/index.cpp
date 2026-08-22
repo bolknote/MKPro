@@ -273,6 +273,7 @@ const std::vector<IrPass>& pass_pipeline() {
       vp_splice_pass(),
       vp_x2_peephole_pass(),
       constant_folding_pass(),
+      bounded_symbolic_superoptimizer_pass(),
       duplicate_failure_tail_pass(),
       cse_display_block_pass(),
       dead_code_after_halt_pass(),

@@ -2840,11 +2840,12 @@ while later fixed-point iterations fail closed after targets are materialized.
     visible zero is already proved may be removed. Immediate restore boundaries
     remain conservative unless a separate VP/source proof covers them.
 31. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
-32. `duplicate-failure-tail-merge` — removes duplicated failure tails by redirecting one tail label to an equivalent kept tail; this covers both `(label -> 0 -> pause)` and `(label -> pause -> same terminal flow)` forms, including separated pause-only tails when the removed tail has no fallthrough predecessor.
-33. `cse-display-block` — detects identical `recall/plain/.../return(stop)` blocks and replaces duplicates with one canonical block plus jump.
-34. `dead-code-after-halt` — removes unreachable IR ops by CFG reachability from entry.
-35. `register-coalesce` — merges non-overlapping register live ranges and, when enabled, performs copy coalescing for safe `recall/store` aliases.
-36. `arithmetic-if-pass` — merges two branch paths that lower to byte-identical pure linear blocks (same side effects and same single-pass behavior).
+32. `bounded-symbolic-superoptimizer` — enumerates short straight-line sequences over `Сx`, `В↑`, `F Вx`, and `X↔Y`, models their complete `X/Y/Z/T/X1` plus hidden decimal-entry `X2` transfer, and replaces a region only when a strictly shorter sequence has exactly the same symbolic state. The replacement must retain the final opcode as well as the state, so the hardware previous-command context is unchanged. The search is bounded to four source cells and three replacement cells, rejects raw/manual/display-sensitive or proof-role-bearing operations, never crosses a procedure boundary, and fails closed before digits, decimal point, sign, or `ВП`. This is opcode-semantics enumeration rather than recognition of source functions, formulas, or examples.
+33. `duplicate-failure-tail-merge` — removes duplicated failure tails by redirecting one tail label to an equivalent kept tail; this covers both `(label -> 0 -> pause)` and `(label -> pause -> same terminal flow)` forms, including separated pause-only tails when the removed tail has no fallthrough predecessor.
+34. `cse-display-block` — detects identical `recall/plain/.../return(stop)` blocks and replaces duplicates with one canonical block plus jump.
+35. `dead-code-after-halt` — removes unreachable IR ops by CFG reachability from entry.
+36. `register-coalesce` — merges non-overlapping register live ranges and, when enabled, performs copy coalescing for safe `recall/store` aliases.
+37. `arithmetic-if-pass` — merges two branch paths that lower to byte-identical pure linear blocks (same side effects and same single-pass behavior).
 
 A fixed-point loop repeats while transformations continue, up to internal iteration limits.
 
