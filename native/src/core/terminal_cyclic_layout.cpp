@@ -3336,4 +3336,31 @@ optimize_terminal_cyclic_layout(const std::vector<MachineItem>& items,
   return result;
 }
 
+TerminalCyclicLayoutProjection
+project_terminal_cyclic_layout_size(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const TerminalCyclicLayoutOptions& options) {
+  const int input_cells = index_artifact(items).cells;
+  if (!control_flow.proved) {
+    return TerminalCyclicLayoutProjection{
+        .input_cells = input_cells,
+        .output_cells = input_cells,
+        .reduction_proved = false,
+    };
+  }
+  const TerminalCyclicLayoutResult projected =
+      optimize_terminal_cyclic_layout(items, preloads, control_flow, options);
+  const int output_cells = index_artifact(projected.items).cells;
+  const bool reduction_proved = projected.applied > 0 &&
+                                projected.plan.final_artifact_proved &&
+                                output_cells < input_cells;
+  return TerminalCyclicLayoutProjection{
+      .input_cells = input_cells,
+      .output_cells = reduction_proved ? output_cells : input_cells,
+      .reduction_proved = reduction_proved,
+  };
+}
+
 } // namespace mkpro::core

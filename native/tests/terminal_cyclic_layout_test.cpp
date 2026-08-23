@@ -252,8 +252,41 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
     require(inverted.applied == 1 && inverted.removed_cells == 2 &&
                 inverted.plan.final_artifact_proved &&
                 cell_count(inverted.items) == cell_count(inverted_layout) - 2,
-            "generic branch inversion and terminal-block placement should expose a proved tail: " +
+                "generic branch inversion and terminal-block placement should expose a proved tail: " +
                 inverted_reasons);
+
+    std::vector<MachineItem> equal_size_without_tail = inverted_layout;
+    equal_size_without_tail.at(item_at_address(equal_size_without_tail, 5)) =
+        MachineItem::op(0x22, "F x^2");
+    const core::AuthoritativePostLayoutControlFlow equal_size_flow =
+        core::build_post_layout_control_flow(equal_size_without_tail, flow_options);
+    require(equal_size_flow.proved,
+            "equal-size projection control fixture should have an authoritative CFG");
+    const core::TerminalCyclicLayoutProjection reducing_projection =
+        core::project_terminal_cyclic_layout_size(
+            inverted_layout, inverted_preloads, inverted_flow);
+    const core::TerminalCyclicLayoutProjection unchanged_projection =
+        core::project_terminal_cyclic_layout_size(
+            equal_size_without_tail, inverted_preloads, equal_size_flow);
+    require(reducing_projection.input_cells == unchanged_projection.input_cells &&
+                reducing_projection.reduction_proved &&
+                reducing_projection.output_cells ==
+                    reducing_projection.input_cells - 2 &&
+                !unchanged_projection.reduction_proved &&
+                unchanged_projection.output_cells ==
+                    unchanged_projection.input_cells &&
+                reducing_projection.output_cells < unchanged_projection.output_cells,
+            "equal-size layout ranking should prefer only an independently proved smaller "
+            "terminal/cyclic projection");
+
+    core::AuthoritativePostLayoutControlFlow unproved_projection_flow = equal_size_flow;
+    unproved_projection_flow.proved = false;
+    const core::TerminalCyclicLayoutProjection unproved_projection =
+        core::project_terminal_cyclic_layout_size(
+            inverted_layout, inverted_preloads, unproved_projection_flow);
+    require(!unproved_projection.reduction_proved &&
+                unproved_projection.output_cells == unproved_projection.input_cells,
+            "terminal/cyclic projection should fail closed on an unauthoritative CFG");
 
     std::vector<MachineItem> nonrecall_continuation = inverted_layout;
     nonrecall_continuation.front() = MachineItem::op(0x54, "К НОП");

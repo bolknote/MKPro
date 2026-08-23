@@ -742,6 +742,63 @@ void example_sizes_match_typescript_baselines() {
     }
     const std::filesystem::path path = pending_root / (name + ".mkpro");
     const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
+    if (name == "tic-tac-toe-4x4") {
+      const SizeHelperSummaryReport* packed_score =
+          find_size_helper(result, "packed_score accumulator helper");
+      require(packed_score != nullptr && packed_score->body_cells == 8 &&
+                  !packed_score->details.contains("valueAwareMixedStateTempCarrierNames"),
+              "tic-tac-toe packed_score attribution must stop at its straight-line return "
+              "instead of absorbing caller loop state");
+      const SizeHelperSummaryReport* mark_lines =
+          find_size_helper(result, "mark_lines_and_check");
+      require(mark_lines != nullptr &&
+                  mark_lines->details.contains("valueAwareMixedStateControlCrossingNames") &&
+                  mark_lines->details.at("valueAwareMixedStateControlCrossingNames") ==
+                      "best_score" &&
+                  mark_lines->details.contains("valueAwareMixedStateLifetimeStatus") &&
+                  mark_lines->details.at("valueAwareMixedStateLifetimeStatus") ==
+                      "crosses-control-flow-or-external-entry" &&
+                  mark_lines->details.contains("valueAwareSchedulerPlanStatus") &&
+                  mark_lines->details.at("valueAwareSchedulerPlanStatus") ==
+                      "control-crossing-state-not-stack-carrier" &&
+                  mark_lines->details.contains(
+                      "valueAwareEstimatedNetSavingsAfterMaterialization") &&
+                  mark_lines->details.at(
+                      "valueAwareEstimatedNetSavingsAfterMaterialization") == "0" &&
+                  !mark_lines->details.contains("valueAwareMixedStateTempCarrierNames"),
+              "tic-tac-toe best_score must remain persistent across the callee-hole call "
+              "instead of being reported as a local stack carrier");
+      const SizeOpportunityReport* mark_lines_traffic =
+          find_size_opportunity_detail(result, "helper-register-traffic", "helperLabel",
+                                       "mark_lines_and_check");
+      require(mark_lines_traffic != nullptr && mark_lines_traffic->savings == 0 &&
+                  mark_lines_traffic->details.contains("sizeImpactStatus") &&
+                  mark_lines_traffic->details.at("sizeImpactStatus") ==
+                      "estimated-nonpositive-net",
+              "tic-tac-toe control-crossing best_score traffic must remain a zero-saving "
+              "blocker instead of a positive optimizer opportunity");
+    }
+    if (name == "nekromant") {
+      const SizeHelperSummaryReport* draw = find_size_helper(result, "draw stack entry");
+      require(draw != nullptr &&
+                  draw->details.contains("valueAwareMixedStateRequiredUpdateNames") &&
+                  draw->details.at("valueAwareMixedStateRequiredUpdateNames") ==
+                      "random_state" &&
+                  draw->details.contains(
+                      "valueAwareEstimatedNetSavingsAfterMaterialization") &&
+                  draw->details.at(
+                      "valueAwareEstimatedNetSavingsAfterMaterialization") == "0" &&
+                  !draw->details.contains("valueAwareMixedStateTempCarrierNames"),
+              "nekromant random_state recall-before-store must remain a persistent RNG update");
+      const SizeOpportunityReport* draw_traffic =
+          find_size_opportunity_detail(result, "helper-register-traffic", "helperLabel",
+                                       "draw stack entry");
+      require(draw_traffic != nullptr && draw_traffic->savings == 0 &&
+                  draw_traffic->details.contains("sizeImpactStatus") &&
+                  draw_traffic->details.at("sizeImpactStatus") ==
+                      "estimated-nonpositive-net",
+              "nekromant RNG state update must not be ranked as removable register traffic");
+    }
     record_size_mismatch("pending example", name, expected, result.steps.size());
   }
   require(size_mismatches.empty(), "example size mismatches: " + size_mismatches);

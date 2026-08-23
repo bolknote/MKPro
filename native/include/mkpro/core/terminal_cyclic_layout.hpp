@@ -63,6 +63,12 @@ struct TerminalCyclicLayoutResult {
   int removed_cells = 0;
 };
 
+struct TerminalCyclicLayoutProjection {
+  int input_cells = 0;
+  int output_cells = 0;
+  bool reduction_proved = false;
+};
+
 struct EmptyReturnStartupLayoutResult {
   std::vector<MachineItem> items;
   std::vector<PreloadReport> preloads;
@@ -110,6 +116,16 @@ optimize_terminal_cyclic_layout(const std::vector<MachineItem>& items,
                                 const std::vector<PreloadReport>& preloads,
                                 const AuthoritativePostLayoutControlFlow& control_flow,
                                 const TerminalCyclicLayoutOptions& options = {});
+
+// Measure only a fully verified downstream terminal/cyclic reduction. A
+// failed or non-reducing proof ranks as the unchanged input size, so callers
+// may safely use this as a secondary key between already equal-size layouts.
+TerminalCyclicLayoutProjection
+project_terminal_cyclic_layout_size(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const TerminalCyclicLayoutOptions& options = {});
 
 // Fold `F x=0 terminal; V/O` into the complementary one-cell indirect
 // condition before component layout. The shared return becomes a typed

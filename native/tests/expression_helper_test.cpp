@@ -191,6 +191,14 @@ program SelectedStackCarriedPow10 {
           "every proved call site should emit its indexed-value preload");
   require(has_optimization(result, "selected-stack-carried-pow10-index"),
           "selected stack-carried pow10 path should be reported as an optimization");
+  require(std::any_of(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
+            return step.comment.has_value() &&
+                   step.comment->starts_with(
+                       "predecrement indexed packed digit update store through ") &&
+                   step.comment->find("indirect-memory-targets=") != std::string::npos;
+          }),
+          "predecrement indexed stores should retain their proved memory-target range for "
+          "post-layout selector-preservation proofs");
 
   const SizeHelperSummaryReport* mark_one = find_size_helper(result, "mark_one");
   require(mark_one != nullptr, "size report should include mark_one helper");

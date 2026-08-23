@@ -23052,9 +23052,11 @@ bool emit_predecrement_indexed_packed_pow10_delta_from_stacked_value(
   const PreparedIndexedSelector prepared_selector{.selector = selector};
   emit_prepared_indirect_indexed_store(context, target, prepared_selector, line);
   if (!context.emitter.items.empty()) {
-    context.emitter.items.back().comment =
+    context.emitter.items.back().comment = indexed_memory_comment_or_action(
+        context,
         "predecrement indexed packed digit update store through " +
-        core::register_name_for_index(selector_register);
+            core::register_name_for_index(selector_register),
+        target, prepared_selector);
   }
   return true;
 }
@@ -53311,7 +53313,19 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
         std::optional<core::NaturalTargetComponentLayoutResult> chosen_layout;
         std::optional<core::HelperSemanticAliasProof> chosen_alias;
         bool chosen_empty_return_startup = false;
+        bool chosen_by_terminal_projection = false;
+        std::optional<int> chosen_projected_terminal_cells;
         std::vector<std::string> natural_layout_search_rejections;
+        const auto projected_terminal_cells =
+            [&](const core::NaturalTargetComponentLayoutResult& candidate) {
+              return core::project_terminal_cyclic_layout_size(
+                      candidate.items, candidate.preloads,
+                      candidate.plan.final_control_flow,
+                      core::TerminalCyclicLayoutOptions{
+                          .address_space_model =
+                              address_space_model_for_options(options)})
+                  .output_cells;
+            };
         const auto consider_layout = [&](core::NaturalTargetComponentLayoutResult candidate,
                                          std::optional<core::HelperSemanticAliasProof> alias,
                                          bool empty_return_startup = false) {
@@ -53337,11 +53351,33 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
           if (candidate.applied <= 0 || !candidate.plan.final_artifact_proved ||
               (!size_improves && !bounded_layout))
             return;
-          if (!chosen_layout.has_value() || core::machine_cell_count(candidate.items) <
-                                                core::machine_cell_count(chosen_layout->items)) {
+          const int chosen_cells =
+              chosen_layout.has_value()
+                  ? core::machine_cell_count(chosen_layout->items)
+                  : std::numeric_limits<int>::max();
+          bool prefer_candidate = !chosen_layout.has_value() || candidate_cells < chosen_cells;
+          bool preferred_by_projection = false;
+          std::optional<int> candidate_projected_terminal_cells;
+          if (!prefer_candidate && candidate_cells == chosen_cells) {
+            if (!chosen_projected_terminal_cells.has_value()) {
+              chosen_projected_terminal_cells =
+                  projected_terminal_cells(*chosen_layout);
+            }
+            candidate_projected_terminal_cells =
+                projected_terminal_cells(candidate);
+            prefer_candidate = *candidate_projected_terminal_cells <
+                               *chosen_projected_terminal_cells;
+            preferred_by_projection = prefer_candidate;
+          }
+          if (prefer_candidate) {
             chosen_layout = std::move(candidate);
             chosen_alias = std::move(alias);
             chosen_empty_return_startup = empty_return_startup;
+            chosen_by_terminal_projection = preferred_by_projection;
+            chosen_projected_terminal_cells =
+                preferred_by_projection
+                    ? candidate_projected_terminal_cells
+                    : std::nullopt;
           }
         };
 
@@ -53426,6 +53462,19 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                           std::to_string(chosen_alias->removed_body_cells) +
                           "-cell unary-X helper before atomic downstream preload/layout "
                           "rebinding and final-artifact proof.",
+            });
+          }
+          if (chosen_by_terminal_projection &&
+              chosen_projected_terminal_cells.has_value()) {
+            post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+                .name = "projected-terminal-layout-tiebreak",
+                .detail =
+                    "Selected an equal-size component layout whose independently "
+                    "proved terminal/cyclic projection reduces the delivered "
+                    "artifact from " +
+                    std::to_string(core::machine_cell_count(natural_layout.items)) +
+                    " to " + std::to_string(*chosen_projected_terminal_cells) +
+                    " cells.",
             });
           }
           if (chosen_empty_return_startup) {
@@ -60026,6 +60075,8 @@ std::optional<std::string> value_aware_scheduler_plan_status(
     return mixed_temp_plan_it->second;
   if (state_output_plan_it != details.end())
     return state_output_plan_it->second;
+  if (details.contains("valueAwareMixedStateControlCrossingNames"))
+    return "control-crossing-state-not-stack-carrier";
   if (details.contains("valueAwareNestedCallInputNames"))
     return "nested-call-inputs-not-direct-scheduler-savings";
   if (scheduler_shape_it != details.end())
@@ -60409,6 +60460,25 @@ SizeAttributionReport build_size_attribution_report(
           end = scan + 1U;
           break;
         }
+      }
+    }
+    // A straight-line helper cannot own caller code merely because the next
+    // separately addressed helper starts later. Stop at its first proved
+    // return, but only while the prefix has no control transfer that could
+    // reach a later arm of the same helper.
+    bool straight_line_prefix = true;
+    for (std::size_t scan = start; scan < end; ++scan) {
+      if (address_operand.at(scan))
+        continue;
+      const int opcode = steps.at(scan).opcode;
+      if (opcode == 0x52) {
+        if (straight_line_prefix)
+          end = scan + 1U;
+        break;
+      }
+      if (opcode == 0x50 || opcode_by_code(opcode).takes_address ||
+          indirect_flow_register_for_opcode(opcode).has_value()) {
+        straight_line_prefix = false;
       }
     }
     if (end <= start)
@@ -62456,6 +62526,71 @@ SizeAttributionReport build_size_attribution_report(
               return {};
             return access_it->second;
           };
+      const auto mixed_state_control_crossing =
+          [&](const std::vector<std::pair<int, SizeSpillAccessKind>>& accesses)
+              -> std::optional<std::string> {
+        if (accesses.size() != 2U ||
+            accesses.front().second != SizeSpillAccessKind::Store ||
+            accesses.back().second != SizeSpillAccessKind::Recall) {
+          return std::string("requires-exactly-one-store-followed-by-one-recall");
+        }
+        const auto start_it = index_by_address.find(accesses.front().first);
+        const auto end_it = index_by_address.find(accesses.back().first);
+        if (start_it == index_by_address.end() || end_it == index_by_address.end() ||
+            start_it->second >= end_it->second) {
+          return std::string("store-recall-order-is-not-linear");
+        }
+        const std::size_t start_index = start_it->second;
+        const std::size_t end_index = end_it->second;
+        for (std::size_t index = start_index + 1U; index < end_index; ++index) {
+          if (address_operand.at(index))
+            continue;
+          const int opcode = steps.at(index).opcode;
+          if (opcode == 0x50 || opcode == 0x52 || opcode_by_code(opcode).takes_address ||
+              indirect_flow_register_for_opcode(opcode).has_value()) {
+            return "crosses-control-transfer@" +
+                   safe_format_label_address(steps.at(index).address);
+          }
+        }
+
+        // No other direct or proved-indirect edge may enter the interior of
+        // the alleged local lifetime. Such an entry can observe a stale
+        // register value without executing the producer store.
+        for (std::size_t source = 0; source < steps.size(); ++source) {
+          if ((source >= start_index && source <= end_index) || address_operand.at(source))
+            continue;
+          const auto enters_lifetime = [&](int target) {
+            const auto target_it = index_by_address.find(target);
+            return target_it != index_by_address.end() &&
+                   target_it->second > start_index && target_it->second <= end_index;
+          };
+          if (opcode_by_code(steps.at(source).opcode).takes_address &&
+              source + 1U < steps.size()) {
+            const std::optional<int> target =
+                size_report_direct_target(steps.at(source + 1U), index_by_address);
+            if (target.has_value() && enters_lifetime(*target)) {
+              return "external-direct-entry@" +
+                     safe_format_label_address(steps.at(source).address);
+            }
+          }
+          if (const std::optional<int> target =
+                  size_report_indirect_target(steps.at(source).comment);
+              target.has_value() && enters_lifetime(*target)) {
+            return "external-indirect-entry@" +
+                   safe_format_label_address(steps.at(source).address);
+          }
+          if (const auto targets =
+                  callee_hole_leaf_targets_from_comment(steps.at(source).comment, options)) {
+            if (std::any_of(targets->begin(), targets->end(), [&](const auto& target) {
+                  return enters_lifetime(target.first);
+                })) {
+              return "external-multi-target-entry@" +
+                     safe_format_label_address(steps.at(source).address);
+            }
+          }
+        }
+        return std::nullopt;
+      };
       for (const SizeHelperSpillSummaryReport& spill : spills->second) {
         if (spill.recall_cells > 0 && spill.store_cells == 0) {
           stack_input_names.insert(spill.name);
@@ -66170,11 +66305,14 @@ SizeAttributionReport build_size_attribution_report(
         std::vector<std::string> local_lifetime_names;
         std::vector<std::string> nested_crossing_names;
         std::vector<std::string> nested_crossing_site_parts;
+        std::vector<std::string> control_crossing_names;
+        std::vector<std::string> control_crossing_reason_parts;
         std::vector<std::string> temp_carrier_names;
         std::vector<std::string> required_update_names;
         std::vector<std::string> unclassified_local_names;
         int local_lifetime_cells = 0;
         int nested_crossing_cells = 0;
+        int control_crossing_cells = 0;
         int temp_carrier_cells = 0;
         int required_update_cells = 0;
         int unclassified_local_cells = 0;
@@ -66183,24 +66321,35 @@ SizeAttributionReport build_size_attribution_report(
           access_order_parts.push_back(mixed_state_access_order(spill));
           const std::vector<std::string> nested_sites = mixed_state_nested_sites(spill);
           if (nested_sites.empty()) {
-            local_lifetime_names.push_back(spill.name);
-            local_lifetime_cells += spill.total_cells;
             const std::vector<std::pair<int, SizeSpillAccessKind>> accesses =
                 mixed_state_accesses(spill);
             if (!accesses.empty() && accesses.front().second == SizeSpillAccessKind::Store &&
                 std::any_of(accesses.begin(), accesses.end(), [](const auto& access) {
                   return access.second == SizeSpillAccessKind::Recall;
                 })) {
-              temp_carrier_names.push_back(spill.name);
-              temp_carrier_cells += spill.total_cells;
+              if (const std::optional<std::string> crossing =
+                      mixed_state_control_crossing(accesses)) {
+                control_crossing_names.push_back(spill.name);
+                control_crossing_cells += spill.total_cells;
+                control_crossing_reason_parts.push_back(spill.name + ":" + *crossing);
+              } else {
+                local_lifetime_names.push_back(spill.name);
+                local_lifetime_cells += spill.total_cells;
+                temp_carrier_names.push_back(spill.name);
+                temp_carrier_cells += spill.total_cells;
+              }
             } else if (!accesses.empty() &&
                        accesses.front().second == SizeSpillAccessKind::Recall &&
                        std::any_of(accesses.begin(), accesses.end(), [](const auto& access) {
                          return access.second == SizeSpillAccessKind::Store;
                        })) {
+              local_lifetime_names.push_back(spill.name);
+              local_lifetime_cells += spill.total_cells;
               required_update_names.push_back(spill.name);
               required_update_cells += spill.total_cells;
             } else {
+              local_lifetime_names.push_back(spill.name);
+              local_lifetime_cells += spill.total_cells;
               unclassified_local_names.push_back(spill.name);
               unclassified_local_cells += spill.total_cells;
             }
@@ -66236,6 +66385,13 @@ SizeAttributionReport build_size_attribution_report(
           helper.details["valueAwareMixedStateRequiredUpdateReason"] =
               "recall-before-store traffic updates persistent state and is not direct scheduler "
               "savings";
+          if (temp_carrier_cells == 0) {
+            helper.details["valueAwareEstimatedNetSavingsAfterMaterialization"] = "0";
+            helper.details["valueAwareEstimatedNetSavingsModel"] =
+                "persistent-state-update-excluded-from-local-stack-carriers";
+            helper.details["valueAwareEstimatedNetSavingsExcludes"] =
+                "recall-before-store-persistent-state-updates";
+          }
         }
         if (!unclassified_local_names.empty()) {
           helper.details["valueAwareMixedStateUnclassifiedLocalNames"] =
@@ -66251,15 +66407,41 @@ SizeAttributionReport build_size_attribution_report(
           helper.details["valueAwareMixedStateNestedCrossingSites"] =
               join_strings(nested_crossing_site_parts, ";");
         }
-        helper.details["valueAwareMixedStateLifetimeStatus"] =
-            nested_crossing_names.empty()
-                ? "local-to-helper-without-nested-calls"
-                : (local_lifetime_names.empty() ? "crosses-nested-helper-calls"
-                                                : "mixed-local-and-nested-crossing-lifetimes");
-        helper.details["valueAwareMixedStateProofAction"] =
-            nested_crossing_names.empty()
-                ? "prove-local-stack-value-flow-through-mutating-ops"
-                : "split-local-lifetimes-from-nested-call-crossing-state";
+        if (!control_crossing_names.empty()) {
+          helper.details["valueAwareMixedStateControlCrossingNames"] =
+              join_strings(control_crossing_names, ",");
+          helper.details["valueAwareMixedStateControlCrossingCells"] =
+              std::to_string(control_crossing_cells);
+          helper.details["valueAwareMixedStateControlCrossingReasons"] =
+              join_strings(control_crossing_reason_parts, ";");
+          if (temp_carrier_cells == 0) {
+            helper.details["valueAwareEstimatedNetSavingsAfterMaterialization"] = "0";
+            helper.details["valueAwareEstimatedNetSavingsModel"] =
+                "control-crossing-state-excluded-from-local-stack-carriers";
+            helper.details["valueAwareEstimatedNetSavingsExcludes"] =
+                "control-flow-and-externally-addressable-state-lifetimes";
+          }
+        }
+        if (!nested_crossing_names.empty()) {
+          helper.details["valueAwareMixedStateLifetimeStatus"] =
+              local_lifetime_names.empty() && control_crossing_names.empty()
+                  ? "crosses-nested-helper-calls"
+                  : "mixed-local-and-nested-crossing-lifetimes";
+          helper.details["valueAwareMixedStateProofAction"] =
+              "split-local-lifetimes-from-nested-call-crossing-state";
+        } else if (!control_crossing_names.empty()) {
+          helper.details["valueAwareMixedStateLifetimeStatus"] =
+              local_lifetime_names.empty()
+                  ? "crosses-control-flow-or-external-entry"
+                  : "mixed-local-and-control-crossing-lifetimes";
+          helper.details["valueAwareMixedStateProofAction"] =
+              "preserve-control-crossing-state-in-register";
+        } else {
+          helper.details["valueAwareMixedStateLifetimeStatus"] =
+              "local-to-helper-without-nested-calls";
+          helper.details["valueAwareMixedStateProofAction"] =
+              "prove-local-stack-value-flow-through-mutating-ops";
+        }
         if (temp_carrier_cells > 0) {
           const int temp_carrier_materialize_cells =
               required_update_cells > 0 ? temp_carrier_cells : 0;
