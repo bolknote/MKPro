@@ -91,6 +91,34 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   the earlier layout, so this lookahead cannot exchange size for a speculative
   runtime or geometry preference. The selected artifact is still rechecked and
   transformed by the ordinary downstream terminal/cyclic pass.
+- `empty-return-startup-component-transaction` composes physical-00 startup
+  normalization with generic fallthrough-closed component layout when the
+  standalone startup rewrite would shift a pre-existing indirect-flow target.
+  Every such command identity becomes an exact-address constraint at its
+  original physical address. Stable preloaded targets use the generic required
+  selector-anchor solver, including its ordinary split/trampoline search;
+  only targets without such a selector use a raw absolute constraint. The
+  corresponding delivered preload must remain byte-for-byte unchanged. A
+  typed source/target/final-address reconciliation
+  contract permits that preload to disagree only with the temporary geometry;
+  it must decode to the contracted identity in the final artifact. The shifted
+  intermediate graph is structural only and is never published as a proved
+  program. The candidate is admitted only
+  after component layout rebuilds the final authoritative CFG and repeats its
+  command-identity, external-entry, complete return-stack, stack/X2, indirect
+  memory, data-projection, exact-address, and final-size proofs. A size-neutral
+  result may participate only when the ordinary terminal/cyclic verifier proves
+  an immediate downstream reduction. Inside this transaction the generic
+  component solver may also spend at most two temporary cells on its existing
+  indirect split bridges, but only after the ordinary zero-growth search failed
+  and an independent terminal/cyclic projection of the original proved artifact
+  established the repayment budget. The bridge budget cannot exceed that proved
+  saving minus one final cell. Such a larger intermediate artifact is never
+  exposed: the same terminal/cyclic verifier must immediately remove enough cells
+  to make the final artifact smaller than the transaction input, or the entire
+  candidate is discarded. The final CFG and fixed selector preloads are checked
+  again after that repayment. No source name, constant spelling, game, or
+  function is recognized.
   The adjusted `argStoreNet` in the corpus script is therefore a pre-entry-cost
   proof target, not an enabled size win. For stack-inputs that cross nested
   helper calls, the report also records depth-aware callee stack survival

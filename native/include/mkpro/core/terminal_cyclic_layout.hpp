@@ -86,6 +86,21 @@ std::vector<EmptyReturnStartupLayoutResult> normalize_empty_return_startup_layou
     const AuthoritativePostLayoutControlFlow& control_flow,
     const TerminalCyclicLayoutOptions& options = {});
 
+// Compose the same empty-return startup rewrite with generic component layout
+// in one transaction. Every pre-existing indirect-flow target is constrained
+// to its original physical address, so dual-use and runtime-charged selectors
+// keep their exact values. The intermediate structural CFG is never exposed as
+// a proved result; only a natural-layout artifact that repeats the complete
+// CFG/return-stack/stack/X2 and exact-preload checks is returned.
+std::vector<NaturalTargetComponentLayoutResult>
+optimize_empty_return_startup_component_layouts(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const NaturalTargetComponentLayoutOptions& natural_options = {},
+    const TerminalCyclicLayoutOptions& terminal_options = {},
+    std::vector<std::string>* rejection_reasons = nullptr);
+
 // Canonicalize every resolved direct-flow operand to a unique symbolic command
 // identity without changing cell count or control flow. This lets subsequent
 // cell-removing layout proofs rebind fixed targets instead of relying on stale

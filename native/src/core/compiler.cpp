@@ -53313,6 +53313,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
         std::optional<core::NaturalTargetComponentLayoutResult> chosen_layout;
         std::optional<core::HelperSemanticAliasProof> chosen_alias;
         bool chosen_empty_return_startup = false;
+        bool chosen_atomic_startup_component = false;
         bool chosen_by_terminal_projection = false;
         std::optional<int> chosen_projected_terminal_cells;
         std::vector<std::string> natural_layout_search_rejections;
@@ -53328,7 +53329,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
             };
         const auto consider_layout = [&](core::NaturalTargetComponentLayoutResult candidate,
                                          std::optional<core::HelperSemanticAliasProof> alias,
-                                         bool empty_return_startup = false) {
+                                         bool empty_return_startup = false,
+                                         bool atomic_startup_component = false) {
           if (options.analysis) {
             for (const std::string& reason : candidate.plan.reasons) {
               if (natural_layout_search_rejections.size() >= 512U)
@@ -53348,23 +53350,36 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
               candidate.plan.size_neutral_bounded_layout &&
               candidate.plan.bounded_targets_proved && candidate.removed_cells == 0 &&
               candidate_cells == current_cells;
+          const bool absolute_layout =
+              candidate.plan.size_neutral_absolute_layout &&
+              candidate.plan.absolute_targets_proved && candidate.removed_cells == 0 &&
+              candidate_cells == current_cells;
+          std::optional<int> candidate_projected_terminal_cells;
+          const bool projected_absolute_layout = [&]() {
+            if (!absolute_layout)
+              return false;
+            candidate_projected_terminal_cells = projected_terminal_cells(candidate);
+            return *candidate_projected_terminal_cells < candidate_cells;
+          }();
           if (candidate.applied <= 0 || !candidate.plan.final_artifact_proved ||
-              (!size_improves && !bounded_layout))
+              (!size_improves && !bounded_layout && !projected_absolute_layout))
             return;
           const int chosen_cells =
               chosen_layout.has_value()
                   ? core::machine_cell_count(chosen_layout->items)
                   : std::numeric_limits<int>::max();
           bool prefer_candidate = !chosen_layout.has_value() || candidate_cells < chosen_cells;
-          bool preferred_by_projection = false;
-          std::optional<int> candidate_projected_terminal_cells;
+          bool preferred_by_projection =
+              prefer_candidate && projected_absolute_layout;
           if (!prefer_candidate && candidate_cells == chosen_cells) {
             if (!chosen_projected_terminal_cells.has_value()) {
               chosen_projected_terminal_cells =
                   projected_terminal_cells(*chosen_layout);
             }
-            candidate_projected_terminal_cells =
-                projected_terminal_cells(candidate);
+            if (!candidate_projected_terminal_cells.has_value()) {
+              candidate_projected_terminal_cells =
+                  projected_terminal_cells(candidate);
+            }
             prefer_candidate = *candidate_projected_terminal_cells <
                                *chosen_projected_terminal_cells;
             preferred_by_projection = prefer_candidate;
@@ -53373,6 +53388,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
             chosen_layout = std::move(candidate);
             chosen_alias = std::move(alias);
             chosen_empty_return_startup = empty_return_startup;
+            chosen_atomic_startup_component = atomic_startup_component;
             chosen_by_terminal_projection = preferred_by_projection;
             chosen_projected_terminal_cells =
                 preferred_by_projection
@@ -53385,7 +53401,84 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
             core::optimize_natural_target_component_layout(
                 *natural_layout_input, effective_preloads, control_flow,
                 natural_options);
+        std::vector<core::NaturalTargetComponentLayoutResult>
+            ordinary_atomic_descendants =
+                core::optimize_empty_return_startup_component_layouts(
+                    ordinary_natural_layout.items,
+                    ordinary_natural_layout.preloads,
+                    ordinary_natural_layout.plan.final_control_flow,
+                    natural_options,
+                    core::TerminalCyclicLayoutOptions{
+                        .address_space_model =
+                            address_space_model_for_options(options)},
+                    options.analysis ? &natural_layout_search_rejections
+                                     : nullptr);
+        for (core::NaturalTargetComponentLayoutResult& descendant :
+             ordinary_atomic_descendants) {
+          const int composed_output_cells =
+              core::machine_cell_count(descendant.items);
+          const int composed_input_cells =
+              core::machine_cell_count(*natural_layout_input);
+          descendant.plan.input_cells = composed_input_cells;
+          descendant.plan.output_cells = composed_output_cells;
+          descendant.plan.removed_cells =
+              composed_input_cells - composed_output_cells;
+          descendant.removed_cells = descendant.plan.removed_cells;
+          descendant.applied += ordinary_natural_layout.applied;
+          descendant.plan.moved_segments +=
+              ordinary_natural_layout.plan.moved_segments;
+          descendant.plan.rebound_indirect_flows +=
+              ordinary_natural_layout.plan.rebound_indirect_flows;
+          descendant.plan.transparent_trampolines +=
+              ordinary_natural_layout.plan.transparent_trampolines;
+          descendant.plan.transparent_split_bridges +=
+              ordinary_natural_layout.plan.transparent_split_bridges;
+          descendant.plan.flows.insert(
+              descendant.plan.flows.begin(),
+              ordinary_natural_layout.plan.flows.begin(),
+              ordinary_natural_layout.plan.flows.end());
+          descendant.plan.preloads.insert(
+              descendant.plan.preloads.begin(),
+              ordinary_natural_layout.plan.preloads.begin(),
+              ordinary_natural_layout.plan.preloads.end());
+          descendant.plan.control_flow_equivalent =
+              descendant.plan.control_flow_equivalent &&
+              ordinary_natural_layout.plan.control_flow_equivalent;
+          descendant.plan.call_return_equivalent =
+              descendant.plan.call_return_equivalent &&
+              ordinary_natural_layout.plan.call_return_equivalent;
+          descendant.plan.stack_and_x2_equivalent =
+              descendant.plan.stack_and_x2_equivalent &&
+              ordinary_natural_layout.plan.stack_and_x2_equivalent;
+          descendant.plan.indirect_memory_equivalent =
+              descendant.plan.indirect_memory_equivalent &&
+              ordinary_natural_layout.plan.indirect_memory_equivalent;
+          descendant.plan.data_projection_equivalent =
+              descendant.plan.data_projection_equivalent &&
+              ordinary_natural_layout.plan.data_projection_equivalent;
+          descendant.plan.final_artifact_proved =
+              descendant.plan.final_artifact_proved &&
+              ordinary_natural_layout.plan.final_artifact_proved;
+          descendant.plan.proved =
+              descendant.plan.proved && ordinary_natural_layout.plan.proved &&
+              descendant.plan.control_flow_equivalent &&
+              descendant.plan.call_return_equivalent &&
+              descendant.plan.stack_and_x2_equivalent &&
+              descendant.plan.indirect_memory_equivalent &&
+              descendant.plan.data_projection_equivalent &&
+              descendant.plan.final_artifact_proved &&
+              descendant.plan.removed_cells >= 0;
+          if (descendant.plan.removed_cells > 0) {
+            descendant.plan.size_neutral_absolute_layout = false;
+            descendant.plan.size_neutral_bounded_layout = false;
+            descendant.plan.size_neutral_selector_target_layout = false;
+          }
+        }
         consider_layout(std::move(ordinary_natural_layout), std::nullopt);
+        for (core::NaturalTargetComponentLayoutResult& descendant :
+             ordinary_atomic_descendants) {
+          consider_layout(std::move(descendant), std::nullopt, true, true);
+        }
 
         for (core::EmptyReturnStartupLayoutResult& startup :
              core::normalize_empty_return_startup_layouts(
@@ -53477,7 +53570,28 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                     " cells.",
             });
           }
-          if (chosen_empty_return_startup) {
+          if (chosen_atomic_startup_component) {
+            const std::string transactional_repayment =
+                natural_layout.plan.transactional_terminal_removed_cells > 0
+                    ? " The atomic transaction temporarily used " +
+                          std::to_string(
+                              natural_layout.plan.transactional_growth_cells) +
+                          " bridge cell(s), then the terminal/cyclic verifier "
+                          "removed " +
+                          std::to_string(natural_layout.plan
+                                             .transactional_terminal_removed_cells) +
+                          " cell(s) before publication."
+                    : "";
+            post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+                .name = "empty-return-startup-component-transaction",
+                .detail =
+                    "Placed a transparent physical-00 return and reordered generic "
+                    "fallthrough-closed components in one proof transaction, keeping "
+                    "every pre-existing indirect target at its original physical "
+                    "address and every such selector preload byte-for-byte unchanged." +
+                    transactional_repayment,
+            });
+          } else if (chosen_empty_return_startup) {
             post_layout_optimizations.push_back(core::passes::AppliedOptimization{
                 .name = "empty-return-startup-layout",
                 .detail =
@@ -53496,7 +53610,14 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
             }
           }
           std::string natural_layout_detail;
-          if (natural_layout.plan.size_neutral_bounded_layout) {
+          if (natural_layout.plan.size_neutral_absolute_layout) {
+            natural_layout_detail =
+                "Reordered " + std::to_string(natural_layout.plan.moved_segments) +
+                " fallthrough-closed component(s) without changing size so " +
+                std::to_string(natural_layout.plan.absolute_targets) +
+                " fixed indirect command target(s) retain their exact physical "
+                "addresses under the final CFG/return-stack/stack/X2 proof.";
+          } else if (natural_layout.plan.size_neutral_bounded_layout) {
             natural_layout_detail =
                 "Reordered " + std::to_string(natural_layout.plan.moved_segments) +
                 " fallthrough-closed component(s) without changing size so " +

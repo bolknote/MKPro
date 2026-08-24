@@ -922,7 +922,18 @@ struct ReboundArtifact {
   std::optional<std::vector<PreloadReport>> preloads;
   AuthoritativePostLayoutControlFlow control_flow;
   bool proved = false;
+  bool structural_control_flow_proved = false;
+  std::vector<NaturalTargetRequiredAbsoluteTarget> required_absolute_targets;
+  std::vector<NaturalTargetRequiredSelectorTarget> required_selector_targets;
+  std::vector<NaturalTargetDeferredSelectorReconciliation>
+      deferred_selector_reconciliations;
+  std::vector<std::optional<std::size_t>> original_to_output;
   std::vector<std::string> reasons;
+};
+
+enum class StartupIndirectTargetPolicy {
+  RetuneProvedSelectors,
+  PreservePhysicalTargetsForComponentLayout,
 };
 
 bool is_direct_flow_opcode(int opcode) {
@@ -1985,7 +1996,9 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts(
     const std::vector<PreloadReport>& preloads,
     const AuthoritativePostLayoutControlFlow& control_flow,
     const TerminalCyclicLayoutOptions& options,
-    std::vector<std::string>* rejection_reasons) {
+    std::vector<std::string>* rejection_reasons,
+    StartupIndirectTargetPolicy target_policy =
+        StartupIndirectTargetPolicy::RetuneProvedSelectors) {
   const ArtifactIndex input_index = index_artifact(items);
   std::vector<ReboundArtifact> candidates;
   const auto reject = [&](std::string reason) {
@@ -2111,6 +2124,10 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts(
       std::string value;
     };
     std::map<int, PendingSelectorRetarget> selector_retargets;
+    std::map<std::size_t, int> preserved_indirect_targets;
+    std::map<int, std::size_t> preserved_selector_targets;
+    std::vector<NaturalTargetDeferredSelectorReconciliation>
+        deferred_selector_reconciliations;
     std::vector<PreloadReport> rebound_preloads = preloads;
     for (const auto& [old_source, old_targets] : control_flow.indirect_flow_targets) {
       if (!relocation.at(old_source).has_value()) {
@@ -2130,34 +2147,73 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts(
         }
         const int new_address =
             output_index.item_addresses.at(*relocation.at(old_target.item_index));
-        if (new_address != old_target.address) {
-          const std::optional<int> selector =
-              encoded_register(items.at(old_source).opcode);
-          std::optional<std::size_t> selector_preload;
-          if (selector.has_value()) {
-            for (std::size_t index = 0; index < preloads.size(); ++index) {
-              int preload_register = -1;
-              try {
-                preload_register =
-                    register_index(register_from_text(preloads.at(index).register_name));
-              } catch (const std::exception&) {
-                continue;
-              }
-              if (preload_register != *selector)
-                continue;
-              if (selector_preload.has_value()) {
-                selector_preload.reset();
-                break;
-              }
-              selector_preload = index;
+        const std::optional<int> selector =
+            encoded_register(items.at(old_source).opcode);
+        std::optional<std::size_t> selector_preload;
+        if (selector.has_value()) {
+          for (std::size_t index = 0; index < preloads.size(); ++index) {
+            const std::optional<int> preload_register =
+                normalized_register_index(preloads.at(index).register_name);
+            if (!preload_register.has_value() ||
+                *preload_register != *selector) {
+              continue;
+            }
+            if (selector_preload.has_value()) {
+              selector_preload.reset();
+              break;
+            }
+            selector_preload = index;
+          }
+        }
+        const std::optional<std::string> rebound =
+            selector_preload.has_value()
+                ? rebind_proved_natural_fractional_selector_preload(
+                      items, preloads.at(*selector_preload), old_target.address,
+                      new_address, options.address_space_model)
+                : std::nullopt;
+        const bool late_bound_consumer =
+            std::find(items.at(old_source).roles.begin(),
+                      items.at(old_source).roles.end(),
+                      "late-decimal-selector-consumer") !=
+            items.at(old_source).roles.end();
+        const bool defer_late_bound_consumer =
+            target_policy == StartupIndirectTargetPolicy::
+                                 PreservePhysicalTargetsForComponentLayout &&
+            late_bound_consumer;
+        const bool preserve_fixed_target =
+            target_policy ==
+                StartupIndirectTargetPolicy::PreservePhysicalTargetsForComponentLayout &&
+            !defer_late_bound_consumer && !rebound.has_value();
+        if (preserve_fixed_target) {
+          const std::size_t new_target_item =
+              *relocation.at(old_target.item_index);
+          if (selector.has_value() && selector_preload.has_value()) {
+            const auto [existing, inserted] = preserved_selector_targets.emplace(
+                *selector, new_target_item);
+            if (!inserted && existing->second != new_target_item) {
+              indirect_facts_rebound = false;
+              indirect_rebind_failure =
+                  "one fixed selector register has conflicting target identities";
+              break;
+            }
+          } else {
+            const auto [existing, inserted] = preserved_indirect_targets.emplace(
+                new_target_item, old_target.address);
+            if (!inserted && existing->second != old_target.address) {
+              indirect_facts_rebound = false;
+              indirect_rebind_failure =
+                  "one command identity has conflicting original indirect addresses";
+              break;
             }
           }
-          const std::optional<std::string> rebound =
-              selector_preload.has_value()
-                  ? rebind_proved_natural_fractional_selector_preload(
-                        items, preloads.at(*selector_preload), old_target.address,
-                        new_address, options.address_space_model)
-                  : std::nullopt;
+          deferred_selector_reconciliations.push_back(
+              NaturalTargetDeferredSelectorReconciliation{
+                  .source_item = *relocation.at(old_source),
+                  .target_item = new_target_item,
+                  .final_target_address = old_target.address,
+              });
+        } else if (new_address != old_target.address &&
+                   !defer_late_bound_consumer) {
           if (!selector.has_value() || !selector_preload.has_value() ||
               !rebound.has_value()) {
             indirect_facts_rebound = false;
@@ -2311,11 +2367,34 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts(
     if (!indirect_identities_match)
       continue;
 
+    std::vector<NaturalTargetRequiredAbsoluteTarget> required_absolute_targets;
+    required_absolute_targets.reserve(preserved_indirect_targets.size());
+    for (const auto& [target_item, target_address] : preserved_indirect_targets) {
+      required_absolute_targets.push_back(NaturalTargetRequiredAbsoluteTarget{
+          .target_item = target_item,
+          .target_address = target_address,
+      });
+    }
+    std::vector<NaturalTargetRequiredSelectorTarget> required_selector_targets;
+    required_selector_targets.reserve(preserved_selector_targets.size());
+    for (const auto& [selector, target_item] : preserved_selector_targets) {
+      required_selector_targets.push_back(NaturalTargetRequiredSelectorTarget{
+          .target_item = target_item,
+          .register_name = register_text(selector),
+      });
+    }
+
     candidates.push_back(ReboundArtifact{
         .items = std::move(rewritten),
         .preloads = std::move(rebound_preloads),
         .control_flow = std::move(rewritten_flow),
-        .proved = true,
+        .proved = target_policy == StartupIndirectTargetPolicy::RetuneProvedSelectors,
+        .structural_control_flow_proved = true,
+        .required_absolute_targets = std::move(required_absolute_targets),
+        .required_selector_targets = std::move(required_selector_targets),
+        .deferred_selector_reconciliations =
+            std::move(deferred_selector_reconciliations),
+        .original_to_output = std::move(relocation),
     });
   }
   if (!found_zero_jump)
@@ -2348,6 +2427,325 @@ std::vector<EmptyReturnStartupLayoutResult> normalize_empty_return_startup_layou
         .final_artifact_proved = true,
     });
   }
+  return results;
+}
+
+std::vector<NaturalTargetComponentLayoutResult>
+optimize_empty_return_startup_component_layouts(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const NaturalTargetComponentLayoutOptions& natural_options,
+    const TerminalCyclicLayoutOptions& terminal_options,
+    std::vector<std::string>* rejection_reasons) {
+  std::vector<NaturalTargetComponentLayoutResult> results;
+  const auto reject = [&](std::string reason) {
+    if (rejection_reasons != nullptr)
+      add_reason(*rejection_reasons,
+                 "atomic empty-return/component layout: " + std::move(reason));
+  };
+  if (!control_flow.proved ||
+      natural_options.address_space_model != terminal_options.address_space_model) {
+    reject("input CFG is not authoritative or address-space models differ");
+    return results;
+  }
+  const int input_cells = index_artifact(items).cells;
+
+  const auto reports_equal = [](const PreloadReport& left,
+                                const PreloadReport& right) {
+    return left.register_name == right.register_name &&
+           left.value == right.value &&
+           left.counts_against_program == right.counts_against_program &&
+           left.retunable_natural_fractional_prefix ==
+               right.retunable_natural_fractional_prefix &&
+           left.setup_target_name == right.setup_target_name &&
+           left.setup_expression == right.setup_expression &&
+           left.setup_expression_text == right.setup_expression_text &&
+           left.setup_source_line == right.setup_source_line;
+  };
+  const auto selector_preloads_unchanged = [&reports_equal](
+                                                const std::vector<PreloadReport>& before,
+                                                const std::vector<PreloadReport>& after,
+                                                const ReboundArtifact& staged) {
+    std::set<int> selectors;
+    for (const NaturalTargetDeferredSelectorReconciliation& reconciliation :
+         staged.deferred_selector_reconciliations) {
+      if (reconciliation.source_item >= staged.items.size())
+        return false;
+      const std::optional<int> selector =
+          encoded_register(staged.items.at(reconciliation.source_item).opcode);
+      if (!selector.has_value())
+        return false;
+      selectors.insert(*selector);
+    }
+    for (const int selector : selectors) {
+      std::vector<const PreloadReport*> old_reports;
+      std::vector<const PreloadReport*> new_reports;
+      for (const PreloadReport& report : before) {
+        if (normalized_register_index(report.register_name) == selector)
+          old_reports.push_back(&report);
+      }
+      for (const PreloadReport& report : after) {
+        if (normalized_register_index(report.register_name) == selector)
+          new_reports.push_back(&report);
+      }
+      if (old_reports.size() != new_reports.size())
+        return false;
+      std::vector<bool> matched(new_reports.size(), false);
+      for (const PreloadReport* old_report : old_reports) {
+        bool found = false;
+        for (std::size_t index = 0; index < new_reports.size(); ++index) {
+          if (!matched.at(index) &&
+              reports_equal(*old_report, *new_reports.at(index))) {
+            matched.at(index) = true;
+            found = true;
+            break;
+          }
+        }
+        if (!found)
+          return false;
+      }
+    }
+    return true;
+  };
+
+  std::vector<std::string> startup_rejections;
+  for (ReboundArtifact& staged : build_empty_return_startup_layouts(
+           items, preloads, control_flow, terminal_options,
+           rejection_reasons == nullptr ? nullptr : &startup_rejections,
+           StartupIndirectTargetPolicy::PreservePhysicalTargetsForComponentLayout)) {
+    if (staged.proved || !staged.structural_control_flow_proved ||
+        !staged.control_flow.proved || !staged.preloads.has_value() ||
+        (staged.required_absolute_targets.empty() &&
+         staged.required_selector_targets.empty()) ||
+        staged.original_to_output.size() != items.size()) {
+      reject("staged startup geometry did not produce complete structural obligations");
+      continue;
+    }
+
+    NaturalTargetComponentLayoutOptions options = natural_options;
+    options.allow_size_neutral_absolute_layout = true;
+    options.allow_size_neutral_selector_target_layout = true;
+    options.maximum_transactional_growth_cells = 0;
+    bool requirements_relocated = true;
+    const auto relocate_item = [&](std::size_t old_item)
+        -> std::optional<std::size_t> {
+      if (old_item >= staged.original_to_output.size())
+        return std::nullopt;
+      return staged.original_to_output.at(old_item);
+    };
+    for (NaturalTargetRequiredFlowSelector& required :
+         options.required_flow_selectors) {
+      const std::optional<std::size_t> relocated =
+          relocate_item(required.command_item);
+      if (!relocated.has_value()) {
+        requirements_relocated = false;
+        break;
+      }
+      required.command_item = *relocated;
+    }
+    for (NaturalTargetRequiredSelectorTarget& required :
+         options.required_selector_targets) {
+      const std::optional<std::size_t> relocated =
+          relocate_item(required.target_item);
+      if (!relocated.has_value()) {
+        requirements_relocated = false;
+        break;
+      }
+      required.target_item = *relocated;
+    }
+    for (const NaturalTargetRequiredSelectorTarget& required :
+         staged.required_selector_targets) {
+      const std::optional<int> required_selector =
+          normalized_register_index(required.register_name);
+      bool already_present = false;
+      if (!required_selector.has_value()) {
+        requirements_relocated = false;
+        break;
+      }
+      for (const NaturalTargetRequiredSelectorTarget& existing :
+           options.required_selector_targets) {
+        const std::optional<int> existing_selector =
+            normalized_register_index(existing.register_name);
+        if (!existing_selector.has_value()) {
+          requirements_relocated = false;
+          break;
+        }
+        if (existing.target_item == required.target_item ||
+            *existing_selector == *required_selector) {
+          if (existing.target_item != required.target_item ||
+              *existing_selector != *required_selector) {
+            requirements_relocated = false;
+          } else {
+            already_present = true;
+          }
+          break;
+        }
+      }
+      if (!requirements_relocated)
+        break;
+      if (!already_present)
+        options.required_selector_targets.push_back(required);
+    }
+    for (NaturalTargetDeferredSelectorReconciliation& reconciliation :
+         options.deferred_selector_reconciliations) {
+      const std::optional<std::size_t> relocated_source =
+          relocate_item(reconciliation.source_item);
+      const std::optional<std::size_t> relocated_target =
+          relocate_item(reconciliation.target_item);
+      if (!relocated_source.has_value() || !relocated_target.has_value()) {
+        requirements_relocated = false;
+        break;
+      }
+      reconciliation.source_item = *relocated_source;
+      reconciliation.target_item = *relocated_target;
+    }
+
+    std::map<std::size_t, int> absolute_targets;
+    for (NaturalTargetRequiredAbsoluteTarget& required :
+         options.required_absolute_targets) {
+      const std::optional<std::size_t> relocated =
+          relocate_item(required.target_item);
+      if (!relocated.has_value()) {
+        requirements_relocated = false;
+        break;
+      }
+      required.target_item = *relocated;
+      const auto [existing, inserted] = absolute_targets.emplace(
+          required.target_item, required.target_address);
+      if (!inserted && existing->second != required.target_address) {
+        requirements_relocated = false;
+        break;
+      }
+    }
+    for (const NaturalTargetRequiredAbsoluteTarget& required :
+         staged.required_absolute_targets) {
+      const auto [existing, inserted] = absolute_targets.emplace(
+          required.target_item, required.target_address);
+      if (!inserted && existing->second != required.target_address) {
+        requirements_relocated = false;
+        break;
+      }
+    }
+    if (!requirements_relocated) {
+      reject("caller and fixed-target obligations conflict after startup relocation");
+      continue;
+    }
+    options.deferred_selector_reconciliations.insert(
+        options.deferred_selector_reconciliations.end(),
+        staged.deferred_selector_reconciliations.begin(),
+        staged.deferred_selector_reconciliations.end());
+    options.required_absolute_targets.clear();
+    for (const auto& [target_item, target_address] : absolute_targets) {
+      options.required_absolute_targets.push_back(
+          NaturalTargetRequiredAbsoluteTarget{
+              .target_item = target_item,
+              .target_address = target_address,
+          });
+    }
+
+    NaturalTargetComponentLayoutResult natural =
+        optimize_natural_target_component_layout(
+            staged.items, *staged.preloads, staged.control_flow, options);
+    if (natural.applied <= 0 || !natural.plan.proved) {
+      const TerminalCyclicLayoutProjection repayment =
+          project_terminal_cyclic_layout_size(items, preloads, control_flow,
+                                              terminal_options);
+      const int maximum_repaid_growth =
+          repayment.reduction_proved
+              ? input_cells - repayment.output_cells - 1
+              : 0;
+      if (maximum_repaid_growth > 0) {
+        options.maximum_transactional_growth_cells =
+            std::min(2, maximum_repaid_growth);
+        natural = optimize_natural_target_component_layout(
+            staged.items, *staged.preloads, staged.control_flow, options);
+      }
+    }
+    int output_cells = index_artifact(natural.items).cells;
+    if (natural.applied <= 0 || !natural.plan.proved ||
+        !natural.plan.final_artifact_proved ||
+        !natural.plan.control_flow_equivalent ||
+        !natural.plan.call_return_equivalent ||
+        !natural.plan.stack_and_x2_equivalent ||
+        !natural.plan.indirect_memory_equivalent ||
+        !natural.plan.data_projection_equivalent ||
+        !natural.plan.absolute_targets_proved ||
+        !natural.plan.deferred_selector_reconciliations_proved ||
+        natural.plan.deferred_selector_reconciliations <
+            static_cast<int>(staged.deferred_selector_reconciliations.size()) ||
+        natural.plan.absolute_targets <
+            static_cast<int>(absolute_targets.size()) ||
+        !selector_preloads_unchanged(preloads, natural.preloads, staged)) {
+      int copied = 0;
+      for (auto reason = natural.plan.reasons.rbegin();
+           reason != natural.plan.reasons.rend() && copied < 8;
+           ++reason, ++copied) {
+        reject("component solver: " + *reason);
+      }
+      if (natural.plan.reasons.empty()) {
+        reject("final proof flags, exact preloads, or size accounting rejected the candidate");
+      }
+      continue;
+    }
+
+    if (output_cells >= input_cells) {
+      const int component_output_cells = output_cells;
+      TerminalCyclicLayoutResult terminal = optimize_terminal_cyclic_layout(
+          natural.items, natural.preloads, natural.plan.final_control_flow,
+          terminal_options);
+      const int terminal_output_cells = index_artifact(terminal.items).cells;
+      const bool terminal_reduction_proved =
+          terminal.applied > 0 && terminal.plan.final_artifact_proved &&
+          terminal.plan.final_control_flow.proved &&
+          terminal_output_cells < input_cells &&
+          selector_preloads_unchanged(preloads, terminal.preloads, staged);
+      if (terminal_reduction_proved) {
+        natural.items = std::move(terminal.items);
+        natural.preloads = std::move(terminal.preloads);
+        natural.applied += terminal.applied;
+        natural.plan.transactional_terminal_removed_cells =
+            component_output_cells - terminal_output_cells;
+        natural.plan.final_control_flow =
+            std::move(terminal.plan.final_control_flow);
+        natural.plan.final_artifact_proved =
+            natural.plan.final_artifact_proved &&
+            terminal.plan.final_artifact_proved;
+        natural.plan.proved = natural.plan.proved &&
+                              natural.plan.final_artifact_proved &&
+                              natural.plan.final_control_flow.proved;
+        natural.plan.size_neutral_absolute_layout = false;
+        natural.plan.size_neutral_bounded_layout = false;
+        natural.plan.size_neutral_selector_target_layout = false;
+        natural.plan.reasons.push_back(
+            "transactional selector bridge was committed only after terminal/cyclic "
+            "proof removed " +
+            std::to_string(natural.plan.transactional_terminal_removed_cells) +
+            " cell(s)");
+        output_cells = terminal_output_cells;
+      } else if (output_cells > input_cells) {
+        if (!terminal.plan.reasons.empty()) {
+          int copied = 0;
+          for (auto reason = terminal.plan.reasons.rbegin();
+               reason != terminal.plan.reasons.rend() && copied < 8;
+               ++reason, ++copied) {
+            reject("terminal/cyclic repayment: " + *reason);
+          }
+        } else {
+          reject("temporary selector bridge growth was not repaid below the "
+                 "original artifact size");
+        }
+        continue;
+      }
+    }
+    natural.plan.input_cells = input_cells;
+    natural.plan.output_cells = output_cells;
+    natural.plan.removed_cells = input_cells - output_cells;
+    natural.removed_cells = natural.plan.removed_cells;
+    results.push_back(std::move(natural));
+  }
+  for (const std::string& reason : startup_rejections)
+    reject(reason);
   return results;
 }
 

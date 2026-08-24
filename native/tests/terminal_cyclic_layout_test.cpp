@@ -694,6 +694,86 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
             "startup normalization should replace BP 00 with two proved empty-stack returns "
             "without changing size");
   }
+  {
+    std::vector<MachineItem> startup_with_fixed_target = {
+        MachineItem::op(0x01, "1"),
+        MachineItem::op(0xac, "К ПП c"),
+        MachineItem::op(0x51, "БП"),
+        MachineItem::address(7),
+        stop(StopDisposition::Terminal),
+        MachineItem::op(0x02, "2"),
+        MachineItem::op(0x52, "В/О"),
+        MachineItem::op(0x51, "БП"),
+        MachineItem::address(0),
+    };
+    startup_with_fixed_target.at(1).indirect_flow_targets =
+        std::vector<IrTarget>{5};
+    const std::vector<PreloadReport> fixed_preloads = {
+        PreloadReport{.register_name = "c", .value = "4.1200005E-1"},
+    };
+    core::PostLayoutControlFlowOptions startup_options;
+    startup_options.main_entry = 0;
+    startup_options.empty_return_target = 1;
+    const core::AuthoritativePostLayoutControlFlow startup_flow =
+        core::build_post_layout_control_flow(startup_with_fixed_target,
+                                             startup_options);
+    require(startup_flow.proved,
+            "fixed-target startup fixture should have an authoritative CFG");
+    require(core::normalize_empty_return_startup_layouts(
+                startup_with_fixed_target, fixed_preloads, startup_flow)
+                .empty(),
+            "standalone startup normalization must not retune an unproved dual-use "
+            "selector");
+
+    core::NaturalTargetComponentLayoutOptions natural_options;
+    natural_options.maximum_subset_states = 512;
+    const auto atomic =
+        core::optimize_empty_return_startup_component_layouts(
+            startup_with_fixed_target, fixed_preloads, startup_flow,
+            natural_options);
+    require(atomic.size() == 1U && atomic.front().plan.proved &&
+                atomic.front().plan.final_artifact_proved &&
+                atomic.front().plan.absolute_targets_proved &&
+                atomic.front().plan.deferred_selector_reconciliations == 1 &&
+                atomic.front().plan.deferred_selector_reconciliations_proved &&
+                atomic.front().plan.transactional_selector_target_layout &&
+                atomic.front().plan.transactional_growth_cells == 0 &&
+                atomic.front().plan.transactional_terminal_removed_cells == 0 &&
+                atomic.front().plan.size_neutral_selector_target_layout &&
+                cell_count(atomic.front().items) ==
+                    cell_count(startup_with_fixed_target) &&
+                atomic.front().items.front().kind == MachineItemKind::Op &&
+                atomic.front().items.front().opcode == 0x52 &&
+                atomic.front().items.at(
+                    item_at_address(atomic.front().items, 5)).opcode == 0x02 &&
+                atomic.front().preloads.size() == 1U &&
+                atomic.front().preloads.front().register_name == "c" &&
+                atomic.front().preloads.front().value == "4.1200005E-1",
+            "atomic startup/component layout should restore the fixed target at 05 "
+            "without changing its dual-use preload");
+    const auto final_source = std::find_if(
+        atomic.front().plan.final_control_flow.indirect_flow_targets.begin(),
+        atomic.front().plan.final_control_flow.indirect_flow_targets.end(),
+        [&](const auto& entry) {
+          return atomic.front().items.at(entry.first).opcode == 0xac;
+        });
+    require(final_source !=
+                atomic.front().plan.final_control_flow.indirect_flow_targets.end() &&
+                final_source->second.size() == 1U &&
+                final_source->second.front().address == 5,
+            "atomic final CFG should retain the exact indirect target address");
+
+    natural_options.required_absolute_targets.push_back(
+        core::NaturalTargetRequiredAbsoluteTarget{
+            .target_item = item_at_address(startup_with_fixed_target, 5),
+            .target_address = 4,
+        });
+    require(core::optimize_empty_return_startup_component_layouts(
+                startup_with_fixed_target, fixed_preloads, startup_flow,
+                natural_options)
+                .empty(),
+            "conflicting exact-address obligations must reject the whole transaction");
+  }
 }
 
 } // namespace mkpro::tests

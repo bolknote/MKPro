@@ -38,6 +38,20 @@ struct NaturalTargetRequiredAbsoluteTarget {
   bool operator==(const NaturalTargetRequiredAbsoluteTarget&) const = default;
 };
 
+// One stage of an atomic geometry transaction may temporarily move a typed
+// indirect target away from the address decoded by its unchanged preload.
+// This contract is admissible only together with an exact absolute placement
+// of the same target identity at final_target_address. The final runtime
+// selector proof must decode the unchanged preload to that exact identity.
+struct NaturalTargetDeferredSelectorReconciliation {
+  std::size_t source_item = 0;
+  std::size_t target_item = 0;
+  int final_target_address = -1;
+
+  bool operator==(
+      const NaturalTargetDeferredSelectorReconciliation&) const = default;
+};
+
 struct NaturalTargetComponentLayoutOptions {
   AddressSpaceModel address_space_model = AddressSpaceModel::Standard;
   std::size_t maximum_subset_states = 20000;
@@ -65,6 +79,11 @@ struct NaturalTargetComponentLayoutOptions {
   // that target exists. This is a zero-flow layout anchor, not a saving by
   // itself, and is accepted only as part of a separately profitable layout.
   std::vector<NaturalTargetRequiredSelectorTarget> required_selector_targets;
+  bool allow_size_neutral_selector_target_layout = false;
+  // A larger atomic transaction may temporarily spend a bounded number of
+  // bridge/padding cells. The caller must consume that growth immediately in
+  // a separately proved downstream rewrite and publish only a net reduction.
+  int maximum_transactional_growth_cells = 0;
   // A larger atomic layout transaction may require an executable command
   // identity at one exact physical address before applying a separately
   // proved size-reducing machine rewrite. This mode never claims savings on
@@ -76,6 +95,8 @@ struct NaturalTargetComponentLayoutOptions {
   // may request only the neutral geometric solution. This skips unrelated
   // natural-flow anchor combinations that the caller could not accept.
   bool require_size_neutral_absolute_layout = false;
+  std::vector<NaturalTargetDeferredSelectorReconciliation>
+      deferred_selector_reconciliations;
 };
 
 struct NaturalTargetFlowRewrite {
@@ -145,6 +166,12 @@ struct NaturalTargetComponentLayoutPlan {
   int absolute_targets = 0;
   bool absolute_targets_proved = false;
   bool size_neutral_absolute_layout = false;
+  bool size_neutral_selector_target_layout = false;
+  bool transactional_selector_target_layout = false;
+  int transactional_growth_cells = 0;
+  int transactional_terminal_removed_cells = 0;
+  int deferred_selector_reconciliations = 0;
+  bool deferred_selector_reconciliations_proved = false;
   std::vector<NaturalTargetFlowRewrite> flows;
   std::vector<NaturalTargetPreloadRewrite> preloads;
   std::vector<NaturalTargetRuntimeSelectorProof> runtime_selectors;

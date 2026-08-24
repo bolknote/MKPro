@@ -2189,6 +2189,8 @@ bool rebind_preloads(
     const std::vector<NaturalTargetAnchorCandidate>& anchors,
     const std::vector<DisplacedIndirectFlowRewrite>& displaced_flows,
     const std::vector<TransparentTrampoline>& trampolines,
+    const std::vector<NaturalTargetDeferredSelectorReconciliation>&
+        deferred_selector_reconciliations,
     AddressSpaceModel model, std::vector<PreloadReport>& preloads,
     std::vector<NaturalTargetPreloadRewrite>& rewrites,
     std::string* failure = nullptr) {
@@ -2305,18 +2307,58 @@ bool rebind_preloads(
                              !is_late_bound_selector_consumer(
                                  original_items.at(use));
                     });
+    bool deferred_reconciliation = false;
     if (had_original_flow_use) {
-      if (!preload_value_targets(name, old_value, old_target->second, model))
-        return reject("original preload does not decode to its typed target");
+      if (!preload_value_targets(name, old_value, old_target->second, model)) {
+        deferred_reconciliation =
+            preload_value_targets(name, old_value, new_target->second, model) &&
+            std::all_of(
+                original_uses.begin(), original_uses.end(),
+                [&](std::size_t use) {
+                  if (displaced_commands.contains(use) ||
+                      is_late_bound_selector_consumer(original_items.at(use))) {
+                    return true;
+                  }
+                  const std::optional<std::size_t> use_target =
+                      target_origin_for_flow_use(original_flow, use);
+                  return use_target.has_value() &&
+                         *use_target == original_target_origin &&
+                         std::any_of(
+                             deferred_selector_reconciliations.begin(),
+                             deferred_selector_reconciliations.end(),
+                             [&](const NaturalTargetDeferredSelectorReconciliation&
+                                     reconciliation) {
+                               return reconciliation.source_item == use &&
+                                      reconciliation.target_item == *use_target &&
+                                      reconciliation.final_target_address ==
+                                          new_target->second;
+                             });
+                });
+        if (!deferred_reconciliation) {
+          return reject("original preload does not decode to its typed target: R" +
+                        name + " temporary=" +
+                        std::to_string(old_target->second) + " final=" +
+                        std::to_string(new_target->second) + " uses=" +
+                        std::to_string(original_uses.size()) + " contracts=" +
+                        std::to_string(
+                            deferred_selector_reconciliations.size()));
+        }
+      }
     }
     if (sign_toggle_written) {
       // The register alternates between ±(preload magnitude) at runtime, so
       // its decode must reach the (possibly relocated) target under both
       // signs, and the preload value itself must never be rewritten.
-      if (had_original_flow_use &&
+      if (had_original_flow_use && !deferred_reconciliation &&
           !preload_value_targets(name, negated_literal_spelling(old_value),
                                  old_target->second, model)) {
         return reject("sign-toggled selector does not decode to its typed target when negated");
+      }
+      if (had_original_flow_use && deferred_reconciliation &&
+          !preload_value_targets(name, negated_literal_spelling(old_value),
+                                 new_target->second, model)) {
+        return reject(
+            "deferred sign-toggled selector does not decode to its final target");
       }
       if (!sign_toggle_decode_is_invariant(name, old_value, new_target->second, model))
         return reject("sign-toggled selector preload cannot be rebound");
@@ -3535,7 +3577,10 @@ std::optional<CandidateArtifact> try_candidate(
   const bool absolute_only =
       !has_flow_anchor && options.allow_size_neutral_absolute_layout &&
       !options.required_absolute_targets.empty();
-  const bool layout_only = bounded_only || absolute_only;
+  const bool selector_target_only =
+      !has_flow_anchor && options.allow_size_neutral_selector_target_layout &&
+      !options.required_selector_targets.empty();
+  const bool layout_only = bounded_only || absolute_only || selector_target_only;
   if (!has_flow_anchor && !layout_only)
     return reject("candidate has no natural-target anchors");
   std::vector<NaturalTargetFlowRewrite> rewrites;
@@ -3660,7 +3705,9 @@ std::optional<CandidateArtifact> try_candidate(
   }
   const int maximum_padding =
       layout_only
-          ? 0
+          ? (selector_target_only
+                 ? std::max(0, options.maximum_transactional_growth_cells)
+                 : 0)
           : static_cast<int>(rewrites.size()) -
                 static_cast<int>(displaced_flows.size()) -
                 2 * static_cast<int>(trampolines.size()) -
@@ -3867,6 +3914,7 @@ std::optional<CandidateArtifact> try_candidate(
   if (!rebind_preloads(items, control_flow, original_address_by_origin,
                        new_address_by_origin, selectors, anchors,
                        displaced_flows, trampolines,
+                       options.deferred_selector_reconciliations,
                        options.address_space_model, candidate.preloads,
                        preload_rewrites, &preload_failure)) {
     return reject("runtime preload rebinding proof failed: " + preload_failure);
@@ -3965,6 +4013,15 @@ std::optional<CandidateArtifact> try_candidate(
       static_cast<int>(options.required_absolute_targets.size());
   plan.absolute_targets_proved = absolute_targets_proved;
   plan.size_neutral_absolute_layout = absolute_only;
+  plan.transactional_selector_target_layout = selector_target_only;
+  plan.transactional_growth_cells = std::max(0, -plan.removed_cells);
+  plan.size_neutral_selector_target_layout =
+      selector_target_only && plan.removed_cells == 0;
+  plan.deferred_selector_reconciliations =
+      static_cast<int>(options.deferred_selector_reconciliations.size());
+  plan.deferred_selector_reconciliations_proved =
+      options.deferred_selector_reconciliations.empty() ||
+      (absolute_targets_proved && runtime_selectors.has_value());
   plan.size_neutral_flow_rebind =
       !bounded_only && options.allow_size_neutral_flow_rebind &&
       plan.removed_cells == 0;
@@ -3977,7 +4034,9 @@ std::optional<CandidateArtifact> try_candidate(
   plan.indirect_memory_equivalent = indirect_memory_facts_equivalent(
       control_flow, final_flow, rewritten_origin_by_item);
   plan.data_projection_equivalent = true;
-  plan.final_artifact_proved = final_flow.proved && bounded_targets_proved;
+  plan.final_artifact_proved =
+      final_flow.proved && bounded_targets_proved && absolute_targets_proved &&
+      plan.deferred_selector_reconciliations_proved;
   const int expected_removed_cells =
       static_cast<int>(plan.flows.size()) -
       static_cast<int>(displaced_flows.size()) -
@@ -3985,7 +4044,7 @@ std::optional<CandidateArtifact> try_candidate(
       split_bridge_cells(split_bridges) -
       selected_layout->order.padding_cells;
   const bool size_goal_proved =
-      layout_only ? plan.removed_cells == 0
+      layout_only ? plan.removed_cells >= -maximum_padding
                    : plan.removed_cells > 0 || plan.size_neutral_flow_rebind;
   plan.proved = plan.removed_cells == expected_removed_cells &&
                 size_goal_proved && plan.control_flow_equivalent &&
@@ -4001,8 +4060,8 @@ std::optional<CandidateArtifact> try_candidate(
     if (!bounded_only && plan.removed_cells <= 0 &&
         !plan.size_neutral_flow_rebind)
       reason += ": nonpositive-size-saving";
-    if (layout_only && plan.removed_cells != 0)
-      reason += ": layout-only-size-changed";
+    if (layout_only && plan.removed_cells < -maximum_padding)
+      reason += ": layout-only-growth-exceeded";
     if (!plan.stack_and_x2_equivalent) {
       reason += ": stack-or-X2";
       if (!trampolines_proved)
@@ -4320,8 +4379,62 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
       return result;
     }
   }
+  std::set<std::size_t> deferred_selector_sources;
+  for (const NaturalTargetDeferredSelectorReconciliation& reconciliation :
+       options.deferred_selector_reconciliations) {
+    const auto absolute = std::find_if(
+        options.required_absolute_targets.begin(),
+        options.required_absolute_targets.end(),
+        [&](const NaturalTargetRequiredAbsoluteTarget& required) {
+          return required.target_item == reconciliation.target_item &&
+                 required.target_address ==
+                     reconciliation.final_target_address;
+        });
+    const std::optional<int> source_selector =
+        reconciliation.source_item < logical_items.size()
+            ? std::optional<int>{
+                  encoded_register(
+                      logical_items.at(reconciliation.source_item).opcode)}
+            : std::nullopt;
+    const auto selector_target = std::find_if(
+        options.required_selector_targets.begin(),
+        options.required_selector_targets.end(),
+        [&](const NaturalTargetRequiredSelectorTarget& required) {
+          if (required.target_item != reconciliation.target_item ||
+              !source_selector.has_value()) {
+            return false;
+          }
+          try {
+            return register_index(register_from_text(required.register_name)) ==
+                   *source_selector;
+          } catch (const std::exception&) {
+            return false;
+          }
+        });
+    const auto typed = logical_flow->indirect_flow_targets.find(
+        reconciliation.source_item);
+    if (reconciliation.source_item >= logical_items.size() ||
+        reconciliation.target_item >= logical_items.size() ||
+        logical_items.at(reconciliation.source_item).kind != MachineItemKind::Op ||
+        !is_indirect_flow(logical_items.at(reconciliation.source_item).opcode) ||
+        logical_items.at(reconciliation.target_item).kind != MachineItemKind::Op ||
+        reconciliation.final_target_address < 0 ||
+        reconciliation.final_target_address >
+            official_program_last_address(options.address_space_model) ||
+        !deferred_selector_sources.insert(reconciliation.source_item).second ||
+        (absolute == options.required_absolute_targets.end() &&
+         selector_target == options.required_selector_targets.end()) ||
+        typed == logical_flow->indirect_flow_targets.end() ||
+        typed->second.size() != 1U ||
+        typed->second.front().item_index != reconciliation.target_item) {
+      add_reason(result.plan,
+                 "deferred selector reconciliation contract is incomplete or invalid");
+      return result;
+    }
+  }
   if (flows.empty() && bounded_target_origins.empty() &&
-      options.required_absolute_targets.empty()) {
+      options.required_absolute_targets.empty() &&
+      options.required_selector_targets.empty()) {
     add_reason(result.plan, "artifact contains no direct flow to shorten");
     return result;
   }
@@ -4835,7 +4948,9 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
       ((options.allow_size_neutral_bounded_layout &&
         !bounded_target_origins.empty()) ||
        (options.allow_size_neutral_absolute_layout &&
-        !options.required_absolute_targets.empty()))) {
+        !options.required_absolute_targets.empty()) ||
+       (options.allow_size_neutral_selector_target_layout &&
+        !options.required_selector_targets.empty()))) {
     consider_trial({}, false);
   }
   if (transparent_jump_search_capped)
@@ -4856,7 +4971,8 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   }
   result.applied =
       (result.plan.size_neutral_bounded_layout ||
-       result.plan.size_neutral_absolute_layout)
+       result.plan.size_neutral_absolute_layout ||
+       result.plan.transactional_selector_target_layout)
                        ? std::max(1, result.plan.moved_segments)
                        : static_cast<int>(result.plan.flows.size());
   result.removed_cells = result.plan.removed_cells;
