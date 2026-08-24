@@ -108,6 +108,13 @@ struct TransparentSplitBridge {
   std::optional<std::size_t> operand_origin;
   std::size_t target_origin = 0;
   int selector_register = -1;
+  bool reuses_existing_command = false;
+};
+
+struct SplitBridgeDonor {
+  std::size_t command_origin = 0;
+  std::size_t target_origin = 0;
+  int selector_register = -1;
 };
 
 struct NaturalTargetPlacement {
@@ -474,13 +481,23 @@ bool split_segment_with_bridge(
     std::vector<Segment>& segments, std::size_t segment_index,
     std::size_t prefix_cells, std::size_t command_origin,
     std::size_t operand_origin, TransparentSplitBridge& bridge,
-    int selector_register = -1) {
+    int selector_register = -1,
+    std::optional<Cell> donated_command = std::nullopt) {
   if (segment_index >= segments.size() || prefix_cells == 0U ||
       prefix_cells >= segments.at(segment_index).cells.size() ||
       segments.at(segment_index).cells.at(prefix_cells).value.item.kind ==
           MachineItemKind::Address ||
       safe_cut_after(segments.at(segment_index).cells, prefix_cells - 1U) ||
       selector_register > 14) {
+    return false;
+  }
+  const int bridge_opcode =
+      selector_register >= 0 ? 0x80 + selector_register : kJumpOpcode;
+  if (donated_command.has_value() &&
+      (selector_register < 0 ||
+       donated_command->value.item.kind != MachineItemKind::Op ||
+       donated_command->value.item.opcode != bridge_opcode ||
+       donated_command->value.item.manual_interaction.has_value())) {
     return false;
   }
 
@@ -494,21 +511,26 @@ bool split_segment_with_bridge(
   if (suffix.cells.empty())
     return false;
   bridge = TransparentSplitBridge{
-      .command_origin = command_origin,
+      .command_origin = donated_command.has_value()
+                            ? donated_command->value.origin
+                            : command_origin,
       .operand_origin = selector_register >= 0
                             ? std::nullopt
                             : std::optional<std::size_t>(operand_origin),
       .target_origin = suffix.cells.front().value.origin,
       .selector_register = selector_register,
+      .reuses_existing_command = donated_command.has_value(),
   };
-  const int bridge_opcode =
-      selector_register >= 0 ? 0x80 + selector_register : kJumpOpcode;
-  prefix.cells.push_back(Cell{
-      .value = OwnedItem{
-          .item = MachineItem::op(bridge_opcode, opcode_by_code(bridge_opcode).name),
-          .origin = bridge.command_origin,
-      },
-  });
+  if (donated_command.has_value()) {
+    prefix.cells.push_back(std::move(*donated_command));
+  } else {
+    prefix.cells.push_back(Cell{
+        .value = OwnedItem{
+            .item = MachineItem::op(bridge_opcode, opcode_by_code(bridge_opcode).name),
+            .origin = bridge.command_origin,
+        },
+    });
+  }
   if (bridge.operand_origin.has_value()) {
     prefix.cells.push_back(Cell{
         .value = OwnedItem{
@@ -522,6 +544,8 @@ bool split_segment_with_bridge(
 }
 
 int split_bridge_cells(const TransparentSplitBridge& bridge) {
+  if (bridge.reuses_existing_command)
+    return 0;
   return bridge.selector_register >= 0 ? 1 : 2;
 }
 
@@ -1582,7 +1606,8 @@ layout_order_with_optional_split(
     std::size_t maximum_states, int maximum_padding,
     std::size_t bridge_command_origin,
     const std::vector<NaturalTargetPlacement>& bounded_placements = {},
-    int maximum_bounded_target = std::numeric_limits<int>::max()) {
+    int maximum_bounded_target = std::numeric_limits<int>::max(),
+    const std::vector<SplitBridgeDonor>& bridge_donors = {}) {
   std::optional<NaturalTargetLayoutVariant> best;
   auto consider = [&](std::vector<Segment> trial_segments,
                       NaturalTargetLayoutOrder trial_order,
@@ -1723,6 +1748,98 @@ layout_order_with_optional_split(
   }
   if (!ordinary.has_value() || ordinary->padding_cells > 2)
     try_direct_gap_splits(segments, placements, {}, bounded_placements);
+
+  for (const NaturalTargetPlacement& bridge_target : placements) {
+    if (bridge_target.target_segment >= segments.size() ||
+        bridge_target.target_offset <= 0 ||
+        bridge_target.selector_register < 0) {
+      continue;
+    }
+    const std::size_t prefix_cells =
+        static_cast<std::size_t>(bridge_target.target_offset);
+    if (prefix_cells >=
+        segments.at(bridge_target.target_segment).cells.size()) {
+      continue;
+    }
+    const std::size_t suffix_origin =
+        segments.at(bridge_target.target_segment)
+            .cells.at(prefix_cells).value.origin;
+    for (const SplitBridgeDonor& donor : bridge_donors) {
+      if (donor.selector_register != bridge_target.selector_register ||
+          donor.target_origin != suffix_origin) {
+        continue;
+      }
+      const auto donor_location = locate_origin(segments, donor.command_origin);
+      if (!donor_location.has_value() ||
+          donor_location->first == main_segment ||
+          donor_location->first == bridge_target.target_segment ||
+          segments.at(donor_location->first).cells.size() != 1U ||
+          donor_location->second != 0) {
+        continue;
+      }
+      const bool donor_is_placed =
+          std::any_of(placements.begin(), placements.end(),
+                      [&](const NaturalTargetPlacement& placement) {
+                        return placement.target_segment == donor_location->first;
+                      }) ||
+          std::any_of(bounded_placements.begin(), bounded_placements.end(),
+                      [&](const NaturalTargetPlacement& placement) {
+                        return placement.target_segment == donor_location->first;
+                      });
+      if (donor_is_placed)
+        continue;
+
+      std::vector<Segment> trial_segments = segments;
+      Cell donated = std::move(
+          trial_segments.at(donor_location->first).cells.front());
+      trial_segments.erase(trial_segments.begin() +
+                           static_cast<std::ptrdiff_t>(donor_location->first));
+      const auto remap_segment = [&](std::size_t segment) {
+        return segment > donor_location->first ? segment - 1U : segment;
+      };
+      const std::size_t trial_main = remap_segment(main_segment);
+      const std::size_t trial_target_segment =
+          remap_segment(bridge_target.target_segment);
+      std::vector<NaturalTargetPlacement> trial_placements = placements;
+      std::vector<NaturalTargetPlacement> trial_bounded_placements =
+          bounded_placements;
+      for (NaturalTargetPlacement& placement : trial_placements)
+        placement.target_segment = remap_segment(placement.target_segment);
+      for (NaturalTargetPlacement& placement : trial_bounded_placements)
+        placement.target_segment = remap_segment(placement.target_segment);
+
+      TransparentSplitBridge bridge;
+      if (!split_segment_with_bridge(
+              trial_segments, trial_target_segment, prefix_cells,
+              bridge_command_origin, bridge_command_origin + 1U, bridge,
+              bridge_target.selector_register, std::move(donated))) {
+        continue;
+      }
+      const std::size_t suffix_segment = trial_segments.size() - 1U;
+      for (NaturalTargetPlacement& placement : trial_placements) {
+        if (placement.target_segment != trial_target_segment ||
+            placement.target_offset < static_cast<int>(prefix_cells)) {
+          continue;
+        }
+        placement.target_segment = suffix_segment;
+        placement.target_offset -= static_cast<int>(prefix_cells);
+      }
+      for (NaturalTargetPlacement& placement : trial_bounded_placements) {
+        if (placement.target_segment != trial_target_segment ||
+            placement.target_offset < static_cast<int>(prefix_cells)) {
+          continue;
+        }
+        placement.target_segment = suffix_segment;
+        placement.target_offset -= static_cast<int>(prefix_cells);
+      }
+      const auto trial_order = layout_order_for_targets(
+          trial_segments, trial_main, trial_placements, maximum_states,
+          maximum_padding, trial_bounded_placements,
+          maximum_bounded_target);
+      if (trial_order.has_value())
+        consider(std::move(trial_segments), *trial_order, {bridge});
+    }
+  }
 
   if (maximum_padding >= 1) {
     for (const NaturalTargetPlacement& bridge_target : placements) {
@@ -3512,7 +3629,8 @@ bool transparent_split_bridges_proved(
         return false;
       }
     }
-    bridge_commands.insert(command->second);
+    if (!bridge.reuses_existing_command)
+      bridge_commands.insert(command->second);
   }
   for (const PostLayoutExternalEntryState& entry : flow.external_entries) {
     if (bridge_commands.contains(entry.entry.item_index))
@@ -3700,7 +3818,37 @@ std::optional<CandidateArtifact> try_candidate(
     placements.push_back(NaturalTargetPlacement{
         .target_segment = target_location->first,
         .target_offset = target_location->second,
-        .natural_target = required.target_address,
+      .natural_target = required.target_address,
+    });
+  }
+  std::vector<SplitBridgeDonor> split_bridge_donors;
+  const auto command_is_control_identity =
+      [&](const std::size_t command_origin) {
+        return control_flow.empty_return_target.has_value() &&
+               control_flow.empty_return_target->item_index == command_origin;
+      };
+  for (const auto& [command_origin, targets] :
+       control_flow.indirect_flow_targets) {
+    if (command_origin >= items.size() || targets.size() != 1U ||
+        command_is_control_identity(command_origin)) {
+      continue;
+    }
+    const MachineItem& command = items.at(command_origin);
+    if (command.kind != MachineItemKind::Op || command.opcode < 0x80 ||
+        command.opcode > 0x8e || command.manual_interaction.has_value() ||
+        targets.front().item_index == command_origin) {
+      continue;
+    }
+    const auto command_location = locate_origin(segments, command_origin);
+    if (!command_location.has_value() || command_location->second != 0 ||
+        segments.at(command_location->first).cells.size() != 1U ||
+        command_location->first == main_location->first) {
+      continue;
+    }
+    split_bridge_donors.push_back(SplitBridgeDonor{
+        .command_origin = command_origin,
+        .target_origin = targets.front().item_index,
+        .selector_register = command.opcode - 0x80,
     });
   }
   const int maximum_padding =
@@ -3720,7 +3868,7 @@ std::optional<CandidateArtifact> try_candidate(
     selected_layout = layout_order_with_optional_split(
         segments, main_location->first, placements, options.maximum_subset_states,
         maximum_padding, next_synthetic_origin, bounded_placements,
-        options.maximum_bounded_target_address);
+        options.maximum_bounded_target_address, split_bridge_donors);
   } else if (flexible_placements.size() == 1U) {
     const auto flexible_anchor = std::find_if(
         anchors.begin(), anchors.end(), [](const NaturalTargetAnchorCandidate& anchor) {
@@ -3744,7 +3892,7 @@ std::optional<CandidateArtifact> try_candidate(
               segments, main_location->first, trial_placements,
               options.maximum_subset_states, maximum_padding,
               next_synthetic_origin, bounded_placements,
-              options.maximum_bounded_target_address);
+              options.maximum_bounded_target_address, split_bridge_donors);
       if (!trial_layout.has_value())
         continue;
       if (!selected_layout.has_value() ||
@@ -3772,13 +3920,14 @@ std::optional<CandidateArtifact> try_candidate(
         options.maximum_subset_states, maximum_padding,
         next_synthetic_origin, all_bounded,
         std::min(options.maximum_bounded_target_address,
-                 std::min(99, official_program_last_address(options.address_space_model))));
+                 std::min(99, official_program_last_address(options.address_space_model))),
+        split_bridge_donors);
   } else {
     selected_layout = layout_order_with_optional_split(
         segments, main_location->first, placements,
         options.maximum_subset_states, maximum_padding,
         next_synthetic_origin, bounded_placements,
-        options.maximum_bounded_target_address);
+        options.maximum_bounded_target_address, split_bridge_donors);
   }
   if (!selected_layout.has_value()) {
     std::string geometry =
@@ -3951,6 +4100,23 @@ std::optional<CandidateArtifact> try_candidate(
     transparent_aliases.emplace(trampoline.command_origin, trampoline.target_origin);
   for (const TransparentSplitBridge& bridge : split_bridges)
     transparent_aliases.emplace(bridge.command_origin, bridge.target_origin);
+  const TraceGraph* comparison_original_trace = &original_trace;
+  std::optional<TraceGraph> donated_original_trace;
+  std::map<std::size_t, std::size_t> donated_original_aliases;
+  for (const TransparentSplitBridge& bridge : split_bridges) {
+    if (bridge.reuses_existing_command)
+      donated_original_aliases.emplace(bridge.command_origin,
+                                       bridge.target_origin);
+  }
+  if (!donated_original_aliases.empty()) {
+    donated_original_trace = build_trace_graph(
+        items, control_flow, original_origin_by_item,
+        options.address_space_model, options.maximum_execution_states,
+        &donated_original_aliases);
+    if (!donated_original_trace.has_value())
+      return reject("donated split-bridge source trace could not be canonicalized");
+    comparison_original_trace = &*donated_original_trace;
+  }
   const bool trampolines_proved = transparent_trampolines_proved(
       candidate.items, candidate.new_item_by_origin, new_address_by_origin,
       final_flow, trampolines);
@@ -3973,7 +4139,7 @@ std::optional<CandidateArtifact> try_candidate(
     return reject("rewritten external-entry ledger is incomplete");
   if (!runtime_selectors.has_value())
     return reject("runtime selector proof failed");
-  if (*rewritten_trace != original_trace)
+  if (*rewritten_trace != *comparison_original_trace)
     return reject("rewritten identity trace differs from the logical input");
   if (*rewritten_external != original_external)
     return reject("rewritten external-entry ledger differs from the logical input");
@@ -3992,6 +4158,11 @@ std::optional<CandidateArtifact> try_candidate(
   plan.rebound_indirect_flows = static_cast<int>(displaced_flows.size());
   plan.transparent_trampolines = static_cast<int>(trampolines.size());
   plan.transparent_split_bridges = static_cast<int>(split_bridges.size());
+  plan.reused_split_bridge_commands = static_cast<int>(std::count_if(
+      split_bridges.begin(), split_bridges.end(),
+      [](const TransparentSplitBridge& bridge) {
+        return bridge.reuses_existing_command;
+      }));
   plan.flows = std::move(rewrites);
   plan.preloads = std::move(preload_rewrites);
   plan.runtime_selectors = *runtime_selectors;
@@ -4002,7 +4173,8 @@ std::optional<CandidateArtifact> try_candidate(
   int x2_reconvergence_flows = 0;
   const bool converted_flow_effects_proved =
       layout_only || converted_flow_effects_equivalent(
-                          items, anchors, plan.flows, original_trace,
+                          items, anchors, plan.flows,
+                          *comparison_original_trace,
                           flow_effect_proof_context, &converted_flow_failure,
                           nullptr, &x2_reconvergence_flows);
   plan.x2_reconvergence_flows = x2_reconvergence_flows;

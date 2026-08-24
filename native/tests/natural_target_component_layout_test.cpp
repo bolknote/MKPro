@@ -1099,6 +1099,68 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
   }
 
   {
+    Fixture input = indirect_split_bridge_fixture();
+    MachineItem donor = op(0x89);
+    donor.indirect_flow_targets =
+        std::vector<IrTarget>{std::string("unrelated_indirect_split_suffix")};
+    input.items.at(item_at_address(input.items, 13)) = std::move(donor);
+    for (int removed = 0; removed < 5; ++removed) {
+      input.items.erase(input.items.begin() +
+                        static_cast<std::ptrdiff_t>(
+                            item_at_address(input.items, 14)));
+    }
+    input.items.push_back(op(0x69));
+    for (int padding = 0; padding < 4; ++padding)
+      input.items.push_back(op(0x54));
+    input.items.push_back(stop());
+    input.preloads.at(1).value = "31";
+    core::NaturalTargetComponentLayoutOptions donor_options;
+    int direct_call = 0;
+    for (std::size_t item = 0; item < input.items.size(); ++item) {
+      if (input.items.at(item).kind != MachineItemKind::Op ||
+          input.items.at(item).opcode != 0x53) {
+        continue;
+      }
+      donor_options.required_flow_selectors.push_back(
+          core::NaturalTargetRequiredFlowSelector{
+              .command_item = item,
+              .register_name = direct_call < 2 ? "8" : "9",
+          });
+      ++direct_call;
+    }
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input), donor_options);
+    std::string donor_detail =
+        " applied=" + std::to_string(rewritten.applied) +
+        " removed=" + std::to_string(rewritten.removed_cells) +
+        " bridges=" +
+        std::to_string(rewritten.plan.transparent_split_bridges) +
+        " reused=" +
+        std::to_string(rewritten.plan.reused_split_bridge_commands);
+    for (const std::string& reason : rewritten.plan.reasons)
+      donor_detail += "; " + reason;
+    require(rewritten.plan.proved && rewritten.applied > 0 &&
+                rewritten.plan.transparent_split_bridges == 1 &&
+                rewritten.plan.reused_split_bridge_commands == 1,
+            "a separately addressed equivalent indirect jump should donate its "
+            "existing cell to a natural-target split bridge:" + donor_detail);
+    const Observation before = observe(input.items, input.preloads);
+    const Observation after = observe(rewritten.items, rewritten.preloads);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "a donated split bridge must preserve observable machine state");
+
+    input.items.at(item_at_address(input.items, 13)).opcode = 0x8c;
+    input.items.at(item_at_address(input.items, 13)).mnemonic =
+        opcode_by_code(0x8c).name;
+    input.preloads.push_back(
+        PreloadReport{.register_name = "c", .value = "31"});
+    const auto mismatched = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input), donor_options);
+    require(mismatched.plan.reused_split_bridge_commands == 0,
+            "a donor with a different selector must not be reused");
+  }
+
+  {
     const Fixture input = indirect_split_bridge_call_continuation_fixture();
     const auto rewritten = core::optimize_natural_target_component_layout(
         input.items, input.preloads, flow(input));

@@ -157,6 +157,7 @@ struct NaturalTargetComponentLayoutPlan {
   int rebound_indirect_flows = 0;
   int transparent_trampolines = 0;
   int transparent_split_bridges = 0;
+  int reused_split_bridge_commands = 0;
   int x2_reconvergence_flows = 0;
   int terminal_shared_return_folds = 0;
   int bounded_targets = 0;

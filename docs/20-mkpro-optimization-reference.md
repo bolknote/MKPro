@@ -82,6 +82,19 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   register-entry ABI and may become removable only after a stack-entry function
   ABI proves that the argument expressions can stay in X/Y/Z/T through the call.
 
+- `split-bridge-donor-reuse` is a zero-cell variant of the generic natural-target
+  fallthrough split. If the final CFG already contains a separately addressed,
+  one-cell `К БП Rn` component whose sole proved command target is exactly the
+  suffix required by a split through the same selector, the solver moves that
+  command identity and its labels to the split boundary instead of synthesizing
+  another cell. The donor cannot be the main/empty-return entry or another
+  constrained placement. External entries and return-stack continuations are
+  allowed only because the original command identity is retained and retargeted
+  to its new address. Both the original and rewritten traces canonicalize the
+  same transparent jump; final CFG, command identity, stack/X2, return-stack,
+  indirect-memory, preload, and size accounting proofs are then repeated. No
+  opcode with fallthrough and no merely numerically equal target is eligible.
+
 - `projected-terminal-layout-tiebreak` is a post-layout selection rule, not a
   source-pattern recognizer. Current executable-cell count remains the primary
   ordering key for natural-target component layouts. Only when two fully

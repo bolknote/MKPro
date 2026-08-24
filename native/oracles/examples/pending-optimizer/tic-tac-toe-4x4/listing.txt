@@ -115,7 +115,7 @@
    41 | 63    | П→X 3                   | recall best_score
    42 | 12    | ×                       | stack-carried packed digit delta
    43 | 10    | +                       | add stacked indexed value to packed digit delta
-   44 | B0    | К X→П 0                 | predecrement indexed packed digit update store through 0
+   44 | B0    | К X→П 0                 | predecrement indexed packed digit update store through 0 lines; indirect-memory-targets=4,5,6,7
    45 | 6C    | П→X c                   | preload const 88888834
    46 | 37    | К ∧                     | updated packed fractional report mask
    47 | 35    | К {x}                   | updated packed fractional report predicate

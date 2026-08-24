@@ -53433,6 +53433,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
               ordinary_natural_layout.plan.transparent_trampolines;
           descendant.plan.transparent_split_bridges +=
               ordinary_natural_layout.plan.transparent_split_bridges;
+          descendant.plan.reused_split_bridge_commands +=
+              ordinary_natural_layout.plan.reused_split_bridge_commands;
           descendant.plan.flows.insert(
               descendant.plan.flows.begin(),
               ordinary_natural_layout.plan.flows.begin(),
@@ -53688,6 +53690,12 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                                      std::to_string(
                                          natural_layout.plan.transparent_split_bridges) +
                                      " proved fallthrough split bridge(s)";
+            if (natural_layout.plan.reused_split_bridge_commands > 0) {
+              natural_layout_detail += ", including " +
+                  std::to_string(
+                      natural_layout.plan.reused_split_bridge_commands) +
+                  " bridge(s) donated by existing one-cell commands";
+            }
           }
           natural_layout_detail += " after exact final-artifact "
               "control/return-stack/stack/X2/runtime-selector proofs.";
@@ -53698,6 +53706,17 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                           : "natural-target-component-layout",
               .detail = std::move(natural_layout_detail),
           });
+          if (natural_layout.plan.reused_split_bridge_commands > 0) {
+            post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+                .name = "split-bridge-donor-reuse",
+                .detail =
+                    "Moved " +
+                    std::to_string(
+                        natural_layout.plan.reused_split_bridge_commands) +
+                    " separately addressed one-cell indirect jump command(s) to "
+                    "equivalent fallthrough split boundaries without adding cells.",
+            });
+          }
           if (natural_layout.plan.terminal_shared_return_folds > 0) {
             post_layout_optimizations.push_back(core::passes::AppliedOptimization{
                 .name = "terminal-shared-return-selector-layout",
