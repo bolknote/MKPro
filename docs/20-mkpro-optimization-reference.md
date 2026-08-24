@@ -3392,3 +3392,9 @@ selection.
 JSON and human `--analysis` output expose the score, unit, CFG counts, loop
 bound, policy, and availability reason. A selected equal-size alternative also
 records `runtime-cost-tie-break` with the two compared scores.
+
+## Proof-closed post-layout repayment
+
+Компонентная раскладка может временно добавить не более двух ячеек моста, только если обычная раскладка не удовлетворяет доказанным адресным ограничениям. Такой промежуточный артефакт не публикуется напрямую.
+
+Одинаковый downstream pipeline применяется к исходной и кандидатной раскладке: `error-padding-code-overlay`, `address-code-overlay`, затем terminal/cyclic. После каждого выбранного этапа заново строится authoritative CFG. Выросший кандидат принимается только тогда, когда его доказанный конечный размер строго меньше доказанного конечного размера baseline; равенство и неполное доказательство отклоняются. Это общий size-first механизм и не использует имена программ, функций или исходные паттерны конкретной игры.

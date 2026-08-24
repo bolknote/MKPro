@@ -738,6 +738,8 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
                 atomic.front().plan.deferred_selector_reconciliations_proved &&
                 atomic.front().plan.transactional_selector_target_layout &&
                 atomic.front().plan.transactional_growth_cells == 0 &&
+                atomic.front().plan.transactional_downstream_removed_cells == 0 &&
+                atomic.front().plan.transactional_overlay_removed_cells == 0 &&
                 atomic.front().plan.transactional_terminal_removed_cells == 0 &&
                 atomic.front().plan.size_neutral_selector_target_layout &&
                 cell_count(atomic.front().items) ==

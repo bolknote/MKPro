@@ -170,6 +170,8 @@ struct NaturalTargetComponentLayoutPlan {
   bool size_neutral_selector_target_layout = false;
   bool transactional_selector_target_layout = false;
   int transactional_growth_cells = 0;
+  int transactional_downstream_removed_cells = 0;
+  int transactional_overlay_removed_cells = 0;
   int transactional_terminal_removed_cells = 0;
   int deferred_selector_reconciliations = 0;
   bool deferred_selector_reconciliations_proved = false;

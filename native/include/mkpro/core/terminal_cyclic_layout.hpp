@@ -22,6 +22,7 @@ struct TerminalCyclicLayoutOptions {
   int maximum_return_depth = 5;
   int maximum_execution_states = 20000;
   bool enable_return_alias = false;
+  bool enable_transactional_startup_layout = true;
   const std::vector<HelperSemanticContract>* helper_semantic_contracts = nullptr;
 };
 
@@ -81,6 +82,30 @@ struct EmptyReturnStartupLayoutResult {
 // when their delivered preload belongs to a compiler-proved retunable natural
 // fractional family; the returned preload set is part of the transaction.
 std::vector<EmptyReturnStartupLayoutResult> normalize_empty_return_startup_layouts(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const TerminalCyclicLayoutOptions& options = {});
+
+// Run the proof-valid size-reducing post-layout passes that may repay a
+// temporary component-layout bridge. Every selected stage is materialized and
+// its authoritative CFG is rebuilt before the next stage. The result never
+// reports a larger artifact than its input.
+struct PostLayoutRepaymentPipelineResult {
+  std::vector<MachineItem> items;
+  std::vector<PreloadReport> preloads;
+  AuthoritativePostLayoutControlFlow final_control_flow;
+  int input_cells = 0;
+  int output_cells = 0;
+  int code_overlay_applied = 0;
+  int overlay_removed_cells = 0;
+  int terminal_applied = 0;
+  int terminal_removed_cells = 0;
+  bool final_artifact_proved = false;
+  std::vector<std::string> reasons;
+};
+
+PostLayoutRepaymentPipelineResult optimize_post_layout_repayment_pipeline(
     const std::vector<MachineItem>& items,
     const std::vector<PreloadReport>& preloads,
     const AuthoritativePostLayoutControlFlow& control_flow,

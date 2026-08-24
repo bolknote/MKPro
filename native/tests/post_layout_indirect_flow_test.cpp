@@ -4,6 +4,7 @@
 #include "mkpro/core/post_layout_control_flow.hpp"
 #include "mkpro/core/post_layout_indirect_flow.hpp"
 #include "mkpro/core/super_dark_layout.hpp"
+#include "mkpro/core/terminal_cyclic_layout.hpp"
 #include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
@@ -122,6 +123,40 @@ void post_layout_indirect_flow_matches_typescript_contract() {
   options.delivery = DeliveryMode::Manual;
   options.budget = 999999;
   options.analysis = true;
+
+  {
+    const std::vector<MachineItem> candidate =
+        error_padding_overlay_program();
+    const core::AuthoritativePostLayoutControlFlow candidate_flow =
+        core::build_post_layout_control_flow(candidate);
+    require(candidate_flow.proved,
+            "repayment candidate should have an authoritative input CFG");
+    const core::PostLayoutRepaymentPipelineResult candidate_pipeline =
+        core::optimize_post_layout_repayment_pipeline(
+            candidate, {}, candidate_flow);
+    require(candidate_pipeline.final_artifact_proved &&
+                candidate_pipeline.code_overlay_applied == 1 &&
+                candidate_pipeline.overlay_removed_cells == 1 &&
+                candidate_pipeline.terminal_removed_cells == 0 &&
+                candidate_pipeline.output_cells == 6,
+            "proof-closed repayment should consume a proved error-padding overlay");
+
+    std::vector<MachineItem> baseline = candidate;
+    baseline.at(3).roles.clear();
+    const core::AuthoritativePostLayoutControlFlow baseline_flow =
+        core::build_post_layout_control_flow(baseline);
+    require(baseline_flow.proved,
+            "repayment negative fixture should retain an authoritative CFG");
+    const core::PostLayoutRepaymentPipelineResult baseline_pipeline =
+        core::optimize_post_layout_repayment_pipeline(
+            baseline, {}, baseline_flow);
+    require(baseline_pipeline.final_artifact_proved &&
+                baseline_pipeline.code_overlay_applied == 0 &&
+                baseline_pipeline.output_cells == 7 &&
+                candidate_pipeline.output_cells < baseline_pipeline.output_cells,
+            "repayment must fail closed without the typed skipped-cell proof and rank "
+            "the proof-valid equal-byte candidate by final size");
+  }
 
   {
     const std::vector<MachineItem> program =

@@ -53574,15 +53574,21 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
           }
           if (chosen_atomic_startup_component) {
             const std::string transactional_repayment =
-                natural_layout.plan.transactional_terminal_removed_cells > 0
+                natural_layout.plan.transactional_downstream_removed_cells > 0
                     ? " The atomic transaction temporarily used " +
                           std::to_string(
                               natural_layout.plan.transactional_growth_cells) +
-                          " bridge cell(s), then the terminal/cyclic verifier "
-                          "removed " +
+                          " bridge cell(s), then the proof-closed downstream "
+                          "pipeline removed " +
+                          std::to_string(natural_layout.plan
+                                             .transactional_downstream_removed_cells) +
+                          " cell(s) before publication (code overlays " +
+                          std::to_string(natural_layout.plan
+                                             .transactional_overlay_removed_cells) +
+                          ", terminal/cyclic " +
                           std::to_string(natural_layout.plan
                                              .transactional_terminal_removed_cells) +
-                          " cell(s) before publication."
+                          ")."
                     : "";
             post_layout_optimizations.push_back(core::passes::AppliedOptimization{
                 .name = "empty-return-startup-component-transaction",

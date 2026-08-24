@@ -5,6 +5,7 @@
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/natural_target_component_layout.hpp"
 #include "mkpro/core/opcodes.hpp"
+#include "mkpro/core/post_layout_indirect_flow.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2430,6 +2431,95 @@ std::vector<EmptyReturnStartupLayoutResult> normalize_empty_return_startup_layou
   return results;
 }
 
+PostLayoutRepaymentPipelineResult optimize_post_layout_repayment_pipeline(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const TerminalCyclicLayoutOptions& options) {
+  PostLayoutRepaymentPipelineResult result{
+      .items = items,
+      .preloads = preloads,
+      .final_control_flow = control_flow,
+      .input_cells = index_artifact(items).cells,
+      .output_cells = index_artifact(items).cells,
+  };
+  if (!control_flow.proved) {
+    result.reasons.push_back("input post-layout CFG is not authoritative");
+    return result;
+  }
+
+  const auto identity_target = [](const PostLayoutCommandIdentity& identity) -> IrTarget {
+    if (!identity.labels.empty())
+      return IrTarget{identity.labels.front()};
+    return IrTarget{identity.address};
+  };
+  const auto main_entry = std::find_if(
+      control_flow.external_entries.begin(), control_flow.external_entries.end(),
+      [](const PostLayoutExternalEntryState& entry) {
+        return entry.kind == ExternalEntryKind::Main;
+      });
+  if (main_entry == control_flow.external_entries.end()) {
+    result.reasons.push_back("input post-layout CFG has no main entry identity");
+    return result;
+  }
+
+  PostLayoutControlFlowOptions flow_options{
+      .address_space_model = options.address_space_model,
+      .maximum_return_depth = options.maximum_return_depth,
+      .maximum_execution_states =
+          static_cast<std::size_t>(options.maximum_execution_states),
+      .main_entry = identity_target(main_entry->entry),
+      .empty_return_target =
+          control_flow.empty_return_target.has_value()
+              ? std::optional<IrTarget>{identity_target(*control_flow.empty_return_target)}
+              : std::nullopt,
+  };
+  CompileOptions compile_options;
+  compile_options.feature_profile =
+      options.address_space_model == AddressSpaceModel::Mk61SMiniExpanded
+          ? FeatureProfile::Mk61SMiniExpanded
+          : FeatureProfile::Standard;
+
+  const PostLayoutIndirectFlowResult overlay =
+      optimize_post_layout_code_overlays(result.items, result.preloads,
+                                         compile_options);
+  const int overlay_cells = index_artifact(overlay.items).cells;
+  if (overlay.applied > 0 && overlay_cells < result.output_cells) {
+    const AuthoritativePostLayoutControlFlow overlay_flow =
+        build_post_layout_control_flow(overlay.items, flow_options);
+    if (overlay_flow.proved) {
+      result.items = overlay.items;
+      result.preloads = overlay.preloads;
+      result.final_control_flow = overlay_flow;
+      result.code_overlay_applied = overlay.applied;
+      result.overlay_removed_cells = result.output_cells - overlay_cells;
+      result.output_cells = overlay_cells;
+    } else {
+      result.reasons.push_back(
+          "code-overlay artifact did not rebuild an authoritative CFG");
+    }
+  }
+
+  TerminalCyclicLayoutOptions terminal_options = options;
+  terminal_options.enable_transactional_startup_layout = false;
+  TerminalCyclicLayoutResult terminal = optimize_terminal_cyclic_layout(
+      result.items, result.preloads, result.final_control_flow, terminal_options);
+  const int terminal_cells = index_artifact(terminal.items).cells;
+  if (terminal.applied > 0 && terminal.plan.final_artifact_proved &&
+      terminal.plan.final_control_flow.proved &&
+      terminal_cells < result.output_cells) {
+    result.terminal_applied = terminal.applied;
+    result.terminal_removed_cells = result.output_cells - terminal_cells;
+    result.items = std::move(terminal.items);
+    result.preloads = std::move(terminal.preloads);
+    result.final_control_flow = std::move(terminal.plan.final_control_flow);
+    result.output_cells = terminal_cells;
+  }
+  result.final_artifact_proved = result.final_control_flow.proved &&
+                                 result.output_cells <= result.input_cells;
+  return result;
+}
+
 std::vector<NaturalTargetComponentLayoutResult>
 optimize_empty_return_startup_component_layouts(
     const std::vector<MachineItem>& items,
@@ -2648,19 +2738,12 @@ optimize_empty_return_startup_component_layouts(
         optimize_natural_target_component_layout(
             staged.items, *staged.preloads, staged.control_flow, options);
     if (natural.applied <= 0 || !natural.plan.proved) {
-      const TerminalCyclicLayoutProjection repayment =
-          project_terminal_cyclic_layout_size(items, preloads, control_flow,
-                                              terminal_options);
-      const int maximum_repaid_growth =
-          repayment.reduction_proved
-              ? input_cells - repayment.output_cells - 1
-              : 0;
-      if (maximum_repaid_growth > 0) {
-        options.maximum_transactional_growth_cells =
-            std::min(2, maximum_repaid_growth);
-        natural = optimize_natural_target_component_layout(
-            staged.items, *staged.preloads, staged.control_flow, options);
-      }
+      // Search a deliberately small growth frontier. No larger intermediate
+      // artifact is publishable: the common downstream pipeline below must
+      // prove that it beats the same pipeline on the baseline artifact.
+      options.maximum_transactional_growth_cells = 2;
+      natural = optimize_natural_target_component_layout(
+          staged.items, *staged.preloads, staged.control_flow, options);
     }
     int output_cells = index_artifact(natural.items).cells;
     if (natural.applied <= 0 || !natural.plan.proved ||
@@ -2691,26 +2774,42 @@ optimize_empty_return_startup_component_layouts(
 
     if (output_cells >= input_cells) {
       const int component_output_cells = output_cells;
-      TerminalCyclicLayoutResult terminal = optimize_terminal_cyclic_layout(
-          natural.items, natural.preloads, natural.plan.final_control_flow,
-          terminal_options);
-      const int terminal_output_cells = index_artifact(terminal.items).cells;
-      const bool terminal_reduction_proved =
-          terminal.applied > 0 && terminal.plan.final_artifact_proved &&
-          terminal.plan.final_control_flow.proved &&
-          terminal_output_cells < input_cells &&
-          selector_preloads_unchanged(preloads, terminal.preloads, staged);
-      if (terminal_reduction_proved) {
-        natural.items = std::move(terminal.items);
-        natural.preloads = std::move(terminal.preloads);
-        natural.applied += terminal.applied;
+      const PostLayoutRepaymentPipelineResult baseline_pipeline =
+          optimize_post_layout_repayment_pipeline(
+              items, preloads, control_flow, terminal_options);
+      PostLayoutRepaymentPipelineResult candidate_pipeline =
+          optimize_post_layout_repayment_pipeline(
+              natural.items, natural.preloads,
+              natural.plan.final_control_flow, terminal_options);
+      const bool candidate_pipeline_proved =
+          candidate_pipeline.final_artifact_proved &&
+          selector_preloads_unchanged(preloads, candidate_pipeline.preloads,
+                                      staged);
+      const bool growth_repaid =
+          output_cells > input_cells && candidate_pipeline_proved &&
+          baseline_pipeline.final_artifact_proved &&
+          candidate_pipeline.output_cells < baseline_pipeline.output_cells;
+      const bool neutral_pipeline_not_worse =
+          output_cells == input_cells && candidate_pipeline_proved &&
+          baseline_pipeline.final_artifact_proved &&
+          candidate_pipeline.output_cells <= baseline_pipeline.output_cells;
+      if ((growth_repaid || neutral_pipeline_not_worse) &&
+          candidate_pipeline.output_cells < component_output_cells) {
+        natural.items = std::move(candidate_pipeline.items);
+        natural.preloads = std::move(candidate_pipeline.preloads);
+        natural.applied += candidate_pipeline.code_overlay_applied +
+                           candidate_pipeline.terminal_applied;
+        natural.plan.transactional_downstream_removed_cells =
+            component_output_cells - candidate_pipeline.output_cells;
+        natural.plan.transactional_overlay_removed_cells =
+            candidate_pipeline.overlay_removed_cells;
         natural.plan.transactional_terminal_removed_cells =
-            component_output_cells - terminal_output_cells;
+            candidate_pipeline.terminal_removed_cells;
         natural.plan.final_control_flow =
-            std::move(terminal.plan.final_control_flow);
+            std::move(candidate_pipeline.final_control_flow);
         natural.plan.final_artifact_proved =
             natural.plan.final_artifact_proved &&
-            terminal.plan.final_artifact_proved;
+            candidate_pipeline.final_artifact_proved;
         natural.plan.proved = natural.plan.proved &&
                               natural.plan.final_artifact_proved &&
                               natural.plan.final_control_flow.proved;
@@ -2718,23 +2817,17 @@ optimize_empty_return_startup_component_layouts(
         natural.plan.size_neutral_bounded_layout = false;
         natural.plan.size_neutral_selector_target_layout = false;
         natural.plan.reasons.push_back(
-            "transactional selector bridge was committed only after terminal/cyclic "
-            "proof removed " +
-            std::to_string(natural.plan.transactional_terminal_removed_cells) +
+            "transactional selector bridge was committed only after the proof-closed "
+            "downstream pipeline removed " +
+            std::to_string(natural.plan.transactional_downstream_removed_cells) +
             " cell(s)");
-        output_cells = terminal_output_cells;
+        output_cells = candidate_pipeline.output_cells;
       } else if (output_cells > input_cells) {
-        if (!terminal.plan.reasons.empty()) {
-          int copied = 0;
-          for (auto reason = terminal.plan.reasons.rbegin();
-               reason != terminal.plan.reasons.rend() && copied < 8;
-               ++reason, ++copied) {
-            reject("terminal/cyclic repayment: " + *reason);
-          }
-        } else {
-          reject("temporary selector bridge growth was not repaid below the "
-                 "original artifact size");
-        }
+        reject("temporary selector bridge growth did not beat the proof-closed "
+               "downstream baseline (candidate " +
+               std::to_string(candidate_pipeline.output_cells) +
+               " cells vs baseline " +
+               std::to_string(baseline_pipeline.output_cells) + " cells)");
         continue;
       }
     }
@@ -3609,8 +3702,9 @@ optimize_terminal_cyclic_layout(const std::vector<MachineItem>& items,
         }
       }
     }
-    std::vector<std::string> startup_rejections;
-    for (ReboundArtifact& startup : build_empty_return_startup_layouts(
+    if (options.enable_transactional_startup_layout) {
+      std::vector<std::string> startup_rejections;
+      for (ReboundArtifact& startup : build_empty_return_startup_layouts(
              items, preloads, control_flow, options, &startup_rejections)) {
       const std::vector<PreloadReport>& startup_preloads =
           startup.preloads.has_value() ? *startup.preloads : preloads;
@@ -3627,12 +3721,13 @@ optimize_terminal_cyclic_layout(const std::vector<MachineItem>& items,
         }
       }
     }
-    for (auto reason = startup_rejections.rbegin();
-         reason != startup_rejections.rend(); ++reason) {
-      const std::string prefixed = "empty-return startup layout: " + *reason;
-      if (std::find(result.plan.reasons.begin(), result.plan.reasons.end(), prefixed) ==
-          result.plan.reasons.end()) {
-        result.plan.reasons.insert(result.plan.reasons.begin(), prefixed);
+      for (auto reason = startup_rejections.rbegin();
+           reason != startup_rejections.rend(); ++reason) {
+        const std::string prefixed = "empty-return startup layout: " + *reason;
+        if (std::find(result.plan.reasons.begin(), result.plan.reasons.end(), prefixed) ==
+            result.plan.reasons.end()) {
+          result.plan.reasons.insert(result.plan.reasons.begin(), prefixed);
+        }
       }
     }
     return result;
