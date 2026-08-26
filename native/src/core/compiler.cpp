@@ -62725,9 +62725,10 @@ SizeAttributionReport build_size_attribution_report(
             return "external-indirect-entry@" +
                    safe_format_label_address(steps.at(source).address);
           }
-          if (const auto targets =
+          if (const auto callee_hole_targets =
                   callee_hole_leaf_targets_from_comment(steps.at(source).comment, options)) {
-            if (std::any_of(targets->begin(), targets->end(), [&](const auto& target) {
+            if (std::any_of(callee_hole_targets->begin(), callee_hole_targets->end(),
+                            [&](const auto& target) {
                   return enters_lifetime(target.first);
                 })) {
               return "external-multi-target-entry@" +
@@ -70720,6 +70721,7 @@ CompileResult compile_source_for_optimizer_profile(
             candidate_options.stack_through_function_entries = true;
             candidate_options.stack_ssa_function_entries = true;
             candidate_options.branch_y_payload_forwarding = true;
+            candidate_options.inline_floor_packed_row_expressions = true;
           },
           "branch-y-payload-stack-function-entries",
           "Combined stack-through value-function entries with two-way branch payload forwarding",
@@ -72623,13 +72625,21 @@ CompileResult compile_source_for_optimizer_profile(
       try {
         ++finalized_layout_attempts;
         CompileOptions finalized_options = finalist.options;
-        CompileResult finalized = compile_source_once(source, finalized_options, source_has_entered,
-                                                      /*apply_final_layout_size_rescue=*/true);
+        const bool apply_atomic_absolute_dark_rescue =
+            finalized_options.inline_floor_packed_row_expressions &&
+            finalized_options.stack_ssa_function_entries &&
+            finalized_options.branch_y_payload_forwarding;
+        CompileResult finalized = compile_source_once(
+            source, finalized_options, source_has_entered,
+            /*apply_final_layout_size_rescue=*/true,
+            apply_atomic_absolute_dark_rescue);
         if (!finalized.implemented &&
             can_retry_lowering_attempt_in_analysis(finalized, finalized_options)) {
           finalized_options.analysis = true;
-          finalized = compile_source_once(source, finalized_options, source_has_entered,
-                                          /*apply_final_layout_size_rescue=*/true);
+          finalized = compile_source_once(
+              source, finalized_options, source_has_entered,
+              /*apply_final_layout_size_rescue=*/true,
+              apply_atomic_absolute_dark_rescue);
         }
         const auto accepted_equivalent = std::find_if(
             finalist_group.equivalents.begin(), finalist_group.equivalents.end(),

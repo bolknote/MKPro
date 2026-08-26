@@ -164,7 +164,7 @@ void example_sizes_match_typescript_baselines() {
       {"zagaday-tsifru", 105},
   };
   const std::map<std::string, std::size_t> PENDING_BASELINE{
-      {"nekromant", 136},
+      {"nekromant", 133},
       {"tic-tac-toe-4x4", 136},
   };
 
@@ -782,14 +782,15 @@ void example_sizes_match_typescript_baselines() {
       const SizeHelperSummaryReport* draw = find_size_helper(result, "draw stack entry");
       require(draw != nullptr &&
                   draw->details.contains("valueAwareMixedStateRequiredUpdateNames") &&
-                  draw->details.at("valueAwareMixedStateRequiredUpdateNames") ==
-                      "random_state" &&
+                  draw->details.at("valueAwareMixedStateRequiredUpdateNames")
+                          .find("random_state") != std::string::npos &&
                   draw->details.contains(
                       "valueAwareEstimatedNetSavingsAfterMaterialization") &&
                   draw->details.at(
                       "valueAwareEstimatedNetSavingsAfterMaterialization") == "0" &&
                   !draw->details.contains("valueAwareMixedStateTempCarrierNames"),
-              "nekromant random_state recall-before-store must remain a persistent RNG update");
+              "nekromant random_state recall-before-store must remain among persistent RNG "
+              "updates");
       const SizeOpportunityReport* draw_traffic =
           find_size_opportunity_detail(result, "helper-register-traffic", "helperLabel",
                                        "draw stack entry");

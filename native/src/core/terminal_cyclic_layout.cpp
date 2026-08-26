@@ -2150,7 +2150,8 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts(
             output_index.item_addresses.at(*relocation.at(old_target.item_index));
         const std::optional<int> selector =
             encoded_register(items.at(old_source).opcode);
-        std::optional<std::size_t> selector_preload;
+        std::size_t selector_preload_index = 0;
+        bool has_unique_selector_preload = false;
         if (selector.has_value()) {
           for (std::size_t index = 0; index < preloads.size(); ++index) {
             const std::optional<int> preload_register =
@@ -2159,17 +2160,18 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts(
                 *preload_register != *selector) {
               continue;
             }
-            if (selector_preload.has_value()) {
-              selector_preload.reset();
+            if (has_unique_selector_preload) {
+              has_unique_selector_preload = false;
               break;
             }
-            selector_preload = index;
+            selector_preload_index = index;
+            has_unique_selector_preload = true;
           }
         }
         const std::optional<std::string> rebound =
-            selector_preload.has_value()
+            has_unique_selector_preload
                 ? rebind_proved_natural_fractional_selector_preload(
-                      items, preloads.at(*selector_preload), old_target.address,
+                      items, preloads.at(selector_preload_index), old_target.address,
                       new_address, options.address_space_model)
                 : std::nullopt;
         const bool late_bound_consumer =
@@ -2188,7 +2190,7 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts(
         if (preserve_fixed_target) {
           const std::size_t new_target_item =
               *relocation.at(old_target.item_index);
-          if (selector.has_value() && selector_preload.has_value()) {
+          if (selector.has_value() && has_unique_selector_preload) {
             const auto [existing, inserted] = preserved_selector_targets.emplace(
                 *selector, new_target_item);
             if (!inserted && existing->second != new_target_item) {
@@ -2215,7 +2217,7 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts(
               });
         } else if (new_address != old_target.address &&
                    !defer_late_bound_consumer) {
-          if (!selector.has_value() || !selector_preload.has_value() ||
+          if (!selector.has_value() || !has_unique_selector_preload ||
               !rebound.has_value()) {
             indirect_facts_rebound = false;
             indirect_rebind_failure =
@@ -2228,7 +2230,7 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts(
           const PendingSelectorRetarget retarget{
               .old_target = old_target.address,
               .new_target = new_address,
-              .preload_index = *selector_preload,
+              .preload_index = selector_preload_index,
               .value = *rebound,
           };
           const auto [existing, inserted] =

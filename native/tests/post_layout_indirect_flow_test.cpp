@@ -1,6 +1,7 @@
 #include "mkpro/core/compiler_static_proof_gate.hpp"
 #include "mkpro/core/emit/machine_emitter.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
+#include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
 #include "mkpro/core/post_layout_indirect_flow.hpp"
 #include "mkpro/core/super_dark_layout.hpp"
@@ -1688,6 +1689,150 @@ void post_layout_indirect_flow_matches_typescript_contract() {
         core::optimize_post_layout_stop_tail_reuse(clobbered, {});
     require(rejected.applied == 0,
             "an unknown overwrite between the charge and the call must reject the rewrite");
+  }
+
+  // Deleting a direct-flow operand may move a compiler-marked runtime
+  // selector target. The transaction must rebind the decimal charge and then
+  // independently prove that the charged register reaches the same typed
+  // target. An unmarked or data-dependent charge remains immovable.
+  {
+    const auto late_bound_program = [](bool poison_selector) {
+      std::vector<MachineItem> program = {
+          MachineItem::op(0x51, "БП"),
+          MachineItem::address("main"),
+          MachineItem::label("helper"),
+          MachineItem::op(0x01, "1"),
+          MachineItem::op(0x52, "В/О"),
+          MachineItem::label("main"),
+          MachineItem::op(0x02, "2"),
+          MachineItem::op(0x48, "X->П 8"),
+          MachineItem::op(0x53, "ПП"),
+          MachineItem::address("helper"),
+      };
+      MachineItem high = MachineItem::op(0x00, "0");
+      high.roles.push_back(core::make_late_bound_decimal_selector_role(
+          core::LateBoundDecimalSelectorPart::High, "late_helper"));
+      MachineItem low = MachineItem::op(0x00, "0");
+      low.roles.push_back(core::make_late_bound_decimal_selector_role(
+          core::LateBoundDecimalSelectorPart::Low, "late_helper"));
+      program.push_back(std::move(high));
+      program.push_back(std::move(low));
+      if (poison_selector)
+        program.push_back(MachineItem::op(0x10, "+"));
+      program.push_back(MachineItem::op(0x49, "X->П 9"));
+      MachineItem late_call = MachineItem::op(0xa9, "К ПП 9");
+      late_call.indirect_flow_targets = std::vector<IrTarget>{"late_helper"};
+      program.push_back(std::move(late_call));
+      MachineItem stop = MachineItem::op(0x50, "С/П");
+      stop.stop_disposition = StopDisposition::Terminal;
+      program.push_back(std::move(stop));
+      program.push_back(MachineItem::label("late_helper"));
+      program.push_back(MachineItem::op(0x51, "БП"));
+      MachineItem numeric_return = MachineItem::address("late_return");
+      numeric_return.comment = "numeric relocation fixture";
+      program.push_back(std::move(numeric_return));
+      program.push_back(MachineItem::op(0x00, "0"));
+      program.push_back(MachineItem::label("late_return"));
+      program.push_back(MachineItem::op(0x02, "2"));
+      program.push_back(MachineItem::op(0x52, "В/О"));
+
+      const core::LateBoundDecimalSelectorResult bound =
+          core::bind_late_bound_decimal_selectors(
+              program, core::LateBoundDecimalSelectorOptions{
+                           .minimum_target_address = 0,
+                           .maximum_target_address = 99,
+                       });
+      require(bound.diagnostics.empty() && bound.applied == 1,
+              "late-bound relocation fixture should bind one selector charge");
+      std::vector<MachineItem> result = bound.items;
+      int address = 0;
+      std::optional<int> late_return_address;
+      for (const MachineItem& item : result) {
+        if (item.kind == MachineItemKind::Label) {
+          if (item.name == "late_return")
+            late_return_address = address;
+        } else {
+          ++address;
+        }
+      }
+      require(late_return_address.has_value(),
+              "numeric relocation fixture should contain its target label");
+      const auto numeric_operand = std::find_if(
+          result.begin(), result.end(), [](const MachineItem& item) {
+            return item.kind == MachineItemKind::Address &&
+                   item.comment == "numeric relocation fixture";
+          });
+      require(numeric_operand != result.end(),
+              "numeric relocation fixture should contain its direct operand");
+      numeric_operand->target = *late_return_address;
+      return result;
+    };
+
+    const std::vector<MachineItem> program = late_bound_program(false);
+    const core::PostLayoutIndirectFlowResult result =
+        core::optimize_post_layout_charged_selector_flow(program, {});
+    require(result.applied == 1 &&
+                core::machine_cell_count(result.items) ==
+                    core::machine_cell_count(program) - 1,
+            "a marked runtime selector should follow a profitable operand deletion");
+    const auto rebound_high = std::find_if(
+        result.items.begin(), result.items.end(), [](const MachineItem& item) {
+          return std::ranges::find(item.roles,
+                                   "late-decimal-selector-high:late_helper") !=
+                 item.roles.end();
+        });
+    const auto rebound_low = std::find_if(
+        result.items.begin(), result.items.end(), [](const MachineItem& item) {
+          return std::ranges::find(item.roles,
+                                   "late-decimal-selector-low:late_helper") !=
+                 item.roles.end();
+        });
+    require(rebound_high != result.items.end() && rebound_low != result.items.end() &&
+                rebound_high->opcode == 1 && rebound_low->opcode == 2,
+            "the moved late helper should rebind from address 13 to 12");
+    const auto rebound_numeric = std::find_if(
+        result.items.begin(), result.items.end(), [](const MachineItem& item) {
+          return item.kind == MachineItemKind::Address &&
+                 item.comment == "numeric relocation fixture";
+        });
+    require(rebound_numeric != result.items.end() &&
+                std::holds_alternative<int>(rebound_numeric->target) &&
+                std::get<int>(rebound_numeric->target) == 15,
+            "a numeric direct operand should follow its target command from 16 to 15");
+
+    const auto canonical_number = [](std::string text) {
+      std::erase(text, ' ');
+      std::replace(text.begin(), text.end(), ',', '.');
+      if (!text.empty() && text.back() == '.')
+        text.pop_back();
+      const std::size_t sign = !text.empty() && text.front() == '-' ? 1U : 0U;
+      std::size_t nonzero = sign;
+      while (nonzero + 1U < text.size() && text.at(nonzero) == '0' &&
+             std::isdigit(static_cast<unsigned char>(text.at(nonzero + 1U))) != 0) {
+        ++nonzero;
+      }
+      return text.substr(0, sign) + text.substr(nonzero);
+    };
+    std::vector<std::string> observed;
+    for (const std::vector<MachineItem>* variant : {&program, &result.items}) {
+      emulator::MK61 calc;
+      calc.load_program(resolved_opcodes(*variant));
+      calc.press("В/О");
+      calc.press("С/П");
+      const emulator::RunResult run = calc.run_until_stable(300, 5);
+      require(run.stopped, "both late-bound selector layouts should stop");
+      observed.push_back(canonical_number(calc.read_register("x")) + "|" +
+                         canonical_number(calc.read_register("8")));
+    }
+    require(observed.at(0) == observed.at(1),
+            "late-bound selector relocation should preserve observable execution: baseline=" +
+                observed.at(0) + " candidate=" + observed.at(1));
+
+    const std::vector<MachineItem> poisoned = late_bound_program(true);
+    const core::PostLayoutIndirectFlowResult rejected =
+        core::optimize_post_layout_charged_selector_flow(poisoned, {});
+    require(rejected.applied == 0,
+            "a marked charge with an unproved runtime value must fail closed");
   }
 
   // A join of two different charged values must not prove either one, and a

@@ -187,20 +187,32 @@ bind_late_bound_decimal_selectors(const std::vector<MachineItem>& items,
                        " is not preceded by its adjacent high digit.");
       continue;
     }
-    if (index + 1U >= marker_by_item.size() || !marker_by_item.at(index + 1U).has_value()) {
+    std::size_t low_index = index + 1U;
+    while (low_index < items.size() &&
+           items.at(low_index).kind == MachineItemKind::Label) {
+      ++low_index;
+    }
+    if (low_index >= marker_by_item.size() ||
+        !marker_by_item.at(low_index).has_value()) {
       append_error(result.diagnostics, "late-decimal-selector-nonadjacent-pair",
                    "Selector placeholders for target label '" + high.target_label +
-                       "' must be adjacent, with high before low.");
+                       "' must occupy adjacent machine cells, with high before low.");
       continue;
     }
-    const Marker& low = *marker_by_item.at(index + 1U);
+    const Marker& low = *marker_by_item.at(low_index);
     if (low.part != LateBoundDecimalSelectorPart::Low) {
       append_error(result.diagnostics, "late-decimal-selector-incomplete-pair",
                    "Late-bound decimal selector high placeholder for target label '" +
                        high.target_label + "' is not followed by a low placeholder.");
       continue;
     }
-    ++index;
+    index = low_index;
+    if (low.cell_address != high.cell_address + 1) {
+      append_error(result.diagnostics, "late-decimal-selector-nonadjacent-pair",
+                   "Selector placeholders for target label '" + high.target_label +
+                       "' must occupy adjacent machine cells, with high before low.");
+      continue;
+    }
     if (low.target_label != high.target_label) {
       append_error(
           result.diagnostics, "late-decimal-selector-mismatched-target",

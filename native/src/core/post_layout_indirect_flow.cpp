@@ -2,6 +2,7 @@
 
 #include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
+#include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/passes/helpers.hpp"
 #include "mkpro/core/passes/preloaded_indirect_flow.hpp"
@@ -1776,6 +1777,73 @@ retarget_machine_selector_comments(std::vector<MachineItem> items,
   return items;
 }
 
+bool late_bound_runtime_selectors_match_typed_targets(
+    const std::vector<MachineItem>& items, const std::vector<PreloadReport>& preloads,
+    const std::set<std::string>& late_bound_target_labels, AddressSpaceModel model) {
+  PostLayoutControlFlowOptions control_options;
+  control_options.address_space_model = model;
+  control_options.empty_return_target = 1;
+  AuthoritativePostLayoutControlFlow flow =
+      build_post_layout_control_flow(items, control_options);
+  if (!flow.proved) {
+    control_options.empty_return_target.reset();
+    flow = build_post_layout_control_flow(items, control_options);
+  }
+  if (!flow.proved)
+    return false;
+  if (late_bound_target_labels.empty())
+    return true;
+
+  const StableRegisterValueFlow values =
+      analyze_stable_register_value_flow(items, preloads, flow, model);
+  if (!values.proved)
+    return false;
+
+  for (const auto& [item_index, targets] : flow.indirect_flow_targets) {
+    const bool reaches_late_bound_target =
+        std::any_of(targets.begin(), targets.end(), [&](const PostLayoutCommandIdentity& target) {
+          return std::any_of(target.labels.begin(), target.labels.end(),
+                             [&](const std::string& label) {
+                               return late_bound_target_labels.contains(label);
+                             });
+        });
+    if (!reaches_late_bound_target)
+      continue;
+    if (item_index >= items.size())
+      return false;
+
+    const std::optional<std::string> register_name =
+        register_from_indirect_opcode(items.at(item_index).opcode);
+    if (!register_name.has_value())
+      return false;
+    const int selector_index = register_index(*register_name);
+    if (selector_index < 7 || selector_index > 0x0e)
+      return false;
+    const auto known = values.before_item.find(item_index);
+    if (known == values.before_item.end())
+      return false;
+    const std::optional<std::string>& selector_value =
+        known->second.at(static_cast<std::size_t>(selector_index - 7));
+    if (!selector_value.has_value())
+      return false;
+
+    std::optional<IndirectAddressEvaluation> decoded;
+    try {
+      decoded = evaluate_indirect_address(*register_name, *selector_value,
+                                          IndirectOperationKind::Flow, model);
+    } catch (const std::exception&) {
+      return false;
+    }
+    if (!decoded.has_value() || !decoded->actual_flow_target.has_value() ||
+        std::none_of(targets.begin(), targets.end(), [&](const PostLayoutCommandIdentity& target) {
+          return target.address == *decoded->actual_flow_target;
+        })) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::optional<SelectorValue> selector_value_for_register(const std::vector<PreloadReport>& preloads,
                                                          const std::string& register_name,
                                                          const CompileOptions& options) {
@@ -2428,11 +2496,172 @@ std::optional<RetargetedMachine> retarget_selector_preloads_after_machine_deleti
     const std::vector<MachineItem>& before_items, std::vector<MachineItem> after_items,
     const std::vector<PreloadReport>& preloads, std::vector<int> removed_item_indices,
     int replaced_item_index, AddressSpaceModel model) {
+  const auto reject = [&](std::string_view reason) -> std::optional<RetargetedMachine> {
+    if (trace_post_layout_enabled())
+      std::cerr << "[machine-deletion-retarget] " << reason << "\n";
+    return std::nullopt;
+  };
   std::ranges::sort(removed_item_indices);
   removed_item_indices.erase(std::unique(removed_item_indices.begin(), removed_item_indices.end()),
                              removed_item_indices.end());
   const std::vector<MachineCell> before_cells = machine_cells(before_items);
+  const std::optional<std::vector<std::string>> late_bound_labels =
+      late_bound_decimal_selector_target_labels(before_items);
+  if (!late_bound_labels.has_value())
+    return reject("malformed late-bound selector marker");
+  const std::map<std::string, int> before_label_addresses =
+      machine_label_addresses(before_items);
+  const auto late_bound_marker_inventory = [](const std::vector<MachineItem>& items) {
+    std::multiset<std::string> inventory;
+    constexpr std::string_view high_prefix = "late-decimal-selector-high:";
+    constexpr std::string_view low_prefix = "late-decimal-selector-low:";
+    for (const MachineItem& item : items) {
+      for (const std::string& role : item.roles) {
+        if (role.starts_with(high_prefix) || role.starts_with(low_prefix))
+          inventory.insert(role);
+      }
+    }
+    return inventory;
+  };
+  if (late_bound_marker_inventory(before_items) !=
+      late_bound_marker_inventory(after_items)) {
+    return reject("late-bound selector marker inventory changed");
+  }
+
+  std::map<std::string, int> after_label_addresses =
+      machine_label_addresses(after_items);
+  std::set<std::string> shifted_late_bound_target_labels;
+  for (const std::string& label : *late_bound_labels) {
+    const auto before = before_label_addresses.find(label);
+    const auto after = after_label_addresses.find(label);
+    if (before == before_label_addresses.end() || after == after_label_addresses.end())
+      return reject("late-bound selector target label disappeared");
+    if (before->second != after->second)
+      shifted_late_bound_target_labels.insert(label);
+  }
+  std::set<std::string> immediately_rebound_late_bound_target_labels =
+      shifted_late_bound_target_labels;
+  if (!shifted_late_bound_target_labels.empty()) {
+    constexpr std::string_view high_prefix = "late-decimal-selector-high:";
+    constexpr std::string_view low_prefix = "late-decimal-selector-low:";
+    std::map<std::string, std::vector<int>> target_addresses;
+    int cell_address = 0;
+    for (const MachineItem& item : after_items) {
+      if (item.kind == MachineItemKind::Label) {
+        if (std::ranges::find(*late_bound_labels, item.name) != late_bound_labels->end())
+          target_addresses[item.name].push_back(cell_address);
+      } else {
+        ++cell_address;
+      }
+    }
+    std::map<std::string, std::pair<int, int>> part_counts;
+    for (std::size_t index = 0; index < after_items.size(); ++index) {
+      MachineItem& item = after_items.at(index);
+      std::optional<std::string> target_label;
+      bool high = false;
+      for (const std::string& role : item.roles) {
+        std::string_view suffix;
+        if (role.starts_with(high_prefix)) {
+          high = true;
+          suffix = std::string_view(role).substr(high_prefix.size());
+        } else if (role.starts_with(low_prefix)) {
+          high = false;
+          suffix = std::string_view(role).substr(low_prefix.size());
+        } else {
+          continue;
+        }
+        if (suffix.empty() || target_label.has_value())
+          return reject("late-bound selector marker is malformed or duplicated on one cell");
+        target_label = std::string(suffix);
+      }
+      if (!target_label.has_value())
+        continue;
+      if (!shifted_late_bound_target_labels.contains(*target_label))
+        continue;
+      const auto target = target_addresses.find(*target_label);
+      if (target == target_addresses.end() || target->second.size() != 1U)
+        return reject("late-bound selector target label is missing or ambiguous");
+      const int target_address = target->second.front();
+      if (target_address < 0)
+        return reject("late-bound selector target has a negative address");
+      if (target_address > 99) {
+        immediately_rebound_late_bound_target_labels.erase(*target_label);
+        continue;
+      }
+      const int expected_digit = high ? target_address / 10 : target_address % 10;
+      auto& counts = part_counts[*target_label];
+      ++(high ? counts.first : counts.second);
+
+      if (item.kind == MachineItemKind::Address) {
+        const std::optional<int> opcode = address_opcode_for_item(after_items, item, model);
+        if (item.raw || !opcode.has_value() || *opcode != expected_digit)
+          return reject("late-bound selector address overlay encodes the wrong shifted digit");
+        continue;
+      }
+      if (item.kind != MachineItemKind::Op || item.raw || item.opcode < 0x00 ||
+          item.opcode > 0x09 || item.mnemonic != std::to_string(item.opcode)) {
+        return reject("late-bound selector marker is not attached to a decimal digit");
+      }
+      item.opcode = expected_digit;
+      item.mnemonic = std::to_string(expected_digit);
+    }
+    for (const auto& [label, counts] : part_counts) {
+      if (counts.first == 0 || counts.first != counts.second)
+        return reject("late-bound selector high/low marker counts do not match");
+    }
+    after_label_addresses = machine_label_addresses(after_items);
+  }
   const std::map<int, int> after_address_by_item_index = machine_address_by_item_index(after_items);
+  const std::map<std::string, int> before_direct_labels =
+      machine_label_addresses(before_items);
+  const auto after_item_index_for = [&](int before_item_index) -> std::optional<int> {
+    if (std::ranges::binary_search(removed_item_indices, before_item_index))
+      return std::nullopt;
+    const int removed_before = static_cast<int>(
+        std::ranges::lower_bound(removed_item_indices, before_item_index) -
+        removed_item_indices.begin());
+    return before_item_index - removed_before;
+  };
+  bool shifted_numeric_direct_target = false;
+  for (int item_index = 0; item_index < static_cast<int>(before_items.size()); ++item_index) {
+    const MachineItem& operand = before_items.at(static_cast<std::size_t>(item_index));
+    if (operand.kind != MachineItemKind::Address ||
+        !std::holds_alternative<int>(operand.target) ||
+        std::ranges::binary_search(removed_item_indices, item_index)) {
+      continue;
+    }
+    const std::optional<int> old_target =
+        resolved_machine_target(operand.target, before_direct_labels);
+    if (!old_target.has_value())
+      return reject("numeric direct target cannot be resolved");
+    const std::optional<MachineCell> old_target_cell =
+        machine_cell_at(before_cells, *old_target);
+    if (!old_target_cell.has_value() || old_target_cell->item_index == replaced_item_index)
+      return reject("numeric direct target was removed or replaced");
+    const std::optional<int> new_operand_index = after_item_index_for(item_index);
+    const std::optional<int> new_target_index =
+        after_item_index_for(old_target_cell->item_index);
+    if (!new_operand_index.has_value() || !new_target_index.has_value() ||
+        *new_operand_index < 0 || *new_operand_index >= static_cast<int>(after_items.size())) {
+      return reject("numeric direct target identity cannot be mapped after deletion");
+    }
+    const auto new_target_address = after_address_by_item_index.find(*new_target_index);
+    if (new_target_address == after_address_by_item_index.end())
+      return reject("numeric direct target has no post-deletion address");
+    MachineItem& shifted_operand =
+        after_items.at(static_cast<std::size_t>(*new_operand_index));
+    if (shifted_operand.kind != MachineItemKind::Address)
+      return reject("numeric direct operand identity no longer names an address cell");
+    if (new_target_address->second == *old_target)
+      continue;
+    if (has_machine_role(shifted_operand, "exec") ||
+        address_code_overlay_mnemonic(shifted_operand.comment).has_value()) {
+      return reject("numeric direct operand is also executable overlay code");
+    }
+    shifted_operand.target = new_target_address->second;
+    shifted_operand.formal_opcode.reset();
+    shifted_numeric_direct_target = true;
+  }
   std::vector<PreloadReport> next_preloads;
   next_preloads.reserve(preloads.size());
   std::map<std::string, std::string> next_by_register;
@@ -2440,14 +2669,14 @@ std::optional<RetargetedMachine> retarget_selector_preloads_after_machine_deleti
     const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
         preload.register_name, preload.value, IndirectOperationKind::Flow, model);
     if (!decoded.has_value() || !decoded->actual_flow_target.has_value())
-      return std::nullopt;
+      return reject("preloaded selector does not decode before deletion");
     const int target = *decoded->actual_flow_target;
     const std::optional<MachineCell> before_cell = machine_cell_at(before_cells, target);
     if (!before_cell.has_value())
-      return std::nullopt;
+      return reject("preloaded selector target is not an executable input cell");
     if (std::ranges::binary_search(removed_item_indices, before_cell->item_index) ||
         before_cell->item_index == replaced_item_index) {
-      return std::nullopt;
+      return reject("preloaded selector target was removed or replaced");
     }
     const int removed_before =
         static_cast<int>(std::ranges::lower_bound(removed_item_indices, before_cell->item_index) -
@@ -2455,18 +2684,18 @@ std::optional<RetargetedMachine> retarget_selector_preloads_after_machine_deleti
     const int after_item_index = before_cell->item_index - removed_before;
     const auto shifted_target_it = after_address_by_item_index.find(after_item_index);
     if (shifted_target_it == after_address_by_item_index.end())
-      return std::nullopt;
+      return reject("preloaded selector target identity has no output address");
     const int shifted_target = shifted_target_it->second;
     const std::optional<std::string> selector_value =
         shifted_target == target ? std::optional<std::string>(preload.value)
                                  : retargeted_selector_value(preload.register_name, preload.value,
                                                              shifted_target, model);
     if (!selector_value.has_value())
-      return std::nullopt;
+      return reject("preloaded selector cannot be encoded for shifted target");
     const std::optional<IndirectAddressEvaluation> shifted = evaluate_indirect_address(
         preload.register_name, *selector_value, IndirectOperationKind::Flow, model);
     if (!shifted.has_value() || shifted->actual_flow_target != shifted_target)
-      return std::nullopt;
+      return reject("retargeted preload does not decode to shifted identity");
     next_preloads.push_back(PreloadReport{
         .register_name = preload.register_name,
         .value = *selector_value,
@@ -2475,8 +2704,18 @@ std::optional<RetargetedMachine> retarget_selector_preloads_after_machine_deleti
     next_by_register[preload.register_name] = *selector_value;
   }
 
+  after_items =
+      retarget_machine_selector_comments(std::move(after_items), next_by_register, model);
+  if ((shifted_numeric_direct_target ||
+       !immediately_rebound_late_bound_target_labels.empty()) &&
+      !late_bound_runtime_selectors_match_typed_targets(
+          after_items, next_preloads,
+          immediately_rebound_late_bound_target_labels, model)) {
+    return reject("final CFG or runtime selector value proof failed");
+  }
+
   return RetargetedMachine{
-      .items = retarget_machine_selector_comments(std::move(after_items), next_by_register, model),
+      .items = std::move(after_items),
       .preloads = std::move(next_preloads),
   };
 }
@@ -3592,6 +3831,12 @@ find_charged_selector_flow_rewrite(const std::vector<MachineItem>& raw_items,
   const std::map<int, std::vector<std::string>> labels_by_address =
       machine_labels_by_address(items);
   const std::set<std::string> referenced = referenced_machine_labels(items);
+  const std::optional<std::vector<std::string>> late_bound_labels =
+      late_bound_decimal_selector_target_labels(items);
+  if (!late_bound_labels.has_value())
+    return std::nullopt;
+  const std::set<std::string> late_bound_target_labels(late_bound_labels->begin(),
+                                                       late_bound_labels->end());
   std::set<std::string> preloaded_registers;
   for (const PreloadReport& preload : preloads)
     preloaded_registers.insert(preload.register_name);
@@ -3645,17 +3890,10 @@ find_charged_selector_flow_rewrite(const std::vector<MachineItem>& raw_items,
       }
     }
 
-    // The deletion machinery retargets preloaded selectors, and label
-    // operands follow their items; everything else must stay put after this
-    // candidate's operand cell is erased.
+    // The deletion transaction retargets numeric direct operands by command
+    // identity, preloaded selectors by decoded target, and compiler-marked
+    // decimal charges by opaque target label. Everything else must stay put.
     const auto deletion_is_encoding_safe = [&]() {
-      for (const MachineItem& item : items) {
-        if (item.kind == MachineItemKind::Address &&
-            std::holds_alternative<int>(item.target) &&
-            std::get<int>(item.target) >= address.address) {
-          return false;
-        }
-      }
       for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
         const auto typed = flow->indirect_flow_targets.find(item_index);
         if (typed == flow->indirect_flow_targets.end())
@@ -3665,7 +3903,12 @@ find_charged_selector_flow_rewrite(const std::vector<MachineItem>& raw_items,
         if (register_name.has_value() && preloaded_registers.contains(*register_name))
           continue;
         for (const PostLayoutCommandIdentity& identity : typed->second) {
-          if (identity.address >= address.address)
+          const bool rebound_late_bound_target =
+              std::any_of(identity.labels.begin(), identity.labels.end(),
+                          [&](const std::string& label) {
+                            return late_bound_target_labels.contains(label);
+                          });
+          if (identity.address >= address.address && !rebound_late_bound_target)
             return false;
         }
       }

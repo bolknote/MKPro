@@ -16,7 +16,7 @@ with a raw listing: the goal is to make the high-level source fit.
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
 | `tic-tac-toe-4x4.mkpro` | 136 | 105 | +31 | pending optimizer |
-| `nekromant.mkpro` | 136 | 105 | +31 | pending optimizer |
+| `nekromant.mkpro` | 133 | 105 | +28 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
@@ -239,3 +239,8 @@ mode may reject over-window programs earlier than the analysis path.
   value through one-argument stack-entry calls. Ordinary dead-store elimination
   then removes the redundant register materializations, reducing
   `nekromant.mkpro` from 140 to 136 cells without changing its source.
+- Generic floor-packed expression forwarding now composes with guarded
+  stack-SSA function entries, and that composed finalist runs the same proved
+  atomic absolute/dark layout rescue as an explicitly requested lowering. This removes
+  the display scratch while retaining the smaller final geometry, reducing
+  `nekromant.mkpro` from 136 to 133 cells without changing its source.

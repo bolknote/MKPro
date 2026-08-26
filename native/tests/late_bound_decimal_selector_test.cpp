@@ -117,8 +117,9 @@ void late_bound_decimal_selector_binds_only_proved_pairs() {
             "target address 08 should bind as an explicit leading-zero pair");
   }
 
-  // Pair structure is strict: intervening labels/items, reversed halves, and
-  // target disagreement are rejected rather than guessed.
+  // Pair structure is strict in emitted cells: zero-width labels may separate
+  // the halves, while an intervening command, reversed halves, and target
+  // disagreement are rejected rather than guessed.
   {
     std::vector<MachineItem> items = {
         placeholder(LateBoundDecimalSelectorPart::High, "target"),
@@ -129,8 +130,22 @@ void late_bound_decimal_selector_binds_only_proved_pairs() {
     items.push_back(MachineItem::label("target"));
     const core::LateBoundDecimalSelectorResult result =
         core::bind_late_bound_decimal_selectors(items);
+    require(result.diagnostics.empty() && result.applied == 1 &&
+                result.items.at(0).opcode == 1 && result.items.at(2).opcode == 0,
+            "a zero-width label should preserve physical selector adjacency");
+  }
+  {
+    std::vector<MachineItem> items = {
+        placeholder(LateBoundDecimalSelectorPart::High, "target"),
+        MachineItem::op(0x10, "+"),
+        placeholder(LateBoundDecimalSelectorPart::Low, "target"),
+    };
+    append_filler(items, 7);
+    items.push_back(MachineItem::label("target"));
+    const core::LateBoundDecimalSelectorResult result =
+        core::bind_late_bound_decimal_selectors(items);
     require(has_diagnostic(result, "late-decimal-selector-nonadjacent-pair"),
-            "a label between selector halves should break the strict pair");
+            "a command between selector halves should break the strict pair");
     require(has_diagnostic(result, "late-decimal-selector-unexpected-low"),
             "an unpaired low half should also be diagnosed");
   }
