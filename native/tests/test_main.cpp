@@ -222,6 +222,7 @@ void x2_preloaded_constant_matches_typescript_contract();
 void vp_x2_peephole_matches_typescript_contract();
 void vp_splice_matches_typescript_contract();
 void pre_shift_stack_lift_matches_typescript_contract();
+void redundant_literal_reload_is_generic_and_proof_gated();
 
 } // namespace mkpro::tests
 
@@ -481,6 +482,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(vp_x2_peephole_matches_typescript_contract),
       MKPRO_TEST(vp_splice_matches_typescript_contract),
       MKPRO_TEST(pre_shift_stack_lift_matches_typescript_contract),
+      MKPRO_TEST(redundant_literal_reload_is_generic_and_proof_gated),
   };
 #undef MKPRO_TEST
 

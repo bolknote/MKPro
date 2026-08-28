@@ -811,10 +811,32 @@ std::vector<std::string> computed_dispatch_target_labels(const IrOp& op) {
   // in the CFG exactly like computed-dispatch target labels.
   if (op.meta.comment->starts_with("callee-hole indirect call;")) {
     constexpr std::string_view kLeafMarker = "leaf-targets=";
+    constexpr std::string_view kLateLeafMarker = "leaf-labels=";
     const std::string& comment = *op.meta.comment;
     const std::size_t marker = comment.find(kLeafMarker);
-    if (marker == std::string::npos)
+    if (marker == std::string::npos) {
+      const std::size_t late_marker = comment.find(kLateLeafMarker);
+      if (late_marker == std::string::npos)
+        return labels;
+      std::size_t cursor = late_marker + kLateLeafMarker.size();
+      std::string current;
+      while (cursor <= comment.size()) {
+        const char ch = cursor < comment.size() ? comment.at(cursor) : ';';
+        if (ch == ',' || ch == ';' ||
+            std::isspace(static_cast<unsigned char>(ch)) != 0) {
+          if (current.empty())
+            return {};
+          labels.push_back(current);
+          current.clear();
+          if (ch != ',')
+            break;
+        } else {
+          current.push_back(ch);
+        }
+        ++cursor;
+      }
       return labels;
+    }
     std::size_t cursor = marker + kLeafMarker.size();
     std::string current;
     bool in_label = false;

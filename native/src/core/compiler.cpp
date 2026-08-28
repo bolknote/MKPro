@@ -31,6 +31,7 @@
 #include "mkpro/core/passes/index.hpp"
 #include "mkpro/core/passes/cfg.hpp"
 #include "mkpro/core/passes/register_coalesce.hpp"
+#include "mkpro/core/passes/redundant_literal_reload.hpp"
 #include "mkpro/core/post_layout_indirect_flow.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
 #include "mkpro/core/shared_helper_wrapper.hpp"
@@ -50687,16 +50688,18 @@ std::optional<ProvedIndirectFlowSet> collect_proved_indirect_flow_set(
     }
 
     const std::vector<IrOp> raised = raise_machine_to_ir({item});
-    if (raised.size() != 1U)
+    if (raised.size() != 1U) {
       return std::nullopt;
+    }
     const std::vector<std::string> target_labels =
         core::passes::computed_dispatch_target_labels(raised.front());
     if (!target_labels.empty()) {
       std::vector<int> targets;
       for (const std::string& label : target_labels) {
         const auto found = label_addresses.find(label);
-        if (found == label_addresses.end())
+        if (found == label_addresses.end()) {
           return std::nullopt;
+        }
         targets.push_back(found->second);
       }
       std::sort(targets.begin(), targets.end());
@@ -50707,8 +50710,9 @@ std::optional<ProvedIndirectFlowSet> collect_proved_indirect_flow_set(
 
     const std::optional<int> numeric =
         core::passes::known_indirect_flow_target(raised.front(), model);
-    if (!numeric.has_value())
+    if (!numeric.has_value()) {
       return std::nullopt;
+    }
     std::vector<int> targets{*numeric};
     proof.targets.emplace(item_index, targets);
     proof.fixed_numeric_targets.emplace(item_index, std::move(targets));
@@ -50716,11 +50720,58 @@ std::optional<ProvedIndirectFlowSet> collect_proved_indirect_flow_set(
   return proof;
 }
 
+struct ProvedDirectAddressSet {
+  std::map<std::size_t, int> targets;
+  std::set<std::size_t> retargetable_items;
+};
+
+std::optional<ProvedDirectAddressSet> collect_fixed_direct_address_targets(
+    const std::vector<MachineItem>& items, const CompileOptions& options,
+    AddressSpaceModel model) {
+  const ResolvedProgram resolved = resolve_machine_items(items, options);
+  if (resolved.steps.size() !=
+      static_cast<std::size_t>(core::machine_cell_count(items))) {
+    return std::nullopt;
+  }
+  ProvedDirectAddressSet proof;
+  std::size_t cell = 0;
+  std::optional<std::size_t> previous_cell;
+  for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
+    const MachineItem& item = items.at(item_index);
+    if (item.kind == MachineItemKind::Label)
+      continue;
+    if (item.kind == MachineItemKind::Address &&
+        (item.formal_opcode.has_value() || std::holds_alternative<int>(item.target))) {
+      try {
+        const int target = formal_address_info(resolved.steps.at(cell).opcode, model).actual;
+        if (target < 0 || target >= core::machine_cell_count(items))
+          return std::nullopt;
+        proof.targets.emplace(item_index, target);
+        bool ordinary_formal = true;
+        if (item.formal_opcode.has_value()) {
+          const FormalAddressInfo formal = formal_address_info(*item.formal_opcode, model);
+          ordinary_formal = formal.kind == FormalAddressKind::Official &&
+                            !formal.one_command && !formal.extra.has_value();
+        }
+        const bool direct_operand =
+            previous_cell.has_value() &&
+            items.at(*previous_cell).kind == MachineItemKind::Op &&
+            opcode_by_code(items.at(*previous_cell).opcode).takes_address;
+        if (direct_operand && ordinary_formal && !item.raw && item.roles.empty())
+          proof.retargetable_items.insert(item_index);
+      } catch (const std::exception&) {
+        return std::nullopt;
+      }
+    }
+    previous_cell = item_index;
+    ++cell;
+  }
+  return proof;
+}
+
 std::optional<std::size_t> helper_hoist_reindexed_item(
     std::size_t old_item, const core::HelperInvariantRecallHoistProof& proof) {
-  std::set<std::size_t> removed;
-  for (const core::HelperInvariantRecallCall& call : proof.calls)
-    removed.insert(call.recall_item_index);
+  const std::set<std::size_t>& removed = proof.erased_recall_items;
   if (removed.contains(old_item))
     return std::nullopt;
   std::size_t result = old_item;
@@ -52651,34 +52702,6 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                                        post_layout_overlay.optimizations.end());
     }
 
-    // Expose identical call continuations before indirect-flow selectors make
-    // cell deletion require preload retargeting. The ordinary late hoist below
-    // remains the fallback for artifacts that already contain indirect flow.
-    for (;;) {
-      const std::optional<ProvedIndirectFlowSet> early_indirect_flow_proof =
-          collect_proved_indirect_flow_set(
-              post_layout_items, address_space_model_for_options(options));
-      if (!early_indirect_flow_proof.has_value())
-        break;
-      const core::HelperInvariantRecallHoistResult early_recall_hoist =
-          core::optimize_helper_invariant_recall_hoist(
-              post_layout_items,
-              core::HelperInvariantRecallHoistOptions{
-                  .proved_indirect_flow_targets =
-                      early_indirect_flow_proof->targets,
-              });
-      if (early_recall_hoist.applied <= 0 ||
-          !early_recall_hoist.proof.final_artifact_proved ||
-          !helper_hoist_preserves_fixed_indirect_targets(
-              *early_indirect_flow_proof, early_recall_hoist.proof)) {
-        break;
-      }
-      post_layout_items = early_recall_hoist.items;
-      post_layout_optimizations.insert(post_layout_optimizations.end(),
-                                       early_recall_hoist.optimizations.begin(),
-                                       early_recall_hoist.optimizations.end());
-    }
-
     // Before generic selector overlay turns direct calls into address-bearing
     // indirect commands, consider an atomic physical-00/F9 layout. Component
     // placement is size-neutral and source-agnostic; only the independently
@@ -53008,38 +53031,6 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
     post_layout_optimizations.insert(post_layout_optimizations.end(),
                                      post_layout_overlay.optimizations.begin(),
                                      post_layout_overlay.optimizations.end());
-
-    // Move a register value used identically around every direct call into the
-    // root of the called straight-line helper.  The pass scans all labels and
-    // accepts only a complete bounded stack/X2/CFG proof.  Existing indirect
-    // control flow is supplied as a complete target set; already-materialized
-    // numeric selectors must keep the same target after the deletion, while
-    // label-derived dispatches are rebound by the late selector pass below.
-    const std::optional<ProvedIndirectFlowSet> indirect_flow_proof =
-        collect_proved_indirect_flow_set(post_layout_items,
-                                         address_space_model_for_options(options));
-    if (indirect_flow_proof.has_value()) {
-      const core::HelperInvariantRecallHoistResult recall_hoist =
-          core::optimize_helper_invariant_recall_hoist(
-              post_layout_items,
-              core::HelperInvariantRecallHoistOptions{
-                  .proved_indirect_flow_targets = indirect_flow_proof->targets,
-              });
-      if (recall_hoist.applied > 0 && recall_hoist.proof.final_artifact_proved &&
-          helper_hoist_preserves_fixed_indirect_targets(*indirect_flow_proof,
-                                                        recall_hoist.proof)) {
-        post_layout_items = recall_hoist.items;
-        post_layout_optimizations.insert(post_layout_optimizations.end(),
-                                         recall_hoist.optimizations.begin(),
-                                         recall_hoist.optimizations.end());
-      } else if (options.analysis && !recall_hoist.proof.reasons.empty()) {
-        post_layout_optimizations.push_back(core::passes::AppliedOptimization{
-            .name = "helper-invariant-recall-hoist-rejected",
-            .detail = recall_hoist.proof.helper_label + ": " +
-                      recall_hoist.proof.reasons.front(),
-        });
-      }
-    }
 
     const std::optional<ProvedIndirectFlowSet> wrapper_indirect_flow_proof =
         collect_proved_indirect_flow_set(post_layout_items,
@@ -54322,6 +54313,98 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
       post_layout_optimizations.push_back(core::passes::AppliedOptimization{
           .name = "zggog-return-stack-preload",
           .detail = std::move(zggog_detail),
+      });
+    }
+  }
+
+  // A repeated one-cell literal can be redundant while its stack lift is not:
+  // deleting it early changes the geometry explored by the natural-target
+  // search. Apply the proof after layout instead. Numeric and indirect targets
+  // are accepted by the pass only when deleting the cell leaves their physical
+  // addresses unchanged.
+  for (int iteration = 0; iteration < 8; ++iteration) {
+    const int before_cells = core::machine_cell_count(post_layout_items);
+    const core::passes::PassResult literal_reload =
+        core::passes::redundant_literal_reload(
+            raise_machine_to_ir(post_layout_items,
+                                optimizer_feature_profile_for_options(options)),
+            core::passes::PassContext{.options = options});
+    if (literal_reload.applied != 1)
+      break;
+    std::vector<MachineItem> candidate = lower_ir_to_machine(literal_reload.ops);
+    if (core::machine_cell_count(candidate) != before_cells - 1)
+      break;
+    post_layout_items = std::move(candidate);
+    post_layout_optimizations.insert(post_layout_optimizations.end(),
+                                     literal_reload.optimizations.begin(),
+                                     literal_reload.optimizations.end());
+  }
+
+  // This geometry-changing rewrite deliberately runs after every layout,
+  // overlay, selector-flow, and literal-reload pass.  Fixed direct operands are
+  // decoded through the delivered address model; fixed indirect selectors and
+  // command identity are preserved exactly.  Compiler-marked decimal selector
+  // charges are rebound once more if the proved rewrite wins.
+  const std::optional<ProvedIndirectFlowSet> final_indirect_flow_proof =
+      collect_proved_indirect_flow_set(post_layout_items,
+                                       address_space_model_for_options(options));
+  const std::optional<ProvedDirectAddressSet> final_direct_target_proof =
+      collect_fixed_direct_address_targets(post_layout_items, options,
+                                           address_space_model_for_options(options));
+  if (final_indirect_flow_proof.has_value() && final_direct_target_proof.has_value()) {
+    const core::HelperInvariantRecallHoistResult recall_hoist =
+        core::optimize_helper_invariant_recall_hoist(
+            post_layout_items,
+            core::HelperInvariantRecallHoistOptions{
+                .proved_indirect_flow_targets = final_indirect_flow_proof->targets,
+                .fixed_indirect_flow_targets =
+                    final_indirect_flow_proof->fixed_numeric_targets,
+                .fixed_direct_address_targets = final_direct_target_proof->targets,
+                .retargetable_direct_address_items =
+                    final_direct_target_proof->retargetable_items,
+            });
+    const bool fixed_indirect_targets_preserved =
+        recall_hoist.applied > 0 && recall_hoist.proof.final_artifact_proved &&
+        helper_hoist_preserves_fixed_indirect_targets(*final_indirect_flow_proof,
+                                                      recall_hoist.proof);
+    if (fixed_indirect_targets_preserved) {
+      const core::LateBoundDecimalSelectorResult rebound =
+          core::rebind_late_bound_decimal_selectors(
+              recall_hoist.items,
+              core::LateBoundDecimalSelectorOptions{.minimum_target_address = 0,
+                                                    .maximum_target_address = 99});
+      if (rebound.diagnostics.empty()) {
+        post_layout_items = rebound.items;
+        post_layout_optimizations.insert(post_layout_optimizations.end(),
+                                         recall_hoist.optimizations.begin(),
+                                         recall_hoist.optimizations.end());
+        if (rebound.applied > 0) {
+          post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+              .name = "late-bound-decimal-selector-rebind",
+              .detail = "Rebound " + std::to_string(rebound.applied) +
+                        " compiler-marked decimal selector charge(s) after final helper recall "
+                        "hoisting.",
+          });
+        }
+      } else if (options.analysis) {
+        post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+            .name = "helper-invariant-recall-hoist-rejected",
+            .detail = recall_hoist.proof.helper_label +
+                      ": final late-bound decimal selector rebind failed",
+        });
+      }
+    } else if (options.analysis && recall_hoist.applied > 0 &&
+               recall_hoist.proof.final_artifact_proved) {
+      post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+          .name = "helper-invariant-recall-hoist-rejected",
+          .detail = recall_hoist.proof.helper_label +
+                    ": fixed indirect target address or command identity changed",
+      });
+    } else if (options.analysis && !recall_hoist.proof.reasons.empty()) {
+      post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+          .name = "helper-invariant-recall-hoist-rejected",
+          .detail = recall_hoist.proof.helper_label + ": " +
+                    recall_hoist.proof.reasons.front(),
       });
     }
   }

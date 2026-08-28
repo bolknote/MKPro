@@ -1,6 +1,7 @@
 #include "mkpro/core/helper_invariant_recall_hoist.hpp"
 
 #include "mkpro/core/opcodes.hpp"
+#include "mkpro/core/stack_value_equivalence.hpp"
 
 #include <algorithm>
 #include <array>
@@ -9,6 +10,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -91,6 +93,10 @@ bool is_indirect_flow_opcode(int opcode) {
          high == 0xe0;
 }
 
+bool is_indirect_call_opcode(int opcode) {
+  return (opcode & 0xf0) == 0xa0;
+}
+
 bool is_flow_opcode(int opcode) {
   if (opcode == kStopOpcode || opcode == kDirectJumpOpcode || opcode == kReturnOpcode ||
       opcode == kDirectCallOpcode || is_indirect_flow_opcode(opcode)) {
@@ -159,14 +165,6 @@ std::string binary_expression(int opcode, std::string left, std::string right) {
   if (is_commutative_join(opcode) && right < left)
     std::swap(left, right);
   return "b" + std::to_string(opcode) + "(" + left + "," + right + ")";
-}
-
-bool states_equal(const SymbolicState& left, const SymbolicState& right) {
-  return left.stack == right.stack && left.x2 == right.x2 && left.registers == right.registers;
-}
-
-bool observable_values_equal(const SymbolicState& left, const SymbolicState& right) {
-  return left.stack == right.stack && left.registers == right.registers;
 }
 
 bool execute_symbolic_op(SymbolicState& state, const MachineItem& item, bool allow_return,
@@ -313,117 +311,358 @@ struct ContinuationProof {
   std::string reason;
 };
 
+std::optional<std::size_t> next_cell_item(const std::vector<MachineItem>& items,
+                                          std::size_t start) {
+  while (start < items.size()) {
+    if (items.at(start).kind != MachineItemKind::Label)
+      return start;
+    ++start;
+  }
+  return std::nullopt;
+}
+
+int equality_state_key(const StackValueEqualityState& state, bool number_entry_active) {
+  int key = state.x2_equal ? 16 : 0;
+  for (std::size_t index = 0; index < state.stack_equal.size(); ++index) {
+    if (state.stack_equal.at(index))
+      key |= 1 << static_cast<int>(index);
+  }
+  if (number_entry_active)
+    key |= 32;
+  return key;
+}
+
+bool apply_flow_x2(StackValueEqualityState& state, const OpcodeInfo& info, bool jump,
+                   std::string& rejection) {
+  X2Effect effect = info.x2_effect;
+  if (info.conditional_x2_effect.has_value())
+    effect = jump ? info.conditional_x2_effect->jump : info.conditional_x2_effect->fallthrough;
+  switch (effect) {
+  case X2Effect::Affects:
+    state.x2_equal = state.stack_equal.at(0);
+    return true;
+  case X2Effect::Preserves:
+    return true;
+  case X2Effect::Restores:
+    rejection = "X2 is observed before a proved overwrite";
+    return false;
+  case X2Effect::Unknown:
+    rejection = "control flow has an unknown X2 effect";
+    return false;
+  }
+  rejection = "control flow has an unknown X2 effect";
+  return false;
+}
+
+bool is_direct_x_conditional(int opcode) {
+  return opcode == 0x57 || opcode == 0x59 || opcode == 0x5c || opcode == 0x5e;
+}
+
+bool is_direct_loop(int opcode) {
+  return opcode == 0x58 || opcode == 0x5a || opcode == 0x5b || opcode == 0x5d;
+}
+
+bool is_indirect_conditional(int opcode) {
+  const int high = opcode & 0xf0;
+  return high == 0x70 || high == 0x90 || high == 0xc0 || high == 0xe0;
+}
+
 ContinuationProof prove_continuation(const std::vector<MachineItem>& items,
                                      std::size_t start_item_index, SymbolicState original,
                                      SymbolicState rewritten,
                                      const HelperInvariantRecallHoistOptions& options) {
   ContinuationProof proof;
-  bool numeric_entry_active = false;
-  for (std::size_t item_index = start_item_index; item_index < items.size(); ++item_index) {
-    if (states_equal(original, rewritten)) {
-      proof.proved = true;
-      return proof;
-    }
-    const MachineItem& item = items.at(item_index);
-    if (item.kind == MachineItemKind::Label)
-      continue;
-    if (proof.cells >= options.max_continuation_cells) {
-      proof.reason = "symbolic continuation exceeds the configured bound";
-      return proof;
-    }
-    ++proof.cells;
-    if (item.kind != MachineItemKind::Op || item.raw) {
-      proof.reason = "symbolic continuation reaches a raw/address cell before convergence";
-      return proof;
-    }
-
-    const OpcodeInfo& info = opcode_by_code(item.opcode);
-    if (info.x2_effect == X2Effect::Restores && original.x2 != rewritten.x2) {
-      proof.reason = "X2 is observed before a proved overwrite";
-      return proof;
-    }
-
-    if (item.opcode >= 0x00 && item.opcode <= 0x09) {
-      const std::array<std::string, 4> old_original = original.stack;
-      const std::array<std::string, 4> old_rewritten = rewritten.stack;
-      const std::string digit = std::to_string(item.opcode);
-      if (numeric_entry_active) {
-        original.stack.at(0) = "digits(" + old_original.at(0) + "," + digit + ")";
-        rewritten.stack.at(0) = "digits(" + old_rewritten.at(0) + "," + digit + ")";
-      } else {
-        original.stack = {"digit." + digit, old_original.at(0), old_original.at(1),
-                          old_original.at(2)};
-        rewritten.stack = {"digit." + digit, old_rewritten.at(0), old_rewritten.at(1),
-                           old_rewritten.at(2)};
-      }
-      // The entry command observes X2, which was proved equal above.  Its
-      // exact normalized representation is irrelevant to the relational
-      // proof, but retaining the common symbol prevents a false X2 kill.
-      original.x2 = "number-entry(" + original.x2 + ")";
-      rewritten.x2 = "number-entry(" + rewritten.x2 + ")";
-      numeric_entry_active = true;
-      continue;
-    }
-    numeric_entry_active = false;
-
-    if (item.opcode == kDirectJumpOpcode) {
-      if (item_index + 1U >= items.size() ||
-          items.at(item_index + 1U).kind != MachineItemKind::Address ||
-          items.at(item_index + 1U).formal_opcode.has_value() ||
-          !std::holds_alternative<std::string>(items.at(item_index + 1U).target)) {
-        proof.reason = "symbolic continuation reached an unresolved direct jump";
-        return proof;
-      }
-      if (proof.cells >= options.max_continuation_cells) {
-        proof.reason = "symbolic continuation exceeds the configured bound";
-        return proof;
-      }
-      ++proof.cells;
-      const ArtifactIndex index = index_artifact(items);
-      const std::string& label =
-          std::get<std::string>(items.at(item_index + 1U).target);
-      const auto target = index.label_items.find(label);
-      if (target == index.label_items.end() || index.duplicate_labels.contains(label)) {
-        proof.reason = "symbolic continuation reached a missing or duplicate jump label";
-        return proof;
-      }
-      if (target->second <= item_index + 1U) {
-        proof.reason = "symbolic continuation does not follow backward or cyclic jumps";
-        return proof;
-      }
-      HelperInvariantRecallHoistOptions tail_options = options;
-      tail_options.max_continuation_cells -= proof.cells;
-      ContinuationProof tail = prove_continuation(items, target->second, std::move(original),
-                                                  std::move(rewritten), tail_options);
-      proof.cells += tail.cells;
-      proof.proved = tail.proved;
-      proof.reason = std::move(tail.reason);
-      return proof;
-    }
-
-    if (is_flow_opcode(item.opcode) || is_any_indirect_opcode(item.opcode)) {
-      if ((item.opcode == kStopOpcode || item.opcode == kReturnOpcode) &&
-          observable_values_equal(original, rewritten) &&
-          original.stack.at(0) == rewritten.stack.at(0)) {
-        // Both commands overwrite X2 from the same X before control leaves.
-        proof.proved = true;
-        return proof;
-      }
-      proof.reason = "control flow is reached before stack/X2 convergence";
-      return proof;
-    }
-
-    std::string rejection;
-    if (!execute_symbolic_pair(original, rewritten, item, false, false, rejection)) {
-      proof.reason = rejection;
-      return proof;
-    }
+  if (original.registers != rewritten.registers) {
+    proof.reason = "symbolic continuation starts with unequal registers";
+    return proof;
   }
-  if (states_equal(original, rewritten)) {
+
+  StackValueEqualityState initial;
+  for (std::size_t index = 0; index < initial.stack_equal.size(); ++index)
+    initial.stack_equal.at(index) = original.stack.at(index) == rewritten.stack.at(index);
+  initial.x2_equal = original.x2 == rewritten.x2;
+  if (stack_values_fully_equal(initial)) {
     proof.proved = true;
     return proof;
   }
-  proof.reason = "symbolic continuation ends before stack/X2 convergence";
+
+  const ArtifactIndex artifact = index_artifact(items);
+  const auto resolve_address_target = [&](std::size_t address_item) -> std::optional<std::size_t> {
+    if (address_item >= items.size() || items.at(address_item).kind != MachineItemKind::Address ||
+        items.at(address_item).formal_opcode.has_value()) {
+      return std::nullopt;
+    }
+    const MachineItem& address = items.at(address_item);
+    if (const auto* label = std::get_if<std::string>(&address.target)) {
+      const auto found = artifact.label_items.find(*label);
+      if (found == artifact.label_items.end() || artifact.duplicate_labels.contains(*label))
+        return std::nullopt;
+      return next_cell_item(items, found->second);
+    }
+    const auto found = artifact.cell_items.find(std::get<int>(address.target));
+    if (found == artifact.cell_items.end())
+      return std::nullopt;
+    return found->second;
+  };
+  const auto resolve_numeric_target = [&](int address) -> std::optional<std::size_t> {
+    const auto found = artifact.cell_items.find(address);
+    if (found == artifact.cell_items.end())
+      return std::nullopt;
+    return found->second;
+  };
+
+  struct WorkState {
+    std::size_t item_index = 0;
+    StackValueEqualityState equality;
+    bool number_entry_active = false;
+    std::vector<std::size_t> return_items;
+    std::size_t cells = 0;
+  };
+  const std::optional<std::size_t> start = next_cell_item(items, start_item_index);
+  if (!start.has_value()) {
+    proof.reason = "symbolic continuation ends before stack/X2 convergence";
+    return proof;
+  }
+  std::vector<WorkState> work = {WorkState{.item_index = *start, .equality = initial}};
+  std::set<std::tuple<std::size_t, int, std::vector<std::size_t>>> visited;
+
+  const auto reject = [&](std::string reason) {
+    proof.reason = std::move(reason);
+    proof.proved = false;
+  };
+  const auto enqueue = [&](std::vector<WorkState>& queue, std::optional<std::size_t> target,
+                           const WorkState& from, StackValueEqualityState equality,
+                           bool number_entry_active, std::vector<std::size_t> return_items,
+                           std::size_t consumed_cells) -> bool {
+    if (!target.has_value()) {
+      reject("symbolic continuation reaches the end of the artifact before convergence");
+      return false;
+    }
+    const std::size_t cells = from.cells + consumed_cells;
+    proof.cells = std::max(proof.cells, cells);
+    if (cells > options.max_continuation_cells) {
+      reject("symbolic continuation exceeds the configured bound");
+      return false;
+    }
+    queue.push_back(WorkState{.item_index = *target,
+                              .equality = equality,
+                              .number_entry_active = number_entry_active,
+                              .return_items = std::move(return_items),
+                              .cells = cells});
+    return true;
+  };
+
+  while (!work.empty()) {
+    WorkState current = std::move(work.back());
+    work.pop_back();
+    if (stack_values_fully_equal(current.equality))
+      continue;
+    if (current.item_index >= items.size()) {
+      reject("symbolic continuation leaves the artifact before convergence");
+      return proof;
+    }
+    if (!visited
+             .insert({current.item_index,
+                      equality_state_key(current.equality, current.number_entry_active),
+                      current.return_items})
+             .second) {
+      continue;
+    }
+    const MachineItem& item = items.at(current.item_index);
+    if (item.kind != MachineItemKind::Op || item.raw) {
+      reject("symbolic continuation reaches a raw/address cell before convergence");
+      return proof;
+    }
+
+    const std::optional<std::size_t> fallthrough =
+        next_cell_item(items, current.item_index + 1U);
+    const OpcodeInfo& info = opcode_by_code(item.opcode);
+
+    if (item.opcode == kStopOpcode) {
+      StackValueEqualityState stopped = current.equality;
+      stopped.x2_equal = stopped.stack_equal.at(0);
+      if (!stack_values_fully_equal(stopped)) {
+        reject("non-converged stack reaches an observable stop");
+        return proof;
+      }
+      continue;
+    }
+    if (item.opcode == kReturnOpcode) {
+      current.equality.x2_equal = current.equality.stack_equal.at(0);
+      if (current.return_items.empty()) {
+        if (!stack_values_fully_equal(current.equality)) {
+          reject("non-converged stack reaches an observable return");
+          return proof;
+        }
+        continue;
+      }
+      const std::size_t continuation = current.return_items.back();
+      current.return_items.pop_back();
+      if (!enqueue(work, continuation, current, current.equality, false,
+                   std::move(current.return_items), 1U)) {
+        return proof;
+      }
+      continue;
+    }
+
+    if (item.opcode == kDirectJumpOpcode || item.opcode == kDirectCallOpcode ||
+        is_direct_x_conditional(item.opcode) || is_direct_loop(item.opcode)) {
+      const std::optional<std::size_t> operand = fallthrough;
+      if (!operand.has_value() || items.at(*operand).kind != MachineItemKind::Address) {
+        reject("symbolic continuation reached unresolved direct control flow");
+        return proof;
+      }
+      const std::optional<std::size_t> target = resolve_address_target(*operand);
+      const std::optional<std::size_t> after_operand = next_cell_item(items, *operand + 1U);
+      if (!target.has_value()) {
+        reject("symbolic continuation reached a missing direct target");
+        return proof;
+      }
+      if (item.opcode == kDirectCallOpcode) {
+        if (!after_operand.has_value()) {
+          reject("symbolic continuation reached a call without a continuation");
+          return proof;
+        }
+        StackValueEqualityState called = current.equality;
+        std::string rejection;
+        if (!apply_flow_x2(called, info, true, rejection)) {
+          reject(std::move(rejection));
+          return proof;
+        }
+        std::vector<std::size_t> returns = current.return_items;
+        returns.push_back(*after_operand);
+        if (!enqueue(work, target, current, called, false, std::move(returns), 2U))
+          return proof;
+        continue;
+      }
+      if (item.opcode == kDirectJumpOpcode) {
+        StackValueEqualityState jumped = current.equality;
+        std::string rejection;
+        if (!apply_flow_x2(jumped, info, true, rejection)) {
+          reject(std::move(rejection));
+          return proof;
+        }
+        if (!enqueue(work, target, current, jumped, false, current.return_items, 2U))
+          return proof;
+        continue;
+      }
+      if (is_direct_x_conditional(item.opcode) && !current.equality.stack_equal.at(0)) {
+        reject("symbolic continuation reaches a branch with unequal X");
+        return proof;
+      }
+      if (!after_operand.has_value()) {
+        reject("symbolic continuation reached a conditional without fallthrough");
+        return proof;
+      }
+      for (const auto& [successor, jump] :
+           std::array<std::pair<std::optional<std::size_t>, bool>, 2>{
+               std::pair{target, true}, std::pair{after_operand, false}}) {
+        StackValueEqualityState branched = current.equality;
+        std::string rejection;
+        if (!apply_flow_x2(branched, info, jump, rejection)) {
+          reject(std::move(rejection));
+          return proof;
+        }
+        if (!enqueue(work, successor, current, branched, false, current.return_items, 2U))
+          return proof;
+      }
+      continue;
+    }
+
+    if (is_indirect_flow_opcode(item.opcode)) {
+      const auto proved_targets = options.proved_indirect_flow_targets.find(current.item_index);
+      if (proved_targets == options.proved_indirect_flow_targets.end() ||
+          proved_targets->second.empty()) {
+        reject("symbolic continuation reaches unknown indirect control flow");
+        return proof;
+      }
+      const int high = item.opcode & 0xf0;
+      if (is_indirect_conditional(item.opcode) && !current.equality.stack_equal.at(0)) {
+        reject("symbolic continuation reaches an indirect branch with unequal X");
+        return proof;
+      }
+      StackValueEqualityState jumped = current.equality;
+      std::string rejection;
+      if (!apply_flow_x2(jumped, info, true, rejection)) {
+        reject(std::move(rejection));
+        return proof;
+      }
+      for (const int address : proved_targets->second) {
+        const std::optional<std::size_t> target = resolve_numeric_target(address);
+        if (!target.has_value()) {
+          reject("symbolic continuation reaches an out-of-artifact indirect target");
+          return proof;
+        }
+        if (high == 0xa0) {
+          if (!fallthrough.has_value()) {
+            reject("symbolic continuation reaches an indirect call without a continuation");
+            return proof;
+          }
+          std::vector<std::size_t> returns = current.return_items;
+          returns.push_back(*fallthrough);
+          if (!enqueue(work, target, current, jumped, false, std::move(returns), 1U))
+            return proof;
+        } else if (!enqueue(work, target, current, jumped, false, current.return_items, 1U)) {
+          return proof;
+        }
+      }
+      if (is_indirect_conditional(item.opcode)) {
+        StackValueEqualityState not_taken = current.equality;
+        if (!apply_flow_x2(not_taken, info, false, rejection)) {
+          reject(std::move(rejection));
+          return proof;
+        }
+        if (!enqueue(work, fallthrough, current, not_taken, false, current.return_items, 1U))
+          return proof;
+      }
+      continue;
+    }
+
+    if (item.opcode >= 0x00 && item.opcode <= 0x09) {
+      if (current.number_entry_active) {
+        if (!current.equality.stack_equal.at(0)) {
+          reject("continued decimal entry observes unequal X");
+          return proof;
+        }
+      } else {
+        const std::array<bool, 4> old = current.equality.stack_equal;
+        current.equality.stack_equal = {true, old.at(0), old.at(1), old.at(2)};
+      }
+      if (!enqueue(work, fallthrough, current, current.equality, true,
+                   current.return_items, 1U)) {
+        return proof;
+      }
+      continue;
+    }
+
+    StackValueEqualityStepKind step_kind = StackValueEqualityStepKind::Plain;
+    if (is_direct_recall(item.opcode) || (item.opcode & 0xf0) == 0xd0)
+      step_kind = StackValueEqualityStepKind::Recall;
+    else if (is_direct_store(item.opcode) || (item.opcode & 0xf0) == 0xb0)
+      step_kind = StackValueEqualityStepKind::Store;
+    else if (is_any_indirect_opcode(item.opcode) || is_direct_register_alias(item.opcode)) {
+      reject("symbolic continuation reaches unsupported indirect/register-alias memory");
+      return proof;
+    }
+    if (info.x2_effect == X2Effect::Restores && !current.equality.x2_equal) {
+      reject("X2 is observed before a proved overwrite");
+      return proof;
+    }
+    const StackValueEqualityTransfer transfer =
+        transfer_stack_value_equality(current.equality, item.opcode, step_kind);
+    if (transfer == StackValueEqualityTransfer::Rejected) {
+      reject(std::string("symbolic continuation observes an unequal value at ") + info.name);
+      return proof;
+    }
+    if (transfer == StackValueEqualityTransfer::Converged)
+      continue;
+    if (!enqueue(work, fallthrough, current, current.equality, false,
+                 current.return_items, 1U)) {
+      return proof;
+    }
+  }
+
+  proof.proved = true;
   return proof;
 }
 
@@ -495,6 +734,13 @@ void validate_pre_artifact_flow(const std::vector<MachineItem>& items, const Art
                                 const std::set<std::size_t>& removed_recall_items,
                                 const HelperInvariantRecallHoistOptions& options,
                                 HelperInvariantRecallHoistProof& proof) {
+  const auto nop_safe_call_entry = [&](std::size_t item_index) {
+    return std::any_of(proof.calls.begin(), proof.calls.end(),
+                       [&](const HelperInvariantRecallCall& call) {
+                         return call.recall_item_index == item_index &&
+                                call.placement == HelperInvariantRecallPlacement::BeforeCall;
+                       });
+  };
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
     const MachineItem& item = items.at(item_index);
     if (item.kind == MachineItemKind::Op && is_indirect_flow_opcode(item.opcode)) {
@@ -505,14 +751,22 @@ void validate_pre_artifact_flow(const std::vector<MachineItem>& items, const Art
         const int helper_start = index.item_addresses.at(proof.helper_label_item_index);
         const int helper_return = index.item_addresses.at(proof.helper_return_item_index);
         for (const int target : targets->second) {
+          const bool proved_root_call =
+              target == helper_start && is_indirect_call_opcode(item.opcode) &&
+              std::any_of(proof.calls.begin(), proof.calls.end(),
+                          [&](const HelperInvariantRecallCall& call) {
+                            return call.indirect && call.call_item_index == item_index;
+                          });
           const auto target_item = index.cell_items.find(target);
           if (target_item == index.cell_items.end()) {
             add_reason(proof, "proved indirect target is outside the input artifact");
           } else if (items.at(target_item->second).kind != MachineItemKind::Op) {
             add_reason(proof, "proved indirect target is not a stable opcode cell");
-          } else if (target >= helper_start && target <= helper_return) {
+          } else if (target >= helper_start && target <= helper_return &&
+                     !proved_root_call) {
             add_reason(proof, "proved indirect target can enter the helper body");
-          } else if (removed_recall_items.contains(target_item->second)) {
+          } else if (removed_recall_items.contains(target_item->second) &&
+                     !nop_safe_call_entry(target_item->second)) {
             add_reason(proof, "proved indirect target names a removed call-site recall");
           }
         }
@@ -521,7 +775,27 @@ void validate_pre_artifact_flow(const std::vector<MachineItem>& items, const Art
     if (item.kind != MachineItemKind::Address)
       continue;
     if (item.formal_opcode.has_value() || std::holds_alternative<int>(item.target)) {
-      add_reason(proof, "fixed/formal address operand cannot be safely reindexed");
+      const auto fixed = options.fixed_direct_address_targets.find(item_index);
+      if (fixed == options.fixed_direct_address_targets.end() ||
+          !index.cell_items.contains(fixed->second)) {
+        add_reason(proof, "fixed/formal direct address lacks an authoritative target proof");
+      } else if (removed_recall_items.contains(index.cell_items.at(fixed->second)) &&
+                 !nop_safe_call_entry(index.cell_items.at(fixed->second))) {
+        std::string detail = "fixed/formal direct address at " +
+                             std::to_string(index.item_addresses.at(item_index)) + " targets " +
+                             std::to_string(fixed->second) + " (item " +
+                             std::to_string(index.cell_items.at(fixed->second)) +
+                             "), a removed call-site recall; recalls=";
+        bool first = true;
+        for (const std::size_t recall_item : removed_recall_items) {
+          if (!first)
+            detail += ",";
+          first = false;
+          detail += std::to_string(index.item_addresses.at(recall_item)) + "/" +
+                    std::to_string(recall_item);
+        }
+        add_reason(proof, std::move(detail));
+      }
     }
   }
 
@@ -530,6 +804,14 @@ void validate_pre_artifact_flow(const std::vector<MachineItem>& items, const Art
     if (item_index >= items.size() || items.at(item_index).kind != MachineItemKind::Op ||
         !is_indirect_flow_opcode(items.at(item_index).opcode)) {
       add_reason(proof, "indirect-flow proof map contains a stale item index");
+    }
+  }
+  for (const auto& [item_index, target] : options.fixed_direct_address_targets) {
+    (void)target;
+    if (item_index >= items.size() || items.at(item_index).kind != MachineItemKind::Address ||
+        (!items.at(item_index).formal_opcode.has_value() &&
+         !std::holds_alternative<int>(items.at(item_index).target))) {
+      add_reason(proof, "fixed direct-address proof map contains a stale item index");
     }
   }
 }
@@ -542,6 +824,13 @@ bool reindex_indirect_flow_proof(const std::vector<MachineItem>& original,
                                  const HelperInvariantRecallHoistOptions& options,
                                  HelperInvariantRecallHoistProof& proof) {
   proof.final_indirect_flow_targets.clear();
+  const auto original_root = original_index.label_addresses.find(proof.helper_label);
+  const auto candidate_root = candidate_index.label_addresses.find(proof.helper_label);
+  if (original_root == original_index.label_addresses.end() ||
+      candidate_root == candidate_index.label_addresses.end()) {
+    add_reason(proof, "helper root disappeared while reindexing indirect flow");
+    return false;
+  }
   for (const auto& [old_flow_item, old_targets] : options.proved_indirect_flow_targets) {
     if (old_flow_item >= original.size() || old_flow_item >= old_to_new_item.size() ||
         !old_to_new_item.at(old_flow_item).has_value()) {
@@ -559,6 +848,11 @@ bool reindex_indirect_flow_proof(const std::vector<MachineItem>& original,
     std::vector<int> new_targets;
     new_targets.reserve(old_targets.size());
     for (const int old_target : old_targets) {
+      if (old_target == original_root->second &&
+          is_indirect_call_opcode(original.at(old_flow_item).opcode)) {
+        new_targets.push_back(candidate_root->second);
+        continue;
+      }
       const auto old_target_item = original_index.cell_items.find(old_target);
       if (old_target_item == original_index.cell_items.end() ||
           old_target_item->second >= old_to_new_item.size() ||
@@ -578,11 +872,71 @@ bool reindex_indirect_flow_proof(const std::vector<MachineItem>& original,
   return true;
 }
 
+bool retarget_or_verify_direct_targets(
+    const std::vector<MachineItem>& original, const ArtifactIndex& original_index,
+    std::vector<MachineItem>& candidate, const ArtifactIndex& candidate_index,
+    const std::vector<std::optional<std::size_t>>& old_to_new_item,
+    const HelperInvariantRecallHoistOptions& options,
+    const HelperInvariantRecallHoistProof& proof) {
+  const int original_root = original_index.item_addresses.at(proof.helper_label_item_index);
+  const auto candidate_root = candidate_index.label_addresses.find(proof.helper_label);
+  if (candidate_root == candidate_index.label_addresses.end())
+    return false;
+  for (const auto& [old_operand_item, target] : options.fixed_direct_address_targets) {
+    if (old_operand_item >= original.size() || old_operand_item >= old_to_new_item.size() ||
+        !old_to_new_item.at(old_operand_item).has_value()) {
+      return false;
+    }
+    const std::size_t new_operand_item = *old_to_new_item.at(old_operand_item);
+    if (new_operand_item >= candidate.size() ||
+        candidate.at(new_operand_item).kind != MachineItemKind::Address) {
+      return false;
+    }
+    int new_target_address = -1;
+    if (target == original_root) {
+      new_target_address = candidate_root->second;
+    } else {
+      const auto old_target_item = original_index.cell_items.find(target);
+      if (old_target_item == original_index.cell_items.end())
+        return false;
+      std::optional<std::size_t> new_target_item;
+      if (old_target_item->second < old_to_new_item.size())
+        new_target_item = old_to_new_item.at(old_target_item->second);
+      if (!new_target_item.has_value()) {
+        const auto call = std::find_if(
+            proof.calls.begin(), proof.calls.end(), [&](const HelperInvariantRecallCall& entry) {
+              return entry.recall_item_index == old_target_item->second &&
+                     entry.placement == HelperInvariantRecallPlacement::BeforeCall;
+            });
+        if (call == proof.calls.end() || call->call_item_index >= old_to_new_item.size())
+          return false;
+        new_target_item = old_to_new_item.at(call->call_item_index);
+      }
+      if (!new_target_item.has_value() ||
+          *new_target_item >= candidate_index.item_addresses.size()) {
+        return false;
+      }
+      new_target_address = candidate_index.item_addresses.at(*new_target_item);
+    }
+    if (options.retargetable_direct_address_items.contains(old_operand_item)) {
+      candidate.at(new_operand_item).target = new_target_address;
+      candidate.at(new_operand_item).formal_opcode.reset();
+    } else if (new_target_address != target ||
+               candidate.at(new_operand_item).target != original.at(old_operand_item).target ||
+               candidate.at(new_operand_item).formal_opcode !=
+                   original.at(old_operand_item).formal_opcode) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool verify_final_artifact(const std::vector<MachineItem>& original,
                            const std::vector<MachineItem>& candidate,
                            HelperInvariantRecallHoistProof& proof) {
   const ArtifactIndex index = index_artifact(candidate);
-  const int expected_cells = proof.input_cells - static_cast<int>(proof.calls.size()) + 1;
+  const int expected_cells =
+      proof.input_cells - static_cast<int>(proof.erased_recall_items.size()) + 1;
   proof.output_cells = index.cells;
   if (index.cells != expected_cells) {
     add_reason(proof, "final artifact has an unexpected cell count");
@@ -623,7 +977,17 @@ bool verify_final_artifact(const std::vector<MachineItem>& original,
     return false;
   }
 
-  int direct_root_calls = 0;
+  const int nop_padding_count = static_cast<int>(std::count_if(
+      candidate.begin(), candidate.end(), [](const MachineItem& item) {
+        return std::find(item.roles.begin(), item.roles.end(),
+                         "helper-invariant-recall-hoist:fixed-target-padding") != item.roles.end();
+      }));
+  if (nop_padding_count != static_cast<int>(proof.nop_recall_items.size())) {
+    add_reason(proof, "final artifact lost fixed-target NOP padding");
+    return false;
+  }
+
+  int root_calls = 0;
   for (std::size_t item_index = 0; item_index < candidate.size(); ++item_index) {
     const MachineItem& item = candidate.at(item_index);
     if (item.kind == MachineItemKind::Op && is_indirect_flow_opcode(item.opcode)) {
@@ -642,18 +1006,23 @@ bool verify_final_artifact(const std::vector<MachineItem>& original,
           add_reason(proof, "final proved indirect target is not an opcode cell");
           return false;
         }
-        if (target >= final_helper_start_address && target <= final_helper_return_address) {
+        const bool proved_root_call = target == final_helper_start_address &&
+                                      is_indirect_call_opcode(item.opcode);
+        if (target >= final_helper_start_address &&
+            target <= final_helper_return_address && !proved_root_call) {
           add_reason(proof, "final proved indirect target can enter the helper body");
           return false;
         }
+        if (proved_root_call)
+          ++root_calls;
       }
     }
     if (item.kind != MachineItemKind::Address)
       continue;
-    if (item.formal_opcode.has_value() || std::holds_alternative<int>(item.target)) {
-      add_reason(proof, "final artifact contains a fixed/formal address operand");
-      return false;
-    }
+    // Numeric/formal operands were decoded authoritatively and either retargeted
+    // or identity/address-checked before this whole-artifact verifier runs.
+    if (item.formal_opcode.has_value() || std::holds_alternative<int>(item.target))
+      continue;
     const std::string& label = std::get<std::string>(item.target);
     if (!index.label_items.contains(label)) {
       add_reason(proof, "final artifact contains a missing label target");
@@ -666,10 +1035,10 @@ bool verify_final_artifact(const std::vector<MachineItem>& original,
       add_reason(proof, "final helper root has a non-PP reference");
       return false;
     }
-    ++direct_root_calls;
+    ++root_calls;
   }
-  if (direct_root_calls != static_cast<int>(proof.calls.size())) {
-    add_reason(proof, "final helper direct-call set differs from the proved set");
+  if (root_calls != static_cast<int>(proof.calls.size())) {
+    add_reason(proof, "final helper call set differs from the proved set");
     return false;
   }
   for (const auto& [item_index, targets] : proof.final_indirect_flow_targets) {
@@ -681,6 +1050,117 @@ bool verify_final_artifact(const std::vector<MachineItem>& original,
     }
   }
   return true;
+}
+
+void plan_fixed_target_recall_erasure(const ArtifactIndex& index,
+                                      const HelperInvariantRecallHoistOptions& options,
+                                      HelperInvariantRecallHoistProof& proof) {
+  std::vector<std::pair<int, std::size_t>> recalls;
+  recalls.reserve(proof.calls.size());
+  for (const HelperInvariantRecallCall& call : proof.calls) {
+    recalls.emplace_back(index.item_addresses.at(call.recall_item_index),
+                         call.recall_item_index);
+  }
+  std::sort(recalls.begin(), recalls.end());
+
+  const auto force_nop_target = [&](int target) {
+    const auto target_item = index.cell_items.find(target);
+    if (target_item == index.cell_items.end())
+      return;
+    const auto call = std::find_if(
+        proof.calls.begin(), proof.calls.end(), [&](const HelperInvariantRecallCall& candidate) {
+          return candidate.recall_item_index == target_item->second &&
+                 candidate.placement == HelperInvariantRecallPlacement::BeforeCall;
+        });
+    if (call != proof.calls.end())
+      proof.nop_recall_items.insert(call->recall_item_index);
+  };
+  for (const auto& [flow_item, targets] : options.proved_indirect_flow_targets) {
+    (void)flow_item;
+    for (const int target : targets)
+      force_nop_target(target);
+  }
+  for (const auto& [operand_item, target] : options.fixed_direct_address_targets) {
+    if (!options.retargetable_direct_address_items.contains(operand_item))
+      force_nop_target(target);
+  }
+
+  std::vector<int> fixed_targets;
+  for (const auto& [flow_item, targets] : options.fixed_indirect_flow_targets) {
+    const auto proved = options.proved_indirect_flow_targets.find(flow_item);
+    if (proved == options.proved_indirect_flow_targets.end()) {
+      add_reason(proof, "fixed indirect target lacks a complete flow proof");
+      return;
+    }
+    for (const int target : targets) {
+      if (std::find(proved->second.begin(), proved->second.end(), target) ==
+          proved->second.end()) {
+        add_reason(proof, "fixed indirect target is absent from the complete flow proof");
+        return;
+      }
+      if (!index.cell_items.contains(target)) {
+        add_reason(proof, "fixed indirect target is outside the input artifact");
+        return;
+      }
+      fixed_targets.push_back(target);
+    }
+  }
+  for (const auto& [operand_item, target] : options.fixed_direct_address_targets) {
+    if (!options.retargetable_direct_address_items.contains(operand_item))
+      fixed_targets.push_back(target);
+  }
+  std::sort(fixed_targets.begin(), fixed_targets.end());
+  fixed_targets.erase(std::unique(fixed_targets.begin(), fixed_targets.end()),
+                      fixed_targets.end());
+
+  if (fixed_targets.empty()) {
+    for (const auto& [address, item] : recalls) {
+      (void)address;
+      if (!proof.nop_recall_items.contains(item))
+        proof.erased_recall_items.insert(item);
+    }
+    return;
+  }
+
+  const int helper_start = index.item_addresses.at(proof.helper_label_item_index);
+  int previous_target = -1;
+  for (const int target : fixed_targets) {
+    const int required_deletions = target > helper_start ? 1 : 0;
+    int selected_before = 0;
+    for (const auto& [address, item] : recalls) {
+      if (address < target && proof.erased_recall_items.contains(item))
+        ++selected_before;
+    }
+    if (selected_before > required_deletions) {
+      add_reason(proof, "fixed indirect targets require incompatible recall padding");
+      return;
+    }
+    int needed = required_deletions - selected_before;
+    for (auto recall = recalls.rbegin(); recall != recalls.rend() && needed > 0; ++recall) {
+      if (recall->first < previous_target || recall->first >= target ||
+          proof.erased_recall_items.contains(recall->second) ||
+          proof.nop_recall_items.contains(recall->second)) {
+        continue;
+      }
+      proof.erased_recall_items.insert(recall->second);
+      --needed;
+    }
+    if (needed != 0) {
+      add_reason(proof, "fixed indirect target cannot retain its address after recall hoisting");
+      return;
+    }
+    previous_target = target;
+  }
+
+  for (const auto& [address, item] : recalls) {
+    if (address >= previous_target && !proof.nop_recall_items.contains(item))
+      proof.erased_recall_items.insert(item);
+  }
+  for (const auto& [address, item] : recalls) {
+    (void)address;
+    if (!proof.erased_recall_items.contains(item))
+      proof.nop_recall_items.insert(item);
+  }
 }
 
 } // namespace
@@ -788,6 +1268,23 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
         .operand_item_index = item_index,
     });
   }
+  if (found_return) {
+    const int helper_start = index.item_addresses.at(root->second);
+    for (const auto& [call_item_index, targets] :
+         options.proved_indirect_flow_targets) {
+      if (call_item_index >= items.size() || targets.size() != 1U ||
+          targets.front() != helper_start ||
+          items.at(call_item_index).kind != MachineItemKind::Op ||
+          !is_indirect_call_opcode(items.at(call_item_index).opcode)) {
+        continue;
+      }
+      proof.calls.push_back(HelperInvariantRecallCall{
+          .call_item_index = call_item_index,
+          .operand_item_index = call_item_index,
+          .indirect = true,
+      });
+    }
+  }
   if (proof.calls.size() < 2U)
     add_reason(proof, "helper needs at least two proved direct PP call sites");
 
@@ -883,7 +1380,10 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
     }
   }
 
-  proof.output_cells = proof.input_cells - static_cast<int>(proof.calls.size()) + 1;
+  if (proof.reasons.empty())
+    plan_fixed_target_recall_erasure(index, options, proof);
+  proof.output_cells =
+      proof.input_cells - static_cast<int>(proof.erased_recall_items.size()) + 1;
   if (proof.output_cells >= proof.input_cells)
     add_reason(proof, "recall hoist is not cell-profitable");
   proof.proved = proof.reasons.empty();
@@ -900,20 +1400,24 @@ rewrite_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
   if (!result.proof.proved)
     return result;
 
-  std::set<std::size_t> removed_recalls;
-  for (const HelperInvariantRecallCall& call : result.proof.calls)
-    removed_recalls.insert(call.recall_item_index);
   MachineItem hoisted = items.at(result.proof.calls.front().recall_item_index);
   hoisted.roles.push_back("helper-invariant-recall-hoist:root");
 
   std::vector<MachineItem> candidate;
-  candidate.reserve(items.size() - removed_recalls.size() + 1U);
+  candidate.reserve(items.size() - result.proof.erased_recall_items.size() + 1U);
   std::vector<std::optional<std::size_t>> old_to_new_item(items.size());
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
-    if (removed_recalls.contains(item_index))
+    if (result.proof.erased_recall_items.contains(item_index))
       continue;
     old_to_new_item.at(item_index) = candidate.size();
-    candidate.push_back(items.at(item_index));
+    if (result.proof.nop_recall_items.contains(item_index)) {
+      MachineItem padding = MachineItem::op(0x54, "К НОП");
+      padding.comment = "fixed-target padding for helper recall hoist";
+      padding.roles.push_back("helper-invariant-recall-hoist:fixed-target-padding");
+      candidate.push_back(std::move(padding));
+    } else {
+      candidate.push_back(items.at(item_index));
+    }
     if (item_index == result.proof.helper_label_item_index)
       candidate.push_back(hoisted);
   }
@@ -922,6 +1426,14 @@ rewrite_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
   const ArtifactIndex candidate_index = index_artifact(candidate);
   if (!reindex_indirect_flow_proof(items, original_index, candidate, candidate_index,
                                    old_to_new_item, options, result.proof)) {
+    result.proof.proved = false;
+    result.items = items;
+    return result;
+  }
+  if (!retarget_or_verify_direct_targets(items, original_index, candidate, candidate_index,
+                                         old_to_new_item, options, result.proof)) {
+    add_reason(result.proof,
+               "fixed/formal direct target changed address or command identity after rewrite");
     result.proof.proved = false;
     result.items = items;
     return result;
@@ -939,7 +1451,7 @@ rewrite_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
       .name = "helper-invariant-recall-hoist",
       .detail = "Hoisted one invariant direct-register recall into straight-line helper " +
                 helper_label + " after bounded X/Y/Z/T/X2 proofs at " +
-                std::to_string(result.proof.calls.size()) + " complete direct call sites; saved " +
+                std::to_string(result.proof.calls.size()) + " complete call sites; saved " +
                 std::to_string(result.proof.input_cells - result.proof.output_cells) + " cells.",
   });
   return result;

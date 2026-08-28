@@ -83,6 +83,7 @@ add_library(mkpro_core STATIC
   src/core/passes/recall_removal.cpp
   src/core/passes/register_coalesce.cpp
   src/core/passes/redundant_prologue.cpp
+  src/core/passes/redundant_literal_reload.cpp
   src/core/passes/return_suffix_gadget.cpp
   src/core/passes/return_trampoline.cpp
   src/core/passes/return_zero_jump.cpp
@@ -308,6 +309,7 @@ add_executable(mkpro_tests
   tests/vp_x2_peephole_test.cpp
   tests/vp_splice_pass_test.cpp
   tests/pre_shift_stack_lift_pass_test.cpp
+  tests/redundant_literal_reload_test.cpp
 )
 target_link_libraries(mkpro_tests PRIVATE mkpro_debug)
 
@@ -504,6 +506,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   vp_x2_peephole_matches_typescript_contract
   vp_splice_matches_typescript_contract
   pre_shift_stack_lift_matches_typescript_contract
+  redundant_literal_reload_is_generic_and_proof_gated
 )
 foreach(test_name IN LISTS MKPRO_NATIVE_TEST_NAMES)
   add_test(NAME "mkpro.${test_name}" COMMAND mkpro_tests --exact "${test_name}")

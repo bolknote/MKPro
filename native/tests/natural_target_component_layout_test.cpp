@@ -543,6 +543,35 @@ Fixture single_flow_conditional_x2_reconvergence_fixture() {
   return result;
 }
 
+Fixture loop_conditional_x2_reconvergence_fixture(bool restore_inside_loop) {
+  Fixture result;
+  const std::string loop = "unrelated_loop_x2_body";
+  const std::string sink = "unrelated_loop_x2_sink";
+
+  result.items.push_back(MachineItem::label("unrelated_loop_x2_entry"));
+  result.items.push_back(op(0x5e));
+  result.items.push_back(MachineItem::address(sink));
+  result.items.push_back(MachineItem::label(loop));
+  if (restore_inside_loop)
+    result.items.push_back(op(0x0a));
+  result.items.push_back(op(0x5b));
+  result.items.push_back(MachineItem::address(loop));
+  result.visible_stop = result.items.size();
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label(sink));
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label("unrelated_loop_x2_padding"));
+  for (int cell = 1; cell < 14; ++cell)
+    result.items.push_back(op(0x54));
+  result.items.push_back(stop());
+
+  result.preloads.push_back(PreloadReport{.register_name = "1", .value = "2"});
+  result.preloads.push_back(PreloadReport{.register_name = "8", .value = "18"});
+  return result;
+}
+
 // A stable register written only by the exact toggle triple `П->X r; /-/;
 // X->П r`. `write` selects the runtime write shape: 0 keeps the proved
 // triple, 1 stores without the negate, 2 places a label between the negate
@@ -949,6 +978,43 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
     const Observation after = observe(rewritten.items, rewritten.preloads);
     require(before.stopped && after.stopped && before.state == after.state,
             "proved single-flow conditional X2 reconvergence must preserve observable state");
+  }
+
+  {
+    const Fixture input = loop_conditional_x2_reconvergence_fixture(false);
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    const int converted_conditionals = static_cast<int>(std::count_if(
+        rewritten.plan.flows.begin(), rewritten.plan.flows.end(), [](const auto& flow) {
+          return flow.original_opcode == 0x5e;
+        }));
+    std::string rejection;
+    for (const std::string& reason : rewritten.plan.reasons) {
+      if (!rejection.empty())
+        rejection += " | ";
+      rejection += reason;
+    }
+    require(rewritten.plan.proved && rewritten.removed_cells == 1 &&
+                converted_conditionals == 1 &&
+                rewritten.plan.x2_reconvergence_flows == 1,
+            "a preserving counted-loop SCC may carry a hidden conditional X2 difference "
+            "until every exit overwrites it: applied=" +
+                std::to_string(rewritten.applied) +
+                ", removed=" + std::to_string(rewritten.removed_cells) +
+                ", reasons=" + rejection);
+    const Observation before = observe(input.items, input.preloads);
+    const Observation after = observe(rewritten.items, rewritten.preloads);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "loop-aware conditional X2 reconvergence must preserve observable state");
+  }
+
+  {
+    const Fixture input = loop_conditional_x2_reconvergence_fixture(true);
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    require(rewritten.applied == 0 && reason_contains(rewritten.plan, "x2=0"),
+            "an X2 restore reachable inside a preserving SCC must reject indirect "
+            "conditional conversion");
   }
 
   {

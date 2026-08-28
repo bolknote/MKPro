@@ -1,0 +1,120 @@
+#include "mkpro/core/passes/redundant_literal_reload.hpp"
+#include "mkpro/emulator/mk61.hpp"
+
+#include "ir_pass_test_support.hpp"
+#include "test_support.hpp"
+
+#include <array>
+#include <string>
+#include <vector>
+
+namespace mkpro::tests {
+
+namespace {
+
+using namespace mkpro::tests::irbuild;
+
+core::passes::PassResult run(const std::vector<IrOp>& ops) {
+  return core::passes::redundant_literal_reload(
+      ops, core::passes::PassContext{.options = noop_options()});
+}
+
+std::array<std::string, 9> run_machine(const std::vector<int>& program) {
+  emulator::MK61 calc;
+  calc.set_register("x", "9");
+  calc.set_register("y", "8");
+  calc.set_register("z", "7");
+  calc.set_register("t", "6");
+  calc.set_register("1", "111");
+  calc.set_register("2", "222");
+  calc.set_register("9", "333");
+  calc.load_program(program);
+  calc.press_sequence({"В/О", "С/П"});
+  (void)calc.run_until_stable(500, 5);
+  return {
+      calc.read_register("x"), calc.read_register("y"), calc.read_register("z"),
+      calc.read_register("t"), calc.read_register("x1"), calc.read_register("1"),
+      calc.read_register("2"), calc.read_register("9"), calc.display_text(),
+  };
+}
+
+} // namespace
+
+void redundant_literal_reload_is_generic_and_proof_gated() {
+  const std::vector<IrOp> positive = {
+      plain(0x0d, "Cx"), plain(0x04, "4"), store("2"), plain(0x04, "4"),
+      store("1"), recall("9"), recall("1"), recall("2"), plain(0x0a, "."), halt(),
+  };
+  const std::vector<IrOp> expected = {
+      plain(0x0d, "Cx"), plain(0x04, "4"), store("2"), store("1"),
+      recall("9"), recall("1"), recall("2"), plain(0x0a, "."), halt(),
+  };
+  const auto positive_result = run(positive);
+  require_applied(positive_result.applied, 1,
+                  "repeated literal with dead stack and X2 lift");
+  require_ops_equal(positive_result.ops, expected,
+                    "repeated literal with dead stack and X2 lift");
+
+  const std::vector<IrOp> internal_marker = {
+      plain(0x0d, "Cx"), plain(0x04, "4"), label("marker_a"), store("2"),
+      label("marker_b"), plain(0x04, "4"), label("marker_c"), store("1"),
+      recall("9"), recall("1"), recall("2"), halt(),
+  };
+  require_applied(run(internal_marker).applied, 1,
+                  "unreferenced internal labels do not break a linear proof");
+
+  const std::vector<IrOp> stack_observed = {
+      plain(0x0d, "Cx"), plain(0x04, "4"), store("2"), plain(0x04, "4"),
+      store("1"), plain(0x10, "+"), halt(),
+  };
+  require_applied(run(stack_observed).applied, 0,
+                  "reload whose stack lift reaches arithmetic");
+
+  const std::vector<IrOp> x2_observed = {
+      plain(0x0d, "Cx"), plain(0x04, "4"), store("2"), plain(0x04, "4"),
+      store("1"), plain(0x0a, "."), halt(),
+  };
+  require_applied(run(x2_observed).applied, 0,
+                  "reload whose X2 sync reaches restore");
+
+  const std::vector<IrOp> different_literal = {
+      plain(0x0d, "Cx"), plain(0x04, "4"), store("2"), plain(0x05, "5"),
+      store("1"), recall("9"), recall("1"), recall("2"), halt(),
+  };
+  require_applied(run(different_literal).applied, 0,
+                  "different literal value");
+
+  const std::vector<IrOp> externally_entered = {
+      plain(0x0d, "Cx"), plain(0x04, "4"), store("2"), label("entry"),
+      plain(0x04, "4"), store("1"), recall("9"), recall("1"), recall("2"),
+      jump("entry"),
+  };
+  require_applied(run(externally_entered).applied, 0,
+                  "reload at an independently addressable entry");
+
+  IrOp raw_reload = plain(0x04, "4");
+  raw_reload.meta.raw = true;
+  const std::vector<IrOp> raw = {
+      plain(0x0d, "Cx"), plain(0x04, "4"), store("2"), raw_reload,
+      store("1"), recall("9"), recall("1"), recall("2"), halt(),
+  };
+  require_applied(run(raw).applied, 0, "raw literal reload");
+
+  const std::vector<IrOp> shifted_numeric_target = {
+      numeric_jump(9), plain(0x04, "4"), store("2"), plain(0x04, "4"),
+      store("1"), recall("9"), recall("1"), recall("2"), halt(),
+  };
+  require_applied(run(shifted_numeric_target).applied, 0,
+                  "physical target shifted by reload removal");
+
+  const std::vector<int> original = {
+      0x04, 0x42, 0x04, 0x41, 0x69, 0x61, 0x62, 0x0a, 0x50,
+  };
+  const std::vector<int> optimized = {
+      0x04, 0x42, 0x41, 0x69, 0x61, 0x62, 0x0a, 0x50,
+  };
+  require(run_machine(original) == run_machine(optimized),
+          "emulator must confirm X/Y/Z/T/X1/register/display equivalence after convergence");
+}
+
+} // namespace mkpro::tests

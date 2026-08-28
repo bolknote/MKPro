@@ -15,7 +15,7 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 136 | 105 | +31 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 135 | 105 | +30 | pending optimizer |
 | `nekromant.mkpro` | 133 | 105 | +28 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
@@ -174,6 +174,14 @@ mode may reject over-window programs earlier than the analysis path.
   empty-stack loop-return pad recovers the coincidences but loses the
   charged-selector reuse, tying at 136 again. The committed size baseline pins
   that 136-cell equilibrium.
+- Generic final-layout helper recall hoisting moves one direct-register recall
+  shared by every direct or proved single-target indirect call into the helper
+  root. A relational CFG proof follows calls, branches, cycles, stack/X2 state,
+  and return continuations. Numeric direct entries are retargeted by command
+  identity; non-retargetable dual-use targets retain the minimum `К НОП`
+  padding needed to preserve physical addresses. On this artifact the three
+  `cell_mask` call sites become one root recall plus one anchored padding cell,
+  reducing the verified result from 136 to 135 cells without source changes.
 - Optimizer tests must use unrelated synthetic programs and local proof
   obligations. The tic-tac-toe fixture may lock only its size and observable
   UI; it must not select or justify an optimization by recognizing this game

@@ -3225,48 +3225,70 @@ bool converted_flow_effects_equivalent(
   };
 
   const auto fallthrough_x2_difference_reconverges = [&](std::size_t command) {
-    enum class VisitState { Visiting, Proved, Rejected };
-    std::map<TraceState, VisitState> memo;
-    std::function<bool(const TraceState&)> visit = [&](const TraceState& state) {
-      const auto cached = memo.find(state);
-      if (cached != memo.end())
-        return cached->second == VisitState::Proved;
-      memo[state] = VisitState::Visiting;
+    // This is a safety property, not a termination proof. A preserving loop is
+    // valid while the hidden X2 difference cannot escape to an observer; a DFS
+    // that rejects every back-edge therefore loses valid loop-heavy layouts.
+    // Build the preserving dependency graph and compute its greatest fixed
+    // point instead. Any unsafe exit removes its whole predecessor SCC, while a
+    // closed preserving SCC remains valid because both programs take the same
+    // control-flow edges and never observe the hidden difference.
+    std::set<TraceState> seeds;
+    for (const auto& [state, edges] : trace) {
+      if (state.command != command)
+        continue;
+      for (const TraceEdge& edge : edges) {
+        if (edge.kind != TraceEdgeKind::Fallthrough)
+          continue;
+        seeds.insert(edge.target);
+      }
+    }
+    if (seeds.empty())
+      return false;
+
+    std::set<TraceState> reachable;
+    std::set<TraceState> intrinsically_unsafe;
+    std::map<TraceState, std::set<TraceState>> preserving_successors;
+    std::deque<TraceState> pending(seeds.begin(), seeds.end());
+    while (!pending.empty()) {
+      const TraceState state = pending.front();
+      pending.pop_front();
+      if (!reachable.insert(state).second)
+        continue;
       if (state.command >= original_items.size()) {
-        memo[state] = VisitState::Rejected;
-        return false;
+        intrinsically_unsafe.insert(state);
+        continue;
       }
       const MachineItem& item = original_items.at(state.command);
       if (item.kind != MachineItemKind::Op) {
-        memo[state] = VisitState::Rejected;
-        return false;
+        intrinsically_unsafe.insert(state);
+        continue;
       }
       const OpcodeInfo& info = opcode_by_code(item.opcode);
-      if (!is_direct_conditional(item.opcode) && !is_indirect_conditional(item.opcode)) {
-        if (info.x2_effect == X2Effect::Affects) {
-          memo[state] = VisitState::Proved;
-          return true;
-        }
+      const bool conditional =
+          is_direct_conditional(item.opcode) || is_indirect_conditional(item.opcode);
+      if (!conditional) {
+        if (info.x2_effect == X2Effect::Affects)
+          continue;
         if (info.x2_effect != X2Effect::Preserves) {
-          memo[state] = VisitState::Rejected;
-          return false;
+          intrinsically_unsafe.insert(state);
+          continue;
         }
+      } else if (!info.conditional_x2_effect.has_value()) {
+        intrinsically_unsafe.insert(state);
+        continue;
       }
 
       const auto outgoing = trace.find(state);
       if (outgoing == trace.end() || outgoing->second.empty()) {
-        memo[state] = VisitState::Rejected;
-        return false;
+        intrinsically_unsafe.insert(state);
+        continue;
       }
       for (const TraceEdge& edge : outgoing->second) {
         X2Effect edge_effect = info.x2_effect;
-        if (is_direct_conditional(item.opcode) || is_indirect_conditional(item.opcode)) {
-          if (!info.conditional_x2_effect.has_value()) {
-            memo[state] = VisitState::Rejected;
-            return false;
-          }
+        if (conditional) {
           const bool converted_direct =
-              is_direct_conditional(item.opcode) && converted_commands.contains(state.command);
+              is_direct_conditional(item.opcode) &&
+              converted_commands.contains(state.command);
           if (converted_direct || is_indirect_conditional(item.opcode)) {
             edge_effect = X2Effect::Preserves;
           } else {
@@ -3277,28 +3299,42 @@ bool converted_flow_effects_equivalent(
         }
         if (edge_effect == X2Effect::Affects)
           continue;
-        if (edge_effect != X2Effect::Preserves || !visit(edge.target)) {
-          memo[state] = VisitState::Rejected;
-          return false;
-        }
-      }
-      memo[state] = VisitState::Proved;
-      return true;
-    };
-
-    bool found_fallthrough = false;
-    for (const auto& [state, edges] : trace) {
-      if (state.command != command)
-        continue;
-      for (const TraceEdge& edge : edges) {
-        if (edge.kind != TraceEdgeKind::Fallthrough)
+        if (edge_effect != X2Effect::Preserves) {
+          intrinsically_unsafe.insert(state);
           continue;
-        found_fallthrough = true;
-        if (!visit(edge.target))
-          return false;
+        }
+        preserving_successors[state].insert(edge.target);
+        pending.push_back(edge.target);
       }
     }
-    return found_fallthrough;
+
+    std::set<TraceState> proved;
+    for (const TraceState& state : reachable) {
+      if (!intrinsically_unsafe.contains(state))
+        proved.insert(state);
+    }
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      std::vector<TraceState> rejected;
+      for (const TraceState& state : proved) {
+        const auto successors = preserving_successors.find(state);
+        if (successors == preserving_successors.end())
+          continue;
+        if (std::any_of(successors->second.begin(), successors->second.end(),
+                        [&](const TraceState& successor) {
+                          return !proved.contains(successor);
+                        })) {
+          rejected.push_back(state);
+        }
+      }
+      for (const TraceState& state : rejected)
+        changed = proved.erase(state) > 0U || changed;
+    }
+    const bool result = std::all_of(
+        seeds.begin(), seeds.end(),
+        [&](const TraceState& seed) { return proved.contains(seed); });
+    return result;
   };
 
   for (const NaturalTargetFlowRewrite& flow : flows) {

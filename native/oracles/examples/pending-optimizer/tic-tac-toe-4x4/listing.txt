@@ -82,13 +82,13 @@
    07 | 61    | П→X 1                   | recall x
    08 | AB    | К ПП b                  | grid_norm shared helper; preloaded Rb=2.2600021E-1 indirect-target=21 shifted-forward indirect flow
    09 | 41    | X→П 1                   | set x
-   10 | 69    | П→X 9                   | recall occupied
+   10 | 54    | К НОП                   | fixed-target padding for helper recall hoist
    11 | AD    | К ПП d                  | expr cell_mask(x, y); preloaded Rd=4.1200076E-1 indirect-target=76 shifted-forward indirect flow
    12 | 38    | К ∨                     | bit_or test-and-set value
    13 | 49    | X→П 9                   | bit_or test-and-set occupied
    14 | 11    | −                       | bit_or test-and-set changed
    15 | 5E    | F x=0                   | false branch for bit_or test-and-set occupied
-   16 | 75    | >75                     | false branch for bit_or test-and-set occupied
+   16 | 75    | 75                      | false branch for bit_or test-and-set occupied
    17 | 6A    | П→X a                   | preload const -99999999
    18 | 41    | X→П 1                   | set x
    19 | 51    | БП                      | if end
@@ -139,29 +139,29 @@
    65 | 62    | П→X 2                   | recall y
    66 | 48    | X→П 8                   | set best_y
    67 | 5B    | F L1                    | counted while x
-   68 | 7B    | >7B                     | counted while x
+   68 | 82    | 82                      | counted while x
    69 | 58    | F L2                    | counted while y
-   70 | 79    | >79                     | counted while y
+   70 | 80    | 80                      | counted while y
    71 | 63    | П→X 3                   | recall best_score
    72 | 5C    | F x<0                   | false branch for <
-   73 | 85    | 85                      | false branch for <
+   73 | 86    | 86                      | false branch for <
    74 | 00    | 0                       | halt
    75 | 50    | С/П                     | halt
-   76 | 61    | П→X 1                   | recall x
-   77 | 15    | F 10ˣ                   | pow10()
-   78 | 62    | П→X 2                   | recall y
-   79 | 6B    | П→X b                   | preload const 0.226
-   80 | 12    | ×                       | expr *
-   81 | 15    | F 10ˣ                   | pow10()
-   82 | 34    | К [x]                   | int()
-   83 | 10    | +                       | expr +
-   84 | 52    | В/О                     | expression helper return
-   85 | 60    | П→X 0                   | recall slot
-   86 | 41    | X→П 1                   | set x
-   87 | 68    | П→X 8                   | recall best_y
-   88 | 42    | X→П 2                   | set y
-   89 | AD    | К ПП d                  | expr cell_mask(x, y); preloaded Rd=4.1200076E-1 indirect-target=76 indirect flow
-   90 | 69    | П→X 9                   | recall occupied
+   76 | 69    | П→X 9                   | recall occupied
+   77 | 61    | П→X 1                   | recall x
+   78 | 15    | F 10ˣ                   | pow10()
+   79 | 62    | П→X 2                   | recall y
+   80 | 6B    | П→X b                   | preload const 0.226
+   81 | 12    | ×                       | expr *
+   82 | 15    | F 10ˣ                   | pow10()
+   83 | 34    | К [x]                   | int()
+   84 | 10    | +                       | expr +
+   85 | 52    | В/О                     | expression helper return
+   86 | 60    | П→X 0                   | recall slot
+   87 | 41    | X→П 1                   | set x
+   88 | 68    | П→X 8                   | recall best_y
+   89 | 42    | X→П 2                   | set y
+   90 | AD    | К ПП d                  | expr cell_mask(x, y); preloaded Rd=4.1200076E-1 indirect-target=76 indirect flow
    91 | 38    | К ∨                     | bit_or()
    92 | 49    | X→П 9                   | set occupied
    93 | 01    | 1                       |
@@ -194,15 +194,14 @@
   >78 | 42    | X→П 2                   | set y
   >79 | 04    | 4                       |
   >7A | 41    | X→П 1                   | set x
-  >7B | 69    | П→X 9                   | recall occupied
-  >7C | AD    | К ПП d                  | expr cell_mask(x, y); preloaded Rd=4.1200076E-1 indirect-target=76 indirect flow
-  >7D | 37    | К ∧                     | bit_and()
-  >7E | 5E    | F x=0                   | false branch for ==
-  >7F | 67    | 67                      | false branch for ==
-  >80 | 05 01 | 51                      | callee-hole selector-value=51 indirect-target=51
-  >82 | AA    | К ПП a                  | callee-hole charge-entry call; proof=__callee_hole_helper_0; selector=e; preloaded Ra=-99999999 indirect-target=99 indirect flow
-  >83 | AE    | К ПП e                  | packed_score accumulator helper; reused runtime-charged Re=51 indirect-target=51 direct flow
-  >84 | 63    | П→X 3                   | recall best_score
-  >85 | 36    | К max                   | max-assignment update
-  >86 | 51    | БП                      |
-  >87 | 59    | 59                      |
+  >7B | AD    | К ПП d                  | expr cell_mask(x, y); preloaded Rd=4.1200076E-1 indirect-target=76 indirect flow
+  >7C | 37    | К ∧                     | bit_and()
+  >7D | 5E    | F x=0                   | false branch for ==
+  >7E | 67    | 67                      | false branch for ==
+  >7F | 05 01 | 51                      | callee-hole selector-value=51 indirect-target=51
+  >81 | AA    | К ПП a                  | callee-hole charge-entry call; proof=__callee_hole_helper_0; selector=e; preloaded Ra=-99999999 indirect-target=99 indirect flow
+  >82 | AE    | К ПП e                  | packed_score accumulator helper; reused runtime-charged Re=51 indirect-target=51 direct flow
+  >83 | 63    | П→X 3                   | recall best_score
+  >84 | 36    | К max                   | max-assignment update
+  >85 | 51    | БП                      |
+  >86 | 59    | 59                      |

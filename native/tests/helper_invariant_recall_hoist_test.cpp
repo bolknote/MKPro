@@ -135,6 +135,8 @@ EmulatorOutcome run(const std::vector<MachineItem>& items) {
   require(loaded.diagnostics.empty(), "recall-hoist fixture should load");
   calc.set_register("1", "3");
   calc.set_register("8", "4");
+  if (opcode_count(items, 0xab) > 0)
+    calc.set_register("b", std::to_string(item_address(items, label_index(items, kRoot))));
   calc.press_sequence({"В/О", "С/П"});
   const emulator::RunResult stable = calc.run_until_stable(1200, 6);
   return EmulatorOutcome{
@@ -202,9 +204,52 @@ std::vector<MachineItem> x2_live_fixture() {
   throw std::runtime_error("X2-live fixture site is absent");
 }
 
+struct IndirectCallFixture {
+  std::vector<MachineItem> items;
+  core::HelperInvariantRecallHoistOptions options;
+  std::vector<std::size_t> call_items;
+};
+
+IndirectCallFixture indirect_call_fixture() {
+  IndirectCallFixture fixture{.items = alpha_fixture()};
+  for (std::size_t index = 0; index + 1U < fixture.items.size();) {
+    if (fixture.items.at(index).kind == MachineItemKind::Op &&
+        fixture.items.at(index).opcode == 0x53 &&
+        fixture.items.at(index + 1U).kind == MachineItemKind::Address &&
+        std::holds_alternative<std::string>(fixture.items.at(index + 1U).target) &&
+        std::get<std::string>(fixture.items.at(index + 1U).target) == kRoot) {
+      fixture.items.at(index) = MachineItem::op(0xab, "К ПП b");
+      fixture.items.erase(fixture.items.begin() + static_cast<std::ptrdiff_t>(index + 1U));
+      fixture.call_items.push_back(index);
+    }
+    ++index;
+  }
+  const int target = item_address(fixture.items, label_index(fixture.items, kRoot));
+  for (const std::size_t call : fixture.call_items)
+    fixture.options.proved_indirect_flow_targets.emplace(call, std::vector<int>{target});
+  return fixture;
+}
+
 } // namespace
 
 void helper_invariant_recall_hoist_rewrites_only_proved_calls() {
+  for (const auto& [metadata, expected] :
+       std::array<std::pair<std::string, std::vector<std::string>>, 2>{
+           std::pair{std::string("callee-hole indirect call; proof=p; "
+                                 "leaf-labels=leaf_a,leaf_b"),
+                     std::vector<std::string>{"leaf_a", "leaf_b"}},
+           std::pair{std::string("callee-hole indirect call; proof=p; "
+                                 "leaf-targets=30:leaf_a,40:leaf_b"),
+                     std::vector<std::string>{"leaf_a", "leaf_b"}},
+       }) {
+    MachineItem dispatch = MachineItem::op(0xae, "К ПП e");
+    dispatch.comment = metadata;
+    const std::vector<IrOp> raised = raise_machine_to_ir({dispatch});
+    require(raised.size() == 1U &&
+                core::passes::computed_dispatch_target_labels(raised.front()) == expected,
+            "callee-hole CFG metadata should retain leaf identities before and after binding");
+  }
+
   const std::vector<MachineItem> baseline = alpha_fixture();
   const core::HelperInvariantRecallHoistProof proof =
       core::verify_helper_invariant_recall_hoist(baseline, std::string(kRoot));
@@ -288,6 +333,112 @@ void helper_invariant_recall_hoist_rewrites_only_proved_calls() {
   }
 
   {
+    std::vector<MachineItem> fixed_geometry = alpha_fixture();
+    const std::size_t root = label_index(fixed_geometry, kRoot);
+    std::size_t first_call_recall = 0;
+    while (first_call_recall < fixed_geometry.size() &&
+           (fixed_geometry.at(first_call_recall).kind != MachineItemKind::Op ||
+            fixed_geometry.at(first_call_recall).opcode != 0x68)) {
+      ++first_call_recall;
+    }
+    fixed_geometry.insert(fixed_geometry.begin() + static_cast<std::ptrdiff_t>(root),
+                          MachineItem::op(0x80, "К БП 0"));
+    const std::size_t fixed_flow_item = root;
+    const int fixed_target = item_address(fixed_geometry, first_call_recall);
+    core::HelperInvariantRecallHoistOptions options;
+    options.proved_indirect_flow_targets.emplace(fixed_flow_item,
+                                                 std::vector<int>{fixed_target});
+    options.fixed_indirect_flow_targets = options.proved_indirect_flow_targets;
+    const auto accepted = core::rewrite_helper_invariant_recall_hoist(
+        fixed_geometry, std::string(kRoot), options);
+    require(accepted.applied == 1 && accepted.proof.final_artifact_proved &&
+                accepted.proof.nop_recall_items.size() == 1U &&
+                opcode_count(accepted.items, 0x54) == 1 &&
+                cell_count(accepted.items) == cell_count(fixed_geometry) - 1,
+            "fixed targets should retain only the minimum NOP padding and still save a cell");
+    require(accepted.proof.final_indirect_flow_targets.size() == 1U &&
+                accepted.proof.final_indirect_flow_targets.begin()->second ==
+                    std::vector<int>{fixed_target},
+            "fixed-target NOP padding should preserve the target address exactly");
+    require(run(fixed_geometry) == run(accepted.items),
+            "fixed-target padded recall hoist should remain emulator-equivalent");
+  }
+
+  {
+    std::vector<MachineItem> retargetable = alpha_fixture();
+    std::vector<std::size_t> before_call_recalls;
+    for (std::size_t index = 0; index + 1U < retargetable.size(); ++index) {
+      if (retargetable.at(index).kind == MachineItemKind::Op &&
+          retargetable.at(index).opcode == 0x68 &&
+          retargetable.at(index + 1U).kind == MachineItemKind::Op &&
+          retargetable.at(index + 1U).opcode == 0x53) {
+        before_call_recalls.push_back(index);
+      }
+    }
+    require(before_call_recalls.size() == 2U,
+            "retarget fixture should expose two before-call recalls");
+    const int old_target = item_address(retargetable, before_call_recalls.back());
+    const std::size_t root = label_index(retargetable, kRoot);
+    MachineItem operand = MachineItem::address(old_target);
+    operand.comment = "retargetable call-entry fixture";
+    retargetable.insert(retargetable.begin() + static_cast<std::ptrdiff_t>(root),
+                        {MachineItem::op(0x51, "БП"), operand});
+    const std::size_t operand_item = root + 1U;
+    core::HelperInvariantRecallHoistOptions options;
+    options.fixed_direct_address_targets.emplace(operand_item, old_target);
+    options.retargetable_direct_address_items.insert(operand_item);
+    const auto accepted = core::rewrite_helper_invariant_recall_hoist(
+        retargetable, std::string(kRoot), options);
+    require(accepted.applied == 1 && accepted.proof.final_artifact_proved &&
+                accepted.proof.nop_recall_items.empty() &&
+                cell_count(accepted.items) == cell_count(retargetable) - 2,
+            "ordinary direct operands should follow a removed recall to its call and save two cells");
+    const auto retargeted_operand = std::find_if(
+        accepted.items.begin(), accepted.items.end(), [](const MachineItem& item) {
+          return item.kind == MachineItemKind::Address && item.comment.has_value() &&
+                 *item.comment == "retargetable call-entry fixture";
+        });
+    require(retargeted_operand != accepted.items.end() &&
+                std::holds_alternative<int>(retargeted_operand->target) &&
+                std::get<int>(retargeted_operand->target) == old_target - 1,
+            "direct call-entry operand should be retargeted to the surviving call identity");
+    require(run(retargetable) == run(accepted.items),
+            "retargeted direct-entry recall hoist should remain emulator-equivalent");
+  }
+
+  {
+    const IndirectCallFixture indirect_calls = indirect_call_fixture();
+    const auto accepted = core::rewrite_helper_invariant_recall_hoist(
+        indirect_calls.items, std::string(kRoot), indirect_calls.options);
+    require(accepted.applied == 1 && accepted.proof.final_artifact_proved &&
+                accepted.proof.calls.size() == 3U &&
+                std::all_of(accepted.proof.calls.begin(), accepted.proof.calls.end(),
+                            [](const auto& call) { return call.indirect; }),
+            "proved single-target KPP calls should participate in a recall hoist");
+    require(cell_count(accepted.items) == cell_count(indirect_calls.items) - 2 &&
+                run(indirect_calls.items) == run(accepted.items),
+            "indirect-call recall hoist should save two cells and remain emulator-equivalent");
+  }
+
+  {
+    IndirectCallFixture ambiguous = indirect_call_fixture();
+    ambiguous.options.proved_indirect_flow_targets.at(ambiguous.call_items.front()).push_back(0);
+    const auto rejected = core::rewrite_helper_invariant_recall_hoist(
+        ambiguous.items, std::string(kRoot), ambiguous.options);
+    require(rejected.applied == 0 && contains_reason(rejected.proof, "helper body"),
+            "a multi-target KPP that may enter the helper should fail closed");
+  }
+
+  {
+    IndirectCallFixture unknown = indirect_call_fixture();
+    unknown.options.proved_indirect_flow_targets.erase(unknown.call_items.front());
+    const auto rejected = core::rewrite_helper_invariant_recall_hoist(
+        unknown.items, std::string(kRoot), unknown.options);
+    require(rejected.applied == 0 && contains_reason(rejected.proof, "unknown indirect flow"),
+            "an unproved KPP target should fail closed");
+  }
+
+  {
     std::vector<MachineItem> proved_indirect = alpha_fixture();
     const std::size_t root = label_index(proved_indirect, kRoot);
     std::size_t main_stop = root;
@@ -317,15 +468,20 @@ void helper_invariant_recall_hoist_rewrites_only_proved_calls() {
   {
     std::vector<MachineItem> removed_target = alpha_fixture();
     removed_target.insert(removed_target.begin(), MachineItem::op(0x80, "К БП 0"));
-    std::size_t first_recall = 0;
-    while (first_recall < removed_target.size() &&
-           (removed_target.at(first_recall).kind != MachineItemKind::Op ||
-            removed_target.at(first_recall).opcode != 0x68)) {
-      ++first_recall;
+    std::size_t after_return_recall = 0;
+    for (std::size_t index = 0; index + 2U < removed_target.size(); ++index) {
+      if (removed_target.at(index).kind == MachineItemKind::Op &&
+          removed_target.at(index).opcode == 0x53 &&
+          removed_target.at(index + 1U).kind == MachineItemKind::Address &&
+          removed_target.at(index + 2U).kind == MachineItemKind::Op &&
+          removed_target.at(index + 2U).opcode == 0x68) {
+        after_return_recall = index + 2U;
+        break;
+      }
     }
     core::HelperInvariantRecallHoistOptions options;
     options.proved_indirect_flow_targets.emplace(
-        0U, std::vector<int>{item_address(removed_target, first_recall)});
+        0U, std::vector<int>{item_address(removed_target, after_return_recall)});
     const auto rejected =
         core::rewrite_helper_invariant_recall_hoist(removed_target, std::string(kRoot), options);
     require(rejected.applied == 0 && contains_reason(rejected.proof, "removed call-site recall"),
