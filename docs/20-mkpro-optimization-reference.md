@@ -95,6 +95,19 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   indirect-memory, preload, and size accounting proofs are then repeated. No
   opcode with fallthrough and no merely numerically equal target is eligible.
 
+- `fallthrough-jump-component-fold` is a generic final-layout block-chaining
+  transform. When an ordinary `БП <target>` pair terminates one movable
+  fallthrough component and its target is the root of another, the layout
+  solver may place the target component immediately after the source and erase
+  both jump cells. Raw commands, labelled jump/operand cells, main-entry
+  targets, external entries, return continuations, and directly or indirectly
+  addressable jump cells fail closed. The source trace treats the erased `БП`
+  as a transparent alias of its target; the rewritten artifact is accepted only
+  after exact CFG, return-stack, stack/X2, indirect-memory, selector-preload,
+  address-retargeting, and size-accounting proofs. The rule depends only on
+  control-flow identities and component geometry, not source functions or game
+  names.
+
 - `projected-terminal-layout-tiebreak` is a post-layout selection rule, not a
   source-pattern recognizer. Current executable-cell count remains the primary
   ordering key for natural-target component layouts. Only when two fully
@@ -726,6 +739,21 @@ committed example oracles under `native/oracles/`.
   selectors fail closed. The final artifact repeats command-identity, CFG,
   return-stack, X/Y/Z/T, X2, indirect-memory, and runtime-selector proofs, so the
   rule composes with any lowering ABI without recognizing a function or source.
+- `late-bound-runtime-selector-natural-target` — admits a compiler-marked
+  two-digit runtime selector as a flexible natural-target register. Every old
+  indirect consumer is first expanded back to its typed direct form; only a
+  larger set of unrelated direct calls, jumps, or compatible conditionals may
+  reuse the register profitably. Marker pairs are associated with the physical
+  register, rebound to an opaque label after final component placement, and
+  resolved by the common late-decimal binder. The final value-flow proof must
+  recover one exact decimal value before every new indirect command, decode it
+  to the same command identity, and preserve the selector write-back, CFG,
+  return stack, X/Y/Z/T, and X2. Unmarked stores, non-flow reads, indirect-memory
+  aliases, ambiguous targets, or observable conditional X2 differences reject
+  the entire candidate. The ordinary stable-preload search runs first; one
+  runtime selector is then tried in a bounded second transaction against that
+  proved geometry, with every existing indirect target retained as a
+  preservation anchor. This avoids multiplying the main selector cross-product.
 - `dual-use-constant-tail-branch-layout` — combines dual-use constant indirect-flow selectors with tail-branch inversion before layout scoring.
 - `alias-x-reuse` — tests value reuse of X at scalar sites for cleaner candidate control-flow.
 - `coalesce-copies` — enables copy coalescing candidate before final layout scoring.
@@ -940,7 +968,7 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `runtime-indirect-call-flow` — for repeated backward helper calls with legal numeric targets, initializes a dead stable register once at runtime and replaces direct `ПП addr` pairs with one-cell `К ПП r` calls.
 - `post-layout-empty-stack-loop-return` — converts a direct `БП` to physical 01 into a one-cell `В/О` when every execution state of the branch carries an empty return stack. The MK-61 sets the program counter to 00 after an empty-stack `В/О` and the next fetched command is the one at physical 01 (the cell at 00 is skipped; pinned by `emulator_vo_empty_continuation_facts`), so the converted command transfers to the same target with the same stack. The pass runs first in the post-layout pipeline, before any selector value or anchor address is solved, so all later layout machinery rebuilds the geometry of the shrunk artifact itself; a deletion is admitted only when every numeric direct operand and every non-symbolic indirect target lies before the erased operand cell (label-typed indirect targets follow the shifted layout through the late binder and the retunable-selector machinery). The converted `В/О` carries the ecosystem-wide `optimized БП 01` marker so later machine-to-IR raises keep modeling its physical-01 continuation. The `empty_stack_loop_return` lowering option manufactures the eligible shape by placing a one-cell `К НОП` entry pad at physical 00 so the main loop head lands on 01. On the current tic-tac-toe-4x4 artifact the transform is size-neutral under full candidate search: the pad costs one cell, the two converted loop returns save two, and the shifted geometry displaces one other proved rewrite, so the padded and unpadded winners tie at the same official size. The option therefore stays opt-in (`--empty-stack-loop-return`) and as a curated candidate rather than a default seed.
 - `post-layout-charged-selector-flow` — runs after every selector charge (including late-bound decimal charges) has been materialized. A flow-sensitive value analysis over the authoritative execution-state graph proves that a stable register holds one exact literal on every path reaching a direct `ПП addr` / `БП addr`; when that literal decodes to the same backward target and is a fixed point of the selector write-back, the two-cell direct flow becomes a one-cell `К ПП r` / `К БП r`. Value sources are deliberately narrow (literal preloads, uninterrupted integer digit entry stored via `X->П r`, recalls of tracked registers, `/-/` of a known X, and the machine's own write-back); everything else — arithmetic, fractional entry, indirect stores, manual external entries — poisons the tracked slot. The operand-erasure transaction follows every numeric direct target by executable-item identity and clears stale formal encodings, while symbolic operands continue to follow labels; an address/code overlay whose operand byte is also executable remains immovable. The same transaction may move a compiler-marked late-bound runtime selector target: the common decimal-selector binder follows its opaque target label, rewrites the charge digits, and the final CFG/value-flow proof independently checks that every affected indirect command receives an exact value decoding to one of its typed targets. Unmarked, malformed, out-of-range, arithmetic-dependent, or ambiguously joined charges remain immovable. The callee-hole static gate re-validates each such reuse against its independently derived charge inventory.
-- `helper-invariant-recall-hoist` — after all layout and selector-flow rewrites, moves a direct-register recall common to every direct `ПП` or proved single-target `К ПП` call into the root of a straight-line helper. Before-call recalls are proved by exact symbolic transfer; an after-return recall is accepted only before commutative `К И`/`К ИЛИ`, followed by a bounded relational CFG proof over `X/Y/Z/T`, `X2`, registers, branches, loops, exact call targets, and the return stack. Unknown control flow, an unequal observed operand, live `X2`, opaque memory, or an unproved target rejects the candidate. Ordinary numeric direct operands follow the surviving command identity; formal/dark/dual-use targets keep their byte and physical address, replacing only the minimum required removed recalls with semantic `К НОП` padding. Late decimal selector charges are rebound after a winning rewrite. The transformation is source- and helper-name-independent and remains eligible only when the final artifact is smaller.
+- `helper-invariant-recall-hoist` — after all layout and selector-flow rewrites, moves a direct-register recall common to every direct `ПП` or proved single-target `К ПП` call into a straight-line helper. Mixed and before-call sites use the helper root after exact symbolic transfer. When every site originally recalls after return immediately before commutative `К И`/`К ИЛИ`, the recall is instead placed directly before the helper's `В/О`; this preserves incoming `X/Y` arguments and returns the exact operand pair expected by the commutative continuation. A bounded relational CFG proof covers `X/Y/Z/T`, `X2`, registers, branches, loops, exact call targets, and the return stack. Unknown control flow, an unequal observed operand, live `X2`, opaque memory, or an unproved target rejects the candidate. Ordinary numeric direct operands follow the surviving command identity; formal/dark/dual-use targets keep their byte and physical address, replacing only the minimum required removed recalls with semantic `К НОП` padding. Late decimal selector charges are rebound after a winning rewrite. The transformation is source- and helper-name-independent and remains eligible only when the final artifact is smaller.
 - `preloaded-super-dark-flow` — super-dark path with a preloaded indirect target.
 - `super-dark-address-code-overlay` — compares ordinary post-layout indirect
   flow with the composed candidate `address-code-overlay` followed by

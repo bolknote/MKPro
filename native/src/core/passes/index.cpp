@@ -297,17 +297,19 @@ RunPassesResult run_ir_passes(const std::vector<MachineItem>& items,
   };
 }
 
-RunPassesResult run_finalization_dead_store_elimination(
-    const std::vector<MachineItem>& items, const CompileOptions& options) {
-  const std::vector<MachineItem> identity_items =
-      attach_finalization_flow_identity_labels(items);
+template <typename Pass>
+RunPassesResult run_finalization_cell_erasure(
+    const std::vector<MachineItem>& items, const CompileOptions& options,
+    std::string_view pass_name, bool attach_identity_labels, Pass&& pass) {
+  const std::vector<MachineItem> identity_items = attach_identity_labels
+                                                       ? attach_finalization_flow_identity_labels(items)
+                                                       : items;
   std::vector<IrOp> current =
       raise_machine_to_ir(identity_items,
                           effective_optimizer_feature_profile(options));
   RunPassesResult aggregate;
   for (int iteration = 0; iteration < kMaxFixpointIterations; ++iteration) {
-    const PassResult result = finalization_dead_store_elimination(
-        current, PassContext{.options = options});
+    const PassResult result = pass(current, PassContext{.options = options});
     if (result.applied <= 0)
       break;
     aggregate.applied += result.applied;
@@ -317,34 +319,53 @@ RunPassesResult run_finalization_dead_store_elimination(
     current = result.ops;
   }
   aggregate.items = lower_ir_to_machine(current);
-  std::set<int> retained_addresses;
-  for (MachineItem& item : aggregate.items) {
-    item.roles.erase(
-        std::remove_if(item.roles.begin(), item.roles.end(),
-                       [&](const CellRole& role) {
-                         if (!role.starts_with(kFinalizationCellOriginRole))
-                           return false;
-                         try {
-                           retained_addresses.insert(std::stoi(
-                               role.substr(kFinalizationCellOriginRole.size())));
-                         } catch (const std::exception&) {
-                         }
-                         return true;
-                       }),
-        item.roles.end());
-  }
-  const int original_cells = static_cast<int>(std::count_if(
-      items.begin(), items.end(), [](const MachineItem& item) {
-        return item.kind != MachineItemKind::Label;
-      }));
-  for (int address = 0; address < original_cells; ++address) {
-    if (!retained_addresses.contains(address))
-      aggregate.removed_cell_addresses.push_back(address);
+  if (attach_identity_labels) {
+    std::set<int> retained_addresses;
+    for (MachineItem& item : aggregate.items) {
+      item.roles.erase(
+          std::remove_if(item.roles.begin(), item.roles.end(),
+                         [&](const CellRole& role) {
+                           if (!role.starts_with(kFinalizationCellOriginRole))
+                             return false;
+                           try {
+                             retained_addresses.insert(std::stoi(
+                                 role.substr(kFinalizationCellOriginRole.size())));
+                           } catch (const std::exception&) {
+                           }
+                           return true;
+                         }),
+          item.roles.end());
+    }
+    const int original_cells = static_cast<int>(std::count_if(
+        items.begin(), items.end(), [](const MachineItem& item) {
+          return item.kind != MachineItemKind::Label;
+        }));
+    for (int address = 0; address < original_cells; ++address) {
+      if (!retained_addresses.contains(address))
+        aggregate.removed_cell_addresses.push_back(address);
+    }
   }
 
-  aggregate.pass_counts["finalization-dead-store-elimination"] =
-      aggregate.applied;
+  aggregate.pass_counts[std::string(pass_name)] = aggregate.applied;
   return aggregate;
+}
+
+RunPassesResult run_finalization_dead_store_elimination(
+    const std::vector<MachineItem>& items, const CompileOptions& options) {
+  return run_finalization_cell_erasure(
+      items, options, "finalization-dead-store-elimination", true,
+      [](const std::vector<IrOp>& ops, const PassContext& context) {
+        return finalization_dead_store_elimination(ops, context);
+      });
+}
+
+RunPassesResult run_post_inline_dead_store_elimination(
+    const std::vector<MachineItem>& items, const CompileOptions& options) {
+  return run_finalization_cell_erasure(
+      items, options, "post-inline-dead-store-elimination", false,
+      [](const std::vector<IrOp>& ops, const PassContext& context) {
+        return finalization_dead_store_elimination(ops, context);
+      });
 }
 
 RunLayoutPassesResult run_ir_passes_on_layout(const std::vector<LayoutIrCell>& cells,

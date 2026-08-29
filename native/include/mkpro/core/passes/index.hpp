@@ -29,6 +29,8 @@ RunPassesResult run_ir_passes(const std::vector<MachineItem>& items,
                               const CompileOptions& options);
 RunPassesResult run_finalization_dead_store_elimination(
     const std::vector<MachineItem>& items, const CompileOptions& options);
+RunPassesResult run_post_inline_dead_store_elimination(
+    const std::vector<MachineItem>& items, const CompileOptions& options);
 RunLayoutPassesResult run_ir_passes_on_layout(const std::vector<LayoutIrCell>& cells,
                                               const CompileOptions& options);
 

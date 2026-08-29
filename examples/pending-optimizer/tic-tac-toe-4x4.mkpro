@@ -39,7 +39,10 @@ program TicTacToe4x4 {
     preview(y)
     show(x)
     // Source UI is X ПП Y С/П: ПП executes only the first entered() store,
-    // then С/П resumes at the second one with the new X value.
+    // then С/П resumes at the second one with the new X value. Keep both
+    // entered() assignments explicit: y = entered() is the second interactive
+    // input phase, not redundant source state. The compiler may forward its
+    // current X directly into grid_norm and omit only the physical X->P y cell.
     x = entered()
     y = entered()
     // Use the same calculator primitive as the original listing. It truncates

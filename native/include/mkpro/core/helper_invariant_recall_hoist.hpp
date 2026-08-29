@@ -21,6 +21,11 @@ enum class HelperInvariantRecallPlacement {
   AfterReturnBeforeCommutative,
 };
 
+enum class HelperInvariantRecallInsertion {
+  HelperRoot,
+  BeforeReturn,
+};
+
 struct HelperInvariantRecallCall {
   std::size_t call_item_index = 0;
   std::size_t operand_item_index = 0;
@@ -65,6 +70,7 @@ struct HelperInvariantRecallHoistProof {
   int output_cells = 0;
   int recall_opcode = -1;
   int register_index = -1;
+  HelperInvariantRecallInsertion insertion = HelperInvariantRecallInsertion::HelperRoot;
   std::size_t helper_label_item_index = 0;
   std::size_t helper_body_begin_item_index = 0;
   std::size_t helper_return_item_index = 0;

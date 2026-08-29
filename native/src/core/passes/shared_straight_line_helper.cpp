@@ -1399,6 +1399,7 @@ std::vector<IrOp> hole_charge_ops(int charge_value, int leaf_target,
           index == 0U ? LateBoundDecimalSelectorPart::High
                       : LateBoundDecimalSelectorPart::Low,
           leaf_label));
+      op.meta.roles.push_back("late-decimal-selector-register:" + register_name);
     }
     result.push_back(std::move(op));
   }
@@ -1410,6 +1411,8 @@ std::vector<IrOp> hole_charge_ops(int charge_value, int leaf_target,
     store.meta.mnemonic = "X->П " + register_name;
     store.meta.comment = selector_comment;
     store.meta.source_line = source.meta.source_line;
+    if (late_bound_selector)
+      store.meta.roles.push_back("late-decimal-selector-store");
     result.push_back(std::move(store));
   }
 
@@ -1533,6 +1536,8 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
       store.meta.mnemonic = "X->П " + helper.register_name;
       store.meta.comment = "callee-hole charge-entry store; proof=" + helper.label +
                            "; selector=" + helper.register_name;
+      if (helper.late_bound_selector)
+        store.meta.roles.push_back("late-decimal-selector-store");
       if (!helper.body.empty())
         store.meta.source_line = helper.body.front().meta.source_line;
       result.push_back(std::move(store));

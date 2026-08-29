@@ -73,6 +73,26 @@ std::vector<MachineItem> alpha_fixture() {
   return items;
 }
 
+std::vector<MachineItem> after_return_fixture() {
+  std::vector<MachineItem> items;
+  int input = 1;
+  for (const int store : {0x40, 0x42, 0x43}) {
+    items.push_back(MachineItem::op(input++, "distinct caller input"));
+    items.push_back(MachineItem::op(0x53, "ПП"));
+    items.push_back(MachineItem::address(std::string(kRoot)));
+    items.push_back(MachineItem::op(0x68, "П->X 8"));
+    items.push_back(MachineItem::op(0x38, "К OR"));
+    append_forget_y(items);
+    items.push_back(MachineItem::op(store, "store result"));
+  }
+  items.push_back(MachineItem::op(0x50, "С/П"));
+  items.push_back(MachineItem::label(std::string(kRoot)));
+  items.push_back(MachineItem::op(0x61, "П->X 1"));
+  items.push_back(MachineItem::op(0x22, "F x^2"));
+  items.push_back(MachineItem::op(0x52, "В/О"));
+  return items;
+}
+
 int cell_count(const std::vector<MachineItem>& items) {
   return static_cast<int>(std::count_if(items.begin(), items.end(), [](const MachineItem& item) {
     return item.kind != MachineItemKind::Label;
@@ -284,6 +304,24 @@ void helper_invariant_recall_hoist_rewrites_only_proved_calls() {
           "the retained recall should be the first helper command");
   require(run(baseline) == run(rewritten.items),
           "baseline and hoisted alpha fixtures should be emulator-equivalent");
+
+  {
+    const std::vector<MachineItem> after_return = after_return_fixture();
+    const auto accepted =
+        core::rewrite_helper_invariant_recall_hoist(after_return, std::string(kRoot));
+    require(accepted.applied == 1 && accepted.proof.final_artifact_proved &&
+                accepted.proof.insertion ==
+                    core::HelperInvariantRecallInsertion::BeforeReturn,
+            "all after-return commutative recalls should be inserted at the helper tail");
+    const std::size_t root = label_index(accepted.items, kRoot);
+    require(accepted.items.at(root + 1U).opcode == 0x61 &&
+                accepted.items.at(root + 3U).opcode == 0x68 &&
+                accepted.items.at(root + 4U).opcode == 0x52,
+            "tail insertion must leave helper inputs untouched and place recall before V/O");
+    require(cell_count(accepted.items) == cell_count(after_return) - 2 &&
+                run(after_return) == run(accepted.items),
+            "tail recall insertion should save two cells and remain emulator-equivalent");
+  }
 
   {
     const std::vector<MachineItem> forward = forward_jump_continuation_fixture();

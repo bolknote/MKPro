@@ -533,6 +533,10 @@ void tic_tac_toe_4x4_source_manual_ui_contract_is_explicit() {
   const std::filesystem::path source =
       fixture_root() / "examples" / "pending-optimizer" / "tic-tac-toe-4x4.mkpro";
   const std::string text = read_text(source);
+  require(text.find("y = entered()") != std::string::npos &&
+              text.find("second interactive") != std::string::npos,
+          "the high-level port must keep the second Y input phase explicit even when "
+          "lowering forwards its current X without a physical register store");
   CompileOptions options;
   options.analysis = true;
   options.budget = 999;
@@ -549,6 +553,29 @@ void tic_tac_toe_4x4_source_manual_ui_contract_is_explicit() {
                         return preload.retunable_natural_fractional_prefix == "0.226000";
                       }),
           "cell-mask lowering should preserve its retunable fractional-selector preload proof");
+
+  const auto packed_report = [](const std::string& value,
+                                const std::string& mask) {
+    emulator::MK61 calc;
+    const emulator::ProgramLoadResult loaded =
+        calc.load_program({0x64, 0x6c, 0x37, 0x35, 0x50});
+    require(loaded.diagnostics.empty(),
+            "packed-mask selector probe should load without diagnostics");
+    calc.set_register("4", value);
+    calc.set_register("c", mask);
+    calc.press_sequence({"В/О", "С/П"});
+    run_to_stop(calc, "packed-mask selector probe");
+    return compact(calc.display_text());
+  };
+  for (const std::string_view packed_line : {
+           "44444.4", "84444.4", "48444.4", "44844.4", "44484.4",
+           "44448.4", "88888.8", "00000.0",
+       }) {
+    require(packed_report(std::string(packed_line), "88888834") ==
+                packed_report(std::string(packed_line), "88888819"),
+            "retuning the address suffix of a six-digit packed report mask must preserve "
+            "the emulator-visible fractional report");
+  }
   require(compiled.interaction_protocols.size() == 1U &&
               compiled.interaction_protocols.front().phases.size() == 2U &&
               !compiled.interaction_protocols.front().phases.at(0).admitted_domain.known() &&

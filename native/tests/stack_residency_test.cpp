@@ -945,14 +945,53 @@ program StackHelperAbiReversed {
                 reversed_stack_entry, "expr cell_mask(sy, sx) stack entry", 0x53) == 6,
             "reversed stack helper argument-entry variant should route stack-resident "
             "cell_mask calls through the stack entry");
-    require(count_steps_with_comment(reversed_stack_entry,
-                                     "expression helper stack-entry pow10") >= 1,
-            "reversed stack helper argument-entry variant should compute the X-resident "
-            "argument before swapping to the row argument");
+    require(has_optimization(reversed_stack_entry, "stack-resident-value-pipeline"),
+            "reversed stack helper argument-entry variant should use the generic X/Y value "
+            "pipeline rather than a primitive-specific helper body");
     require(find_size_abi_blocker(reversed_stack_entry, "stack-helper-abi",
                                   "cell_mask(sy, sx)") == nullptr,
             "reversed stack helper argument-entry variant should satisfy the stack-helper ABI "
             "blocker");
+
+    const std::string stored_assignment_source = R"mkpro(
+program StoredAssignmentHelperEntry {
+  state {
+    left: packed = 1
+    right: packed = 2
+    source_left: packed = 3
+    source_right: packed = 4
+    bias: packed = 5
+    out: packed = 0
+  }
+
+  loop {
+    left = source_left
+    right = source_right
+    out += pow10(left) + int(pow10(right * 0.226)) + bias
+    out += left + right
+    right = source_right
+    left = source_left
+    out += pow10(left) + int(pow10(right * 0.226)) + bias
+    out += left + right
+    left = source_left
+    right = source_right
+    out += pow10(left) + int(pow10(right * 0.226)) + bias
+    out += left + right
+    halt(out)
+  }
+}
+)mkpro";
+    const CompileResult stored_assignment =
+        compile_source(stored_assignment_source, stack_entry_options);
+    require_clean_compile(stored_assignment, "stored-assignment generic helper entry");
+    require(has_optimization(stored_assignment, "stored-assignment-helper-stack-entry") &&
+                has_optimization(stored_assignment, "expression-helper-stack-entry-primary"),
+            "independent persistent assignments should feed a generic shared helper through X/Y");
+    require(count_steps_with_comment_prefix_and_opcode(
+                stored_assignment,
+                "expr pow10(left) + int(pow10(0.226 * right)) + bias stack entry",
+                0x53) == 3,
+            "all generic expression-helper calls should use the same stored-value stack ABI");
 
     CompileOptions selected_options;
     selected_options.analysis = true;
@@ -3994,8 +4033,10 @@ program DirectStackAbiCallerY {
 }
 )mkpro", options);
     require_clean_compile(result, "direct stack ABI caller-Y forwarding");
-    require(has_optimization(result, "function-stack-abi-caller-y"),
-            "direct stack-expression ABI should expose its proved caller-Y fact");
+    require(has_optimization(result, "function-stack-abi-caller-y") ||
+                has_optimization(result, "function-current-x-value-inline"),
+            "direct stack-expression ABI should expose its proved caller-Y fact or be replaced "
+            "by the stronger current-X-only lowering");
     require(!has_optimization(result, "interprocedural-y-value-forwarding"),
             "caller-Y alone must not imply recall-equivalent X1/Z/T effects");
     require(count_steps_with_comment(result, "recall guard") == 1,

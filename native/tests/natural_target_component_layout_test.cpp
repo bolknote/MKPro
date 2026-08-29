@@ -2,6 +2,8 @@
 
 #include "mkpro/core/emit/machine_emitter.hpp"
 #include "mkpro/core/emit/lowering/proc_raw_setup.hpp"
+#include "mkpro/core/indirect_addressing.hpp"
+#include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/emulator/mk61.hpp"
 
@@ -634,6 +636,78 @@ Fixture conditional_x2_value_equality_fixture() {
   return result;
 }
 
+Fixture late_runtime_selector_fixture(bool marked_store,
+                                      bool observe_x2_before_overwrite) {
+  Fixture result;
+  const std::string old_leaf = "late_runtime_old_leaf";
+  const std::string shared_sink = "late_runtime_shared_sink";
+  const std::string selector_role = "late-decimal-selector-register:8";
+
+  result.items.push_back(MachineItem::label("late_runtime_entry"));
+  for (const core::LateBoundDecimalSelectorPart part :
+       {core::LateBoundDecimalSelectorPart::High,
+        core::LateBoundDecimalSelectorPart::Low}) {
+    MachineItem digit = op(0x00);
+    digit.roles.push_back(
+        core::make_late_bound_decimal_selector_role(part, old_leaf));
+    digit.roles.push_back(selector_role);
+    result.items.push_back(std::move(digit));
+  }
+  MachineItem store = op(0x48);
+  if (marked_store)
+    store.roles.push_back("late-decimal-selector-store");
+  result.items.push_back(std::move(store));
+  MachineItem old_call = op(0xa8);
+  old_call.roles.push_back("late-decimal-selector-consumer");
+  old_call.indirect_flow_targets = std::vector<IrTarget>{old_leaf};
+  result.items.push_back(std::move(old_call));
+  result.items.push_back(op(0x20));
+
+  for (int branch = 0; branch < 2; ++branch) {
+    result.items.push_back(op(observe_x2_before_overwrite ? 0x20 : 0x60));
+    result.items.push_back(op(0x5e));
+    result.items.push_back(MachineItem::address(shared_sink));
+    if (observe_x2_before_overwrite)
+      result.items.push_back(op(0x0a));
+    result.items.push_back(op(0x61));
+  }
+  result.items.push_back(op(0x00));
+  MachineItem main_cleanup = op(0x48);
+  main_cleanup.roles.push_back("late-decimal-selector-store");
+  result.items.push_back(std::move(main_cleanup));
+  result.items.push_back(op(0x20));
+  result.items.push_back(op(0x61));
+  result.visible_stop = result.items.size();
+  result.items.push_back(stop());
+
+  result.items.push_back(MachineItem::label(shared_sink));
+  result.items.push_back(op(0x00));
+  MachineItem sink_cleanup = op(0x48);
+  sink_cleanup.roles.push_back("late-decimal-selector-store");
+  result.items.push_back(std::move(sink_cleanup));
+  result.items.push_back(op(0x20));
+  result.items.push_back(op(0x61));
+  result.items.push_back(stop());
+  result.items.push_back(MachineItem::label(old_leaf));
+  result.items.push_back(op(0x22));
+  result.items.push_back(op(0x52));
+  result.items.push_back(MachineItem::label("late_runtime_padding"));
+  for (int cell = 1; cell < 12; ++cell)
+    result.items.push_back(op(0x54));
+  result.items.push_back(stop());
+
+  result.preloads.push_back(PreloadReport{.register_name = "0", .value = "0"});
+  result.preloads.push_back(PreloadReport{.register_name = "1", .value = "1"});
+  core::LateBoundDecimalSelectorOptions bind_options;
+  bind_options.minimum_target_address = 0;
+  const core::LateBoundDecimalSelectorResult bound =
+      core::bind_late_bound_decimal_selectors(result.items, bind_options);
+  require(bound.diagnostics.empty() && bound.applied == 1,
+          "synthetic late selector charge should bind before component layout");
+  result.items = bound.items;
+  return result;
+}
+
 Fixture address_selector_rebind_fixture() {
   Fixture result;
   const std::string helper = "unrelated_rebound_address_helper";
@@ -785,6 +859,83 @@ bool reason_contains(const core::NaturalTargetComponentLayoutPlan& plan,
 } // namespace
 
 void natural_target_component_layout_is_generic_and_proof_gated() {
+  {
+    const Fixture input = late_runtime_selector_fixture(true, false);
+    core::NaturalTargetComponentLayoutOptions options;
+    options.maximum_anchors = 1;
+    options.enable_late_bound_runtime_selector_composition = true;
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input), options);
+    const int converted_conditionals = static_cast<int>(std::count_if(
+        rewritten.plan.flows.begin(), rewritten.plan.flows.end(),
+        [](const core::NaturalTargetFlowRewrite& rewrite) {
+          return rewrite.original_opcode == 0x5e &&
+                 rewrite.selector_register == "8";
+        }));
+    std::string late_diagnostics;
+    for (const std::string& reason : rewritten.plan.reasons) {
+      if (!late_diagnostics.empty())
+        late_diagnostics += " | ";
+      late_diagnostics += reason;
+    }
+    require(rewritten.plan.proved && rewritten.applied > 0 &&
+                rewritten.removed_cells == 1 && converted_conditionals == 2 &&
+                rewritten.plan.rebound_indirect_flows == 1 &&
+                std::count_if(rewritten.plan.runtime_selectors.begin(),
+                              rewritten.plan.runtime_selectors.end(),
+                              [](const auto& proof) {
+                                return proof.register_name == "8" &&
+                                       proof.typed_target_matches_runtime_decode;
+                              }) >= 2,
+            "a marked late runtime selector should be reassigned only when two generic "
+            "flows repay its displaced old consumer: proved=" +
+                std::to_string(rewritten.plan.proved) + " applied=" +
+                std::to_string(rewritten.applied) + " removed=" +
+                std::to_string(rewritten.removed_cells) + " conditionals=" +
+                std::to_string(converted_conditionals) + " displaced=" +
+                std::to_string(rewritten.plan.rebound_indirect_flows) +
+                " reasons=" + late_diagnostics);
+    const Observation before = observe(input.items, input.preloads);
+    const Observation after = observe(rewritten.items, rewritten.preloads);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "late runtime selector reassignment must preserve emulator-visible state: "
+            "before=" + before.state.at("x") + "/" + before.state.at("y") + "/" +
+                before.state.at("z") + "/" + before.state.at("t") + "/" +
+                before.state.at("x1") + "/" + before.state.at("8") + "/" +
+                before.state.at("9") + " after=" + after.state.at("x") + "/" +
+                after.state.at("y") + "/" + after.state.at("z") + "/" +
+                after.state.at("t") + "/" + after.state.at("x1") + "/" +
+                after.state.at("8") + "/" + after.state.at("9"));
+  }
+
+  {
+    const Fixture unmarked = late_runtime_selector_fixture(false, false);
+    core::NaturalTargetComponentLayoutOptions runtime_options;
+    runtime_options.enable_late_bound_runtime_selector_composition = true;
+    const auto rejected = core::optimize_natural_target_component_layout(
+        unmarked.items, unmarked.preloads, flow(unmarked), runtime_options);
+    require(!rejected.plan.proved && rejected.applied == 0,
+            "an unmarked runtime store must not become a selector candidate");
+
+    const Fixture x2_observed = late_runtime_selector_fixture(true, true);
+    const auto x2_rejected = core::optimize_natural_target_component_layout(
+        x2_observed.items, x2_observed.preloads, flow(x2_observed),
+        runtime_options);
+    const bool used_runtime_selector = std::any_of(
+        x2_rejected.plan.flows.begin(), x2_rejected.plan.flows.end(),
+        [](const core::NaturalTargetFlowRewrite& rewrite) {
+          return rewrite.selector_register == "8";
+        });
+    require(!used_runtime_selector &&
+                x2_rejected.plan.rebound_indirect_flows == 0,
+            "late runtime selector reassignment must fail when conditional X2 is observed: "
+            "proved=" + std::to_string(x2_rejected.plan.proved) + " applied=" +
+                std::to_string(x2_rejected.applied) + " flows=" +
+                std::to_string(x2_rejected.plan.flows.size()) + " rebound=" +
+                std::to_string(x2_rejected.plan.rebound_indirect_flows) + " x2=" +
+                std::to_string(x2_rejected.plan.x2_reconvergence_flows));
+  }
+
   {
     Fixture input;
     input.items.push_back(MachineItem::label("absolute_entry"));
@@ -1335,6 +1486,78 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
   }
 
   {
+    Fixture input;
+    const std::string helper = "same_target_rebound_helper";
+    input.items.push_back(MachineItem::label("same_target_rebound_entry"));
+    MachineItem existing_call = op(0xa9);
+    existing_call.indirect_flow_targets = std::vector<IrTarget>{helper};
+    input.items.push_back(std::move(existing_call));
+    for (int call = 0; call < 3; ++call) {
+      input.items.push_back(op(0x53));
+      input.items.push_back(MachineItem::address(helper));
+    }
+    input.visible_stop = input.items.size();
+    input.items.push_back(stop());
+    for (int cell = 8; cell < 14; ++cell)
+      input.items.push_back(op(0x54));
+    input.items.push_back(stop());
+    input.items.push_back(MachineItem::label(helper));
+    const std::size_t helper_item = input.items.size();
+    input.items.push_back(op(0x22));
+    input.items.push_back(op(0x52));
+    input.preloads.push_back(
+        PreloadReport{.register_name = "9", .value = "C7"});
+
+    core::NaturalTargetComponentLayoutOptions options;
+    options.required_absolute_targets.push_back(
+        core::NaturalTargetRequiredAbsoluteTarget{
+            .target_item = helper_item,
+            .target_address = 8,
+        });
+    const Observation before = observe(input.items, input.preloads);
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input), options);
+    const Observation after = observe(rewritten.items, rewritten.preloads);
+    const auto final_flow = flow(Fixture{.items = rewritten.items,
+                                        .preloads = rewritten.preloads});
+    const int retained_indirect_calls = static_cast<int>(std::count_if(
+        final_flow.indirect_flow_targets.begin(),
+        final_flow.indirect_flow_targets.end(), [&](const auto& entry) {
+          return entry.first < rewritten.items.size() &&
+                 rewritten.items.at(entry.first).kind == MachineItemKind::Op &&
+                 rewritten.items.at(entry.first).opcode == 0xa9 &&
+                 entry.second.size() == 1U && entry.second.front().address == 8;
+        }));
+    std::string same_target_diagnostics;
+    for (const std::string& reason : rewritten.plan.reasons) {
+      if (!same_target_diagnostics.empty())
+        same_target_diagnostics += " | ";
+      same_target_diagnostics += reason;
+    }
+    require(rewritten.plan.proved && rewritten.applied == 3 &&
+                rewritten.removed_cells == 1 &&
+                rewritten.plan.rebound_indirect_flows == 0 &&
+                preload_map(rewritten.preloads).at("9") == "8" &&
+                retained_indirect_calls == 4,
+            "relocating a selector to the same typed callee should preserve its existing "
+            "one-cell consumers while converting direct calls: proved=" +
+                std::to_string(rewritten.plan.proved) + " applied=" +
+                std::to_string(rewritten.applied) + " removed=" +
+                std::to_string(rewritten.removed_cells) + " rebound=" +
+                std::to_string(rewritten.plan.rebound_indirect_flows) +
+                " preload=" + preload_map(rewritten.preloads).at("9") +
+                " calls=" + std::to_string(retained_indirect_calls) +
+                " reasons=" + same_target_diagnostics);
+    std::map<std::string, std::string> before_observable = before.state;
+    std::map<std::string, std::string> after_observable = after.state;
+    before_observable.erase("9");
+    after_observable.erase("9");
+    require(before.stopped && after.stopped &&
+                before_observable == after_observable,
+            "same-target selector relocation must preserve emulator-visible state");
+  }
+
+  {
     const Fixture input = companion_address_selector_rebind_fixture();
     core::NaturalTargetComponentLayoutOptions options;
     options.maximum_anchors = 1;
@@ -1668,16 +1891,39 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
     const Observation after = observe(rewritten.items, rewritten.preloads, true);
     const std::map<std::string, std::string> final_preloads =
         preload_map(rewritten.preloads);
+    std::vector<int> final_selector_targets;
+    for (const auto& [source_item, targets] :
+         rewritten.plan.final_control_flow.indirect_flow_targets) {
+      if (source_item >= rewritten.items.size() ||
+          rewritten.items.at(source_item).kind != MachineItemKind::Op ||
+          rewritten.items.at(source_item).opcode != 0xa7) {
+        continue;
+      }
+      for (const core::PostLayoutCommandIdentity& target : targets)
+        final_selector_targets.push_back(target.address);
+    }
+    std::sort(final_selector_targets.begin(), final_selector_targets.end());
+    final_selector_targets.erase(
+        std::unique(final_selector_targets.begin(), final_selector_targets.end()),
+        final_selector_targets.end());
+    const std::optional<core::IndirectAddressEvaluation> delivered_selector =
+        core::evaluate_indirect_address(
+            "7", final_preloads.at("7"), core::IndirectOperationKind::Flow);
     require(rewritten.plan.proved && rewritten.applied == 3 &&
                 rewritten.removed_cells == 2 &&
                 rewritten.plan.rebound_indirect_flows == 1 &&
-                final_preloads.at("7") == "2.2600010E-1",
+                final_selector_targets.size() == 1U &&
+                delivered_selector.has_value() &&
+                delivered_selector->actual_flow_target ==
+                    final_selector_targets.front(),
             "a retunable fractional selector should move from one old flow to three new calls: "
             "proved=" + std::to_string(rewritten.plan.proved) +
                 ", applied=" + std::to_string(rewritten.applied) +
                 ", removed=" + std::to_string(rewritten.removed_cells) +
                 ", rebound=" + std::to_string(rewritten.plan.rebound_indirect_flows) +
                 ", preload=" + final_preloads.at("7") +
+                ", typedTargets=" +
+                std::to_string(final_selector_targets.size()) +
                 ", firstReason=" +
                 (rewritten.plan.reasons.empty() ? std::string("-")
                                                 : rewritten.plan.reasons.front()));
@@ -1904,6 +2150,85 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
                  uses, ordinary, 21, 22)
                  .has_value(),
             "an untagged numeric preload must not be retargeted");
+
+    MachineItem first_packed_recall = MachineItem::op(0x6c, "П->X c");
+    first_packed_recall.roles.push_back(
+        std::string(kRetunableNaturalFractionalSelectorRolePrefix) +
+        "packed:888888");
+    MachineItem second_packed_recall = first_packed_recall;
+    const std::vector<MachineItem> packed_uses = {
+        std::move(first_packed_recall), MachineItem::op(0x37, "К ∧"),
+        std::move(second_packed_recall), MachineItem::op(0x37, "К ∧"),
+    };
+    const PreloadReport packed{
+        .register_name = "c",
+        .value = "88888834",
+        .retunable_natural_fractional_prefix = "packed:888888",
+    };
+    require(core::rebind_proved_natural_fractional_selector_preload(
+                packed_uses, packed, 34, 19) == "88888819",
+            "a proved packed mask/address family should retarget every shared selector use");
+
+    PreloadReport malformed_packed = packed;
+    malformed_packed.retunable_natural_fractional_prefix = "packed:88888";
+    require(!core::rebind_proved_natural_fractional_selector_preload(
+                 packed_uses, malformed_packed, 34, 19)
+                 .has_value(),
+            "a malformed packed mask/address family must fail closed");
+  }
+
+  {
+    const auto jump_fold_fixture = [](bool raw_jump) {
+      Fixture input = fixture(2, 4, true);
+      const std::string sink = "generic_fallthrough_jump_sink";
+      MachineItem jump = op(0x51);
+      jump.raw = raw_jump;
+      input.items.at(input.visible_stop) = std::move(jump);
+      input.items.insert(input.items.begin() +
+                             static_cast<std::ptrdiff_t>(input.visible_stop + 1U),
+                         MachineItem::address(sink));
+      const std::size_t separator = input.old_fractional_selector.find('.');
+      input.old_fractional_selector =
+          std::to_string(std::stoi(input.old_fractional_selector.substr(0, separator)) + 1) +
+          input.old_fractional_selector.substr(separator);
+      for (PreloadReport& preload : input.preloads) {
+        if (preload.register_name == "b")
+          preload.value = input.old_fractional_selector;
+      }
+      input.items.push_back(MachineItem::label(sink));
+      input.items.push_back(stop());
+      return input;
+    };
+
+    const Fixture input = jump_fold_fixture(false);
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    const Observation before = observe(input.items, input.preloads);
+    const Observation after = observe(rewritten.items, rewritten.preloads);
+    std::string fold_diagnostics;
+    for (const std::string& reason : rewritten.plan.reasons) {
+      if (!fold_diagnostics.empty())
+        fold_diagnostics += " | ";
+      fold_diagnostics += reason;
+    }
+    require(rewritten.plan.proved && rewritten.plan.fallthrough_jump_folds == 1 &&
+                rewritten.plan.removed_cells >= 4 &&
+                cell_count(input.items) - cell_count(rewritten.items) ==
+                    rewritten.plan.removed_cells,
+            "a terminal direct jump should chain its target component and account for both "
+            "erased cells: proved=" + std::to_string(rewritten.plan.proved) +
+                " folds=" +
+                std::to_string(rewritten.plan.fallthrough_jump_folds) +
+                " removed=" + std::to_string(rewritten.plan.removed_cells) +
+                " reasons=" + fold_diagnostics);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "fallthrough jump component folding must preserve emulator-visible state");
+
+    const Fixture raw = jump_fold_fixture(true);
+    const auto blocked = core::optimize_natural_target_component_layout(
+        raw.items, raw.preloads, flow(raw));
+    require(blocked.plan.proved && blocked.plan.fallthrough_jump_folds == 0,
+            "a raw terminal direct jump must remain an opaque layout barrier");
   }
 
   {

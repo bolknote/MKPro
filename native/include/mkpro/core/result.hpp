@@ -37,9 +37,11 @@ struct PreloadReport {
   std::string register_name;
   std::string value;
   bool counts_against_program = false;
-  // Compiler-proved family whose final two mantissa digits may be rebuilt as
-  // a natural indirect-flow target. Presence means every data recall of this
-  // preload was produced by a lowering that certified the same family.
+  // Compiler-proved family whose final two delivered digits may be rebuilt as
+  // a natural indirect-flow target. Plain values describe fractional families;
+  // `packed:<prefix>` describes an eight-digit packed mask whose observed data
+  // projection excludes the final two selector digits. Presence means every
+  // data recall was produced by a lowering that certified the same family.
   std::optional<std::string> retunable_natural_fractional_prefix;
   std::optional<std::string> setup_target_name;
   bool setup_expression = false;

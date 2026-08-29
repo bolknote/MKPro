@@ -1,8 +1,10 @@
 #include "mkpro/core/natural_target_component_layout.hpp"
 
 #include "mkpro/core/indirect_addressing.hpp"
+#include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/passes/helpers.hpp"
+#include "mkpro/core/stable_register_value_flow.hpp"
 
 #include <algorithm>
 #include <array>
@@ -17,6 +19,7 @@
 #include <queue>
 #include <set>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <variant>
@@ -80,21 +83,54 @@ struct SelectorCandidate {
   int fixed_target = -1;
   bool rebindable_address = false;
   std::optional<std::string> rebindable_natural_fractional_prefix;
+  bool rebindable_late_bound_decimal_charge = false;
   int displaced_flow_uses = 0;
 };
 
 bool selector_is_flexible(const SelectorCandidate& selector) {
   return selector.rebindable_address ||
-         selector.rebindable_natural_fractional_prefix.has_value();
+         selector.rebindable_natural_fractional_prefix.has_value() ||
+         selector.rebindable_late_bound_decimal_charge;
 }
 
 struct NaturalTargetAnchorCandidate {
   SelectorCandidate selector;
   std::size_t target_origin = 0;
   int flow_sites = 0;
+  int displaced_flow_uses = 0;
   bool via_trampoline = false;
   int split_prefix_cells = 0;
+  std::optional<std::string> runtime_target_label;
 };
+
+constexpr std::string_view kLateSelectorStoreRole =
+    "late-decimal-selector-store";
+constexpr std::string_view kLateSelectorRegisterRolePrefix =
+    "late-decimal-selector-register:";
+constexpr std::string_view kLateSelectorHighRolePrefix =
+    "late-decimal-selector-high:";
+constexpr std::string_view kLateSelectorLowRolePrefix =
+    "late-decimal-selector-low:";
+
+bool role_starts_with(std::string_view value, std::string_view prefix) {
+  return value.size() >= prefix.size() &&
+         value.substr(0, prefix.size()) == prefix;
+}
+
+bool has_role(const MachineItem& item, std::string_view wanted) {
+  return std::any_of(item.roles.begin(), item.roles.end(),
+                     [&](const std::string& role) { return role == wanted; });
+}
+
+std::string late_selector_register_role(std::string_view register_name_value) {
+  return std::string(kLateSelectorRegisterRolePrefix) +
+         std::string(register_name_value);
+}
+
+bool has_late_selector_register_role(const MachineItem& item,
+                                     std::string_view register_name_value) {
+  return has_role(item, late_selector_register_role(register_name_value));
+}
 
 struct TransparentTrampoline {
   int selector_register = -1;
@@ -109,6 +145,12 @@ struct TransparentSplitBridge {
   std::size_t target_origin = 0;
   int selector_register = -1;
   bool reuses_existing_command = false;
+};
+
+struct TransparentFallthroughJumpFold {
+  std::size_t command_origin = 0;
+  std::size_t operand_origin = 0;
+  std::size_t target_origin = 0;
 };
 
 struct SplitBridgeDonor {
@@ -477,6 +519,28 @@ bool safe_cut_after(const std::vector<Cell>& cells, std::size_t cell_index) {
   return (item.opcode & 0xf0) == 0x80;
 }
 
+bool splits_late_decimal_selector_pair(const std::vector<Cell>& cells,
+                                       std::size_t prefix_cells) {
+  if (prefix_cells == 0U || prefix_cells >= cells.size())
+    return false;
+  constexpr std::string_view kHighPrefix = "late-decimal-selector-high:";
+  constexpr std::string_view kLowPrefix = "late-decimal-selector-low:";
+  const MachineItem& before = cells.at(prefix_cells - 1U).value.item;
+  const MachineItem& after = cells.at(prefix_cells).value.item;
+  for (const CellRole& role : before.roles) {
+    if (!role.starts_with(kHighPrefix) || role.size() == kHighPrefix.size())
+      continue;
+    const std::string_view target(role.data() + kHighPrefix.size(),
+                                  role.size() - kHighPrefix.size());
+    const std::string expected = std::string(kLowPrefix) + std::string(target);
+    if (std::find(after.roles.begin(), after.roles.end(), expected) !=
+        after.roles.end()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool split_segment_with_bridge(
     std::vector<Segment>& segments, std::size_t segment_index,
     std::size_t prefix_cells, std::size_t command_origin,
@@ -487,6 +551,8 @@ bool split_segment_with_bridge(
       prefix_cells >= segments.at(segment_index).cells.size() ||
       segments.at(segment_index).cells.at(prefix_cells).value.item.kind ==
           MachineItemKind::Address ||
+      splits_late_decimal_selector_pair(segments.at(segment_index).cells,
+                                        prefix_cells) ||
       safe_cut_after(segments.at(segment_index).cells, prefix_cells - 1U) ||
       selector_register > 14) {
     return false;
@@ -656,6 +722,117 @@ std::optional<std::size_t> main_origin(
   return result;
 }
 
+bool apply_transparent_fallthrough_jump_fold(
+    std::vector<Segment>& segments,
+    const TransparentFallthroughJumpFold& requested,
+    const std::vector<DirectReference>& references,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    std::size_t main_command_origin, std::string* failure_reason = nullptr) {
+  const auto fail = [&](std::string reason) {
+    if (failure_reason != nullptr)
+      *failure_reason = std::move(reason);
+    return false;
+  };
+  const auto source = locate_origin(segments, requested.command_origin);
+  const auto operand = locate_origin(segments, requested.operand_origin);
+  const auto target = locate_origin(segments, requested.target_origin);
+  const auto main = locate_origin(segments, main_command_origin);
+  if (!source.has_value() || !operand.has_value() || !target.has_value() ||
+      !main.has_value()) {
+    return fail("jump-fold component identity was lost during flow conversion: source=" +
+                std::to_string(source.has_value()) + " operand=" +
+                std::to_string(operand.has_value()) + " target=" +
+                std::to_string(target.has_value()) + " main=" +
+                std::to_string(main.has_value()));
+  }
+  if (source->first != operand->first || source->first == target->first ||
+      target->first == main->first || target->second != 0) {
+    return fail("jump-fold target is not a distinct movable component root");
+  }
+  const Segment& source_segment = segments.at(source->first);
+  const bool source_is_terminal =
+      source->second >= 0 && operand->second == source->second + 1 &&
+      static_cast<std::size_t>(operand->second + 1) ==
+          source_segment.cells.size();
+  if (!source_is_terminal) {
+    return fail("jump-fold pair does not terminate its fallthrough component");
+  }
+  const Cell& command_cell =
+      source_segment.cells.at(static_cast<std::size_t>(source->second));
+  const Cell& operand_cell =
+      source_segment.cells.at(static_cast<std::size_t>(operand->second));
+  const MachineItem& command = command_cell.value.item;
+  const MachineItem& address = operand_cell.value.item;
+  const OpcodeInfo& jump = opcode_by_code(command.opcode);
+  if (!command_cell.labels.empty() || !operand_cell.labels.empty() ||
+      command.kind != MachineItemKind::Op || command.opcode != kJumpOpcode ||
+      command.raw || command.manual_interaction.has_value() ||
+      !command.roles.empty() ||
+      address.kind != MachineItemKind::Address || address.raw ||
+      address.manual_interaction.has_value() || !address.roles.empty() ||
+      jump.stack_effect != StackEffect::Preserves ||
+      jump.x2_effect != X2Effect::Preserves) {
+    return fail("jump-fold pair is not an unlabelled transparent ordinary БП pair"
+                " (command-labels=" +
+                std::to_string(command_cell.labels.size()) +
+                ", operand-labels=" +
+                std::to_string(operand_cell.labels.size()) +
+                ", command-roles=" + std::to_string(command.roles.size()) +
+                ", operand-roles=" +
+                std::to_string(address.roles.size()) +
+                ", command-raw=" + std::to_string(command.raw) +
+                ", operand-raw=" + std::to_string(address.raw) + ")");
+  }
+
+  const auto removed_identity = [&](std::size_t item_index) {
+    return item_index == requested.command_origin ||
+           item_index == requested.operand_origin;
+  };
+  for (const DirectReference& reference : references) {
+    if (removed_identity(reference.target))
+      return fail("jump-fold pair is itself a direct-flow target");
+  }
+  for (const auto& [flow_command, targets] : control_flow.indirect_flow_targets) {
+    (void)flow_command;
+    if (std::any_of(targets.begin(), targets.end(), [&](const auto& identity) {
+          return removed_identity(identity.item_index);
+        })) {
+      return fail("jump-fold pair is itself an indirect-flow target");
+    }
+  }
+  for (const PostLayoutExternalEntryState& entry : control_flow.external_entries) {
+    if (removed_identity(entry.entry.item_index) ||
+        std::any_of(entry.return_stack.begin(), entry.return_stack.end(),
+                    [&](const auto& identity) {
+                      return removed_identity(identity.item_index);
+                    })) {
+      return fail("jump-fold pair is an external entry or return continuation");
+    }
+  }
+  if (control_flow.empty_return_target.has_value() &&
+      removed_identity(control_flow.empty_return_target->item_index)) {
+    return fail("jump-fold pair is the empty-return target");
+  }
+
+  Segment merged = std::move(segments.at(source->first));
+  merged.cells.resize(merged.cells.size() - 2U);
+  Segment& target_segment = segments.at(target->first);
+  for (Cell& cell : target_segment.cells)
+    merged.cells.push_back(std::move(cell));
+  std::vector<Segment> rewritten;
+  rewritten.reserve(segments.size() - 1U);
+  for (std::size_t index = 0; index < segments.size(); ++index) {
+    if (index == target->first)
+      continue;
+    if (index == source->first)
+      rewritten.push_back(std::move(merged));
+    else
+      rewritten.push_back(std::move(segments.at(index)));
+  }
+  segments = std::move(rewritten);
+  return true;
+}
+
 std::map<std::string, std::size_t> preload_index(
     const std::vector<PreloadReport>& preloads, bool& unique) {
   std::map<std::string, std::size_t> result;
@@ -739,6 +916,21 @@ natural_fractional_selector_encoding(std::string_view value) {
 
 std::optional<std::string> natural_fractional_selector_family_value(
     std::string_view stable_prefix, int target) {
+  constexpr std::string_view kPackedPrefix = "packed:";
+  if (stable_prefix.starts_with(kPackedPrefix)) {
+    const std::string_view packed = stable_prefix.substr(kPackedPrefix.size());
+    if (target < 0 || target > 99 || packed.size() != 6U ||
+        !std::all_of(packed.begin(), packed.end(),
+                     [](char ch) { return ch >= '0' && ch <= '9'; })) {
+      return std::nullopt;
+    }
+    std::string candidate(packed);
+    if (target < 10)
+      candidate.push_back('0');
+    candidate += std::to_string(target);
+    return candidate.size() == 8U ? std::optional<std::string>{candidate}
+                                  : std::nullopt;
+  }
   if (target <= 0 || target > 99 || !stable_prefix.starts_with("0.") ||
       stable_prefix.size() <= 2U ||
       !std::all_of(stable_prefix.begin() + 2, stable_prefix.end(),
@@ -789,12 +981,15 @@ std::optional<std::string> proved_natural_fractional_selector_family(
       !natural_fractional_selector_family_value(family_prefix, 1).has_value()) {
     return std::nullopt;
   }
+  constexpr std::string_view kPackedPrefix = "packed:";
+  const bool packed_family = family_prefix.starts_with(kPackedPrefix);
   const std::optional<std::string> canonical_preload =
-      canonical_plain_fraction(preload_value);
+      packed_family ? std::nullopt : canonical_plain_fraction(preload_value);
   const std::optional<std::string> canonical_family =
-      canonical_plain_fraction(family_prefix);
+      packed_family ? std::nullopt : canonical_plain_fraction(family_prefix);
   const bool plain_family_value =
-      canonical_preload.has_value() && canonical_family.has_value() &&
+      !packed_family && canonical_preload.has_value() &&
+      canonical_family.has_value() &&
       *canonical_preload == *canonical_family;
   bool delivered_family_value = false;
   for (int target = 1; target <= 99 && !delivered_family_value; ++target) {
@@ -1036,6 +1231,70 @@ bool register_has_nonflow_use(const std::vector<MachineItem>& items,
   });
 }
 
+std::optional<SelectorCandidate> late_bound_selector_candidate(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow, int register_index_value,
+    const std::map<std::string, std::size_t>& preload_by_register) {
+  const std::string name = register_name(register_index_value);
+  if (name.empty() || preload_by_register.contains(name) ||
+      indirect_selector_mutation(name) != IndirectSelectorMutation::Stable) {
+    return std::nullopt;
+  }
+
+  bool saw_store = false;
+  bool saw_high_marker = false;
+  bool saw_low_marker = false;
+  int flow_uses = 0;
+  for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
+    const MachineItem& item = items.at(item_index);
+    if (item.kind != MachineItemKind::Op)
+      continue;
+
+    if (item.opcode == 0x40 + register_index_value) {
+      if (!has_role(item, kLateSelectorStoreRole))
+        return std::nullopt;
+      saw_store = true;
+    } else if (item.opcode == 0x60 + register_index_value) {
+      return std::nullopt;
+    }
+
+    if (is_indirect_memory(item.opcode) &&
+        encoded_register(item.opcode) == register_index_value) {
+      return std::nullopt;
+    }
+    if (is_indirect_flow(item.opcode) &&
+        encoded_register(item.opcode) == register_index_value) {
+      if (!is_late_bound_selector_consumer(item))
+        return std::nullopt;
+      const auto targets = flow.indirect_flow_targets.find(item_index);
+      if (targets == flow.indirect_flow_targets.end() ||
+          targets->second.size() != 1U) {
+        return std::nullopt;
+      }
+      ++flow_uses;
+    }
+
+    if (!has_late_selector_register_role(item, name))
+      continue;
+    for (const std::string& role : item.roles) {
+      saw_high_marker = saw_high_marker ||
+                        role_starts_with(role, kLateSelectorHighRolePrefix);
+      saw_low_marker = saw_low_marker ||
+                       role_starts_with(role, kLateSelectorLowRolePrefix);
+    }
+  }
+
+  if (!saw_store || !saw_high_marker || !saw_low_marker || flow_uses == 0)
+    return std::nullopt;
+  return SelectorCandidate{
+      .register_index = register_index_value,
+      .register_name = name,
+      .origin = NaturalTargetSelectorOrigin::LateBoundDecimalCharge,
+      .rebindable_late_bound_decimal_charge = true,
+      .displaced_flow_uses = flow_uses,
+  };
+}
+
 std::vector<SelectorCandidate> selector_candidates(
     const std::vector<MachineItem>& items, const std::vector<PreloadReport>& preloads,
     const AuthoritativePostLayoutControlFlow& flow,
@@ -1052,7 +1311,9 @@ std::vector<SelectorCandidate> selector_candidates(
     const bool sign_toggle_written =
         written &&
         register_written_only_by_uninterruptible_sign_toggles(items, flow, index);
-    if (written && !sign_toggle_written)
+    const std::optional<SelectorCandidate> late =
+        late_bound_selector_candidate(items, flow, index, preload_by_register);
+    if (written && !sign_toggle_written && !late.has_value())
       continue;
     const std::string name = register_name(index);
     const auto preload = preload_by_register.find(name);
@@ -1126,6 +1387,11 @@ std::vector<SelectorCandidate> selector_candidates(
                     targets->second.front().address ==
                         *decoded_existing_flow->actual_flow_target;
            }));
+      const int current_target =
+          decoded_existing_flow.has_value() &&
+                  decoded_existing_flow->actual_flow_target.has_value()
+              ? *decoded_existing_flow->actual_flow_target
+              : -1;
 
       // Rebindable variants rewrite the preload value; a sign-toggled register
       // is admitted only with its exact runtime-proved ±magnitude.
@@ -1144,6 +1410,7 @@ std::vector<SelectorCandidate> selector_candidates(
               .register_index = index,
               .register_name = name,
               .origin = NaturalTargetSelectorOrigin::ExistingPreload,
+              .fixed_target = current_target,
               .rebindable_natural_fractional_prefix = *family,
               .displaced_flow_uses = static_cast<int>(uses.size()),
           });
@@ -1157,12 +1424,16 @@ std::vector<SelectorCandidate> selector_candidates(
               .register_index = index,
               .register_name = name,
               .origin = NaturalTargetSelectorOrigin::ExistingPreload,
+              .fixed_target = current_target,
               .rebindable_address = true,
               .displaced_flow_uses = static_cast<int>(uses.size()),
           });
         }
       }
     }
+
+    if (late.has_value())
+      result.push_back(*late);
 
   }
   return result;
@@ -1184,6 +1455,28 @@ bool selector_existing_uses_match_target(
     }
   }
   return true;
+}
+
+std::optional<std::size_t> target_origin_for_flow_use(
+    const AuthoritativePostLayoutControlFlow& flow, std::size_t use);
+
+std::optional<int> displaced_selector_uses_for_target(
+    const SelectorCandidate& selector, std::size_t target_origin,
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow) {
+  if (!selector_is_flexible(selector))
+    return 0;
+  int displaced = 0;
+  for (const std::size_t use :
+       indirect_flow_uses(items, selector.register_index)) {
+    const std::optional<std::size_t> existing_target =
+        target_origin_for_flow_use(flow, use);
+    if (!existing_target.has_value())
+      return std::nullopt;
+    if (*existing_target != target_origin)
+      ++displaced;
+  }
+  return displaced;
 }
 
 std::optional<std::vector<Cell>> convert_direct_flows(
@@ -1238,11 +1531,13 @@ std::optional<std::vector<Cell>> convert_direct_flows(
   std::map<std::size_t, DisplacedIndirectFlowRewrite> displaced_by_command;
   std::size_t next_synthetic_origin = items.size();
   for (const NaturalTargetAnchorCandidate& anchor : anchors) {
-    if (anchor.selector.displaced_flow_uses <= 0 ||
+    if (anchor.displaced_flow_uses <= 0 ||
         (!anchor.selector.rebindable_address &&
-         !anchor.selector.rebindable_natural_fractional_prefix.has_value())) {
+         !anchor.selector.rebindable_natural_fractional_prefix.has_value() &&
+         !anchor.selector.rebindable_late_bound_decimal_charge)) {
       continue;
     }
+    int displaced_count = 0;
     for (const std::size_t command :
          indirect_flow_uses(items, anchor.selector.register_index)) {
       const auto targets = flow.indirect_flow_targets.find(command);
@@ -1254,6 +1549,13 @@ std::optional<std::vector<Cell>> convert_direct_flows(
           targets->second.size() != 1U || !direct.has_value()) {
         return std::nullopt;
       }
+      // Retargeting an address-only selector while keeping the same typed
+      // callee does not displace its existing one-cell consumers. The final
+      // preload rewrite moves those consumers and newly converted direct flows
+      // together. Only consumers of a different identity need to be expanded
+      // back into a two-cell direct flow.
+      if (targets->second.front().item_index == anchor.target_origin)
+        continue;
       DisplacedIndirectFlowRewrite rewrite{
           .command_origin = command,
           .operand_origin = next_synthetic_origin++,
@@ -1263,7 +1565,10 @@ std::optional<std::vector<Cell>> convert_direct_flows(
       if (!displaced_by_command.emplace(command, rewrite).second)
         return std::nullopt;
       displaced_flows.push_back(rewrite);
+      ++displaced_count;
     }
+    if (displaced_count != anchor.displaced_flow_uses)
+      return std::nullopt;
   }
 
   std::vector<Cell> cells;
@@ -1295,6 +1600,10 @@ std::optional<std::vector<Cell>> convert_direct_flows(
       command.mnemonic = opcode_by_code(command.opcode).name;
       command.indirect_flow_targets =
           std::vector<IrTarget>{static_cast<int>(original_flow->target)};
+      if (selected->second->rebindable_late_bound_decimal_charge &&
+          !has_role(command, "late-decimal-selector-consumer")) {
+        command.roles.push_back("late-decimal-selector-consumer");
+      }
     }
     const auto displaced = displaced_by_command.find(cell.value.origin);
     if (displaced != displaced_by_command.end()) {
@@ -1302,6 +1611,10 @@ std::optional<std::vector<Cell>> convert_direct_flows(
       command.opcode = displaced->second.direct_opcode;
       command.mnemonic = opcode_by_code(command.opcode).name;
       command.indirect_flow_targets.reset();
+      command.roles.erase(
+          std::remove(command.roles.begin(), command.roles.end(),
+                      "late-decimal-selector-consumer"),
+          command.roles.end());
       cells.push_back(std::move(cell));
       cells.push_back(Cell{
           .value = OwnedItem{
@@ -1409,74 +1722,133 @@ std::optional<NaturalTargetLayoutOrder> layout_order_for_targets(
   std::map<std::size_t, std::size_t> eligible_index_by_segment;
   for (std::size_t index = 0; index < eligible.size(); ++index)
     eligible_index_by_segment.emplace(eligible.at(index), index);
-  const auto assignment_deadline_rank = [&](const std::vector<int>& assignment) {
-    std::vector<std::tuple<int, std::size_t, int>> ranked;
-    for (const auto& [segment, deadline] : bounded_deadline_by_segment) {
-      const auto eligible_index = eligible_index_by_segment.find(segment);
-      if (eligible_index == eligible_index_by_segment.end())
-        continue;
-      const int gap = assignment.at(eligible_index->second);
-      ranked.emplace_back(deadline, segment,
-                          gap < 0 ? std::numeric_limits<int>::max() : gap);
-    }
-    std::sort(ranked.begin(), ranked.end());
-    std::vector<int> result;
-    result.reserve(ranked.size());
-    for (const auto& [deadline, segment, gap] : ranked) {
-      (void)deadline;
-      (void)segment;
-      result.push_back(gap);
-    }
-    return result;
-  };
 
   using GapTotals = std::vector<int>;
   using GapAssignment = std::vector<int>;
-  std::map<GapTotals, GapAssignment> states;
-  states.emplace(GapTotals(gap_capacities.size(), 0),
-                 GapAssignment(eligible.size(), -1));
+  std::vector<std::tuple<int, std::size_t, std::size_t>> ranked_bounded;
+  for (const auto& [segment, deadline] : bounded_deadline_by_segment) {
+    const auto eligible_index = eligible_index_by_segment.find(segment);
+    if (eligible_index != eligible_index_by_segment.end()) {
+      ranked_bounded.emplace_back(deadline, segment,
+                                  eligible_index->second);
+    }
+  }
+  std::sort(ranked_bounded.begin(), ranked_bounded.end());
+  std::vector<int> bounded_rank_slot_by_eligible(eligible.size(), -1);
+  for (std::size_t rank = 0; rank < ranked_bounded.size(); ++rank) {
+    bounded_rank_slot_by_eligible.at(std::get<2>(ranked_bounded.at(rank))) =
+        static_cast<int>(rank);
+  }
+
+  struct GapAssignmentNode {
+    std::size_t parent = std::numeric_limits<std::size_t>::max();
+    std::size_t eligible_index = std::numeric_limits<std::size_t>::max();
+    int gap = -1;
+    std::vector<int> bounded_deadline_rank;
+  };
+  std::vector<GapAssignmentNode> assignment_nodes;
+  assignment_nodes.push_back(GapAssignmentNode{
+      .bounded_deadline_rank = std::vector<int>(
+          ranked_bounded.size(), std::numeric_limits<int>::max()),
+  });
+  std::map<GapTotals, std::size_t> states;
+  states.emplace(GapTotals(gap_capacities.size(), 0), 0U);
+  const int total_gap_capacity =
+      std::accumulate(gap_capacities.begin(), gap_capacities.end(), 0);
+  const int minimum_required_fill =
+      std::max(0, total_gap_capacity - maximum_padding);
+  std::vector<int> suffix_segment_cells(eligible.size() + 1U, 0);
+  for (std::size_t index = eligible.size(); index > 0U; --index) {
+    suffix_segment_cells.at(index - 1U) =
+        suffix_segment_cells.at(index) +
+        segment_cells(segments.at(eligible.at(index - 1U)));
+  }
   for (std::size_t eligible_index = 0; eligible_index < eligible.size();
        ++eligible_index) {
-    std::map<GapTotals, GapAssignment> next = states;
+    std::map<GapTotals, std::size_t> next;
     const int length = segment_cells(segments.at(eligible.at(eligible_index)));
-    for (const auto& [totals, assignment] : states) {
+    const int remaining_cells = suffix_segment_cells.at(eligible_index + 1U);
+    const auto retain = [&](GapTotals totals, const std::size_t assignment_node,
+                            const std::optional<std::pair<std::size_t, int>>&
+                                assignment) {
+      const int filled = std::accumulate(totals.begin(), totals.end(), 0);
+      if (filled + remaining_cells < minimum_required_fill)
+        return true;
+
+      std::vector<int> deadline_rank =
+          assignment_nodes.at(assignment_node).bounded_deadline_rank;
+      int rank_slot = -1;
+      if (assignment.has_value()) {
+        rank_slot = bounded_rank_slot_by_eligible.at(assignment->first);
+        if (rank_slot >= 0) {
+          deadline_rank.at(static_cast<std::size_t>(rank_slot)) =
+              assignment->second;
+        }
+      }
+      const auto existing = next.find(totals);
+      if (existing != next.end() &&
+          (ranked_bounded.empty() ||
+           !(deadline_rank < assignment_nodes.at(existing->second)
+                                  .bounded_deadline_rank))) {
+        return true;
+      }
+      std::size_t node = assignment_node;
+      if (assignment.has_value()) {
+        node = assignment_nodes.size();
+        assignment_nodes.push_back(GapAssignmentNode{
+            .parent = assignment_node,
+            .eligible_index = assignment->first,
+            .gap = assignment->second,
+            .bounded_deadline_rank = std::move(deadline_rank),
+        });
+      }
+      if (existing == next.end())
+        next.emplace(std::move(totals), node);
+      else
+        existing->second = node;
+      return next.size() <= maximum_states;
+    };
+
+    for (const auto& [totals, assignment_node] : states) {
+      if (!retain(totals, assignment_node, std::nullopt))
+        return std::nullopt;
       for (std::size_t gap = 0; gap < gap_capacities.size(); ++gap) {
         if (totals.at(gap) + length > gap_capacities.at(gap))
           continue;
         GapTotals extended_totals = totals;
         extended_totals.at(gap) += length;
-        GapAssignment extended_assignment = assignment;
-        extended_assignment.at(eligible_index) = static_cast<int>(gap);
-        const auto existing = next.find(extended_totals);
-        if (existing != next.end()) {
-          if (!bounded_placements.empty() &&
-              assignment_deadline_rank(extended_assignment) <
-                  assignment_deadline_rank(existing->second)) {
-            existing->second = std::move(extended_assignment);
-          }
-          continue;
-        }
-        next.emplace(std::move(extended_totals), std::move(extended_assignment));
-        if (next.size() > maximum_states)
+        if (!retain(std::move(extended_totals), assignment_node,
+                    std::pair{eligible_index, static_cast<int>(gap)})) {
           return std::nullopt;
+        }
       }
     }
     states = std::move(next);
+    if (states.empty())
+      return std::nullopt;
   }
+
+  const auto assignment_for_node = [&](std::size_t node) {
+    GapAssignment assignment(eligible.size(), -1);
+    while (node != 0U) {
+      const GapAssignmentNode& current = assignment_nodes.at(node);
+      assignment.at(current.eligible_index) = current.gap;
+      node = current.parent;
+    }
+    return assignment;
+  };
 
   if (!bounded_placements.empty()) {
     std::optional<NaturalTargetLayoutOrder> best;
     int best_filled = -1;
-    for (const auto& [totals, assignment] : states) {
+    for (const auto& [totals, assignment_node] : states) {
       int filled = 0;
       for (const int total : totals)
         filled += total;
-      int total_capacity = 0;
-      for (const int capacity : gap_capacities)
-        total_capacity += capacity;
-      const int padding_cells = total_capacity - filled;
+      const int padding_cells = total_gap_capacity - filled;
       if (padding_cells < 0 || padding_cells > maximum_padding || filled < best_filled)
         continue;
+      const GapAssignment assignment = assignment_for_node(assignment_node);
 
       const auto append_ordered = [&](NaturalTargetLayoutOrder& layout,
                                       const std::vector<std::size_t>& indexes) {
@@ -1561,20 +1933,18 @@ std::optional<NaturalTargetLayoutOrder> layout_order_for_targets(
       solution = state;
     }
   }
-  int total_capacity = 0;
-  for (const int capacity : gap_capacities)
-    total_capacity += capacity;
-  const int padding_cells = total_capacity - best_filled;
+  const int padding_cells = total_gap_capacity - best_filled;
   if (solution == states.end() || padding_cells < 0 || padding_cells > maximum_padding)
     return std::nullopt;
 
   NaturalTargetLayoutOrder layout;
+  const GapAssignment solution_assignment = assignment_for_node(solution->second);
   layout.padding_cells = padding_cells;
   layout.segments.reserve(segments.size());
   layout.segments.push_back(main_segment);
   for (std::size_t gap = 0; gap < fixed_segments.size(); ++gap) {
     for (std::size_t index = 0; index < eligible.size(); ++index) {
-      if (solution->second.at(index) == static_cast<int>(gap))
+      if (solution_assignment.at(index) == static_cast<int>(gap))
         layout.segments.push_back(eligible.at(index));
     }
     const std::size_t fixed_segment = fixed_segments.at(gap).second;
@@ -1584,7 +1954,7 @@ std::optional<NaturalTargetLayoutOrder> layout_order_for_targets(
     layout.segments.push_back(fixed_segment);
   }
   for (std::size_t index = 0; index < eligible.size(); ++index) {
-    if (solution->second.at(index) < 0)
+    if (solution_assignment.at(index) < 0)
       layout.segments.push_back(eligible.at(index));
   }
   return layout.segments.size() == segments.size()
@@ -1668,11 +2038,38 @@ layout_order_with_optional_split(
         if (gap_capacities.empty())
           return;
 
+        std::vector<std::size_t> candidate_segments;
+        candidate_segments.reserve(base_segments.size());
         for (std::size_t segment = 0; segment < base_segments.size(); ++segment) {
           if (segment == main_segment || anchored_segments.contains(segment))
             continue;
+          candidate_segments.push_back(segment);
+        }
+        const auto bounded_deadline = [&](const std::size_t segment) {
+          int deadline = std::numeric_limits<int>::max();
+          for (const NaturalTargetPlacement& placement :
+               base_bounded_placements) {
+            if (placement.target_segment == segment) {
+              deadline = std::min(
+                  deadline,
+                  maximum_bounded_target - placement.target_offset);
+            }
+          }
+          return deadline;
+        };
+        std::stable_sort(candidate_segments.begin(), candidate_segments.end(),
+                         [&](const std::size_t left, const std::size_t right) {
+          return std::tuple{bounded_deadline(left), left} <
+                 std::tuple{bounded_deadline(right), right};
+        });
+
+        for (const std::size_t segment : candidate_segments) {
+          if (best.has_value() &&
+              best->layout_cost <= existing_bridge_cells + 2) {
+            return;
+          }
           const int length = segment_cells(base_segments.at(segment));
-          std::set<int> cut_candidates;
+          std::map<int, int> cut_priority;
           const int maximum_cut_slack = std::min(
               maximum_padding - existing_bridge_cells - 2,
               std::max(0, length - 1));
@@ -1685,11 +2082,22 @@ layout_order_with_optional_split(
             // saving budget; split_segment_with_bridge and the final layout
             // proof continue to reject unsafe boundaries and arrangements.
             for (int slack = 0; slack <= maximum_cut_slack; ++slack) {
-              cut_candidates.insert(gap - 2 - slack);
-              cut_candidates.insert(length - gap + slack);
+              for (const int cut : {gap - 2 - slack,
+                                    length - gap + slack}) {
+                const auto [existing, inserted] =
+                    cut_priority.emplace(cut, slack);
+                if (!inserted)
+                  existing->second = std::min(existing->second, slack);
+              }
             }
           }
-          for (const int cut : cut_candidates) {
+          std::vector<std::pair<int, int>> cut_candidates;
+          cut_candidates.reserve(cut_priority.size());
+          for (const auto& [cut, slack] : cut_priority)
+            cut_candidates.emplace_back(slack, cut);
+          std::sort(cut_candidates.begin(), cut_candidates.end());
+          for (const auto& [slack, cut] : cut_candidates) {
+            (void)slack;
             if (cut <= 0 || cut >= length)
               continue;
             std::vector<Segment> trial_segments = base_segments;
@@ -1736,6 +2144,10 @@ layout_order_with_optional_split(
             bridges.push_back(bridge);
             consider(std::move(trial_segments), *trial_order,
                      std::move(bridges));
+            if (best.has_value() &&
+                best->layout_cost <= existing_bridge_cells + 2) {
+              return;
+            }
           }
         }
       };
@@ -1966,8 +2378,11 @@ std::vector<MachineItem> flatten_segments(
   for (const std::size_t segment_index : order) {
     const auto padding = padding_before_segment.find(segment_index);
     if (padding != padding_before_segment.end()) {
-      for (int cell = 0; cell < padding->second; ++cell)
-        result.push_back(MachineItem::op(0x54, opcode_by_code(0x54).name));
+      for (int cell = 0; cell < padding->second; ++cell) {
+        MachineItem spacer = MachineItem::op(0x54, opcode_by_code(0x54).name);
+        spacer.roles.push_back("natural-target-component-layout:padding");
+        result.push_back(std::move(spacer));
+      }
     }
     for (const Cell& cell : segments.at(segment_index).cells) {
       for (const OwnedItem& label : cell.labels) {
@@ -2371,12 +2786,20 @@ bool rebind_preloads(
   for (const auto& [reg, target_origins] : required_targets) {
     if (reg < 7 || reg > 0x0e || target_origins.size() != 1U)
       return reject("selector register does not have one required target");
+    const auto runtime_selected = selected_by_register.find(reg);
+    if (runtime_selected != selected_by_register.end() &&
+        runtime_selected->second->selector.rebindable_late_bound_decimal_charge) {
+      if (!runtime_selected->second->runtime_target_label.has_value())
+        return reject("late-bound selector target has no symbolic label");
+      continue;
+    }
     const bool written = register_is_written(original_items, original_flow, reg);
     const bool sign_toggle_written =
         written && register_written_only_by_uninterruptible_sign_toggles(
                        original_items, original_flow, reg);
     if (written && !sign_toggle_written)
-      return reject("selector register is written at runtime");
+      return reject("selector register " + register_name(reg) +
+                    " is written at runtime");
     const std::string name = register_name(reg);
     const auto preload = preload_by_register.find(name);
     if (preload == preload_by_register.end())
@@ -2916,6 +3339,7 @@ bool converted_flow_effects_equivalent(
     const std::vector<MachineItem>& original_items,
     const std::vector<NaturalTargetAnchorCandidate>& anchors,
     const std::vector<NaturalTargetFlowRewrite>& flows,
+    const std::vector<DisplacedIndirectFlowRewrite>& displaced_flows,
     const TraceGraph& trace, ConvertedFlowEffectProofContext& proof_context,
     std::string* failure_reason = nullptr,
     std::size_t* failure_command = nullptr,
@@ -3224,7 +3648,8 @@ bool converted_flow_effects_equivalent(
     return found;
   };
 
-  const auto fallthrough_x2_difference_reconverges = [&](std::size_t command) {
+  const auto x2_difference_reconverges = [&](std::size_t command,
+                                              bool fallthrough_only) {
     // This is a safety property, not a termination proof. A preserving loop is
     // valid while the hidden X2 difference cannot escape to an observer; a DFS
     // that rejects every back-edge therefore loses valid loop-heavy layouts.
@@ -3237,7 +3662,7 @@ bool converted_flow_effects_equivalent(
       if (state.command != command)
         continue;
       for (const TraceEdge& edge : edges) {
-        if (edge.kind != TraceEdgeKind::Fallthrough)
+        if (fallthrough_only && edge.kind != TraceEdgeKind::Fallthrough)
           continue;
         seeds.insert(edge.target);
       }
@@ -3369,7 +3794,7 @@ bool converted_flow_effects_equivalent(
           entry_has_x2_equal_x(flow.original_command_item);
       used_x2_reconvergence =
           !same_fallthrough_effect && !equal_at_entry &&
-          fallthrough_x2_difference_reconverges(flow.original_command_item);
+          x2_difference_reconverges(flow.original_command_item, true);
       const bool value_equal_at_entry =
           !same_fallthrough_effect && !equal_at_entry && !used_x2_reconvergence &&
           symbolic_entry_has_x2_equal_x(flow.original_command_item);
@@ -3407,6 +3832,34 @@ bool converted_flow_effects_equivalent(
     if (used_x2_reconvergence && x2_reconvergence_flows != nullptr)
       ++*x2_reconvergence_flows;
   }
+  for (const DisplacedIndirectFlowRewrite& displaced : displaced_flows) {
+    if (displaced.command_origin >= original_items.size())
+      return fail("displaced-flow-identity");
+    const MachineItem& original = original_items.at(displaced.command_origin);
+    if (original.kind != MachineItemKind::Op ||
+        !is_indirect_flow(original.opcode)) {
+      return fail("displaced-flow-opcode@" +
+                  std::to_string(displaced.command_origin));
+    }
+    const auto anchor = std::find_if(
+        anchors.begin(), anchors.end(), [&](const auto& candidate) {
+          return candidate.selector.register_index ==
+                     encoded_register(original.opcode) &&
+                 candidate.selector.rebindable_late_bound_decimal_charge;
+        });
+    if (anchor == anchors.end())
+      continue;
+    const OpcodeInfo& before = opcode_by_code(original.opcode);
+    const OpcodeInfo& after = opcode_by_code(displaced.direct_opcode);
+    if (before.stack_effect != after.stack_effect ||
+        before.takes_address == after.takes_address ||
+        !x2_difference_reconverges(displaced.command_origin, false)) {
+      return fail("displaced-runtime-x2@" +
+                  std::to_string(displaced.command_origin));
+    }
+    if (x2_reconvergence_flows != nullptr)
+      ++*x2_reconvergence_flows;
+  }
   return true;
 }
 
@@ -3417,7 +3870,8 @@ std::optional<std::vector<NaturalTargetRuntimeSelectorProof>> prove_runtime_sele
     const AuthoritativePostLayoutControlFlow& final_flow,
     const std::map<std::size_t, std::size_t>& final_origin_by_item,
     const std::vector<PreloadReport>& preloads, AddressSpaceModel model,
-    const std::map<std::size_t, std::size_t>& transparent_aliases) {
+    const std::map<std::size_t, std::size_t>& transparent_aliases,
+    bool prove_late_runtime_values) {
   bool unique = false;
   const std::map<std::string, std::size_t> preload_by_register =
       preload_index(preloads, unique);
@@ -3425,6 +3879,7 @@ std::optional<std::vector<NaturalTargetRuntimeSelectorProof>> prove_runtime_sele
     return std::nullopt;
 
   std::vector<NaturalTargetRuntimeSelectorProof> result;
+  std::optional<StableRegisterValueFlow> late_values;
   for (const auto& [final_command, targets] : final_flow.indirect_flow_targets) {
     if (final_command >= final_items.size() || targets.empty())
       return std::nullopt;
@@ -3438,12 +3893,108 @@ std::optional<std::vector<NaturalTargetRuntimeSelectorProof>> prove_runtime_sele
     if (late_bound_consumer) {
       if (!command_origin.has_value() || *command_origin >= original_items.size())
         return std::nullopt;
-      const MachineItem& original_command = original_items.at(*command_origin);
-      if (std::find(original_command.roles.begin(), original_command.roles.end(),
-                    "late-decimal-selector-consumer") ==
-          original_command.roles.end()) {
+      if (!prove_late_runtime_values) {
+        const MachineItem& original_command = original_items.at(*command_origin);
+        if (!has_role(original_command, "late-decimal-selector-consumer"))
+          return std::nullopt;
+        std::vector<std::size_t> logical_target_origins;
+        logical_target_origins.reserve(targets.size());
+        for (const PostLayoutCommandIdentity& target : targets) {
+          const std::optional<std::size_t> target_origin =
+              origin_for_item(final_origin_by_item, target.item_index);
+          if (!target_origin.has_value())
+            return std::nullopt;
+          std::size_t logical_target_origin = *target_origin;
+          if (const auto alias = transparent_aliases.find(logical_target_origin);
+              alias != transparent_aliases.end()) {
+            logical_target_origin = alias->second;
+          }
+          logical_target_origins.push_back(logical_target_origin);
+        }
+        std::sort(logical_target_origins.begin(), logical_target_origins.end());
+        logical_target_origins.erase(
+            std::unique(logical_target_origins.begin(),
+                        logical_target_origins.end()),
+            logical_target_origins.end());
+        const auto original_targets =
+            original_flow.indirect_flow_targets.find(*command_origin);
+        if (original_targets == original_flow.indirect_flow_targets.end())
+          return std::nullopt;
+        std::vector<std::size_t> original_target_origins;
+        original_target_origins.reserve(original_targets->second.size());
+        for (const PostLayoutCommandIdentity& target : original_targets->second)
+          original_target_origins.push_back(target.item_index);
+        std::sort(original_target_origins.begin(), original_target_origins.end());
+        original_target_origins.erase(
+            std::unique(original_target_origins.begin(),
+                        original_target_origins.end()),
+            original_target_origins.end());
+        if (logical_target_origins != original_target_origins)
+          return std::nullopt;
+        continue;
+      }
+      if (targets.size() != 1U)
+        return std::nullopt;
+      const int reg = encoded_register(command.opcode);
+      const std::string name = register_name(reg);
+      if (reg < 7 || reg > 0x0e || name.empty() ||
+          indirect_selector_mutation(name) != IndirectSelectorMutation::Stable) {
         return std::nullopt;
       }
+      if (!late_values.has_value()) {
+        late_values = analyze_stable_register_value_flow(
+            final_items, preloads, final_flow, model);
+      }
+      if (!late_values->proved)
+        return std::nullopt;
+      const auto before = late_values->before_item.find(final_command);
+      if (before == late_values->before_item.end() ||
+          !before->second.at(static_cast<std::size_t>(reg - 7)).has_value()) {
+        return std::nullopt;
+      }
+      const std::string& value =
+          *before->second.at(static_cast<std::size_t>(reg - 7));
+      std::optional<IndirectAddressEvaluation> decoded;
+      try {
+        decoded = evaluate_indirect_address(
+            name, value, IndirectOperationKind::Flow, model);
+      } catch (const std::exception&) {
+        return std::nullopt;
+      }
+      if (!decoded.has_value() || !decoded->actual_flow_target.has_value() ||
+          *decoded->actual_flow_target != targets.front().address ||
+          !decoded->result_value.has_value() || *decoded->result_value != value) {
+        return std::nullopt;
+      }
+      const std::optional<std::size_t> target_origin =
+          origin_for_item(final_origin_by_item, targets.front().item_index);
+      if (!target_origin.has_value())
+        return std::nullopt;
+      std::size_t logical_target_origin = *target_origin;
+      if (const auto alias = transparent_aliases.find(logical_target_origin);
+          alias != transparent_aliases.end()) {
+        logical_target_origin = alias->second;
+      }
+      const auto original_targets =
+          original_flow.indirect_flow_targets.find(*command_origin);
+      if (original_targets != original_flow.indirect_flow_targets.end() &&
+          (original_targets->second.size() != 1U ||
+           original_targets->second.front().item_index != logical_target_origin)) {
+        return std::nullopt;
+      }
+      result.push_back(NaturalTargetRuntimeSelectorProof{
+          .original_command_item = *command_origin,
+          .final_command_item = final_command,
+          .original_target_item = logical_target_origin,
+          .register_name = name,
+          .delivered_preload = value,
+          .decoded_target = *decoded->actual_flow_target,
+          .final_target_address = targets.front().address,
+          .stable_mutation_class = true,
+          .selector_unwritten = false,
+          .selector_sign_toggle_invariant = false,
+          .typed_target_matches_runtime_decode = true,
+      });
       continue;
     }
     if (targets.size() != 1U)
@@ -3531,7 +4082,9 @@ bool unchanged_command_effects_preserved(
     const std::vector<MachineItem>& rewritten_items,
     const std::map<std::size_t, std::size_t>& new_item_by_origin,
     const std::vector<NaturalTargetFlowRewrite>& flows,
-    const std::vector<DisplacedIndirectFlowRewrite>& displaced_flows) {
+    const std::vector<DisplacedIndirectFlowRewrite>& displaced_flows,
+    const std::vector<NaturalTargetAnchorCandidate>& anchors,
+    const std::set<std::size_t>& transparently_removed_commands = {}) {
   std::set<std::size_t> converted;
   for (const NaturalTargetFlowRewrite& flow : flows)
     converted.insert(flow.original_command_item);
@@ -3541,6 +4094,8 @@ bool unchanged_command_effects_preserved(
   for (std::size_t origin = 0; origin < original_items.size(); ++origin) {
     const MachineItem& before = original_items.at(origin);
     if (before.kind != MachineItemKind::Op)
+      continue;
+    if (transparently_removed_commands.contains(origin))
       continue;
     const auto found = new_item_by_origin.find(origin);
     if (found == new_item_by_origin.end())
@@ -3560,7 +4115,44 @@ bool unchanged_command_effects_preserved(
         return false;
       }
     } else if (!converted.contains(origin) && before.opcode != after.opcode) {
-      return false;
+      const bool proved_late_charge_digit =
+          before.opcode >= 0x00 && before.opcode <= 0x09 &&
+          after.opcode >= 0x00 && after.opcode <= 0x09 && !before.raw &&
+          !after.raw &&
+          std::any_of(anchors.begin(), anchors.end(), [&](const auto& anchor) {
+            if (!anchor.selector.rebindable_late_bound_decimal_charge ||
+                !has_late_selector_register_role(
+                    before, anchor.selector.register_name) ||
+                !has_late_selector_register_role(
+                    after, anchor.selector.register_name)) {
+              return false;
+            }
+            const bool high =
+                std::any_of(before.roles.begin(), before.roles.end(),
+                            [](const std::string& role) {
+                              return role_starts_with(
+                                  role, kLateSelectorHighRolePrefix);
+                            }) &&
+                std::any_of(after.roles.begin(), after.roles.end(),
+                            [](const std::string& role) {
+                              return role_starts_with(
+                                  role, kLateSelectorHighRolePrefix);
+                            });
+            const bool low =
+                std::any_of(before.roles.begin(), before.roles.end(),
+                            [](const std::string& role) {
+                              return role_starts_with(
+                                  role, kLateSelectorLowRolePrefix);
+                            }) &&
+                std::any_of(after.roles.begin(), after.roles.end(),
+                            [](const std::string& role) {
+                              return role_starts_with(
+                                  role, kLateSelectorLowRolePrefix);
+                            });
+            return high != low;
+          });
+      if (!proved_late_charge_digit)
+        return false;
     }
   }
   return true;
@@ -3693,6 +4285,7 @@ std::optional<CandidateArtifact> try_candidate(
     const TraceGraph& original_trace,
     ConvertedFlowEffectProofContext& flow_effect_proof_context,
     const std::vector<ExternalIdentity>& original_external,
+  bool attempt_jump_folds,
     std::vector<std::string>* rejection_reasons) {
   const auto reject = [&](std::string reason) -> std::optional<CandidateArtifact> {
     if (rejection_reasons != nullptr &&
@@ -3769,8 +4362,8 @@ std::optional<CandidateArtifact> try_candidate(
       std::string failure;
       std::size_t failure_command = std::numeric_limits<std::size_t>::max();
       if (converted_flow_effects_equivalent(
-              items, anchors, rewrites, original_trace, flow_effect_proof_context,
-              &failure,
+              items, anchors, rewrites, displaced_flows, original_trace,
+              flow_effect_proof_context, &failure,
               &failure_command)) {
         break;
       }
@@ -3795,6 +4388,66 @@ std::optional<CandidateArtifact> try_candidate(
   const std::optional<std::size_t> main = main_origin(control_flow);
   if (!main.has_value())
     return reject("main entry identity is ambiguous");
+  std::vector<TransparentFallthroughJumpFold> jump_folds;
+  if (attempt_jump_folds) {
+    std::vector<TransparentFallthroughJumpFold> fold_candidates;
+    for (const DirectReference& reference : references) {
+      if (reference.command < items.size() &&
+          items.at(reference.command).kind == MachineItemKind::Op &&
+          items.at(reference.command).opcode == kJumpOpcode) {
+        fold_candidates.push_back(TransparentFallthroughJumpFold{
+            .command_origin = reference.command,
+            .operand_origin = reference.operand,
+            .target_origin = reference.target,
+        });
+      }
+    }
+    for (const DisplacedIndirectFlowRewrite& displaced : displaced_flows) {
+      if (displaced.direct_opcode == kJumpOpcode) {
+        fold_candidates.push_back(TransparentFallthroughJumpFold{
+            .command_origin = displaced.command_origin,
+            .operand_origin = displaced.operand_origin,
+            .target_origin = displaced.target_origin,
+        });
+      }
+    }
+    std::sort(fold_candidates.begin(), fold_candidates.end(),
+              [](const auto& left, const auto& right) {
+                return std::tie(left.command_origin, left.operand_origin,
+                                left.target_origin) <
+                       std::tie(right.command_origin, right.operand_origin,
+                                right.target_origin);
+              });
+    fold_candidates.erase(
+        std::unique(fold_candidates.begin(), fold_candidates.end(),
+                    [](const auto& left, const auto& right) {
+                      return left.command_origin == right.command_origin &&
+                             left.operand_origin == right.operand_origin &&
+                             left.target_origin == right.target_origin;
+                    }),
+        fold_candidates.end());
+    std::string fold_failures =
+        "converted artifact contains no direct jump candidate";
+    for (const TransparentFallthroughJumpFold& fold : fold_candidates) {
+      std::string fold_failure;
+      if (apply_transparent_fallthrough_jump_fold(
+              segments, fold, references, control_flow, *main,
+              &fold_failure)) {
+        jump_folds.push_back(fold);
+      } else {
+        if (!fold_failures.empty())
+          fold_failures += "; ";
+        fold_failures += "command=" + std::to_string(fold.command_origin) +
+                         " operand=" + std::to_string(fold.operand_origin) +
+                         " target=" + std::to_string(fold.target_origin) +
+                         ": " + fold_failure;
+      }
+    }
+    if (jump_folds.empty()) {
+      return reject("fallthrough jump fold could not be proved: " +
+                    fold_failures);
+    }
+  }
   const ArtifactIndex original_index = index_artifact(items);
   if (*main >= original_index.item_addresses.size() ||
       original_index.item_addresses.at(*main) != 0)
@@ -3820,8 +4473,11 @@ std::optional<CandidateArtifact> try_candidate(
   std::vector<NaturalTargetPlacement> flexible_placements;
   std::map<std::size_t, const NaturalTargetAnchorCandidate*> anchor_by_target_origin;
   for (const NaturalTargetAnchorCandidate& anchor : anchors) {
-    if (anchor.selector.origin != NaturalTargetSelectorOrigin::ExistingPreload)
-      return reject("selector is not an existing stable preload");
+    if (anchor.selector.origin != NaturalTargetSelectorOrigin::ExistingPreload &&
+        anchor.selector.origin !=
+            NaturalTargetSelectorOrigin::LateBoundDecimalCharge) {
+      return reject("selector origin is not proof-supported");
+    }
     const std::optional<std::size_t> placement_origin =
         physical_target_origin(anchor, trampolines);
     if (!placement_origin.has_value())
@@ -3887,59 +4543,59 @@ std::optional<CandidateArtifact> try_candidate(
         .selector_register = command.opcode - 0x80,
     });
   }
+  const int jump_fold_savings = 2 * static_cast<int>(jump_folds.size());
   const int maximum_padding =
       layout_only
-          ? (selector_target_only
-                 ? std::max(0, options.maximum_transactional_growth_cells)
-                 : 0)
+          ? std::max(0, options.maximum_transactional_growth_cells) +
+                jump_fold_savings
           : static_cast<int>(rewrites.size()) -
                 static_cast<int>(displaced_flows.size()) -
                 2 * static_cast<int>(trampolines.size()) -
-                split_bridge_cells(split_bridges) - 1;
+                split_bridge_cells(split_bridges) - 1 + jump_fold_savings;
   if (maximum_padding < 0)
     return reject("address-selector displacement cannot produce a smaller artifact");
   std::optional<NaturalTargetLayoutVariant> selected_layout;
-  int flexible_target = -1;
   if (layout_only) {
     selected_layout = layout_order_with_optional_split(
         segments, main_location->first, placements, options.maximum_subset_states,
         maximum_padding, next_synthetic_origin, bounded_placements,
         options.maximum_bounded_target_address, split_bridge_donors);
   } else if (flexible_placements.size() == 1U) {
-    const auto flexible_anchor = std::find_if(
-        anchors.begin(), anchors.end(), [](const NaturalTargetAnchorCandidate& anchor) {
-          return selector_is_flexible(anchor.selector);
-        });
-    if (flexible_anchor == anchors.end())
-      return reject("flexible selector identity was lost");
-    const int last_flexible_target =
-        flexible_anchor->selector.rebindable_natural_fractional_prefix.has_value()
-            ? std::min(99, official_program_last_address(options.address_space_model))
-            : official_program_last_address(options.address_space_model);
-    for (int target = 1;
-         target <= last_flexible_target;
-         ++target) {
-      std::vector<NaturalTargetPlacement> trial_placements = placements;
-      NaturalTargetPlacement trial = flexible_placements.front();
-      trial.natural_target = target;
-      trial_placements.push_back(trial);
-      std::optional<NaturalTargetLayoutVariant> trial_layout =
-          layout_order_with_optional_split(
-              segments, main_location->first, trial_placements,
-              options.maximum_subset_states, maximum_padding,
-              next_synthetic_origin, bounded_placements,
-              options.maximum_bounded_target_address, split_bridge_donors);
-      if (!trial_layout.has_value())
-        continue;
-      if (!selected_layout.has_value() ||
-          std::tie(trial_layout->layout_cost,
-                   trial_layout->order.padding_cells, target) <
-              std::tie(selected_layout->layout_cost,
-                       selected_layout->order.padding_cells,
-                       flexible_target)) {
-        selected_layout = std::move(trial_layout);
-        flexible_target = target;
-      }
+    // A retunable selector does not require relocation.  Keeping its already
+    // proved target is both the safest semantic choice and a much smaller
+    // search than rebuilding the complete component DP once for every address
+    // in the official window.  If that exact geometry is impossible, fall
+    // back to the bounded formulation below and let the preload proof accept
+    // a genuinely necessary relocation.
+    NaturalTargetPlacement preferred_flexible = flexible_placements.front();
+    const int official_last =
+        std::min(99, official_program_last_address(options.address_space_model));
+    if (preferred_flexible.natural_target <= 0 ||
+        preferred_flexible.natural_target > official_last) {
+      preferred_flexible.natural_target =
+          segment_cells(segments.at(main_location->first));
+    }
+    if (preferred_flexible.natural_target > 0 &&
+        preferred_flexible.natural_target <= official_last) {
+      std::vector<NaturalTargetPlacement> preferred = placements;
+      preferred.push_back(preferred_flexible);
+      selected_layout = layout_order_with_optional_split(
+          segments, main_location->first, preferred,
+          options.maximum_subset_states, maximum_padding,
+          next_synthetic_origin, bounded_placements,
+          options.maximum_bounded_target_address, split_bridge_donors);
+    }
+    if (!selected_layout.has_value()) {
+      std::vector<NaturalTargetPlacement> all_bounded = bounded_placements;
+      all_bounded.push_back(flexible_placements.front());
+      selected_layout = layout_order_with_optional_split(
+          segments, main_location->first, placements,
+          options.maximum_subset_states, maximum_padding,
+          next_synthetic_origin, all_bounded,
+          std::min(options.maximum_bounded_target_address,
+                   std::min(99, official_program_last_address(
+                                    options.address_space_model))),
+          split_bridge_donors);
     }
   } else if (!flexible_placements.empty()) {
     // Flexible selectors have no equality constraint on their target address:
@@ -4078,6 +4734,9 @@ std::optional<CandidateArtifact> try_candidate(
       return reject("converted direct-flow identity was lost");
     removed_operands.insert(flow_site->operand);
   }
+  for (const TransparentFallthroughJumpFold& fold : jump_folds) {
+    removed_operands.insert(fold.operand_origin);
+  }
   if (!retarget_direct_references(candidate.items, references, removed_operands,
                                   candidate.new_item_by_origin, new_address_by_origin) ||
       !retarget_indirect_facts(candidate.items, control_flow,
@@ -4088,6 +4747,51 @@ std::optional<CandidateArtifact> try_candidate(
       !retarget_split_bridges(candidate.items, candidate.new_item_by_origin,
                               new_address_by_origin, split_bridges)) {
     return reject("direct or indirect target rebinding failed");
+  }
+
+  for (const NaturalTargetAnchorCandidate& anchor : anchors) {
+    if (!anchor.selector.rebindable_late_bound_decimal_charge)
+      continue;
+    if (!anchor.runtime_target_label.has_value())
+      return reject("late-bound runtime selector has no target label");
+    bool marked = false;
+    for (MachineItem& item : candidate.items) {
+      if (!has_late_selector_register_role(item,
+                                           anchor.selector.register_name)) {
+        continue;
+      }
+      for (std::string& role : item.roles) {
+        if (role_starts_with(role, kLateSelectorHighRolePrefix)) {
+          role = make_late_bound_decimal_selector_role(
+              LateBoundDecimalSelectorPart::High,
+              *anchor.runtime_target_label);
+          marked = true;
+        } else if (role_starts_with(role, kLateSelectorLowRolePrefix)) {
+          role = make_late_bound_decimal_selector_role(
+              LateBoundDecimalSelectorPart::Low,
+              *anchor.runtime_target_label);
+          marked = true;
+        }
+      }
+    }
+    if (!marked)
+      return reject("late-bound runtime selector has no marked charge");
+  }
+  if (options.late_bound_runtime_selector_phase) {
+    const std::optional<std::vector<std::string>> late_target_labels =
+        late_bound_decimal_selector_target_labels(candidate.items);
+    if (!late_target_labels.has_value())
+      return reject("late-bound runtime selector markers are malformed");
+    if (!late_target_labels->empty()) {
+    LateBoundDecimalSelectorOptions bind_options;
+    bind_options.minimum_target_address = 0;
+    bind_options.maximum_target_address = 99;
+    LateBoundDecimalSelectorResult rebound =
+        rebind_late_bound_decimal_selectors(candidate.items, bind_options);
+    if (!rebound.diagnostics.empty() || rebound.applied == 0)
+      return reject("late-bound runtime selector charge rebinding failed");
+    candidate.items = std::move(rebound.items);
+    }
   }
 
   std::map<std::size_t, int> original_address_by_origin;
@@ -4137,21 +4841,23 @@ std::optional<CandidateArtifact> try_candidate(
   for (const TransparentSplitBridge& bridge : split_bridges)
     transparent_aliases.emplace(bridge.command_origin, bridge.target_origin);
   const TraceGraph* comparison_original_trace = &original_trace;
-  std::optional<TraceGraph> donated_original_trace;
-  std::map<std::size_t, std::size_t> donated_original_aliases;
+  std::optional<TraceGraph> canonical_original_trace;
+  std::map<std::size_t, std::size_t> canonical_original_aliases;
   for (const TransparentSplitBridge& bridge : split_bridges) {
     if (bridge.reuses_existing_command)
-      donated_original_aliases.emplace(bridge.command_origin,
-                                       bridge.target_origin);
+      canonical_original_aliases.emplace(bridge.command_origin,
+                                         bridge.target_origin);
   }
-  if (!donated_original_aliases.empty()) {
-    donated_original_trace = build_trace_graph(
+  for (const TransparentFallthroughJumpFold& fold : jump_folds)
+    canonical_original_aliases.emplace(fold.command_origin, fold.target_origin);
+  if (!canonical_original_aliases.empty()) {
+    canonical_original_trace = build_trace_graph(
         items, control_flow, original_origin_by_item,
         options.address_space_model, options.maximum_execution_states,
-        &donated_original_aliases);
-    if (!donated_original_trace.has_value())
-      return reject("donated split-bridge source trace could not be canonicalized");
-    comparison_original_trace = &*donated_original_trace;
+        &canonical_original_aliases);
+    if (!canonical_original_trace.has_value())
+      return reject("transparent source trace could not be canonicalized");
+    comparison_original_trace = &*canonical_original_trace;
   }
   const bool trampolines_proved = transparent_trampolines_proved(
       candidate.items, candidate.new_item_by_origin, new_address_by_origin,
@@ -4168,7 +4874,8 @@ std::optional<CandidateArtifact> try_candidate(
   const std::optional<std::vector<NaturalTargetRuntimeSelectorProof>> runtime_selectors =
       prove_runtime_selectors(items, control_flow, candidate.items, final_flow,
                               rewritten_origin_by_item, candidate.preloads,
-                              options.address_space_model, transparent_aliases);
+                              options.address_space_model, transparent_aliases,
+                              options.late_bound_runtime_selector_phase);
   if (!rewritten_trace.has_value())
     return reject("rewritten identity trace is incomplete");
   if (!rewritten_external.has_value())
@@ -4199,6 +4906,7 @@ std::optional<CandidateArtifact> try_candidate(
       [](const TransparentSplitBridge& bridge) {
         return bridge.reuses_existing_command;
       }));
+  plan.fallthrough_jump_folds = static_cast<int>(jump_folds.size());
   plan.flows = std::move(rewrites);
   plan.preloads = std::move(preload_rewrites);
   plan.runtime_selectors = *runtime_selectors;
@@ -4209,7 +4917,7 @@ std::optional<CandidateArtifact> try_candidate(
   int x2_reconvergence_flows = 0;
   const bool converted_flow_effects_proved =
       layout_only || converted_flow_effects_equivalent(
-                          items, anchors, plan.flows,
+                          items, anchors, plan.flows, displaced_flows,
                           *comparison_original_trace,
                           flow_effect_proof_context, &converted_flow_failure,
                           nullptr, &x2_reconvergence_flows);
@@ -4233,9 +4941,12 @@ std::optional<CandidateArtifact> try_candidate(
   plan.size_neutral_flow_rebind =
       !bounded_only && options.allow_size_neutral_flow_rebind &&
       plan.removed_cells == 0;
+  std::set<std::size_t> transparently_removed_commands;
+  for (const TransparentFallthroughJumpFold& fold : jump_folds)
+    transparently_removed_commands.insert(fold.command_origin);
   const bool unchanged_command_effects_proved = unchanged_command_effects_preserved(
       items, candidate.items, candidate.new_item_by_origin, plan.flows,
-      displaced_flows);
+      displaced_flows, anchors, transparently_removed_commands);
   plan.stack_and_x2_equivalent =
       trampolines_proved && split_bridges_proved &&
       converted_flow_effects_proved && unchanged_command_effects_proved;
@@ -4245,12 +4956,13 @@ std::optional<CandidateArtifact> try_candidate(
   plan.final_artifact_proved =
       final_flow.proved && bounded_targets_proved && absolute_targets_proved &&
       plan.deferred_selector_reconciliations_proved;
+  const int jump_fold_removed_cells = 2 * static_cast<int>(jump_folds.size());
   const int expected_removed_cells =
       static_cast<int>(plan.flows.size()) -
       static_cast<int>(displaced_flows.size()) -
       2 * static_cast<int>(trampolines.size()) -
       split_bridge_cells(split_bridges) -
-      selected_layout->order.padding_cells;
+      selected_layout->order.padding_cells + jump_fold_removed_cells;
   const bool size_goal_proved =
       layout_only ? plan.removed_cells >= -maximum_padding
                    : plan.removed_cells > 0 || plan.size_neutral_flow_rebind;
@@ -4336,6 +5048,39 @@ std::optional<std::string> rebind_proved_natural_fractional_selector_preload(
     return std::nullopt;
   }
   return rebound;
+}
+
+std::optional<std::string> rebind_stable_preloaded_indirect_flow_selector(
+    const std::vector<MachineItem>& items, const PreloadReport& preload,
+    const AuthoritativePostLayoutControlFlow& control_flow, int old_target,
+    int new_target, AddressSpaceModel model) {
+  int reg = -1;
+  try {
+    reg = register_index(register_from_text(preload.register_name));
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+  if (reg < 0 || reg > 0x0e ||
+      indirect_selector_mutation(preload.register_name) !=
+          IndirectSelectorMutation::Stable ||
+      register_is_written(items, control_flow, reg) ||
+      !is_literal_runtime_preload(preload) ||
+      !preload_value_targets(preload.register_name, preload.value, old_target,
+                             model)) {
+    return std::nullopt;
+  }
+  if (old_target == new_target)
+    return preload.value;
+  if (!register_has_nonflow_use(items, reg)) {
+    const std::string address_value = std::to_string(new_target);
+    if (preload_value_targets(preload.register_name, address_value, new_target,
+                              model)) {
+      return address_value;
+    }
+    return std::nullopt;
+  }
+  return rebind_proved_natural_fractional_selector_preload(
+      items, preload, old_target, new_target, model);
 }
 
 PreloadedIndirectFlowCellErasurePlan
@@ -4430,36 +5175,21 @@ plan_preloaded_indirect_flow_cell_erasure(
 
   for (const auto& [reg, required] : required_by_register) {
     const std::string name = register_name(reg);
-    if (name.empty() || indirect_selector_mutation(name) !=
-                            IndirectSelectorMutation::Stable) {
-      return reject("cell-erasure target uses a mutating indirect selector");
-    }
-    if (register_is_written(items, control_flow, reg))
-      return reject("cell-erasure selector register is written at runtime");
     const auto preload = preload_by_register.find(name);
-    if (preload == preload_by_register.end() ||
-        !is_literal_runtime_preload(result.preloads.at(preload->second))) {
+    if (name.empty() || preload == preload_by_register.end()) {
       return reject("cell-erasure selector has no literal runtime preload");
     }
     PreloadReport& report = result.preloads.at(preload->second);
     const std::string old_value = report.value;
-    if (!preload_value_targets(name, old_value, required.old_target, model))
-      return reject("cell-erasure selector preload does not decode to its typed target");
-    if (required.old_target == required.new_target)
-      continue;
-
-    std::optional<std::string> rebound;
-    if (!register_has_nonflow_use(items, reg)) {
-      const std::string address_value = std::to_string(required.new_target);
-      if (preload_value_targets(name, address_value, required.new_target, model))
-        rebound = address_value;
-    } else {
-      rebound = rebind_proved_natural_fractional_selector_preload(
-          items, report, required.old_target, required.new_target, model);
-    }
+    const std::optional<std::string> rebound =
+        rebind_stable_preloaded_indirect_flow_selector(
+            items, report, control_flow, required.old_target,
+            required.new_target, model);
     if (!rebound.has_value()) {
       return reject("cell-erasure selector cannot preserve its non-flow value while retargeting");
     }
+    if (*rebound == old_value)
+      continue;
     report.value = *rebound;
     result.preload_rewrites.push_back(NaturalTargetPreloadRewrite{
         .register_name = name,
@@ -4573,6 +5303,21 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   }
   const std::vector<DirectFlowSite> flows =
       shortenable_direct_flows(*references, logical_items);
+  const bool has_jump_fold_seed =
+      std::any_of(references->begin(), references->end(), [&](const auto& reference) {
+        return reference.command < logical_items.size() &&
+               logical_items.at(reference.command).kind == MachineItemKind::Op &&
+               logical_items.at(reference.command).opcode == kJumpOpcode;
+      }) ||
+      std::any_of(logical_flow->indirect_flow_targets.begin(),
+                  logical_flow->indirect_flow_targets.end(),
+                  [&](const auto& entry) {
+                    const std::size_t command = entry.first;
+                    return command < logical_items.size() &&
+                           logical_items.at(command).kind == MachineItemKind::Op &&
+                           direct_opcode_for_indirect_flow(
+                               logical_items.at(command).opcode) == kJumpOpcode;
+                  });
   std::set<std::size_t> absolute_target_items;
   for (const NaturalTargetRequiredAbsoluteTarget& required :
        options.required_absolute_targets) {
@@ -4811,6 +5556,10 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
 
   std::map<int, std::vector<NaturalTargetAnchorCandidate>> options_by_selector;
   for (const SelectorCandidate& selector : selectors) {
+    if (selector.rebindable_late_bound_decimal_charge !=
+        options.late_bound_runtime_selector_phase) {
+      continue;
+    }
     if (!selector_is_flexible(selector) && selector.fixed_target <= 0)
       continue;
     for (const std::size_t target : flow_targets) {
@@ -4827,17 +5576,42 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
       }
       if (!selector_existing_uses_match_target(selector, target, logical_items, *logical_flow))
         continue;
-      if (selector.displaced_flow_uses > 0 &&
-          (options.allow_size_neutral_flow_rebind
-               ? flow_sites_by_target.at(target) < selector.displaced_flow_uses
-               : flow_sites_by_target.at(target) <= selector.displaced_flow_uses)) {
+      const std::optional<int> displaced_flow_uses =
+          displaced_selector_uses_for_target(selector, target, logical_items,
+                                             *logical_flow);
+      if (!displaced_flow_uses.has_value())
         continue;
+      if (*displaced_flow_uses > 0 &&
+          (options.allow_size_neutral_flow_rebind
+               ? flow_sites_by_target.at(target) < *displaced_flow_uses
+               : flow_sites_by_target.at(target) <= *displaced_flow_uses)) {
+        continue;
+      }
+      std::optional<std::string> runtime_target_label;
+      if (selector.rebindable_late_bound_decimal_charge) {
+        for (const DirectFlowSite& flow_site : flows) {
+          if (flow_site.target != target ||
+              flow_site.operand >= logical_items.size()) {
+            continue;
+          }
+          const MachineItem& operand = logical_items.at(flow_site.operand);
+          if (operand.kind != MachineItemKind::Address)
+            continue;
+          if (const auto* label = std::get_if<std::string>(&operand.target)) {
+            runtime_target_label = *label;
+            break;
+          }
+        }
+        if (!runtime_target_label.has_value())
+          continue;
       }
       options_by_selector[selector.register_index].push_back(
           NaturalTargetAnchorCandidate{
               .selector = selector,
               .target_origin = target,
               .flow_sites = flow_sites_by_target.at(target),
+              .displaced_flow_uses = *displaced_flow_uses,
+              .runtime_target_label = std::move(runtime_target_label),
           });
     }
   }
@@ -4847,9 +5621,9 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     (void)register_index;
     std::sort(group.begin(), group.end(), [](const auto& left, const auto& right) {
       const int left_savings =
-          left.flow_sites - left.selector.displaced_flow_uses;
+          left.flow_sites - left.displaced_flow_uses;
       const int right_savings =
-          right.flow_sites - right.selector.displaced_flow_uses;
+          right.flow_sites - right.displaced_flow_uses;
       if (left_savings != right_savings)
         return left_savings > right_savings;
       return std::tie(left.selector.fixed_target, left.target_origin) <
@@ -4861,7 +5635,7 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   const auto score = [](const std::vector<NaturalTargetAnchorCandidate>& anchors) {
     int total = 0;
     for (const NaturalTargetAnchorCandidate& anchor : anchors)
-      total += anchor.flow_sites - anchor.selector.displaced_flow_uses -
+      total += anchor.flow_sites - anchor.displaced_flow_uses -
                (anchor.via_trampoline ? 2 : 0) -
                (anchor.split_prefix_cells > 0 ? 2 : 0);
     return total;
@@ -4942,11 +5716,14 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     return true;
   };
 
+  const std::size_t maximum_combinations =
+      options.maximum_anchor_combinations > 0U
+          ? options.maximum_anchor_combinations
+          : options.maximum_subset_states;
   const std::size_t maximum_expanded_states =
-      options.maximum_subset_states > std::numeric_limits<std::size_t>::max() / 32U
+      maximum_combinations > std::numeric_limits<std::size_t>::max() / 32U
           ? std::numeric_limits<std::size_t>::max()
-          : options.maximum_subset_states * 32U;
-  const std::size_t maximum_combinations = options.maximum_subset_states;
+          : maximum_combinations * 32U;
 
   std::size_t expanded_states = 0;
   std::size_t searched_combinations = 0;
@@ -5005,6 +5782,12 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   });
 
   std::optional<CandidateArtifact> best;
+  std::optional<std::vector<NaturalTargetAnchorCandidate>> best_anchor_trial;
+  struct JumpFoldFrontierEntry {
+    CandidateArtifact candidate;
+    std::vector<NaturalTargetAnchorCandidate> anchors;
+  };
+  std::vector<JumpFoldFrontierEntry> jump_fold_frontier;
   std::size_t transparent_jump_attempts = 0;
   bool transparent_jump_search_capped = false;
   const auto with_preservation_anchors =
@@ -5072,29 +5855,40 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
         with_preservation_anchors(trial);
     if (!complete_trial.has_value())
       return;
-    const std::optional<CandidateArtifact> candidate = try_candidate(
+    const auto candidate_proves_required_flows =
+        [&](const std::optional<CandidateArtifact>& candidate) {
+      const bool required_flows_proved =
+          candidate.has_value() &&
+          std::all_of(required_selector_by_flow.begin(),
+                      required_selector_by_flow.end(),
+                      [&](const auto& binding) {
+                        return std::any_of(
+                            candidate->plan.flows.begin(),
+                            candidate->plan.flows.end(),
+                            [&](const NaturalTargetFlowRewrite& flow) {
+                              return flow.original_command_item == binding.first &&
+                                     flow.selector_register ==
+                                         register_name(binding.second);
+                            });
+                      });
+      return required_flows_proved;
+    };
+    std::optional<CandidateArtifact> candidate = try_candidate(
         logical_items, preloads, *logical_flow, options, *references, flows,
-        selectors, *complete_trial,
-        bounded_target_origins,
-        *original_trace, flow_effect_proof_context, *original_external,
+        selectors, *complete_trial, bounded_target_origins, *original_trace,
+        flow_effect_proof_context, *original_external, false,
         &result.plan.reasons);
-    const bool required_flows_proved =
-        candidate.has_value() &&
-        std::all_of(required_selector_by_flow.begin(),
-                    required_selector_by_flow.end(),
-                    [&](const auto& binding) {
-                      return std::any_of(
-                          candidate->plan.flows.begin(),
-                          candidate->plan.flows.end(),
-                          [&](const NaturalTargetFlowRewrite& flow) {
-                            return flow.original_command_item == binding.first &&
-                                   flow.selector_register ==
-                                       register_name(binding.second);
-                          });
-                    });
-    if (required_flows_proved &&
-        (!best.has_value() || better_candidate(*candidate, *best))) {
-      best = candidate;
+    if (candidate_proves_required_flows(candidate)) {
+      if (has_jump_fold_seed) {
+        jump_fold_frontier.push_back(JumpFoldFrontierEntry{
+            .candidate = *candidate,
+            .anchors = *complete_trial,
+        });
+      }
+      if (!best.has_value() || better_candidate(*candidate, *best)) {
+        best = std::move(candidate);
+        best_anchor_trial = *complete_trial;
+      }
     }
   };
   for (const auto& anchors : combinations) {
@@ -5160,6 +5954,131 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
        (options.allow_size_neutral_selector_target_layout &&
         !options.required_selector_targets.empty()))) {
     consider_trial({}, false);
+  }
+  if (best.has_value() && has_jump_fold_seed) {
+    std::stable_sort(
+        jump_fold_frontier.begin(), jump_fold_frontier.end(),
+        [](const JumpFoldFrontierEntry& left,
+           const JumpFoldFrontierEntry& right) {
+          return better_candidate(left.candidate, right.candidate);
+        });
+    constexpr std::size_t kJumpFoldFrontierWidth = 8;
+    if (jump_fold_frontier.size() > kJumpFoldFrontierWidth)
+      jump_fold_frontier.resize(kJumpFoldFrontierWidth);
+    for (const JumpFoldFrontierEntry& frontier : jump_fold_frontier) {
+      // A transparent БП fold removes at most its command and operand.  Do not
+      // spend another exact layout proof on a base that cannot beat the
+      // incumbent even under that optimistic bound.
+      if (frontier.candidate.plan.removed_cells + 2 <=
+          best->plan.removed_cells) {
+        continue;
+      }
+      std::optional<CandidateArtifact> candidate = try_candidate(
+          logical_items, preloads, *logical_flow, options, *references, flows,
+          selectors, frontier.anchors, bounded_target_origins, *original_trace,
+          flow_effect_proof_context, *original_external, true,
+          &result.plan.reasons);
+      const bool required_flows_proved =
+          candidate.has_value() &&
+          std::all_of(required_selector_by_flow.begin(),
+                      required_selector_by_flow.end(),
+                      [&](const auto& binding) {
+                        return std::any_of(
+                            candidate->plan.flows.begin(),
+                            candidate->plan.flows.end(),
+                            [&](const NaturalTargetFlowRewrite& flow) {
+                              return flow.original_command_item == binding.first &&
+                                     flow.selector_register ==
+                                         register_name(binding.second);
+                            });
+                      });
+      if (required_flows_proved && better_candidate(*candidate, *best))
+        best = std::move(candidate);
+    }
+  }
+  const bool has_late_runtime_selector = std::any_of(
+      selectors.begin(), selectors.end(), [](const SelectorCandidate& selector) {
+        return selector.rebindable_late_bound_decimal_charge;
+      });
+  const bool standard_composition =
+      options.required_flow_selectors.empty() &&
+      options.required_selector_targets.empty() &&
+      options.required_absolute_targets.empty() &&
+      options.deferred_selector_reconciliations.empty() &&
+      !options.allow_size_neutral_flow_rebind &&
+      !options.allow_size_neutral_selector_target_layout &&
+      !options.allow_size_neutral_absolute_layout &&
+      options.maximum_transactional_growth_cells == 0;
+  if (options.enable_late_bound_runtime_selector_composition &&
+      !options.late_bound_runtime_selector_phase &&
+      has_late_runtime_selector && standard_composition) {
+    NaturalTargetComponentLayoutOptions runtime_options = options;
+    runtime_options.enable_late_bound_runtime_selector_composition = false;
+    runtime_options.late_bound_runtime_selector_phase = true;
+    runtime_options.required_bounded_target_labels.clear();
+    runtime_options.allow_size_neutral_bounded_layout = false;
+    runtime_options.maximum_anchors = 1;
+    runtime_options.maximum_subset_states =
+        std::min<std::size_t>(runtime_options.maximum_subset_states, 64U);
+
+    std::vector<MachineItem> runtime_items =
+        best.has_value() ? best->items : logical_items;
+    LateBoundDecimalSelectorOptions runtime_bind_options;
+    runtime_bind_options.minimum_target_address = 0;
+    runtime_bind_options.maximum_target_address = 99;
+    LateBoundDecimalSelectorResult runtime_bound =
+        rebind_late_bound_decimal_selectors(runtime_items,
+                                            runtime_bind_options);
+    if (!runtime_bound.diagnostics.empty() || runtime_bound.applied == 0)
+      runtime_items.clear();
+    else
+      runtime_items = std::move(runtime_bound.items);
+    const std::vector<PreloadReport>& runtime_preloads =
+        best.has_value() ? best->preloads : preloads;
+    const AuthoritativePostLayoutControlFlow& runtime_flow =
+        best.has_value() ? best->plan.final_control_flow : *logical_flow;
+    NaturalTargetComponentLayoutResult runtime;
+    if (!runtime_items.empty()) {
+      runtime = optimize_natural_target_component_layout(
+          runtime_items, runtime_preloads, runtime_flow, runtime_options);
+    }
+    if (runtime.plan.proved && runtime.removed_cells > 0) {
+      if (best.has_value()) {
+        NaturalTargetComponentLayoutPlan base_plan = best->plan;
+        runtime.plan.input_cells = base_plan.input_cells;
+        runtime.plan.removed_cells += base_plan.removed_cells;
+        runtime.plan.moved_segments += base_plan.moved_segments;
+        runtime.plan.rebound_indirect_flows +=
+            base_plan.rebound_indirect_flows;
+        runtime.plan.transparent_trampolines +=
+            base_plan.transparent_trampolines;
+        runtime.plan.transparent_split_bridges +=
+            base_plan.transparent_split_bridges;
+        runtime.plan.reused_split_bridge_commands +=
+            base_plan.reused_split_bridge_commands;
+        runtime.plan.fallthrough_jump_folds +=
+            base_plan.fallthrough_jump_folds;
+        runtime.plan.x2_reconvergence_flows +=
+            base_plan.x2_reconvergence_flows;
+        runtime.plan.terminal_shared_return_folds +=
+            base_plan.terminal_shared_return_folds;
+        runtime.plan.flows.insert(runtime.plan.flows.begin(),
+                                  base_plan.flows.begin(),
+                                  base_plan.flows.end());
+        runtime.plan.preloads.insert(runtime.plan.preloads.begin(),
+                                     base_plan.preloads.begin(),
+                                     base_plan.preloads.end());
+        runtime.plan.reasons.insert(runtime.plan.reasons.end(),
+                                    base_plan.reasons.begin(),
+                                    base_plan.reasons.end());
+        runtime.applied += static_cast<int>(base_plan.flows.size());
+      } else {
+        runtime.plan.input_cells = index.cells;
+      }
+      runtime.plan.output_cells = index_artifact(runtime.items).cells;
+      runtime.removed_cells = runtime.plan.removed_cells;
+      return runtime;
+    }
   }
   if (transparent_jump_search_capped)
     add_reason(result.plan, "transparent-jump proof search reached its cap");

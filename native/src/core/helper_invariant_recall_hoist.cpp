@@ -688,7 +688,26 @@ bool prove_call_transfer(const std::vector<MachineItem>& items,
   SymbolicState rewritten = initial_symbolic_state();
   const MachineItem& recall = items.at(call.recall_item_index);
 
-  if (call.placement == HelperInvariantRecallPlacement::BeforeCall) {
+  if (helper.insertion == HelperInvariantRecallInsertion::BeforeReturn) {
+    if (call.placement != HelperInvariantRecallPlacement::AfterReturnBeforeCommutative) {
+      rejection = "tail recall insertion requires after-return commutative call sites";
+      return false;
+    }
+    if (!simulate_helper_body_pair(items, helper.helper_body_begin_item_index,
+                                   helper.helper_return_item_index, original, rewritten,
+                                   rejection) ||
+        !execute_symbolic_op(original, recall, false, rejection) ||
+        !execute_symbolic_op(rewritten, recall, false, rejection)) {
+      return false;
+    }
+    const MachineItem& join = items.at(call.continuation_item_index - 1U);
+    if (!same_evaluated_operands(original, rewritten, join.opcode, false) ||
+        !execute_symbolic_op(original, join, false, rejection) ||
+        !execute_symbolic_op(rewritten, join, false, rejection)) {
+      rejection = "tail recall insertion did not preserve the commutative continuation";
+      return false;
+    }
+  } else if (call.placement == HelperInvariantRecallPlacement::BeforeCall) {
     if (!execute_symbolic_op(original, recall, false, rejection) ||
         !execute_symbolic_op(rewritten, recall, false, rejection)) {
       return false;
@@ -943,10 +962,8 @@ bool verify_final_artifact(const std::vector<MachineItem>& original,
     return false;
   }
   const auto root = index.label_items.find(proof.helper_label);
-  if (root == index.label_items.end() || root->second + 1U >= candidate.size() ||
-      candidate.at(root->second + 1U).kind != MachineItemKind::Op ||
-      candidate.at(root->second + 1U).opcode != proof.recall_opcode) {
-    add_reason(proof, "final artifact does not start the helper with the hoisted recall");
+  if (root == index.label_items.end()) {
+    add_reason(proof, "final artifact lost the helper root");
     return false;
   }
   std::optional<std::size_t> final_helper_return;
@@ -959,6 +976,19 @@ bool verify_final_artifact(const std::vector<MachineItem>& original,
   }
   if (!final_helper_return.has_value()) {
     add_reason(proof, "final artifact lost the helper return");
+    return false;
+  }
+  const std::size_t expected_recall_item =
+      proof.insertion == HelperInvariantRecallInsertion::BeforeReturn
+          ? *final_helper_return - 1U
+          : root->second + 1U;
+  if (expected_recall_item >= candidate.size() ||
+      candidate.at(expected_recall_item).kind != MachineItemKind::Op ||
+      candidate.at(expected_recall_item).opcode != proof.recall_opcode) {
+    add_reason(proof,
+               proof.insertion == HelperInvariantRecallInsertion::BeforeReturn
+                   ? "final artifact does not end the helper with the hoisted recall"
+                   : "final artifact does not start the helper with the hoisted recall");
     return false;
   }
   const int final_helper_start_address = index.item_addresses.at(root->second);
@@ -1346,6 +1376,13 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
   proof.recall_opcode = common_recall_opcode;
   if (common_recall_opcode >= 0)
     proof.register_index = common_recall_opcode - kFirstDirectRecallOpcode;
+  if (!proof.calls.empty() &&
+      std::all_of(proof.calls.begin(), proof.calls.end(), [](const HelperInvariantRecallCall& call) {
+        return call.placement ==
+               HelperInvariantRecallPlacement::AfterReturnBeforeCommutative;
+      })) {
+    proof.insertion = HelperInvariantRecallInsertion::BeforeReturn;
+  }
 
   if (found_return && proof.register_index >= 0) {
     for (std::size_t item_index = proof.helper_body_begin_item_index;
@@ -1401,7 +1438,9 @@ rewrite_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
     return result;
 
   MachineItem hoisted = items.at(result.proof.calls.front().recall_item_index);
-  hoisted.roles.push_back("helper-invariant-recall-hoist:root");
+  hoisted.roles.push_back(result.proof.insertion == HelperInvariantRecallInsertion::BeforeReturn
+                              ? "helper-invariant-recall-hoist:tail"
+                              : "helper-invariant-recall-hoist:root");
 
   std::vector<MachineItem> candidate;
   candidate.reserve(items.size() - result.proof.erased_recall_items.size() + 1U);
@@ -1409,6 +1448,9 @@ rewrite_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
     if (result.proof.erased_recall_items.contains(item_index))
       continue;
+    if (result.proof.insertion == HelperInvariantRecallInsertion::BeforeReturn &&
+        item_index == result.proof.helper_return_item_index)
+      candidate.push_back(hoisted);
     old_to_new_item.at(item_index) = candidate.size();
     if (result.proof.nop_recall_items.contains(item_index)) {
       MachineItem padding = MachineItem::op(0x54, "К НОП");
@@ -1418,7 +1460,8 @@ rewrite_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
     } else {
       candidate.push_back(items.at(item_index));
     }
-    if (item_index == result.proof.helper_label_item_index)
+    if (result.proof.insertion == HelperInvariantRecallInsertion::HelperRoot &&
+        item_index == result.proof.helper_label_item_index)
       candidate.push_back(hoisted);
   }
 
@@ -1449,7 +1492,10 @@ rewrite_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
   result.applied = 1;
   result.optimizations.push_back(passes::AppliedOptimization{
       .name = "helper-invariant-recall-hoist",
-      .detail = "Hoisted one invariant direct-register recall into straight-line helper " +
+      .detail = "Hoisted one invariant direct-register recall into the " +
+                std::string(result.proof.insertion == HelperInvariantRecallInsertion::BeforeReturn
+                                ? "tail of straight-line helper "
+                                : "root of straight-line helper ") +
                 helper_label + " after bounded X/Y/Z/T/X2 proofs at " +
                 std::to_string(result.proof.calls.size()) + " complete call sites; saved " +
                 std::to_string(result.proof.input_cells - result.proof.output_cells) + " cells.",

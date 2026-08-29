@@ -181,8 +181,12 @@ bool physical_flow_targets_stay_stable(const std::vector<IrOp>& ops,
 
   const std::map<std::string, int> label_addresses = calculate_label_addresses(ops);
   const auto indirect_target_stays_stable = [&](const IrTarget& target) {
-    const std::optional<int> address = target_address(target, label_addresses);
-    return address.has_value() && *address < reload_address;
+    if (const std::string* label = std::get_if<std::string>(&target)) {
+      const auto address = label_addresses.find(*label);
+      return address != label_addresses.end() && address->second < reload_address;
+    }
+    const int* address = std::get_if<int>(&target);
+    return address != nullptr && *address < reload_address;
   };
 
   for (const IrOp& op : ops) {
