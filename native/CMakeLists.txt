@@ -108,6 +108,7 @@ add_library(mkpro_core STATIC
   src/core/rule_cfg.cpp
   src/core/rules.cpp
   src/core/shared_helper_continuation.cpp
+  src/core/shared_helper_dual_mode_layout.cpp
   src/core/shared_helper_wrapper.cpp
   src/core/stable_register_value_flow.cpp
   src/core/state_banks.cpp

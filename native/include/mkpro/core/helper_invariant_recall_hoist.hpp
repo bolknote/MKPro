@@ -18,6 +18,7 @@ namespace mkpro::core {
 // CFG proof shows that every observable continuation is equivalent.
 enum class HelperInvariantRecallPlacement {
   BeforeCall,
+  BeforeCallBeforeCommutative,
   AfterReturnBeforeCommutative,
 };
 
@@ -42,6 +43,12 @@ struct HelperInvariantRecallHoistOptions {
   // outside either bound is rejected rather than guessed about.
   std::size_t max_helper_body_cells = 16;
   std::size_t max_continuation_cells = 128;
+
+  // Internal search axis: allow a recall found before a call to move to the
+  // helper tail when the returned value is consumed by a commutative join.
+  // The public verifier also evaluates the root-placement fallback and keeps
+  // whichever proved plan removes more cells.
+  bool allow_before_call_commutative_tail = true;
 
   // A complete target set is required for every indirect-flow MachineItem.
   // Targets are physical cell addresses in the input artifact.  The rewrite

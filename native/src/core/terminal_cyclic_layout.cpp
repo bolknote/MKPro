@@ -2103,6 +2103,86 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts(
     return candidates;
   }
 
+  // A one-cell indirect call immediately followed by a proved empty-stack
+  // BP 00 is a tail call once physical 00 becomes the shared return.  Remove
+  // the intermediate continuation and let the callee's own return reach 01.
+  // This is admitted only when the call is reached with an empty return stack
+  // and the continuation is not independently addressable or preserved by a
+  // resumable external entry.
+  std::map<std::size_t, std::size_t> fused_tail_calls;
+  for (const auto& [jump, unused_operand] : empty_stack_zero_jumps) {
+    (void)unused_operand;
+    std::optional<std::size_t> call = previous_cell_item(items, jump);
+    if (call.has_value() &&
+        items.at(*call).kind == MachineItemKind::Address) {
+      const std::size_t call_operand = *call;
+      call = previous_cell_item(items, call_operand);
+      if (!call.has_value() || items.at(*call).kind != MachineItemKind::Op ||
+          items.at(*call).opcode != kCallOpcode ||
+          next_cell_item(items, *call) != call_operand) {
+        call.reset();
+      }
+    }
+    if (!call.has_value() || items.at(*call).kind != MachineItemKind::Op ||
+        (items.at(*call).opcode != kCallOpcode &&
+         !is_indirect_call_opcode(items.at(*call).opcode))) {
+      continue;
+    }
+
+    bool call_reached = false;
+    bool call_stack_proved = true;
+    for (const PostLayoutExecutionState& state : control_flow.execution_states) {
+      if (state.item_index != *call)
+        continue;
+      call_reached = true;
+      if (!state.return_stack.empty()) {
+        call_stack_proved = false;
+        break;
+      }
+    }
+    if (!call_stack_proved)
+      continue;
+
+    const int continuation_address = input_index.item_addresses.at(jump);
+    bool independent_entry = false;
+    for (std::size_t source = 0; source < items.size() && !independent_entry;
+         ++source) {
+      if (items.at(source).kind != MachineItemKind::Op ||
+          !is_direct_flow_opcode(items.at(source).opcode)) {
+        continue;
+      }
+      const std::optional<std::size_t> operand = next_cell_item(items, source);
+      if (!operand.has_value())
+        continue;
+      const std::optional<int> target =
+          resolved_target(items.at(*operand), input_index,
+                          options.address_space_model);
+      independent_entry = target.has_value() && *target == continuation_address;
+    }
+    for (const auto& [source, targets] : control_flow.indirect_flow_targets) {
+      (void)source;
+      independent_entry =
+          independent_entry ||
+          std::any_of(targets.begin(), targets.end(),
+                      [&](const PostLayoutCommandIdentity& target) {
+                        return target.item_index == jump;
+                      });
+    }
+    for (const PostLayoutExternalEntryState& entry :
+         control_flow.external_entries) {
+      independent_entry = independent_entry || entry.entry.item_index == jump ||
+                          std::any_of(
+                              entry.return_stack.begin(), entry.return_stack.end(),
+                              [&](const PostLayoutCommandIdentity& slot) {
+                                return slot.item_index == jump;
+                              });
+    }
+    if (!independent_entry &&
+        (call_reached || unreachable_zero_jumps.contains(jump))) {
+      fused_tail_calls.emplace(jump, *call);
+    }
+  }
+
   // Inserting В/О@00 costs one cell regardless of how many independently
   // proved empty-stack loop edges use it. Rewrite every safe BP 00 in one
   // transaction so two or more edges expose the shared size saving instead of
@@ -2124,8 +2204,25 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts(
     for (std::size_t old_item = 0; old_item < items.size(); ++old_item) {
       if (selected_operands.contains(old_item))
         continue;
+      if (fused_tail_calls.contains(old_item))
+        continue;
       relocation.at(old_item) = rewritten.size();
       MachineItem item = items.at(old_item);
+      const bool fused_call = std::any_of(
+          fused_tail_calls.begin(), fused_tail_calls.end(),
+          [&](const auto& entry) { return entry.second == old_item; });
+      if (fused_call) {
+        if (is_indirect_call_opcode(item.opcode)) {
+          const int selector = item.opcode & 0x0f;
+          item.opcode = 0x80 | selector;
+          item.name = "К БП " + register_text(selector);
+        } else {
+          item.opcode = kJumpOpcode;
+          item.name = "БП";
+        }
+        item.comment = "empty-stack tail call through shared physical-00 return";
+        item.roles.push_back("empty-return-startup-tail-call");
+      }
       if (selected_jumps.contains(old_item)) {
         item.opcode = kReturnOpcode;
         item.name = "В/О";
@@ -2361,6 +2458,36 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts(
     bool rewritten_edge_states_match = true;
     for (const auto& [old_jump, unused_operand] : empty_stack_zero_jumps) {
       (void)unused_operand;
+      const auto fused = fused_tail_calls.find(old_jump);
+      if (fused != fused_tail_calls.end()) {
+        if (relocation.at(old_jump).has_value() ||
+            !relocation.at(fused->second).has_value()) {
+          rewritten_edge_states_match = false;
+          break;
+        }
+        bool reached = false;
+        for (const PostLayoutExecutionState& state :
+             rewritten_flow.execution_states) {
+          if (state.item_index != *relocation.at(fused->second))
+            continue;
+          reached = true;
+          if (!state.return_stack.empty()) {
+            rewritten_edge_states_match = false;
+            break;
+          }
+        }
+        const bool originally_reached = std::any_of(
+            control_flow.execution_states.begin(),
+            control_flow.execution_states.end(),
+            [&](const PostLayoutExecutionState& state) {
+              return state.item_index == fused->second;
+            });
+        if (!rewritten_edge_states_match || reached != originally_reached) {
+          rewritten_edge_states_match = false;
+          break;
+        }
+        continue;
+      }
       if (!relocation.at(old_jump).has_value()) {
         rewritten_edge_states_match = false;
         break;
@@ -2701,12 +2828,58 @@ optimize_empty_return_startup_component_layouts(
            items, preloads, control_flow, terminal_options,
            rejection_reasons == nullptr ? nullptr : &startup_rejections,
            StartupIndirectTargetPolicy::PreservePhysicalTargetsForComponentLayout)) {
+    const bool has_component_obligations =
+        !staged.required_absolute_targets.empty() ||
+        !staged.required_selector_targets.empty();
+    if (!staged.proved && staged.structural_control_flow_proved &&
+        staged.control_flow.proved && staged.preloads.has_value() &&
+        !has_component_obligations &&
+        staged.original_to_output.size() == items.size()) {
+      // With no indirect target or selector to preserve, the component
+      // assignment problem is empty. The staged transaction has already
+      // rebuilt every direct edge, external entry, return-stack class,
+      // stack/X2 state, and indirect-memory identity, so accepting the empty
+      // assignment is the exact vacuous counterpart of a successful solver
+      // result rather than a relaxation of any proof.
+      const int output_cells = index_artifact(staged.items).cells;
+      NaturalTargetComponentLayoutResult natural;
+      natural.items = std::move(staged.items);
+      natural.preloads = std::move(*staged.preloads);
+      natural.plan.proved = true;
+      natural.plan.control_flow_equivalent = true;
+      natural.plan.call_return_equivalent = true;
+      natural.plan.stack_and_x2_equivalent = true;
+      natural.plan.indirect_memory_equivalent = true;
+      natural.plan.data_projection_equivalent = true;
+      natural.plan.final_artifact_proved = true;
+      natural.plan.input_cells = input_cells;
+      natural.plan.output_cells = output_cells;
+      natural.plan.removed_cells = input_cells - output_cells;
+      natural.plan.absolute_targets_proved = true;
+      natural.plan.deferred_selector_reconciliations_proved = true;
+      natural.plan.final_control_flow = std::move(staged.control_flow);
+      natural.applied = 1;
+      natural.removed_cells = natural.plan.removed_cells;
+      results.push_back(std::move(natural));
+      continue;
+    }
     if (staged.proved || !staged.structural_control_flow_proved ||
         !staged.control_flow.proved || !staged.preloads.has_value() ||
-        (staged.required_absolute_targets.empty() &&
-         staged.required_selector_targets.empty()) ||
+        !has_component_obligations ||
         staged.original_to_output.size() != items.size()) {
-      reject("staged startup geometry did not produce complete structural obligations");
+      reject("staged startup geometry did not produce complete structural obligations "
+             "(proved=" + std::to_string(staged.proved) +
+             ", structural=" +
+             std::to_string(staged.structural_control_flow_proved) +
+             ", control=" + std::to_string(staged.control_flow.proved) +
+             ", preloads=" + std::to_string(staged.preloads.has_value()) +
+             ", absolute=" +
+             std::to_string(staged.required_absolute_targets.size()) +
+             ", selectors=" +
+             std::to_string(staged.required_selector_targets.size()) +
+             ", relocation=" +
+             std::to_string(staged.original_to_output.size()) + "/" +
+             std::to_string(items.size()) + ")");
       continue;
     }
 

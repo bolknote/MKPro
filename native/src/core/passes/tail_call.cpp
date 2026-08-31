@@ -1,5 +1,7 @@
 #include "mkpro/core/passes/tail_call.hpp"
 
+#include "mkpro/core/opcodes.hpp"
+
 #include <map>
 #include <optional>
 #include <set>
@@ -290,9 +292,11 @@ IrOp jump_from_return(const IrOp& op, IrTarget continuation) {
 
 IrOp jump_from_call(const IrOp& op, std::string_view replacement, std::string fallback) {
   IrOp out;
-  out.kind = IrKind::Jump;
+  const bool indirect = op.kind == IrKind::IndirectCall;
+  out.kind = indirect ? IrKind::IndirectJump : IrKind::Jump;
   out.target = op.target;
-  out.opcode = 0x51;
+  out.register_name = op.register_name;
+  out.opcode = indirect ? 0x80 + register_index(op.register_name) : 0x51;
   out.meta = op.meta;
   out.meta.mnemonic = "БП";
   out.meta.comment = replace_comment_prefix(op.meta.comment, "proc call", replacement, fallback);
@@ -358,7 +362,7 @@ PassResult tail_call_lowering(const std::vector<IrOp>& ops, const PassContext& c
       }
     }
 
-    if (op.kind == IrKind::Call) {
+    if (op.kind == IrKind::Call || op.kind == IrKind::IndirectCall) {
       const std::optional<int> continuation_index = next_executable_index(ops, index + 1);
       const IrOp* continuation =
           continuation_index.has_value()
@@ -381,6 +385,14 @@ PassResult tail_call_lowering(const std::vector<IrOp>& ops, const PassContext& c
         if (continuation_is_immediate)
           ++index;
         ++applied;
+        continue;
+      }
+
+      // The remaining analyses depend on a statically named direct callee.
+      // The immediate return cases above are target-agnostic and are the only
+      // proof-valid late lowering required for an indirect call.
+      if (op.kind == IrKind::IndirectCall) {
+        result.push_back(op);
         continue;
       }
 

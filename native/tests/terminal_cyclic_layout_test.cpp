@@ -732,6 +732,86 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
             "proved empty-stack BP 00 edge");
   }
   {
+    const std::vector<MachineItem> direct_tail_startup = {
+        MachineItem::op(0x54, "К НОП"),
+        MachineItem::op(0x53, "ПП"),
+        MachineItem::address(std::string("callee")),
+        MachineItem::op(0x51, "БП"),
+        MachineItem::address(0),
+        MachineItem::label("callee"),
+        MachineItem::op(0x02, "2"),
+        MachineItem::op(0x52, "В/О"),
+    };
+    core::PostLayoutControlFlowOptions startup_options;
+    startup_options.main_entry = 0;
+    startup_options.empty_return_target = 1;
+    const core::AuthoritativePostLayoutControlFlow startup_flow =
+        core::build_post_layout_control_flow(direct_tail_startup,
+                                             startup_options);
+    require(startup_flow.proved,
+            "direct empty-stack tail fixture should have an authoritative CFG");
+    const std::vector<core::EmptyReturnStartupLayoutResult> normalized =
+        core::normalize_empty_return_startup_layouts(
+            direct_tail_startup, {}, startup_flow);
+    require(normalized.size() == 1U &&
+                normalized.front().final_artifact_proved &&
+                normalized.front().control_flow.proved &&
+                cell_count(normalized.front().items) ==
+                    cell_count(direct_tail_startup) - 1 &&
+                std::count_if(
+                    normalized.front().items.begin(),
+                    normalized.front().items.end(),
+                    [](const MachineItem& item) {
+                      return std::find(item.roles.begin(), item.roles.end(),
+                                       "empty-return-startup-tail-call") !=
+                             item.roles.end() &&
+                             item.kind == MachineItemKind::Op &&
+                             item.opcode == 0x51;
+                    }) == 1,
+            "call followed only by an empty-stack BP 00 continuation should "
+            "become a direct tail jump");
+  }
+  {
+    const std::vector<MachineItem> shared_continuation_startup = {
+        MachineItem::op(0x54, "К НОП"),
+        MachineItem::op(0x53, "ПП"),
+        MachineItem::address(std::string("callee")),
+        MachineItem::label("continue_loop"),
+        MachineItem::op(0x51, "БП"),
+        MachineItem::address(0),
+        MachineItem::label("callee"),
+        MachineItem::op(0x02, "2"),
+        MachineItem::op(0x52, "В/О"),
+        MachineItem::op(0x51, "БП"),
+        MachineItem::address(std::string("continue_loop")),
+    };
+    core::PostLayoutControlFlowOptions startup_options;
+    startup_options.main_entry = 0;
+    startup_options.empty_return_target = 1;
+    const core::AuthoritativePostLayoutControlFlow startup_flow =
+        core::build_post_layout_control_flow(shared_continuation_startup,
+                                             startup_options);
+    require(startup_flow.proved,
+            "shared empty-stack continuation fixture should have an authoritative CFG");
+    const std::vector<core::EmptyReturnStartupLayoutResult> normalized =
+        core::normalize_empty_return_startup_layouts(
+            shared_continuation_startup, {}, startup_flow);
+    require(normalized.size() == 1U &&
+                normalized.front().final_artifact_proved &&
+                cell_count(normalized.front().items) ==
+                    cell_count(shared_continuation_startup) &&
+                std::none_of(
+                    normalized.front().items.begin(),
+                    normalized.front().items.end(),
+                    [](const MachineItem& item) {
+                      return std::find(item.roles.begin(), item.roles.end(),
+                                       "empty-return-startup-tail-call") !=
+                             item.roles.end();
+                    }),
+            "an independently addressed BP 00 continuation must remain a "
+            "shared return instead of being consumed by tail-call fusion");
+  }
+  {
     const std::vector<MachineItem> reachable_and_dead_startup_loops = {
         MachineItem::op(0x54, "К НОП"),
         MachineItem::op(0x51, "БП"),

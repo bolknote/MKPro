@@ -77,6 +77,29 @@ void redundant_literal_reload_is_generic_and_proof_gated() {
   require_applied(run(x2_observed).applied, 0,
                   "reload whose X2 sync reaches restore");
 
+  const std::vector<IrOp> converges_in_helper = {
+      plain(0x0d, "Cx"), plain(0x04, "4"), store("2"), plain(0x04, "4"),
+      store("1"), call("helper"), halt(), label("helper"), recall("9"),
+      recall("1"), recall("2"), ret(),
+  };
+  const std::vector<IrOp> converges_in_helper_expected = {
+      plain(0x0d, "Cx"), plain(0x04, "4"), store("2"), store("1"),
+      call("helper"), halt(), label("helper"), recall("9"), recall("1"),
+      recall("2"), ret(),
+  };
+  const auto helper_result = run(converges_in_helper);
+  require_applied(helper_result.applied, 1,
+                  "repeated literal whose stack lift dies inside a called helper");
+  require_ops_equal(helper_result.ops, converges_in_helper_expected,
+                    "interprocedural repeated literal reload");
+
+  const std::vector<IrOp> helper_observes_stack = {
+      plain(0x0d, "Cx"), plain(0x04, "4"), store("2"), plain(0x04, "4"),
+      store("1"), call("helper"), halt(), label("helper"), plain(0x10, "+"), ret(),
+  };
+  require_applied(run(helper_observes_stack).applied, 0,
+                  "called helper that consumes the differing stack value");
+
   const std::vector<IrOp> different_literal = {
       plain(0x0d, "Cx"), plain(0x04, "4"), store("2"), plain(0x05, "5"),
       store("1"), recall("9"), recall("1"), recall("2"), halt(),
@@ -115,6 +138,17 @@ void redundant_literal_reload_is_generic_and_proof_gated() {
   };
   require(run_machine(original) == run_machine(optimized),
           "emulator must confirm X/Y/Z/T/X1/register/display equivalence after convergence");
+
+  const std::vector<int> original_call = {
+      0x0d, 0x04, 0x42, 0x04, 0x41, 0x53, 0x08, 0x50,
+      0x69, 0x61, 0x62, 0x52,
+  };
+  const std::vector<int> optimized_call = {
+      0x0d, 0x04, 0x42, 0x41, 0x53, 0x07, 0x50,
+      0x69, 0x61, 0x62, 0x52,
+  };
+  require(run_machine(original_call) == run_machine(optimized_call),
+          "emulator must confirm interprocedural stack/X2 convergence");
 }
 
 } // namespace mkpro::tests

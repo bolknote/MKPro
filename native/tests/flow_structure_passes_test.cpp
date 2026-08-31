@@ -254,6 +254,23 @@ void flow_structure_passes_match_typescript_contract() {
     require(result.ops.at(2).kind == IrKind::Label && result.ops.at(2).name == "if_end",
             "tail-call-lowering: ops[2] label if_end");
   }
+  {
+    IrOp call;
+    call.kind = IrKind::IndirectCall;
+    call.register_name = "c";
+    call.opcode = 0xac;
+    call.meta.mnemonic = "К ПП c";
+    call.meta.indirect_flow_targets = std::vector<IrTarget>{std::string("finish_turn")};
+    const std::vector<IrOp> program = {call, ret(), label("finish_turn"), ret()};
+    const auto result = core::passes::tail_call_lowering_pass().run(program, ctx);
+    require_applied(result.applied, 1,
+                    "tail-call-lowering handles an indirect call with immediate return");
+    require(!result.ops.empty() && result.ops.front().kind == IrKind::IndirectJump &&
+                result.ops.front().opcode == 0x8c && result.ops.front().register_name == "c",
+            "tail-call-lowering preserves the selector while replacing КПП with КБП");
+    require(result.ops.size() == 3,
+            "tail-call-lowering should remove exactly the immediate return cell");
+  }
 
   // --- tail-branch-inversion ----------------------------------------------
   {

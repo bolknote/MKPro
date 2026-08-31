@@ -1232,6 +1232,16 @@ bool is_late_bound_selector_consumer(const MachineItem& item) {
                    "late-decimal-selector-consumer") != item.roles.end();
 }
 
+bool is_runtime_charged_selector_consumer(const MachineItem& item) {
+  return std::find(item.roles.begin(), item.roles.end(),
+                   "runtime-charged-selector-consumer") != item.roles.end();
+}
+
+bool is_proved_dynamic_selector_consumer(const MachineItem& item) {
+  return is_late_bound_selector_consumer(item) ||
+         is_runtime_charged_selector_consumer(item);
+}
+
 bool register_has_nonflow_use(const std::vector<MachineItem>& items,
                               int register_index_value) {
   return std::any_of(items.begin(), items.end(), [&](const MachineItem& item) {
@@ -2777,7 +2787,7 @@ bool rebind_preloads(
     if (displaced_commands.contains(item_index))
       continue;
     const int reg = encoded_register(item.opcode);
-    if (is_late_bound_selector_consumer(item))
+    if (is_proved_dynamic_selector_consumer(item))
       continue;
     const std::optional<std::size_t> target =
         target_origin_for_flow_use(original_flow, item_index);
@@ -3907,14 +3917,18 @@ std::optional<std::vector<NaturalTargetRuntimeSelectorProof>> prove_runtime_sele
       return std::nullopt;
     const std::optional<std::size_t> command_origin =
         origin_for_item(final_origin_by_item, final_command);
-    const bool late_bound_consumer =
-        is_late_bound_selector_consumer(command);
-    if (late_bound_consumer) {
+    const bool late_bound_consumer = is_late_bound_selector_consumer(command);
+    const bool runtime_charged_consumer =
+        is_runtime_charged_selector_consumer(command);
+    if (late_bound_consumer || runtime_charged_consumer) {
       if (!command_origin.has_value() || *command_origin >= original_items.size())
         return std::nullopt;
       if (!prove_late_runtime_values) {
         const MachineItem& original_command = original_items.at(*command_origin);
-        if (!has_role(original_command, "late-decimal-selector-consumer"))
+        const std::string_view proof_role =
+            late_bound_consumer ? "late-decimal-selector-consumer"
+                                : "runtime-charged-selector-consumer";
+        if (!has_role(original_command, proof_role))
           return std::nullopt;
         std::vector<std::size_t> logical_target_origins;
         logical_target_origins.reserve(targets.size());

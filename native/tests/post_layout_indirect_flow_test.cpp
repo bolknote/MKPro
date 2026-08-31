@@ -15,6 +15,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <variant>
 #include <vector>
 
@@ -1644,9 +1645,12 @@ void post_layout_indirect_flow_matches_typescript_contract() {
             "a runtime-charged stable register should shorten a backward direct call");
     require(std::any_of(result.items.begin(), result.items.end(),
                         [](const MachineItem& item) {
-                          return item.kind == MachineItemKind::Op && item.opcode == 0xa8;
+                          return item.kind == MachineItemKind::Op && item.opcode == 0xa8 &&
+                                 std::find(item.roles.begin(), item.roles.end(),
+                                           "runtime-charged-selector-consumer") !=
+                                     item.roles.end();
                         }),
-            "the charged rewrite should emit К ПП 8");
+            "the charged rewrite should emit К ПП 8 with its relayout proof role");
     require(std::any_of(result.optimizations.begin(), result.optimizations.end(),
                         [](const core::passes::AppliedOptimization& optimization) {
                           return optimization.name == "post-layout-charged-selector-flow";
@@ -1689,6 +1693,96 @@ void post_layout_indirect_flow_matches_typescript_contract() {
         core::optimize_post_layout_stop_tail_reuse(clobbered, {});
     require(rejected.applied == 0,
             "an unknown overwrite between the charge and the call must reject the rewrite");
+    require(std::none_of(rejected.items.begin(), rejected.items.end(),
+                         [](const MachineItem& item) {
+                           return std::find(item.roles.begin(), item.roles.end(),
+                                            "runtime-charged-selector-consumer") !=
+                                  item.roles.end();
+                         }),
+            "a rejected charged rewrite must not manufacture a relayout proof role");
+
+    // All four ordinary X-condition families may reuse the same proved
+    // runtime selector. Their direct fallthrough updates hidden X2 whereas
+    // the indirect form preserves it, so the conversion is legal only when
+    // every fallthrough path overwrites X2 before observation.
+    const auto charged_conditional_program = [](int condition_opcode,
+                                                 const std::string& mnemonic,
+                                                 int condition_value,
+                                                 bool restore_x2) {
+      std::vector<MachineItem> conditional = {
+          MachineItem::op(0x51, "БП"),
+          MachineItem::address("conditional_start"),
+          MachineItem::label("conditional_target"),
+      };
+      MachineItem target_stop = MachineItem::op(0x50, "С/П");
+      target_stop.stop_disposition = StopDisposition::Terminal;
+      conditional.push_back(std::move(target_stop));
+      conditional.push_back(MachineItem::label("conditional_start"));
+      conditional.push_back(MachineItem::op(0x00, "0"));
+      conditional.push_back(MachineItem::op(0x02, "2"));
+      conditional.push_back(MachineItem::op(0x48, "X->П 8"));
+      conditional.push_back(MachineItem::op(condition_value, std::to_string(condition_value)));
+      conditional.push_back(MachineItem::op(condition_opcode, mnemonic));
+      conditional.push_back(MachineItem::address("conditional_target"));
+      conditional.push_back(MachineItem::op(restore_x2 ? 0x0a : 0x0d,
+                                             restore_x2 ? "." : "Cx"));
+      MachineItem fallthrough_stop = MachineItem::op(0x50, "С/П");
+      fallthrough_stop.stop_disposition = StopDisposition::Terminal;
+      conditional.push_back(std::move(fallthrough_stop));
+      return conditional;
+    };
+
+    const std::vector<std::tuple<int, std::string, int>> conditional_families = {
+        {0x57, "F x!=0", 0x78},
+        {0x59, "F x>=0", 0x98},
+        {0x5c, "F x<0", 0xc8},
+        {0x5e, "F x=0", 0xe8},
+    };
+    for (const auto& [direct_opcode, mnemonic, indirect_opcode] :
+         conditional_families) {
+      for (const int condition_value : {0, 1}) {
+        const std::vector<MachineItem> direct = charged_conditional_program(
+            direct_opcode, mnemonic, condition_value, false);
+        const core::PostLayoutIndirectFlowResult conditional_result =
+            core::optimize_post_layout_charged_selector_flow(direct, {});
+        require(conditional_result.applied == 1 &&
+                    core::machine_cell_count(conditional_result.items) ==
+                        core::machine_cell_count(direct) - 1,
+                "a runtime-charged selector should shorten a conditional after "
+                "proved X2 reconvergence");
+        require(std::any_of(conditional_result.items.begin(),
+                            conditional_result.items.end(),
+                            [&](const MachineItem& item) {
+                              return item.kind == MachineItemKind::Op &&
+                                     item.opcode == indirect_opcode;
+                            }),
+                "charged conditional rewrite should emit the matching K family through R8");
+
+        std::vector<std::pair<std::string, std::string>> conditional_observed;
+        for (const std::vector<MachineItem>* variant :
+             {&direct, &conditional_result.items}) {
+          emulator::MK61 calc;
+          calc.load_program(resolved_opcodes(*variant));
+          calc.press("В/О");
+          calc.press("С/П");
+          const emulator::RunResult run = calc.run_until_stable(100, 5);
+          require(run.stopped, "both charged conditional layouts should stop");
+          conditional_observed.emplace_back(
+              canonical_number(calc.read_register("x")),
+              canonical_number(calc.read_register("8")));
+        }
+        require(conditional_observed.at(0) == conditional_observed.at(1),
+                "charged conditional rewrite should preserve observable state");
+      }
+    }
+
+    const std::vector<MachineItem> x2_observer = charged_conditional_program(
+        0x5e, "F x=0", 0, true);
+    const core::PostLayoutIndirectFlowResult x2_rejected =
+        core::optimize_post_layout_charged_selector_flow(x2_observer, {});
+    require(x2_rejected.applied == 0,
+            "a fallthrough X2 restore before reconvergence must reject charged conditional "
+            "reuse");
   }
 
   // Deleting a direct-flow operand may move a compiler-marked runtime

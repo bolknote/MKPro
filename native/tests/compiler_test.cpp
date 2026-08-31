@@ -700,6 +700,15 @@ void compiler_feature_profile_rf_optimizer_is_size_monotonic_contract() {
   const CompileResult without_rf = compile_full(source, without_rf_options);
   require(without_rf.implemented && !has_error_diagnostic(without_rf),
           "standard-profile optimizer root should compile the regression fixture");
+  require(without_rf.steps.size() == 128,
+          "the generic finalization pipeline should keep tic-tac-toe-4x4 at 128 cells, got " +
+              std::to_string(without_rf.steps.size()));
+  require(has_optimization(without_rf, "finalization-dead-store-elimination") &&
+              has_optimization(without_rf,
+                               "finalization-redundant-literal-reload") &&
+              has_optimization(without_rf, "empty-return-startup-layout") &&
+              has_optimization(without_rf, "empty-return-tail-call-fusion"),
+          "the 128-cell fixture should exercise the composed generic erasure/layout proofs");
 
   CompileOptions with_rf_options = without_rf_options;
   with_rf_options.feature_profile = FeatureProfile::Mk61SMiniExpanded;
@@ -3217,25 +3226,25 @@ program ExpressionCall {
   require(expression_call.implemented, "native compiler should lower expression function call");
   require(expression_call.diagnostics.empty(),
           "expression function call should not report diagnostics");
-  require(expression_call.registers.find("value") != expression_call.registers.end(),
-          "expression call should allocate a register for the rule parameter");
-  require(expression_call.listing.find("arg value for inc") != std::string::npos,
-          "expression call listing should assign argument to parameter");
+  require(has_optimization(expression_call, "function-current-x-value-call"),
+          "expression call should select the generic current-X value ABI");
+  require(expression_call.listing.find("arg value for inc") == std::string::npos,
+          "current-X expression calls should not materialize the argument register");
   require(expression_call.listing.find("call function inc") != std::string::npos,
           "expression call listing should include function call");
-  require(expression_call.listing.find("recall value") != std::string::npos,
-          "expression call listing should recall the function parameter before using it");
-  bool has_ts_function_body_order = false;
-  for (std::size_t index = 0; index + 3 < expression_call.steps.size(); ++index) {
+  require(expression_call.listing.find("recall value") == std::string::npos,
+          "current-X function bodies should consume the staged argument directly");
+  bool has_current_x_function_body_order = false;
+  for (std::size_t index = 0; index + 2 < expression_call.steps.size(); ++index) {
     if (expression_call.steps.at(index).opcode == 0x01 &&
-        expression_call.steps.at(index + 1).opcode == 0x61 &&
-        expression_call.steps.at(index + 2).opcode == 0x10 &&
-        expression_call.steps.at(index + 3).opcode == 0x52) {
-      has_ts_function_body_order = true;
+        expression_call.steps.at(index + 1).opcode == 0x10 &&
+        expression_call.steps.at(index + 2).opcode == 0x52) {
+      has_current_x_function_body_order = true;
       break;
     }
   }
-  require(has_ts_function_body_order, "expression call should match TS function body byte order");
+  require(has_current_x_function_body_order,
+          "expression call should keep the current-X function body byte order");
   require(expression_call.listing.find("return value") != std::string::npos,
           "expression call listing should include function return");
 

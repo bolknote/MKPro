@@ -149,10 +149,11 @@ void callee_hole_helper_matches_direct_call_semantics() {
   const CompileResult hole = compile_source(kCalleeHoleSource, hole_options);
   require(has_optimization(hole, "callee-hole-straight-line-helper"),
           "walks differing only in their leaf call should merge into a skeleton");
-  require(has_proof(hole, "callee-hole-indirect-call-targets"),
-          "callee-hole dispatch should discharge its leaf-address proof");
   const std::optional<std::string> hole_gate_rejection =
       optimizer_static_proof_gate_rejection_reason_for_testing(hole_options, hole);
+  require(has_proof(hole, "callee-hole-indirect-call-targets"),
+          "callee-hole dispatch should discharge its leaf-address proof: " +
+              hole_gate_rejection.value_or("proof report missing without gate rejection"));
   require(!hole_gate_rejection.has_value(),
           "generated callee-hole final artifact should pass its static gate: " +
               hole_gate_rejection.value_or("unknown rejection"));
@@ -205,6 +206,13 @@ void callee_hole_helper_matches_direct_call_semantics() {
   };
   require(run_recall_restore("7") == run_recall_restore("8"),
           "four recalls should erase an initial X difference even when the next opcode restores X2");
+
+  core::StackValueEqualityState decimal_sync;
+  decimal_sync.stack_equal = {true, true, true, true};
+  decimal_sync.x2_equal = false;
+  require(core::transfer_decimal_digit_equality(decimal_sync, false) ==
+              core::StackValueEqualityTransfer::Converged,
+          "a fresh equal decimal digit should synchronize the hidden X2 copy");
 
   std::vector<IrOp> ir;
   ir.push_back(label("leaf_a"));

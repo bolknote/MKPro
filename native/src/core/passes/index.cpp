@@ -1,5 +1,7 @@
 #include "mkpro/core/passes/index.hpp"
 
+#include "mkpro/core/passes/redundant_literal_reload.hpp"
+
 #include "mkpro/core/passes/arithmetic_if.hpp"
 #include "mkpro/core/passes/branch_target_x_reuse.hpp"
 #include "mkpro/core/passes/conditional_branch_trampoline.hpp"
@@ -268,6 +270,7 @@ const std::vector<IrPass>& pass_pipeline() {
       dead_store_before_commutative_pass(),
       dead_store_elimination_pass(),
       last_x_reuse_pass(),
+      redundant_literal_reload_pass(),
       r0_fractional_sentinel_pass(),
       indirect_selector_integer_part_pass(),
       vp_splice_pass(),
@@ -359,12 +362,30 @@ RunPassesResult run_finalization_dead_store_elimination(
       });
 }
 
+RunPassesResult run_finalization_redundant_literal_reload(
+    const std::vector<MachineItem>& items, const CompileOptions& options) {
+  return run_finalization_cell_erasure(
+      items, options, "finalization-redundant-literal-reload", true,
+      [](const std::vector<IrOp>& ops, const PassContext& context) {
+        return finalization_redundant_literal_reload(ops, context);
+      });
+}
+
 RunPassesResult run_post_inline_dead_store_elimination(
     const std::vector<MachineItem>& items, const CompileOptions& options) {
   return run_finalization_cell_erasure(
       items, options, "post-inline-dead-store-elimination", false,
       [](const std::vector<IrOp>& ops, const PassContext& context) {
         return finalization_dead_store_elimination(ops, context);
+      });
+}
+
+RunPassesResult run_post_inline_redundant_literal_reload(
+    const std::vector<MachineItem>& items, const CompileOptions& options) {
+  return run_finalization_cell_erasure(
+      items, options, "post-inline-redundant-literal-reload", true,
+      [](const std::vector<IrOp>& ops, const PassContext& context) {
+        return finalization_redundant_literal_reload(ops, context);
       });
 }
 

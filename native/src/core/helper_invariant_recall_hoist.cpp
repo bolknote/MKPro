@@ -619,15 +619,14 @@ ContinuationProof prove_continuation(const std::vector<MachineItem>& items,
     }
 
     if (item.opcode >= 0x00 && item.opcode <= 0x09) {
-      if (current.number_entry_active) {
-        if (!current.equality.stack_equal.at(0)) {
-          reject("continued decimal entry observes unequal X");
-          return proof;
-        }
-      } else {
-        const std::array<bool, 4> old = current.equality.stack_equal;
-        current.equality.stack_equal = {true, old.at(0), old.at(1), old.at(2)};
+      const StackValueEqualityTransfer transfer = transfer_decimal_digit_equality(
+          current.equality, current.number_entry_active);
+      if (transfer == StackValueEqualityTransfer::Rejected) {
+        reject("continued decimal entry observes unequal X");
+        return proof;
       }
+      if (transfer == StackValueEqualityTransfer::Converged)
+        continue;
       if (!enqueue(work, fallthrough, current, current.equality, true,
                    current.return_items, 1U)) {
         return proof;
@@ -689,19 +688,32 @@ bool prove_call_transfer(const std::vector<MachineItem>& items,
   const MachineItem& recall = items.at(call.recall_item_index);
 
   if (helper.insertion == HelperInvariantRecallInsertion::BeforeReturn) {
-    if (call.placement != HelperInvariantRecallPlacement::AfterReturnBeforeCommutative) {
-      rejection = "tail recall insertion requires after-return commutative call sites";
+    const bool recall_before_call =
+        call.placement == HelperInvariantRecallPlacement::BeforeCallBeforeCommutative;
+    const bool recall_after_return =
+        call.placement == HelperInvariantRecallPlacement::AfterReturnBeforeCommutative;
+    if (!recall_before_call && !recall_after_return) {
+      rejection = "tail recall insertion requires a commutative call continuation";
+      return false;
+    }
+    if (recall_before_call &&
+        !execute_symbolic_op(original, recall, false, rejection)) {
       return false;
     }
     if (!simulate_helper_body_pair(items, helper.helper_body_begin_item_index,
                                    helper.helper_return_item_index, original, rewritten,
-                                   rejection) ||
-        !execute_symbolic_op(original, recall, false, rejection) ||
-        !execute_symbolic_op(rewritten, recall, false, rejection)) {
+                                   rejection)) {
       return false;
     }
+    if (recall_after_return &&
+        !execute_symbolic_op(original, recall, false, rejection)) {
+      return false;
+    }
+    if (!execute_symbolic_op(rewritten, recall, false, rejection))
+      return false;
     const MachineItem& join = items.at(call.continuation_item_index - 1U);
-    if (!same_evaluated_operands(original, rewritten, join.opcode, false) ||
+    if (!same_evaluated_operands(original, rewritten, join.opcode,
+                                 recall_before_call) ||
         !execute_symbolic_op(original, join, false, rejection) ||
         !execute_symbolic_op(rewritten, join, false, rejection)) {
       rejection = "tail recall insertion did not preserve the commutative continuation";
@@ -757,7 +769,11 @@ void validate_pre_artifact_flow(const std::vector<MachineItem>& items, const Art
     return std::any_of(proof.calls.begin(), proof.calls.end(),
                        [&](const HelperInvariantRecallCall& call) {
                          return call.recall_item_index == item_index &&
-                                call.placement == HelperInvariantRecallPlacement::BeforeCall;
+                                (call.placement ==
+                                     HelperInvariantRecallPlacement::BeforeCall ||
+                                 call.placement ==
+                                     HelperInvariantRecallPlacement::
+                                         BeforeCallBeforeCommutative);
                        });
   };
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
@@ -925,7 +941,9 @@ bool retarget_or_verify_direct_targets(
         const auto call = std::find_if(
             proof.calls.begin(), proof.calls.end(), [&](const HelperInvariantRecallCall& entry) {
               return entry.recall_item_index == old_target_item->second &&
-                     entry.placement == HelperInvariantRecallPlacement::BeforeCall;
+                     (entry.placement == HelperInvariantRecallPlacement::BeforeCall ||
+                      entry.placement ==
+                          HelperInvariantRecallPlacement::BeforeCallBeforeCommutative);
             });
         if (call == proof.calls.end() || call->call_item_index >= old_to_new_item.size())
           return false;
@@ -1100,7 +1118,9 @@ void plan_fixed_target_recall_erasure(const ArtifactIndex& index,
     const auto call = std::find_if(
         proof.calls.begin(), proof.calls.end(), [&](const HelperInvariantRecallCall& candidate) {
           return candidate.recall_item_index == target_item->second &&
-                 candidate.placement == HelperInvariantRecallPlacement::BeforeCall;
+                 (candidate.placement == HelperInvariantRecallPlacement::BeforeCall ||
+                  candidate.placement ==
+                      HelperInvariantRecallPlacement::BeforeCallBeforeCommutative);
         });
     if (call != proof.calls.end())
       proof.nop_recall_items.insert(call->recall_item_index);
@@ -1355,9 +1375,22 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
         break;
       }
       if (matching_before) {
-        call.placement = HelperInvariantRecallPlacement::BeforeCall;
         call.recall_item_index = call.call_item_index - 1U;
-        call.continuation_item_index = call.operand_item_index + 1U;
+        const std::size_t join_item = call.operand_item_index + 1U;
+        const bool commutative_continuation =
+            join_item < items.size() &&
+            items.at(join_item).kind == MachineItemKind::Op &&
+            is_commutative_join(items.at(join_item).opcode);
+        if (commutative_continuation &&
+            options.allow_before_call_commutative_tail) {
+          call.placement =
+              HelperInvariantRecallPlacement::BeforeCallBeforeCommutative;
+          call.commutative_opcode = items.at(join_item).opcode;
+          call.continuation_item_index = join_item + 1U;
+        } else {
+          call.placement = HelperInvariantRecallPlacement::BeforeCall;
+          call.continuation_item_index = join_item;
+        }
       } else {
         call.placement = HelperInvariantRecallPlacement::AfterReturnBeforeCommutative;
         call.recall_item_index = call.operand_item_index + 1U;
@@ -1379,7 +1412,9 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
   if (!proof.calls.empty() &&
       std::all_of(proof.calls.begin(), proof.calls.end(), [](const HelperInvariantRecallCall& call) {
         return call.placement ==
-               HelperInvariantRecallPlacement::AfterReturnBeforeCommutative;
+                   HelperInvariantRecallPlacement::BeforeCallBeforeCommutative ||
+               call.placement ==
+                   HelperInvariantRecallPlacement::AfterReturnBeforeCommutative;
       })) {
     proof.insertion = HelperInvariantRecallInsertion::BeforeReturn;
   }
@@ -1424,6 +1459,16 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
   if (proof.output_cells >= proof.input_cells)
     add_reason(proof, "recall hoist is not cell-profitable");
   proof.proved = proof.reasons.empty();
+  if (options.allow_before_call_commutative_tail) {
+    HelperInvariantRecallHoistOptions root_options = options;
+    root_options.allow_before_call_commutative_tail = false;
+    HelperInvariantRecallHoistProof root_plan = verify_helper_invariant_recall_hoist(
+        items, helper_label, root_options);
+    if (root_plan.proved &&
+        (!proof.proved || root_plan.output_cells < proof.output_cells)) {
+      return root_plan;
+    }
+  }
   return proof;
 }
 

@@ -244,15 +244,27 @@ std::optional<std::size_t> cell_item_for_address(const ArtifactIndex& index, int
   return found == index.cell_items.end() ? std::nullopt : std::optional<std::size_t>(found->second);
 }
 
-bool enqueue_successor(std::deque<std::pair<std::size_t, StackValueEqualityState>>& work,
-                       const ArtifactIndex& index, int target, const StackValueEqualityState& state,
+struct X2ConvergenceState {
+  std::size_t item_index = 0;
+  StackValueEqualityState equality;
+  bool number_entry_active = false;
+};
+
+bool enqueue_successor(std::deque<X2ConvergenceState>& work,
+                       const ArtifactIndex& index, int target,
+                       const StackValueEqualityState& state,
+                       bool number_entry_active,
                        std::vector<std::string>& reasons) {
   const std::optional<std::size_t> item = cell_item_for_address(index, target);
   if (!item.has_value()) {
     reasons.push_back("X2 convergence path leaves the materialized artifact");
     return false;
   }
-  work.emplace_back(*item, state);
+  work.push_back(X2ConvergenceState{
+      .item_index = *item,
+      .equality = state,
+      .number_entry_active = number_entry_active,
+  });
   return true;
 }
 
@@ -262,21 +274,29 @@ bool x2_difference_converges(const std::vector<MachineItem>& items, const Artifa
   StackValueEqualityState initial;
   initial.stack_equal = {true, true, true, true};
   initial.x2_equal = false;
-  std::deque<std::pair<std::size_t, StackValueEqualityState>> work;
-  work.emplace_back(start_item, initial);
-  std::set<std::pair<std::size_t, int>> visited;
+  std::deque<X2ConvergenceState> work;
+  work.push_back(X2ConvergenceState{
+      .item_index = start_item,
+      .equality = initial,
+  });
+  std::set<std::tuple<std::size_t, int, bool>> visited;
   int explored = 0;
 
   while (!work.empty()) {
-    auto [item_index, state] = work.front();
+    X2ConvergenceState current = work.front();
     work.pop_front();
+    const std::size_t item_index = current.item_index;
+    StackValueEqualityState state = current.equality;
     if (stack_values_fully_equal(state))
       continue;
     if (++explored > options.maximum_convergence_states) {
       reasons.push_back("X2 convergence proof exceeded its bounded state budget");
       return false;
     }
-    if (!visited.insert({item_index, equality_state_key(state)}).second) {
+    if (!visited
+             .insert({item_index, equality_state_key(state),
+                      current.number_entry_active})
+             .second) {
       reasons.push_back("X2 difference can circulate through a non-converged cycle");
       return false;
     }
@@ -291,7 +311,11 @@ bool x2_difference_converges(const std::vector<MachineItem>& items, const Artifa
         reasons.push_back("X2 difference reaches the end of the artifact");
         return false;
       }
-      work.emplace_back(*next, state);
+      work.push_back(X2ConvergenceState{
+          .item_index = *next,
+          .equality = state,
+          .number_entry_active = current.number_entry_active,
+      });
       continue;
     }
     if (item.kind == MachineItemKind::Address) {
@@ -300,7 +324,11 @@ bool x2_difference_converges(const std::vector<MachineItem>& items, const Artifa
         reasons.push_back("X2 difference reaches a terminal address operand");
         return false;
       }
-      work.emplace_back(*next, state);
+      work.push_back(X2ConvergenceState{
+          .item_index = *next,
+          .equality = state,
+          .number_entry_active = current.number_entry_active,
+      });
       continue;
     }
 
@@ -334,7 +362,7 @@ bool x2_difference_converges(const std::vector<MachineItem>& items, const Artifa
         return false;
       }
       if (direct_jump) {
-        if (!enqueue_successor(work, index, *target, state, reasons))
+        if (!enqueue_successor(work, index, *target, state, false, reasons))
           return false;
         continue;
       }
@@ -350,7 +378,7 @@ bool x2_difference_converges(const std::vector<MachineItem>& items, const Artifa
         return false;
       }
       if (!stack_values_fully_equal(jump_state) &&
-          !enqueue_successor(work, index, *target, jump_state, reasons)) {
+          !enqueue_successor(work, index, *target, jump_state, false, reasons)) {
         return false;
       }
       StackValueEqualityState fallthrough_state = state;
@@ -364,7 +392,10 @@ bool x2_difference_converges(const std::vector<MachineItem>& items, const Artifa
           reasons.push_back("non-converged conditional fallthrough leaves the artifact");
           return false;
         }
-        work.emplace_back(*fallthrough, fallthrough_state);
+        work.push_back(X2ConvergenceState{
+            .item_index = *fallthrough,
+            .equality = fallthrough_state,
+        });
       }
       continue;
     }
@@ -377,7 +408,7 @@ bool x2_difference_converges(const std::vector<MachineItem>& items, const Artifa
       }
       if (kind == IrKind::IndirectJump) {
         for (const int target : targets->second) {
-          if (!enqueue_successor(work, index, target, state, reasons))
+          if (!enqueue_successor(work, index, target, state, false, reasons))
             return false;
         }
         continue;
@@ -394,7 +425,7 @@ bool x2_difference_converges(const std::vector<MachineItem>& items, const Artifa
       }
       if (!stack_values_fully_equal(jump_state)) {
         for (const int target : targets->second) {
-          if (!enqueue_successor(work, index, target, jump_state, reasons))
+          if (!enqueue_successor(work, index, target, jump_state, false, reasons))
             return false;
         }
       }
@@ -409,8 +440,33 @@ bool x2_difference_converges(const std::vector<MachineItem>& items, const Artifa
           reasons.push_back("non-converged indirect fallthrough leaves the artifact");
           return false;
         }
-        work.emplace_back(*fallthrough, fallthrough_state);
+        work.push_back(X2ConvergenceState{
+            .item_index = *fallthrough,
+            .equality = fallthrough_state,
+        });
       }
+      continue;
+    }
+
+    if (item.opcode >= 0x00 && item.opcode <= 0x09) {
+      const StackValueEqualityTransfer transfer =
+          transfer_decimal_digit_equality(state, current.number_entry_active);
+      if (transfer == StackValueEqualityTransfer::Rejected) {
+        reasons.push_back("continued decimal entry observes unequal X before X2 convergence");
+        return false;
+      }
+      if (transfer == StackValueEqualityTransfer::Converged)
+        continue;
+      const std::optional<std::size_t> next = next_cell_item(items, item_index);
+      if (!next.has_value()) {
+        reasons.push_back("decimal entry reaches the end of the artifact");
+        return false;
+      }
+      work.push_back(X2ConvergenceState{
+          .item_index = *next,
+          .equality = state,
+          .number_entry_active = true,
+      });
       continue;
     }
 
@@ -434,7 +490,11 @@ bool x2_difference_converges(const std::vector<MachineItem>& items, const Artifa
       reasons.push_back("X2 difference reaches the end of the artifact");
       return false;
     }
-    work.emplace_back(*next, state);
+    work.push_back(X2ConvergenceState{
+        .item_index = *next,
+        .equality = state,
+        .number_entry_active = item.opcode >= 0x0a && item.opcode <= 0x0c,
+    });
   }
   return true;
 }

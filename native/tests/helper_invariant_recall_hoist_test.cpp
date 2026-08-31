@@ -210,6 +210,21 @@ std::vector<MachineItem> forward_jump_continuation_fixture() {
 
 std::vector<MachineItem> x2_live_fixture() {
   std::vector<MachineItem> items = alpha_fixture();
+  // Keep one site on the root-placement ABI so this remains a negative X2
+  // fixture rather than becoming exactly equivalent through the new common
+  // commutative tail.
+  for (std::size_t index = 0; index + 3U < items.size(); ++index) {
+    if (items.at(index).kind == MachineItemKind::Op && items.at(index).opcode == 0x68 &&
+        items.at(index + 1U).kind == MachineItemKind::Op &&
+        items.at(index + 1U).opcode == 0x53 &&
+        items.at(index + 2U).kind == MachineItemKind::Address &&
+        items.at(index + 3U).kind == MachineItemKind::Op &&
+        (items.at(index + 3U).opcode == 0x37 ||
+         items.at(index + 3U).opcode == 0x38)) {
+      items.at(index + 3U) = MachineItem::op(0x11, "−");
+      break;
+    }
+  }
   for (std::size_t index = 0; index + 6U < items.size(); ++index) {
     if (items.at(index).kind == MachineItemKind::Op && items.at(index).opcode == 0x53 &&
         items.at(index + 1U).kind == MachineItemKind::Address &&
@@ -281,27 +296,34 @@ void helper_invariant_recall_hoist_rewrites_only_proved_calls() {
   require(
       std::count_if(proof.calls.begin(), proof.calls.end(),
                     [](const auto& call) {
-                      return call.placement == core::HelperInvariantRecallPlacement::BeforeCall;
+                      return call.placement ==
+                             core::HelperInvariantRecallPlacement::
+                                 BeforeCallBeforeCommutative;
                     }) == 2 &&
           std::count_if(proof.calls.begin(), proof.calls.end(),
                         [](const auto& call) {
                           return call.placement ==
                                  core::HelperInvariantRecallPlacement::AfterReturnBeforeCommutative;
                         }) == 1,
-      "proof should distinguish the two legal recall placements");
+      "proof should distinguish both commutative recall placements");
 
   const core::HelperInvariantRecallHoistResult rewritten =
       core::rewrite_helper_invariant_recall_hoist(baseline, std::string(kRoot));
   require(rewritten.applied == 1 && rewritten.proof.final_artifact_proved,
           "proved recall hoist should survive the final artifact check");
+  require(rewritten.proof.insertion ==
+              core::HelperInvariantRecallInsertion::BeforeReturn,
+          "mixed before-call/after-return commutative sites should share one tail recall");
   require(cell_count(rewritten.items) == cell_count(baseline) - 2 &&
               opcode_count(baseline, 0x68) == 3 && opcode_count(rewritten.items, 0x68) == 1,
-          "three call-site recalls should become one helper-root recall and save two cells");
+          "three call-site recalls should become one helper-tail recall and save two cells");
   const std::size_t rewritten_root = label_index(rewritten.items, kRoot);
   require(rewritten_root + 1U < rewritten.items.size() &&
               rewritten.items.at(rewritten_root + 1U).kind == MachineItemKind::Op &&
-              rewritten.items.at(rewritten_root + 1U).opcode == 0x68,
-          "the retained recall should be the first helper command");
+              rewritten.items.at(rewritten_root + 1U).opcode == 0x61 &&
+              rewritten.items.at(rewritten_root + 3U).opcode == 0x68 &&
+              rewritten.items.at(rewritten_root + 4U).opcode == 0x52,
+          "the retained recall should be immediately before the helper return");
   require(run(baseline) == run(rewritten.items),
           "baseline and hoisted alpha fixtures should be emulator-equivalent");
 

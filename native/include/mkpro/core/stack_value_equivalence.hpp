@@ -32,6 +32,26 @@ inline bool stack_values_fully_equal(const StackValueEqualityState& state) {
          state.stack_equal.at(2) && state.stack_equal.at(3);
 }
 
+// Decimal-entry opcodes are context-sensitive on the MK-61.  The first digit
+// starts a fresh mantissa, lifts the previous X into Y, and synchronizes the
+// hidden X2 copy to the newly entered digit.  Later digits extend the current
+// mantissa and therefore require equal visible X, but do not need another
+// stack lift.  Keeping this fact here prevents independent continuation proofs
+// from treating every digit as an opaque X2 restore.
+inline StackValueEqualityTransfer transfer_decimal_digit_equality(
+    StackValueEqualityState& state, bool number_entry_active) {
+  const std::array<bool, 4> old = state.stack_equal;
+  if (number_entry_active) {
+    if (!old.at(0))
+      return StackValueEqualityTransfer::Rejected;
+  } else {
+    state.stack_equal = {true, old.at(0), old.at(1), old.at(2)};
+    state.x2_equal = true;
+  }
+  return stack_values_fully_equal(state) ? StackValueEqualityTransfer::Converged
+                                         : StackValueEqualityTransfer::Continue;
+}
+
 // Transfer one identical opcode in both executions. `reads_distinct_register`
 // is true when a recall/indirect operation observes the selector register whose
 // hypothetical stable charge differs from the actual mutating charge.

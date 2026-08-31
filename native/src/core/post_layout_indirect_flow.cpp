@@ -1,5 +1,6 @@
 #include "mkpro/core/post_layout_indirect_flow.hpp"
 
+
 #include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/late_bound_decimal_selector.hpp"
@@ -111,6 +112,7 @@ struct BranchRewrite {
   std::string comment;
   std::optional<int> source_line;
   IrTarget target = 0;
+  std::vector<CellRole> roles;
 };
 
 struct RetargetedMachine {
@@ -3570,6 +3572,7 @@ find_existing_selector_flow_rewrite(const std::vector<MachineItem>& items,
           .comment = comment,
           .source_line = branch.item->source_line,
           .target = address.item->target,
+          .roles = branch.item->roles,
       };
     }
   }
@@ -3799,15 +3802,205 @@ find_empty_stack_loop_return_rewrite(const std::vector<MachineItem>& raw_items,
   return std::nullopt;
 }
 
-// Replace a direct `ПП addr` / `БП addr` with a one-cell indirect flow through
-// a stable register whose exact value at the branch site is proved by the
-// flow-sensitive stable-register value analysis over the authoritative
-// execution-state graph. Unlike the preloaded rewrites above, the selector
-// value here may come from a runtime charge (digit entry stored into the
-// register) that the program already performs for another indirect consumer.
+bool is_direct_x_conditional_opcode(int opcode) {
+  return opcode == 0x57 || opcode == 0x59 || opcode == 0x5c || opcode == 0x5e;
+}
+
+bool is_indirect_x_conditional_opcode(int opcode) {
+  const int family = opcode & 0xf0;
+  return family == 0x70 || family == 0x90 || family == 0xc0 || family == 0xe0;
+}
+
+std::optional<std::size_t> conditional_fallthrough_item(
+    const std::vector<MachineItem>& items, std::size_t command_item) {
+  if (command_item >= items.size() ||
+      !is_direct_x_conditional_opcode(items.at(command_item).opcode)) {
+    return std::nullopt;
+  }
+  std::size_t item = command_item + 1U;
+  while (item < items.size() && items.at(item).kind == MachineItemKind::Label)
+    ++item;
+  if (item >= items.size() || items.at(item).kind != MachineItemKind::Address)
+    return std::nullopt;
+  ++item;
+  while (item < items.size() && items.at(item).kind == MachineItemKind::Label)
+    ++item;
+  if (item >= items.size() || items.at(item).kind != MachineItemKind::Op)
+    return std::nullopt;
+  return item;
+}
+
+// A direct conditional updates X2 only on its fallthrough edge, while its
+// one-cell indirect counterpart preserves X2 on both edges. Prove that this
+// sole difference is overwritten before it can be restored or escape on every
+// fallthrough execution state. Preserving SCCs are safe: the two machines take
+// identical control-flow edges and the hidden difference remains unobservable
+// forever. This is a greatest-fixed-point safety proof, not a termination
+// proof.
+bool charged_selector_conditional_x2_reconverges(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow,
+    std::size_t command_item) {
+  const std::optional<std::size_t> initial_fallthrough =
+      conditional_fallthrough_item(items, command_item);
+  if (!initial_fallthrough.has_value() || !flow.proved ||
+      flow.execution_states.size() != flow.execution_successors.size()) {
+    return false;
+  }
+
+  std::set<std::size_t> seeds;
+  for (std::size_t state = 0; state < flow.execution_states.size(); ++state) {
+    if (flow.execution_states.at(state).item_index != command_item)
+      continue;
+    for (const std::size_t successor : flow.execution_successors.at(state)) {
+      if (successor < flow.execution_states.size() &&
+          flow.execution_states.at(successor).item_index == *initial_fallthrough) {
+        seeds.insert(successor);
+      }
+    }
+  }
+  if (seeds.empty())
+    return false;
+
+  std::set<std::size_t> reachable;
+  std::set<std::size_t> intrinsically_unsafe;
+  std::map<std::size_t, std::set<std::size_t>> preserving_successors;
+  std::deque<std::size_t> pending(seeds.begin(), seeds.end());
+  while (!pending.empty()) {
+    const std::size_t state = pending.front();
+    pending.pop_front();
+    if (!reachable.insert(state).second)
+      continue;
+    if (state >= flow.execution_states.size()) {
+      intrinsically_unsafe.insert(state);
+      continue;
+    }
+    const std::size_t item_index = flow.execution_states.at(state).item_index;
+    if (item_index >= items.size() || items.at(item_index).kind != MachineItemKind::Op) {
+      intrinsically_unsafe.insert(state);
+      continue;
+    }
+    const MachineItem& item = items.at(item_index);
+    const OpcodeInfo& info = opcode_by_code(item.opcode);
+    const bool conditional = is_direct_x_conditional_opcode(item.opcode) ||
+                             is_indirect_x_conditional_opcode(item.opcode);
+    if (!conditional) {
+      if (info.x2_effect == X2Effect::Affects)
+        continue;
+      if (info.x2_effect != X2Effect::Preserves) {
+        intrinsically_unsafe.insert(state);
+        continue;
+      }
+    } else if (!info.conditional_x2_effect.has_value()) {
+      intrinsically_unsafe.insert(state);
+      continue;
+    }
+
+    const std::vector<std::size_t>& successors = flow.execution_successors.at(state);
+    if (successors.empty()) {
+      intrinsically_unsafe.insert(state);
+      continue;
+    }
+    const std::optional<std::size_t> fallthrough =
+        is_direct_x_conditional_opcode(item.opcode)
+            ? conditional_fallthrough_item(items, item_index)
+            : [&]() -> std::optional<std::size_t> {
+                std::size_t next = item_index + 1U;
+                while (next < items.size() &&
+                       items.at(next).kind == MachineItemKind::Label) {
+                  ++next;
+                }
+                if (next >= items.size() ||
+                    items.at(next).kind != MachineItemKind::Op) {
+                  return std::nullopt;
+                }
+                return next;
+              }();
+    if (conditional && !fallthrough.has_value()) {
+      intrinsically_unsafe.insert(state);
+      continue;
+    }
+
+    for (const std::size_t successor : successors) {
+      if (successor >= flow.execution_states.size()) {
+        intrinsically_unsafe.insert(state);
+        continue;
+      }
+      X2Effect effect = info.x2_effect;
+      if (conditional) {
+        const bool is_fallthrough =
+            flow.execution_states.at(successor).item_index == *fallthrough;
+        effect = is_fallthrough ? info.conditional_x2_effect->fallthrough
+                                : info.conditional_x2_effect->jump;
+      }
+      if (effect == X2Effect::Affects)
+        continue;
+      if (effect != X2Effect::Preserves) {
+        intrinsically_unsafe.insert(state);
+        continue;
+      }
+      preserving_successors[state].insert(successor);
+      pending.push_back(successor);
+    }
+  }
+
+  std::set<std::size_t> proved;
+  for (const std::size_t state : reachable) {
+    if (!intrinsically_unsafe.contains(state))
+      proved.insert(state);
+  }
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    std::vector<std::size_t> rejected;
+    for (const std::size_t state : proved) {
+      const auto successors = preserving_successors.find(state);
+      if (successors == preserving_successors.end())
+        continue;
+      if (std::any_of(successors->second.begin(), successors->second.end(),
+                      [&](std::size_t successor) {
+                        return !proved.contains(successor);
+                      })) {
+        rejected.push_back(state);
+      }
+    }
+    for (const std::size_t state : rejected)
+      changed = proved.erase(state) > 0U || changed;
+  }
+  const bool result = std::all_of(seeds.begin(), seeds.end(), [&](std::size_t seed) {
+    return proved.contains(seed);
+  });
+  if (!result && trace_post_layout_enabled()) {
+    std::cerr << "[charged-selector-x2] command-item=" << command_item
+              << " fallthrough-item=" << *initial_fallthrough << " seeds=";
+    for (const std::size_t seed : seeds) {
+      const PostLayoutExecutionState& execution = flow.execution_states.at(seed);
+      std::cerr << seed << "@" << execution.address
+                << (proved.contains(seed) ? ":proved" : ":rejected") << ",";
+    }
+    std::cerr << " unsafe=";
+    for (const std::size_t state : intrinsically_unsafe) {
+      if (state < flow.execution_states.size()) {
+        const PostLayoutExecutionState& execution = flow.execution_states.at(state);
+        std::cerr << state << "@" << execution.address << "/"
+                  << items.at(execution.item_index).mnemonic << ",";
+      }
+    }
+    std::cerr << "\n";
+  }
+  return result;
+}
+
+// Replace a direct `ПП addr` / `БП addr` or compatible X conditional with a
+// one-cell indirect flow through a stable register whose exact value at the
+// branch site is proved by the flow-sensitive stable-register value analysis
+// over the authoritative execution-state graph. Unlike the preloaded rewrites
+// above, the selector value here may come from a runtime charge (digit entry
+// stored into the register) that the program already performs for another
+// indirect consumer.
 //
-// Conditionals are excluded (they would need the separate X2 equivalence
-// proof), and the deletion is admitted only when it cannot break any
+// Conditional conversion additionally requires the X2 reconvergence proof
+// above. The deletion is admitted only when it cannot break any
 // non-retargetable address encoding: the converted flow must be backward
 // (target before the erased operand), every numeric direct operand and every
 // typed indirect target whose register has no retargetable preload must also
@@ -3850,7 +4043,8 @@ find_charged_selector_flow_rewrite(const std::vector<MachineItem>& raw_items,
     if (branch.item == nullptr || address.item == nullptr ||
         branch.item->kind != MachineItemKind::Op ||
         address.item->kind != MachineItemKind::Address ||
-        (branch.item->opcode != 0x51 && branch.item->opcode != 0x53)) {
+        (branch.item->opcode != 0x51 && branch.item->opcode != 0x53 &&
+         !is_direct_x_conditional_opcode(branch.item->opcode))) {
       continue;
     }
     const std::optional<int> target = resolved_machine_target(address.item->target, labels);
@@ -3888,6 +4082,15 @@ find_charged_selector_flow_rewrite(const std::vector<MachineItem>& raw_items,
         }
         return std::nullopt;
       }
+    }
+    if (is_direct_x_conditional_opcode(branch.item->opcode) &&
+        !charged_selector_conditional_x2_reconverges(
+            items, *flow, static_cast<std::size_t>(branch.item_index))) {
+      if (trace_post_layout_enabled()) {
+        std::cerr << "[charged-selector] conditional X2 does not reconverge at "
+                  << branch.address << "\n";
+      }
+      continue;
     }
 
     // The deletion transaction retargets numeric direct operands by command
@@ -3995,6 +4198,11 @@ std::vector<MachineItem> apply_branch_rewrite(const std::vector<MachineItem>& it
       MachineItem item = MachineItem::op(rewrite.opcode, rewrite.mnemonic);
       item.comment = rewrite.comment;
       item.indirect_flow_targets = std::vector<IrTarget>{rewrite.target};
+      item.roles = rewrite.roles;
+      if (std::find(item.roles.begin(), item.roles.end(),
+                    "runtime-charged-selector-consumer") == item.roles.end()) {
+        item.roles.push_back("runtime-charged-selector-consumer");
+      }
       if (rewrite.source_line.has_value())
         item.source_line = *rewrite.source_line;
       result.push_back(item);
@@ -4499,7 +4707,7 @@ optimize_post_layout_charged_selector_flow(const std::vector<MachineItem>& items
           {
               passes::AppliedOptimization{
                   .name = "post-layout-charged-selector-flow",
-                  .detail = "Replaced " + std::to_string(applied) + " direct branch/call" +
+                  .detail = "Replaced " + std::to_string(applied) + " direct flow" +
                             (applied == 1 ? "" : "s") +
                             " with indirect flow through a stable register whose "
                             "runtime-charged value is proved on every path by the "
@@ -4671,7 +4879,7 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
   if (charged_selector_applied > 0) {
     optimizations.push_back(passes::AppliedOptimization{
         .name = "post-layout-charged-selector-flow",
-        .detail = "Replaced " + std::to_string(charged_selector_applied) + " direct branch/call" +
+        .detail = "Replaced " + std::to_string(charged_selector_applied) + " direct flow" +
                   (charged_selector_applied == 1 ? "" : "s") +
                   " with indirect flow through a stable register whose runtime-charged value "
                   "is proved on every path by the execution-state graph.",

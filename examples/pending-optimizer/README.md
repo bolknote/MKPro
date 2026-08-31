@@ -15,7 +15,7 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 133 | 105 | +28 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 128 | 105 | +23 | pending optimizer |
 | `nekromant.mkpro` | 133 | 105 | +28 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
@@ -252,12 +252,18 @@ mode may reject over-window programs earlier than the analysis path.
   atomic absolute/dark layout rescue as an explicitly requested lowering. This removes
   the display scratch while retaining the smaller final geometry, reducing
   `nekromant.mkpro` from 136 to 133 cells without changing its source.
-- Generic physical-00 return sharing now handles every `БП 00` edge in one
-  transaction. A reachable edge must be proved to carry only an empty return
-  stack; an edge absent from the complete authoritative CFG may participate as
-  dead code, but only after the input CFG has been rebuilt and matched exactly.
-  One `В/О` at physical 00 is then amortized across all accepted edges, with
-  final CFG, external-entry, command-identity, return-stack, data-stack, X2,
-  indirect-memory, preload, and size proofs repeated after relocation. This
-  reduces `tic-tac-toe-4x4.mkpro` from 134 to 133 cells without changing its
-  source or recognizing the game.
+- Generic physical-00 return sharing handles every `БП 00` edge in one
+  transaction. A reachable edge must carry an empty return stack; an edge
+  absent from the complete authoritative CFG may participate as dead code only
+  after the input CFG is rebuilt and matched exactly.
+- Finalization now composes independent one-cell erasures across absolute
+  relayouts. Numeric direct and proved indirect targets follow command identity
+  in physical address space, while compiler-owned padding can be recycled as
+  layout budget. A runtime-charged selector consumer carries its value-flow
+  proof through that relayout and pins each non-retunable dynamic target to its
+  original address. The final CFG, external entries, return stack, data stack,
+  X2, indirect memory, selector values, and setup preloads are rebuilt after
+  every accepted step. On this artifact the generic DSE, redundant-literal,
+  empty-return tail-call fusion, padding recovery, and fallthrough-component
+  transactions compose to reduce `tic-tac-toe-4x4.mkpro` from 133 to 128 cells
+  without changing its source or recognizing the game.
