@@ -15,7 +15,7 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 134 | 105 | +29 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 133 | 105 | +28 | pending optimizer |
 | `nekromant.mkpro` | 133 | 105 | +28 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
@@ -252,3 +252,12 @@ mode may reject over-window programs earlier than the analysis path.
   atomic absolute/dark layout rescue as an explicitly requested lowering. This removes
   the display scratch while retaining the smaller final geometry, reducing
   `nekromant.mkpro` from 136 to 133 cells without changing its source.
+- Generic physical-00 return sharing now handles every `БП 00` edge in one
+  transaction. A reachable edge must be proved to carry only an empty return
+  stack; an edge absent from the complete authoritative CFG may participate as
+  dead code, but only after the input CFG has been rebuilt and matched exactly.
+  One `В/О` at physical 00 is then amortized across all accepted edges, with
+  final CFG, external-entry, command-identity, return-stack, data-stack, X2,
+  indirect-memory, preload, and size proofs repeated after relocation. This
+  reduces `tic-tac-toe-4x4.mkpro` from 134 to 133 cells without changing its
+  source or recognizing the game.

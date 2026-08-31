@@ -35,6 +35,10 @@ constexpr int kReturnOpcode = 0x52;
 constexpr int kCallOpcode = 0x53;
 constexpr int kFractionalPartOpcode = 0x35;
 
+bool is_number_entry_opcode(int opcode) {
+  return opcode >= 0x00 && opcode <= 0x0c;
+}
+
 constexpr std::array<std::string_view, 15> kRegisterNames = {
     "0", "1", "2", "3", "4", "5", "6", "7",
     "8", "9", "a", "b", "c", "d", "e",
@@ -756,6 +760,21 @@ bool apply_transparent_fallthrough_jump_fold(
           source_segment.cells.size();
   if (!source_is_terminal) {
     return fail("jump-fold pair does not terminate its fallthrough component");
+  }
+  // BP closes number entry. Erasing it after a digit, decimal point, sign, or
+  // exponent-entry command can glue the target's later number-entry command to
+  // the source even though X/Y/Z/T and X2 are otherwise identical. Requiring a
+  // preceding ordinary executable cell proves that the entry context was
+  // already closed on the only fallthrough path into this unlabelled jump.
+  if (source->second == 0) {
+    return fail("jump-fold source has no local number-entry-closing predecessor");
+  }
+  const MachineItem& predecessor =
+      source_segment.cells.at(static_cast<std::size_t>(source->second - 1))
+          .value.item;
+  if (predecessor.kind != MachineItemKind::Op ||
+      is_number_entry_opcode(predecessor.opcode)) {
+    return fail("jump-fold would remove an observable number-entry boundary");
   }
   const Cell& command_cell =
       source_segment.cells.at(static_cast<std::size_t>(source->second));
@@ -4285,7 +4304,8 @@ std::optional<CandidateArtifact> try_candidate(
     const TraceGraph& original_trace,
     ConvertedFlowEffectProofContext& flow_effect_proof_context,
     const std::vector<ExternalIdentity>& original_external,
-  bool attempt_jump_folds,
+    bool attempt_jump_folds,
+    std::optional<std::size_t> preserved_jump_command,
     std::vector<std::string>* rejection_reasons) {
   const auto reject = [&](std::string reason) -> std::optional<CandidateArtifact> {
     if (rejection_reasons != nullptr &&
@@ -4327,13 +4347,19 @@ std::optional<CandidateArtifact> try_candidate(
   const bool selector_target_only =
       !has_flow_anchor && options.allow_size_neutral_selector_target_layout &&
       !options.required_selector_targets.empty();
-  const bool layout_only = bounded_only || absolute_only || selector_target_only;
+  const bool jump_fold_only =
+      !has_flow_anchor && attempt_jump_folds &&
+      options.allow_standalone_fallthrough_jump_fold;
+  const bool layout_only =
+      bounded_only || absolute_only || selector_target_only || jump_fold_only;
   if (!has_flow_anchor && !layout_only)
     return reject("candidate has no natural-target anchors");
   std::vector<NaturalTargetFlowRewrite> rewrites;
   std::vector<DisplacedIndirectFlowRewrite> displaced_flows;
   std::vector<TransparentTrampoline> trampolines;
   std::set<std::size_t> excluded_direct_commands;
+  if (preserved_jump_command.has_value())
+    excluded_direct_commands.insert(*preserved_jump_command);
   std::vector<std::string> excluded_direct_failures;
   std::optional<std::vector<Cell>> converted;
   if (layout_only) {
@@ -4392,6 +4418,10 @@ std::optional<CandidateArtifact> try_candidate(
   if (attempt_jump_folds) {
     std::vector<TransparentFallthroughJumpFold> fold_candidates;
     for (const DirectReference& reference : references) {
+      if (preserved_jump_command.has_value() &&
+          reference.command != *preserved_jump_command) {
+        continue;
+      }
       if (reference.command < items.size() &&
           items.at(reference.command).kind == MachineItemKind::Op &&
           items.at(reference.command).opcode == kJumpOpcode) {
@@ -4402,13 +4432,15 @@ std::optional<CandidateArtifact> try_candidate(
         });
       }
     }
-    for (const DisplacedIndirectFlowRewrite& displaced : displaced_flows) {
-      if (displaced.direct_opcode == kJumpOpcode) {
-        fold_candidates.push_back(TransparentFallthroughJumpFold{
-            .command_origin = displaced.command_origin,
-            .operand_origin = displaced.operand_origin,
-            .target_origin = displaced.target_origin,
-        });
+    if (!preserved_jump_command.has_value()) {
+      for (const DisplacedIndirectFlowRewrite& displaced : displaced_flows) {
+        if (displaced.direct_opcode == kJumpOpcode) {
+          fold_candidates.push_back(TransparentFallthroughJumpFold{
+              .command_origin = displaced.command_origin,
+              .operand_origin = displaced.operand_origin,
+              .target_origin = displaced.target_origin,
+          });
+        }
       }
     }
     std::sort(fold_candidates.begin(), fold_candidates.end(),
@@ -5303,12 +5335,19 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   }
   const std::vector<DirectFlowSite> flows =
       shortenable_direct_flows(*references, logical_items);
-  const bool has_jump_fold_seed =
-      std::any_of(references->begin(), references->end(), [&](const auto& reference) {
-        return reference.command < logical_items.size() &&
-               logical_items.at(reference.command).kind == MachineItemKind::Op &&
-               logical_items.at(reference.command).opcode == kJumpOpcode;
-      }) ||
+  std::vector<std::size_t> direct_jump_fold_seeds;
+  for (const DirectReference& reference : *references) {
+    if (reference.command < logical_items.size() &&
+        logical_items.at(reference.command).kind == MachineItemKind::Op &&
+        logical_items.at(reference.command).opcode == kJumpOpcode) {
+      direct_jump_fold_seeds.push_back(reference.command);
+    }
+  }
+  std::sort(direct_jump_fold_seeds.begin(), direct_jump_fold_seeds.end());
+  direct_jump_fold_seeds.erase(
+      std::unique(direct_jump_fold_seeds.begin(), direct_jump_fold_seeds.end()),
+      direct_jump_fold_seeds.end());
+  const bool has_displaced_jump_fold_seed =
       std::any_of(logical_flow->indirect_flow_targets.begin(),
                   logical_flow->indirect_flow_targets.end(),
                   [&](const auto& entry) {
@@ -5318,6 +5357,8 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
                            direct_opcode_for_indirect_flow(
                                logical_items.at(command).opcode) == kJumpOpcode;
                   });
+  const bool has_jump_fold_seed = !direct_jump_fold_seeds.empty() ||
+                                  has_displaced_jump_fold_seed;
   std::set<std::size_t> absolute_target_items;
   for (const NaturalTargetRequiredAbsoluteTarget& required :
        options.required_absolute_targets) {
@@ -5788,6 +5829,7 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     std::vector<NaturalTargetAnchorCandidate> anchors;
   };
   std::vector<JumpFoldFrontierEntry> jump_fold_frontier;
+  std::vector<std::string> jump_fold_rejections;
   std::size_t transparent_jump_attempts = 0;
   bool transparent_jump_search_capped = false;
   const auto with_preservation_anchors =
@@ -5876,7 +5918,7 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     std::optional<CandidateArtifact> candidate = try_candidate(
         logical_items, preloads, *logical_flow, options, *references, flows,
         selectors, *complete_trial, bounded_target_origins, *original_trace,
-        flow_effect_proof_context, *original_external, false,
+        flow_effect_proof_context, *original_external, false, std::nullopt,
         &result.plan.reasons);
     if (candidate_proves_required_flows(candidate)) {
       if (has_jump_fold_seed) {
@@ -5955,6 +5997,32 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
         !options.required_selector_targets.empty()))) {
     consider_trial({}, false);
   }
+  // A transparent terminal `BP <target>` pair is independently profitable:
+  // chaining the target component erases two cells even when no direct flow
+  // can or should be converted through a selector. Historically this exact
+  // proof was reachable only from a successful selector-layout candidate.
+  // Run each jump as its own bounded transaction so unrelated jumps cannot
+  // make a valid fold disappear through ordering or local selector choices.
+  if (options.allow_standalone_fallthrough_jump_fold &&
+      options.required_flow_selectors.empty() && has_jump_fold_seed) {
+    const std::optional<std::vector<NaturalTargetAnchorCandidate>> complete_trial =
+        with_preservation_anchors({});
+    if (complete_trial.has_value()) {
+      for (const std::size_t command : direct_jump_fold_seeds) {
+        std::optional<CandidateArtifact> candidate = try_candidate(
+            logical_items, preloads, *logical_flow, options, *references, flows,
+            selectors, *complete_trial, bounded_target_origins, *original_trace,
+            flow_effect_proof_context, *original_external, true, command,
+            &result.plan.reasons);
+        if (candidate.has_value() &&
+            candidate->plan.fallthrough_jump_folds > 0 &&
+            (!best.has_value() || better_candidate(*candidate, *best))) {
+          best = std::move(candidate);
+          best_anchor_trial = *complete_trial;
+        }
+      }
+    }
+  }
   if (best.has_value() && has_jump_fold_seed) {
     std::stable_sort(
         jump_fold_frontier.begin(), jump_fold_frontier.end(),
@@ -5962,7 +6030,12 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
            const JumpFoldFrontierEntry& right) {
           return better_candidate(left.candidate, right.candidate);
         });
-    constexpr std::size_t kJumpFoldFrontierWidth = 8;
+    // Base size alone is not a sufficient fold predictor: preserving a
+    // two-cell jump can change fixed-address padding after the target is
+    // chained. Keep a bounded but broad exact frontier inside the existing
+    // optimistic two-cell gate so a locally tied layout is not discarded
+    // before its post-fold geometry is proved.
+    constexpr std::size_t kJumpFoldFrontierWidth = 32;
     if (jump_fold_frontier.size() > kJumpFoldFrontierWidth)
       jump_fold_frontier.resize(kJumpFoldFrontierWidth);
     for (const JumpFoldFrontierEntry& frontier : jump_fold_frontier) {
@@ -5973,28 +6046,67 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
           best->plan.removed_cells) {
         continue;
       }
-      std::optional<CandidateArtifact> candidate = try_candidate(
-          logical_items, preloads, *logical_flow, options, *references, flows,
-          selectors, frontier.anchors, bounded_target_origins, *original_trace,
-          flow_effect_proof_context, *original_external, true,
-          &result.plan.reasons);
-      const bool required_flows_proved =
-          candidate.has_value() &&
-          std::all_of(required_selector_by_flow.begin(),
-                      required_selector_by_flow.end(),
-                      [&](const auto& binding) {
-                        return std::any_of(
-                            candidate->plan.flows.begin(),
-                            candidate->plan.flows.end(),
-                            [&](const NaturalTargetFlowRewrite& flow) {
-                              return flow.original_command_item == binding.first &&
-                                     flow.selector_register ==
-                                         register_name(binding.second);
-                            });
-                      });
-      if (required_flows_proved && better_candidate(*candidate, *best))
-        best = std::move(candidate);
+      std::vector<std::optional<std::size_t>> fold_requests;
+      fold_requests.reserve(direct_jump_fold_seeds.size() +
+                            (has_displaced_jump_fold_seed ? 1U : 0U));
+      for (const std::size_t command : direct_jump_fold_seeds)
+        fold_requests.emplace_back(command);
+      if (has_displaced_jump_fold_seed)
+        fold_requests.emplace_back(std::nullopt);
+
+      for (const std::optional<std::size_t> preserved_jump : fold_requests) {
+        std::vector<std::string> attempt_rejections;
+        std::optional<CandidateArtifact> candidate = try_candidate(
+            logical_items, preloads, *logical_flow, options, *references, flows,
+            selectors, frontier.anchors, bounded_target_origins, *original_trace,
+            flow_effect_proof_context, *original_external, true, preserved_jump,
+            &attempt_rejections);
+        const bool required_flows_proved =
+            candidate.has_value() &&
+            std::all_of(required_selector_by_flow.begin(),
+                        required_selector_by_flow.end(),
+                        [&](const auto& binding) {
+                          if (!candidate->new_item_by_origin.contains(binding.first))
+                            return true;
+                          return std::any_of(
+                              candidate->plan.flows.begin(),
+                              candidate->plan.flows.end(),
+                              [&](const NaturalTargetFlowRewrite& flow) {
+                                return flow.original_command_item == binding.first &&
+                                       flow.selector_register ==
+                                           register_name(binding.second);
+                              });
+                        });
+        if (required_flows_proved && better_candidate(*candidate, *best)) {
+          best = std::move(candidate);
+        } else if (jump_fold_rejections.size() < 12U) {
+          std::string detail = "fallthrough jump candidate";
+          if (preserved_jump.has_value())
+            detail += " command=" + std::to_string(*preserved_jump);
+          else
+            detail += " displaced-indirect";
+          if (!candidate.has_value()) {
+            detail += attempt_rejections.empty()
+                          ? ": rejected without a diagnostic"
+                          : ": " + attempt_rejections.back();
+          } else if (!required_flows_proved) {
+            detail += ": required selector-flow composition was not preserved";
+          } else {
+            detail += ": proved but did not beat the incumbent (removed=" +
+                      std::to_string(candidate->plan.removed_cells) +
+                      ", incumbent=" +
+                      std::to_string(best->plan.removed_cells) + ")";
+          }
+          jump_fold_rejections.push_back(std::move(detail));
+        }
+      }
     }
+  }
+  if (best.has_value() && best->plan.fallthrough_jump_folds == 0 &&
+      !jump_fold_rejections.empty()) {
+    result.plan.reasons.insert(result.plan.reasons.begin(),
+                               jump_fold_rejections.begin(),
+                               jump_fold_rejections.end());
   }
   const bool has_late_runtime_selector = std::any_of(
       selectors.begin(), selectors.end(), [](const SelectorCandidate& selector) {
@@ -6101,7 +6213,8 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
        result.plan.size_neutral_absolute_layout ||
        result.plan.transactional_selector_target_layout)
                        ? std::max(1, result.plan.moved_segments)
-                       : static_cast<int>(result.plan.flows.size());
+                       : std::max(static_cast<int>(result.plan.flows.size()),
+                                  result.plan.fallthrough_jump_folds);
   result.removed_cells = result.plan.removed_cells;
   return result;
 }

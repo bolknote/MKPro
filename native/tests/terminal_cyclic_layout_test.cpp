@@ -695,6 +695,86 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
             "without changing size");
   }
   {
+    const std::vector<MachineItem> two_startup_loops = {
+        MachineItem::op(0x54, "К НОП"),
+        MachineItem::op(0x5e, "F x=0"),
+        MachineItem::address(6),
+        MachineItem::op(0x54, "К НОП"),
+        MachineItem::op(0x51, "БП"),
+        MachineItem::address(0),
+        MachineItem::op(0x54, "К НОП"),
+        MachineItem::op(0x51, "БП"),
+        MachineItem::address(0),
+    };
+    core::PostLayoutControlFlowOptions startup_options;
+    startup_options.main_entry = 0;
+    startup_options.empty_return_target = 1;
+    const core::AuthoritativePostLayoutControlFlow startup_flow =
+        core::build_post_layout_control_flow(two_startup_loops, startup_options);
+    require(startup_flow.proved,
+            "two-edge empty-stack startup loop should have an authoritative CFG");
+    const std::vector<core::EmptyReturnStartupLayoutResult> normalized =
+        core::normalize_empty_return_startup_layouts(
+            two_startup_loops, {}, startup_flow);
+    require(normalized.size() == 1U &&
+                normalized.front().final_artifact_proved &&
+                normalized.front().control_flow.proved &&
+                cell_count(normalized.front().items) ==
+                    cell_count(two_startup_loops) - 1 &&
+                std::count_if(
+                    normalized.front().items.begin(),
+                    normalized.front().items.end(),
+                    [](const MachineItem& item) {
+                      return item.kind == MachineItemKind::Op &&
+                             item.opcode == 0x52;
+                    }) == 3,
+            "one physical-00 return should amortize across every independently "
+            "proved empty-stack BP 00 edge");
+  }
+  {
+    const std::vector<MachineItem> reachable_and_dead_startup_loops = {
+        MachineItem::op(0x54, "К НОП"),
+        MachineItem::op(0x51, "БП"),
+        MachineItem::address(0),
+        MachineItem::op(0x51, "БП"),
+        MachineItem::address(0),
+    };
+    core::PostLayoutControlFlowOptions startup_options;
+    startup_options.main_entry = 0;
+    startup_options.empty_return_target = 1;
+    const core::AuthoritativePostLayoutControlFlow startup_flow =
+        core::build_post_layout_control_flow(reachable_and_dead_startup_loops,
+                                             startup_options);
+    require(startup_flow.proved,
+            "reachable/dead startup fixture should have an authoritative CFG");
+    const std::vector<core::EmptyReturnStartupLayoutResult> normalized =
+        core::normalize_empty_return_startup_layouts(
+            reachable_and_dead_startup_loops, {}, startup_flow);
+    require(normalized.size() == 1U &&
+                normalized.front().final_artifact_proved &&
+                normalized.front().control_flow.proved &&
+                cell_count(normalized.front().items) ==
+                    cell_count(reachable_and_dead_startup_loops) - 1 &&
+                std::count_if(
+                    normalized.front().items.begin(),
+                    normalized.front().items.end(),
+                    [](const MachineItem& item) {
+                      return std::find(item.roles.begin(), item.roles.end(),
+                                       "empty-return-startup-edge") !=
+                             item.roles.end();
+                    }) == 2,
+            "a complete CFG should let one reachable empty-stack edge and one "
+            "unreachable edge amortize the physical-00 return");
+
+    std::vector<MachineItem> stale_artifact =
+        reachable_and_dead_startup_loops;
+    stale_artifact.front() = stop(StopDisposition::Terminal);
+    require(core::normalize_empty_return_startup_layouts(
+                stale_artifact, {}, startup_flow)
+                .empty(),
+            "unreachability must not be consumed from a stale authoritative CFG");
+  }
+  {
     std::vector<MachineItem> startup_with_fixed_target = {
         MachineItem::op(0x01, "1"),
         MachineItem::op(0xac, "К ПП c"),
@@ -738,11 +818,10 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
                 atomic.front().plan.deferred_selector_reconciliations_proved &&
                 atomic.front().plan.transactional_selector_target_layout &&
                 atomic.front().plan.transactional_growth_cells == 0 &&
-                atomic.front().plan.transactional_downstream_removed_cells == 0 &&
-                atomic.front().plan.transactional_overlay_removed_cells == 0 &&
-                atomic.front().plan.transactional_terminal_removed_cells == 0 &&
-                atomic.front().plan.size_neutral_selector_target_layout &&
-                cell_count(atomic.front().items) ==
+                atomic.front().plan.removed_cells ==
+                    cell_count(startup_with_fixed_target) -
+                        cell_count(atomic.front().items) &&
+                cell_count(atomic.front().items) <=
                     cell_count(startup_with_fixed_target) &&
                 atomic.front().items.front().kind == MachineItemKind::Op &&
                 atomic.front().items.front().opcode == 0x52 &&
@@ -752,7 +831,35 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
                 atomic.front().preloads.front().register_name == "c" &&
                 atomic.front().preloads.front().value == "4.1200005E-1",
             "atomic startup/component layout should restore the fixed target at 05 "
-            "without changing its dual-use preload");
+            "without changing its dual-use preload: " +
+                (atomic.empty()
+                     ? std::string("no candidate")
+                     : "candidates=" + std::to_string(atomic.size()) +
+                           " proved=" +
+                           std::to_string(atomic.front().plan.proved) +
+                           " final=" +
+                           std::to_string(
+                               atomic.front().plan.final_artifact_proved) +
+                           " absolute=" +
+                           std::to_string(
+                               atomic.front().plan.absolute_targets_proved) +
+                           " selector-layout=" +
+                           std::to_string(atomic.front().plan
+                                              .transactional_selector_target_layout) +
+                           " growth=" +
+                           std::to_string(atomic.front().plan
+                                              .transactional_growth_cells) +
+                           " removed=" +
+                           std::to_string(atomic.front().plan.removed_cells) +
+                           " cells=" +
+                           std::to_string(cell_count(atomic.front().items)) +
+                           " opcode05=" +
+                           std::to_string(atomic.front().items.at(
+                               item_at_address(atomic.front().items, 5)).opcode) +
+                           " preload=" +
+                           (atomic.front().preloads.empty()
+                                ? std::string("none")
+                                : atomic.front().preloads.front().value)));
     const auto final_source = std::find_if(
         atomic.front().plan.final_control_flow.indirect_flow_targets.begin(),
         atomic.front().plan.final_control_flow.indirect_flow_targets.end(),

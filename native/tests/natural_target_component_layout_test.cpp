@@ -2221,6 +2221,13 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
                 std::to_string(rewritten.plan.fallthrough_jump_folds) +
                 " removed=" + std::to_string(rewritten.plan.removed_cells) +
                 " reasons=" + fold_diagnostics);
+    require(std::none_of(
+                rewritten.plan.flows.begin(), rewritten.plan.flows.end(),
+                [&](const core::NaturalTargetFlowRewrite& flow) {
+                  return flow.original_command_item == input.visible_stop;
+                }),
+            "a two-cell fallthrough fold must outrank a competing one-cell "
+            "selector rewrite of the same direct jump");
     require(before.stopped && after.stopped && before.state == after.state,
             "fallthrough jump component folding must preserve emulator-visible state");
 
@@ -2229,6 +2236,60 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
         raw.items, raw.preloads, flow(raw));
     require(blocked.plan.proved && blocked.plan.fallthrough_jump_folds == 0,
             "a raw terminal direct jump must remain an opaque layout barrier");
+  }
+
+  {
+    const auto standalone_jump_fixture = [](bool raw_jump) {
+      Fixture input;
+      input.items.push_back(MachineItem::label("standalone_jump_entry"));
+      input.items.push_back(op(0x54));
+      MachineItem jump = op(0x51);
+      jump.raw = raw_jump;
+      input.items.push_back(std::move(jump));
+      input.items.push_back(MachineItem::address("standalone_jump_sink"));
+      input.items.push_back(MachineItem::label("standalone_jump_sink"));
+      input.items.push_back(op(0x54));
+      input.items.push_back(stop());
+      return input;
+    };
+
+    core::NaturalTargetComponentLayoutOptions options;
+    options.allow_standalone_fallthrough_jump_fold = true;
+    const Fixture input = standalone_jump_fixture(false);
+    const Observation before = observe(input.items, input.preloads);
+    const auto rewritten = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input), options);
+    const Observation after = observe(rewritten.items, rewritten.preloads);
+    require(rewritten.plan.proved && rewritten.applied == 1 &&
+                rewritten.plan.fallthrough_jump_folds == 1 &&
+                rewritten.plan.removed_cells == 2 &&
+                cell_count(rewritten.items) == cell_count(input.items) - 2,
+            "standalone final-layout jump folding should not require a selector rewrite");
+    require(before.stopped && after.stopped && before.state == after.state,
+            "standalone fallthrough jump folding must preserve emulator-visible state");
+
+    const Fixture raw = standalone_jump_fixture(true);
+    const auto blocked = core::optimize_natural_target_component_layout(
+        raw.items, raw.preloads, flow(raw), options);
+    require(blocked.applied == 0 && blocked.plan.fallthrough_jump_folds == 0 &&
+                cell_count(blocked.items) == cell_count(raw.items),
+            "standalone jump folding must fail closed for a raw jump command");
+
+    Fixture numeric_entry;
+    numeric_entry.items.push_back(MachineItem::label("numeric_jump_entry"));
+    numeric_entry.items.push_back(op(0x01));
+    numeric_entry.items.push_back(op(0x51));
+    numeric_entry.items.push_back(MachineItem::address("numeric_jump_sink"));
+    numeric_entry.items.push_back(MachineItem::label("numeric_jump_sink"));
+    numeric_entry.items.push_back(op(0x02));
+    numeric_entry.items.push_back(stop());
+    const auto numeric_blocked = core::optimize_natural_target_component_layout(
+        numeric_entry.items, numeric_entry.preloads, flow(numeric_entry), options);
+    require(numeric_blocked.applied == 0 &&
+                numeric_blocked.plan.fallthrough_jump_folds == 0 &&
+                cell_count(numeric_blocked.items) ==
+                    cell_count(numeric_entry.items),
+            "standalone jump folding must preserve an observable number-entry boundary");
   }
 
   {

@@ -55280,6 +55280,39 @@ bool aggressive_post_layout_indirect_flow_static_gate_accepts(
   return has_indirect_flow_proof;
 }
 
+bool aggressive_post_layout_indirect_flow_composed_static_gate_accepts(
+    const CompileOptions& candidate_options, const CompileResult& result) {
+  // Aggressive post-layout flow is also safe after an independently proved
+  // preloaded-flow and/or callee-hole lowering.  Keep this as an explicit
+  // conjunction of final-artifact proofs rather than teaching either pass
+  // about the other pass's source shape.
+  const bool composes_preloaded_flow = candidate_options.preloaded_indirect_flow;
+  const bool composes_callee_hole = candidate_options.callee_hole_straight_line_helper;
+  if (!candidate_options.aggressive_post_layout_indirect_flow ||
+      (!composes_preloaded_flow && !composes_callee_hole) ||
+      candidate_options.dual_use_constant_indirect_flow ||
+      candidate_options.forward_indirect_flow ||
+      candidate_options.runtime_indirect_call_flow ||
+      candidate_options.aggressive_indirect_call ||
+      candidate_options.aggressive_indirect_call_threshold ||
+      candidate_options.assume_dead_selector_integer_part ||
+      !candidate_options.synthesized_dispatch_plans.empty() ||
+      !candidate_options.fractional_constant_selectors.empty() ||
+      !candidate_options.force_fractional_constant_selector_preloads.empty()) {
+    return false;
+  }
+  if (!suppressed_preload_static_gate_accepts(candidate_options, result))
+    return false;
+  if (!indirect_flow_targets_proved(result.optimizations, result.preloads, result.items,
+                                    result.steps, result.registers,
+                                    address_space_model_for_options(candidate_options))) {
+    return false;
+  }
+  return !composes_callee_hole || callee_hole_indirect_call_targets_proved(
+                                      result.optimizations, result.items, result.steps,
+                                      candidate_options);
+}
+
 bool runtime_indirect_call_flow_static_gate_accepts(const CompileOptions& candidate_options,
                                                     const CompileResult& result) {
   const bool enables_runtime_indirect_call_flow =
@@ -55483,6 +55516,8 @@ bool optimizer_static_gate_accepts(const CompileOptions& candidate_options,
   return computed_dispatch_static_gate_accepts(candidate_options, result) ||
          suppress_constant_preload_only_static_gate_accepts(candidate_options, result) ||
          preloaded_indirect_flow_callee_hole_static_gate_accepts(candidate_options, result) ||
+         aggressive_post_layout_indirect_flow_composed_static_gate_accepts(candidate_options,
+                                                                            result) ||
          preloaded_indirect_flow_static_gate_accepts(candidate_options, result) ||
          aggressive_post_layout_indirect_flow_static_gate_accepts(candidate_options, result) ||
          runtime_indirect_call_flow_static_gate_accepts(candidate_options, result) ||
@@ -69041,6 +69076,33 @@ bool identical_preloads(const std::vector<PreloadReport>& left,
                     });
 }
 
+void refresh_single_indirect_target_comment_addresses(
+    std::vector<MachineItem>& items,
+    const core::AuthoritativePostLayoutControlFlow& control) {
+  constexpr std::string_view kIndirectTargetMarker = "indirect-target=";
+  for (const auto& [source_item, targets] : control.indirect_flow_targets) {
+    if (source_item >= items.size() || targets.size() != 1U)
+      continue;
+    MachineItem& source = items.at(source_item);
+    if (!source.comment.has_value())
+      continue;
+    std::size_t marker = source.comment->find(kIndirectTargetMarker);
+    while (marker != std::string::npos) {
+      const std::size_t value_begin = marker + kIndirectTargetMarker.size();
+      std::size_t value_end = value_begin;
+      while (value_end < source.comment->size() &&
+             source.comment->at(value_end) >= '0' &&
+             source.comment->at(value_end) <= '9') {
+        ++value_end;
+      }
+      source.comment->replace(value_begin, value_end - value_begin,
+                              std::to_string(targets.front().address));
+      marker = source.comment->find(kIndirectTargetMarker,
+                                    value_begin + 1U);
+    }
+  }
+}
+
 std::optional<CompileResult>
 apply_finalization_absolute_relayout(
     const CompileResult& selected, const CompileOptions& options,
@@ -69538,29 +69600,8 @@ apply_finalization_absolute_relayout(
   if (!final_control.proved)
     return reject("final control-flow proof failed after late-bound rebind");
 
-  constexpr std::string_view kIndirectTargetMarker = "indirect-target=";
-  for (const auto& [source_item, targets] :
-       final_control.indirect_flow_targets) {
-    if (source_item >= placed.items.size() || targets.size() != 1U)
-      continue;
-    MachineItem& source = placed.items.at(source_item);
-    if (!source.comment.has_value())
-      continue;
-    std::size_t marker = source.comment->find(kIndirectTargetMarker);
-    while (marker != std::string::npos) {
-      const std::size_t value_begin = marker + kIndirectTargetMarker.size();
-      std::size_t value_end = value_begin;
-      while (value_end < source.comment->size() &&
-             source.comment->at(value_end) >= '0' &&
-             source.comment->at(value_end) <= '9') {
-        ++value_end;
-      }
-      source.comment->replace(value_begin, value_end - value_begin,
-                              std::to_string(targets.front().address));
-      marker = source.comment->find(kIndirectTargetMarker,
-                                    value_begin + 1U);
-    }
-  }
+  refresh_single_indirect_target_comment_addresses(placed.items,
+                                                   final_control);
 
   CompileResult relaid = selected;
   relaid.items = std::move(placed.items);
@@ -69807,6 +69848,361 @@ apply_finalization_dead_store_to_selected_result(
                                                             options);
   return apply_finalization_cell_erasure_to_selected_result(
       source, selected, options, dead_store, "dse");
+}
+
+std::optional<CompileResult>
+apply_finalization_fallthrough_jump_fold_to_selected_result(
+    const std::string& source, const CompileResult& selected,
+    const CompileOptions& options) {
+  if (!selected.implemented || selected.items.empty() ||
+      selected.manual_startup_sequence.has_value()) {
+    return std::nullopt;
+  }
+
+  const AddressSpaceModel model = address_space_model_for_options(options);
+  const std::optional<std::vector<MachineItem>> normalized =
+      core::normalize_natural_target_overflow_formals(selected.items, model);
+  if (!normalized.has_value())
+    return std::nullopt;
+
+  core::PostLayoutControlFlowOptions control_options;
+  control_options.address_space_model = model;
+  control_options.empty_return_target = 1;
+  const core::AuthoritativePostLayoutControlFlow control =
+      core::build_post_layout_control_flow(*normalized, control_options);
+  if (!control.proved)
+    return std::nullopt;
+
+  const std::optional<std::vector<std::string>> late_bound_targets =
+      core::late_bound_decimal_selector_target_labels(*normalized);
+  if (!late_bound_targets.has_value())
+    return std::nullopt;
+
+  core::NaturalTargetComponentLayoutOptions layout_options;
+  layout_options.address_space_model = model;
+  layout_options.maximum_subset_states = 512;
+  layout_options.maximum_anchors = options.maximum_natural_target_anchors;
+  layout_options.maximum_rejection_reasons = 12;
+  layout_options.allow_standalone_fallthrough_jump_fold = true;
+  layout_options.required_bounded_target_labels.assign(
+      late_bound_targets->begin(), late_bound_targets->end());
+  layout_options.maximum_bounded_target_address = 99;
+  layout_options.allow_size_neutral_bounded_layout =
+      !late_bound_targets->empty();
+
+  core::NaturalTargetComponentLayoutResult folded =
+      core::optimize_natural_target_component_layout(
+          *normalized, selected.preloads, control, layout_options);
+  const bool trace =
+      std::getenv("MKPRO_NATIVE_TRACE_FINALIZATION") != nullptr;
+  if (folded.applied <= 0 || !folded.plan.proved ||
+      folded.plan.fallthrough_jump_folds <= 0 ||
+      folded.plan.removed_cells <= 0 ||
+      !folded.plan.control_flow_equivalent ||
+      !folded.plan.call_return_equivalent ||
+      !folded.plan.stack_and_x2_equivalent ||
+      !folded.plan.indirect_memory_equivalent ||
+      !folded.plan.data_projection_equivalent ||
+      !folded.plan.final_artifact_proved ||
+      core::machine_cell_count(folded.items) >=
+          core::machine_cell_count(selected.items)) {
+    if (trace) {
+      std::cerr << "[finalization-fallthrough-jump] applied="
+                << folded.applied << " proved=" << folded.plan.proved
+                << " folds=" << folded.plan.fallthrough_jump_folds
+                << " removed=" << folded.plan.removed_cells
+                << " final=" << folded.plan.final_artifact_proved << "\n";
+      for (const std::string& reason : folded.plan.reasons) {
+        std::cerr << "[finalization-fallthrough-jump] " << reason << "\n";
+      }
+    }
+    return std::nullopt;
+  }
+
+  const core::LateBoundDecimalSelectorResult rebound =
+      core::rebind_late_bound_decimal_selectors(
+          folded.items,
+          core::LateBoundDecimalSelectorOptions{
+              .minimum_target_address = 0,
+              .maximum_target_address = 99,
+          });
+  if (!rebound.diagnostics.empty())
+    return std::nullopt;
+
+  CompileResult candidate = selected;
+  candidate.items = rebound.items;
+  refresh_single_indirect_target_comment_addresses(
+      candidate.items, folded.plan.final_control_flow);
+  candidate.preloads = folded.preloads;
+  candidate.optimizations.push_back(OptimizationReport{
+      .name = "fallthrough-jump-component-fold",
+      .detail =
+          "Chained " +
+          std::to_string(folded.plan.fallthrough_jump_folds) +
+          " independently proved terminal BP target component" +
+          (folded.plan.fallthrough_jump_folds == 1 ? "" : "s") +
+          " and erased the transparent command/address pair after final CFG, "
+          "stack/X2, return-stack, indirect-target, and preload proofs.",
+  });
+  if (rebound.applied > 0) {
+    candidate.optimizations.push_back(OptimizationReport{
+        .name = "late-bound-decimal-selector-rebind",
+        .detail = "Rebound " + std::to_string(rebound.applied) +
+                  " compiler-marked decimal selector charge(s) after the "
+                  "proved fallthrough component fold.",
+    });
+  }
+
+  const ResolvedProgram resolved = resolve_machine_items(candidate.items, options);
+  if (!resolved.diagnostics.empty() ||
+      resolved.steps.size() >= selected.steps.size()) {
+    return std::nullopt;
+  }
+
+  ProgramAst ast;
+  try {
+    ast = parse_program(
+        source, ParseOptions{
+                    .signed_abs_match_pairs = options.signed_abs_match_pairs,
+                    .synthesize_parametric_siblings =
+                        options.synthesize_parametric_siblings,
+                    .segmented_bitplanes = options.segmented_bitplanes,
+                });
+  } catch (const ParseError&) {
+    return std::nullopt;
+  }
+
+  if (selected.setup_program.has_value() &&
+      !identical_preloads(candidate.preloads, selected.preloads)) {
+    if (!ast.v2.has_value())
+      return std::nullopt;
+    std::map<std::string, const V2Board*> boards;
+    for (const V2Board& board : ast.v2->boards)
+      boards.emplace(board.name, &board);
+    const std::optional<std::string> setup_expected_mode =
+        options.output == OutputFormat::Mk61s ? std::nullopt
+                                              : candidate.expected_mode;
+    candidate.setup_program =
+        core::emit::lowering::compile_setup_program_with_preloads(
+            boards, candidate.registers, candidate.preloads, options,
+            setup_expected_mode);
+    candidate.setup_hex =
+        format_hex_steps(candidate.setup_program->steps, model);
+    candidate.setup_listing =
+        format_listing_steps(candidate.setup_program->steps, model);
+  }
+
+  candidate.steps = resolved.steps;
+  candidate.labels = label_map(resolved.labels);
+  candidate.hex = format_hex_steps(candidate.steps, model);
+  candidate.listing = combine_listing(candidate, model);
+  candidate.implemented = !has_errors(candidate.diagnostics);
+  if (!candidate.implemented)
+    return std::nullopt;
+  populate_public_report(candidate, ast, options);
+  return candidate;
+}
+
+std::optional<CompileResult>
+apply_finalization_empty_return_startup_to_selected_result(
+    const std::string& source, const CompileResult& selected,
+    const CompileOptions& options) {
+  if (!selected.implemented || selected.items.empty() ||
+      selected.manual_startup_sequence.has_value()) {
+    return std::nullopt;
+  }
+
+  const AddressSpaceModel model = address_space_model_for_options(options);
+  const std::optional<std::vector<MachineItem>> normalized =
+      core::normalize_natural_target_overflow_formals(selected.items, model);
+  if (!normalized.has_value())
+    return std::nullopt;
+
+  core::PostLayoutControlFlowOptions control_options;
+  control_options.address_space_model = model;
+  control_options.empty_return_target = 1;
+  const core::AuthoritativePostLayoutControlFlow control =
+      core::build_post_layout_control_flow(*normalized, control_options);
+  if (!control.proved)
+    return std::nullopt;
+
+  const bool trace =
+      std::getenv("MKPRO_NATIVE_TRACE_FINALIZATION") != nullptr;
+  const std::optional<std::vector<std::string>> late_bound_targets =
+      core::late_bound_decimal_selector_target_labels(*normalized);
+  if (!late_bound_targets.has_value())
+    return std::nullopt;
+
+  ProgramAst ast;
+  try {
+    ast = parse_program(
+        source, ParseOptions{
+                    .signed_abs_match_pairs = options.signed_abs_match_pairs,
+                    .synthesize_parametric_siblings =
+                        options.synthesize_parametric_siblings,
+                    .segmented_bitplanes = options.segmented_bitplanes,
+                });
+  } catch (const ParseError&) {
+    return std::nullopt;
+  }
+
+  core::TerminalCyclicLayoutOptions terminal_options;
+  terminal_options.address_space_model = model;
+  core::NaturalTargetComponentLayoutOptions natural_options;
+  natural_options.address_space_model = model;
+  natural_options.maximum_subset_states = 512;
+  natural_options.maximum_anchors = options.maximum_natural_target_anchors;
+  natural_options.maximum_rejection_reasons = 12;
+  natural_options.required_bounded_target_labels.assign(
+      late_bound_targets->begin(), late_bound_targets->end());
+  natural_options.maximum_bounded_target_address = 99;
+  natural_options.allow_size_neutral_bounded_layout =
+      !late_bound_targets->empty();
+
+  struct StartupLayout {
+    std::vector<MachineItem> items;
+    std::vector<PreloadReport> preloads;
+    bool component_transaction = false;
+  };
+  std::vector<StartupLayout> layouts;
+  for (core::EmptyReturnStartupLayoutResult& startup :
+       core::normalize_empty_return_startup_layouts(
+           *normalized, selected.preloads, control, terminal_options)) {
+    if (startup.final_artifact_proved && startup.control_flow.proved) {
+      layouts.push_back(StartupLayout{
+          .items = std::move(startup.items),
+          .preloads = std::move(startup.preloads),
+      });
+    }
+  }
+  std::vector<std::string> atomic_rejections;
+  for (core::NaturalTargetComponentLayoutResult& startup :
+       core::optimize_empty_return_startup_component_layouts(
+           *normalized, selected.preloads, control, natural_options,
+           terminal_options, &atomic_rejections)) {
+    if (startup.applied > 0 && startup.plan.proved &&
+        startup.plan.final_artifact_proved &&
+        startup.plan.control_flow_equivalent &&
+        startup.plan.call_return_equivalent &&
+        startup.plan.stack_and_x2_equivalent &&
+        startup.plan.indirect_memory_equivalent &&
+        startup.plan.data_projection_equivalent &&
+        startup.plan.absolute_targets_proved &&
+        startup.plan.deferred_selector_reconciliations_proved) {
+      layouts.push_back(StartupLayout{
+          .items = std::move(startup.items),
+          .preloads = std::move(startup.preloads),
+          .component_transaction = true,
+      });
+    }
+  }
+  if (trace) {
+    std::cerr << "[finalization-empty-return] candidates=" << layouts.size()
+              << " input-cells=" << core::machine_cell_count(selected.items)
+              << "\n";
+    for (const std::string& reason : atomic_rejections)
+      std::cerr << "[finalization-empty-return] " << reason << "\n";
+    for (const StartupLayout& layout : layouts) {
+      std::cerr << "[finalization-empty-return] candidate cells="
+                << core::machine_cell_count(layout.items)
+                << " component=" << layout.component_transaction << "\n";
+    }
+  }
+
+  std::optional<CompileResult> best;
+  for (StartupLayout& layout : layouts) {
+    const core::LateBoundDecimalSelectorResult rebound =
+        core::rebind_late_bound_decimal_selectors(
+            layout.items,
+            core::LateBoundDecimalSelectorOptions{
+                .minimum_target_address = 0,
+                .maximum_target_address = 99,
+            });
+    if (!rebound.diagnostics.empty() ||
+        core::machine_cell_count(rebound.items) >=
+            core::machine_cell_count(selected.items)) {
+      continue;
+    }
+
+    CompileResult candidate = selected;
+    candidate.items = rebound.items;
+    candidate.preloads = std::move(layout.preloads);
+    const core::AuthoritativePostLayoutControlFlow candidate_control =
+        core::build_post_layout_control_flow(candidate.items, control_options);
+    if (!candidate_control.proved)
+      continue;
+    refresh_single_indirect_target_comment_addresses(candidate.items,
+                                                     candidate_control);
+    const int loop_returns = static_cast<int>(std::count_if(
+        candidate.items.begin(), candidate.items.end(),
+        [](const MachineItem& item) {
+          return item.kind == MachineItemKind::Op && item.opcode == 0x52 &&
+                 std::find(item.roles.begin(), item.roles.end(),
+                           "empty-return-startup-edge") != item.roles.end();
+        }));
+    candidate.optimizations.push_back(OptimizationReport{
+        .name = layout.component_transaction
+                    ? "empty-return-startup-component-transaction"
+                    : "empty-return-startup-layout",
+        .detail =
+            "Placed a shared return at physical 00 and replaced " +
+            std::to_string(loop_returns) +
+            " BP 00 edge" +
+            (loop_returns == 1 ? "" : "s") +
+            " proved reachable only with an empty stack or unreachable from "
+            "every admitted entry with one-cell returns; final component "
+            "layout preserved every "
+            "direct/indirect command identity, return stack, stack/X2 state, "
+            "and delivered preload.",
+    });
+    if (rebound.applied > 0) {
+      candidate.optimizations.push_back(OptimizationReport{
+          .name = "late-bound-decimal-selector-rebind",
+          .detail = "Rebound " + std::to_string(rebound.applied) +
+                    " compiler-marked decimal selector charge(s) after the "
+                    "proved empty-return startup layout.",
+      });
+    }
+
+    const ResolvedProgram resolved =
+        resolve_machine_items(candidate.items, options);
+    if (!resolved.diagnostics.empty() ||
+        resolved.steps.size() >= selected.steps.size()) {
+      continue;
+    }
+
+    if (selected.setup_program.has_value() &&
+        !identical_preloads(candidate.preloads, selected.preloads)) {
+      if (!ast.v2.has_value())
+        continue;
+      std::map<std::string, const V2Board*> boards;
+      for (const V2Board& board : ast.v2->boards)
+        boards.emplace(board.name, &board);
+      const std::optional<std::string> setup_expected_mode =
+          options.output == OutputFormat::Mk61s ? std::nullopt
+                                                : candidate.expected_mode;
+      candidate.setup_program =
+          core::emit::lowering::compile_setup_program_with_preloads(
+              boards, candidate.registers, candidate.preloads, options,
+              setup_expected_mode);
+      candidate.setup_hex =
+          format_hex_steps(candidate.setup_program->steps, model);
+      candidate.setup_listing =
+          format_listing_steps(candidate.setup_program->steps, model);
+    }
+
+    candidate.steps = resolved.steps;
+    candidate.labels = label_map(resolved.labels);
+    candidate.hex = format_hex_steps(candidate.steps, model);
+    candidate.listing = combine_listing(candidate, model);
+    candidate.implemented = !has_errors(candidate.diagnostics);
+    if (!candidate.implemented)
+      continue;
+    populate_public_report(candidate, ast, options);
+    if (!best.has_value() || candidate.steps.size() < best->steps.size())
+      best = std::move(candidate);
+  }
+  return best;
 }
 
 std::optional<SelectedAbsoluteDarkLayout>
@@ -70317,6 +70713,20 @@ CompileResult compile_source_for_optimizer_profile(
       if (finalized.has_value() &&
           candidate_beats_best(*finalized, result, options)) {
         result = *finalized;
+      }
+      const std::optional<CompileResult> startup =
+          apply_finalization_empty_return_startup_to_selected_result(
+              source, result, options);
+      if (startup.has_value() &&
+          candidate_beats_best(*startup, result, options)) {
+        result = *startup;
+      }
+      const std::optional<CompileResult> folded =
+          apply_finalization_fallthrough_jump_fold_to_selected_result(
+              source, result, options);
+      if (folded.has_value() &&
+          candidate_beats_best(*folded, result, options)) {
+        result = *folded;
       }
     }
     write_compile_result_cache(source, options, result);
@@ -73536,10 +73946,17 @@ CompileResult compile_source_for_optimizer_profile(
       try {
         ++finalized_layout_attempts;
         CompileOptions finalized_options = finalist.options;
+        // Dark-side suffix placement is a property of the finalized machine
+        // artifact, not of the lowering flags that happened to expose it. Run
+        // the expensive atomic proof for the best-ranked finalist of every
+        // overflowing program, while retaining the historical composed
+        // lowering trigger for later finalists. The ordinary sibling is still
+        // compiled below and wins whenever the dark layout is neutral or worse.
         const bool apply_atomic_absolute_dark_rescue =
-            finalized_options.inline_floor_packed_row_expressions &&
-            finalized_options.stack_ssa_function_entries &&
-            finalized_options.branch_y_payload_forwarding;
+            finalization_index == 1U ||
+            (finalized_options.inline_floor_packed_row_expressions &&
+             finalized_options.stack_ssa_function_entries &&
+             finalized_options.branch_y_payload_forwarding);
         CompileResult finalized = compile_source_once(
             source, finalized_options, source_has_entered,
             /*apply_final_layout_size_rescue=*/true,
@@ -73742,6 +74159,30 @@ CompileResult compile_source_for_optimizer_profile(
     };
     std::vector<PendingFinalLayoutDemotion> pending_final_layout_demotions;
     for (const FinalLayoutCandidate& base : composition_bases) {
+      // A post-layout selector can borrow the entry phase of a data register
+      // only after the winning lowering and layout have exposed its exact
+      // lifetime.  Compose it here, then require the combined final-artifact
+      // proof gate above; enumerating it only as an independent root misses
+      // profitable interactions with preloaded flow and extracted helpers.
+      if (allow_aggressive_post_layout &&
+          !base.options.aggressive_post_layout_indirect_flow &&
+          !base.options.dual_use_constant_indirect_flow &&
+          !base.options.forward_indirect_flow &&
+          !base.options.runtime_indirect_call_flow &&
+          !base.options.aggressive_indirect_call &&
+          !base.options.aggressive_indirect_call_threshold &&
+          !base.options.assume_dead_selector_integer_part &&
+          base.options.synthesized_dispatch_plans.empty() &&
+          base.options.fractional_constant_selectors.empty() &&
+          base.options.force_fractional_constant_selector_preloads.empty()) {
+        FinalLayoutCandidate composed = base;
+        composed.options.aggressive_post_layout_indirect_flow = true;
+        consider_composed_finalist(
+            std::move(composed), "aggressive-post-layout-final-composition",
+            "Re-ran proven post-layout indirect-flow borrowing on a competitive finalized "
+            "lowering and layout.");
+      }
+
       for (const std::size_t maximum_anchors : {std::size_t{0}, std::size_t{1}}) {
         FinalLayoutCandidate composed = base;
         composed.options.disable_return_suffix_gadget = true;
@@ -74128,6 +74569,20 @@ CompileResult compile_source_for_optimizer_profile(
       if (finalized.has_value() &&
           candidate_beats_best(*finalized, best, options)) {
         best = *finalized;
+      }
+      const std::optional<CompileResult> startup =
+          apply_finalization_empty_return_startup_to_selected_result(
+              source, best, best_options);
+      if (startup.has_value() &&
+          candidate_beats_best(*startup, best, options)) {
+        best = *startup;
+      }
+      const std::optional<CompileResult> folded =
+          apply_finalization_fallthrough_jump_fold_to_selected_result(
+              source, best, best_options);
+      if (folded.has_value() &&
+          candidate_beats_best(*folded, best, options)) {
+        best = *folded;
       }
       const std::optional<CompileResult> rescued =
           apply_absolute_dark_layout_to_selected_result(source, best, best_options);

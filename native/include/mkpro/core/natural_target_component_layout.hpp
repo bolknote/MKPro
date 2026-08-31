@@ -110,6 +110,12 @@ struct NaturalTargetComponentLayoutOptions {
   // may request only the neutral geometric solution. This skips unrelated
   // natural-flow anchor combinations that the caller could not accept.
   bool require_size_neutral_absolute_layout = false;
+  // Permit the ordinary two-cell `BP <target>` component stitch to run as a
+  // complete post-layout transaction even when no selector rewrite is
+  // profitable. The fold still has to preserve every command identity,
+  // external/return entry, stack/X2 effect, indirect target, and preload under
+  // the final authoritative control-flow proof.
+  bool allow_standalone_fallthrough_jump_fold = false;
   std::vector<NaturalTargetDeferredSelectorReconciliation>
       deferred_selector_reconciliations;
 };

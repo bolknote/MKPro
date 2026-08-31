@@ -77,10 +77,11 @@ struct EmptyReturnStartupLayoutResult {
   bool final_artifact_proved = false;
 };
 
-// Replace one empty-stack `BP 00` startup loop with a physical-00 return and
-// remove its operand without changing size. Indirect targets may move only
-// when their delivered preload belongs to a compiler-proved retunable natural
-// fractional family; the returned preload set is part of the transaction.
+// Replace every `BP 00` edge that is either reachable only with an empty return
+// stack or absent from the complete authoritative CFG with a shared physical-00
+// return, then remove their operands. Indirect targets may move only when their
+// delivered preload belongs to a compiler-proved retunable natural fractional
+// family; the returned preload set is part of the transaction.
 std::vector<EmptyReturnStartupLayoutResult> normalize_empty_return_startup_layouts(
     const std::vector<MachineItem>& items,
     const std::vector<PreloadReport>& preloads,

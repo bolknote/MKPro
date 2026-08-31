@@ -2006,6 +2006,14 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts(
     if (rejection_reasons != nullptr)
       add_reason(*rejection_reasons, std::move(reason));
   };
+  std::vector<std::string> control_reasons;
+  if (!validate_complete_control_flow(items, input_index, control_flow, options,
+                                      control_reasons)) {
+    reject("input CFG is not an exact authoritative proof");
+    for (const std::string& reason : control_reasons)
+      reject("input CFG: " + reason);
+    return candidates;
+  }
   const auto zero = input_index.cell_items.find(0);
   if (zero == input_index.cell_items.end() || is_op(items, zero->second, kReturnOpcode) ||
       !control_flow.empty_return_target.has_value() ||
@@ -2025,6 +2033,8 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts(
   }
 
   bool found_zero_jump = false;
+  std::vector<std::pair<std::size_t, std::size_t>> empty_stack_zero_jumps;
+  std::set<std::size_t> unreachable_zero_jumps;
   for (std::size_t jump = 0; jump < items.size(); ++jump) {
     if (!is_op(items, jump, kJumpOpcode))
       continue;
@@ -2041,6 +2051,21 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts(
     }
     found_zero_jump = true;
 
+    const bool reachable = std::any_of(
+        control_flow.execution_states.begin(), control_flow.execution_states.end(),
+        [&](const PostLayoutExecutionState& state) {
+          return state.item_index == jump;
+        });
+    if (!reachable) {
+      // The authoritative CFG is complete over every admitted external entry.
+      // Changing a command absent from that graph is vacuously behavior-neutral;
+      // the rebuilt final CFG below must still prove that relocation did not
+      // make this command reachable.
+      empty_stack_zero_jumps.emplace_back(jump, *operand);
+      unreachable_zero_jumps.insert(jump);
+      continue;
+    }
+
     std::vector<std::string> stack_reasons;
     const std::vector<std::vector<int>> stacks = reachable_return_stacks(
         items, input_index, control_flow, input_index.item_addresses.at(jump), options,
@@ -2048,10 +2073,48 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts(
     if (!stack_reasons.empty() || stacks.empty() ||
         std::any_of(stacks.begin(), stacks.end(),
                     [](const std::vector<int>& stack) { return !stack.empty(); })) {
-      reject("direct BP 00 is not proved reachable only with an empty return stack");
+      std::string detail =
+          "direct BP 00 at physical " +
+          std::to_string(input_index.item_addresses.at(jump)) +
+          " is not proved reachable only with an empty return stack; stacks=";
+      for (std::size_t stack_index = 0; stack_index < stacks.size();
+           ++stack_index) {
+        if (stack_index > 0)
+          detail += ",";
+        detail += "[";
+        for (std::size_t slot = 0; slot < stacks.at(stack_index).size(); ++slot) {
+          if (slot > 0)
+            detail += "/";
+          detail += std::to_string(stacks.at(stack_index).at(slot));
+        }
+        detail += "]";
+      }
+      for (const std::string& reason : stack_reasons)
+        detail += "; " + reason;
+      reject(std::move(detail));
       continue;
     }
 
+    empty_stack_zero_jumps.emplace_back(jump, *operand);
+  }
+  if (empty_stack_zero_jumps.empty()) {
+    if (!found_zero_jump)
+      reject("artifact contains no direct BP 00 startup loop candidate");
+    return candidates;
+  }
+
+  // Inserting В/О@00 costs one cell regardless of how many independently
+  // proved empty-stack loop edges use it. Rewrite every safe BP 00 in one
+  // transaction so two or more edges expose the shared size saving instead of
+  // being evaluated as separate size-neutral candidates.
+  std::set<std::size_t> selected_jumps;
+  std::set<std::size_t> selected_operands;
+  for (const auto& [jump, operand] : empty_stack_zero_jumps) {
+    selected_jumps.insert(jump);
+    selected_operands.insert(operand);
+  }
+
+  do {
     std::vector<std::optional<std::size_t>> relocation(items.size());
     std::vector<MachineItem> rewritten;
     rewritten.reserve(items.size());
@@ -2059,14 +2122,17 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts(
     startup_return.comment = "transparent empty-stack startup return to physical 01";
     rewritten.push_back(std::move(startup_return));
     for (std::size_t old_item = 0; old_item < items.size(); ++old_item) {
-      if (old_item == *operand)
+      if (selected_operands.contains(old_item))
         continue;
       relocation.at(old_item) = rewritten.size();
       MachineItem item = items.at(old_item);
-      if (old_item == jump) {
+      if (selected_jumps.contains(old_item)) {
         item.opcode = kReturnOpcode;
         item.name = "В/О";
-        item.comment = "empty-stack loop return to physical 01";
+        item.comment = unreachable_zero_jumps.contains(old_item)
+                           ? "unreachable BP 00 compacted as a return; final CFG re-proved"
+                           : "empty-stack loop return to physical 01";
+        item.roles.push_back("empty-return-startup-edge");
       }
       rewritten.push_back(std::move(item));
     }
@@ -2074,7 +2140,8 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts(
 
     bool direct_edges_rebound = true;
     for (std::size_t source = 0; source < items.size(); ++source) {
-      if (source == jump || items.at(source).kind != MachineItemKind::Op ||
+      if (selected_jumps.contains(source) ||
+          items.at(source).kind != MachineItemKind::Op ||
           !is_direct_flow_opcode(items.at(source).opcode)) {
         continue;
       }
@@ -2291,6 +2358,36 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts(
       continue;
     }
 
+    bool rewritten_edge_states_match = true;
+    for (const auto& [old_jump, unused_operand] : empty_stack_zero_jumps) {
+      (void)unused_operand;
+      if (!relocation.at(old_jump).has_value()) {
+        rewritten_edge_states_match = false;
+        break;
+      }
+      const std::size_t new_jump = *relocation.at(old_jump);
+      bool reached = false;
+      for (const PostLayoutExecutionState& state :
+           rewritten_flow.execution_states) {
+        if (state.item_index != new_jump)
+          continue;
+        reached = true;
+        if (!state.return_stack.empty()) {
+          rewritten_edge_states_match = false;
+          break;
+        }
+      }
+      if (!rewritten_edge_states_match ||
+          (unreachable_zero_jumps.contains(old_jump) ? reached : !reached)) {
+        rewritten_edge_states_match = false;
+        break;
+      }
+    }
+    if (!rewritten_edge_states_match) {
+      reject("startup layout changed reachability or return-stack class of a rewritten BP 00 edge");
+      continue;
+    }
+
     bool external_entries_rebound = true;
     for (const PostLayoutExternalEntryState& old_entry : control_flow.external_entries) {
       if (old_entry.kind == ExternalEntryKind::Main) {
@@ -2399,9 +2496,7 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts(
             std::move(deferred_selector_reconciliations),
         .original_to_output = std::move(relocation),
     });
-  }
-  if (!found_zero_jump)
-    reject("artifact contains no direct BP 00 startup loop candidate");
+  } while (false);
   return candidates;
 }
 

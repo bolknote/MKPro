@@ -546,10 +546,19 @@ void callee_hole_helper_matches_direct_call_semantics() {
   require(!combined_rejection.has_value(),
           "combined callee-hole/preloaded-flow gate should accept both proved final artifacts: " +
               combined_rejection.value_or("unknown rejection"));
+  CompileOptions aggressive_preloaded_hole_options = preloaded_hole_options;
+  aggressive_preloaded_hole_options.aggressive_post_layout_indirect_flow = true;
+  require(optimizer_static_proof_gate_accepts_for_testing(aggressive_preloaded_hole_options,
+                                                           preloaded_hole),
+          "aggressive post-layout flow should compose with independently proved preloaded-flow "
+          "and callee-hole artifacts");
   preloaded_hole.preloads.clear();
   require(!optimizer_static_proof_gate_accepts_for_testing(preloaded_hole_options,
                                                             preloaded_hole),
           "combined callee-hole/preloaded-flow gate should reject a missing preload proof");
+  require(!optimizer_static_proof_gate_accepts_for_testing(aggressive_preloaded_hole_options,
+                                                            preloaded_hole),
+          "aggressive composed flow should fail closed when the preload proof is missing");
 
   CompileResult live_entry_x = proved_mutating;
   live_entry_x.steps.erase(live_entry_x.steps.begin() + 11);
