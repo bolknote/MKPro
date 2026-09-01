@@ -460,6 +460,145 @@ bool repeated_literal_lift_converges_through_cfg(const std::vector<IrOp>& ops,
   return true;
 }
 
+std::optional<std::string> selector_role_target(const MachineItem& item,
+                                                std::string_view prefix) {
+  std::optional<std::string> target;
+  for (const CellRole& role : item.roles) {
+    if (!role.starts_with(prefix))
+      continue;
+    const std::string value = role.substr(prefix.size());
+    if (value.empty() || (target.has_value() && *target != value))
+      return std::nullopt;
+    target = value;
+  }
+  return target;
+}
+
+std::map<std::string, int> machine_label_addresses(
+    const std::vector<MachineItem>& items) {
+  std::map<std::string, int> labels;
+  int address = 0;
+  for (const MachineItem& item : items) {
+    if (item.kind == MachineItemKind::Label)
+      labels.emplace(item.name, address);
+    else
+      ++address;
+  }
+  return labels;
+}
+
+bool x2_only_difference_converges_after_address(
+    const std::vector<MachineItem>& items, int seed_address,
+    int required_predecessor_address) {
+  const bool trace = std::getenv("MKPRO_NATIVE_TRACE_REDUNDANT_LITERAL_RELOAD") != nullptr;
+  const auto reject = [&](const std::string& reason) {
+    if (trace)
+      std::cerr << "[single-digit-selector-proof] " << reason << "\n";
+    return false;
+  };
+  const AuthoritativePostLayoutControlFlow flow =
+      build_reload_equivalence_flow(items);
+  if (!flow.proved || flow.execution_states.size() != flow.execution_successors.size())
+    return reject("authoritative CFG failed");
+
+  std::vector<std::vector<std::size_t>> predecessors(flow.execution_states.size());
+  for (std::size_t source = 0; source < flow.execution_successors.size(); ++source) {
+    for (const std::size_t target : flow.execution_successors.at(source)) {
+      if (target >= predecessors.size())
+        return reject("CFG successor is outside execution-state graph");
+      predecessors.at(target).push_back(source);
+    }
+  }
+
+  std::vector<std::optional<StackValueEqualityState>> incoming(flow.execution_states.size());
+  std::deque<std::size_t> worklist;
+  const StackValueEqualityState x2_only_difference{
+      .stack_equal = {true, true, true, true},
+      .x2_equal = false,
+  };
+  bool seeded = false;
+  for (std::size_t state_index = 0; state_index < flow.execution_states.size(); ++state_index) {
+    if (flow.execution_states.at(state_index).address != seed_address)
+      continue;
+    const std::vector<std::size_t>& incoming_edges = predecessors.at(state_index);
+    if (incoming_edges.empty())
+      return reject("surviving digit is an independent external entry");
+    for (const std::size_t predecessor : incoming_edges) {
+      if (flow.execution_states.at(predecessor).address != required_predecessor_address)
+        return reject("surviving digit has a non-leading-zero predecessor");
+    }
+    if (flow.execution_successors.at(state_index).size() != 1U)
+      return reject("surviving digit does not have one fallthrough successor");
+    const std::size_t successor = flow.execution_successors.at(state_index).front();
+    if (!incoming.at(successor).has_value()) {
+      incoming.at(successor) = x2_only_difference;
+      worklist.push_back(successor);
+    } else if (equality_state_merge(*incoming.at(successor), x2_only_difference)) {
+      worklist.push_back(successor);
+    }
+    seeded = true;
+  }
+  if (!seeded)
+    return reject("selector charge is unreachable from every admitted entry");
+
+  while (!worklist.empty()) {
+    const std::size_t state_index = worklist.front();
+    worklist.pop_front();
+    if (!incoming.at(state_index).has_value())
+      return reject("worklist state has no equality input");
+    StackValueEqualityState state = *incoming.at(state_index);
+    if (stack_values_fully_equal(state))
+      continue;
+
+    const PostLayoutExecutionState& execution = flow.execution_states.at(state_index);
+    if (execution.item_index >= items.size() ||
+        items.at(execution.item_index).kind != MachineItemKind::Op) {
+      return reject("execution state points outside executable items");
+    }
+    const MachineItem& item = items.at(execution.item_index);
+    const IrKind kind = machine_opcode_kind(item.opcode);
+    if (kind == IrKind::Stop)
+      return reject("unequal X2 reaches stop at " + std::to_string(execution.address));
+    if (kind == IrKind::Return) {
+      if (transfer_stack_value_equality(state, item.opcode,
+                                        StackValueEqualityStepKind::Plain) ==
+          StackValueEqualityTransfer::Rejected) {
+        return reject("unequal X2 reaches return at " +
+                      std::to_string(execution.address));
+      }
+    } else if (!is_stack_equivalence_flow(kind)) {
+      StackValueEqualityStepKind step_kind = StackValueEqualityStepKind::Plain;
+      if (kind == IrKind::Recall || kind == IrKind::IndirectRecall)
+        step_kind = StackValueEqualityStepKind::Recall;
+      else if (kind == IrKind::Store || kind == IrKind::IndirectStore)
+        step_kind = StackValueEqualityStepKind::Store;
+      const StackValueEqualityTransfer transfer =
+          transfer_stack_value_equality(state, item.opcode, step_kind);
+      if (transfer == StackValueEqualityTransfer::Rejected) {
+        return reject("X2 consumer observes leading-zero spelling at " +
+                      std::to_string(execution.address));
+      }
+      if (transfer == StackValueEqualityTransfer::Converged)
+        continue;
+    }
+
+    const std::vector<std::size_t>& successors = flow.execution_successors.at(state_index);
+    if (successors.empty())
+      return reject("unequal X2 reaches terminal CFG state");
+    for (const std::size_t successor : successors) {
+      if (successor >= incoming.size())
+        return reject("CFG successor is outside execution-state graph");
+      if (!incoming.at(successor).has_value()) {
+        incoming.at(successor) = state;
+        worklist.push_back(successor);
+      } else if (equality_state_merge(*incoming.at(successor), state)) {
+        worklist.push_back(successor);
+      }
+    }
+  }
+  return true;
+}
+
 } // namespace
 
 std::optional<std::size_t>
@@ -496,6 +635,64 @@ post_layout_redundant_literal_reload_item(const std::vector<MachineItem>& items)
         items.at(*item).opcode == reload.opcode) {
       return item;
     }
+  }
+  return std::nullopt;
+}
+
+std::optional<SingleDigitLateSelectorPlan>
+post_layout_single_digit_late_selector_plan(const std::vector<MachineItem>& items) {
+  constexpr std::string_view kHighPrefix = "late-decimal-selector-high:";
+  constexpr std::string_view kLowPrefix = "late-decimal-selector-low:";
+  const std::map<std::string, int> labels = machine_label_addresses(items);
+  int high_address = 0;
+  for (std::size_t high_item = 0; high_item + 1U < items.size(); ++high_item) {
+    const MachineItem& high = items.at(high_item);
+    if (high.kind == MachineItemKind::Label)
+      continue;
+    const int current_address = high_address++;
+    const std::optional<std::string> target =
+        selector_role_target(high, kHighPrefix);
+    if (!target.has_value() || high.kind != MachineItemKind::Op || high.raw ||
+        high.opcode != 0x00 || high.mnemonic != "0") {
+      continue;
+    }
+    std::size_t low_item = high_item + 1U;
+    while (low_item < items.size() &&
+           items.at(low_item).kind == MachineItemKind::Label) {
+      ++low_item;
+    }
+    if (low_item >= items.size())
+      continue;
+    const MachineItem& low = items.at(low_item);
+    const std::optional<std::string> low_target =
+        selector_role_target(low, kLowPrefix);
+    if (!low_target.has_value() || *low_target != *target ||
+        low.kind != MachineItemKind::Op || low.raw || low.opcode < 0x00 ||
+        low.opcode > 0x09 || low.mnemonic != std::to_string(low.opcode)) {
+      continue;
+    }
+    const auto label = labels.find(*target);
+    if (label == labels.end() || label->second < 0 || label->second > 9 ||
+        low.opcode != label->second || current_address <= 0)
+      continue;
+    const std::optional<std::size_t> previous_item =
+        machine_item_at_address(items, current_address - 1);
+    if (!previous_item.has_value() ||
+        items.at(*previous_item).kind != MachineItemKind::Op ||
+        items.at(*previous_item).opcode <= 0x0c) {
+      continue;
+    }
+    if (!x2_only_difference_converges_after_address(
+            items, current_address + 1, current_address)) {
+      continue;
+    }
+    return SingleDigitLateSelectorPlan{
+        .leading_zero_item = high_item,
+        .low_digit_item = low_item,
+        .leading_zero_address = current_address,
+        .target_address = label->second,
+        .target_label = *target,
+    };
   }
   return std::nullopt;
 }

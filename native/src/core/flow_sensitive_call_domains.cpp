@@ -8,6 +8,7 @@
 #include <array>
 #include <charconv>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <map>
 #include <optional>
@@ -204,8 +205,12 @@ std::string swap_comparison(std::string op) {
 
 class Analyzer {
 public:
-  Analyzer(const V2Program& program, std::set<std::string> targets)
-      : program_(program), targets_(std::move(targets)) {
+  Analyzer(const V2Program& program, std::set<std::string> direct_targets,
+           std::vector<FlowSensitiveExpressionCallTarget> expression_targets = {})
+      : program_(program), direct_targets_(std::move(direct_targets)),
+        expression_targets_(std::move(expression_targets)), targets_(direct_targets_) {
+    for (const FlowSensitiveExpressionCallTarget& target : expression_targets_)
+      targets_.insert(target.proof_key);
     for (const V2Rule& rule : program_.rules)
       rules_.emplace(rule.name, &rule);
     for (const V2Const& constant : program_.consts)
@@ -262,6 +267,29 @@ public:
           }
         }
       }
+      const auto expression_target_facts = expression_facts_.find(target);
+      if (expression_target_facts != expression_facts_.end()) {
+        for (const auto& [unused_statement, site_facts] : expression_target_facts->second) {
+          (void)unused_statement;
+          for (const SiteFact& fact : site_facts) {
+            if (!fact.seen)
+              continue;
+            ++seen;
+            proof.valid = proof.valid && fact.valid && fact.value.domain.valid();
+            if (!proof.domain.valid()) {
+              proof.domain = fact.value.domain;
+              proof.decimal_derivation_exact = fact.value.decimal_derivation_exact;
+              proof.zero_canonical_positive = fact.value.zero_canonical_positive;
+            } else {
+              proof.domain = unite(proof.domain, fact.value.domain);
+              proof.decimal_derivation_exact =
+                  proof.decimal_derivation_exact && fact.value.decimal_derivation_exact;
+              proof.zero_canonical_positive =
+                  proof.zero_canonical_positive && fact.value.zero_canonical_positive;
+            }
+          }
+        }
+      }
       if (!contains_zero(proof.domain))
         proof.zero_canonical_positive = true;
       proof.valid = proof.valid && seen == proof.call_sites && proof.domain.valid();
@@ -275,11 +303,14 @@ private:
   static constexpr int kMaximumCallDepth = 64;
 
   const V2Program& program_;
+  std::set<std::string> direct_targets_;
+  std::vector<FlowSensitiveExpressionCallTarget> expression_targets_;
   std::set<std::string> targets_;
   std::map<std::string, const V2Rule*> rules_;
   Domains constants_;
   std::map<std::string, int> syntactic_calls_;
   std::map<std::string, std::map<const V2Statement*, SiteFact>> facts_;
+  std::map<std::string, std::map<const V2Statement*, std::vector<SiteFact>>> expression_facts_;
   bool sound_ = true;
 
   bool expression_invokes_rule(const Expression& expression) const {
@@ -306,6 +337,116 @@ private:
       // is irrelevant here; any transfer that needs it will still become
       // Unknown when analyzed.
     }
+  }
+
+  using ExpressionVisitor = std::function<void(const Expression&)>;
+
+  void visit_expression(const Expression& expression, const ExpressionVisitor& visitor) const {
+    visitor(expression);
+    if (expression.index != nullptr)
+      visit_expression(*expression.index, visitor);
+    if (expression.expr != nullptr)
+      visit_expression(*expression.expr, visitor);
+    if (expression.left != nullptr)
+      visit_expression(*expression.left, visitor);
+    if (expression.right != nullptr)
+      visit_expression(*expression.right, visitor);
+    for (const Expression& argument : expression.args)
+      visit_expression(argument, visitor);
+  }
+
+  void visit_expression_text(const std::string& text, int line,
+                             const ExpressionVisitor& visitor) {
+    try {
+      visit_expression(parse_expression(text, line), visitor);
+    } catch (const std::exception&) {
+      const bool may_hide_target =
+          std::any_of(expression_targets_.begin(), expression_targets_.end(),
+                      [&](const FlowSensitiveExpressionCallTarget& target) {
+                        return text.find(target.callee) != std::string::npos;
+                      });
+      if (may_hide_target)
+        sound_ = false;
+    }
+  }
+
+  void visit_statement_expressions(const V2Statement& statement,
+                                   const ExpressionVisitor& visitor) {
+    if (statement.target.has_value())
+      visit_expression_text(*statement.target, statement.line, visitor);
+    if (statement.expr.has_value())
+      visit_expression_text(*statement.expr, statement.line, visitor);
+    for (const std::string& argument : statement.args)
+      visit_expression_text(argument, statement.line, visitor);
+    if (statement.predicate.has_value()) {
+      visit_expression_text(statement.predicate->left, statement.line, visitor);
+      visit_expression_text(statement.predicate->right, statement.line, visitor);
+      if (!statement.predicate->collection.empty())
+        visit_expression_text(statement.predicate->collection, statement.line, visitor);
+      if (!statement.predicate->item.empty())
+        visit_expression_text(statement.predicate->item, statement.line, visitor);
+    }
+    if (statement.items.has_value()) {
+      for (const DisplayItem& item : *statement.items) {
+        if (item.expr.has_value())
+          visit_expression(*item.expr, visitor);
+      }
+    }
+    for (const V2RawInput& input : statement.inputs)
+      visit_expression_text(input.expr, input.line, visitor);
+    for (const V2MatchCase& match_case : statement.cases) {
+      for (const std::string& value : match_case.values)
+        visit_expression_text(value, match_case.line, visitor);
+    }
+  }
+
+  bool expression_target_matches(const FlowSensitiveExpressionCallTarget& target,
+                                 const Expression& expression) const {
+    if (expression.kind != "call" || expression.callee != target.callee ||
+        expression.args.size() <= target.argument_index) {
+      return false;
+    }
+    if (!target.literal_argument_index.has_value())
+      return true;
+    const std::size_t literal_index = *target.literal_argument_index;
+    if (expression.args.size() <= literal_index)
+      return target.accept_missing_literal_argument;
+    const std::optional<std::int64_t> literal = integer_literal(expression.args.at(literal_index));
+    return literal.has_value() && target.literal_argument_value.has_value() &&
+           *literal == *target.literal_argument_value;
+  }
+
+  void collect_expression_calls(const V2Statement& statement) {
+    visit_statement_expressions(statement, [&](const Expression& expression) {
+      for (const FlowSensitiveExpressionCallTarget& target : expression_targets_) {
+        if (expression_target_matches(target, expression))
+          ++syntactic_calls_[target.proof_key];
+      }
+    });
+  }
+
+  void observe_expression_calls(const V2Statement& statement, const AbstractState& input) {
+    std::map<std::string, std::size_t> ordinals;
+    visit_statement_expressions(statement, [&](const Expression& expression) {
+      for (const FlowSensitiveExpressionCallTarget& target : expression_targets_) {
+        if (!expression_target_matches(target, expression))
+          continue;
+        const std::size_t ordinal = ordinals[target.proof_key]++;
+        std::vector<SiteFact>& statement_facts =
+            expression_facts_[target.proof_key][&statement];
+        if (statement_facts.size() <= ordinal)
+          statement_facts.resize(ordinal + 1U);
+        SiteFact& fact = statement_facts.at(ordinal);
+        fact.seen = true;
+        const std::optional<AbstractValue> value =
+            expression_domain(expression.args.at(target.argument_index), input);
+        if (!value.has_value()) {
+          fact.valid = false;
+          continue;
+        }
+        fact.value = fact.value.domain.valid() ? unite(fact.value, *value) : *value;
+      }
+    });
   }
 
   void scan_statements_for_expression_calls(const std::vector<V2Statement>& statements) {
@@ -349,9 +490,10 @@ private:
   void collect_syntactic_calls(const std::vector<V2Statement>& statements) {
     for (const V2Statement& statement : statements) {
       if (statement.kind == "v2_invoke" && statement.name.has_value() &&
-          targets_.contains(*statement.name)) {
+          direct_targets_.contains(*statement.name)) {
         ++syntactic_calls_[*statement.name];
       }
+      collect_expression_calls(statement);
       collect_syntactic_calls(statement.body);
       collect_syntactic_calls(statement.then_body);
       collect_syntactic_calls(statement.else_body);
@@ -489,7 +631,7 @@ private:
   }
 
   void observe_call(const V2Statement& statement, const AbstractState& input) {
-    if (!statement.name.has_value() || !targets_.contains(*statement.name))
+    if (!statement.name.has_value() || !direct_targets_.contains(*statement.name))
       return;
     SiteFact& fact = facts_[*statement.name][&statement];
     fact.seen = true;
@@ -595,6 +737,7 @@ private:
     AbstractState returned;
     bool converged = false;
     for (int iteration = 0; iteration < kMaximumLoopIterations; ++iteration) {
+      observe_expression_calls(statement, header);
       AbstractState body_input = header;
       if (statement.kind == "v2_while" && statement.predicate.has_value()) {
         body_input = refine(header, *statement.predicate, true, statement.line);
@@ -685,6 +828,8 @@ private:
                                std::vector<std::string>& call_stack) {
     if (!input.reachable)
       return FlowResult{.fallthrough = input};
+    if (statement.kind != "v2_while" && statement.kind != "v2_loop")
+      observe_expression_calls(statement, input);
     if (statement.kind == "v2_assign" || statement.kind == "v2_update" ||
         statement.kind == "v2_read") {
       AbstractState output = input;
@@ -806,6 +951,13 @@ std::map<std::string, FlowSensitiveCallDomainProof>
 prove_flow_sensitive_call_domains(const V2Program& program,
                                   const std::set<std::string>& rule_names) {
   return Analyzer(program, rule_names).run();
+}
+
+std::map<std::string, FlowSensitiveCallDomainProof>
+prove_flow_sensitive_expression_call_domains(
+    const V2Program& program,
+    const std::vector<FlowSensitiveExpressionCallTarget>& targets) {
+  return Analyzer(program, {}, targets).run();
 }
 
 } // namespace mkpro::core

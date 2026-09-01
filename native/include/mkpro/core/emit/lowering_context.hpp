@@ -213,12 +213,19 @@ struct LoweringContext {
   std::set<std::string> inline_statement_rules;
   std::set<std::pair<std::string, int>> terminal_underflow_unit_decrements;
   std::map<std::string, XParamProcLowering> x_param_procs;
+  // Procedures whose single X parameter is proved to be a sign-only value.
+  // Their callers may forward any value with the requested nonzero sign; the
+  // callee canonicalizes it to +/-1 once at entry.
+  std::set<std::string> sign_normalized_x_param_procs;
   std::map<std::string, XParamYStackProcLowering> x_param_y_stack_procs;
   std::optional<std::string> current_y_variable;
   // Subset of MachineEmitter::current_x_aliases whose register memory is
   // proved to contain the same value. A plain mark_current_x() is only a stack
   // fact; emit_recall()/emit_store() establish memory synchronization.
   std::set<std::string> current_x_memory_aliases;
+  // Sign proof for the current named X value: -1, 0 (unknown/zero), or +1.
+  // It is consumed only together with a matching current_x_variable fact.
+  int current_x_known_sign = 0;
   // Pure definitions whose evaluation is delayed until the first real
   // lowering-time recall. The register is materialized at that point, so all
   // later readers retain ordinary semantics; generic IR DSE removes the store
@@ -298,6 +305,7 @@ struct LoweringContext {
   std::map<std::string, ExpressionHelperStackEntryRequest> expression_helper_stack_entries;
   std::map<int, std::string> grid_norm_helper_labels;
   std::vector<int> grid_norm_helper_order;
+  std::map<int, std::pair<std::int64_t, std::int64_t>> finite_grid_norm_domains;
   std::map<std::string, FunctionStackEntryPlan> stack_entry_functions;
   std::map<std::string, RuleStackInputEntryPlan> stack_input_rule_entries;
   std::map<std::string, PredecrementIndexedStackRulePlan>
@@ -344,9 +352,11 @@ struct LoweringContext {
   bool packed_score_helper_paid_by_non_accumulator_groups = false;
   bool stack_resident_temps = false;
   bool stack_argument_helper_entries = false;
+  bool single_x_expression_helper_entries = false;
   bool setup_only_counted_loop_init = false;
   bool empty_stack_loop_return = false;
   bool x_param_value_functions = false;
+  bool sign_normalized_x_param = false;
   bool x_param_y_stack_stored_entry = false;
   bool stack_argument_function_entries = false;
   bool stack_through_function_entries = false;

@@ -117,6 +117,44 @@ void late_bound_decimal_selector_binds_only_proved_pairs() {
             "target address 08 should bind as an explicit leading-zero pair");
   }
 
+  // A post-layout proof may replace that fixed-width pair by one marked digit.
+  // The same binder then follows a relaid target while keeping the one-digit
+  // range as a hard invariant.
+  {
+    core::LateBoundDecimalSelectorOptions options;
+    options.minimum_target_address = 0;
+    std::vector<MachineItem> items = {
+        placeholder(LateBoundDecimalSelectorPart::Single, "early"),
+    };
+    append_filler(items, 7);
+    items.push_back(MachineItem::label("early"));
+    items.push_back(MachineItem::op(0x50, "C/P"));
+    const core::LateBoundDecimalSelectorResult bound =
+        core::bind_late_bound_decimal_selectors(items, options);
+    require(bound.diagnostics.empty() && bound.applied == 1 &&
+                bound.items.at(0).opcode == 8 &&
+                bound.proofs.at(0).single_cell,
+            "single-cell target address 08 should bind as digit 8");
+
+    std::vector<MachineItem> moved = bound.items;
+    moved.erase(moved.begin() + 1);
+    const core::LateBoundDecimalSelectorResult rebound =
+        core::rebind_late_bound_decimal_selectors(moved, options);
+    require(rebound.diagnostics.empty() && rebound.applied == 1 &&
+                rebound.items.at(0).opcode == 7,
+            "single-cell selector should follow a relaid one-digit target");
+
+    moved = bound.items;
+    moved.insert(moved.end() - 2, MachineItem::op(0x10, "+"));
+    moved.insert(moved.end() - 2, MachineItem::op(0x10, "+"));
+    const core::LateBoundDecimalSelectorResult overflow =
+        core::rebind_late_bound_decimal_selectors(moved, options);
+    require(overflow.applied == 0 &&
+                has_diagnostic(overflow,
+                               "late-decimal-selector-single-target-out-of-range"),
+            "single-cell selector must reject a target moved beyond address 09");
+  }
+
   // Pair structure is strict in emitted cells: zero-width labels may separate
   // the halves, while an intervening command, reversed halves, and target
   // disagreement are rejected rather than guessed.

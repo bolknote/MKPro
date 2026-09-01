@@ -732,6 +732,71 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
             "proved empty-stack BP 00 edge");
   }
   {
+    const std::vector<MachineItem> existing_startup_return_loop = {
+        MachineItem::op(0x52, "В/О"),
+        MachineItem::op(0x54, "К НОП"),
+        MachineItem::op(0x51, "БП"),
+        MachineItem::address(1),
+    };
+    core::PostLayoutControlFlowOptions startup_options;
+    startup_options.main_entry = 0;
+    startup_options.empty_return_target = 1;
+    const core::AuthoritativePostLayoutControlFlow startup_flow =
+        core::build_post_layout_control_flow(existing_startup_return_loop,
+                                             startup_options);
+    require(startup_flow.proved,
+            "existing physical-00 return fixture should have an authoritative CFG");
+    const std::vector<core::EmptyReturnStartupLayoutResult> normalized =
+        core::normalize_empty_return_startup_layouts(
+            existing_startup_return_loop, {}, startup_flow);
+    require(normalized.size() == 1U &&
+                normalized.front().final_artifact_proved &&
+                normalized.front().control_flow.proved &&
+                cell_count(normalized.front().items) ==
+                    cell_count(existing_startup_return_loop) - 1 &&
+                std::count_if(
+                    normalized.front().items.begin(),
+                    normalized.front().items.end(),
+                    [](const MachineItem& item) {
+                      return std::find(item.roles.begin(), item.roles.end(),
+                                       "empty-return-main-edge") !=
+                             item.roles.end();
+                    }) == 1,
+            "a proved empty-stack BP 01 should reuse physical-00 В/О and lose its operand");
+  }
+  {
+    MachineItem resumable_error = MachineItem::op(0x29, "К ÷");
+    resumable_error.stop_disposition = StopDisposition::Resumable;
+    MachineItem error_padding = MachineItem::op(0x54, "К НОП");
+    error_padding.roles.push_back(kResumableErrorPaddingRole);
+    const std::vector<MachineItem> nonempty_main_edge = {
+        MachineItem::op(0x52, "В/О"),
+        resumable_error,
+        error_padding,
+        MachineItem::op(0x53, "ПП"),
+        MachineItem::address(std::string("nested")),
+        stop(StopDisposition::Terminal),
+        MachineItem::label("nested"),
+        MachineItem::op(0x51, "БП"),
+        MachineItem::address(1),
+    };
+    core::PostLayoutControlFlowOptions startup_options;
+    startup_options.main_entry = 0;
+    startup_options.empty_return_target = 1;
+    const core::AuthoritativePostLayoutControlFlow startup_flow =
+        core::build_post_layout_control_flow(nonempty_main_edge,
+                                             startup_options);
+    std::string flow_reasons;
+    for (const std::string& reason : startup_flow.reasons)
+      flow_reasons += "; " + reason;
+    require(!startup_flow.proved &&
+                flow_reasons.find("return-stack depth") != std::string::npos &&
+                core::normalize_empty_return_startup_layouts(
+                    nonempty_main_edge, {}, startup_flow)
+                    .empty(),
+            "BP 01 on an unbounded live-return-frame path must fail closed");
+  }
+  {
     const std::vector<MachineItem> direct_tail_startup = {
         MachineItem::op(0x54, "К НОП"),
         MachineItem::op(0x53, "ПП"),
@@ -879,11 +944,15 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
                                              startup_options);
     require(startup_flow.proved,
             "fixed-target startup fixture should have an authoritative CFG");
-    require(core::normalize_empty_return_startup_layouts(
-                startup_with_fixed_target, fixed_preloads, startup_flow)
-                .empty(),
+    const auto standalone_fixed = core::normalize_empty_return_startup_layouts(
+        startup_with_fixed_target, fixed_preloads, startup_flow);
+    require(standalone_fixed.empty(),
             "standalone startup normalization must not retune an unproved dual-use "
-            "selector");
+            "selector; candidates=" + std::to_string(standalone_fixed.size()) +
+                (standalone_fixed.empty()
+                     ? std::string{}
+                     : ", cells=" +
+                           std::to_string(cell_count(standalone_fixed.front().items))));
 
     core::NaturalTargetComponentLayoutOptions natural_options;
     natural_options.maximum_subset_states = 512;

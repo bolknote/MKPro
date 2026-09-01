@@ -364,6 +364,21 @@ void indirect_flow_target_marker_requires_strict_boundary() {
 
 void pass_pipeline_matches_initial_typescript_contract() {
   {
+    const std::vector<core::passes::IrPass>& pipeline = core::passes::pass_pipeline();
+    const auto pass_index = [&](std::string_view name) {
+      const auto found = std::find_if(pipeline.begin(), pipeline.end(), [&](const auto& pass) {
+        return pass.name == name;
+      });
+      require(found != pipeline.end(), "pass pipeline should contain " + std::string(name));
+      return std::distance(pipeline.begin(), found);
+    };
+    require(pass_index("return-suffix-gadget") < pass_index("call-continuation-composition"),
+            "sum/difference suffix sharing must run before continuation composition");
+    require(pass_index("return-suffix-gadget") < pass_index("tail-call-lowering"),
+            "sum/difference suffix sharing must run before tail-call lowering");
+  }
+
+  {
     const core::passes::PassResult result =
         run_jump_to_next({jump_to("next"), label("next"), plain()});
     require(result.applied == 1, "jump-to-next did not remove direct fallthrough jump");

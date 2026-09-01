@@ -3,9 +3,13 @@
 #include "mkpro/core/ast.hpp"
 #include "mkpro/core/helper_semantic_alias.hpp"
 
+#include <cstddef>
+#include <cstdint>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace mkpro::core {
 
@@ -28,5 +32,24 @@ struct FlowSensitiveCallDomainProof {
 std::map<std::string, FlowSensitiveCallDomainProof>
 prove_flow_sensitive_call_domains(const V2Program& program,
                                   const std::set<std::string>& rule_names);
+
+// Describes one family of expression-call sites whose value argument should
+// be proved. Multiple targets may share a proof key, allowing aliases to
+// contribute to one all-sites certificate. An optional literal discriminator
+// keeps differently specialized calls independent; a missing discriminator
+// may represent a language-level default.
+struct FlowSensitiveExpressionCallTarget {
+  std::string proof_key;
+  std::string callee;
+  std::size_t argument_index = 0;
+  std::optional<std::size_t> literal_argument_index;
+  std::optional<std::int64_t> literal_argument_value;
+  bool accept_missing_literal_argument = false;
+};
+
+std::map<std::string, FlowSensitiveCallDomainProof>
+prove_flow_sensitive_expression_call_domains(
+    const V2Program& program,
+    const std::vector<FlowSensitiveExpressionCallTarget>& targets);
 
 } // namespace mkpro::core

@@ -2,6 +2,9 @@
 
 #include "mkpro/core/passes/liveness_analysis.hpp"
 
+#include <algorithm>
+#include <cstdlib>
+#include <iostream>
 #include <map>
 #include <optional>
 #include <regex>
@@ -201,6 +204,113 @@ bool is_direct_flow_to_address_99(const IrOp& op) {
   return address != nullptr && *address == 99;
 }
 
+struct ZeroPathSentinelFold {
+  std::vector<IrOp> ops;
+  int folded = 0;
+  int saved_cells = 0;
+};
+
+bool program_observes_last_x(const std::vector<IrOp>& ops) {
+  return std::any_of(ops.begin(), ops.end(), [](const IrOp& op) {
+    return op.kind == IrKind::Plain && op.opcode == 0x0f;
+  });
+}
+
+IrOp sentinel_scratch_store(const IrOp& destination_store) {
+  IrOp result = destination_store;
+  result.kind = IrKind::Store;
+  result.register_name = "3";
+  result.opcode = 0x43;
+  result.meta.mnemonic = "X->П 3";
+  result.meta.comment = "seed proved zero for R3 underflow sentinel";
+  return result;
+}
+
+IrOp sentinel_scratch_recall(const IrOp& destination_store) {
+  IrOp result = destination_store;
+  result.kind = IrKind::IndirectRecall;
+  result.register_name = "3";
+  result.opcode = 0xd3;
+  result.meta.mnemonic = "К П->X 3";
+  result.meta.comment = "form and self-recall -99999999 by R3 underflow";
+  return result;
+}
+
+ZeroPathSentinelFold fold_zero_path_sentinel_literals(const std::vector<IrOp>& ops) {
+  ZeroPathSentinelFold fold{.ops = ops};
+  const bool trace = std::getenv("MKPRO_NATIVE_TRACE_R0_SENTINEL") != nullptr;
+  if (ops.size() < 11U || program_observes_last_x(ops))
+    return fold;
+
+  const LivenessInfo liveness =
+      compute_liveness(ops, LivenessOptions{.unresolved_direct_flow_to_all = false});
+  if (!liveness.control_flow_targets_are_exact) {
+    if (trace)
+      std::cerr << "[zero-path-sentinel] incomplete control-flow proof\n";
+    return fold;
+  }
+
+  std::set<std::size_t> remove;
+  std::map<std::size_t, std::vector<IrOp>> replace;
+  for (std::size_t store_index = 10U; store_index < ops.size(); ++store_index) {
+    const IrOp& destination = ops.at(store_index);
+    if (destination.kind != IrKind::Store || has_rewrite_barrier(destination) ||
+        !is_sentinel_direct_literal_before_store(ops, store_index)) {
+      continue;
+    }
+
+    const std::size_t first_digit = store_index - 9U;
+    if (first_digit == 0U)
+      continue;
+    const IrOp& guard = ops.at(first_digit - 1U);
+    if (trace) {
+      std::cerr << "[zero-path-sentinel] candidate store=" << store_index
+                << " destination=" << destination.register_name
+                << " guard-kind=" << static_cast<int>(guard.kind)
+                << " guard-condition=" << guard.condition
+                << " r3-live=" << liveness.live_in.at(first_digit).contains("3")
+                << "\n";
+    }
+    if (guard.kind != IrKind::CondJump || guard.condition != "==0" ||
+        has_rewrite_barrier(guard) ||
+        (destination.register_name != "3" &&
+         liveness.live_in.at(first_digit).contains("3"))) {
+      continue;
+    }
+    if (std::any_of(ops.begin() + static_cast<std::ptrdiff_t>(first_digit),
+                    ops.begin() + static_cast<std::ptrdiff_t>(store_index),
+                    [](const IrOp& op) { return has_rewrite_barrier(op); })) {
+      continue;
+    }
+
+    std::vector<IrOp> replacement;
+    replacement.push_back(sentinel_scratch_store(destination));
+    replacement.push_back(sentinel_scratch_recall(destination));
+    if (destination.register_name != "3")
+      replacement.push_back(destination);
+    replace.emplace(first_digit, std::move(replacement));
+    for (std::size_t index = first_digit; index <= store_index; ++index)
+      remove.insert(index);
+    ++fold.folded;
+    fold.saved_cells += destination.register_name == "3" ? 8 : 7;
+  }
+
+  if (fold.folded == 0)
+    return fold;
+
+  fold.ops.clear();
+  fold.ops.reserve(ops.size() - static_cast<std::size_t>(fold.saved_cells));
+  for (std::size_t index = 0; index < ops.size(); ++index) {
+    const auto replacement = replace.find(index);
+    if (replacement != replace.end()) {
+      fold.ops.insert(fold.ops.end(), replacement->second.begin(), replacement->second.end());
+    }
+    if (!remove.contains(index))
+      fold.ops.push_back(ops.at(index));
+  }
+  return fold;
+}
+
 } // namespace
 
 PassResult r0_fractional_sentinel(const std::vector<IrOp>& ops, const PassContext& context) {
@@ -338,9 +448,6 @@ PassResult r0_fractional_sentinel(const std::vector<IrOp>& ops, const PassContex
     x_fact = XFact::Unknown;
   }
 
-  if (remove.empty() && replace.empty())
-    return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
-
   std::vector<IrOp> result;
   result.reserve(ops.size() - remove.size());
   for (std::size_t index = 0; index < ops.size(); ++index) {
@@ -350,17 +457,34 @@ PassResult r0_fractional_sentinel(const std::vector<IrOp>& ops, const PassContex
     result.push_back(replacement == replace.end() ? ops.at(index) : replacement->second);
   }
 
+  ZeroPathSentinelFold folded = fold_zero_path_sentinel_literals(result);
+  const int existing_applied = static_cast<int>(remove.size() + replace.size());
+  const int total_applied = existing_applied + folded.folded;
+  if (total_applied == 0)
+    return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
+
+  std::vector<AppliedOptimization> optimizations;
+  if (existing_applied > 0) {
+    optimizations.push_back(AppliedOptimization{
+        .name = "r0-fractional-sentinel",
+        .detail = optimization_detail(direct_r3_accesses, sentinel_stores,
+                                      sentinel_recalls, fractional_jumps),
+    });
+  }
+  if (folded.folded > 0) {
+    optimizations.push_back(AppliedOptimization{
+        .name = "zero-path-underflow-sentinel-materialization",
+        .detail = "Replaced " + std::to_string(folded.folded) +
+                  " direct -99999999 literal materialization(s) on proved X=0 "
+                  "fallthrough paths with dead-R3 underflow, saving " +
+                  std::to_string(folded.saved_cells) + " cell(s).",
+    });
+  }
+
   return PassResult{
-      .ops = std::move(result),
-      .applied = static_cast<int>(remove.size() + replace.size()),
-      .optimizations =
-          std::vector<AppliedOptimization>{
-              AppliedOptimization{
-                  .name = "r0-fractional-sentinel",
-                  .detail = optimization_detail(direct_r3_accesses, sentinel_stores,
-                                                sentinel_recalls, fractional_jumps),
-              },
-          },
+      .ops = std::move(folded.ops),
+      .applied = total_applied,
+      .optimizations = std::move(optimizations),
   };
 }
 

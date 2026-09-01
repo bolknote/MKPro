@@ -4,6 +4,7 @@
 
 #include "mkpro/core/passes/arithmetic_if.hpp"
 #include "mkpro/core/passes/branch_target_x_reuse.hpp"
+#include "mkpro/core/passes/call_continuation_composition.hpp"
 #include "mkpro/core/passes/conditional_branch_trampoline.hpp"
 #include "mkpro/core/passes/constant_folding.hpp"
 #include "mkpro/core/passes/cse_display_block.hpp"
@@ -242,11 +243,16 @@ const std::vector<IrPass>& pass_pipeline() {
       // address-sensitive forms have appeared.
       early_exact_stack_dead_store_elimination_pass(),
       redundant_prologue_elimination_pass(),
+      // Run the transactional sum/difference suffix canonicalizer before
+      // continuation composition and tail-call lowering erase the explicit
+      // `call; return` boundary. Later opportunities created by other passes
+      // are still seen on the next fixed-point iteration.
+      return_suffix_gadget_pass(),
+      call_continuation_composition_pass(),
       tail_call_lowering_pass(),
       tail_branch_inversion_pass(),
       conditional_branch_trampoline_pass(),
       shared_call_tail_pass(),
-      return_suffix_gadget_pass(),
       shared_terminal_tail_pass(),
       shared_straight_line_helper_pass(),
       callee_hole_straight_line_helper_pass(),
@@ -258,6 +264,7 @@ const std::vector<IrPass>& pass_pipeline() {
       jump_thread_pass(),
       flow_x_reuse_pass(),
       branch_target_x_reuse_pass(),
+      call_entry_materialization_order_pass(),
       entry_stack_input_reuse_pass(),
       stable_indirect_flow_pass(),
       preloaded_indirect_flow_pass(),

@@ -146,6 +146,7 @@ std::optional<int> address_target(const MachineItem& item, const ArtifactIndex& 
 
 bool direct_address_artifact_is_relocatable(const std::vector<MachineItem>& items,
                                             const ArtifactIndex& index,
+                                            AddressSpaceModel model,
                                             std::vector<std::string>& reasons) {
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
     const MachineItem& item = items.at(item_index);
@@ -165,13 +166,9 @@ bool direct_address_artifact_is_relocatable(const std::vector<MachineItem>& item
       reasons.push_back("artifact contains an orphan address operand");
       return false;
     }
-    if (item.formal_opcode.has_value() || std::holds_alternative<int>(item.target)) {
-      reasons.push_back("fixed numeric or formal address is unsafe across continuation layout");
-      return false;
-    }
-    const auto* label = std::get_if<std::string>(&item.target);
-    if (label == nullptr || !index.label_addresses.contains(*label)) {
-      reasons.push_back("address operand references an unresolved label");
+    const std::optional<int> target = address_target(item, index, model);
+    if (!target.has_value() || !index.cell_items.contains(*target)) {
+      reasons.push_back("address operand does not resolve to an executable command identity");
       return false;
     }
   }
@@ -187,9 +184,9 @@ struct ContinuationShape {
 };
 
 ContinuationShape continuation_shape(const std::vector<MachineItem>& items,
-                                     std::size_t operand_item) {
+                                     std::size_t flow_end_item) {
   ContinuationShape shape;
-  const std::optional<std::size_t> join = next_cell_item(items, operand_item);
+  const std::optional<std::size_t> join = next_cell_item(items, flow_end_item);
   if (!join.has_value())
     return shape;
   const std::optional<std::size_t> store = next_cell_item(items, *join);
@@ -207,10 +204,39 @@ ContinuationShape continuation_shape(const std::vector<MachineItem>& items,
   return shape;
 }
 
-bool range_has_label(const std::vector<MachineItem>& items, std::size_t after,
-                     std::size_t through) {
-  for (std::size_t index = after + 1U; index <= through && index < items.size(); ++index) {
-    if (items.at(index).kind == MachineItemKind::Label)
+bool label_is_executable_entry(const std::vector<MachineItem>& items,
+                               const ArtifactIndex& index,
+                               std::size_t label_item,
+                               const SharedHelperContinuationOptions& options) {
+  const MachineItem& label = items.at(label_item);
+  if (label.kind != MachineItemKind::Label)
+    return false;
+  if (label.procedure_boundary == "start")
+    return true;
+  for (const MachineItem& item : items) {
+    if (item.kind != MachineItemKind::Address)
+      continue;
+    const auto* target = std::get_if<std::string>(&item.target);
+    if (target != nullptr && *target == label.name)
+      return true;
+  }
+  const int address = index.item_addresses.at(label_item);
+  for (const auto& [flow_item, targets] : options.proved_indirect_flow_targets) {
+    (void)flow_item;
+    if (std::find(targets.begin(), targets.end(), address) != targets.end())
+      return true;
+  }
+  return false;
+}
+
+bool range_has_executable_entry(
+    const std::vector<MachineItem>& items, const ArtifactIndex& artifact,
+    std::size_t after, std::size_t through,
+    const SharedHelperContinuationOptions& options) {
+  for (std::size_t item_index = after + 1U;
+       item_index <= through && item_index < items.size(); ++item_index) {
+    if (items.at(item_index).kind == MachineItemKind::Label &&
+        label_is_executable_entry(items, artifact, item_index, options))
       return true;
   }
   return false;
@@ -549,7 +575,8 @@ verify_shared_helper_continuation(const std::vector<MachineItem>& items,
   }
   proof.helper_label_item_index = root_item->second;
   proof.helper_body_start_address = root_address->second;
-  if (!direct_address_artifact_is_relocatable(items, index, proof.reasons))
+  if (!direct_address_artifact_is_relocatable(
+          items, index, options.address_space_model, proof.reasons))
     return proof;
 
   bool found_return = false;
@@ -558,8 +585,15 @@ verify_shared_helper_continuation(const std::vector<MachineItem>& items,
     const int address = index.item_addresses.at(item_index);
     if (item.kind == MachineItemKind::Label) {
       if (!found_return) {
-        proof.reasons.push_back("helper has a secondary executable entry label");
-        break;
+        if (address != proof.helper_body_start_address &&
+            label_is_executable_entry(items, index, item_index, options)) {
+          proof.reasons.push_back("helper has a secondary executable entry label");
+          break;
+        }
+        // Final relayouts retain opaque command-identity labels. A label with
+        // no direct or proved indirect predecessor is metadata, not another
+        // executable helper entry.
+        continue;
       }
       if (item.procedure_boundary == "end") {
         proof.helper_block_end_item_index = item_index + 1U;
@@ -596,10 +630,28 @@ verify_shared_helper_continuation(const std::vector<MachineItem>& items,
   std::vector<SharedHelperContinuationCall> calls;
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
     const MachineItem& item = items.at(item_index);
-    if (item.kind == MachineItemKind::Op &&
-        is_indirect_flow_kind(basic_kind_for_opcode(item.opcode)) &&
-        !options.proved_indirect_flow_targets.contains(item_index)) {
-      proof.reasons.push_back("indirect flow lacks a complete target map");
+    if (item.kind == MachineItemKind::Op) {
+      const IrKind kind = basic_kind_for_opcode(item.opcode);
+      if (is_indirect_flow_kind(kind) &&
+          !options.proved_indirect_flow_targets.contains(item_index)) {
+        proof.reasons.push_back("indirect flow lacks a complete target map");
+      }
+      if (kind == IrKind::IndirectCall) {
+        const auto targets = options.proved_indirect_flow_targets.find(item_index);
+        if (targets != options.proved_indirect_flow_targets.end() &&
+            targets->second.size() == 1U &&
+            targets->second.front() == proof.helper_body_start_address) {
+          const ContinuationShape shape = continuation_shape(items, item_index);
+          calls.push_back(SharedHelperContinuationCall{
+              .call_item_index = item_index,
+              .operand_item_index = item_index,
+              .join_item_index = shape.join_item,
+              .store_item_index = shape.store_item,
+              .call_address = index.item_addresses.at(item_index),
+              .indirect = true,
+          });
+        }
+      }
     }
     if (item.kind != MachineItemKind::Address)
       continue;
@@ -619,10 +671,12 @@ verify_shared_helper_continuation(const std::vector<MachineItem>& items,
         .join_item_index = shape.join_item,
         .store_item_index = shape.store_item,
         .call_address = index.item_addresses.at(*call),
+        .indirect = false,
     });
   }
   if (calls.size() != 3U)
-    proof.reasons.push_back("helper does not have a complete set of exactly three direct calls");
+    proof.reasons.push_back(
+        "helper does not have a complete set of exactly three proved calls");
 
   std::map<std::pair<int, int>, std::vector<std::size_t>> shape_calls;
   for (std::size_t call_index = 0; call_index < calls.size(); ++call_index) {
@@ -653,8 +707,11 @@ verify_shared_helper_continuation(const std::vector<MachineItem>& items,
       call.ordinary = shape.supported && shape.join_opcode == proof.join_opcode &&
                       shape.store_opcode == proof.store_opcode;
       if (call.ordinary) {
-        if (range_has_label(items, call.operand_item_index, call.store_item_index))
-          proof.reasons.push_back("removable continuation contains an entry label");
+        if (range_has_executable_entry(items, index, call.operand_item_index,
+                                       call.store_item_index, options)) {
+          proof.reasons.push_back(
+              "removable continuation contains an executable entry label");
+        }
         proof.ordinary_call_item_indices.push_back(call.call_item_index);
         const std::optional<std::size_t> after_store = next_cell_item(items, call.store_item_index);
         if (!after_store.has_value()) {
@@ -679,13 +736,20 @@ verify_shared_helper_continuation(const std::vector<MachineItem>& items,
 
   const int helper_begin = proof.helper_body_start_address;
   const int helper_end = proof.helper_return_address;
+  std::set<std::size_t> admitted_indirect_calls;
+  for (const SharedHelperContinuationCall& call : calls) {
+    if (call.indirect)
+      admitted_indirect_calls.insert(call.call_item_index);
+  }
   for (const auto& [flow_item, targets] : options.proved_indirect_flow_targets) {
     if (flow_item >= items.size()) {
       proof.reasons.push_back("indirect target map contains an out-of-range item index");
       continue;
     }
     for (const int target : targets) {
-      if (target >= helper_begin && target <= helper_end)
+      const bool admitted_root_call =
+          target == helper_begin && admitted_indirect_calls.contains(flow_item);
+      if (target >= helper_begin && target <= helper_end && !admitted_root_call)
         proof.reasons.push_back("proved indirect flow can enter the helper body");
     }
   }

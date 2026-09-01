@@ -44,7 +44,7 @@
       "id": "basic",
       "sourcePath": "examples/basic.mkpro",
       "sourceSha256": "1ec1f9567f4cda4f6fc03618868aa6408a64fd85ed20d41ba3d32ff50132b859",
-      "steps": 8,
+      "steps": 7,
       "artifacts": {
         "bytes": "basic/bytes.txt",
         "hex": "basic/hex.txt",
@@ -60,7 +60,7 @@
       "id": "cave-highlevel-baseline",
       "sourcePath": "examples/cave-highlevel-baseline.mkpro",
       "sourceSha256": "269f4684b35b117333e52e3a68226dad246916aac5241d5f8f1d5d74df0438cc",
-      "steps": 104,
+      "steps": 103,
       "artifacts": {
         "bytes": "cave-highlevel-baseline/bytes.txt",
         "hex": "cave-highlevel-baseline/hex.txt",
@@ -92,7 +92,7 @@
       "id": "cave-treasure",
       "sourcePath": "examples/cave-treasure.mkpro",
       "sourceSha256": "5940ddfaec18936f51dfb9ede24fe3a172fa22bef65da7cebe05ec80984bec01",
-      "steps": 104,
+      "steps": 103,
       "artifacts": {
         "bytes": "cave-treasure/bytes.txt",
         "hex": "cave-treasure/hex.txt",
@@ -108,7 +108,7 @@
       "id": "clock",
       "sourcePath": "examples/clock.mkpro",
       "sourceSha256": "7c43b8e90a4e3cc3133259e237564d7be56a612d68b7e9e8989fee56b6f619cc",
-      "steps": 34,
+      "steps": 30,
       "artifacts": {
         "bytes": "clock/bytes.txt",
         "hex": "clock/hex.txt",
@@ -124,7 +124,7 @@
       "id": "dangerous-loading",
       "sourcePath": "examples/dangerous-loading.mkpro",
       "sourceSha256": "11b8d8242ca9ea49f1aaad973622f98fbf7554e6db1b363e7a954aee7045fb51",
-      "steps": 84,
+      "steps": 75,
       "artifacts": {
         "bytes": "dangerous-loading/bytes.txt",
         "hex": "dangerous-loading/hex.txt",
@@ -172,7 +172,7 @@
       "id": "fox-hunt-100",
       "sourcePath": "examples/fox-hunt-100.mkpro",
       "sourceSha256": "76b2cf78a018a41d736c9b5e9d1eee287347927b03756b03548d26ba23427b60",
-      "steps": 103,
+      "steps": 102,
       "artifacts": {
         "bytes": "fox-hunt-100/bytes.txt",
         "hex": "fox-hunt-100/hex.txt",
@@ -188,7 +188,7 @@
       "id": "fox-hunt-mk61",
       "sourcePath": "examples/fox-hunt-mk61.mkpro",
       "sourceSha256": "f1859e647d42a73a3892694fdaddf85d0d1026f8bc481b7f5208a6b4a648f0fc",
-      "steps": 60,
+      "steps": 65,
       "artifacts": {
         "bytes": "fox-hunt-mk61/bytes.txt",
         "hex": "fox-hunt-mk61/hex.txt",
@@ -204,7 +204,7 @@
       "id": "functions-demo",
       "sourcePath": "examples/functions-demo.mkpro",
       "sourceSha256": "b7eaeed18c35f230c1709d47a527ddf5928c1a5fd42420fdca21513c5c01148a",
-      "steps": 16,
+      "steps": 13,
       "artifacts": {
         "bytes": "functions-demo/bytes.txt",
         "hex": "functions-demo/hex.txt",
@@ -236,7 +236,7 @@
       "id": "giants-country",
       "sourcePath": "examples/giants-country.mkpro",
       "sourceSha256": "095ad6d215844a7ade90c922fde94e05bceffb9ab76a8760b6312f9fbdd320a3",
-      "steps": 104,
+      "steps": 102,
       "artifacts": {
         "bytes": "giants-country/bytes.txt",
         "hex": "giants-country/hex.txt",
@@ -252,7 +252,7 @@
       "id": "human",
       "sourcePath": "examples/human.mkpro",
       "sourceSha256": "75618f1a9b49483eae208a2964c34c7350e85658723c316b4b70a957685de1ec",
-      "steps": 27,
+      "steps": 23,
       "artifacts": {
         "bytes": "human/bytes.txt",
         "hex": "human/hex.txt",
@@ -268,7 +268,7 @@
       "id": "jack-pot",
       "sourcePath": "examples/jack-pot.mkpro",
       "sourceSha256": "a309e7159b37ee01df3c6f83273488df8acf1c22cd0b41f509f401f1e0a7f7f0",
-      "steps": 96,
+      "steps": 94,
       "artifacts": {
         "bytes": "jack-pot/bytes.txt",
         "hex": "jack-pot/hex.txt",
@@ -316,7 +316,7 @@
       "id": "minesweeper-9x7",
       "sourcePath": "examples/minesweeper-9x7.mkpro",
       "sourceSha256": "12aa7a560c4efe0dcf2e1e9ba6a540a53371974adede33660a2df7284cf28086",
-      "steps": 79,
+      "steps": 76,
       "artifacts": {
         "bytes": "minesweeper-9x7/bytes.txt",
         "hex": "minesweeper-9x7/hex.txt",
@@ -332,7 +332,7 @@
       "id": "minesweeper-9x9",
       "sourcePath": "examples/minesweeper-9x9.mkpro",
       "sourceSha256": "ab7d666b2e1cf696a6ebee06da11a86eedbf9bfc67eddb66cf6aa7764662250c",
-      "steps": 79,
+      "steps": 76,
       "artifacts": {
         "bytes": "minesweeper-9x9/bytes.txt",
         "hex": "minesweeper-9x9/hex.txt",
@@ -380,7 +380,7 @@
       "id": "river-battle",
       "sourcePath": "examples/river-battle.mkpro",
       "sourceSha256": "a5fb97d8debd1a9b37b61f9a298fed72ad801f21b1827d7cc520d8c198b620e1",
-      "steps": 95,
+      "steps": 90,
       "artifacts": {
         "bytes": "river-battle/bytes.txt",
         "hex": "river-battle/hex.txt",
@@ -396,7 +396,7 @@
       "id": "sea-battle",
       "sourcePath": "examples/sea-battle.mkpro",
       "sourceSha256": "5edb8b5a165828d0ac57ffafcf01c324c081ad130fc75f54df3a7d129c37b3ab",
-      "steps": 66,
+      "steps": 65,
       "artifacts": {
         "bytes": "sea-battle/bytes.txt",
         "hex": "sea-battle/hex.txt",
@@ -428,7 +428,7 @@
       "id": "tic-tac-toe",
       "sourcePath": "examples/tic-tac-toe.mkpro",
       "sourceSha256": "70713dcb611e672fc246ec1bcec5c9c2ad5ecb06de6a8927dbef637bb326d6e4",
-      "steps": 98,
+      "steps": 99,
       "artifacts": {
         "bytes": "tic-tac-toe/bytes.txt",
         "hex": "tic-tac-toe/hex.txt",
@@ -444,7 +444,7 @@
       "id": "tiny-game",
       "sourcePath": "examples/tiny-game.mkpro",
       "sourceSha256": "1d5b4c11eb9f15efb450cccc9eabd89b0571343202e7f6d04c5b39c6601a828e",
-      "steps": 27,
+      "steps": 23,
       "artifacts": {
         "bytes": "tiny-game/bytes.txt",
         "hex": "tiny-game/hex.txt",
@@ -460,7 +460,7 @@
       "id": "treasure-hunter-2",
       "sourcePath": "examples/treasure-hunter-2.mkpro",
       "sourceSha256": "aaf550049e17117220cf0f09e1d02028673a58eebc28f2d72877ae698b3ef890",
-      "steps": 99,
+      "steps": 98,
       "artifacts": {
         "bytes": "treasure-hunter-2/bytes.txt",
         "hex": "treasure-hunter-2/hex.txt",
@@ -476,7 +476,7 @@
       "id": "wumpus",
       "sourcePath": "examples/wumpus.mkpro",
       "sourceSha256": "5e75142987ff1377736ed03639b04d8c4ee2c94e34f38e8abe2b801fb1a53625",
-      "steps": 103,
+      "steps": 105,
       "artifacts": {
         "bytes": "wumpus/bytes.txt",
         "hex": "wumpus/hex.txt",
@@ -492,7 +492,7 @@
       "id": "pending-optimizer/tic-tac-toe-4x4",
       "sourcePath": "examples/pending-optimizer/tic-tac-toe-4x4.mkpro",
       "sourceSha256": "19feaeeeaec1a25e74b1dd03a8788f7afc1f926529faef773444bcf2e709ed9a",
-      "steps": 130,
+      "steps": 125,
       "artifacts": {
         "bytes": "pending-optimizer/tic-tac-toe-4x4/bytes.txt",
         "hex": "pending-optimizer/tic-tac-toe-4x4/hex.txt",
@@ -508,7 +508,7 @@
       "id": "pending-optimizer/nekromant",
       "sourcePath": "examples/pending-optimizer/nekromant.mkpro",
       "sourceSha256": "de628c6742de4ec1efc882f9330a34903c45d12cdc3f45dd16501c96863b8818",
-      "steps": 222,
+      "steps": 133,
       "artifacts": {
         "bytes": "pending-optimizer/nekromant/bytes.txt",
         "hex": "pending-optimizer/nekromant/hex.txt",

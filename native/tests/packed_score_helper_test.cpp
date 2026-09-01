@@ -49,6 +49,16 @@ int count_steps_with_comment(const CompileResult& result, const std::string& com
       }));
 }
 
+void require_helper_calls_or_composed(const CompileResult& result, int actual, int logical_calls,
+                                      const std::string& context) {
+  require(actual >= 0 && actual <= logical_calls,
+          context + " should not emit more physical helper calls than logical terms");
+  require(actual == logical_calls ||
+              has_optimization(result, "call-continuation-composition"),
+          context + " may remove physical helper calls only through proved continuation "
+                    "composition");
+}
+
 const CandidateReport* find_candidate(const std::vector<CandidateReport>& candidates,
                                       const std::string& variant) {
   const auto it = std::find_if(candidates.begin(), candidates.end(),
@@ -1387,8 +1397,9 @@ program PackedScoreXParamAccumulatorHelper {
   require(count_optimization(x_param_sequence,
                              "x-param-packed-score-line-stack-accumulate") == 3,
           "x-param packed_score sequence should keep all returned-index updates stack-carried");
-  require(count_packed_score_accumulator_helper_jumps(x_param_sequence) == 3,
-          "x-param packed_score sequence should call the accumulator helper for each term");
+  require_helper_calls_or_composed(
+      x_param_sequence, count_packed_score_accumulator_helper_jumps(x_param_sequence), 3,
+      "x-param packed_score sequence");
   require(count_packed_score_helper_jumps(x_param_sequence) == 0,
           "x-param packed_score sequence should not use the standalone helper fallback");
   require(count_steps_with_comment(x_param_sequence, "packed_score stack accumulator") == 0,
@@ -1456,8 +1467,10 @@ program PackedScoreXParamSignedAccumulatorHelper {
                              "x-param-packed-score-line-stack-accumulate") == 3,
           "signed x-param packed_score sequence should keep all returned-index updates "
           "stack-carried");
-  require(count_packed_score_subtractor_helper_jumps(signed_x_param_sequence) == 3,
-          "signed x-param packed_score sequence should call the subtractor helper for each term");
+  require_helper_calls_or_composed(
+      signed_x_param_sequence,
+      count_packed_score_subtractor_helper_jumps(signed_x_param_sequence), 3,
+      "signed x-param packed_score sequence");
   require(count_packed_score_accumulator_helper_jumps(signed_x_param_sequence) == 0,
           "negative-only signed x-param packed_score sequence should not emit positive helper "
           "calls");
@@ -1506,9 +1519,10 @@ program PackedScoreXParamMixedPrefixAccumulatorHelper {
                              "x-param-packed-score-line-stack-accumulate") == 2,
           "x-param mixed-prefix packed_score sequence should keep both returned-index updates "
           "stack-carried");
-  require(count_packed_score_accumulator_helper_jumps(x_param_mixed_prefix_sequence) == 4,
-          "x-param mixed-prefix packed_score sequence should call the accumulator helper for "
-          "prefix and returned-index terms");
+  require_helper_calls_or_composed(
+      x_param_mixed_prefix_sequence,
+      count_packed_score_accumulator_helper_jumps(x_param_mixed_prefix_sequence), 4,
+      "x-param mixed-prefix packed_score sequence");
   require(count_packed_score_helper_jumps(x_param_mixed_prefix_sequence) == 0,
           "x-param mixed-prefix packed_score sequence should not use the standalone helper "
           "fallback");
@@ -1559,9 +1573,10 @@ program PackedScoreXParamExpressionLineAccumulatorHelper {
                              "x-param-packed-score-line-stack-accumulate") == 3,
           "x-param packed_score expression-line sequence should keep returned-index updates "
           "stack-carried");
-  require(count_packed_score_accumulator_helper_jumps(x_param_expression_line_sequence) == 3,
-          "x-param packed_score expression-line sequence should call the accumulator helper for "
-          "each term");
+  require_helper_calls_or_composed(
+      x_param_expression_line_sequence,
+      count_packed_score_accumulator_helper_jumps(x_param_expression_line_sequence), 3,
+      "x-param packed_score expression-line sequence");
   require(count_packed_score_helper_jumps(x_param_expression_line_sequence) == 0,
           "x-param packed_score expression-line sequence should not use the standalone helper "
           "fallback");
@@ -1610,10 +1625,11 @@ program PackedScoreXParamReturnedIndexExpressionAccumulatorHelper {
                              "x-param-packed-score-line-stack-accumulate") == 3,
           "x-param packed_score returned-index expression sequence should keep returned-index "
           "updates stack-carried");
-  require(count_packed_score_accumulator_helper_jumps(
-              x_param_returned_index_expression_sequence) == 3,
-          "x-param packed_score returned-index expression sequence should call the accumulator "
-          "helper for each term");
+  require_helper_calls_or_composed(
+      x_param_returned_index_expression_sequence,
+      count_packed_score_accumulator_helper_jumps(
+          x_param_returned_index_expression_sequence),
+      3, "x-param packed_score returned-index expression sequence");
   require(count_packed_score_helper_jumps(x_param_returned_index_expression_sequence) == 0,
           "x-param packed_score returned-index expression sequence should not use the standalone "
           "helper fallback");
@@ -1669,9 +1685,10 @@ program PackedScoreXParamInitialAddendAccumulatorHelper {
                              "x-param-packed-score-line-stack-accumulate") == 3,
           "x-param packed_score initial-addend sequence should keep returned-index updates "
           "stack-carried");
-  require(count_packed_score_accumulator_helper_jumps(x_param_initial_addend_sequence) == 3,
-          "x-param packed_score initial-addend sequence should call the accumulator helper for "
-          "each term");
+  require_helper_calls_or_composed(
+      x_param_initial_addend_sequence,
+      count_packed_score_accumulator_helper_jumps(x_param_initial_addend_sequence), 3,
+      "x-param packed_score initial-addend sequence");
   require(count_packed_score_helper_jumps(x_param_initial_addend_sequence) == 0,
           "x-param packed_score initial-addend sequence should not use the standalone helper "
           "fallback");
@@ -1725,10 +1742,11 @@ program PackedScoreXParamNegativeInitialAddendAccumulatorHelper {
                              "x-param-packed-score-line-stack-accumulate") == 3,
           "x-param packed_score negative-initial sequence should keep returned-index updates "
           "stack-carried");
-  require(count_packed_score_accumulator_helper_jumps(
-              x_param_negative_initial_addend_sequence) == 3,
-          "x-param packed_score negative-initial sequence should call the accumulator helper for "
-          "each term");
+  require_helper_calls_or_composed(
+      x_param_negative_initial_addend_sequence,
+      count_packed_score_accumulator_helper_jumps(
+          x_param_negative_initial_addend_sequence),
+      3, "x-param packed_score negative-initial sequence");
   require(count_packed_score_helper_jumps(x_param_negative_initial_addend_sequence) == 0,
           "x-param packed_score negative-initial sequence should not use the standalone helper "
           "fallback");

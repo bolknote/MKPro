@@ -44,6 +44,21 @@ int stable_indirect_recall_value(const std::string& selector) {
   return std::stoi(compact(calc.read_register("X")));
 }
 
+std::array<std::string, 5> predecrement_selector_trace(const std::string& selector) {
+  emulator::MK61 calc;
+  calc.load_program({0xd0, 0x4a, 0xd0, 0x4b, 0xd0, 0x4c, 0xd0, 0x4d, 0x50});
+  for (int index = 4; index <= 7; ++index)
+    calc.set_register(std::to_string(index), std::to_string(4000 + index));
+  calc.set_register("0", selector);
+  calc.press_sequence({"В/О", "С/П"});
+  calc.run_until_stable(400, 5);
+  return {
+      compact(calc.read_register("0")), compact(calc.read_register("a")),
+      compact(calc.read_register("b")), compact(calc.read_register("c")),
+      compact(calc.read_register("d")),
+  };
+}
+
 } // namespace
 
 void emulator_indirect_incdec_facts_match_typescript_contract() {
@@ -78,6 +93,16 @@ void emulator_indirect_incdec_facts_match_typescript_contract() {
   for (const int r : {0, 1, 2, 3})
     require(std::stoi(after_indirect_access(r, "0")) == -99999999,
             "R0..R3 pre-decrement should write the negative sentinel from zero");
+
+  const std::array<std::string, 5> integral_selector =
+      predecrement_selector_trace("8");
+  const std::array<std::string, 5> logical_result_selector =
+      predecrement_selector_trace("8.1234567");
+  require(std::equal(integral_selector.begin() + 1, integral_selector.end(),
+                     logical_result_selector.begin() + 1) &&
+              std::stoi(logical_result_selector.front()) == 4,
+          "a logical-result-shaped 8.HHHHHHH value in R0 should address R7..R4 exactly like "
+          "the integer selector 8 while preserving only an irrelevant fractional residue");
 
   struct TargetCase {
     std::string selector;

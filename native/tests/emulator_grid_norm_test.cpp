@@ -216,6 +216,85 @@ program GridNormPhasedInput {
   for (const auto& [input, expected] : width4_cases)
     require_probe(shared_width4, input, expected, "grid_norm width 4 input " + input);
 
+  const CompileResult finite_domain = compile_source(R"mkpro(
+program FiniteGridNorm {
+  state {
+    raw: counter -3..8 = 0
+    result: packed = 0
+  }
+  loop {
+    show(0)
+    raw = entered(-3, 8)
+    if raw == 8 {
+      result = grid_norm(raw, 4)
+    } else {
+      result = grid_wrap(raw, 4)
+    }
+    halt(result)
+  }
+}
+)mkpro",
+                                                     one_eval_options);
+  require(finite_domain.implemented && !has_error(finite_domain),
+          "finite-domain grid_norm probe should compile");
+  require(has_optimization(finite_domain, "finite-domain-grid-normalization"),
+          "all bounded width-four calls should select the branchless exact-decimal body");
+  require(std::count_if(finite_domain.steps.begin(), finite_domain.steps.end(),
+                        [](const ResolvedStep& step) {
+                          return step.comment == "grid_norm finite-domain shift";
+                        }) == 1,
+          "shared finite-domain calls should emit one branchless helper body");
+  require(std::none_of(finite_domain.steps.begin(), finite_domain.steps.end(),
+                       [](const ResolvedStep& step) {
+                         return step.comment == "grid_norm integer part";
+                       }),
+          "the branchless finite-domain helper should omit truncation and sign branches");
+  const CompileResult outside_finite_domain = compile_source(R"mkpro(
+program OutsideFiniteGridNorm {
+  state {
+    raw: counter -4..8 = 0
+    result: packed = 0
+  }
+  loop {
+    show(0)
+    raw = entered(-4, 8)
+    if raw == 8 {
+      result = grid_norm(raw, 4)
+    } else {
+      result = grid_wrap(raw, 4)
+    }
+    halt(result)
+  }
+}
+)mkpro",
+                                                             one_eval_options);
+  require(outside_finite_domain.implemented && !has_error(outside_finite_domain),
+          "out-of-range grid_norm probe should compile through the universal body");
+  require(!has_optimization(outside_finite_domain, "finite-domain-grid-normalization"),
+          "one width-four call reaching -4 must reject the branchless body for every shared call");
+  require(std::any_of(outside_finite_domain.steps.begin(), outside_finite_domain.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.comment == "grid_norm integer part";
+                      }),
+          "the rejected finite-domain proof should retain the universal signed helper");
+  for (const auto& [input, expected] :
+       std::vector<std::pair<std::string, int>>{{"-3", 1}, {"-1", 3}, {"0", 4},
+                                                {"1", 1},  {"4", 4},  {"8", 4}}) {
+    const Observation finite = run_grid_norm_probe(finite_domain, input);
+    const Observation universal = run_grid_norm_probe(outside_finite_domain, input);
+    require(std::fabs(finite.x - expected) < 1e-9 &&
+                std::fabs(finite.visible - expected) < 1e-9,
+            "finite-domain grid_norm width 4 input " + input +
+                " should produce " + std::to_string(expected));
+    require(finite.x == universal.x && finite.visible == universal.visible &&
+                finite.y == universal.y && finite.z == universal.z && finite.t == universal.t,
+            "finite-domain grid_norm width 4 input " + input +
+                " must preserve the universal body's X/X2/Y/Z/T observation");
+  }
+  const Observation outside_boundary = run_grid_norm_probe(outside_finite_domain, "-4");
+  require(outside_boundary.x == 4 && outside_boundary.visible == 4,
+          "universal grid_norm width 4 boundary input -4 should produce 4");
+
   // These deliberately pin the real eight-digit rounding boundary rather
   // than a mathematical modulo expectation. The fractional results are why
   // flow analysis cannot treat grid_norm as an unconditional sanitizer.

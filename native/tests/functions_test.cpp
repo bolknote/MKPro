@@ -132,8 +132,10 @@ program Nested {
     require_clean_compile(result, "nested function call");
     require(has_optimization(result, "function-call-lifting"),
             "nested function call should report function-call-lifting");
-    require(count_hex(result, "53") == 4,
-            "two nested function calls should emit four ПП calls, got " +
+    require(has_optimization(result, "call-continuation-composition"),
+            "nested producer/consumer calls should report generic continuation composition");
+    require(count_hex(result, "53") == 2,
+            "two nested function chains should retain only their producer ПП calls, got " +
                 std::to_string(count_hex(result, "53")));
   }
 

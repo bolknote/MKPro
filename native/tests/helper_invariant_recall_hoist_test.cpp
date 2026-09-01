@@ -360,11 +360,20 @@ void helper_invariant_recall_hoist_rewrites_only_proved_calls() {
     const std::size_t root = label_index(second_entry, kRoot);
     second_entry.insert(second_entry.begin() + static_cast<std::ptrdiff_t>(root + 2U),
                         MachineItem::label("z4"));
+    const auto accepted =
+        core::rewrite_helper_invariant_recall_hoist(second_entry, std::string(kRoot));
+    require(accepted.applied == 1 && accepted.proof.final_artifact_proved &&
+                run(second_entry) == run(accepted.items),
+            "an unreferenced internal helper label should not be mistaken for an entry");
+
+    second_entry.insert(second_entry.begin(),
+                        {MachineItem::op(0x51, "external branch"),
+                         MachineItem::address("z4")});
     const auto rejected =
         core::rewrite_helper_invariant_recall_hoist(second_entry, std::string(kRoot));
     require(rejected.applied == 0 && rejected.items.size() == second_entry.size() &&
-                contains_reason(rejected.proof, "second executable entry"),
-            "a second helper entry should fail closed");
+                contains_reason(rejected.proof, "second referenced entry"),
+            "a genuinely referenced second helper entry should fail closed");
   }
 
   for (const int opcode : {0x68, 0x48}) {

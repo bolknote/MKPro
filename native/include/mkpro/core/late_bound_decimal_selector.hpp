@@ -16,6 +16,10 @@ namespace mkpro::core {
 enum class LateBoundDecimalSelectorPart {
   High,
   Low,
+  // A one-cell decimal charge is introduced only by a proved post-layout
+  // leading-zero erasure.  Ordinary lowering continues to emit fixed-width
+  // High/Low pairs until the final target is known.
+  Single,
 };
 
 struct LateBoundDecimalSelectorOptions {
@@ -34,6 +38,7 @@ struct LateBoundDecimalSelectorOptions {
 struct LateBoundDecimalSelectorProof {
   std::string target_label;
   int target_address = 0;
+  bool single_cell = false;
   std::size_t high_item_index = 0;
   std::size_t low_item_index = 0;
   int high_cell_address = 0;
@@ -52,21 +57,24 @@ struct LateBoundDecimalSelectorResult {
 // Returns one of these exact role forms:
 //   late-decimal-selector-high:<target-label>
 //   late-decimal-selector-low:<target-label>
+//   late-decimal-selector-single:<target-label>
 // The target is the complete suffix, so punctuation in label names is safe.
 // Empty target labels are rejected.
 std::string make_late_bound_decimal_selector_role(LateBoundDecimalSelectorPart part,
                                                   std::string_view target_label);
 
 // Returns the unique opaque target labels named by all well-formed high/low
-// marker roles. A malformed marker fails closed so layout passes can use this
-// as the same authoritative target set as the final binder.
+// or single-cell marker roles. A malformed marker fails closed so layout
+// passes can use this as the same authoritative target set as the final binder.
 std::optional<std::vector<std::string>>
 late_bound_decimal_selector_target_labels(const std::vector<MachineItem>& items);
 
-// Resolve every strictly marked adjacent high/low placeholder pair against the
-// layout represented by `items`. This operation is atomic: any malformed pair,
-// missing/duplicate label, or out-of-range target returns the original items
-// with applied == 0 and no proof records.
+// Resolve every strictly marked adjacent high/low placeholder pair and every
+// proved single-cell placeholder against the layout represented by `items`.
+// Single-cell charges are additionally restricted to addresses 00..09. This
+// operation is atomic: any malformed charge, missing/duplicate label, or
+// out-of-range target returns the original items with applied == 0 and no
+// proof records.
 LateBoundDecimalSelectorResult
 bind_late_bound_decimal_selectors(const std::vector<MachineItem>& items,
                                   const LateBoundDecimalSelectorOptions& options = {});

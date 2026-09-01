@@ -5,8 +5,6 @@
 
 #include <algorithm>
 #include <charconv>
-#include <cstdlib>
-#include <iostream>
 #include <map>
 #include <optional>
 #include <set>
@@ -157,6 +155,40 @@ bool is_return_opcode(int opcode) {
   return !raised.empty() && raised.front().kind == IrKind::Return;
 }
 
+bool is_direct_store_opcode(int opcode) {
+  return opcode >= 0x40 && opcode <= 0x4e;
+}
+
+bool reachable_item_has_only_predecessor(
+    const AuthoritativePostLayoutControlFlow& control, std::size_t item_index,
+    std::size_t predecessor_item_index) {
+  bool reached = false;
+  for (const PostLayoutExternalEntryState& entry : control.external_entries) {
+    if (entry.entry.item_index == item_index)
+      return false;
+  }
+  for (std::size_t state_index = 0; state_index < control.execution_states.size(); ++state_index) {
+    if (state_index >= control.execution_successors.size())
+      return false;
+    for (const std::size_t successor : control.execution_successors.at(state_index)) {
+      if (successor >= control.execution_states.size())
+        return false;
+      if (control.execution_states.at(successor).item_index != item_index)
+        continue;
+      reached = true;
+      if (control.execution_states.at(state_index).item_index != predecessor_item_index)
+        return false;
+    }
+  }
+  return reached;
+}
+
+bool is_indirect_call_opcode(int opcode) {
+  const std::vector<IrOp> raised =
+      raise_machine_to_ir({MachineItem::op(opcode, opcode_by_code(opcode).name)});
+  return !raised.empty() && raised.front().kind == IrKind::IndirectCall;
+}
+
 bool is_side_alias(const FormalAddressInfo& info) {
   return (info.kind == FormalAddressKind::LongSide ||
           info.kind == FormalAddressKind::Dark) &&
@@ -228,6 +260,95 @@ void append_comment(MachineItem& item, const std::string& text) {
     item.comment = text;
 }
 
+struct ProcedureBlock {
+  std::size_t begin = 0;
+  std::size_t end = 0;
+  std::size_t target_item = 0;
+  int start_address = -1;
+  int cells = 0;
+  std::string target_label;
+};
+
+std::optional<ProcedureBlock> closed_procedure_block(
+    const std::vector<MachineItem>& items, const ArtifactIndex& index,
+    std::size_t target_item) {
+  if (target_item >= items.size() ||
+      items.at(target_item).kind != MachineItemKind::Op) {
+    return std::nullopt;
+  }
+  const int target_address = index.addresses.at(target_item);
+  std::optional<std::size_t> begin;
+  for (std::size_t cursor = target_item + 1U; cursor > 0; --cursor) {
+    const std::size_t item_index = cursor - 1U;
+    if (index.addresses.at(item_index) != target_address)
+      break;
+    const MachineItem& item = items.at(item_index);
+    if (item.kind == MachineItemKind::Label &&
+        item.procedure_boundary == "start") {
+      begin = item_index;
+    }
+  }
+  if (!begin.has_value())
+    return std::nullopt;
+
+  std::optional<std::size_t> end;
+  for (std::size_t item_index = target_item; item_index < items.size(); ++item_index) {
+    const MachineItem& item = items.at(item_index);
+    if (item_index > target_item && item.kind == MachineItemKind::Label &&
+        item.procedure_boundary == "start") {
+      break;
+    }
+    if (item.kind == MachineItemKind::Label &&
+        item.procedure_boundary == "end") {
+      end = item_index + 1U;
+      break;
+    }
+  }
+  if (!end.has_value()) {
+    std::size_t cursor = target_item;
+    while (cursor < items.size()) {
+      if (items.at(cursor).kind == MachineItemKind::Op &&
+          is_return_opcode(items.at(cursor).opcode)) {
+        end = cursor + 1U;
+        while (*end < items.size() &&
+               items.at(*end).kind == MachineItemKind::Label &&
+               items.at(*end).procedure_boundary == "end") {
+          ++*end;
+        }
+        break;
+      }
+      ++cursor;
+    }
+  }
+  if (!end.has_value() || *end <= *begin)
+    return std::nullopt;
+
+  std::optional<std::size_t> last_command;
+  int cells = 0;
+  for (std::size_t item_index = *begin; item_index < *end; ++item_index) {
+    if (items.at(item_index).kind == MachineItemKind::Label)
+      continue;
+    last_command = item_index;
+    ++cells;
+  }
+  if (!last_command.has_value() ||
+      items.at(*last_command).kind != MachineItemKind::Op ||
+      !is_return_opcode(items.at(*last_command).opcode)) {
+    return std::nullopt;
+  }
+  const auto labels = index.labels_by_address.find(target_address);
+  if (labels == index.labels_by_address.end() || labels->second.empty())
+    return std::nullopt;
+  return ProcedureBlock{
+      .begin = *begin,
+      .end = *end,
+      .target_item = target_item,
+      .start_address = target_address,
+      .cells = cells,
+      .target_label = labels->second.front(),
+  };
+}
+
 } // namespace
 
 SharedHelperDualModePreparation prepare_shared_helper_dual_mode_layout(
@@ -254,33 +375,6 @@ SharedHelperDualModePreparation prepare_shared_helper_dual_mode_layout(
   for (const std::string& label : labels) {
     SharedHelperContinuationProof candidate =
         verify_shared_helper_continuation(items, label, continuation_options);
-    if (std::getenv("MKPRO_NATIVE_TRACE_CANDIDATES") != nullptr &&
-        candidate.calls.size() >= 2U) {
-      std::cerr << "[dual-mode-analysis] helper=" << label
-                << " calls=" << candidate.calls.size()
-                << " ordinary="
-                << candidate.ordinary_call_item_indices.size();
-      if (!candidate.reasons.empty())
-        std::cerr << " reason=" << candidate.reasons.front();
-      std::cerr << "\n";
-      for (const SharedHelperContinuationCall& call : candidate.calls) {
-        std::cerr << "[dual-mode-analysis]   call@" << call.call_address
-                  << " tail=";
-        std::optional<std::size_t> cursor = call.operand_item_index;
-        for (int cell = 0; cell < 4 && cursor.has_value(); ++cell) {
-          cursor = next_cell_item(items, *cursor);
-          if (!cursor.has_value())
-            break;
-          const MachineItem& tail = items.at(*cursor);
-          if (tail.kind == MachineItemKind::Op)
-            std::cerr << (cell == 0 ? "" : ",")
-                      << opcode_by_code(tail.opcode).name;
-          else
-            std::cerr << (cell == 0 ? "" : ",") << "<address>";
-        }
-        std::cerr << "\n";
-      }
-    }
     if (candidate.proved) {
       result.continuation = std::move(candidate);
       break;
@@ -324,6 +418,8 @@ SharedHelperDualModePreparation prepare_shared_helper_dual_mode_layout(
            result.marker + ":helper-return");
 
   int ordinary = 0;
+  std::vector<std::size_t> trailing_stores;
+  int trailing_store_opcode = -1;
   for (const SharedHelperContinuationCall& call : result.continuation.calls) {
     if (call.ordinary) {
       const std::string prefix =
@@ -331,6 +427,18 @@ SharedHelperDualModePreparation prepare_shared_helper_dual_mode_layout(
       add_role(result.items.at(call.call_item_index), prefix + ":call");
       add_role(result.items.at(call.join_item_index), prefix + ":join");
       add_role(result.items.at(call.store_item_index), prefix + ":store");
+      const std::optional<std::size_t> trailing =
+          next_cell_item(items, call.store_item_index);
+      if (trailing.has_value() && *trailing == call.store_item_index + 1U &&
+          items.at(*trailing).kind == MachineItemKind::Op &&
+          is_direct_store_opcode(items.at(*trailing).opcode) &&
+          reachable_item_has_only_predecessor(control_flow, *trailing,
+                                              call.store_item_index) &&
+          (trailing_store_opcode < 0 || trailing_store_opcode == items.at(*trailing).opcode)) {
+        trailing_store_opcode = items.at(*trailing).opcode;
+        trailing_stores.push_back(*trailing);
+        add_role(result.items.at(*trailing), prefix + ":trailing-store");
+      }
     } else {
       add_role(result.items.at(call.call_item_index),
                result.marker + ":divergent-call");
@@ -340,12 +448,619 @@ SharedHelperDualModePreparation prepare_shared_helper_dual_mode_layout(
     result.reasons.push_back("dual-mode helper does not have exactly two ordinary calls");
     return result;
   }
+  if (trailing_stores.size() == 2U) {
+    result.trailing_store_opcode = trailing_store_opcode;
+    result.trailing_store_item_indices = std::move(trailing_stores);
+  }
 
   result.helper_target_item_index = *target;
   result.required_final_start_address =
       kOfficialTailStart - result.continuation.helper_body_cells;
   result.applied = 1;
   return result;
+}
+
+SharedHelperDualModeSelectorExchangeResult
+exchange_shared_helper_dual_mode_selector_families(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const SharedHelperDualModePreparation& preparation,
+    AddressSpaceModel model) {
+  SharedHelperDualModeSelectorExchangeResult result;
+  result.items = items;
+  result.preloads = preloads;
+  result.control_flow = control_flow;
+  const auto reject = [&](std::string reason) {
+    result.reasons.push_back(std::move(reason));
+    return result;
+  };
+  if (!control_flow.proved || preparation.applied <= 0 ||
+      !preparation.continuation.proved) {
+    return reject("selector exchange requires a proved dual-mode preparation");
+  }
+
+  std::optional<int> fixed_register;
+  std::set<std::size_t> helper_flow_items;
+  for (const SharedHelperContinuationCall& call : preparation.continuation.calls) {
+    if (!call.indirect || call.call_item_index >= items.size() ||
+        !is_indirect_call_opcode(items.at(call.call_item_index).opcode)) {
+      return reject("dual-mode call family is not uniformly indirect");
+    }
+    const int reg = items.at(call.call_item_index).opcode & 0x0f;
+    if (fixed_register.has_value() && *fixed_register != reg)
+      return reject("dual-mode calls already use more than one selector family");
+    fixed_register = reg;
+    helper_flow_items.insert(call.call_item_index);
+  }
+  if (!fixed_register.has_value())
+    return reject("dual-mode call family has no selector register");
+  const std::optional<std::size_t> fixed_preload =
+      preload_for_register(preloads, *fixed_register);
+  if (!fixed_preload.has_value())
+    return reject("dual-mode selector has no delivered preload");
+  if (preloads.at(*fixed_preload).retunable_natural_fractional_prefix.has_value())
+    return reject("dual-mode selector is already retunable");
+
+  const ArtifactIndex index = index_artifact(items);
+  const std::optional<std::size_t> helper_target = next_cell_item(
+      items, preparation.continuation.helper_label_item_index);
+  if (!helper_target.has_value())
+    return reject("dual-mode helper has no executable target identity");
+  const std::optional<ProcedureBlock> helper_block =
+      closed_procedure_block(items, index, *helper_target);
+  if (!helper_block.has_value())
+    return reject("dual-mode helper is not one closed procedure component");
+
+  for (const auto& [flow_item, targets] : control_flow.indirect_flow_targets) {
+    if (flow_item >= items.size() || items.at(flow_item).kind != MachineItemKind::Op)
+      return reject("selector exchange saw an invalid indirect-flow identity");
+    if ((items.at(flow_item).opcode & 0x0f) != *fixed_register)
+      continue;
+    if (targets.size() != 1U ||
+        targets.front().item_index != helper_block->target_item ||
+        !helper_flow_items.contains(flow_item)) {
+      return reject("fixed selector has another indirect-flow use");
+    }
+  }
+
+  struct FlexibleFamily {
+    int reg = -1;
+    std::size_t preload = 0;
+    ProcedureBlock block;
+    std::set<std::size_t> flow_items;
+  };
+  std::optional<FlexibleFamily> flexible;
+  for (int reg = 0; reg <= 14; ++reg) {
+    if (reg == *fixed_register)
+      continue;
+    const std::optional<std::size_t> preload = preload_for_register(preloads, reg);
+    if (!preload.has_value() ||
+        !preloads.at(*preload).retunable_natural_fractional_prefix.has_value()) {
+      continue;
+    }
+    std::optional<std::size_t> target_item;
+    std::set<std::size_t> flow_items;
+    bool complete = true;
+    for (const auto& [flow_item, targets] : control_flow.indirect_flow_targets) {
+      if (flow_item >= items.size() || items.at(flow_item).kind != MachineItemKind::Op ||
+          (items.at(flow_item).opcode & 0x0f) != reg) {
+        continue;
+      }
+      if (targets.size() != 1U ||
+          (target_item.has_value() && *target_item != targets.front().item_index)) {
+        complete = false;
+        break;
+      }
+      target_item = targets.front().item_index;
+      flow_items.insert(flow_item);
+    }
+    if (!complete || !target_item.has_value() || flow_items.empty() ||
+        *target_item == helper_block->target_item) {
+      continue;
+    }
+    const std::optional<ProcedureBlock> block =
+        closed_procedure_block(items, index, *target_item);
+    if (!block.has_value() || helper_block->end != block->begin)
+      continue;
+    if (flexible.has_value())
+      return reject("more than one adjacent retunable selector family is eligible");
+    flexible = FlexibleFamily{
+        .reg = reg,
+        .preload = *preload,
+        .block = *block,
+        .flow_items = std::move(flow_items),
+    };
+  }
+  if (!flexible.has_value())
+    return reject("no adjacent closed component uses one retunable selector family");
+
+  for (const auto& [flow_item, targets] : control_flow.indirect_flow_targets) {
+    for (const PostLayoutCommandIdentity& target : targets) {
+      if (target.item_index != helper_block->target_item &&
+          target.item_index != flexible->block.target_item) {
+        continue;
+      }
+      if (!helper_flow_items.contains(flow_item) &&
+          !flexible->flow_items.contains(flow_item)) {
+        return reject("a swapped component has an external indirect-flow family");
+      }
+    }
+  }
+  for (const PostLayoutExternalEntryState& entry : control_flow.external_entries) {
+    const int address = entry.entry.address;
+    if ((address >= helper_block->start_address &&
+         address < helper_block->start_address + helper_block->cells) ||
+        (address >= flexible->block.start_address &&
+         address < flexible->block.start_address + flexible->block.cells)) {
+      return reject("a swapped component is an externally admitted entry");
+    }
+  }
+
+  const int new_helper_address =
+      helper_block->start_address + flexible->block.cells;
+  const std::optional<std::string> rebound =
+      rebind_stable_preloaded_indirect_flow_selector(
+          items, result.preloads.at(flexible->preload), control_flow,
+          flexible->block.start_address, new_helper_address, model);
+  if (!rebound.has_value())
+    return reject("retunable selector could not be rebound after component exchange");
+  result.preloads.at(flexible->preload).value = *rebound;
+
+  for (const std::size_t flow_item : helper_flow_items) {
+    MachineItem& item = result.items.at(flow_item);
+    item.opcode = (item.opcode & 0xf0) | flexible->reg;
+    item.mnemonic = opcode_by_code(item.opcode).name;
+    item.indirect_flow_targets =
+        std::vector<IrTarget>{preparation.continuation.helper_label};
+  }
+  for (const std::size_t flow_item : flexible->flow_items) {
+    MachineItem& item = result.items.at(flow_item);
+    item.opcode = (item.opcode & 0xf0) | *fixed_register;
+    item.mnemonic = opcode_by_code(item.opcode).name;
+    item.indirect_flow_targets =
+        std::vector<IrTarget>{flexible->block.target_label};
+  }
+
+  std::vector<MachineItem> exchanged;
+  exchanged.reserve(result.items.size());
+  exchanged.insert(exchanged.end(), result.items.begin(),
+                   result.items.begin() + static_cast<std::ptrdiff_t>(helper_block->begin));
+  exchanged.insert(exchanged.end(),
+                   result.items.begin() + static_cast<std::ptrdiff_t>(flexible->block.begin),
+                   result.items.begin() + static_cast<std::ptrdiff_t>(flexible->block.end));
+  exchanged.insert(exchanged.end(),
+                   result.items.begin() + static_cast<std::ptrdiff_t>(helper_block->begin),
+                   result.items.begin() + static_cast<std::ptrdiff_t>(helper_block->end));
+  exchanged.insert(exchanged.end(),
+                   result.items.begin() + static_cast<std::ptrdiff_t>(flexible->block.end),
+                   result.items.end());
+  result.items = std::move(exchanged);
+
+  PostLayoutControlFlowOptions flow_options;
+  flow_options.address_space_model = model;
+  flow_options.empty_return_target = 1;
+  result.control_flow = build_post_layout_control_flow(result.items, flow_options);
+  if (!result.control_flow.proved) {
+    return reject("selector-family exchange failed final command-identity CFG proof" +
+                  (result.control_flow.reasons.empty()
+                       ? std::string{}
+                       : ": " + result.control_flow.reasons.front()));
+  }
+  result.applied = 1;
+  result.optimizations.push_back(passes::AppliedOptimization{
+      .name = "indirect-selector-family-exchange",
+      .detail = "Exchanged two adjacent independently returning helper components so a "
+                "fixed selector retained its address and a retunable decimal-prefix "
+                "selector followed the relocated family; re-proved every indirect "
+                "target and external entry by command identity.",
+  });
+  return result;
+}
+
+SharedHelperDualModeSelectorExchangeResult
+exchange_profitable_direct_indirect_call_families(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    AddressSpaceModel model) {
+  SharedHelperDualModeSelectorExchangeResult rejected;
+  rejected.items = items;
+  rejected.preloads = preloads;
+  rejected.control_flow = control_flow;
+  if (!control_flow.proved) {
+    rejected.reasons.push_back(
+        "call-family exchange requires authoritative control flow");
+    return rejected;
+  }
+
+  const ArtifactIndex index = index_artifact(items);
+  const auto direct_target_item = [&](std::size_t source)
+      -> std::optional<std::pair<std::size_t, std::size_t>> {
+    if (source >= items.size() || items.at(source).kind != MachineItemKind::Op ||
+        items.at(source).opcode != 0x53) {
+      return std::nullopt;
+    }
+    const std::optional<std::size_t> operand = next_cell_item(items, source);
+    if (!operand.has_value() ||
+        items.at(*operand).kind != MachineItemKind::Address) {
+      return std::nullopt;
+    }
+    const MachineItem& address = items.at(*operand);
+    std::optional<int> target_address;
+    if (address.formal_opcode.has_value()) {
+      try {
+        target_address =
+            formal_address_info(*address.formal_opcode, model).actual;
+      } catch (const std::exception&) {
+        return std::nullopt;
+      }
+    } else if (const auto* label = std::get_if<std::string>(&address.target)) {
+      const auto found = index.label_addresses.find(*label);
+      if (found != index.label_addresses.end())
+        target_address = found->second;
+    } else if (const auto* numeric = std::get_if<int>(&address.target)) {
+      target_address = *numeric;
+    }
+    if (!target_address.has_value())
+      return std::nullopt;
+    const auto target = index.cells.find(*target_address);
+    if (target == index.cells.end() ||
+        items.at(target->second).kind != MachineItemKind::Op) {
+      return std::nullopt;
+    }
+    return std::pair{target->second, *operand};
+  };
+
+  struct DirectCall {
+    std::size_t source = 0;
+    std::size_t operand = 0;
+  };
+  std::map<std::size_t, std::vector<DirectCall>> direct_calls_by_target;
+  for (std::size_t source = 0; source < items.size(); ++source) {
+    const auto target = direct_target_item(source);
+    if (target.has_value()) {
+      direct_calls_by_target[target->first].push_back(
+          DirectCall{.source = source, .operand = target->second});
+    }
+  }
+
+  struct Candidate {
+    int reg = -1;
+    std::size_t preload = 0;
+    ProcedureBlock direct_block;
+    ProcedureBlock indirect_block;
+    std::vector<DirectCall> direct_calls;
+    std::vector<std::size_t> indirect_calls;
+    int saving = 0;
+  };
+  std::vector<Candidate> candidates;
+  for (int reg = 7; reg <= 14; ++reg) {
+    const std::optional<std::size_t> preload = preload_for_register(preloads, reg);
+    if (!preload.has_value() ||
+        !preloads.at(*preload).retunable_natural_fractional_prefix.has_value()) {
+      continue;
+    }
+    std::optional<std::size_t> indirect_target;
+    std::vector<std::size_t> indirect_calls;
+    bool complete = true;
+    for (const auto& [flow_item, targets] : control_flow.indirect_flow_targets) {
+      if (flow_item >= items.size() || items.at(flow_item).kind != MachineItemKind::Op ||
+          (items.at(flow_item).opcode & 0x0f) != reg) {
+        continue;
+      }
+      if (!is_indirect_call_opcode(items.at(flow_item).opcode) ||
+          targets.size() != 1U ||
+          (indirect_target.has_value() &&
+           *indirect_target != targets.front().item_index)) {
+        complete = false;
+        break;
+      }
+      indirect_target = targets.front().item_index;
+      indirect_calls.push_back(flow_item);
+    }
+    if (!complete || !indirect_target.has_value() || indirect_calls.empty())
+      continue;
+    const std::optional<ProcedureBlock> indirect_block =
+        closed_procedure_block(items, index, *indirect_target);
+    if (!indirect_block.has_value())
+      continue;
+
+    for (const auto& [direct_target, direct_calls] : direct_calls_by_target) {
+      if (direct_target == *indirect_target ||
+          direct_calls.size() <= indirect_calls.size()) {
+        continue;
+      }
+      const std::optional<ProcedureBlock> direct_block =
+          closed_procedure_block(items, index, direct_target);
+      if (!direct_block.has_value())
+        continue;
+      candidates.push_back(Candidate{
+          .reg = reg,
+          .preload = *preload,
+          .direct_block = *direct_block,
+          .indirect_block = *indirect_block,
+          .direct_calls = direct_calls,
+          .indirect_calls = indirect_calls,
+          .saving = static_cast<int>(direct_calls.size() - indirect_calls.size()),
+      });
+    }
+  }
+  std::sort(candidates.begin(), candidates.end(),
+            [](const Candidate& left, const Candidate& right) {
+              return std::tie(right.saving, left.direct_block.start_address,
+                              left.indirect_block.start_address, left.reg) <
+                     std::tie(left.saving, right.direct_block.start_address,
+                              right.indirect_block.start_address, right.reg);
+            });
+  if (candidates.empty()) {
+    rejected.reasons.push_back(
+        "no profitable direct/retunable-indirect call families were proved");
+    return rejected;
+  }
+
+  struct DirectFlowIdentity {
+    std::size_t source_item = 0;
+    std::size_t target_item = 0;
+  };
+  std::vector<DirectFlowIdentity> direct_flows;
+  for (std::size_t source = 0; source < items.size(); ++source) {
+    const MachineItem& command = items.at(source);
+    if (command.kind != MachineItemKind::Op ||
+        !opcode_by_code(command.opcode).takes_address) {
+      continue;
+    }
+    const std::optional<std::size_t> operand = next_cell_item(items, source);
+    if (!operand.has_value() ||
+        items.at(*operand).kind != MachineItemKind::Address) {
+      rejected.reasons.push_back("direct flow lost its address operand");
+      return rejected;
+    }
+    const MachineItem& address = items.at(*operand);
+    std::optional<int> target_address;
+    if (address.formal_opcode.has_value()) {
+      try {
+        target_address = formal_address_info(*address.formal_opcode, model).actual;
+      } catch (const std::exception&) {
+        rejected.reasons.push_back("direct flow has an undecodable formal address");
+        return rejected;
+      }
+    } else if (const auto* label = std::get_if<std::string>(&address.target)) {
+      const auto found = index.label_addresses.find(*label);
+      if (found != index.label_addresses.end())
+        target_address = found->second;
+    } else if (const auto* numeric = std::get_if<int>(&address.target)) {
+      target_address = *numeric;
+    }
+    if (!target_address.has_value() || !index.cells.contains(*target_address)) {
+      rejected.reasons.push_back("direct flow target is not an executable identity");
+      return rejected;
+    }
+    direct_flows.push_back({source, index.cells.at(*target_address)});
+  }
+
+  for (const Candidate& candidate : candidates) {
+    SharedHelperDualModeSelectorExchangeResult attempt;
+    attempt.items = items;
+    attempt.preloads = preloads;
+    attempt.control_flow = control_flow;
+    std::string failure;
+    const auto fail = [&](std::string reason) {
+      failure = std::move(reason);
+      return false;
+    };
+
+    std::set<std::size_t> direct_sources;
+    std::set<std::size_t> direct_operands;
+    for (const DirectCall& call : candidate.direct_calls) {
+      direct_sources.insert(call.source);
+      direct_operands.insert(call.operand);
+    }
+    const std::set<std::size_t> indirect_sources(
+        candidate.indirect_calls.begin(), candidate.indirect_calls.end());
+
+    std::vector<MachineItem> rewritten;
+    rewritten.reserve(items.size() - direct_operands.size() +
+                      indirect_sources.size());
+    std::map<std::size_t, std::size_t> final_item_by_original;
+    for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
+      if (direct_operands.contains(item_index))
+        continue;
+      MachineItem item = items.at(item_index);
+      if (direct_sources.contains(item_index)) {
+        item.opcode = 0xd0 | candidate.reg;
+        item.mnemonic = opcode_by_code(item.opcode).name;
+        item.indirect_flow_targets =
+            std::vector<IrTarget>{candidate.direct_block.target_label};
+        append_comment(item, "profitable indirect call-family exchange");
+      } else if (indirect_sources.contains(item_index)) {
+        item.opcode = 0x53;
+        item.mnemonic = opcode_by_code(item.opcode).name;
+        item.indirect_flow_targets.reset();
+        append_comment(item, "profitable direct call-family exchange");
+      }
+      final_item_by_original.emplace(item_index, rewritten.size());
+      rewritten.push_back(std::move(item));
+      if (indirect_sources.contains(item_index)) {
+        MachineItem operand =
+            MachineItem::address(candidate.indirect_block.target_label);
+        append_comment(operand, "direct call-family target");
+        rewritten.push_back(std::move(operand));
+      }
+    }
+    if (cell_count(rewritten) != cell_count(items) - candidate.saving) {
+      fail("call-family exchange produced an unexpected cell count");
+      rejected.reasons.push_back(failure);
+      continue;
+    }
+
+    ArtifactIndex final_index = index_artifact(rewritten);
+    for (const DirectFlowIdentity& flow : direct_flows) {
+      if (direct_sources.contains(flow.source_item))
+        continue;
+      if (!final_item_by_original.contains(flow.source_item) ||
+          !final_item_by_original.contains(flow.target_item)) {
+        fail("call-family exchange lost a direct-flow identity");
+        break;
+      }
+      const std::size_t final_source =
+          final_item_by_original.at(flow.source_item);
+      const std::size_t final_target =
+          final_item_by_original.at(flow.target_item);
+      const std::optional<std::size_t> final_operand =
+          next_cell_item(rewritten, final_source);
+      if (!final_operand.has_value() ||
+          rewritten.at(*final_operand).kind != MachineItemKind::Address) {
+        fail("relocated direct flow lost its address operand");
+        break;
+      }
+      MachineItem& address = rewritten.at(*final_operand);
+      const int final_target_address = final_index.addresses.at(final_target);
+      const auto labels = final_index.labels_by_address.find(final_target_address);
+      if (labels != final_index.labels_by_address.end() && !labels->second.empty())
+        address.target = labels->second.front();
+      else
+        address.target = final_target_address;
+      address.formal_opcode.reset();
+    }
+    if (!failure.empty()) {
+      rejected.reasons.push_back(failure);
+      continue;
+    }
+
+    struct RebindRequirement {
+      int old_target = -1;
+      int new_target = -1;
+      std::size_t original_flow_item = 0;
+    };
+    std::map<int, RebindRequirement> required_by_register;
+    for (const auto& [original_flow_item, targets] :
+         control_flow.indirect_flow_targets) {
+      if (indirect_sources.contains(original_flow_item))
+        continue;
+      if (!final_item_by_original.contains(original_flow_item)) {
+        fail("call-family exchange lost an indirect-flow identity");
+        break;
+      }
+      MachineItem& final_flow =
+          rewritten.at(final_item_by_original.at(original_flow_item));
+      std::vector<IrTarget> rebound_targets;
+      std::vector<std::pair<int, int>> target_moves;
+      for (const PostLayoutCommandIdentity& target : targets) {
+        if (!final_item_by_original.contains(target.item_index)) {
+          fail("call-family exchange erased an indirect target identity");
+          break;
+        }
+        const std::size_t final_target =
+            final_item_by_original.at(target.item_index);
+        const int final_address = final_index.addresses.at(final_target);
+        const auto labels = final_index.labels_by_address.find(final_address);
+        if (labels != final_index.labels_by_address.end() && !labels->second.empty())
+          rebound_targets.emplace_back(labels->second.front());
+        else
+          rebound_targets.emplace_back(final_address);
+        target_moves.emplace_back(target.address, final_address);
+      }
+      if (!failure.empty())
+        break;
+      final_flow.indirect_flow_targets = std::move(rebound_targets);
+      if (targets.size() != 1U)
+        continue;
+      const int reg = final_flow.opcode & 0x0f;
+      const RebindRequirement requirement{
+          .old_target = target_moves.front().first,
+          .new_target = target_moves.front().second,
+          .original_flow_item = original_flow_item,
+      };
+      const auto [existing, inserted] = required_by_register.emplace(reg, requirement);
+      if (!inserted &&
+          (existing->second.old_target != requirement.old_target ||
+           existing->second.new_target != requirement.new_target) &&
+          !runtime_bound_selector(final_flow)) {
+        fail("one selector register needs incompatible target rebinding");
+        break;
+      }
+    }
+    if (!failure.empty()) {
+      rejected.reasons.push_back(failure);
+      continue;
+    }
+
+    const int final_direct_target = final_index.addresses.at(
+        final_item_by_original.at(candidate.direct_block.target_item));
+    required_by_register[candidate.reg] = RebindRequirement{
+        .old_target = candidate.indirect_block.start_address,
+        .new_target = final_direct_target,
+        .original_flow_item = candidate.indirect_calls.front(),
+    };
+    for (const auto& [reg, requirement] : required_by_register) {
+      if (requirement.old_target == requirement.new_target)
+        continue;
+      const std::optional<std::size_t> preload =
+          preload_for_register(attempt.preloads, reg);
+      if (!preload.has_value()) {
+        if (!final_item_by_original.contains(requirement.original_flow_item) ||
+            !runtime_bound_selector(
+                rewritten.at(final_item_by_original.at(
+                    requirement.original_flow_item)))) {
+          fail("moving indirect target lacks a stable or runtime selector");
+          break;
+        }
+        continue;
+      }
+      PreloadReport& report = attempt.preloads.at(*preload);
+      std::optional<std::string> rebound =
+          rebind_stable_preloaded_indirect_flow_selector(
+              items, report, control_flow, requirement.old_target,
+              requirement.new_target, model);
+      if (!rebound.has_value()) {
+        rebound = rebind_proved_natural_fractional_selector_preload(
+            items, report, requirement.old_target,
+            requirement.new_target, model);
+      }
+      if (!rebound.has_value()) {
+        fail("selector R" + std::to_string(reg) +
+             " could not be rebound after call-family exchange");
+        break;
+      }
+      report.value = *rebound;
+    }
+    if (!failure.empty()) {
+      rejected.reasons.push_back(failure);
+      continue;
+    }
+
+    PostLayoutControlFlowOptions flow_options;
+    flow_options.address_space_model = model;
+    flow_options.empty_return_target = 1;
+    attempt.control_flow =
+        build_post_layout_control_flow(rewritten, flow_options);
+    if (!attempt.control_flow.proved) {
+      rejected.reasons.push_back(
+          "call-family exchange failed final command-identity CFG proof" +
+          (attempt.control_flow.reasons.empty()
+               ? std::string{}
+               : ": " + attempt.control_flow.reasons.front()));
+      continue;
+    }
+    attempt.items = std::move(rewritten);
+    attempt.applied = 1;
+    attempt.optimizations.push_back(passes::AppliedOptimization{
+        .name = "direct-indirect-call-family-exchange",
+        .detail = "Exchanged " +
+                  std::to_string(candidate.direct_calls.size()) +
+                  " direct calls with " +
+                  std::to_string(candidate.indirect_calls.size()) +
+                  " calls through one retunable selector; preserved both "
+                  "closed procedure identities and removed " +
+                  std::to_string(candidate.saving) + " cell(s).",
+    });
+    return attempt;
+  }
+
+  if (rejected.reasons.empty())
+    rejected.reasons.push_back("all profitable call-family exchanges failed proof");
+  return rejected;
 }
 
 SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
@@ -385,27 +1100,58 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
       unique_role_item(placed_items, marker + ":ordinary-1:join");
   const auto ordinary1_store =
       unique_role_item(placed_items, marker + ":ordinary-1:store");
+  const auto ordinary0_trailing_store =
+      unique_role_item(placed_items, marker + ":ordinary-0:trailing-store");
+  const auto ordinary1_trailing_store =
+      unique_role_item(placed_items, marker + ":ordinary-1:trailing-store");
+  const bool shared_trailing_store = preparation.trailing_store_opcode >= 0;
   if (!helper_root || !helper_return || !divergent_call ||
       !ordinary0_call || !ordinary0_join || !ordinary0_store ||
-      !ordinary1_call || !ordinary1_join || !ordinary1_store) {
+      !ordinary1_call || !ordinary1_join || !ordinary1_store ||
+      (shared_trailing_store &&
+       (!ordinary0_trailing_store || !ordinary1_trailing_store))) {
     return reject("exact dual-mode command identities did not survive component layout");
   }
+  const auto direct_call_operand = [&](std::size_t call_item)
+      -> std::optional<std::size_t> {
+    if (placed_items.at(call_item).kind != MachineItemKind::Op ||
+        placed_items.at(call_item).opcode != 0x53) {
+      return std::nullopt;
+    }
+    const std::optional<std::size_t> operand =
+        next_cell_item(placed_items, call_item);
+    if (!operand.has_value() ||
+        placed_items.at(*operand).kind != MachineItemKind::Address) {
+      return std::nullopt;
+    }
+    return operand;
+  };
   const std::optional<std::size_t> divergent_operand =
-      next_cell_item(placed_items, *divergent_call);
+      direct_call_operand(*divergent_call);
   const std::optional<std::size_t> ordinary0_operand =
-      next_cell_item(placed_items, *ordinary0_call);
+      direct_call_operand(*ordinary0_call);
   const std::optional<std::size_t> ordinary1_operand =
-      next_cell_item(placed_items, *ordinary1_call);
-  if (!divergent_operand || !ordinary0_operand || !ordinary1_operand ||
-      placed_items.at(*divergent_operand).kind != MachineItemKind::Address ||
-      placed_items.at(*ordinary0_operand).kind != MachineItemKind::Address ||
-      placed_items.at(*ordinary1_operand).kind != MachineItemKind::Address) {
-    return reject("dual-mode call identity lost its adjacent address operand");
+      direct_call_operand(*ordinary1_call);
+  const bool divergent_indirect =
+      is_indirect_call_opcode(placed_items.at(*divergent_call).opcode);
+  const bool ordinary0_indirect =
+      is_indirect_call_opcode(placed_items.at(*ordinary0_call).opcode);
+  const bool ordinary1_indirect =
+      is_indirect_call_opcode(placed_items.at(*ordinary1_call).opcode);
+  if ((!divergent_operand.has_value() && !divergent_indirect) ||
+      (!ordinary0_operand.has_value() && !ordinary0_indirect) ||
+      (!ordinary1_operand.has_value() && !ordinary1_indirect)) {
+    return reject("dual-mode call identity is neither direct nor a proved indirect call");
   }
   if (placed_items.at(*ordinary0_join).opcode != preparation.continuation.join_opcode ||
       placed_items.at(*ordinary1_join).opcode != preparation.continuation.join_opcode ||
       placed_items.at(*ordinary0_store).opcode != preparation.continuation.store_opcode ||
-      placed_items.at(*ordinary1_store).opcode != preparation.continuation.store_opcode) {
+      placed_items.at(*ordinary1_store).opcode != preparation.continuation.store_opcode ||
+      (shared_trailing_store &&
+       (placed_items.at(*ordinary0_trailing_store).opcode !=
+            preparation.trailing_store_opcode ||
+        placed_items.at(*ordinary1_trailing_store).opcode !=
+            preparation.trailing_store_opcode))) {
     return reject("ordinary continuation bytes changed during component layout");
   }
 
@@ -417,10 +1163,17 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
   add_role(shared_store, marker + ":shared-store");
   append_comment(shared_join, "shared official helper continuation");
   append_comment(shared_store, "shared official helper continuation");
+  std::optional<MachineItem> shared_trailing;
+  if (shared_trailing_store) {
+    shared_trailing = placed_items.at(*ordinary0_trailing_store);
+    erase_transaction_roles(*shared_trailing, marker);
+    add_role(*shared_trailing, marker + ":shared-trailing-store");
+    append_comment(*shared_trailing, "shared official helper continuation");
+  }
 
   struct DirectFlowIdentity {
-    std::size_t source_origin = 0;
-    std::size_t target_origin = 0;
+    std::size_t source_item = 0;
+    std::size_t target_item = 0;
   };
   const ArtifactIndex placed_index = index_artifact(placed_items);
   std::vector<DirectFlowIdentity> direct_flows;
@@ -455,27 +1208,46 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
         !placed_index.cells.contains(*target_address)) {
       return reject("direct flow target cannot be identified before relocation");
     }
-    const std::optional<std::size_t> source_origin = origin_id(command, marker);
-    const std::optional<std::size_t> target_origin =
-        origin_id(placed_items.at(placed_index.cells.at(*target_address)), marker);
-    if (!source_origin.has_value() || !target_origin.has_value())
-      return reject("direct flow command identity is missing before relocation");
-    direct_flows.push_back({*source_origin, *target_origin});
+    direct_flows.push_back({source, placed_index.cells.at(*target_address)});
   }
 
-  const std::set<std::size_t> erased{
+  std::set<std::size_t> erased{
       *ordinary0_join, *ordinary0_store, *ordinary1_join, *ordinary1_store};
+  if (shared_trailing_store) {
+    erased.insert(*ordinary0_trailing_store);
+    erased.insert(*ordinary1_trailing_store);
+  }
   std::vector<MachineItem> rewritten;
-  rewritten.reserve(placed_items.size() - 2U);
+  rewritten.reserve(placed_items.size());
+  std::map<std::size_t, std::size_t> final_item_by_placed_item;
+  const int divergent_formal = formal_side_opcode(
+      preparation.required_final_start_address, model);
+  if (divergent_formal < 0)
+    return reject("no exact B2..F9 alias exists for the divergent helper entry");
   for (std::size_t item_index = 0; item_index < placed_items.size(); ++item_index) {
     if (item_index == *helper_return) {
+      const std::size_t final_join = rewritten.size();
       rewritten.push_back(shared_join);
+      const std::size_t final_store = rewritten.size();
       rewritten.push_back(shared_store);
+      final_item_by_placed_item.emplace(*ordinary0_join, final_join);
+      final_item_by_placed_item.emplace(*ordinary1_join, final_join);
+      final_item_by_placed_item.emplace(*ordinary0_store, final_store);
+      final_item_by_placed_item.emplace(*ordinary1_store, final_store);
+      if (shared_trailing_store) {
+        const std::size_t final_trailing = rewritten.size();
+        rewritten.push_back(*shared_trailing);
+        final_item_by_placed_item.emplace(*ordinary0_trailing_store, final_trailing);
+        final_item_by_placed_item.emplace(*ordinary1_trailing_store, final_trailing);
+      }
     }
     if (erased.contains(item_index))
       continue;
     MachineItem item = placed_items.at(item_index);
-    if (item_index == *ordinary0_operand || item_index == *ordinary1_operand) {
+    if ((ordinary0_operand.has_value() &&
+         item_index == *ordinary0_operand) ||
+        (ordinary1_operand.has_value() &&
+         item_index == *ordinary1_operand)) {
       // The neutral component layout has already resolved this direct operand
       // for the pre-rewrite address.  The atomic tail merge moves the helper
       // root, so retain the typed target identity and let the final resolver
@@ -483,14 +1255,26 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
       item.target = preparation.continuation.helper_label;
       item.formal_opcode.reset();
     }
-    if (item_index == *divergent_operand) {
-      const int formal = formal_side_opcode(
-          preparation.required_final_start_address, model);
-      if (formal < 0)
-        return reject("no exact B2..F9 alias exists for the divergent helper entry");
-      item.formal_opcode = formal;
+    if (divergent_operand.has_value() &&
+        item_index == *divergent_operand) {
+      item.formal_opcode = divergent_formal;
       append_comment(item, "divergent side-space helper entry");
     }
+    if (divergent_indirect && item_index == *divergent_call) {
+      item.opcode = 0x53;
+      item.mnemonic = opcode_by_code(item.opcode).name;
+      item.indirect_flow_targets.reset();
+      append_comment(item, "direct divergent dual-mode call");
+      final_item_by_placed_item.emplace(item_index, rewritten.size());
+      rewritten.push_back(std::move(item));
+      MachineItem side_entry =
+          MachineItem::address(preparation.continuation.helper_label);
+      side_entry.formal_opcode = divergent_formal;
+      append_comment(side_entry, "divergent side-space helper entry");
+      rewritten.push_back(std::move(side_entry));
+      continue;
+    }
+    final_item_by_placed_item.emplace(item_index, rewritten.size());
     rewritten.push_back(std::move(item));
   }
 
@@ -505,12 +1289,14 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
   }
 
   for (const DirectFlowIdentity& flow : direct_flows) {
-    if (!final_item_by_origin.contains(flow.source_origin) ||
-        !final_item_by_origin.contains(flow.target_origin)) {
+    if (!final_item_by_placed_item.contains(flow.source_item) ||
+        !final_item_by_placed_item.contains(flow.target_item)) {
       return reject("dual-mode rewrite erased a direct-flow command identity");
     }
-    const std::size_t final_source = final_item_by_origin.at(flow.source_origin);
-    const std::size_t final_target = final_item_by_origin.at(flow.target_origin);
+    const std::size_t final_source =
+        final_item_by_placed_item.at(flow.source_item);
+    const std::size_t final_target =
+        final_item_by_placed_item.at(flow.target_item);
     const std::optional<std::size_t> final_operand =
         next_cell_item(rewritten, final_source);
     if (!final_operand.has_value() ||
@@ -535,23 +1321,23 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
   std::map<int, RebindRequirement> required_by_register;
   for (const auto& [placed_flow_item, targets] :
        placed_control_flow.indirect_flow_targets) {
+    if (divergent_indirect && placed_flow_item == *divergent_call)
+      continue;
     if (placed_flow_item >= placed_items.size())
       return reject("placed indirect-flow identity is out of range");
-    const std::optional<std::size_t> flow_origin =
-        origin_id(placed_items.at(placed_flow_item), marker);
-    if (!flow_origin.has_value() || !final_item_by_origin.contains(*flow_origin))
+    if (!final_item_by_placed_item.contains(placed_flow_item))
       return reject("dual-mode rewrite lost an indirect-flow command identity");
-    MachineItem& final_flow_item = rewritten.at(final_item_by_origin.at(*flow_origin));
+    MachineItem& final_flow_item =
+        rewritten.at(final_item_by_placed_item.at(placed_flow_item));
     std::vector<IrTarget> rebound_targets;
     std::vector<std::pair<int, int>> target_moves;
     for (const PostLayoutCommandIdentity& target : targets) {
       if (target.item_index >= placed_items.size())
         return reject("placed indirect target identity is out of range");
-      const std::optional<std::size_t> target_origin =
-          origin_id(placed_items.at(target.item_index), marker);
-      if (!target_origin.has_value() || !final_item_by_origin.contains(*target_origin))
+      if (!final_item_by_placed_item.contains(target.item_index))
         return reject("dual-mode rewrite erased an indirect-flow target");
-      const std::size_t final_target_item = final_item_by_origin.at(*target_origin);
+      const std::size_t final_target_item =
+          final_item_by_placed_item.at(target.item_index);
       const int final_target_address = final_index.addresses.at(final_target_item);
       const auto labels = final_index.labels_by_address.find(final_target_address);
       if (labels != final_index.labels_by_address.end() && !labels->second.empty())
@@ -584,24 +1370,35 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
       continue;
     const std::optional<std::size_t> preload =
         preload_for_register(result.preloads, reg);
-    const std::optional<std::size_t> flow_origin =
-        origin_id(placed_items.at(requirement.placed_flow_item), marker);
-    if (!flow_origin.has_value() || !final_item_by_origin.contains(*flow_origin))
+    if (!final_item_by_placed_item.contains(requirement.placed_flow_item))
       return reject("selector command identity disappeared during rebinding");
     const MachineItem& final_flow_item =
-        rewritten.at(final_item_by_origin.at(*flow_origin));
+        rewritten.at(final_item_by_placed_item.at(requirement.placed_flow_item));
     if (!preload.has_value()) {
       if (!runtime_bound_selector(final_flow_item))
         return reject("moving indirect target has neither a preload nor a runtime binder");
       continue;
     }
     PreloadReport& report = result.preloads.at(*preload);
-    const std::optional<std::string> rebound =
+    std::optional<std::string> rebound =
         rebind_stable_preloaded_indirect_flow_selector(
             placed_items, report, placed_control_flow,
             requirement.old_target, requirement.new_target, model);
+    if (!rebound.has_value()) {
+      // A transparent layout bridge is a newly synthesized consumer and has
+      // no pre-layout command marker for the stricter command-identity
+      // helper.  The authoritative graph above nevertheless proves that all
+      // uses of this selector move as one target family.  Retunable natural
+      // literals can therefore use their ordinary exact prefix rebinder.
+      rebound = rebind_proved_natural_fractional_selector_preload(
+          placed_items, report, requirement.old_target,
+          requirement.new_target, model);
+    }
     if (!rebound.has_value())
-      return reject("stable selector preload could not be rebound by command identity");
+      return reject("stable selector preload index " + std::to_string(reg) +
+                    " could not be rebound by command identity " +
+                    std::to_string(requirement.old_target) + "->" +
+                    std::to_string(requirement.new_target));
     if (*rebound != report.value) {
       report.value = *rebound;
       ++result.proof.rebound_preloads;
@@ -620,7 +1417,10 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
   result.proof.body_end_address = kSideSpaceLastPhysical;
   result.proof.shared_join_address = kOfficialTailStart;
   result.proof.shared_store_address = kOfficialTailStart + 1;
-  result.proof.official_return_address = kOfficialTailStart + 2;
+  result.proof.shared_trailing_store_address =
+      shared_trailing_store ? kOfficialTailStart + 2 : -1;
+  result.proof.official_return_address =
+      kOfficialTailStart + 2 + (shared_trailing_store ? 1 : 0);
   for (int address = result.proof.body_start_address;
        address <= result.proof.body_end_address; ++address) {
     const auto cell = final_index.cells.find(address);
@@ -632,12 +1432,20 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
   }
   const auto join_cell = final_index.cells.find(result.proof.shared_join_address);
   const auto store_cell = final_index.cells.find(result.proof.shared_store_address);
+  const auto trailing_store_cell =
+      shared_trailing_store
+          ? final_index.cells.find(result.proof.shared_trailing_store_address)
+          : final_index.cells.end();
   const auto return_cell = final_index.cells.find(result.proof.official_return_address);
   const auto zero_cell = final_index.cells.find(0);
   if (join_cell == final_index.cells.end() || store_cell == final_index.cells.end() ||
       return_cell == final_index.cells.end() || zero_cell == final_index.cells.end() ||
       rewritten.at(join_cell->second).opcode != preparation.continuation.join_opcode ||
       rewritten.at(store_cell->second).opcode != preparation.continuation.store_opcode ||
+      (shared_trailing_store &&
+       (trailing_store_cell == final_index.cells.end() ||
+        rewritten.at(trailing_store_cell->second).opcode !=
+            preparation.trailing_store_opcode)) ||
       !is_return_opcode(rewritten.at(return_cell->second).opcode) ||
       !is_return_opcode(rewritten.at(zero_cell->second).opcode)) {
     return reject("final dual-mode body/tail/return geometry is not exact");
@@ -653,22 +1461,46 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
       continue;
     if (has_role(item, marker + ":ordinary-0:call") ||
         has_role(item, marker + ":ordinary-1:call")) {
-      const std::optional<std::size_t> operand = next_cell_item(rewritten, item_index);
-      if (!operand.has_value() ||
-          rewritten.at(*operand).kind != MachineItemKind::Address)
-        return reject("ordinary helper call lost its address operand");
-      const MachineItem& address = rewritten.at(*operand);
-      std::optional<int> target_address;
-      if (const auto* label = std::get_if<std::string>(&address.target)) {
-        const auto found = final_index.label_addresses.find(*label);
-        if (found != final_index.label_addresses.end())
-          target_address = found->second;
-      } else if (const auto* numeric = std::get_if<int>(&address.target)) {
-        target_address = *numeric;
+      if (item.opcode == 0x53) {
+        const std::optional<std::size_t> operand =
+            next_cell_item(rewritten, item_index);
+        if (!operand.has_value() ||
+            rewritten.at(*operand).kind != MachineItemKind::Address)
+          return reject("ordinary direct helper call lost its address operand");
+        const MachineItem& address = rewritten.at(*operand);
+        std::optional<int> target_address;
+        if (const auto* label = std::get_if<std::string>(&address.target)) {
+          const auto found = final_index.label_addresses.find(*label);
+          if (found != final_index.label_addresses.end())
+            target_address = found->second;
+        } else if (const auto* numeric = std::get_if<int>(&address.target)) {
+          target_address = *numeric;
+        }
+        if (address.formal_opcode.has_value() || !target_address.has_value() ||
+            *target_address != preparation.required_final_start_address) {
+          return reject("ordinary direct helper call no longer uses the official entry");
+        }
+      } else if (is_indirect_call_opcode(item.opcode)) {
+        if (!item.indirect_flow_targets.has_value() ||
+            item.indirect_flow_targets->size() != 1U) {
+          return reject("ordinary indirect helper call lacks one typed target");
+        }
+        const IrTarget& target = item.indirect_flow_targets->front();
+        std::optional<int> target_address;
+        if (const auto* label = std::get_if<std::string>(&target)) {
+          const auto found = final_index.label_addresses.find(*label);
+          if (found != final_index.label_addresses.end())
+            target_address = found->second;
+        } else if (const auto* numeric = std::get_if<int>(&target)) {
+          target_address = *numeric;
+        }
+        if (!target_address.has_value() ||
+            *target_address != preparation.required_final_start_address) {
+          return reject("ordinary indirect helper call no longer uses the official entry");
+        }
+      } else {
+        return reject("ordinary helper call changed control-flow kind");
       }
-      if (address.formal_opcode.has_value() || !target_address.has_value() ||
-          *target_address != preparation.required_final_start_address)
-        return reject("ordinary helper call no longer uses the official entry");
       ++ordinary_calls;
     }
     if (has_role(item, marker + ":divergent-call")) {
@@ -705,9 +1537,13 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
   result.proof.output_cells = final_index.cell_count;
   result.proof.removed_cells =
       result.proof.input_cells - result.proof.output_cells;
-  if (result.proof.removed_cells != preparation.continuation.continuation_cells ||
+  const int divergent_conversion_cells = divergent_indirect ? 1 : 0;
+  const int expected_removed =
+      preparation.continuation.continuation_cells + (shared_trailing_store ? 1 : 0) -
+      divergent_conversion_cells;
+  if (result.proof.removed_cells != expected_removed ||
       result.proof.removed_cells <= 0) {
-    return reject("dual-mode rewrite did not remove exactly one duplicate tail pair");
+    return reject("dual-mode rewrite did not realize the proved net tail saving");
   }
 
   result.proof.proved = true;
@@ -716,7 +1552,10 @@ SharedHelperDualModeLayoutResult finalize_shared_helper_dual_mode_layout(
   result.removed_cells = result.proof.removed_cells;
   result.optimizations.push_back(passes::AppliedOptimization{
       .name = "shared-helper-dual-mode-layout",
-      .detail = "Moved two byte-identical commutative/store continuations into one "
+      .detail = "Moved two byte-identical commutative/store continuations" +
+                std::string(shared_trailing_store ? " plus their identical trailing store"
+                                                  : "") +
+                " into one "
                 "official helper tail and sent the divergent call through the same "
                 "straight-line body via its proved F9 side-space entry; removed " +
                 std::to_string(result.removed_cells) +

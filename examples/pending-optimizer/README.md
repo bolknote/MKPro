@@ -15,7 +15,7 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 128 | 105 | +23 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 125 | 105 | +20 | pending optimizer |
 | `nekromant.mkpro` | 133 | 105 | +28 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
@@ -265,5 +265,5 @@ mode may reject over-window programs earlier than the analysis path.
   X2, indirect memory, selector values, and setup preloads are rebuilt after
   every accepted step. On this artifact the generic DSE, redundant-literal,
   empty-return tail-call fusion, padding recovery, and fallthrough-component
-  transactions compose to reduce `tic-tac-toe-4x4.mkpro` from 133 to 128 cells
+  transactions compose to reduce `tic-tac-toe-4x4.mkpro` from 133 to 125 cells
   without changing its source or recognizing the game.

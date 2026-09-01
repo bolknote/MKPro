@@ -33,29 +33,35 @@
    29 |  00  | 0                       |
    30 |  00  | 0                       |
    31 |  47  | X→П 7                   | setup R7
-   32 |  08  | 8                       |
-   33 |  01  | 1                       |
+   32 |  01  | 1                       |
+   33 |  00  | 0                       |
    34 |  00  | 0                       |
-   35 |  02  | 2                       |
+   35 |  00  | 0                       |
    36 |  00  | 0                       |
-   37 |  00  | 0                       |
+   37 |  4B  | X→П b                   | setup Rb
    38 |  08  | 8                       |
-   39 |  08  | 8                       |
+   39 |  01  | 1                       |
    40 |  00  | 0                       |
-   41 |  00  | 0                       |
+   41 |  02  | 2                       |
    42 |  00  | 0                       |
    43 |  00  | 0                       |
-   44 |  00  | 0                       |
-   45 |  00  | 0                       |
+   44 |  08  | 8                       |
+   45 |  08  | 8                       |
    46 |  00  | 0                       |
-   47 |  4E  | X→П e                   | setup Re
-   48 |  09  | 9                       |
-   49 |  07  | 7                       |
-   50 |  4A  | X→П a                   | setup Ra
-   51 |  03  | 3                       |
-   52 |  02  | 2                       |
-   53 |  4B  | X→П b                   | setup Rb
-   54 |  50  | С/П                     | setup complete
+   47 |  00  | 0                       |
+   48 |  00  | 0                       |
+   49 |  00  | 0                       |
+   50 |  00  | 0                       |
+   51 |  00  | 0                       |
+   52 |  00  | 0                       |
+   53 |  4E  | X→П e                   | setup Re
+   54 |  09  | 9                       |
+   55 |  06  | 6                       |
+   56 |  49  | X→П 9                   | setup R9
+   57 |  03  | 3                       |
+   58 |  01  | 1                       |
+   59 |  4A  | X→П a                   | setup Ra
+   60 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code  | Command                 | Comment
@@ -74,91 +80,90 @@
    12 | 4D    | X→П d                   | set event_target
    13 | 3B    | К СЧ                    | random()
    14 | 48    | X→П 8                   | set random_state
-   15 | 04    | 4                       |
-   16 | 15    | F 10ˣ                   | constant 10000
-   17 | 12    | ×                       | expr *
-   18 | 34    | К [x]                   | int()
-   19 | DD    | К П→X d                 | indexed recall cells; indirect-memory-targets=1,2,3,4,5,6,7
-   20 | 10    | +                       | expr +
-   21 | BD    | К X→П d                 | indexed set cells; indirect-memory-targets=1,2,3,4,5,6,7
-   22 | 04    | 4                       |
-   23 | AB    | К ПП b                  | proc call front_stop; preloaded Rb=32 indirect-target=32 shifted-forward indirect flow
-   24 | 05    | 5                       |
-   25 | AB    | К ПП b                  | proc call front_stop; preloaded Rb=32 indirect-target=32 shifted-forward indirect flow
-   26 | 06    | 6                       |
-   27 | AB    | К ПП b                  | proc call front_stop; preloaded Rb=32 indirect-target=32 shifted-forward indirect flow
-   28 | 5D    | F L0                    | setup-counted while time
-   29 | 00    | 00                      | setup-counted while time
-   30 | 6E    | П→X e                   | preload const 810200880000000
-   31 | 50    | С/П                     | halt
-   32 | 4D    | X→П d                   | set event_target from X parameter
-   33 | 03    | 3                       |
-   34 | 11    | −                       | expr -
-   35 | 4C    | X→П c                   | set slot
-   36 | 50    | С/П                     | show __inline_show_59_1
-   37 | 34    | К [x]                   | int()
-   38 | 49    | X→П 9                   | set scratch
-   39 | 67    | П→X 7                   | recall cells_7
-   40 | 14    | ↔                       | current-X operand order
-   41 | 11    | −                       | expr -
-   42 | 47    | X→П 7                   | set cells_7
-   43 | 21    | F √                     | domain-error guard trap
+   15 | 6B    | П→X b                   | preload const 10000
+   16 | 12    | ×                       | expr *
+   17 | 34    | К [x]                   | int()
+   18 | DD    | К П→X d                 | indexed recall cells; indirect-memory-targets=1,2,3,4,5,6,7
+   19 | 10    | +                       | expr +
+   20 | BD    | К X→П d                 | indexed set cells; indirect-memory-targets=1,2,3,4,5,6,7
+   21 | 04    | 4                       |
+   22 | AA    | К ПП a                  | proc call front_stop; preloaded Ra=31 indirect-target=31 shifted-forward indirect flow
+   23 | 05    | 5                       |
+   24 | AA    | К ПП a                  | proc call front_stop; preloaded Ra=31 indirect-target=31 shifted-forward indirect flow
+   25 | 06    | 6                       |
+   26 | AA    | К ПП a                  | proc call front_stop; preloaded Ra=31 indirect-target=31 shifted-forward indirect flow
+   27 | 5D    | F L0                    | setup-counted while time
+   28 | 00    | 00                      | setup-counted while time
+   29 | 6E    | П→X e                   | preload const 810200880000000
+   30 | 50    | С/П                     | halt
+   31 | 4D    | X→П d                   | set event_target from X parameter
+   32 | 03    | 3                       |
+   33 | 11    | −                       | expr -
+   34 | 4C    | X→П c                   | set slot
+   35 | 50    | С/П                     | show __inline_show_59_1
+   36 | 34    | К [x]                   | int()
+   37 | 67    | П→X 7                   | decrement cells_7
+   38 | 14    | X↔Y                     | decrement input order
+   39 | 11    | −                       | decrement input
+   40 | 47    | X→П 7                   | set cells_7
+   41 | 59    | F x≥0                   | decrement negative trap
+   42 | 47    | 47                      | decrement negative trap
+   43 | 0F    | F Вx                    | restore decremented input
    44 | DD    | К П→X d                 | indexed recall cells; indirect-memory-targets=1,2,3,4,5,6,7
-   45 | 69    | П→X 9                   | recall scratch
-   46 | 10    | +                       | expr +
-   47 | BD    | К X→П d                 | indexed set cells; indirect-memory-targets=1,2,3,4,5,6,7
-   48 | 21    | F √                     | indexed assign domain-error guard trap
-   49 | 68    | П→X 8                   | prior random random_state
-   50 | 0E    | В↑                      | prior random keep random_state
-   51 | 3B    | К СЧ                    | random()
-   52 | 48    | X→П 8                   | set random_state
-   53 | 11    | −                       | prior random compare
-   54 | 5C    | F x<0                   | false branch for prior random <
-   55 | 61    | 61                      | false branch for prior random <
-   56 | DC    | К П→X c                 | indexed recall cells; indirect-memory-targets=1,2,3,4,5,6,7
-   57 | AA    | К ПП a                  | call function decay; preloaded Ra=97 indirect-target=97 shifted-forward indirect flow
-   58 | BC    | К X→П c                 | indexed set cells; indirect-memory-targets=1,2,3,4,5,6,7
-   59 | 51    | БП                      | if end
-   60 | 64    | 64                      | if end
-   61 | DD    | К П→X d                 | indexed recall cells; indirect-memory-targets=1,2,3,4,5,6,7
-   62 | AA    | К ПП a                  | call function decay; preloaded Ra=97 indirect-target=97 shifted-forward indirect flow
-   63 | BD    | К X→П d                 | indexed set cells; indirect-memory-targets=1,2,3,4,5,6,7
-   64 | DD    | К П→X d                 | indexed recall cells; indirect-memory-targets=1,2,3,4,5,6,7
-   65 | AA    | К ПП a                  | call function decay; preloaded Ra=97 indirect-target=97 shifted-forward indirect flow
-   66 | BD    | К X→П d                 | indexed set cells; indirect-memory-targets=1,2,3,4,5,6,7
-   67 | DC    | К П→X c                 | indexed recall cells; indirect-memory-targets=1,2,3,4,5,6,7
-   68 | AA    | К ПП a                  | call function decay; preloaded Ra=97 indirect-target=97 shifted-forward indirect flow
-   69 | BC    | К X→П c                 | indexed set cells; indirect-memory-targets=1,2,3,4,5,6,7
-   70 | 35    | К {x}                   | fractional decrement amount frac
-   71 | 68    | П→X 8                   | prior random random_state
-   72 | 0E    | В↑                      | prior random keep random_state
-   73 | 3B    | К СЧ                    | random()
-   74 | 48    | X→П 8                   | set random_state
-   75 | 10    | +                       | prior random + random()
-   76 | 01    | 1                       |
-   77 | 10    | +                       | prior random additive term
-   78 | 02 00 | 20                      |
-   80 | 12    | ×                       | fractional decrement factor
-   81 | DD    | К П→X d                 | indexed recall cells; indirect-memory-targets=1,2,3,4,5,6,7
-   82 | DC    | К П→X c                 | indexed recall cells; indirect-memory-targets=1,2,3,4,5,6,7
-   83 | 13    | ÷                       | fractional decrement amount ratio
-   84 | 13    | ÷                       | fractional decrement scaled step
-   85 | 34    | К [x]                   | fractional decrement int step
-   86 | 03    | 3                       |
-   87 | 15    | F 10ˣ                   | constant 1000
-   88 | 13    | ÷                       | fractional decrement scale
-   89 | 11    | −                       | fractional decrement remaining amount
-   90 | 17    | F lg                    | fractional decrement domain-error guard trap
-   91 | 0F    | F Вx                    | fractional decrement restore remaining amount
-   92 | DC    | К П→X c                 | indexed recall cells; indirect-memory-targets=1,2,3,4,5,6,7
-   93 | 34    | К [x]                   | fractional decrement integer part
-   94 | 10    | +                       | fractional decrement rebuild value
-   95 | BC    | К X→П c                 | indexed set cells; indirect-memory-targets=1,2,3,4,5,6,7
-   96 | 52    | В/О                     | implicit return from proc
-   97 | 68    | П→X 8                   | recall random_state
-   98 | 12    | ×                       | x-param decay scale
-   99 | 04    | 4                       |
-   A0 | 13    | ÷                       | x-param decay divide
-   A1 | 34    | К [x]                   | x-param decay int
-   A2 | 11    | −                       | x-param decay subtract
-   A3 | 52    | В/О                     | x-param decay return
+   45 | 10    | +                       | increment input
+   46 | BD    | К X→П d                 | indexed set cells; indirect-memory-targets=1,2,3,4,5,6,7
+   47 | 21    | F √                     | decrement/increment domain-error guard trap
+   48 | 68    | П→X 8                   | prior random random_state
+   49 | 0E    | В↑                      | prior random keep random_state
+   50 | 3B    | К СЧ                    | random()
+   51 | 48    | X→П 8                   | set random_state
+   52 | 11    | −                       | prior random compare
+   53 | 5C    | F x<0                   | false branch for prior random <
+   54 | 60    | 60                      | false branch for prior random <
+   55 | DC    | К П→X c                 | indexed recall cells; indirect-memory-targets=1,2,3,4,5,6,7
+   56 | A9    | К ПП 9                  | call function decay; preloaded R9=96 indirect-target=96 shifted-forward indirect flow
+   57 | BC    | К X→П c                 | indexed set cells; indirect-memory-targets=1,2,3,4,5,6,7
+   58 | 51    | БП                      | if end
+   59 | 63    | 63                      | if end
+   60 | DD    | К П→X d                 | indexed recall cells; indirect-memory-targets=1,2,3,4,5,6,7
+   61 | A9    | К ПП 9                  | call function decay; preloaded R9=96 indirect-target=96 shifted-forward indirect flow
+   62 | BD    | К X→П d                 | indexed set cells; indirect-memory-targets=1,2,3,4,5,6,7
+   63 | DD    | К П→X d                 | indexed recall cells; indirect-memory-targets=1,2,3,4,5,6,7
+   64 | A9    | К ПП 9                  | call function decay; preloaded R9=96 indirect-target=96 shifted-forward indirect flow
+   65 | BD    | К X→П d                 | indexed set cells; indirect-memory-targets=1,2,3,4,5,6,7
+   66 | DC    | К П→X c                 | indexed recall cells; indirect-memory-targets=1,2,3,4,5,6,7
+   67 | A9    | К ПП 9                  | call function decay; preloaded R9=96 indirect-target=96 shifted-forward indirect flow
+   68 | BC    | К X→П c                 | indexed set cells; indirect-memory-targets=1,2,3,4,5,6,7
+   69 | 35    | К {x}                   | fractional decrement amount frac
+   70 | 68    | П→X 8                   | prior random random_state
+   71 | 0E    | В↑                      | prior random keep random_state
+   72 | 3B    | К СЧ                    | random()
+   73 | 48    | X→П 8                   | set random_state
+   74 | 10    | +                       | prior random + random()
+   75 | 01    | 1                       |
+   76 | 10    | +                       | prior random additive term
+   77 | 02 00 | 20                      |
+   79 | 12    | ×                       | fractional decrement factor
+   80 | DD    | К П→X d                 | indexed recall cells; indirect-memory-targets=1,2,3,4,5,6,7
+   81 | DC    | К П→X c                 | indexed recall cells; indirect-memory-targets=1,2,3,4,5,6,7
+   82 | 13    | ÷                       | fractional decrement amount ratio
+   83 | 13    | ÷                       | fractional decrement scaled step
+   84 | 34    | К [x]                   | fractional decrement int step
+   85 | 03    | 3                       |
+   86 | 15    | F 10ˣ                   | constant 1000
+   87 | 13    | ÷                       | fractional decrement scale
+   88 | 11    | −                       | fractional decrement remaining amount
+   89 | 17    | F lg                    | fractional decrement domain-error guard trap
+   90 | 0F    | F Вx                    | fractional decrement restore remaining amount
+   91 | DC    | К П→X c                 | indexed recall cells; indirect-memory-targets=1,2,3,4,5,6,7
+   92 | 34    | К [x]                   | fractional decrement integer part
+   93 | 10    | +                       | fractional decrement rebuild value
+   94 | BC    | К X→П c                 | indexed set cells; indirect-memory-targets=1,2,3,4,5,6,7
+   95 | 52    | В/О                     | implicit return from proc
+   96 | 68    | П→X 8                   | recall random_state
+   97 | 12    | ×                       | x-param decay scale
+   98 | 04    | 4                       |
+   99 | 13    | ÷                       | x-param decay divide
+   A0 | 34    | К [x]                   | x-param decay int
+   A1 | 11    | −                       | x-param decay subtract
+   A2 | 52    | В/О                     | x-param decay return

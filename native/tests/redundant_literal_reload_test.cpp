@@ -1,4 +1,5 @@
 #include "mkpro/core/passes/redundant_literal_reload.hpp"
+#include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/emulator/mk61.hpp"
 
 #include "ir_pass_test_support.hpp"
@@ -149,6 +150,42 @@ void redundant_literal_reload_is_generic_and_proof_gated() {
   };
   require(run_machine(original_call) == run_machine(optimized_call),
           "emulator must confirm interprocedural stack/X2 convergence");
+
+  const auto late_digit = [](core::LateBoundDecimalSelectorPart part,
+                             const std::string& target, int opcode) {
+    MachineItem item = MachineItem::op(opcode, std::to_string(opcode));
+    item.roles.push_back(core::make_late_bound_decimal_selector_role(part, target));
+    return item;
+  };
+  MachineItem terminal_stop = MachineItem::op(0x50, "C/P");
+  terminal_stop.stop_disposition = StopDisposition::Terminal;
+  std::vector<MachineItem> compactable_selector = {
+      MachineItem::op(0x41, "X->P 1"),
+      late_digit(core::LateBoundDecimalSelectorPart::High, "early", 0),
+      late_digit(core::LateBoundDecimalSelectorPart::Low, "early", 6),
+      MachineItem::op(0x0d, "Cx"),
+      terminal_stop,
+      MachineItem::op(0x54, "K NOP"),
+      MachineItem::label("early"),
+      MachineItem::op(0x52, "B/O"),
+  };
+  const auto selector_plan =
+      core::passes::post_layout_single_digit_late_selector_plan(
+          compactable_selector);
+  require(selector_plan.has_value() && selector_plan->target_address == 6 &&
+              selector_plan->leading_zero_address == 1,
+          "one-digit selector should be compactable after X2 synchronization");
+
+  compactable_selector.at(3) = MachineItem::op(0x0a, ".");
+  require(!core::passes::post_layout_single_digit_late_selector_plan(
+               compactable_selector)
+               .has_value(),
+          "one-digit selector must retain its leading zero when dot observes X2");
+
+  const std::vector<int> original_selector = {0x41, 0x00, 0x06, 0x0d, 0x50};
+  const std::vector<int> compact_selector = {0x41, 0x06, 0x0d, 0x50};
+  require(run_machine(original_selector) == run_machine(compact_selector),
+          "emulator must confirm leading-zero selector equivalence after X2 sync");
 }
 
 } // namespace mkpro::tests

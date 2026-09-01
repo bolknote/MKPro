@@ -259,7 +259,7 @@ void emulator_zagaday_tsifru_final_revision_preserves_ui() {
 
   const std::string semantic_source = read_text(root / "examples" / "zagaday-tsifru.mkpro");
   const CompileResult semantic = compile_source(semantic_source);
-  require(semantic.implemented && semantic.diagnostics.empty() && semantic.steps.size() == 105U,
+  require(semantic.implemented && semantic.diagnostics.empty() && semantic.steps.size() == 104U,
           "final Zagaday Tsifru semantic source should compile into the MK-61 window");
   const std::vector<int> semantic_opcodes = step_opcodes(semantic);
   require(std::count(semantic_opcodes.begin(), semantic_opcodes.end(), 0x1c) == 1 &&

@@ -42,6 +42,6 @@ std::optional<Expression> packed_grid_expression_macro(const std::string& name,
                                                        const std::vector<Expression>& args);
 std::optional<int> grid_norm_call_width(const std::vector<Expression>& args);
 std::string grid_norm_use_count_key(int width);
-void emit_grid_norm_body(ExpressionEmitApi& api, int width);
+void emit_grid_norm_body(ExpressionEmitApi& api, int width, bool finite_domain_branchless = false);
 
 } // namespace mkpro::core::emit

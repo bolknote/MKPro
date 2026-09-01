@@ -15,6 +15,7 @@ namespace {
 
 constexpr std::string_view kHighRolePrefix = "late-decimal-selector-high:";
 constexpr std::string_view kLowRolePrefix = "late-decimal-selector-low:";
+constexpr std::string_view kSingleRolePrefix = "late-decimal-selector-single:";
 
 struct Marker {
   LateBoundDecimalSelectorPart part = LateBoundDecimalSelectorPart::High;
@@ -54,6 +55,10 @@ parse_marker_role(std::string_view role, bool& recognized) {
     recognized = true;
     target = role.substr(kLowRolePrefix.size());
     part = LateBoundDecimalSelectorPart::Low;
+  } else if (starts_with(role, kSingleRolePrefix)) {
+    recognized = true;
+    target = role.substr(kSingleRolePrefix.size());
+    part = LateBoundDecimalSelectorPart::Single;
   } else {
     return std::nullopt;
   }
@@ -80,7 +85,10 @@ std::string make_late_bound_decimal_selector_role(LateBoundDecimalSelectorPart p
   if (target_label.empty())
     throw std::invalid_argument("late-bound decimal selector target label must not be empty");
   const std::string_view prefix =
-      part == LateBoundDecimalSelectorPart::High ? kHighRolePrefix : kLowRolePrefix;
+      part == LateBoundDecimalSelectorPart::High
+          ? kHighRolePrefix
+          : part == LateBoundDecimalSelectorPart::Low ? kLowRolePrefix
+                                                       : kSingleRolePrefix;
   return std::string(prefix) + std::string(target_label);
 }
 
@@ -177,10 +185,15 @@ bind_late_bound_decimal_selectors(const std::vector<MachineItem>& items,
   }
 
   std::vector<Pair> pairs;
+  std::vector<Marker> singles;
   for (std::size_t index = 0; index < marker_by_item.size(); ++index) {
     if (!marker_by_item.at(index).has_value())
       continue;
     const Marker& high = *marker_by_item.at(index);
+    if (high.part == LateBoundDecimalSelectorPart::Single) {
+      singles.push_back(high);
+      continue;
+    }
     if (high.part != LateBoundDecimalSelectorPart::High) {
       append_error(result.diagnostics, "late-decimal-selector-unexpected-low",
                    "Late-bound decimal selector low placeholder at item " + std::to_string(index) +
@@ -248,6 +261,30 @@ bind_late_bound_decimal_selectors(const std::vector<MachineItem>& items,
     pairs.push_back(Pair{.high = high, .low = low, .target_address = target_address});
   }
 
+  for (const Marker& single : singles) {
+    const auto label_it = label_addresses.find(single.target_label);
+    if (label_it == label_addresses.end()) {
+      append_error(result.diagnostics, "late-decimal-selector-missing-label",
+                   "Late-bound decimal selector target label '" + single.target_label +
+                       "' does not exist in the final layout.");
+      continue;
+    }
+    if (label_it->second.size() != 1U) {
+      append_error(result.diagnostics, "late-decimal-selector-duplicate-label",
+                   "Late-bound decimal selector target label '" + single.target_label +
+                       "' is not unique in the final layout.");
+      continue;
+    }
+    const int target_address = label_it->second.front();
+    if (target_address < options.minimum_target_address || target_address > 9) {
+      append_error(result.diagnostics, "late-decimal-selector-single-target-out-of-range",
+                   "Single-cell decimal selector target label '" + single.target_label +
+                       "' resolves to " + std::to_string(target_address) +
+                       ", outside the one-digit interval " +
+                       std::to_string(options.minimum_target_address) + "..9.");
+    }
+  }
+
   if (!result.diagnostics.empty())
     return result;
 
@@ -263,6 +300,7 @@ bind_late_bound_decimal_selectors(const std::vector<MachineItem>& items,
     result.proofs.push_back(LateBoundDecimalSelectorProof{
         .target_label = pair.high.target_label,
         .target_address = pair.target_address,
+        .single_cell = false,
         .high_item_index = pair.high.item_index,
         .low_item_index = pair.low.item_index,
         .high_cell_address = pair.high.cell_address,
@@ -271,7 +309,24 @@ bind_late_bound_decimal_selectors(const std::vector<MachineItem>& items,
         .low_digit = low_digit,
     });
   }
-  result.applied = static_cast<int>(pairs.size());
+  for (const Marker& single : singles) {
+    const int target_address = label_addresses.at(single.target_label).front();
+    MachineItem& item = result.items.at(single.item_index);
+    item.opcode = target_address;
+    item.mnemonic = std::to_string(target_address);
+    result.proofs.push_back(LateBoundDecimalSelectorProof{
+        .target_label = single.target_label,
+        .target_address = target_address,
+        .single_cell = true,
+        .high_item_index = single.item_index,
+        .low_item_index = single.item_index,
+        .high_cell_address = single.cell_address,
+        .low_cell_address = single.cell_address,
+        .high_digit = 0,
+        .low_digit = target_address,
+    });
+  }
+  result.applied = static_cast<int>(pairs.size() + singles.size());
   return result;
 }
 

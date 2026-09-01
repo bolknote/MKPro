@@ -554,6 +554,25 @@ bool compile_current_x_derivation(
     ExpressionEmitApi& api, const Expression& expression,
     const std::map<std::string, std::pair<int, std::string>>& unary_opcodes);
 
+bool lower_current_x_derivation_or_shared_helper(
+    ExpressionEmitApi& api, LoweringContext& context, const Expression& expression,
+    const std::map<std::string, std::pair<int, std::string>>& unary_opcodes) {
+  if (compile_current_x_derivation(api, expression, unary_opcodes))
+    return true;
+  if (context.emitting_expression_helper ||
+      !api.emitter.current_x_variable.has_value()) {
+    return false;
+  }
+  const std::string key = expression_to_json(expression);
+  const auto entry = context.expression_helper_stack_entries.find(key);
+  if (entry == context.expression_helper_stack_entries.end() ||
+      entry->second.temps.size() != 1U ||
+      !current_x_holds_name(api, entry->second.temps.front())) {
+    return false;
+  }
+  return api.lower_expression_to_x(expression);
+}
+
 bool lower_commutative_with_current_x(ExpressionEmitApi& api, LoweringContext& context,
                                       const Expression& expression, int opcode) {
   if (!api.emitter.current_x_variable.has_value() || expression.left == nullptr ||
@@ -564,7 +583,8 @@ bool lower_commutative_with_current_x(ExpressionEmitApi& api, LoweringContext& c
   const auto& unary_opcodes = current_x_unary_opcodes();
   if (expression_preserves_previous_x_as_y_for_current_x_operand(*expression.right) &&
       !expression_contains_current_x_name(api, *expression.right) &&
-      compile_current_x_derivation(api, *expression.left, unary_opcodes)) {
+      lower_current_x_derivation_or_shared_helper(
+          api, context, *expression.left, unary_opcodes)) {
     if (!lower_current_x_preserving_operand_to_x(api, context, *expression.right))
       return false;
     api.emitter.emit_op(opcode, expression.op, "expr " + expression.op);
@@ -579,7 +599,8 @@ bool lower_commutative_with_current_x(ExpressionEmitApi& api, LoweringContext& c
 
   if (expression_preserves_previous_x_as_y_for_current_x_operand(*expression.left) &&
       !expression_contains_current_x_name(api, *expression.left) &&
-      compile_current_x_derivation(api, *expression.right, unary_opcodes)) {
+      lower_current_x_derivation_or_shared_helper(
+          api, context, *expression.right, unary_opcodes)) {
     if (!lower_current_x_preserving_operand_to_x(api, context, *expression.left))
       return false;
     api.emitter.emit_op(opcode, expression.op, "expr " + expression.op);
@@ -736,7 +757,8 @@ bool lower_commutative_call_with_current_x(
   const Expression& right = expression.args.at(1);
   if (expression_preserves_previous_x_as_y_for_current_x_operand(right) &&
       !expression_contains_current_x_name(api, right) &&
-      compile_current_x_derivation(api, left, unary_opcodes)) {
+      lower_current_x_derivation_or_shared_helper(
+          api, context, left, unary_opcodes)) {
     if (!lower_current_x_preserving_operand_to_x(api, context, right))
       return false;
     api.emitter.emit_op(opcode.first, opcode.second, lower_ascii(expression.callee) + "()");
@@ -751,7 +773,8 @@ bool lower_commutative_call_with_current_x(
   }
   if (expression_preserves_previous_x_as_y_for_current_x_operand(left) &&
       !expression_contains_current_x_name(api, left) &&
-      compile_current_x_derivation(api, right, unary_opcodes)) {
+      lower_current_x_derivation_or_shared_helper(
+          api, context, right, unary_opcodes)) {
     if (!lower_current_x_preserving_operand_to_x(api, context, left))
       return false;
     api.emitter.emit_op(opcode.first, opcode.second, lower_ascii(expression.callee) + "()");
@@ -946,8 +969,30 @@ std::string grid_norm_use_count_key(int width) {
   return "__grid_norm_width:" + std::to_string(width);
 }
 
-void emit_grid_norm_body(ExpressionEmitApi& api, int width) {
+void emit_grid_norm_body(ExpressionEmitApi& api, int width, bool finite_domain_branchless) {
   const std::string width_literal = std::to_string(width);
+  if (finite_domain_branchless) {
+    // For integral n >= -(width - 1), one-based modulo is the fractional
+    // part of (n + width - 1) / width, scaled back and shifted by one. The
+    // planner admits this body only when every decimal intermediate is exact.
+    api.emit_number_or_preload(std::to_string(width - 1), "grid_norm finite-domain shift",
+                               std::nullopt, std::nullopt);
+    api.emitter.emit_op(0x10, "+", "grid_norm nonnegative dividend");
+    api.emit_number_or_preload(width_literal, "grid_norm width divisor", std::nullopt,
+                               std::nullopt);
+    api.emitter.emit_op(0x13, "/", "grid_norm quotient");
+    api.emitter.emit_op(0x35, "К {x}", "grid_norm positive fraction");
+    api.emit_number_or_preload(width_literal, "grid_norm width scale", std::nullopt,
+                               std::nullopt);
+    api.emitter.emit_op(0x12, "*", "grid_norm remainder");
+    api.emit_number_or_preload("1", "grid_norm one-based result", std::nullopt, std::nullopt);
+    api.emitter.emit_op(0x10, "+", "grid_norm one-based result");
+    api.emitter.current_x_variable.reset();
+    api.emitter.current_x_aliases.clear();
+    api.emitter.current_x_expression.reset();
+    api.emitter.current_x_known_zero = false;
+    return;
+  }
   const std::string adjust = api.emitter.fresh_label("grid_norm_adjust");
   const std::string done = api.emitter.fresh_label("grid_norm_done");
 
@@ -1453,7 +1498,8 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
       });
       return false;
     }
-    if (*width != k_default_board_width &&
+    const bool finite_domain_branchless = context.finite_grid_norm_domains.contains(*width);
+    if (!finite_domain_branchless && *width != k_default_board_width &&
         !api.ensure_hidden_register("__grid_norm_dividend")) {
       return false;
     }
@@ -1480,7 +1526,7 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
                     " through a shared X-argument helper.",
       });
     } else {
-      emit_grid_norm_body(api, *width);
+      emit_grid_norm_body(api, *width, finite_domain_branchless);
       context.optimizations.push_back(OptimizationReport{
           .name = "signed-grid-normalization-inline",
           .detail = "Normalized a signed calculator value into 1.." + std::to_string(*width) +

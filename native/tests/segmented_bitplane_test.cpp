@@ -173,7 +173,11 @@ program SegmentedClear {
   require(clear.registers.at("__seg_bitplane_selector") == "7",
           "segmented hit-and-clear should keep selector in R7");
 
-  const CompileResult direct = compile_segmented(R"mkpro(
+  CompileOptions direct_options;
+  direct_options.budget = 999;
+  direct_options.segmented_bitplanes = true;
+  direct_options.disable_candidate_search = true;
+  const CompileResult direct = compile_source(R"mkpro(
 program SegmentedDirectDispatch {
   field: board(0..9, 0..9)
 
@@ -195,7 +199,8 @@ program SegmentedDirectDispatch {
     halt(answer)
   }
 }
-)mkpro");
+)mkpro",
+                                              direct_options);
   require(!direct.implemented,
           "oversized direct segmented bitplane dispatch must not claim to fit the MK-61");
   require(std::any_of(direct.diagnostics.begin(), direct.diagnostics.end(),

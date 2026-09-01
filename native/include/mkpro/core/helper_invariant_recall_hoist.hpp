@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <map>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -50,6 +51,21 @@ struct HelperInvariantRecallHoistOptions {
   // whichever proved plan removes more cells.
   bool allow_before_call_commutative_tail = true;
 
+  // Keep a proved tail plan even when the independently evaluated root plan
+  // is locally smaller. This is an internal composition axis: callers may
+  // apply another proved rewrite to the tail plan and compare the complete
+  // result against the original artifact. It never weakens either proof.
+  bool prefer_before_return_plan = false;
+
+  // Optional proof input for an atomic composition: every listed call is
+  // independently proved to enter with this direct-register value already in
+  // X before the common recall is moved. The relational helper proof may then
+  // erase the matching first helper recall while evaluating the original and
+  // final artifacts directly. A partial call set or any other insertion mode
+  // is rejected.
+  std::optional<int> simultaneous_entry_recall_opcode;
+  std::set<std::size_t> entry_x_proved_call_items;
+
   // A complete target set is required for every indirect-flow MachineItem.
   // Targets are physical cell addresses in the input artifact.  The rewrite
   // rejects targets into the helper or a removed recall and records their
@@ -82,6 +98,7 @@ struct HelperInvariantRecallHoistProof {
   std::size_t helper_body_begin_item_index = 0;
   std::size_t helper_return_item_index = 0;
   std::size_t helper_body_cells = 0;
+  std::optional<std::size_t> erased_helper_entry_recall_item;
   std::vector<HelperInvariantRecallCall> calls;
   std::set<std::size_t> erased_recall_items;
   std::set<std::size_t> nop_recall_items;

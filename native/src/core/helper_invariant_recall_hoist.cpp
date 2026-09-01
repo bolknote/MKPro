@@ -667,10 +667,17 @@ ContinuationProof prove_continuation(const std::vector<MachineItem>& items,
 
 bool simulate_helper_body_pair(const std::vector<MachineItem>& items, std::size_t begin,
                                std::size_t return_index, SymbolicState& original,
-                               SymbolicState& rewritten, std::string& rejection) {
+                               SymbolicState& rewritten,
+                               const std::optional<std::size_t>& rewritten_skip_item,
+                               std::string& rejection) {
   for (std::size_t item_index = begin; item_index < return_index; ++item_index) {
     if (items.at(item_index).kind == MachineItemKind::Label)
       continue;
+    if (rewritten_skip_item == item_index) {
+      if (!execute_symbolic_op(original, items.at(item_index), false, rejection))
+        return false;
+      continue;
+    }
     if (!execute_symbolic_pair(original, rewritten, items.at(item_index), false, false,
                                rejection)) {
       return false;
@@ -686,6 +693,13 @@ bool prove_call_transfer(const std::vector<MachineItem>& items,
   SymbolicState original = initial_symbolic_state();
   SymbolicState rewritten = initial_symbolic_state();
   const MachineItem& recall = items.at(call.recall_item_index);
+  if (helper.erased_helper_entry_recall_item.has_value()) {
+    const int entry_opcode = items.at(*helper.erased_helper_entry_recall_item).opcode;
+    const std::size_t register_index =
+        static_cast<std::size_t>(entry_opcode - kFirstDirectRecallOpcode);
+    original.stack.at(0) = original.registers.at(register_index);
+    rewritten.stack.at(0) = rewritten.registers.at(register_index);
+  }
 
   if (helper.insertion == HelperInvariantRecallInsertion::BeforeReturn) {
     const bool recall_before_call =
@@ -702,7 +716,7 @@ bool prove_call_transfer(const std::vector<MachineItem>& items,
     }
     if (!simulate_helper_body_pair(items, helper.helper_body_begin_item_index,
                                    helper.helper_return_item_index, original, rewritten,
-                                   rejection)) {
+                                   helper.erased_helper_entry_recall_item, rejection)) {
       return false;
     }
     if (recall_after_return &&
@@ -726,7 +740,7 @@ bool prove_call_transfer(const std::vector<MachineItem>& items,
     }
     if (!simulate_helper_body_pair(items, helper.helper_body_begin_item_index,
                                    helper.helper_return_item_index, original, rewritten,
-                                   rejection)) {
+                                   helper.erased_helper_entry_recall_item, rejection)) {
       return false;
     }
   } else {
@@ -734,7 +748,7 @@ bool prove_call_transfer(const std::vector<MachineItem>& items,
       return false;
     if (!simulate_helper_body_pair(items, helper.helper_body_begin_item_index,
                                    helper.helper_return_item_index, original, rewritten,
-                                   rejection)) {
+                                   helper.erased_helper_entry_recall_item, rejection)) {
       return false;
     }
     if (!execute_symbolic_op(original, recall, false, rejection))
@@ -801,6 +815,7 @@ void validate_pre_artifact_flow(const std::vector<MachineItem>& items, const Art
                      !proved_root_call) {
             add_reason(proof, "proved indirect target can enter the helper body");
           } else if (removed_recall_items.contains(target_item->second) &&
+                     !proved_root_call &&
                      !nop_safe_call_entry(target_item->second)) {
             add_reason(proof, "proved indirect target names a removed call-site recall");
           }
@@ -902,6 +917,12 @@ bool reindex_indirect_flow_proof(const std::vector<MachineItem>& original,
       }
       new_targets.push_back(candidate_index.item_addresses.at(new_target_item));
     }
+    const auto fixed = options.fixed_indirect_flow_targets.find(old_flow_item);
+    if (fixed != options.fixed_indirect_flow_targets.end() &&
+        new_targets != fixed->second) {
+      add_reason(proof, "fixed indirect target changed address during rewrite");
+      return false;
+    }
     proof.final_indirect_flow_targets.emplace(new_flow_item, std::move(new_targets));
   }
   return true;
@@ -973,7 +994,8 @@ bool verify_final_artifact(const std::vector<MachineItem>& original,
                            HelperInvariantRecallHoistProof& proof) {
   const ArtifactIndex index = index_artifact(candidate);
   const int expected_cells =
-      proof.input_cells - static_cast<int>(proof.erased_recall_items.size()) + 1;
+      proof.input_cells - static_cast<int>(proof.erased_recall_items.size()) + 1 -
+      (proof.erased_helper_entry_recall_item.has_value() ? 1 : 0);
   proof.output_cells = index.cells;
   if (index.cells != expected_cells) {
     add_reason(proof, "final artifact has an unexpected cell count");
@@ -1023,6 +1045,21 @@ bool verify_final_artifact(const std::vector<MachineItem>& original,
   if (candidate_recall_count != original_recall_count - static_cast<int>(proof.calls.size()) + 1) {
     add_reason(proof, "final artifact did not remove exactly one recall per call site");
     return false;
+  }
+  if (proof.erased_helper_entry_recall_item.has_value()) {
+    const int entry_opcode = original.at(*proof.erased_helper_entry_recall_item).opcode;
+    const int original_entry_count = static_cast<int>(std::count_if(
+        original.begin(), original.end(), [&](const MachineItem& item) {
+          return item.kind == MachineItemKind::Op && item.opcode == entry_opcode;
+        }));
+    const int candidate_entry_count = static_cast<int>(std::count_if(
+        candidate.begin(), candidate.end(), [&](const MachineItem& item) {
+          return item.kind == MachineItemKind::Op && item.opcode == entry_opcode;
+        }));
+    if (candidate_entry_count != original_entry_count - 1) {
+      add_reason(proof, "final artifact did not erase exactly one helper entry recall");
+      return false;
+    }
   }
 
   const int nop_padding_count = static_cast<int>(std::count_if(
@@ -1243,7 +1280,6 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
        ++item_index) {
     const MachineItem& item = items.at(item_index);
     if (item.kind == MachineItemKind::Label) {
-      add_reason(proof, "helper contains a second executable entry label");
       continue;
     }
     if (item.kind != MachineItemKind::Op) {
@@ -1272,22 +1308,6 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
     add_reason(proof, "helper has no explicit straight-line return");
   if (proof.helper_body_cells == 0)
     add_reason(proof, "helper body is empty");
-
-  if (found_return) {
-    const int helper_start_address = index.item_addresses.at(root->second);
-    const int helper_return_address = index.item_addresses.at(proof.helper_return_item_index);
-    for (const auto& [label, address] : index.label_addresses) {
-      if (label != helper_label && address >= helper_start_address &&
-          address <= helper_return_address) {
-        const MachineItem& label_item = items.at(index.label_items.at(label));
-        const bool preceding_end_metadata = address == helper_start_address &&
-                                            label_item.procedure_boundary.has_value() &&
-                                            *label_item.procedure_boundary == "end";
-        if (!preceding_end_metadata)
-          add_reason(proof, "helper contains a second executable entry label");
-      }
-    }
-  }
 
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
     const MachineItem& item = items.at(item_index);
@@ -1419,6 +1439,37 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
     proof.insertion = HelperInvariantRecallInsertion::BeforeReturn;
   }
 
+  if (options.simultaneous_entry_recall_opcode.has_value()) {
+    const int entry_opcode = *options.simultaneous_entry_recall_opcode;
+    if (proof.insertion != HelperInvariantRecallInsertion::BeforeReturn) {
+      add_reason(proof, "entry-recall erasure requires the helper-tail plan");
+    } else if (!is_direct_recall(entry_opcode) ||
+               proof.helper_body_begin_item_index >= items.size() ||
+               items.at(proof.helper_body_begin_item_index).kind != MachineItemKind::Op ||
+               items.at(proof.helper_body_begin_item_index).opcode != entry_opcode) {
+      add_reason(proof, "proved entry recall is not the first helper opcode");
+    } else if (entry_opcode == proof.recall_opcode) {
+      add_reason(proof, "entry recall and hoisted invariant recall must be distinct");
+    } else {
+      proof.erased_helper_entry_recall_item = proof.helper_body_begin_item_index;
+    }
+    for (const HelperInvariantRecallCall& call : proof.calls) {
+      if (!options.entry_x_proved_call_items.contains(call.call_item_index)) {
+        add_reason(proof, "entry-X proof does not cover every helper call");
+        break;
+      }
+    }
+    for (const std::size_t call_item : options.entry_x_proved_call_items) {
+      if (std::none_of(proof.calls.begin(), proof.calls.end(),
+                       [&](const HelperInvariantRecallCall& call) {
+                         return call.call_item_index == call_item;
+                       })) {
+        add_reason(proof, "entry-X proof contains a stale helper call item");
+        break;
+      }
+    }
+  }
+
   if (found_return && proof.register_index >= 0) {
     for (std::size_t item_index = proof.helper_body_begin_item_index;
          item_index < proof.helper_return_item_index; ++item_index) {
@@ -1438,6 +1489,8 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
       removed_recall_items.insert(call.recall_item_index);
     }
   }
+  if (proof.erased_helper_entry_recall_item.has_value())
+    removed_recall_items.insert(*proof.erased_helper_entry_recall_item);
   if (found_return)
     validate_pre_artifact_flow(items, index, removed_recall_items, options, proof);
 
@@ -1455,11 +1508,13 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
   if (proof.reasons.empty())
     plan_fixed_target_recall_erasure(index, options, proof);
   proof.output_cells =
-      proof.input_cells - static_cast<int>(proof.erased_recall_items.size()) + 1;
+      proof.input_cells - static_cast<int>(proof.erased_recall_items.size()) + 1 -
+      (proof.erased_helper_entry_recall_item.has_value() ? 1 : 0);
   if (proof.output_cells >= proof.input_cells)
     add_reason(proof, "recall hoist is not cell-profitable");
   proof.proved = proof.reasons.empty();
-  if (options.allow_before_call_commutative_tail) {
+  if (options.allow_before_call_commutative_tail &&
+      !options.prefer_before_return_plan) {
     HelperInvariantRecallHoistOptions root_options = options;
     root_options.allow_before_call_commutative_tail = false;
     HelperInvariantRecallHoistProof root_plan = verify_helper_invariant_recall_hoist(
@@ -1491,7 +1546,8 @@ rewrite_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
   candidate.reserve(items.size() - result.proof.erased_recall_items.size() + 1U);
   std::vector<std::optional<std::size_t>> old_to_new_item(items.size());
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
-    if (result.proof.erased_recall_items.contains(item_index))
+    if (result.proof.erased_recall_items.contains(item_index) ||
+        result.proof.erased_helper_entry_recall_item == item_index)
       continue;
     if (result.proof.insertion == HelperInvariantRecallInsertion::BeforeReturn &&
         item_index == result.proof.helper_return_item_index)
@@ -1554,8 +1610,12 @@ optimize_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
   std::vector<std::string> labels;
   std::set<std::string> seen;
   for (const MachineItem& item : items) {
-    if (item.kind == MachineItemKind::Label && seen.insert(item.name).second)
+    if (item.kind == MachineItemKind::Label &&
+        (!item.procedure_boundary.has_value() ||
+         *item.procedure_boundary != "end") &&
+        seen.insert(item.name).second) {
       labels.push_back(item.name);
+    }
   }
 
   HelperInvariantRecallHoistResult rejection;

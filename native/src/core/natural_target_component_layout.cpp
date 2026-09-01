@@ -153,9 +153,14 @@ struct TransparentSplitBridge {
 
 struct TransparentFallthroughJumpFold {
   std::size_t command_origin = 0;
-  std::size_t operand_origin = 0;
+  std::optional<std::size_t> operand_origin;
   std::size_t target_origin = 0;
 };
+
+int fallthrough_jump_fold_removed_cells(
+    const TransparentFallthroughJumpFold& fold) {
+  return fold.operand_origin.has_value() ? 2 : 1;
+}
 
 struct SplitBridgeDonor {
   std::size_t command_origin = 0;
@@ -738,26 +743,36 @@ bool apply_transparent_fallthrough_jump_fold(
     return false;
   };
   const auto source = locate_origin(segments, requested.command_origin);
-  const auto operand = locate_origin(segments, requested.operand_origin);
+  const std::optional<std::pair<std::size_t, int>> operand =
+      requested.operand_origin.has_value()
+          ? locate_origin(segments, *requested.operand_origin)
+          : std::nullopt;
   const auto target = locate_origin(segments, requested.target_origin);
   const auto main = locate_origin(segments, main_command_origin);
-  if (!source.has_value() || !operand.has_value() || !target.has_value() ||
-      !main.has_value()) {
+  if (!source.has_value() ||
+      (requested.operand_origin.has_value() && !operand.has_value()) ||
+      !target.has_value() || !main.has_value()) {
     return fail("jump-fold component identity was lost during flow conversion: source=" +
                 std::to_string(source.has_value()) + " operand=" +
-                std::to_string(operand.has_value()) + " target=" +
+                std::to_string(!requested.operand_origin.has_value() ||
+                               operand.has_value()) + " target=" +
                 std::to_string(target.has_value()) + " main=" +
                 std::to_string(main.has_value()));
   }
-  if (source->first != operand->first || source->first == target->first ||
+  if ((operand.has_value() && source->first != operand->first) ||
+      source->first == target->first ||
       target->first == main->first || target->second != 0) {
     return fail("jump-fold target is not a distinct movable component root");
   }
   const Segment& source_segment = segments.at(source->first);
-  const bool source_is_terminal =
-      source->second >= 0 && operand->second == source->second + 1 &&
-      static_cast<std::size_t>(operand->second + 1) ==
-          source_segment.cells.size();
+  const bool source_is_terminal = operand.has_value()
+                                      ? source->second >= 0 &&
+                                            operand->second == source->second + 1 &&
+                                            static_cast<std::size_t>(operand->second + 1) ==
+                                                source_segment.cells.size()
+                                      : source->second >= 0 &&
+                                            static_cast<std::size_t>(source->second + 1) ==
+                                                source_segment.cells.size();
   if (!source_is_terminal) {
     return fail("jump-fold pair does not terminate its fallthrough component");
   }
@@ -778,34 +793,42 @@ bool apply_transparent_fallthrough_jump_fold(
   }
   const Cell& command_cell =
       source_segment.cells.at(static_cast<std::size_t>(source->second));
-  const Cell& operand_cell =
-      source_segment.cells.at(static_cast<std::size_t>(operand->second));
   const MachineItem& command = command_cell.value.item;
-  const MachineItem& address = operand_cell.value.item;
   const OpcodeInfo& jump = opcode_by_code(command.opcode);
-  if (!command_cell.labels.empty() || !operand_cell.labels.empty() ||
-      command.kind != MachineItemKind::Op || command.opcode != kJumpOpcode ||
+  const bool direct_jump = requested.operand_origin.has_value();
+  const bool stable_indirect_jump =
+      !direct_jump && command.opcode >= 0x87 && command.opcode <= 0x8e;
+  const bool operand_is_transparent = !operand.has_value() ||
+      (source_segment.cells.at(static_cast<std::size_t>(operand->second))
+               .labels.empty() &&
+       source_segment.cells.at(static_cast<std::size_t>(operand->second))
+               .value.item.kind == MachineItemKind::Address &&
+       !source_segment.cells.at(static_cast<std::size_t>(operand->second))
+            .value.item.raw &&
+       !source_segment.cells.at(static_cast<std::size_t>(operand->second))
+            .value.item.manual_interaction.has_value() &&
+       source_segment.cells.at(static_cast<std::size_t>(operand->second))
+            .value.item.roles.empty());
+  if (!command_cell.labels.empty() || !operand_is_transparent ||
+      command.kind != MachineItemKind::Op ||
+      (!direct_jump && !stable_indirect_jump) ||
+      (direct_jump && command.opcode != kJumpOpcode) ||
       command.raw || command.manual_interaction.has_value() ||
       !command.roles.empty() ||
-      address.kind != MachineItemKind::Address || address.raw ||
-      address.manual_interaction.has_value() || !address.roles.empty() ||
       jump.stack_effect != StackEffect::Preserves ||
       jump.x2_effect != X2Effect::Preserves) {
-    return fail("jump-fold pair is not an unlabelled transparent ordinary БП pair"
+    return fail("jump-fold source is not an unlabelled transparent БП flow"
                 " (command-labels=" +
                 std::to_string(command_cell.labels.size()) +
-                ", operand-labels=" +
-                std::to_string(operand_cell.labels.size()) +
                 ", command-roles=" + std::to_string(command.roles.size()) +
-                ", operand-roles=" +
-                std::to_string(address.roles.size()) +
                 ", command-raw=" + std::to_string(command.raw) +
-                ", operand-raw=" + std::to_string(address.raw) + ")");
+                ", direct=" + std::to_string(direct_jump) + ")");
   }
 
   const auto removed_identity = [&](std::size_t item_index) {
     return item_index == requested.command_origin ||
-           item_index == requested.operand_origin;
+           (requested.operand_origin.has_value() &&
+            item_index == *requested.operand_origin);
   };
   for (const DirectReference& reference : references) {
     if (removed_identity(reference.target))
@@ -834,7 +857,7 @@ bool apply_transparent_fallthrough_jump_fold(
   }
 
   Segment merged = std::move(segments.at(source->first));
-  merged.cells.resize(merged.cells.size() - 2U);
+  merged.cells.resize(merged.cells.size() - (direct_jump ? 2U : 1U));
   Segment& target_segment = segments.at(target->first);
   for (Cell& cell : target_segment.cells)
     merged.cells.push_back(std::move(cell));
@@ -2003,10 +2026,11 @@ layout_order_with_optional_split(
     const std::vector<Segment>& segments, std::size_t main_segment,
     const std::vector<NaturalTargetPlacement>& placements,
     std::size_t maximum_states, int maximum_padding,
-    std::size_t bridge_command_origin,
+    std::size_t bridge_command_origin, int maximum_layout_cells,
     const std::vector<NaturalTargetPlacement>& bounded_placements = {},
     int maximum_bounded_target = std::numeric_limits<int>::max(),
-    const std::vector<SplitBridgeDonor>& bridge_donors = {}) {
+    const std::vector<SplitBridgeDonor>& bridge_donors = {},
+    bool allow_transactional_trailing_split = false) {
   std::optional<NaturalTargetLayoutVariant> best;
   auto consider = [&](std::vector<Segment> trial_segments,
                       NaturalTargetLayoutOrder trial_order,
@@ -2064,13 +2088,35 @@ layout_order_with_optional_split(
           previous_end = std::max(
               previous_end, base + segment_cells(base_segments.at(segment)));
         }
+        if (allow_transactional_trailing_split) {
+          const int remaining_split_padding =
+              maximum_padding - existing_bridge_cells - 2;
+          const int split_layout_cells =
+              2 + std::accumulate(
+                      base_segments.begin(), base_segments.end(), 0,
+                      [](const int cells, const Segment& candidate) {
+                        return cells + segment_cells(candidate);
+                      });
+          // A larger atomic rewrite may temporarily extend beyond the
+          // architectural program window before its downstream erasure.  Its
+          // final fixed component therefore need not end at that window: the
+          // candidate's actual packed cell count defines a useful tail gap.
+          // Enumerate only tail sizes admitted by the transaction's explicit
+          // growth budget; the caller publishes the layout only after the
+          // downstream rewrite and final authoritative proof both succeed.
+          for (int padding = 0; padding <= remaining_split_padding; ++padding) {
+            const int trailing_gap = split_layout_cells + padding - previous_end;
+            if (trailing_gap > 0)
+              gap_capacities.insert(trailing_gap);
+          }
+        }
         if (gap_capacities.empty())
           return;
 
         std::vector<std::size_t> candidate_segments;
         candidate_segments.reserve(base_segments.size());
         for (std::size_t segment = 0; segment < base_segments.size(); ++segment) {
-          if (segment == main_segment || anchored_segments.contains(segment))
+          if (segment == main_segment)
             continue;
           candidate_segments.push_back(segment);
         }
@@ -2120,6 +2166,24 @@ layout_order_with_optional_split(
               }
             }
           }
+          const auto anchored_base = base_by_segment.find(segment);
+          if (anchored_base != base_by_segment.end()) {
+            // A fixed natural target near the end of the executable address
+            // window may head a component that no longer fits contiguously.
+            // Keep the target-bearing prefix at its proved base and move only
+            // the fallthrough suffix behind an ordinary transparent BP pair.
+            // Final CFG/stack/X2 and target-identity validation are shared with
+            // every other transparent component split.
+            const int available = maximum_layout_cells - anchored_base->second;
+            const int boundary_cut = available - 2;
+            if (length > available && boundary_cut > 0 &&
+                boundary_cut < length) {
+              const auto [existing, inserted] =
+                  cut_priority.emplace(boundary_cut, -1);
+              if (!inserted)
+                existing->second = std::min(existing->second, -1);
+            }
+          }
           std::vector<std::pair<int, int>> cut_candidates;
           cut_candidates.reserve(cut_priority.size());
           for (const auto& [cut, slack] : cut_priority)
@@ -2132,8 +2196,7 @@ layout_order_with_optional_split(
             std::vector<Segment> trial_segments = base_segments;
             TransparentSplitBridge bridge;
             const std::size_t bridge_origin =
-                bridge_command_origin +
-                static_cast<std::size_t>(existing_bridge_cells);
+                bridge_command_origin + base_bridges.size() * 2U;
             if (!split_segment_with_bridge(
                     trial_segments, segment, static_cast<std::size_t>(cut),
                     bridge_origin, bridge_origin + 1U, bridge)) {
@@ -2283,7 +2346,25 @@ layout_order_with_optional_split(
   }
 
   if (maximum_padding >= 1) {
-    for (const NaturalTargetPlacement& bridge_target : placements) {
+    // A retunable/bounded selector is just as capable of closing the
+    // fallthrough edge as a fixed natural selector.  Its final target is the
+    // suffix command identity selected by the layout below, and the ordinary
+    // preload-rebind/runtime-selector proofs validate that address after the
+    // split.  Restricting this search to fixed placements needlessly made a
+    // movable target's containing component indivisible.
+    std::vector<NaturalTargetPlacement> split_bridge_targets = placements;
+    for (const NaturalTargetPlacement& bounded : bounded_placements) {
+      const bool duplicate = std::any_of(
+          split_bridge_targets.begin(), split_bridge_targets.end(),
+          [&](const NaturalTargetPlacement& existing) {
+            return existing.target_segment == bounded.target_segment &&
+                   existing.target_offset == bounded.target_offset &&
+                   existing.selector_register == bounded.selector_register;
+          });
+      if (!duplicate)
+        split_bridge_targets.push_back(bounded);
+    }
+    for (const NaturalTargetPlacement& bridge_target : split_bridge_targets) {
       if (bridge_target.target_segment >= segments.size() ||
           bridge_target.target_offset <= 0 || bridge_target.selector_register < 0) {
         continue;
@@ -2466,7 +2547,8 @@ bool retarget_indirect_facts(
     const std::vector<NaturalTargetFlowRewrite>& converted_flows,
     const std::vector<DisplacedIndirectFlowRewrite>& displaced_flows,
     const std::vector<NaturalTargetAnchorCandidate>& anchors,
-    const std::vector<TransparentTrampoline>& trampolines) {
+    const std::vector<TransparentTrampoline>& trampolines,
+    const std::set<std::size_t>& removed_indirect_flow_commands) {
   std::map<int, std::size_t> selected_physical_targets;
   for (const NaturalTargetAnchorCandidate& anchor : anchors) {
     const std::optional<std::size_t> physical =
@@ -2482,7 +2564,8 @@ bool retarget_indirect_facts(
   for (const DisplacedIndirectFlowRewrite& rewrite : displaced_flows)
     displaced_commands.insert(rewrite.command_origin);
   for (const auto& [flow_origin, targets] : original_flow.indirect_flow_targets) {
-    if (displaced_commands.contains(flow_origin))
+    if (displaced_commands.contains(flow_origin) ||
+        removed_indirect_flow_commands.contains(flow_origin))
       continue;
     const auto command = new_item_by_origin.find(flow_origin);
     if (command == new_item_by_origin.end())
@@ -3717,6 +3800,15 @@ bool converted_flow_effects_equivalent(
         intrinsically_unsafe.insert(state);
         continue;
       }
+      // The paired executions still have identical visible X and differ only
+      // in hidden X2. A compiler-proved terminal stop has no admitted resume
+      // edge, so that hidden difference is unobservable and is a safe sink,
+      // not a failed convergence. Resumable and unknown stops remain subject
+      // to the ordinary successor/restore proof below.
+      if (item.opcode == 0x50 &&
+          item.stop_disposition == StopDisposition::Terminal) {
+        continue;
+      }
       const OpcodeInfo& info = opcode_by_code(item.opcode);
       const bool conditional =
           is_direct_conditional(item.opcode) || is_indirect_conditional(item.opcode);
@@ -3813,7 +3905,17 @@ bool converted_flow_effects_equivalent(
         opcode_by_code(*indirect_family + anchor->selector.register_index);
     bool x2_equivalent = direct.x2_effect == indirect.x2_effect;
     bool used_x2_reconvergence = false;
-    if (is_direct_conditional(flow.original_opcode)) {
+    const bool command_reachable = std::any_of(
+        trace.begin(), trace.end(), [&](const auto& state_and_edges) {
+          return state_and_edges.first.command == flow.original_command_item;
+        });
+    if (!command_reachable) {
+      // `trace` is built from every authoritative external entry and exact
+      // return-stack state. Replacing an unreachable flow command cannot expose
+      // its different hidden-X2 transfer; CFG edge identities are still checked
+      // on the final artifact below.
+      x2_equivalent = true;
+    } else if (is_direct_conditional(flow.original_opcode)) {
       const bool same_fallthrough_effect =
           direct.conditional_x2_effect.has_value() &&
           indirect.conditional_x2_effect.has_value() &&
@@ -3873,20 +3975,42 @@ bool converted_flow_effects_equivalent(
     const auto anchor = std::find_if(
         anchors.begin(), anchors.end(), [&](const auto& candidate) {
           return candidate.selector.register_index ==
-                     encoded_register(original.opcode) &&
-                 candidate.selector.rebindable_late_bound_decimal_charge;
+                 encoded_register(original.opcode);
         });
     if (anchor == anchors.end())
-      continue;
+      return fail("displaced-flow-anchor@" +
+                  std::to_string(displaced.command_origin));
     const OpcodeInfo& before = opcode_by_code(original.opcode);
     const OpcodeInfo& after = opcode_by_code(displaced.direct_opcode);
-    if (before.stack_effect != after.stack_effect ||
-        before.takes_address == after.takes_address ||
-        !x2_difference_reconverges(displaced.command_origin, false)) {
+    bool x2_equivalent = before.x2_effect == after.x2_effect;
+    bool used_x2_reconvergence = false;
+    if (is_indirect_conditional(original.opcode) &&
+        is_direct_conditional(displaced.direct_opcode)) {
+      const bool effects_known = before.conditional_x2_effect.has_value() &&
+                                 after.conditional_x2_effect.has_value();
+      const bool same_jump = effects_known &&
+                             before.conditional_x2_effect->jump ==
+                                 after.conditional_x2_effect->jump;
+      const bool same_fallthrough = effects_known &&
+                                    before.conditional_x2_effect->fallthrough ==
+                                        after.conditional_x2_effect->fallthrough;
+      const bool equal_at_entry =
+          !same_fallthrough &&
+          (entry_has_x2_equal_x(displaced.command_origin) ||
+           symbolic_entry_has_x2_equal_x(displaced.command_origin));
+      used_x2_reconvergence =
+          !same_fallthrough && !equal_at_entry &&
+          x2_difference_reconverges(displaced.command_origin, true);
+      x2_equivalent = same_jump &&
+                      (same_fallthrough || equal_at_entry ||
+                       used_x2_reconvergence);
+    }
+    if (before.stack_effect != after.stack_effect || !x2_equivalent ||
+        before.takes_address == after.takes_address) {
       return fail("displaced-runtime-x2@" +
                   std::to_string(displaced.command_origin));
     }
-    if (x2_reconvergence_flows != nullptr)
+    if (used_x2_reconvergence && x2_reconvergence_flows != nullptr)
       ++*x2_reconvergence_flows;
   }
   return true;
@@ -4117,7 +4241,13 @@ bool unchanged_command_effects_preserved(
     const std::vector<NaturalTargetFlowRewrite>& flows,
     const std::vector<DisplacedIndirectFlowRewrite>& displaced_flows,
     const std::vector<NaturalTargetAnchorCandidate>& anchors,
-    const std::set<std::size_t>& transparently_removed_commands = {}) {
+    const std::set<std::size_t>& transparently_removed_commands = {},
+    std::string* failure = nullptr) {
+  const auto reject = [&](std::size_t origin, const std::string& reason) {
+    if (failure != nullptr)
+      *failure = "origin=" + std::to_string(origin) + ":" + reason;
+    return false;
+  };
   std::set<std::size_t> converted;
   for (const NaturalTargetFlowRewrite& flow : flows)
     converted.insert(flow.original_command_item);
@@ -4132,20 +4262,21 @@ bool unchanged_command_effects_preserved(
       continue;
     const auto found = new_item_by_origin.find(origin);
     if (found == new_item_by_origin.end())
-      return false;
+      return reject(origin, "missing rewritten identity");
     const MachineItem& after = rewritten_items.at(found->second);
     if (after.kind != MachineItemKind::Op || before.stop_disposition != after.stop_disposition ||
         before.manual_interaction != after.manual_interaction)
-      return false;
+      return reject(origin, "observable disposition changed");
     const auto displaced_command = displaced.find(origin);
     if (displaced_command != displaced.end()) {
       const OpcodeInfo& before_info = opcode_by_code(before.opcode);
       const OpcodeInfo& after_info = opcode_by_code(after.opcode);
       if (after.opcode != displaced_command->second ||
           before_info.stack_effect != after_info.stack_effect ||
-          before_info.x2_effect != after_info.x2_effect ||
           before_info.takes_address == after_info.takes_address) {
-        return false;
+        return reject(origin, "displaced flow effect mismatch " +
+                                  std::to_string(before.opcode) + "->" +
+                                  std::to_string(after.opcode));
       }
     } else if (!converted.contains(origin) && before.opcode != after.opcode) {
       const bool proved_late_charge_digit =
@@ -4185,7 +4316,9 @@ bool unchanged_command_effects_preserved(
             return high != low;
           });
       if (!proved_late_charge_digit)
-        return false;
+        return reject(origin, "unproved opcode change " +
+                                  std::to_string(before.opcode) + "->" +
+                                  std::to_string(after.opcode));
     }
   }
   return true;
@@ -4456,13 +4589,27 @@ std::optional<CandidateArtifact> try_candidate(
           });
         }
       }
+      for (const auto& [command_origin, targets] :
+           control_flow.indirect_flow_targets) {
+        if (command_origin >= items.size() || targets.size() != 1U)
+          continue;
+        const MachineItem& command = items.at(command_origin);
+        if (command.kind != MachineItemKind::Op || command.opcode < 0x87 ||
+            command.opcode > 0x8e)
+          continue;
+        fold_candidates.push_back(TransparentFallthroughJumpFold{
+            .command_origin = command_origin,
+            .operand_origin = std::nullopt,
+            .target_origin = targets.front().item_index,
+        });
+      }
     }
     std::sort(fold_candidates.begin(), fold_candidates.end(),
               [](const auto& left, const auto& right) {
-                return std::tie(left.command_origin, left.operand_origin,
-                                left.target_origin) <
-                       std::tie(right.command_origin, right.operand_origin,
-                                right.target_origin);
+        return std::tie(left.command_origin, left.operand_origin,
+                        left.target_origin) <
+               std::tie(right.command_origin, right.operand_origin,
+                        right.target_origin);
               });
     fold_candidates.erase(
         std::unique(fold_candidates.begin(), fold_candidates.end(),
@@ -4484,7 +4631,10 @@ std::optional<CandidateArtifact> try_candidate(
         if (!fold_failures.empty())
           fold_failures += "; ";
         fold_failures += "command=" + std::to_string(fold.command_origin) +
-                         " operand=" + std::to_string(fold.operand_origin) +
+                         " operand=" +
+                         (fold.operand_origin.has_value()
+                              ? std::to_string(*fold.operand_origin)
+                              : std::string("indirect")) +
                          " target=" + std::to_string(fold.target_origin) +
                          ": " + fold_failure;
       }
@@ -4589,23 +4739,37 @@ std::optional<CandidateArtifact> try_candidate(
         .selector_register = command.opcode - 0x80,
     });
   }
-  const int jump_fold_savings = 2 * static_cast<int>(jump_folds.size());
+  const int jump_fold_savings = std::accumulate(
+      jump_folds.begin(), jump_folds.end(), 0,
+      [](int cells, const TransparentFallthroughJumpFold& fold) {
+        return cells + fallthrough_jump_fold_removed_cells(fold);
+      });
+  const int converted_flow_budget =
+      static_cast<int>(rewrites.size()) -
+      static_cast<int>(displaced_flows.size()) -
+      2 * static_cast<int>(trampolines.size()) -
+      split_bridge_cells(split_bridges) + jump_fold_savings;
+  const bool transactional_absolute_layout =
+      !options.required_absolute_targets.empty() &&
+      options.maximum_transactional_growth_cells > 0;
   const int maximum_padding =
       layout_only
           ? std::max(0, options.maximum_transactional_growth_cells) +
                 jump_fold_savings
-          : static_cast<int>(rewrites.size()) -
-                static_cast<int>(displaced_flows.size()) -
-                2 * static_cast<int>(trampolines.size()) -
-                split_bridge_cells(split_bridges) - 1 + jump_fold_savings;
+      : transactional_absolute_layout
+          ? converted_flow_budget + options.maximum_transactional_growth_cells
+          : converted_flow_budget -
+                (options.allow_size_neutral_flow_rebind ? 0 : 1);
   if (maximum_padding < 0)
     return reject("address-selector displacement cannot produce a smaller artifact");
   std::optional<NaturalTargetLayoutVariant> selected_layout;
   if (layout_only) {
     selected_layout = layout_order_with_optional_split(
         segments, main_location->first, placements, options.maximum_subset_states,
-        maximum_padding, next_synthetic_origin, bounded_placements,
-        options.maximum_bounded_target_address, split_bridge_donors);
+        maximum_padding, next_synthetic_origin,
+        official_program_step_limit(options.address_space_model), bounded_placements,
+        options.maximum_bounded_target_address, split_bridge_donors,
+        transactional_absolute_layout);
   } else if (flexible_placements.size() == 1U) {
     // A retunable selector does not require relocation.  Keeping its already
     // proved target is both the safest semantic choice and a much smaller
@@ -4628,7 +4792,8 @@ std::optional<CandidateArtifact> try_candidate(
       selected_layout = layout_order_with_optional_split(
           segments, main_location->first, preferred,
           options.maximum_subset_states, maximum_padding,
-          next_synthetic_origin, bounded_placements,
+          next_synthetic_origin,
+          official_program_step_limit(options.address_space_model), bounded_placements,
           options.maximum_bounded_target_address, split_bridge_donors);
     }
     if (!selected_layout.has_value()) {
@@ -4637,7 +4802,8 @@ std::optional<CandidateArtifact> try_candidate(
       selected_layout = layout_order_with_optional_split(
           segments, main_location->first, placements,
           options.maximum_subset_states, maximum_padding,
-          next_synthetic_origin, all_bounded,
+          next_synthetic_origin,
+          official_program_step_limit(options.address_space_model), all_bounded,
           std::min(options.maximum_bounded_target_address,
                    std::min(99, official_program_last_address(
                                     options.address_space_model))),
@@ -4656,15 +4822,16 @@ std::optional<CandidateArtifact> try_candidate(
     selected_layout = layout_order_with_optional_split(
         segments, main_location->first, placements,
         options.maximum_subset_states, maximum_padding,
-        next_synthetic_origin, all_bounded,
+        next_synthetic_origin,
+        official_program_step_limit(options.address_space_model), all_bounded,
         std::min(options.maximum_bounded_target_address,
                  std::min(99, official_program_last_address(options.address_space_model))),
         split_bridge_donors);
   } else {
     selected_layout = layout_order_with_optional_split(
         segments, main_location->first, placements,
-        options.maximum_subset_states, maximum_padding,
-        next_synthetic_origin, bounded_placements,
+        options.maximum_subset_states, maximum_padding, next_synthetic_origin,
+        official_program_step_limit(options.address_space_model), bounded_placements,
         options.maximum_bounded_target_address, split_bridge_donors);
   }
   if (!selected_layout.has_value()) {
@@ -4771,6 +4938,7 @@ std::optional<CandidateArtifact> try_candidate(
     rewrite.target_address = target_address_by_origin.at(rewrite.original_target_item);
 
   std::set<std::size_t> removed_operands;
+  std::set<std::size_t> removed_indirect_flow_commands;
   for (const NaturalTargetFlowRewrite& rewrite : rewrites) {
     const auto flow_site = std::find_if(
         flows.begin(), flows.end(), [&](const DirectFlowSite& site) {
@@ -4781,13 +4949,17 @@ std::optional<CandidateArtifact> try_candidate(
     removed_operands.insert(flow_site->operand);
   }
   for (const TransparentFallthroughJumpFold& fold : jump_folds) {
-    removed_operands.insert(fold.operand_origin);
+    if (fold.operand_origin.has_value())
+      removed_operands.insert(*fold.operand_origin);
+    else
+      removed_indirect_flow_commands.insert(fold.command_origin);
   }
   if (!retarget_direct_references(candidate.items, references, removed_operands,
                                   candidate.new_item_by_origin, new_address_by_origin) ||
       !retarget_indirect_facts(candidate.items, control_flow,
                                candidate.new_item_by_origin, new_address_by_origin,
-                               rewrites, displaced_flows, anchors, trampolines) ||
+                               rewrites, displaced_flows, anchors, trampolines,
+                               removed_indirect_flow_commands) ||
       !retarget_trampolines(candidate.items, candidate.new_item_by_origin,
                             new_address_by_origin, trampolines) ||
       !retarget_split_bridges(candidate.items, candidate.new_item_by_origin,
@@ -4990,9 +5162,11 @@ std::optional<CandidateArtifact> try_candidate(
   std::set<std::size_t> transparently_removed_commands;
   for (const TransparentFallthroughJumpFold& fold : jump_folds)
     transparently_removed_commands.insert(fold.command_origin);
+  std::string unchanged_command_failure;
   const bool unchanged_command_effects_proved = unchanged_command_effects_preserved(
       items, candidate.items, candidate.new_item_by_origin, plan.flows,
-      displaced_flows, anchors, transparently_removed_commands);
+      displaced_flows, anchors, transparently_removed_commands,
+      &unchanged_command_failure);
   plan.stack_and_x2_equivalent =
       trampolines_proved && split_bridges_proved &&
       converted_flow_effects_proved && unchanged_command_effects_proved;
@@ -5002,7 +5176,11 @@ std::optional<CandidateArtifact> try_candidate(
   plan.final_artifact_proved =
       final_flow.proved && bounded_targets_proved && absolute_targets_proved &&
       plan.deferred_selector_reconciliations_proved;
-  const int jump_fold_removed_cells = 2 * static_cast<int>(jump_folds.size());
+  const int jump_fold_removed_cells = std::accumulate(
+      jump_folds.begin(), jump_folds.end(), 0,
+      [](int cells, const TransparentFallthroughJumpFold& fold) {
+        return cells + fallthrough_jump_fold_removed_cells(fold);
+      });
   const int expected_removed_cells =
       static_cast<int>(plan.flows.size()) -
       static_cast<int>(displaced_flows.size()) -
@@ -5010,8 +5188,11 @@ std::optional<CandidateArtifact> try_candidate(
       split_bridge_cells(split_bridges) -
       selected_layout->order.padding_cells + jump_fold_removed_cells;
   const bool size_goal_proved =
-      layout_only ? plan.removed_cells >= -maximum_padding
-                   : plan.removed_cells > 0 || plan.size_neutral_flow_rebind;
+      layout_only
+          ? plan.removed_cells >= -maximum_padding
+      : transactional_absolute_layout
+          ? plan.removed_cells >= -options.maximum_transactional_growth_cells
+          : plan.removed_cells > 0 || plan.size_neutral_flow_rebind;
   plan.proved = plan.removed_cells == expected_removed_cells &&
                 size_goal_proved && plan.control_flow_equivalent &&
                 plan.call_return_equivalent && plan.stack_and_x2_equivalent &&
@@ -5023,8 +5204,8 @@ std::optional<CandidateArtifact> try_candidate(
       reason += ": size-accounting=" + std::to_string(plan.removed_cells) +
                 "/" + std::to_string(expected_removed_cells);
     }
-    if (!bounded_only && plan.removed_cells <= 0 &&
-        !plan.size_neutral_flow_rebind)
+    if (!bounded_only && !transactional_absolute_layout &&
+        plan.removed_cells <= 0 && !plan.size_neutral_flow_rebind)
       reason += ": nonpositive-size-saving";
     if (layout_only && plan.removed_cells < -maximum_padding)
       reason += ": layout-only-growth-exceeded";
@@ -5036,8 +5217,11 @@ std::optional<CandidateArtifact> try_candidate(
         reason += "/split-bridge";
       if (!converted_flow_effects_proved)
         reason += "/converted-flow(" + converted_flow_failure + ")";
-      if (!unchanged_command_effects_proved)
+      if (!unchanged_command_effects_proved) {
         reason += "/unchanged-command";
+        if (!unchanged_command_failure.empty())
+          reason += "(" + unchanged_command_failure + ")";
+      }
     }
     if (!plan.indirect_memory_equivalent)
       reason += ": indirect-memory";
@@ -5051,6 +5235,13 @@ std::optional<CandidateArtifact> try_candidate(
 bool better_candidate(const CandidateArtifact& left, const CandidateArtifact& right) {
   if (left.plan.removed_cells != right.plan.removed_cells)
     return left.plan.removed_cells > right.plan.removed_cells;
+  // At equal size, erasing a terminal jump is both faster and more
+  // composable than merely exchanging selector families: the latter remains
+  // available to a subsequent bounded round, while a different component
+  // order can make the fallthrough opportunity disappear.
+  if (left.plan.fallthrough_jump_folds != right.plan.fallthrough_jump_folds)
+    return left.plan.fallthrough_jump_folds >
+           right.plan.fallthrough_jump_folds;
   if (left.plan.x2_reconvergence_flows != right.plan.x2_reconvergence_flows)
     return left.plan.x2_reconvergence_flows < right.plan.x2_reconvergence_flows;
   if (left.plan.selector_origin != right.plan.selector_origin) {
@@ -6027,6 +6218,19 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
             logical_items, preloads, *logical_flow, options, *references, flows,
             selectors, *complete_trial, bounded_target_origins, *original_trace,
             flow_effect_proof_context, *original_external, true, command,
+            &result.plan.reasons);
+        if (candidate.has_value() &&
+            candidate->plan.fallthrough_jump_folds > 0 &&
+            (!best.has_value() || better_candidate(*candidate, *best))) {
+          best = std::move(candidate);
+          best_anchor_trial = *complete_trial;
+        }
+      }
+      if (has_displaced_jump_fold_seed) {
+        std::optional<CandidateArtifact> candidate = try_candidate(
+            logical_items, preloads, *logical_flow, options, *references, flows,
+            selectors, *complete_trial, bounded_target_origins, *original_trace,
+            flow_effect_proof_context, *original_external, true, std::nullopt,
             &result.plan.reasons);
         if (candidate.has_value() &&
             candidate->plan.fallthrough_jump_folds > 0 &&

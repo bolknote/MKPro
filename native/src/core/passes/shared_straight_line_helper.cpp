@@ -1549,6 +1549,8 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
              ? "leaf-labels=" + hole_leaf_labels_text(helper.leaf_labels)
              : "leaf-targets=" + hole_leaf_targets_text(helper.leaf_labels)) +
         (helper.reused_selector ? "; selector-scope=dead" : "");
+    std::vector<IrOp> materialized_body;
+    materialized_body.reserve(helper.body.size() + 1U);
     std::size_t call_position = 0;
     bool marked_entry_proof = false;
     for (const IrOp& op : helper.body) {
@@ -1587,7 +1589,7 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
             hole.meta.roles.push_back("late-decimal-selector-consumer");
           hole.meta.mnemonic = "К ПП " + helper.register_name;
           hole.meta.comment = hole_comment;
-          result.push_back(std::move(hole));
+          materialized_body.push_back(std::move(hole));
           continue;
         }
       }
@@ -1606,13 +1608,17 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
                                    : marker;
         marked_entry_proof = true;
       }
-      result.push_back(std::move(body_op));
+      materialized_body.push_back(std::move(body_op));
     }
 
-    IrOp ret;
-    ret.kind = IrKind::Return;
-    ret.opcode = 0x52;
-    ret.meta.mnemonic = "В/О";
+    IrOp synthetic_return;
+    synthetic_return.kind = IrKind::Return;
+    synthetic_return.opcode = 0x52;
+    synthetic_return.meta.mnemonic = "В/О";
+
+    result.insert(result.end(), materialized_body.begin(), materialized_body.end());
+
+    IrOp ret = std::move(synthetic_return);
     ret.meta.comment = "callee-hole helper return";
     if (helper.reused_selector)
       ret.meta.comment = *ret.meta.comment + "; callee-hole selector-scope end " + helper.label;
@@ -1645,19 +1651,19 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
     }
   }
 
+  std::vector<AppliedOptimization> optimizations{
+      AppliedOptimization{
+          .name = "callee-hole-straight-line-helper",
+          .detail = "Merged " + std::to_string(applied) +
+                    " straight-line region(s) differing only in their leaf call into " +
+                    std::to_string(selected.size()) + " skeleton(s) with a К ПП dispatch (" +
+                    std::to_string(saved_cells) + " cell(s) saved).",
+      },
+  };
   return PassResult{
       .ops = std::move(result),
       .applied = applied,
-      .optimizations =
-          {
-              AppliedOptimization{
-                  .name = "callee-hole-straight-line-helper",
-                  .detail = "Merged " + std::to_string(applied) +
-                            " straight-line region(s) differing only in their leaf call into " +
-                            std::to_string(selected.size()) + " skeleton(s) with a К ПП dispatch (" +
-                            std::to_string(saved_cells) + " cell(s) saved).",
-              },
-          },
+      .optimizations = std::move(optimizations),
   };
 }
 

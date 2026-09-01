@@ -412,8 +412,16 @@ struct CompileOptions {
   // main loop head is the very first emitted command.
   bool empty_stack_loop_return = false;
   bool x_param_value_functions = false;
+  // Canonicalize unit-literal X parameters once in the callee so callers may
+  // forward any already-live value with the required sign. Keep this as a
+  // layout candidate: the extra callee cell can prevent address packing.
+  bool sign_normalized_x_param = false;
   bool x_param_y_stack_stored_entry = false;
   bool stack_argument_helper_entries = false;
+  // Try a shared-expression ABI that forwards one proved current-X argument.
+  // This remains a separate measured candidate because a narrower helper can
+  // preserve final-layout geometry that a locally smaller X/Y ABI disturbs.
+  bool single_x_expression_helper_entries = false;
   bool stack_argument_function_entries = false;
   bool stack_through_function_entries = false;
   bool stack_ssa_function_entries = false;

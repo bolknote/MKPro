@@ -620,6 +620,79 @@ program TwentyDisjointRegisters {
   require(physical_registers.size() <= 15U && !physical_registers.contains("f"),
           "standard logical allocation must use only R0..Re");
 
+  const std::string equal_entry_values = R"mkpro(
+program EqualEntryValueLifetimes {
+  state {
+    first: packed = 0
+    second: packed = 0
+  }
+  loop {
+    show(first)
+    show(second)
+  }
+}
+)mkpro";
+  const CompileResult equal_entry_probe =
+      compile_source(equal_entry_values, probe_options);
+  require(equal_entry_probe.implemented &&
+              equal_entry_probe.diagnostics.empty(),
+          "logical allocation should accept equal literal entry values");
+  const auto first_assignment = std::find_if(
+      equal_entry_probe.logical_register_assignments.begin(),
+      equal_entry_probe.logical_register_assignments.end(),
+      [](const LogicalRegisterAssignment& assignment) {
+        return assignment.name == "first";
+      });
+  const auto second_assignment = std::find_if(
+      equal_entry_probe.logical_register_assignments.begin(),
+      equal_entry_probe.logical_register_assignments.end(),
+      [](const LogicalRegisterAssignment& assignment) {
+        return assignment.name == "second";
+      });
+  require(first_assignment !=
+              equal_entry_probe.logical_register_assignments.end() &&
+              second_assignment !=
+                  equal_entry_probe.logical_register_assignments.end() &&
+              first_assignment->register_name == second_assignment->register_name,
+          "equal setup literals with no later interference should share one color");
+
+  const std::string diverging_equal_entry_values = R"mkpro(
+program DivergingEqualEntryValueLifetimes {
+  state {
+    first: packed = 0
+    second: packed = 0
+  }
+  loop {
+    first = read()
+    show(first)
+    show(first + second)
+  }
+}
+)mkpro";
+  const CompileResult diverging_entry_probe =
+      compile_source(diverging_equal_entry_values, probe_options);
+  require(diverging_entry_probe.implemented &&
+              diverging_entry_probe.diagnostics.empty(),
+          "logical allocation should color diverging equal-entry values");
+  const auto diverging_first = std::find_if(
+      diverging_entry_probe.logical_register_assignments.begin(),
+      diverging_entry_probe.logical_register_assignments.end(),
+      [](const LogicalRegisterAssignment& assignment) {
+        return assignment.name == "first";
+      });
+  const auto diverging_second = std::find_if(
+      diverging_entry_probe.logical_register_assignments.begin(),
+      diverging_entry_probe.logical_register_assignments.end(),
+      [](const LogicalRegisterAssignment& assignment) {
+        return assignment.name == "second";
+      });
+  require(diverging_first !=
+              diverging_entry_probe.logical_register_assignments.end() &&
+              diverging_second !=
+                  diverging_entry_probe.logical_register_assignments.end() &&
+              diverging_first->register_name != diverging_second->register_name,
+          "a later write while the other entry value is live must retain an interference edge");
+
   const std::string impossible = R"mkpro(
 program SixteenEntryLiveRegisters {
   state {
@@ -700,15 +773,18 @@ void compiler_feature_profile_rf_optimizer_is_size_monotonic_contract() {
   const CompileResult without_rf = compile_full(source, without_rf_options);
   require(without_rf.implemented && !has_error_diagnostic(without_rf),
           "standard-profile optimizer root should compile the regression fixture");
-  require(without_rf.steps.size() == 128,
-          "the generic finalization pipeline should keep tic-tac-toe-4x4 at 128 cells, got " +
+  require(without_rf.steps.size() == 125,
+          "the generic finalization pipeline should keep tic-tac-toe-4x4 at 125 cells, got " +
               std::to_string(without_rf.steps.size()));
   require(has_optimization(without_rf, "finalization-dead-store-elimination") &&
               has_optimization(without_rf,
                                "finalization-redundant-literal-reload") &&
               has_optimization(without_rf, "empty-return-startup-layout") &&
-              has_optimization(without_rf, "empty-return-tail-call-fusion"),
-          "the 128-cell fixture should exercise the composed generic erasure/layout proofs");
+              has_optimization(without_rf, "empty-return-tail-call-fusion") &&
+              has_optimization(without_rf, "empty-return-main-edge-compaction") &&
+              has_optimization(without_rf, "underflow-sentinel-selector-split") &&
+              has_optimization(without_rf, "single-digit-late-bound-selector"),
+          "the 125-cell fixture should exercise the composed generic erasure/layout proofs");
 
   CompileOptions with_rf_options = without_rf_options;
   with_rf_options.feature_profile = FeatureProfile::Mk61SMiniExpanded;

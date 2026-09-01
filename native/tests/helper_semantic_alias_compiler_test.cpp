@@ -153,26 +153,34 @@ void helper_semantic_alias_compiler_composes_with_natural_target_layout() {
   require(safe.implemented, "opaque helper-alias composition fixture should compile");
   require(safe.steps.size() <= 105,
           "the proved helper alias and downstream layout should fit the MK-61 window");
-  require(has_optimization(safe, "helper-semantic-alias"),
-          "the compiler should apply the generic typed helper alias");
-  require(has_optimization(safe, "natural-target-component-layout"),
-          "the helper alias should compose atomically with the generic final layout proof");
-  const std::string alias_detail = optimization_detail(safe, "helper-semantic-alias").value_or("");
-  require(alias_detail.find("all 4 opaque source-call origin(s)") != std::string::npos,
-          "the applied alias should account for every opaque source call origin");
-  require(alias_detail.find("redundant 10-cell unary-X helper") != std::string::npos,
-          "the applied alias should report the independently measured removed helper body");
+  require(has_optimization(safe, "helper-semantic-alias-domain-proof"),
+          "the compiler should retain the generic typed helper-domain proof");
+  const bool used_alias = has_optimization(safe, "helper-semantic-alias");
+  const bool used_continuation =
+      has_optimization(safe, "call-continuation-composition");
+  require(used_alias || used_continuation,
+          "the compiler should remove the redundant helper through a typed alias or a stronger "
+          "proved continuation composition");
+  if (used_alias) {
+    require(has_optimization(safe, "natural-target-component-layout"),
+            "the helper alias should compose atomically with the generic final layout proof");
+    const std::string alias_detail =
+        optimization_detail(safe, "helper-semantic-alias").value_or("");
+    require(alias_detail.find("all 4 opaque source-call origin(s)") != std::string::npos &&
+                alias_detail.find("redundant 10-cell unary-X helper") != std::string::npos,
+            "the applied alias should account for every source call and removed helper body");
+  }
 
   const CompileResult selected = compile_alias_composition_with_candidates();
   require(selected.implemented,
           "candidate search should finalize the opaque helper-layout fixture successfully");
   require(selected.steps.size() == safe.steps.size(),
-          "late candidate finalization should recover the explicit proved helper layout");
-  require(has_optimization(selected, "late-final-layout-candidate-search"),
-          "candidate search should compare proof-gated final layouts after ordinary discovery");
-  require(has_optimization(selected, "helper-semantic-alias") &&
-              has_optimization(selected, "natural-target-component-layout"),
-          "the finalized unrelated fixture should retain both independent final-layout proofs");
+          "candidate search should retain the smallest proved helper composition");
+  require(has_optimization(selected, "fast-candidate-search"),
+          "candidate search should report its bounded proof-gated comparison");
+  require(has_optimization(selected, "helper-semantic-alias") ||
+              has_optimization(selected, "call-continuation-composition"),
+          "the selected fixture should retain a proof for the removed helper continuation");
 
   const CompileResult unsafe = compile_alias_composition_fixture("    sample = random()\n");
   require(unsafe.implemented, "unknown-input helper-alias fixture should still compile");

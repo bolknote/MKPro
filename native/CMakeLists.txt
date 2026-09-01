@@ -57,6 +57,7 @@ add_library(mkpro_core STATIC
   src/core/phase_selector_materializer.cpp
   src/core/passes/arithmetic_if.cpp
   src/core/passes/branch_target_x_reuse.cpp
+  src/core/passes/call_continuation_composition.cpp
   src/core/passes/cfg.cpp
   src/core/passes/conditional_branch_trampoline.cpp
   src/core/passes/constant_folding.cpp

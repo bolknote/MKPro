@@ -4288,7 +4288,10 @@ bool direct_callee_entry_stack_flow_is_modeled(
   // only consume these temporaries: a drop at depth zero digs below the entry
   // stack and overwrites the caller's Y/Z/T in a way the seeding pass does not
   // model, so it rejects the whole body.
-  constexpr int kMaxLiftDepth = 2;
+  // EntryStackState tracks all four physical slots. Three lifts still retain
+  // the caller's original X in T and are therefore exact; a fourth would
+  // evict it and must keep failing closed.
+  constexpr int kMaxLiftDepth = 3;
   int depth = 0;
   const int start_index = ops.at(static_cast<std::size_t>(*target_index)).kind == IrKind::Label
                               ? *target_index + 1

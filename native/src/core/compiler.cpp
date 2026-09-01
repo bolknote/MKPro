@@ -42845,17 +42845,33 @@ bool lower_stored_assignment_helper_entry(LoweringContext& context,
                  expression_preserves_previous_x_as_y_for_stack_analysis(
                      later_value);
         };
+    const std::function<bool(const Expression&)> contains_shared_expression =
+        [&](const Expression& expression) {
+          if (expression_to_json(expression) == helper->key)
+            return true;
+          if (expression.index != nullptr && contains_shared_expression(*expression.index))
+            return true;
+          if (expression.expr != nullptr && contains_shared_expression(*expression.expr))
+            return true;
+          if (expression.left != nullptr && contains_shared_expression(*expression.left))
+            return true;
+          if (expression.right != nullptr && contains_shared_expression(*expression.right))
+            return true;
+          return std::any_of(expression.args.begin(), expression.args.end(),
+                             [&](const Expression& argument) {
+                               return contains_shared_expression(argument);
+                             });
+        };
     const auto zero_copy_call_sites = [&](const std::string& name) {
       int count = 0;
       for (std::size_t index = start + 2U; index < statements.size(); ++index) {
         const V2Statement& candidate = statements.at(index);
-        if (!candidate.expr.has_value() ||
-            (candidate.kind != "v2_assign" && candidate.kind != "v2_update")) {
+        if (!candidate.expr.has_value()) {
           continue;
         }
         const Expression candidate_expression =
             parse_expression(*candidate.expr, candidate.line);
-        if (expression_to_json(candidate_expression) != helper->key)
+        if (!contains_shared_expression(candidate_expression))
           continue;
         const std::optional<std::string> immediate =
             index > 0U ? assignment_target_name(index - 1U) : std::nullopt;
@@ -42866,17 +42882,49 @@ bool lower_stored_assignment_helper_entry(LoweringContext& context,
       }
       return count;
     };
-    std::vector<std::pair<std::string, int>> preferred_names{
-        {first_target.name, zero_copy_call_sites(first_target.name)},
-        {second_target.name, zero_copy_call_sites(second_target.name)},
+    const auto first_read_position = [&](const std::string& name) {
+      int position = 0;
+      int found = std::numeric_limits<int>::max();
+      const std::function<void(const Expression&)> visit =
+          [&](const Expression& expression) {
+            if (expression.kind == "identifier") {
+              if (expression.name == name && found == std::numeric_limits<int>::max())
+                found = position;
+              ++position;
+            }
+            if (expression.index != nullptr)
+              visit(*expression.index);
+            if (expression.expr != nullptr)
+              visit(*expression.expr);
+            if (expression.left != nullptr)
+              visit(*expression.left);
+            if (expression.right != nullptr)
+              visit(*expression.right);
+            for (const Expression& argument : expression.args)
+              visit(argument);
+          };
+      visit(consumer_expression);
+      return found;
+    };
+    struct PreferredSingleXInput {
+      std::string name;
+      int zero_copy_calls = 0;
+      int first_read = std::numeric_limits<int>::max();
+    };
+    std::vector<PreferredSingleXInput> preferred_names{
+        {first_target.name, zero_copy_call_sites(first_target.name),
+         first_read_position(first_target.name)},
+        {second_target.name, zero_copy_call_sites(second_target.name),
+         first_read_position(second_target.name)},
     };
     std::stable_sort(preferred_names.begin(), preferred_names.end(),
                      [](const auto& left, const auto& right) {
-                       return left.second > right.second;
+                       if (left.zero_copy_calls != right.zero_copy_calls)
+                         return left.zero_copy_calls > right.zero_copy_calls;
+                       return left.first_read < right.first_read;
                      });
-    for (const auto& [preferred, unused_call_sites] : preferred_names) {
-      (void)unused_call_sites;
-      const std::vector<std::string> candidate{preferred};
+    for (const PreferredSingleXInput& preferred : preferred_names) {
+      const std::vector<std::string> candidate{preferred.name};
       if (expression_helper_stack_entry_body(context, consumer_expression, candidate)
               .has_value()) {
         temps = candidate;
@@ -42895,8 +42943,7 @@ bool lower_stored_assignment_helper_entry(LoweringContext& context,
       !expression_helper_stack_entry_body(context, consumer_expression, temps).has_value()) {
     return false;
   }
-  if (single_x_reorder_only &&
-      (temps.size() != 1U || *second.target == temps.front())) {
+  if (single_x_reorder_only && temps.size() != 1U) {
     return false;
   }
 
@@ -42970,6 +43017,64 @@ bool lower_stored_assignment_helper_entry(LoweringContext& context,
     });
   }
   consumed = 3U;
+  return true;
+}
+
+bool lower_single_stored_assignment_helper_entry(
+    LoweringContext& context, const std::vector<V2Statement>& statements,
+    std::size_t start, std::size_t& consumed) {
+  consumed = 0;
+  if (!context.single_x_expression_helper_entries ||
+      !context.stack_argument_helper_entries || start + 1U >= statements.size()) {
+    return false;
+  }
+  const V2Statement& producer = statements.at(start);
+  const V2Statement& consumer = statements.at(start + 1U);
+  if (producer.kind != "v2_assign" || !producer.target.has_value() ||
+      !producer.expr.has_value() || !consumer.expr.has_value() ||
+      (consumer.kind != "v2_assign" && consumer.kind != "v2_update")) {
+    return false;
+  }
+  const Expression target = parse_expression(*producer.target, producer.line);
+  const Expression value = parse_expression(*producer.expr, producer.line);
+  if (target.kind != "identifier" ||
+      !context.register_index_by_name.contains(target.name) ||
+      context.stack_only_state_fields.contains(target.name) ||
+      is_cells_state_name(context, target.name) ||
+      is_segmented_cells_name(context, target.name) ||
+      !expression_pure_for_substitution(value)) {
+    return false;
+  }
+
+  const Expression consumer_expression = parse_expression(*consumer.expr, consumer.line);
+  const ExpressionHelperRequest* helper =
+      shared_expression_helper(context, consumer_expression);
+  if (helper == nullptr)
+    return false;
+  const std::vector<std::string> temps{target.name};
+  const auto existing = context.expression_helper_stack_entries.find(helper->key);
+  if ((existing != context.expression_helper_stack_entries.end() &&
+       existing->second.temps != temps) ||
+      !expression_helper_stack_entry_body(context, consumer_expression, temps)
+           .has_value()) {
+    return false;
+  }
+
+  if (!lower_statement(context, producer, &consumer))
+    return false;
+  mark_current_x(context, target.name);
+  if (!lower_stack_argument_expression_helper_call(context, consumer_expression, temps,
+                                                   consumer.line) ||
+      !lower_stack_resident_consumer(context, consumer)) {
+    return false;
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = "stored-assignment-helper-single-x-entry",
+      .detail = "Forwarded the result of the stored assignment to " + target.name +
+                " directly into a shared expression helper before lowering its consumer at "
+                "line " + std::to_string(consumer.line) + ".",
+  });
+  consumed = 2U;
   return true;
 }
 
@@ -43526,6 +43631,15 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     std::size_t stack_resident_consumed = 0;
     if (lower_stored_assignment_helper_entry(context, statements, index,
                                              stack_resident_consumed)) {
+      index += stack_resident_consumed - 1U;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+
+    stack_resident_consumed = 0;
+    if (lower_single_stored_assignment_helper_entry(
+            context, statements, index, stack_resident_consumed)) {
       index += stack_resident_consumed - 1U;
       continue;
     }
@@ -77558,6 +77672,64 @@ CompileResult compile_source_for_optimizer_profile(
       if (std::getenv("MKPRO_NATIVE_TRACE_CANDIDATES") != nullptr)
         std::cerr << "[selected-dark-layout] exception: " << error.what() << "\n";
       // The final-artifact rescue is opportunistic; retain the proved winner.
+    }
+  }
+
+  // One-X helper entries are deliberately composed only after every ordinary
+  // candidate family has finished.  Enabling them earlier can change the
+  // greedy incumbent and prevent unrelated, larger structural reductions from
+  // being discovered.  This final transaction starts from the proved winner,
+  // rebuilds/finalizes the complete artifact, and is accepted only by the
+  // ordinary size-first comparator.
+  if (needs_size_rescue && !best_options.single_x_expression_helper_entries) {
+    try {
+      CompileOptions single_x_options = best_options;
+      single_x_options.stack_argument_helper_entries = true;
+      single_x_options.single_x_expression_helper_entries = true;
+      CompileResult single_x_candidate = cached_compile_source_once(single_x_options);
+      if (std::getenv("MKPRO_NATIVE_TRACE_CANDIDATES") != nullptr) {
+        std::cerr << "[candidate-trace] final-single-x primary implemented="
+                  << (single_x_candidate.implemented ? "yes" : "no")
+                  << " steps=" << single_x_candidate.steps.size()
+                  << " incumbent=" << best.steps.size() << "\n";
+      }
+      const bool initial_static_proof =
+          single_x_candidate.implemented &&
+          (!candidate_needs_static_proof_gate(single_x_options) ||
+           !optimizer_static_gate_rejection_reason(single_x_options,
+                                                   single_x_candidate)
+                .has_value());
+      if (initial_static_proof) {
+        single_x_candidate = apply_finalization_fixed_point_to_selected_result(
+            source, std::move(single_x_candidate), single_x_options, options);
+        const bool final_static_proof =
+            !candidate_needs_static_proof_gate(single_x_options) ||
+            !optimizer_static_gate_rejection_reason(single_x_options,
+                                                    single_x_candidate)
+                 .has_value();
+        if (std::getenv("MKPRO_NATIVE_TRACE_CANDIDATES") != nullptr) {
+          std::cerr << "[candidate-trace] final-single-x finalized implemented="
+                    << (single_x_candidate.implemented ? "yes" : "no")
+                    << " proved=" << (final_static_proof ? "yes" : "no")
+                    << " steps=" << single_x_candidate.steps.size()
+                    << " incumbent=" << best.steps.size() << "\n";
+        }
+        if (final_static_proof &&
+            candidate_beats_best(single_x_candidate, best, options)) {
+          single_x_candidate.optimizations.push_back(OptimizationReport{
+              .name = "single-x-expression-helper-entries-final",
+              .detail =
+                  "Recompiled the proved final winner with one-X shared-expression entries "
+                  "and retained the strictly smaller finalized artifact.",
+          });
+          best_options = std::move(single_x_options);
+          best = std::move(single_x_candidate);
+        }
+      }
+    } catch (const std::exception& error) {
+      if (std::getenv("MKPRO_NATIVE_TRACE_CANDIDATES") != nullptr)
+        std::cerr << "[candidate-trace] final-single-x exception: " << error.what() << "\n";
+      // Opportunistic final composition: keep the previously proved winner.
     }
   }
 

@@ -81,6 +81,19 @@ IrOp numeric_cjump(int target) {
   return op;
 }
 
+IrOp symbolic_cjump(std::string target) {
+  IrOp op = numeric_cjump(0);
+  op.target = std::move(target);
+  return op;
+}
+
+IrOp label(std::string name) {
+  IrOp op;
+  op.kind = IrKind::Label;
+  op.name = std::move(name);
+  return op;
+}
+
 IrOp halt() {
   IrOp op;
   op.kind = IrKind::Stop;
@@ -127,6 +140,68 @@ void append(std::vector<IrOp>& target, std::vector<IrOp> source) {
 } // namespace
 
 void r0_fractional_sentinel_matches_typescript_contract() {
+  {
+    std::vector<IrOp> program = {symbolic_cjump("done")};
+    append(program, direct_sentinel_literal());
+    program.push_back(store("1"));
+    program.push_back(label("done"));
+    program.push_back(halt());
+
+    const core::passes::PassResult result = run_r0_fractional_sentinel(program);
+
+    require(result.applied == 1,
+            "r0-fractional-sentinel did not fold a zero-path sentinel literal");
+    require(result.ops.size() == 6,
+            "zero-path sentinel fold did not replace ten cells with three");
+    require(result.ops.at(1).kind == IrKind::Store &&
+                result.ops.at(1).register_name == "3" &&
+                result.ops.at(2).kind == IrKind::IndirectRecall &&
+                result.ops.at(2).register_name == "3" &&
+                result.ops.at(3).kind == IrKind::Store &&
+                result.ops.at(3).register_name == "1",
+            "zero-path sentinel fold emitted the wrong underflow sequence");
+  }
+
+  {
+    std::vector<IrOp> program = {symbolic_cjump("done")};
+    append(program, direct_sentinel_literal());
+    program.push_back(store("1"));
+    program.push_back(recall("3"));
+    program.push_back(label("done"));
+    program.push_back(halt());
+
+    const core::passes::PassResult result = run_r0_fractional_sentinel(program);
+
+    require(result.applied == 0,
+            "r0-fractional-sentinel borrowed a live R3 scratch register");
+  }
+
+  {
+    std::vector<IrOp> program = direct_sentinel_literal();
+    program.push_back(store("1"));
+    program.push_back(halt());
+
+    const core::passes::PassResult result = run_r0_fractional_sentinel(program);
+
+    require(result.applied == 0,
+            "r0-fractional-sentinel folded a literal without a proved-zero path");
+  }
+
+  {
+    IrOp nonzero_guard = symbolic_cjump("done");
+    nonzero_guard.condition = "!=0";
+    std::vector<IrOp> program = {nonzero_guard};
+    append(program, direct_sentinel_literal());
+    program.push_back(store("1"));
+    program.push_back(label("done"));
+    program.push_back(halt());
+
+    const core::passes::PassResult result = run_r0_fractional_sentinel(program);
+
+    require(result.applied == 0,
+            "r0-fractional-sentinel treated a nonzero fallthrough as zero");
+  }
+
   {
     std::vector<IrOp> program = fractional_r0_prefix();
     program.push_back(indirect_recall("0"));

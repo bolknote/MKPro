@@ -3219,21 +3219,6 @@ apply_forward_rewrite(const std::vector<IrOp>& ir,
   return best;
 }
 
-bool ir_op_reads_register(const IrOp& op, const std::string& register_name) {
-  if (op.kind == IrKind::Recall && op.register_name == register_name)
-    return true;
-  if (op.kind == IrKind::IndirectJump || op.kind == IrKind::IndirectCall ||
-      op.kind == IrKind::IndirectCondJump || op.kind == IrKind::IndirectStore ||
-      op.kind == IrKind::IndirectRecall) {
-    if (op.register_name == register_name)
-      return true;
-  }
-  if (op.kind != IrKind::IndirectRecall)
-    return false;
-  const std::optional<std::set<std::string>> targets = passes::known_indirect_memory_targets(op);
-  return !targets.has_value() || targets->contains(register_name);
-}
-
 std::optional<RewriteStep>
 apply_borrowed_entry_phase_rewrite(const std::vector<IrOp>& ir,
                                    const std::vector<std::optional<std::string>>& target_labels,
@@ -3251,26 +3236,18 @@ apply_borrowed_entry_phase_rewrite(const std::vector<IrOp>& ir,
     if (!used.contains(register_name) || reserved.contains(register_name))
       continue;
 
-    std::optional<int> first_store;
-    std::optional<int> first_read;
+    bool has_store = false;
     for (std::size_t index = 0; index < ir.size(); ++index) {
       const IrOp& op = ir.at(index);
-      if (!first_store.has_value() && op.kind == IrKind::Store &&
-          op.register_name == register_name) {
-        first_store = static_cast<int>(index);
-      }
-      if (!first_read.has_value() && ir_op_reads_register(op, register_name))
-        first_read = static_cast<int>(index);
+      if (op.kind == IrKind::Store && op.register_name == register_name)
+        has_store = true;
     }
-    // This cheap filter keeps candidate search bounded. The authoritative
-    // cyclic proof below remains the correctness boundary.
-    if (!first_store.has_value() || (first_read.has_value() && *first_read < *first_store)) {
+    if (!has_store) {
       continue;
     }
 
     std::vector<std::pair<std::string, std::vector<int>>> groups;
-    for (std::size_t index = 0; index < ir.size() && static_cast<int>(index) < *first_store;
-         ++index) {
+    for (std::size_t index = 0; index < ir.size(); ++index) {
       const IrOp& op = ir.at(index);
       if (passes::has_rewrite_barrier(op) || !is_convertible_post_layout_branch(op) ||
           !target_labels.at(index).has_value()) {
@@ -3285,6 +3262,14 @@ apply_borrowed_entry_phase_rewrite(const std::vector<IrOp>& ir,
         group->second.push_back(static_cast<int>(index));
       }
     }
+
+    // Procedure layout is not execution order: an earlier-emitted helper may
+    // read this register only after the main path has overwritten the setup
+    // value. Do not reject such a borrow with a linear first-read/first-store
+    // approximation. Each candidate below is accepted only when the exact
+    // cyclic (PC, return-stack) proof shows that every marked selector use sees
+    // the entry preload and no ordinary read can observe it before a definite
+    // write, on every path and every loop iteration.
 
     for (const auto& [unused_label, indices] : groups) {
       (void)unused_label;

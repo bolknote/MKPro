@@ -63,6 +63,7 @@ Candidate search:
 
 IR and lowering optimizer switches:
   --x-param-value-functions       Recognize X-parameter value functions.
+  --sign-normalized-x-param       Canonicalize sign-only X parameters in callees.
   --x-param-y-stack-stored-entry  Use Y-stack stored entry for X-parameter paths.
   --canonicalize-repeated-unary-update-args
                                   Canonicalize repeated unary update arguments.
@@ -102,6 +103,8 @@ IR and lowering optimizer switches:
   --setup-only-counted-loop-init  Move counted-loop initialization into setup.
   --show-read-guarded-transfer    Guard read-driven transfers for display safety.
   --stack-resident-temps          Keep eligible temporaries on the stack.
+  --single-x-expression-helper-entries
+                                  Enter eligible shared helpers with one argument already in X.
   --packed-score-accumulator-helpers
                                   Use stack-accumulator helpers for packed_score sums.
   --maximum-natural-target-anchors N
@@ -1271,6 +1274,8 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       options.analysis = true;
     } else if (arg == "--x-param-value-functions") {
       options.x_param_value_functions = true;
+    } else if (arg == "--sign-normalized-x-param") {
+      options.sign_normalized_x_param = true;
     } else if (arg == "--x-param-y-stack-stored-entry") {
       options.x_param_y_stack_stored_entry = true;
     } else if (arg == "--canonicalize-repeated-unary-update-args") {
@@ -1338,6 +1343,9 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       options.show_read_guarded_transfer = true;
     } else if (arg == "--stack-resident-temps") {
       options.stack_resident_temps = true;
+    } else if (arg == "--single-x-expression-helper-entries") {
+      options.stack_argument_helper_entries = true;
+      options.single_x_expression_helper_entries = true;
     } else if (arg == "--packed-score-accumulator-helpers") {
       options.packed_score_accumulator_helpers = true;
     } else if (arg == "--maximum-natural-target-anchors") {

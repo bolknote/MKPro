@@ -153,7 +153,7 @@ void example_sizes_match_typescript_baselines() {
       {"minesweeper-9x7", 76},
       {"minesweeper-9x9", 76},
       {"raja-yoga", 77},
-      {"rambo-iii", 104},
+      {"rambo-iii", 103},
       {"river-battle", 90},
       {"sea-battle", 65},
       {"teleport", 96},
@@ -161,11 +161,11 @@ void example_sizes_match_typescript_baselines() {
       {"tiny-game", 23},
       {"treasure-hunter-2", 98},
       {"wumpus", 105},
-      {"zagaday-tsifru", 105},
+      {"zagaday-tsifru", 104},
   };
   const std::map<std::string, std::size_t> PENDING_BASELINE{
       {"nekromant", 133},
-      {"tic-tac-toe-4x4", 128},
+      {"tic-tac-toe-4x4", 125},
   };
 
   const std::filesystem::path root = std::filesystem::current_path();
@@ -220,8 +220,8 @@ void example_sizes_match_typescript_baselines() {
       continue;
     if (name == "zagaday-tsifru") {
       const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
-      require(result.steps.size() == 105U,
-              "final zagaday-tsifru semantic source should fit in addresses 00..A4");
+      require(result.steps.size() == 104U,
+              "final zagaday-tsifru semantic source should fit in addresses 00..A3");
       require(!has_optimization(result, "borrowed-entry-phase-selector"),
               "zagaday-tsifru must not borrow R9 only for its first iteration: input overwrites "
               "R9 before the program loops back to the same branch");
@@ -279,11 +279,21 @@ void example_sizes_match_typescript_baselines() {
           break;
         }
       }
-      const std::array<int, 5> expected_ui_opcodes{0x69, 0x50, 0x4e, 0x68, 0x50};
-      const bool expected_ui_sequence =
-          std::equal(expected_ui_opcodes.begin(), expected_ui_opcodes.end(),
-                     result.steps.begin() + 33,
-                     [](int opcode, const ResolvedStep& step) { return opcode == step.opcode; });
+      const std::array<std::string, 5> expected_ui_comments{
+          "display __inline_show_65_0 source", "show __inline_show_65_0", "set player",
+          "display __inline_show_67_1 source", "show __inline_show_67_1"};
+      bool expected_ui_sequence = false;
+      for (std::size_t start = 0; start + expected_ui_comments.size() <= result.steps.size();
+           ++start) {
+        if (std::equal(expected_ui_comments.begin(), expected_ui_comments.end(),
+                       result.steps.begin() + static_cast<std::ptrdiff_t>(start),
+                       [](const std::string& comment, const ResolvedStep& step) {
+                         return step.comment == comment;
+                       })) {
+          expected_ui_sequence = true;
+          break;
+        }
+      }
       require(resumable_stops == 2 && prompt_anchors == 1 && single_step_anchors == 0 &&
                   continuous_resume_anchors == 1 && expected_ui_sequence &&
                   result.interaction_protocols.size() == 1U &&
@@ -635,102 +645,48 @@ void example_sizes_match_typescript_baselines() {
       const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
       const SizeHelperSummaryReport* front_stop = find_size_helper(result, "front_stop");
       require(front_stop != nullptr &&
-                  front_stop->details.contains("valueAwareMixedStateNames") &&
-                  front_stop->details.at("valueAwareMixedStateNames") == "cells_7,scratch" &&
-                  front_stop->details.contains("valueAwareMixedStateCells") &&
-                  front_stop->details.at("valueAwareMixedStateCells") == "4" &&
-                  front_stop->details.contains("valueAwareMixedStateBreakdown") &&
-                  front_stop->details.at("valueAwareMixedStateBreakdown")
-                          .find("cells_7:2c/1r/1s@39..42") != std::string::npos &&
-                  front_stop->details.at("valueAwareMixedStateBreakdown")
-                          .find("scratch:2c/1r/1s@38..45") != std::string::npos &&
-                  front_stop->details.contains("valueAwareMixedStateAccessOrder") &&
-                  front_stop->details.at("valueAwareMixedStateAccessOrder")
-                          .find("cells_7:R@39/S@42") != std::string::npos &&
-                  front_stop->details.at("valueAwareMixedStateAccessOrder")
-                          .find("scratch:S@38/R@45") != std::string::npos &&
-                  front_stop->details.contains("valueAwareMixedStateLocalLifetimeNames") &&
-                  front_stop->details.at("valueAwareMixedStateLocalLifetimeNames") ==
-                      "cells_7,scratch" &&
-                  front_stop->details.contains("valueAwareMixedStateLocalLifetimeCells") &&
-                  front_stop->details.at("valueAwareMixedStateLocalLifetimeCells") == "4" &&
-                  front_stop->details.contains("valueAwareMixedStateLifetimeStatus") &&
-                  front_stop->details.at("valueAwareMixedStateLifetimeStatus") ==
-                      "local-to-helper-without-nested-calls" &&
-                  front_stop->details.contains("valueAwareMixedStateProofAction") &&
-                  front_stop->details.at("valueAwareMixedStateProofAction") ==
-                      "prove-local-stack-value-flow-through-mutating-ops" &&
-                  front_stop->details.contains("valueAwareMixedStateTempCarrierNames") &&
-                  front_stop->details.at("valueAwareMixedStateTempCarrierNames") == "scratch" &&
-                  front_stop->details.contains("valueAwareMixedStateTempCarrierCells") &&
-                  front_stop->details.at("valueAwareMixedStateTempCarrierCells") == "2" &&
-                  front_stop->details.contains("valueAwareMixedStateTempCarrierGrossCells") &&
-                  front_stop->details.at("valueAwareMixedStateTempCarrierGrossCells") == "2" &&
-                  front_stop->details.contains(
-                      "valueAwareMixedStateTempCarrierMaterializeCells") &&
-                  front_stop->details.at(
-                      "valueAwareMixedStateTempCarrierMaterializeCells") == "2" &&
-                  front_stop->details.contains("valueAwareMixedStateTempCarrierNetCells") &&
-                  front_stop->details.at("valueAwareMixedStateTempCarrierNetCells") == "0" &&
-                  front_stop->details.contains("valueAwareMixedStateTempCarrierPlanStatus") &&
-                  front_stop->details.at("valueAwareMixedStateTempCarrierPlanStatus") ==
-                      "break-even-after-stack-preservation" &&
-                  front_stop->details.contains("valueAwareMixedStateRequiredUpdateNames") &&
-                  front_stop->details.at("valueAwareMixedStateRequiredUpdateNames") ==
-                      "cells_7" &&
-                  front_stop->details.contains("valueAwareMixedStateRequiredUpdateCells") &&
-                  front_stop->details.at("valueAwareMixedStateRequiredUpdateCells") == "2" &&
-                  front_stop->details.contains("valueAwareEstimatedNetSavingsAfterMaterialization") &&
-                  front_stop->details.at("valueAwareEstimatedNetSavingsAfterMaterialization") ==
-                      "0" &&
-                  front_stop->details.contains("valueAwareEstimatedNetSavingsModel") &&
-                  front_stop->details.at("valueAwareEstimatedNetSavingsModel") ==
-                      "local-temp-carrier-register-traffic-minus-stack-preservation" &&
-                  front_stop->details.contains("valueAwareEstimatedNetSavingsExcludes") &&
-                  front_stop->details.at("valueAwareEstimatedNetSavingsExcludes") ==
-                      "persistent-state-updates-and-nested-call-inputs" &&
+                  !front_stop->details.contains("valueAwareMixedStateNames") &&
+                  front_stop->details.contains("valueAwareRegisterTrafficNames") &&
+                  front_stop->details.at("valueAwareRegisterTrafficNames") ==
+                      "cells_7,random_state" &&
                   front_stop->details.contains("valueAwareSchedulerPlanStatus") &&
                   front_stop->details.at("valueAwareSchedulerPlanStatus") ==
-                      "break-even-after-stack-preservation" &&
-                  !front_stop->details.contains("valueAwareMixedStateNestedCrossingNames") &&
+                      "requires-persistent-state-store" &&
+                  front_stop->details.contains("valueAwareStateOutputNames") &&
+                  front_stop->details.at("valueAwareStateOutputNames") == "cells_7" &&
                   front_stop->details.contains("valueAwareNestedCallInputNames") &&
                   front_stop->details.at("valueAwareNestedCallInputNames") == "random_state",
-              "rambo-iii front_stop size attribution should split local mixed-state lifetimes "
-              "from nested-call state inputs for the value-aware scheduler");
+              "rambo-iii front_stop attribution should exclude register traffic already removed "
+              "by generic forwarding and retain the persistent output/nested-input split");
       const SizeOpportunityReport* front_stop_register_traffic =
           find_size_opportunity_detail(result, "helper-register-traffic", "helperLabel",
                                        "front_stop");
       require(front_stop_register_traffic != nullptr &&
-                  front_stop_register_traffic->savings == 0 &&
-                  front_stop_register_traffic->candidate_steps ==
+                  front_stop_register_traffic->savings == 3 &&
+                  front_stop_register_traffic->candidate_steps + 3 ==
                       static_cast<int>(result.steps.size()) &&
                   front_stop_register_traffic->details.contains("savingsModel") &&
                   front_stop_register_traffic->details.at("savingsModel") ==
-                      "estimated-net-after-callsite-materialization" &&
+                      "gross-helper-register-traffic-before-callsite-proof" &&
                   front_stop_register_traffic->details.contains("candidateStepsStatus") &&
                   front_stop_register_traffic->details.at("candidateStepsStatus") ==
-                      "synthetic-net-estimate-not-compiled" &&
+                      "synthetic-upper-bound-not-compiled" &&
                   front_stop_register_traffic->details.contains("sizeImpactStatus") &&
                   front_stop_register_traffic->details.at("sizeImpactStatus") ==
-                      "estimated-nonpositive-net" &&
+                      "blocked-unmeasured" &&
                   front_stop_register_traffic->details.contains("netSavingsStatus") &&
                   front_stop_register_traffic->details.at("netSavingsStatus") ==
-                      "estimated-nonpositive-after-callsite-materialization" &&
+                      "unproved-before-callsite-stack-proof" &&
                   front_stop_register_traffic->details.contains("trafficShapeAction") &&
                   front_stop_register_traffic->details.at("trafficShapeAction") ==
-                      "prove-local-temp-carrier-through-state-update-guard" &&
-                  front_stop_register_traffic->details.contains(
-                      "valueAwareMixedStateLifetimeStatus") &&
-                  front_stop_register_traffic->details.at(
-                      "valueAwareMixedStateLifetimeStatus") ==
-                      "local-to-helper-without-nested-calls",
-              "rambo-iii should keep the front_stop temp-carrier proof visible while estimating "
-              "it as break-even after required stack preservation");
+                      "split-stack-inputs-from-deferred-state-outputs",
+              "rambo-iii should keep the remaining front_stop traffic visible as a proof-gated "
+              "upper bound after generic forwarding");
       const SizeNextActionSummaryReport* mixed_state_action = find_size_next_action(
-          result, "trafficShapeAction", "prove-local-temp-carrier-through-state-update-guard");
-      require(mixed_state_action == nullptr,
-              "rambo-iii should not rank a break-even local temp-carrier rewrite as a positive "
-              "next scheduler action");
+          result, "trafficShapeAction", "split-stack-inputs-from-deferred-state-outputs");
+      require(mixed_state_action != nullptr,
+              "rambo-iii should rank the remaining proof-gated stack/state split as the next "
+              "scheduler action");
     }
   }
 

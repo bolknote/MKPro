@@ -1012,9 +1012,11 @@ program SingleXHelperEntry {
     const CompileResult single_x = compile_source(single_x_helper_source, single_x_options);
     require_clean_compile(single_x_baseline, "single-X helper-entry baseline");
     require_clean_compile(single_x, "single-X helper-entry candidate");
-    require(single_x.steps.size() == single_x_baseline.steps.size(),
-            "the explicit single-X candidate must not grow after generic current-X forwarding "
-            "has already removed the helper recall");
+    require(single_x.steps.size() < single_x_baseline.steps.size() &&
+                count_steps_with_comment(single_x,
+                                         "stage helper stack argument left") == 0,
+            "the explicit single-X candidate should forward each stored producer without "
+            "call-site materialization");
 
     const std::string reordered_single_x_source = R"mkpro(
 program ReorderedSingleXHelperEntry {
@@ -1053,10 +1055,10 @@ program ReorderedSingleXHelperEntry {
                           "reordered single-X helper-entry baseline");
     require_clean_compile(reordered_single_x,
                           "reordered single-X helper-entry candidate");
-    require(reordered_single_x.steps.size() + 1U ==
+    require(reordered_single_x.steps.size() + 4U ==
                 reordered_single_x_baseline.steps.size(),
-            "whole-block zero-copy scoring should select the helper input that removes one "
-            "shared-body recall without adding call-site materialization");
+            "whole-block zero-copy scoring should select the helper input that removes the "
+            "shared-body recall and exposes all three producer stores to generic DSE");
     require(has_optimization(reordered_single_x,
                              "stored-assignment-helper-stack-entry") &&
                 has_optimization(reordered_single_x,
@@ -1148,10 +1150,10 @@ program LateStackHelperEntry {
     const CompileResult late_single_x =
         compile_source(late_stack_entry_source, late_single_x_options);
     require_clean_compile(late_single_x, "late single-X helper-entry fail-closed case");
-    require(late_single_x.steps.size() == late_stack_entry.steps.size() &&
+    require(late_single_x.steps.size() < late_stack_entry.steps.size() &&
                 has_optimization(late_single_x, "expression-helper-single-x-entry"),
-            "a prior regular call should retain its entry while later proved calls may use a "
-            "same-size secondary single-X ABI");
+            "a prior regular call should retain its entry while later proved calls use a "
+            "smaller secondary single-X ABI and expose its continuation for generic sharing");
 
     CompileOptions selected_options;
     selected_options.analysis = true;

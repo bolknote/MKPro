@@ -10,16 +10,21 @@
 
 namespace mkpro::core {
 
-// One direct call in a complete three-call helper family.  Two calls are
+// One direct or proved single-target indirect call in a complete three-call
+// helper family. Two calls are
 // ordinary entries whose first two continuation cells are byte-identical; the
 // remaining call is the divergent entry that must return before that shared
 // continuation in the eventual dual-mode layout.
 struct SharedHelperContinuationCall {
   std::size_t call_item_index = 0;
+  // For a direct call this is its address operand. For a one-cell indirect
+  // call it is the call itself, so the continuation still starts at the next
+  // executable cell without manufacturing a synthetic operand.
   std::size_t operand_item_index = 0;
   std::size_t join_item_index = 0;
   std::size_t store_item_index = 0;
   int call_address = -1;
+  bool indirect = false;
   bool ordinary = false;
 };
 
@@ -56,10 +61,11 @@ struct SharedHelperContinuationProof {
 };
 
 // Prove a purely structural candidate.  The helper must be straight-line with
-// one explicit return and a complete set of exactly three direct calls.  Two
-// calls must continue with the same supported commutative join followed by the
-// same direct store; the third continuation must differ.  No source names,
-// constants, comments, or absolute program-size signature participate.
+// one explicit return and a complete set of exactly three direct or proved
+// single-target indirect calls. Two calls must continue with the same
+// supported commutative join followed by the same direct store; the third
+// continuation must differ. No source names, constants, comments, or absolute
+// program-size signature participate.
 SharedHelperContinuationProof
 verify_shared_helper_continuation(const std::vector<MachineItem>& items,
                                   const std::string& helper_label,

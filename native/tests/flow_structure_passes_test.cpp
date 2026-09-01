@@ -1,4 +1,5 @@
 #include "mkpro/core/passes/conditional_branch_trampoline.hpp"
+#include "mkpro/core/passes/call_continuation_composition.hpp"
 #include "mkpro/core/passes/jump_thread.hpp"
 #include "mkpro/core/passes/jump_to_next.hpp"
 #include "mkpro/core/passes/redundant_prologue.hpp"
@@ -161,6 +162,54 @@ void flow_structure_passes_match_typescript_contract() {
   }
 
   // --- tail-call-lowering --------------------------------------------------
+  {
+    const std::vector<IrOp> program = {
+        label("main"),       call("producer"), call("consumer"), jump("second"),
+        label("second"),     call("producer"), call("consumer"), halt(),
+        proc_start("producer"), plain(0x34, "K [x]"), ret(),
+        proc_start("consumer"), plain(0x10, "+"), ret(),
+    };
+    const int before = machine_cell_count(program);
+    const auto result = core::passes::call_continuation_composition_pass().run(program, ctx);
+    require_applied(result.applied, 2,
+                    "call-continuation-composition folds every identical continuation");
+    require(machine_cell_count(result.ops) == before - 3,
+            "call-continuation-composition saves two calls minus one tail-jump cell");
+    require(count_kind(result.ops, IrKind::Call) == 2,
+            "call-continuation-composition removes both consumer call sites");
+    require(count_kind(result.ops, IrKind::Jump) == 2,
+            "call-continuation-composition adds one producer tail jump");
+    require(!result.optimizations.empty() &&
+                result.optimizations.at(0).name == "call-continuation-composition",
+            "call-continuation-composition optimization name");
+  }
+  {
+    const std::vector<IrOp> mixed = {
+        label("main"),       call("producer"), call("consumer"), jump("second"),
+        label("second"),     call("producer"), plain(0x01, "1"), halt(),
+        proc_start("producer"), plain(0x34, "K [x]"), ret(),
+        proc_start("consumer"), plain(0x10, "+"), ret(),
+    };
+    const auto result = core::passes::call_continuation_composition_pass().run(mixed, ctx);
+    require_applied(result.applied, 0,
+                    "call-continuation-composition rejects mixed continuations");
+    require_ops_equal(result.ops, mixed,
+                      "call-continuation-composition preserves mixed continuations");
+  }
+  {
+    const std::vector<IrOp> externally_entered = {
+        label("main"),       call("producer"), call("consumer"),
+        jump("producer_body"), proc_start("producer"), label("producer_body"),
+        plain(0x34, "K [x]"), ret(), proc_start("consumer"),
+        plain(0x10, "+"), ret(),
+    };
+    const auto result =
+        core::passes::call_continuation_composition_pass().run(externally_entered, ctx);
+    require_applied(result.applied, 0,
+                    "call-continuation-composition rejects an external body entry");
+    require_ops_equal(result.ops, externally_entered,
+                      "call-continuation-composition preserves externally entered helper");
+  }
   {
     const std::vector<IrOp> program = {label("main"),    call("finish_turn"), jump("loop"),
                                        label("loop"),     halt(),              label("finish_turn"),
