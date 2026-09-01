@@ -2961,7 +2961,10 @@ void suppress_packed_score_inline_rules(LoweringContext& context, const V2Progra
   for (const V2Rule& rule : program.rules) {
     const auto calls = context.proc_call_counts.find(rule.name);
     const int uses = calls == context.proc_call_counts.end() ? 0 : calls->second;
-    if (uses > 1 && context.use_packed_score_accumulator_helper &&
+    const bool retain_for_shared_tail =
+        uses == 1 && context.outline_single_use_packed_score_shared_tails;
+    if ((uses > 1 || retain_for_shared_tail) &&
+        context.use_packed_score_accumulator_helper &&
         count_expression_calls_in_statements(rule.body, "packed_score") >= 4) {
       context.inline_statement_rules.erase(rule.name);
     }
@@ -52928,6 +52931,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   context.sign_normalized_x_param = options.sign_normalized_x_param;
   context.x_param_y_stack_stored_entry = options.x_param_y_stack_stored_entry;
   context.packed_score_accumulator_helpers = options.packed_score_accumulator_helpers;
+  context.outline_single_use_packed_score_shared_tails =
+      options.outline_single_use_packed_score_shared_tails;
   context.shared_bit_mask_helper_calls = options.shared_bit_mask_helper_calls;
   context.compact_bit_mask_helper_body = options.compact_bit_mask_helper_body;
   context.domain_error_guards = options.domain_error_guards;
@@ -56193,6 +56198,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.sentinel_decimal_pack || options.bounded_decimal_tuple_pack ||
          options.trig_fractional_pack || options.sign_pack_state ||
          options.packed_score_accumulator_helpers ||
+         options.outline_single_use_packed_score_shared_tails ||
          options.canonicalize_repeated_unary_update_args ||
          options.alternating_sign_toggle_args ||
          options.x_param_value_functions ||
@@ -57031,6 +57037,8 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";trig_fractional_pack=" << options.trig_fractional_pack
       << ";sign_pack_state=" << options.sign_pack_state
       << ";packed_score_accumulator_helpers=" << options.packed_score_accumulator_helpers
+      << ";outline_single_use_packed_score_shared_tails="
+      << options.outline_single_use_packed_score_shared_tails
       << ";canonicalize_repeated_unary_update_args="
       << options.canonicalize_repeated_unary_update_args
       << ";alternating_sign_toggle_args=" << options.alternating_sign_toggle_args
@@ -57124,7 +57132,9 @@ int estimated_candidate_search_cost_ms(std::string_view name) {
       name == "branch-y-payload-forwarding" ||
       name == "branch-y-payload-stack-function-entries")
     return 20;
-  if (name == "packed-score-accumulator-reverse-suffix-free-layout")
+  if (name == "packed-score-accumulator-reverse-suffix-free-layout" ||
+      name == "packed-score-single-use-shared-tail" ||
+      name == "packed-score-single-use-shared-tail-composed")
     return 100;
   if (name == "fractional-constant-selector" ||
       name == "fractional-constant-selector-dead-int")
@@ -74936,6 +74946,25 @@ CompileResult compile_source_for_optimizer_profile(
         "packed-score-accumulator-reverse-suffix-free-layout",
         "Combined packed_score stack accumulation with reverse procedure layout and generic "
         "callee-hole sharing while keeping the return-suffix outliner disabled");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.packed_score_accumulator_helpers = true;
+          candidate_options.outline_single_use_packed_score_shared_tails = true;
+        },
+        "packed-score-single-use-shared-tail",
+        "Compared ordinary one-use inlining with an out-of-line procedure whose paired "
+        "sum/difference packed_score continuation can be shared");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.packed_score_accumulator_helpers = true;
+          candidate_options.outline_single_use_packed_score_shared_tails = true;
+          candidate_options.disable_return_suffix_gadget = true;
+          candidate_options.proc_layout_strategy = "reverse";
+          candidate_options.callee_hole_straight_line_helper = true;
+        },
+        "packed-score-single-use-shared-tail-composed",
+        "Combined measured one-use shared-tail outlining with reverse procedure layout and "
+        "generic callee-hole sharing");
     if (allow_aggressive_post_layout) {
       add_candidate(
           [](CompileOptions& candidate_options) {
@@ -77009,6 +77038,12 @@ CompileResult compile_source_for_optimizer_profile(
       });
     };
     add_finalist(best_options, {}, {});
+    // The pre-final winner may differ from the lowering seed even though the
+    // seed exposes a much better absolute/natural-target layout. Keep that
+    // independently compiled root in the final frontier instead of losing it
+    // when a locally smaller candidate replaces `best` before layout.
+    add_finalist(initial_options, "initial-lowering-seed-finalist",
+                 "Retained the initial lowering seed across pre-final candidate replacement");
     if (!use_packed_score_seed)
       add_finalist(options, {}, {});
     for (const CandidateSpec& candidate : candidates)

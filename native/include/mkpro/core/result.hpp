@@ -404,6 +404,10 @@ struct CompileOptions {
   bool trig_fractional_pack = false;
   bool sign_pack_state = false;
   bool packed_score_accumulator_helpers = false;
+  // Keep otherwise-inline single-use procedures available to the generic
+  // packed-score shared-tail lowerer. Candidate search compares the complete
+  // out-of-line artifact with the ordinary inline form before selection.
+  bool outline_single_use_packed_score_shared_tails = false;
   bool canonicalize_repeated_unary_update_args = false;
   bool alternating_sign_toggle_args = false;
   // Close the main program loop with one-cell empty-stack В/О returns behind

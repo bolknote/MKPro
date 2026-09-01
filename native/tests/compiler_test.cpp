@@ -2924,6 +2924,56 @@ program GenericPackedScoreSharedReturnedIndexTail {
               "x-param packed_score shared returned-index tail") != std::string::npos,
           "generic packed_score shared tail should emit a shared returned-index helper call");
 
+  const std::string single_use_shared_tail_source = R"mkpro(
+program GenericSingleUsePackedScoreSharedTail {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    d: packed = 44447.4
+    x: counter 0..5 = 4
+    y: counter 0..5 = 4
+    line: packed = 0
+    score: packed = 0
+  }
+
+  fn score_move() {
+    score = sum(packed_score(a, x), packed_score(b, y))
+    normalize(x + y)
+    score += packed_score(c, line)
+    normalize(x - y)
+    score += packed_score(d, line)
+  }
+
+  fn normalize(raw_line) {
+    line = frac((raw_line + 3) / 4) * 4 + 1
+  }
+
+  loop {
+    score_move()
+    halt(score)
+  }
+}
+)mkpro";
+  CompileOptions single_use_inline_options = generic_packed_score_tail_options;
+  single_use_inline_options.disable_candidate_search = true;
+  const CompileResult single_use_inline =
+      compile_source(single_use_shared_tail_source, single_use_inline_options);
+  CompileOptions single_use_outlined_options = single_use_inline_options;
+  single_use_outlined_options.outline_single_use_packed_score_shared_tails = true;
+  const CompileResult single_use_outlined =
+      compile_source(single_use_shared_tail_source, single_use_outlined_options);
+  require(single_use_inline.implemented && single_use_outlined.implemented &&
+              single_use_inline.diagnostics.empty() &&
+              single_use_outlined.diagnostics.empty(),
+          "single-use packed_score shared-tail alternatives should both compile");
+  require(has_optimization(single_use_outlined,
+                           "x-param-packed-score-shared-returned-index-tail"),
+          "the measured out-of-line alternative should expose the generic shared tail");
+  require(single_use_outlined.steps.size() < single_use_inline.steps.size(),
+          "one-use outlining should be retained only when shared-tail lowering repays the "
+          "call boundary");
+
   CompileOptions known_zero_packed_score_tail_options;
   known_zero_packed_score_tail_options.analysis = true;
   known_zero_packed_score_tail_options.disable_candidate_search = true;

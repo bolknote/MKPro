@@ -348,6 +348,7 @@ struct LoweringContext {
   bool segmented_line_count_scan = false;
   bool use_packed_score_helper = false;
   bool packed_score_accumulator_helpers = false;
+  bool outline_single_use_packed_score_shared_tails = false;
   bool use_packed_score_accumulator_helper = false;
   bool use_packed_score_accumulator_for_singletons = false;
   bool packed_score_helper_paid_by_non_accumulator_groups = false;
