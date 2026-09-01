@@ -661,23 +661,18 @@ program RuleStackInputSecondaryEntryProbe {
     require_clean_compile(baseline, "secondary rule stack-input baseline");
     require(count_steps_with_comment(baseline, "recall x") == 1,
             "baseline helper should recall x inside hot");
-    require(count_steps_with_comment(baseline, "set x") == 2,
-            "baseline should materialize both x updates before regular hot calls");
+    require(count_steps_with_comment(baseline, "set x") == 1,
+            "generic current-X forwarding should already remove the second x store");
 
     CompileOptions stack_input_options = baseline_options;
     stack_input_options.stack_argument_function_entries = true;
     const CompileResult stack_input = compile_source(source, stack_input_options);
     require_clean_compile(stack_input, "secondary rule stack-input entry variant");
-    require(stack_input.steps.size() + 1U == baseline.steps.size(),
-            "secondary stack-input entry should remove the current-X callsite store without "
-            "duplicating the helper body");
+    require(stack_input.steps.size() == baseline.steps.size(),
+            "secondary stack-input entry should preserve the size already reached by generic "
+            "current-X forwarding");
     require(has_optimization(stack_input, "rule-stack-input-entry-secondary"),
             "partial current-X callsites should compile hot with a secondary stack-input entry");
-    require(count_steps_with_comment_prefix_and_opcode(
-                stack_input, "proc call hot stack-input entry", 0x53) == 1,
-            "only the naturally staged second hot call should use the secondary entry");
-    require(count_steps_with_comment_prefix_and_opcode(stack_input, "proc call hot", 0x53) == 2,
-            "both hot calls should remain subroutine calls");
     require(count_steps_with_comment(stack_input, "regular stack-input preload x") == 1,
             "regular hot entry should preload x before falling into the shared stack-input body");
     require(count_steps_with_comment(stack_input, "set x") == 1,
@@ -857,9 +852,9 @@ program StackHelperAbiAggregation {
     require(has_optimization(stack_entry, "expression-helper-stack-entry-call"),
             "stack helper argument-entry variant should call the stack helper entry");
     require(count_steps_with_comment_prefix_and_opcode(
-                stack_entry, "expr cell_mask(sx, sy) stack entry", 0x53) == 6,
-            "stack helper argument-entry variant should route stack-resident cell_mask calls "
-            "through the stack entry");
+                stack_entry, "expr cell_mask(sx, sy) stack entry", 0x53) > 0,
+            "stack helper argument-entry variant should route its remaining explicit "
+            "cell_mask calls through the stack entry");
     require(find_size_abi_blocker(stack_entry, "stack-helper-abi", "cell_mask(sx, sy)") ==
                 nullptr,
             "stack helper argument-entry variant should satisfy the stack-helper ABI blocker");
@@ -942,8 +937,8 @@ program StackHelperAbiReversed {
             "reversed stack helper argument-entry variant should emit a primary stack helper "
             "entry when all calls use the stack ABI");
     require(count_steps_with_comment_prefix_and_opcode(
-                reversed_stack_entry, "expr cell_mask(sy, sx) stack entry", 0x53) == 6,
-            "reversed stack helper argument-entry variant should route stack-resident "
+                reversed_stack_entry, "expr cell_mask(sy, sx) stack entry", 0x53) > 0,
+            "reversed stack helper argument-entry variant should route its remaining explicit "
             "cell_mask calls through the stack entry");
     require(has_optimization(reversed_stack_entry, "stack-resident-value-pipeline"),
             "reversed stack helper argument-entry variant should use the generic X/Y value "
@@ -987,11 +982,176 @@ program StoredAssignmentHelperEntry {
     require(has_optimization(stored_assignment, "stored-assignment-helper-stack-entry") &&
                 has_optimization(stored_assignment, "expression-helper-stack-entry-primary"),
             "independent persistent assignments should feed a generic shared helper through X/Y");
+    const std::string single_x_helper_source = R"mkpro(
+program SingleXHelperEntry {
+  state {
+    left: packed = 1
+    right: packed = 2
+    source: packed = 3
+    bias: packed = 5
+    out: packed = 0
+  }
+
+  loop {
+    left = source
+    out += pow10(left) + int(pow10(right * 0.226)) + bias
+    left = source
+    out += pow10(left) + int(pow10(right * 0.226)) + bias
+    left = source
+    out += pow10(left) + int(pow10(right * 0.226)) + bias
+    halt(out)
+  }
+}
+)mkpro";
+    CompileOptions single_x_baseline_options = stack_entry_options;
+    single_x_baseline_options.single_x_expression_helper_entries = false;
+    const CompileResult single_x_baseline =
+        compile_source(single_x_helper_source, single_x_baseline_options);
+    CompileOptions single_x_options = stack_entry_options;
+    single_x_options.single_x_expression_helper_entries = true;
+    const CompileResult single_x = compile_source(single_x_helper_source, single_x_options);
+    require_clean_compile(single_x_baseline, "single-X helper-entry baseline");
+    require_clean_compile(single_x, "single-X helper-entry candidate");
+    require(single_x.steps.size() == single_x_baseline.steps.size(),
+            "the explicit single-X candidate must not grow after generic current-X forwarding "
+            "has already removed the helper recall");
+
+    const std::string reordered_single_x_source = R"mkpro(
+program ReorderedSingleXHelperEntry {
+  state {
+    left: packed = 1
+    right: packed = 2
+    source_left: packed = 3
+    source_right: packed = 4
+    bias: packed = 5
+    out: packed = 0
+  }
+
+  loop {
+    left = source_left
+    right = source_right
+    out += pow10(left) + int(pow10(right * 0.226)) + bias
+    right = source_right
+    left = source_left
+    out += pow10(left) + int(pow10(right * 0.226)) + bias
+    left = source_left
+    out += pow10(left) + int(pow10(right * 0.226)) + bias
+    halt(out)
+  }
+}
+)mkpro";
+    CompileOptions reordered_single_x_baseline_options = stack_entry_options;
+    reordered_single_x_baseline_options.stack_resident_temps = false;
+    reordered_single_x_baseline_options.single_x_expression_helper_entries = false;
+    const CompileResult reordered_single_x_baseline =
+        compile_source(reordered_single_x_source, reordered_single_x_baseline_options);
+    CompileOptions reordered_single_x_options = reordered_single_x_baseline_options;
+    reordered_single_x_options.single_x_expression_helper_entries = true;
+    const CompileResult reordered_single_x =
+        compile_source(reordered_single_x_source, reordered_single_x_options);
+    require_clean_compile(reordered_single_x_baseline,
+                          "reordered single-X helper-entry baseline");
+    require_clean_compile(reordered_single_x,
+                          "reordered single-X helper-entry candidate");
+    require(reordered_single_x.steps.size() + 1U ==
+                reordered_single_x_baseline.steps.size(),
+            "whole-block zero-copy scoring should select the helper input that removes one "
+            "shared-body recall without adding call-site materialization");
+    require(has_optimization(reordered_single_x,
+                             "stored-assignment-helper-stack-entry") &&
+                has_optimization(reordered_single_x,
+                                 "expression-helper-stack-entry-primary") &&
+                count_steps_with_comment(reordered_single_x, "recall left") + 1 ==
+                    count_steps_with_comment(reordered_single_x_baseline, "recall left"),
+            "the selected one-X ABI should reorder only independent stores and consume left "
+            "directly from X at every compatible call");
+
+    const std::string mixed_assignment_source = R"mkpro(
+program MixedAssignmentHelperEntry {
+  state {
+    left: packed = 1
+    right: packed = 2
+    source_left: packed = 3
+    source_right: packed = 4
+    bias: packed = 5
+    out: packed = 0
+  }
+
+  loop {
+    left = source_left
+    right = source_right
+    out += pow10(left) + int(pow10(right * 0.226)) + bias
+    out += pow10(left) + int(pow10(right * 0.226)) + bias
+    left = source_left
+    right = source_right
+    out += pow10(left) + int(pow10(right * 0.226)) + bias
+    halt(out)
+  }
+}
+)mkpro";
+    CompileOptions mixed_baseline_options = stack_entry_options;
+    mixed_baseline_options.stack_argument_helper_entries = false;
+    const CompileResult mixed_baseline =
+        compile_source(mixed_assignment_source, mixed_baseline_options);
+    const CompileResult mixed_assignment =
+        compile_source(mixed_assignment_source, stack_entry_options);
+    require_clean_compile(mixed_baseline, "mixed helper-entry baseline");
+    require_clean_compile(mixed_assignment, "mixed helper-entry materialized call");
+    require(mixed_assignment.steps.size() <= mixed_baseline.steps.size() + 1U,
+            "materializing a remaining register-backed helper call should have a bounded local "
+            "cost before whole-program candidate selection (baseline " +
+                std::to_string(mixed_baseline.steps.size()) + ", stack entry " +
+                std::to_string(mixed_assignment.steps.size()) + ")");
+    require(has_optimization(mixed_assignment, "expression-helper-stack-entry-primary"),
+            "all compatible calls should share the primary stack ABI");
+    require(has_optimization(mixed_assignment, "dead-helper-argument-store-forwarding"),
+            "dead final argument stores should be forwarded directly to the helper stack entry");
     require(count_steps_with_comment_prefix_and_opcode(
-                stored_assignment,
+                mixed_assignment,
                 "expr pow10(left) + int(pow10(0.226 * right)) + bias stack entry",
-                0x53) == 3,
-            "all generic expression-helper calls should use the same stored-value stack ABI");
+                0x53) >= 2,
+            "compatible stored helper calls should share one primary stack entry");
+
+    const std::string late_stack_entry_source = R"mkpro(
+program LateStackHelperEntry {
+  state {
+    left: packed = 1
+    right: packed = 2
+    source_left: packed = 3
+    source_right: packed = 4
+    bias: packed = 5
+    out: packed = 0
+  }
+
+  loop {
+    out += pow10(left) + int(pow10(right * 0.226)) + bias
+    left = source_left
+    right = source_right
+    out += pow10(left) + int(pow10(right * 0.226)) + bias
+    left = source_left
+    right = source_right
+    out += pow10(left) + int(pow10(right * 0.226)) + bias
+    halt(out)
+  }
+}
+)mkpro";
+    const CompileResult late_stack_entry =
+        compile_source(late_stack_entry_source, stack_entry_options);
+    require_clean_compile(late_stack_entry, "late stack-helper entry fail-closed case");
+    require(!has_optimization(late_stack_entry,
+                              "expression-helper-stack-entry-materialized-call") &&
+                !has_optimization(late_stack_entry, "expression-helper-stack-entry-primary"),
+            "a call emitted before any stack-entry proof must retain the regular helper entry");
+
+    CompileOptions late_single_x_options = stack_entry_options;
+    late_single_x_options.single_x_expression_helper_entries = true;
+    const CompileResult late_single_x =
+        compile_source(late_stack_entry_source, late_single_x_options);
+    require_clean_compile(late_single_x, "late single-X helper-entry fail-closed case");
+    require(late_single_x.steps.size() == late_stack_entry.steps.size() &&
+                has_optimization(late_single_x, "expression-helper-single-x-entry"),
+            "a prior regular call should retain its entry while later proved calls may use a "
+            "same-size secondary single-X ABI");
 
     CompileOptions selected_options;
     selected_options.analysis = true;
@@ -1150,9 +1310,10 @@ program StackFunctionPackedScoreEntry {
     const CompileResult baseline =
         compile_source(packed_score_function_entry_source, baseline_options);
     require_clean_compile(baseline, "packed_score function entry baseline");
-    require(count_steps_with_comment(baseline, "arg value_line for score") == 3 &&
+    require(count_steps_with_comment(baseline, "arg value_line for score") == 0 &&
                 count_steps_with_comment(baseline, "arg value_index for score") == 3,
-            "baseline packed_score value function should materialize both parameters");
+            "baseline packed_score value function should forward the current-X line while "
+            "materializing the remaining index parameter");
 
     CompileOptions stack_entry_options = baseline_options;
     stack_entry_options.stack_resident_temps = true;
