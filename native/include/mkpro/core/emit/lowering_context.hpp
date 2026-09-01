@@ -303,6 +303,7 @@ struct LoweringContext {
   std::map<std::string, int> expression_helper_regular_call_sites;
   std::vector<ExpressionHelperRequest> expression_helpers;
   std::map<std::string, ExpressionHelperStackEntryRequest> expression_helper_stack_entries;
+  std::map<std::string, std::string> expression_helper_single_x_plans;
   std::map<int, std::string> grid_norm_helper_labels;
   std::vector<int> grid_norm_helper_order;
   std::map<int, std::pair<std::int64_t, std::int64_t>> finite_grid_norm_domains;

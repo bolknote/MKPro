@@ -1068,6 +1068,52 @@ program ReorderedSingleXHelperEntry {
             "the selected one-X ABI should reorder only independent stores and consume left "
             "directly from X at every compatible call");
 
+    const std::string whole_program_single_x_source = R"mkpro(
+program WholeProgramSingleXHelperEntry {
+  state {
+    left: packed = 1
+    right: packed = 2
+    source_left: packed = 3
+    source_right: packed = 4
+    bias: packed = 5
+    out: packed = 0
+  }
+
+  loop {
+    left = source_left
+    right = source_right
+    out += pow10(left) + int(pow10(right * 0.226)) + bias
+    use_right_one()
+    use_right_two()
+    halt(out)
+  }
+
+  fn use_right_one() {
+    right = source_right
+    out += pow10(left) + int(pow10(right * 0.226)) + bias
+  }
+
+  fn use_right_two() {
+    right = source_right
+    out += pow10(left) + int(pow10(right * 0.226)) + bias
+  }
+}
+)mkpro";
+    const CompileResult whole_program_single_x =
+        compile_source(whole_program_single_x_source, reordered_single_x_options);
+    require_clean_compile(whole_program_single_x,
+                          "whole-program single-X helper-entry planning");
+    require(has_optimization(whole_program_single_x,
+                             "expression-helper-single-x-whole-program-plan") &&
+                has_optimization(whole_program_single_x,
+                                 "expression-helper-stack-entry-primary"),
+            "all procedures should agree on the common zero-copy helper input before emission");
+    require(count_steps_with_comment(whole_program_single_x,
+                                     "stage helper stack argument right") == 0 &&
+                count_steps_with_comment(whole_program_single_x, "recall right") == 0,
+            "whole-program planning should not materialize the common right input at any "
+            "helper call or in the shared body");
+
     const std::string mixed_assignment_source = R"mkpro(
 program MixedAssignmentHelperEntry {
   state {

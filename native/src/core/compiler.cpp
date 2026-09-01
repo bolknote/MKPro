@@ -24418,6 +24418,227 @@ std::optional<Expression> expression_helper_stack_entry_body(
   return body;
 }
 
+std::optional<std::string> single_x_assignment_target(const LoweringContext& context,
+                                                      const V2Statement& statement) {
+  if (statement.kind != "v2_assign" || !statement.target.has_value() ||
+      !statement.expr.has_value()) {
+    return std::nullopt;
+  }
+  try {
+    const Expression target = parse_expression(*statement.target, statement.line);
+    const Expression value = parse_expression(*statement.expr, statement.line);
+    if (target.kind != "identifier" ||
+        !context.register_index_by_name.contains(target.name) ||
+        context.stack_only_state_fields.contains(target.name) ||
+        is_cells_state_name(context, target.name) ||
+        is_segmented_cells_name(context, target.name) ||
+        !expression_pure_for_substitution(value)) {
+      return std::nullopt;
+    }
+    return target.name;
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+std::set<std::string> single_x_candidates_before_statement(
+    const LoweringContext& context, const std::vector<V2Statement>& statements,
+    std::size_t index) {
+  std::set<std::string> candidates;
+  if (index == 0U)
+    return candidates;
+
+  const V2Statement& later = statements.at(index - 1U);
+  const std::optional<std::string> later_target =
+      single_x_assignment_target(context, later);
+  if (later_target.has_value())
+    candidates.insert(*later_target);
+
+  if (index < 2U || !later_target.has_value())
+    return candidates;
+  const V2Statement& earlier = statements.at(index - 2U);
+  const std::optional<std::string> earlier_target =
+      single_x_assignment_target(context, earlier);
+  if (!earlier_target.has_value() || *earlier_target == *later_target)
+    return candidates;
+
+  try {
+    const Expression earlier_value = parse_expression(*earlier.expr, earlier.line);
+    const Expression later_value = parse_expression(*later.expr, later.line);
+    if (!expression_contains_identifier(earlier_value, *later_target) &&
+        !expression_contains_identifier(later_value, *earlier_target) &&
+        expression_preserves_previous_x_as_y_for_stack_analysis(earlier_value) &&
+        expression_preserves_previous_x_as_y_for_stack_analysis(later_value)) {
+      candidates.insert(*earlier_target);
+    }
+  } catch (const std::exception&) {
+  }
+  return candidates;
+}
+
+int expression_identifier_read_position(const Expression& expression,
+                                        const std::string& name) {
+  int position = 0;
+  int found = std::numeric_limits<int>::max();
+  const std::function<void(const Expression&)> visit = [&](const Expression& node) {
+    if (node.kind == "identifier") {
+      if (node.name == name && found == std::numeric_limits<int>::max())
+        found = position;
+      ++position;
+    }
+    if (node.index != nullptr)
+      visit(*node.index);
+    if (node.expr != nullptr)
+      visit(*node.expr);
+    if (node.left != nullptr)
+      visit(*node.left);
+    if (node.right != nullptr)
+      visit(*node.right);
+    for (const Expression& argument : node.args)
+      visit(argument);
+  };
+  visit(expression);
+  return found;
+}
+
+struct SingleXExpressionPlanObservation {
+  Expression expression;
+  std::set<std::string> candidates;
+  int observed_uses = 0;
+  bool initialized = false;
+};
+
+void observe_single_x_expression_plan(
+    LoweringContext& context, const Expression& expression,
+    const std::set<std::string>& site_candidates,
+    std::map<std::string, SingleXExpressionPlanObservation>& observations) {
+  if (should_share_expression(context, expression)) {
+    const std::string key = expression_to_json(expression);
+    std::set<std::string> valid;
+    for (const std::string& candidate : site_candidates) {
+      if (expression_helper_stack_entry_body(context, expression, {candidate}).has_value())
+        valid.insert(candidate);
+    }
+    SingleXExpressionPlanObservation& observation = observations[key];
+    if (!observation.initialized) {
+      observation.expression = expression;
+      observation.candidates = std::move(valid);
+      observation.initialized = true;
+    } else {
+      std::erase_if(observation.candidates,
+                    [&](const std::string& candidate) { return !valid.contains(candidate); });
+    }
+    ++observation.observed_uses;
+  }
+
+  if (expression.index != nullptr)
+    observe_single_x_expression_plan(context, *expression.index, site_candidates, observations);
+  if (expression.expr != nullptr)
+    observe_single_x_expression_plan(context, *expression.expr, site_candidates, observations);
+  if (expression.left != nullptr)
+    observe_single_x_expression_plan(context, *expression.left, site_candidates, observations);
+  if (expression.right != nullptr)
+    observe_single_x_expression_plan(context, *expression.right, site_candidates, observations);
+  for (const Expression& argument : expression.args)
+    observe_single_x_expression_plan(context, argument, site_candidates, observations);
+}
+
+void observe_single_x_expression_text(
+    LoweringContext& context, const std::string& text, int line,
+    const std::set<std::string>& site_candidates,
+    std::map<std::string, SingleXExpressionPlanObservation>& observations) {
+  try {
+    observe_single_x_expression_plan(context, parse_expression(text, line), site_candidates,
+                                     observations);
+  } catch (const std::exception&) {
+  }
+}
+
+void collect_single_x_expression_plan_observations(
+    LoweringContext& context, const std::vector<V2Statement>& statements,
+    std::map<std::string, SingleXExpressionPlanObservation>& observations) {
+  for (std::size_t index = 0; index < statements.size(); ++index) {
+    const V2Statement& statement = statements.at(index);
+    const std::set<std::string> candidates =
+        single_x_candidates_before_statement(context, statements, index);
+    if (statement.expr.has_value()) {
+      observe_single_x_expression_text(context, *statement.expr, statement.line, candidates,
+                                       observations);
+    }
+    if (statement.predicate.has_value()) {
+      const V2Predicate& predicate = *statement.predicate;
+      if (predicate.kind == "v2_compare") {
+        observe_single_x_expression_text(context, predicate.left, statement.line, candidates,
+                                         observations);
+        observe_single_x_expression_text(context, predicate.right, statement.line, candidates,
+                                         observations);
+      } else if (predicate.kind == "v2_contains") {
+        observe_single_x_expression_text(context, predicate.collection, statement.line,
+                                         candidates, observations);
+        observe_single_x_expression_text(context, predicate.item, statement.line, candidates,
+                                         observations);
+      }
+    }
+    for (const std::string& argument : statement.args) {
+      observe_single_x_expression_text(context, argument, statement.line, candidates,
+                                       observations);
+    }
+    if (statement.items.has_value()) {
+      for (const DisplayItem& item : *statement.items) {
+        if (item.expr.has_value())
+          observe_single_x_expression_plan(context, *item.expr, candidates, observations);
+      }
+    }
+    collect_single_x_expression_plan_observations(context, statement.body, observations);
+    collect_single_x_expression_plan_observations(context, statement.then_body, observations);
+    collect_single_x_expression_plan_observations(context, statement.else_body, observations);
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.action != nullptr) {
+        collect_single_x_expression_plan_observations(
+            context, std::vector<V2Statement>{*match_case.action}, observations);
+      }
+    }
+    if (statement.otherwise != nullptr) {
+      collect_single_x_expression_plan_observations(
+          context, std::vector<V2Statement>{*statement.otherwise}, observations);
+    }
+  }
+}
+
+void plan_single_x_expression_helper_entries(LoweringContext& context,
+                                             const V2Program& program) {
+  context.expression_helper_single_x_plans.clear();
+  if (!context.stack_argument_helper_entries ||
+      !context.single_x_expression_helper_entries) {
+    return;
+  }
+
+  std::map<std::string, SingleXExpressionPlanObservation> observations;
+  collect_single_x_expression_plan_observations(context, program.body, observations);
+  for (const V2Rule& rule : program.rules)
+    collect_single_x_expression_plan_observations(context, rule.body, observations);
+
+  for (const auto& [key, observation] : observations) {
+    const auto use_count = context.expression_use_counts.find(key);
+    if (!observation.initialized || observation.candidates.empty() ||
+        use_count == context.expression_use_counts.end() ||
+        observation.observed_uses != use_count->second) {
+      continue;
+    }
+    const auto selected = std::min_element(
+        observation.candidates.begin(), observation.candidates.end(),
+        [&](const std::string& left, const std::string& right) {
+          const int left_position =
+              expression_identifier_read_position(observation.expression, left);
+          const int right_position =
+              expression_identifier_read_position(observation.expression, right);
+          return left_position != right_position ? left_position < right_position
+                                                 : left < right;
+        });
+    context.expression_helper_single_x_plans[key] = *selected;
+  }
+}
+
 bool stack_resident_expression_requires_register_materialization(
     LoweringContext& context, const Expression& expression,
     const std::vector<std::string>& temps) {
@@ -40805,6 +41026,23 @@ bool lower_current_x_expression_helper_stack_entry_call(
       context.expression_helper_regular_call_sites[helper.key] != 0) {
     return false;
   }
+  const auto planned = context.expression_helper_single_x_plans.find(helper.key);
+  if (planned != context.expression_helper_single_x_plans.end()) {
+    const std::string& name = planned->second;
+    if (!context.stack_only_state_fields.contains(name) &&
+        x_holds_identifier(context, name) &&
+        expression_helper_stack_entry_body(context, expression, {name}).has_value() &&
+        lower_stack_argument_expression_helper_call(context, expression, {name}, line)) {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "expression-helper-single-x-entry",
+          .detail = "Used the whole-program one-argument stack ABI for " +
+                    expression_to_source(expression) + " with " + name +
+                    " already available in X.",
+      });
+      return true;
+    }
+    return false;
+  }
   for (const auto& [name, unused_register] : context.register_index_by_name) {
     (void)unused_register;
     if (context.stack_only_state_fields.contains(name) || !x_holds_identifier(context, name))
@@ -42802,6 +43040,10 @@ bool lower_stored_assignment_helper_entry(LoweringContext& context,
   const bool single_x_reorder_only = !context.stack_resident_temps;
   if (existing != context.expression_helper_stack_entries.end()) {
     temps = existing->second.temps;
+  } else if (const auto planned =
+                 context.expression_helper_single_x_plans.find(helper->key);
+             planned != context.expression_helper_single_x_plans.end()) {
+    temps = {planned->second};
   } else if (context.single_x_expression_helper_entries) {
     const auto assignment_target_name = [&](std::size_t index)
         -> std::optional<std::string> {
@@ -43052,6 +43294,11 @@ bool lower_single_stored_assignment_helper_entry(
   if (helper == nullptr)
     return false;
   const std::vector<std::string> temps{target.name};
+  const auto planned = context.expression_helper_single_x_plans.find(helper->key);
+  if (planned != context.expression_helper_single_x_plans.end() &&
+      planned->second != target.name) {
+    return false;
+  }
   const auto existing = context.expression_helper_stack_entries.find(helper->key);
   if ((existing != context.expression_helper_stack_entries.end() &&
        existing->second.temps != temps) ||
@@ -44174,6 +44421,16 @@ bool lower_expression_helpers(LoweringContext& context) {
                     std::to_string(stack_entry_it->second.call_sites) +
                     " stack-resident call site(s).",
       });
+      const auto planned = context.expression_helper_single_x_plans.find(helper.key);
+      if (planned != context.expression_helper_single_x_plans.end() &&
+          stack_entry_it->second.temps == std::vector<std::string>{planned->second}) {
+        context.optimizations.push_back(OptimizationReport{
+            .name = "expression-helper-single-x-whole-program-plan",
+            .detail = "Selected " + planned->second +
+                      " as the common current-X input for every proved call site of " +
+                      expression_to_source(helper.expr) + ".",
+        });
+      }
       continue;
     }
     context.emitter.emit_label(
@@ -52977,6 +53234,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
         plan_spatial_line_count_preloads(context, *ast.v2);
         trace_stage("metadata-near-any");
         collect_near_any_helper_stats(context, *ast.v2);
+        trace_stage("metadata-plan-single-x-expression-helpers");
+        plan_single_x_expression_helper_entries(context, *ast.v2);
       }
       if (can_attempt_lowering) {
         trace_stage("lower-main-functions-helpers");
