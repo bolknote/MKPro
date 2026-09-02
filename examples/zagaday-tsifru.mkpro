@@ -1,20 +1,19 @@
 // Neural number-guessing game published by Hs On in the Telegram chat
 // "МК61 / МК52 / МК85" on 2026-07-14.
 //
-// Semantic counterpart of the final 105-cell handwritten revision in
-// games/logic/zagaday-tsifru-hs-on.txt. Seven previous octal digits form 21
-// binary inputs. Three binary threshold neurons predict bits 4, 2, and 1.
+// Semantic counterpart of Sergey Anvarov's corrected 105-cell handwritten
+// revision in games/logic/zagaday-tsifru-hs-on.txt. Seven previous octal digits
+// form 21 binary inputs. Three binary threshold neurons predict bits 4, 2, and 1.
 
 program ZagadayTsifru {
   const FULL_BITS = 7.7777777
   const PUBLISHED_THRESHOLD_FACTOR = 0.054000098
-  const HISTORY_SHIFT = 1.9999996
 
   state {
     expected_mode_only("grd")
 
     weights: packed[1..3] = [0, 0, 0]
-    history: packed = 0
+    history: packed = 8
 
     score: counter -999..999 = 0
     prediction: counter 0..7 = 0
@@ -60,8 +59,8 @@ program ZagadayTsifru {
     }
 
     // The semantic source uses two ordinary resumable screens. The handwritten
-    // listing packs the same phases into "digit ПП, prediction С/П" by keeping
-    // the entered digit on the calculator stack.
+    // listing packs the score and preceding prediction into X and Y at one stop,
+    // accepts the next digit with С/П, and keeps the next prediction hidden.
     show(score)
     player = entered(0, 7)
     show(prediction)
@@ -82,15 +81,16 @@ program ZagadayTsifru {
         bit_and(bit_xor(player, prediction), ones) / ones * FULL_BITS
       )
       weights[neuron_index] = bit_xor(
-        weights[neuron_index],
-        bit_and(correction, sin(correction))
+        bit_and(correction, sin(correction)),
+        weights[neuron_index]
       )
       ones /= 2
       neuron_index--
     }
 
-    // The 1.9999996 carry trick inserts the new digit and advances the packed
-    // seven-turn history without a separately initialized history register.
-    history = bit_or(history + HISTORY_SHIFT, player)
+    // Adding 2 to the anchored 8.NNNNNNN value normalizes it to 10.NNNNNNN,
+    // which shifts the seven payload digits exactly before the new digit is
+    // merged. Unlike the old 1.9999996 carry, an all-zero history stays zero.
+    history = bit_or(history + 2, 10 + player)
   }
 }

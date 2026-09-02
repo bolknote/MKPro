@@ -161,7 +161,7 @@ void example_sizes_match_typescript_baselines() {
       {"tiny-game", 23},
       {"treasure-hunter-2", 98},
       {"wumpus", 105},
-      {"zagaday-tsifru", 104},
+      {"zagaday-tsifru", 105},
   };
   const std::map<std::string, std::size_t> PENDING_BASELINE{
       {"nekromant", 133},
@@ -220,8 +220,8 @@ void example_sizes_match_typescript_baselines() {
       continue;
     if (name == "zagaday-tsifru") {
       const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
-      require(result.steps.size() == 104U,
-              "final zagaday-tsifru semantic source should fit in addresses 00..A3");
+      require(result.steps.size() == 105U,
+              "corrected zagaday-tsifru semantic source should fit in addresses 00..A4");
       require(!has_optimization(result, "borrowed-entry-phase-selector"),
               "zagaday-tsifru must not borrow R9 only for its first iteration: input overwrites "
               "R9 before the program loops back to the same branch");
@@ -235,14 +235,10 @@ void example_sizes_match_typescript_baselines() {
                   std::none_of(result.steps.begin(), result.steps.end(),
                                [](const ResolvedStep& step) { return step.opcode == 0x3b; }),
               "final zagaday-tsifru learning should contain F sin and no K random command");
-      require(std::any_of(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
-                return step.comment == "set correction";
-              }) &&
-                  std::any_of(result.steps.begin(), result.steps.end(),
-                              [](const ResolvedStep& step) {
-                                return step.comment == "recall correction";
-                              }),
-              "final zagaday-tsifru should materialize the deterministic correction mask once");
+      require(std::none_of(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
+                return step.comment == "set correction" || step.comment == "recall correction";
+              }),
+              "corrected zagaday-tsifru should keep the deterministic correction in X");
       require(std::none_of(result.steps.begin(), result.steps.end(),
                            [](const ResolvedStep& step) {
                              return step.comment == "packed BCD remove anchor";
@@ -280,8 +276,8 @@ void example_sizes_match_typescript_baselines() {
         }
       }
       const std::array<std::string, 5> expected_ui_comments{
-          "display __inline_show_65_0 source", "show __inline_show_65_0", "set player",
-          "display __inline_show_67_1 source", "show __inline_show_67_1"};
+          "display __inline_show_64_0 source", "show __inline_show_64_0", "set player",
+          "display __inline_show_66_1 source", "show __inline_show_66_1"};
       bool expected_ui_sequence = false;
       for (std::size_t start = 0; start + expected_ui_comments.size() <= result.steps.size();
            ++start) {

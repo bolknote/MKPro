@@ -131,45 +131,36 @@ std::vector<int> parse_final_listing(const std::filesystem::path& path) {
 
 std::vector<int> setup_program() {
   return {
-      // R6 = 1.9999996
-      0x01,
-      0x0a,
-      0x09,
-      0x09,
-      0x09,
-      0x09,
-      0x09,
-      0x09,
-      0x06,
-      0x46,
-      // R7 = 5.4000098-02
+      // Ra = the dark 5.40000A8-02 value:
+      // 55400003 B-up 80000008 K-OR K-frac X->R0 K-R->X0 K-R->X0 R0 VP 1 /-/
       0x05,
-      0x0a,
+      0x05,
       0x04,
       0x00,
       0x00,
       0x00,
       0x00,
-      0x09,
+      0x03,
+      0x0e,
       0x08,
-      0x0c,
-      0x02,
-      0x0b,
-      0x47,
-      // Rb = the dark A8 selector: 557 K INV K {x} VP 2
-      0x05,
-      0x05,
-      0x07,
-      0x3a,
-      0x35,
-      0x0c,
-      0x02,
-      0x4b,
-      // Rc = 10
-      0x01,
       0x00,
-      0x4c,
-      // Rd = 7.7777777
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x08,
+      0x38,
+      0x35,
+      0x40,
+      0xd0,
+      0xd0,
+      0x60,
+      0x0c,
+      0x01,
+      0x0b,
+      0x4a,
+      // R4 = -7.7777777. The sign is the prediction-loop sentinel.
       0x07,
       0x0a,
       0x07,
@@ -179,7 +170,34 @@ std::vector<int> setup_program() {
       0x07,
       0x07,
       0x07,
-      0x4d,
+      0x0b,
+      0x44,
+      // R9 = 9.9999999-02: bit mask, approximate 1/10, and target 99.
+      0x09,
+      0x0a,
+      0x09,
+      0x09,
+      0x09,
+      0x09,
+      0x09,
+      0x09,
+      0x09,
+      0x0c,
+      0x00,
+      0x02,
+      0x0b,
+      0x49,
+      // Rb = 11: duplicated player digit and return target 11.
+      0x01,
+      0x01,
+      0x4b,
+      // Reproducible cold start: clear weights, history, and previous prediction.
+      0x0d,
+      0x41,
+      0x42,
+      0x43,
+      0x48,
+      0x4e,
       0x50,
   };
 }
@@ -192,81 +210,173 @@ void require_stop(emulator::MK61& calculator, const std::string& phase, int max_
                            ", frames=" + std::to_string(run.frames));
 }
 
-std::vector<int> step_opcodes(const CompileResult& result) {
+std::vector<int> step_opcodes(const std::vector<ResolvedStep>& steps) {
   std::vector<int> opcodes;
-  opcodes.reserve(result.steps.size());
-  for (const ResolvedStep& step : result.steps)
+  opcodes.reserve(steps.size());
+  for (const ResolvedStep& step : steps)
     opcodes.push_back(step.opcode);
   return opcodes;
 }
 
+std::vector<int> step_opcodes(const CompileResult& result) {
+  return step_opcodes(result.steps);
+}
+
 } // namespace
 
-void emulator_zagaday_tsifru_final_revision_preserves_ui() {
+void emulator_zagaday_tsifru_corrected_revision_preserves_history_and_ui() {
   const std::filesystem::path root = fixture_root();
   const std::vector<int> listing =
       parse_final_listing(root / "games" / "logic" / "zagaday-tsifru-hs-on.txt");
 
-  require(listing.at(0) == 0x52 && listing.at(1) == 0x00 && listing.at(2) == 0x45,
-          "final listing should start with V/O, 0, X->R5");
-  require(listing.at(54) == 0x44, "final listing address 54 must store the entered digit in R4");
-  require(listing.at(81) == 0x1c && std::count(listing.begin(), listing.end(), 0x1c) == 1 &&
+  require(listing.at(0) == 0x52 && listing.at(1) == 0x00 && listing.at(2) == 0x4c,
+          "corrected listing should start with V/O, 0, X->Rc");
+  require(listing.at(23) == 0x13 && listing.at(28) == 0x12,
+          "R9 should replace multiplication by ten, then Ra should multiply by the threshold");
+  require(listing.at(37) == 0x6e && listing.at(38) == 0x6c && listing.at(39) == 0x50,
+          "the stop should expose score in X and the preceding prediction in Y");
+  require(listing.at(47) == 0x67 && listing.at(48) == 0x4e,
+          "the calculated R7 prediction must be copied into Re before comparison");
+  require(listing.at(77) == 0x1c && std::count(listing.begin(), listing.end(), 0x1c) == 1 &&
               std::count(listing.begin(), listing.end(), 0x3b) == 0,
-          "final listing should replace K random with one F sin command");
-  require(listing.at(95) == 0x00 && listing.at(96) == 0x00 && listing.at(97) == 0x00 &&
-              listing.at(98) == 0x09 && listing.at(104) == 0x13,
-          "final listing should preserve its zero padding and 98..A4 helper tail");
+          "corrected listing should retain deterministic F sin learning and no K random");
+  require(listing.at(87) == 0x68 && listing.at(88) == 0x64 && listing.at(89) == 0x35 &&
+              listing.at(90) == 0x37 && listing.at(91) == 0x02 && listing.at(92) == 0x10 &&
+              listing.at(93) == 0x60 && listing.at(94) == 0x38 && listing.at(95) == 0x48,
+          "addresses 87..95 should mask, shift, and merge history without 1.9999996");
+  require(listing.at(96) == 0x80 && listing.at(97) == 0x00 && listing.at(98) == 0x00 &&
+              listing.at(99) == 0x69 && listing.at(104) == 0x13,
+          "addresses 97 and 98 should be free before the 99..A4 helper tail");
+  const std::vector<int> r6_operations{0x46, 0x66, 0x76, 0x86, 0x96, 0xa6, 0xb6, 0xc6, 0xd6, 0xe6};
+  require(std::none_of(listing.begin(), listing.end(),
+                       [&](int opcode) {
+                         return std::find(r6_operations.begin(), r6_operations.end(), opcode) !=
+                                r6_operations.end();
+                       }),
+          "R6 should remain completely free");
 
   emulator::MK61 calculator({.extended = true, .angle_mode = "grad"});
   const emulator::ProgramLoadResult setup_loaded = calculator.load_program(setup_program());
   require(setup_loaded.diagnostics.empty(), "Zagaday Tsifru setup should load");
   calculator.press_sequence({"В/О", "С/П"});
-  require_stop(calculator, "setup", 10000);
-  require(trim_ascii(calculator.read_register("6")) == "1,9999996" &&
-              trim_ascii(calculator.read_register("b")) == "85700," &&
-              trim_ascii(calculator.read_register("c")) == "10," &&
-              trim_ascii(calculator.read_register("d")) == "7,7777777",
-          "published setup should preload R6, dark Rb, Rc, and Rd exactly");
+  require_stop(calculator, "corrected setup", 20000);
+  const std::string dark_ra = trim_ascii(calculator.read_register("a"));
+  const std::string mask_r9 = trim_ascii(calculator.read_register("9"));
+  require(trim_ascii(calculator.read_register("4")) == "-7,7777777" &&
+              dark_ra.starts_with("5,40000-8") && dark_ra.ends_with("-2") &&
+              mask_r9.starts_with("9,9999999") && mask_r9.ends_with("-2") &&
+              trim_ascii(calculator.read_register("b")).ends_with("11,"),
+          "corrected setup should preserve signed R4 and the exact dark Ra/R9/Rb values");
+  calculator.set_register("6", "6.1234567");
+  const std::string free_r6 = trim_ascii(calculator.read_register("6"));
 
   const emulator::ProgramLoadResult loaded = calculator.load_program(listing);
-  require(loaded.diagnostics.empty(), "105-cell final listing should load without truncation");
+  require(loaded.diagnostics.empty(), "105-cell corrected listing should load without truncation");
   calculator.press_sequence({"В/О", "С/П"});
-  require_stop(calculator, "initial score");
-  require(trim_ascii(calculator.display_text()) == "0,",
-          "final listing should start with score zero");
+  require_stop(calculator, "initial score and preceding prediction");
+  require(trim_ascii(calculator.display_text()) == "0," &&
+              trim_ascii(calculator.read_register("y")) == "0," &&
+              calculator.program_counter() == "40",
+          "corrected listing should stop with score in X and preceding prediction in Y");
 
-  calculator.input_number("3", true);
-  calculator.press("ПП");
-  require_stop(calculator, "first positive prediction", 1000);
-  require(trim_ascii(calculator.display_text()) == "0," && calculator.program_counter() == "43",
-          "digit PP should reveal the first positive prediction and wait for C/P");
-  calculator.press("С/П");
-  require_stop(calculator, "score after a miss");
-  require(trim_ascii(calculator.display_text()) == "1," &&
-              trim_ascii(calculator.read_register("5")) == "1,",
-          "a missed prediction should add one point");
+  for (int turn = 1; turn <= 9; ++turn) {
+    calculator.input_number("0", true);
+    calculator.press("С/П");
+    require_stop(calculator, "all-zero turn " + std::to_string(turn));
+    const std::string expected_score = std::to_string(-7 * turn) + ",";
+    require(trim_ascii(calculator.display_text()) == expected_score &&
+                trim_ascii(calculator.read_register("c")) == expected_score &&
+                trim_ascii(calculator.read_register("y")) == "0," &&
+                trim_ascii(calculator.read_register("e")) == "0," &&
+                trim_ascii(calculator.read_register("8")) == "8,",
+            "an all-zero history must stay exactly zero and score each matching prediction");
+  }
 
-  calculator.input_number("7", true);
-  calculator.press("ПП");
-  require_stop(calculator, "second positive prediction", 1000);
-  require(trim_ascii(calculator.display_text()) == "7,",
-          "the final listing should show prediction 7 without the old minus sign");
-  calculator.press("С/П");
-  require_stop(calculator, "score after a hit");
-  require(trim_ascii(calculator.display_text()) == "-6," &&
-              trim_ascii(calculator.read_register("5")) == "-6,",
-          "a matched prediction should subtract seven points");
+  const std::vector<std::string> shifted_histories{"8,1",     "8,21",     "8,321",    "8,4321",
+                                                   "8,54321", "8,654321", "8,7654321"};
+  for (int digit = 1; digit <= 7; ++digit) {
+    calculator.input_number(std::to_string(digit), true);
+    calculator.press("С/П");
+    require_stop(calculator, "mixed-history turn " + std::to_string(digit));
+    require(trim_ascii(calculator.read_register("8")) ==
+                shifted_histories.at(static_cast<std::size_t>(digit - 1)),
+            "new history digits should be inserted from the left");
+    require(trim_ascii(calculator.display_text()) == trim_ascii(calculator.read_register("c")) &&
+                trim_ascii(calculator.read_register("y")) ==
+                    trim_ascii(calculator.read_register("e")),
+            "each stop should expose score in X and the used prediction in Y");
+  }
+  const std::vector<std::pair<std::string, std::string>> aliased_inputs{
+      {"8", "8,0765432"}, {"9", "8,1076543"}};
+  for (const auto& [input, expected_history] : aliased_inputs) {
+    calculator.input_number(input, true);
+    calculator.press("С/П");
+    require_stop(calculator, "aliased input " + input);
+    require(trim_ascii(calculator.read_register("8")) == expected_history,
+            "inputs 8 and 9 should be treated as 0 and 1 respectively");
+  }
+  require(trim_ascii(calculator.read_register("6")) == free_r6,
+          "gameplay must leave the free R6 register untouched");
 
   const std::string semantic_source = read_text(root / "examples" / "zagaday-tsifru.mkpro");
   const CompileResult semantic = compile_source(semantic_source);
-  require(semantic.implemented && semantic.diagnostics.empty() && semantic.steps.size() == 104U,
-          "final Zagaday Tsifru semantic source should compile into the MK-61 window");
+  require(semantic.implemented && semantic.diagnostics.empty() && semantic.steps.size() == 105U,
+          "corrected Zagaday Tsifru semantic source should compile into the MK-61 window");
   const std::vector<int> semantic_opcodes = step_opcodes(semantic);
   require(std::count(semantic_opcodes.begin(), semantic_opcodes.end(), 0x1c) == 1 &&
               std::count(semantic_opcodes.begin(), semantic_opcodes.end(), 0x3b) == 0 &&
-              semantic_source.find("history = bit_or(history + HISTORY_SHIFT, player)") !=
+              semantic_source.find("HISTORY_SHIFT") == std::string::npos &&
+              semantic_source.find("history = bit_or(history + 2, 10 + player)") !=
                   std::string::npos,
-          "semantic source should retain deterministic sine learning and the new history shift");
+          "semantic source should retain deterministic learning and the corrected history shift");
+
+  require(semantic.setup_program.has_value(), "semantic source should provide a setup program");
+  const auto history_store =
+      std::find_if(semantic.steps.begin(), semantic.steps.end(), [](const ResolvedStep& step) {
+        return step.comment == "set history" && step.opcode >= 0x40 && step.opcode <= 0x4e;
+      });
+  require(history_store != semantic.steps.end(),
+          "semantic listing should expose its allocated history register");
+  const int history_register_index = history_store->opcode & 0x0f;
+  const std::string history_register =
+      history_register_index < 10
+          ? std::to_string(history_register_index)
+          : std::string(1, static_cast<char>('a' + history_register_index - 10));
+  emulator::MK61 semantic_calculator({.extended = true, .angle_mode = "grad"});
+  const emulator::ProgramLoadResult semantic_setup =
+      semantic_calculator.load_program(step_opcodes(semantic.setup_program->steps));
+  require(semantic_setup.diagnostics.empty(), "semantic setup should load");
+  semantic_calculator.press_sequence({"В/О", "С/П"});
+  require_stop(semantic_calculator, "semantic setup", 20000);
+  const emulator::ProgramLoadResult semantic_main =
+      semantic_calculator.load_program(semantic_opcodes);
+  require(semantic_main.diagnostics.empty(), "105-cell semantic program should load");
+  semantic_calculator.press_sequence({"В/О", "С/П"});
+  require_stop(semantic_calculator, "semantic initial score");
+  for (int turn = 1; turn <= 2; ++turn) {
+    semantic_calculator.input_number("0", true);
+    semantic_calculator.press("С/П");
+    require_stop(semantic_calculator, "semantic zero prediction " + std::to_string(turn));
+    require(trim_ascii(semantic_calculator.display_text()) == "0,",
+            "semantic zero history should predict zero");
+    semantic_calculator.press("С/П");
+    require_stop(semantic_calculator, "semantic zero score " + std::to_string(turn));
+    require(trim_ascii(semantic_calculator.read_register(history_register)) == "8,",
+            "semantic history must remain exactly zero after a zero input");
+  }
+  for (int digit = 1; digit <= 7; ++digit) {
+    semantic_calculator.input_number(std::to_string(digit), true);
+    semantic_calculator.press("С/П");
+    require_stop(semantic_calculator, "semantic mixed prediction " + std::to_string(digit));
+    semantic_calculator.press("С/П");
+    require_stop(semantic_calculator, "semantic mixed score " + std::to_string(digit));
+    const std::string actual_history =
+        trim_ascii(semantic_calculator.read_register(history_register));
+    const std::string& expected_history = shifted_histories.at(static_cast<std::size_t>(digit - 1));
+    require(actual_history == expected_history,
+            "semantic history should insert mixed digits from the left: expected=" +
+                expected_history + ", actual=" + actual_history);
+  }
 
   for (int ones = 0; ones <= 21; ++ones) {
     const int published = static_cast<int>(std::floor((ones + 8) * 0.054000098));
