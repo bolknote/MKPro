@@ -598,6 +598,21 @@ void pass_pipeline_matches_initial_typescript_contract() {
   }
 
   {
+    IrOp charge_entry = call_to("skeleton");
+    charge_entry.meta.comment =
+        "callee-hole charge-entry call; proof=skeleton; selector=e";
+    const core::passes::PassResult result =
+        run_tail_call({charge_entry, ret(), label("skeleton"), ret()});
+    require(result.applied == 1,
+            "tail-call did not lower a proved callee-hole charge entry");
+    require(result.ops.at(0).kind == IrKind::Jump,
+            "callee-hole charge entry did not become a tail jump");
+    require(result.ops.at(0).meta.comment ==
+                "callee-hole charge-entry tail transfer; proof=skeleton; selector=e",
+            "tail-call did not preserve the callee-hole proof as a typed tail transfer");
+  }
+
+  {
     const core::passes::PassResult result = run_tail_call(
         {call_to("proc"), jump_to("cont"), label("cont"), plain(0x31), label("proc"), ret()});
     require(result.applied == 2, "tail-call did not rewrite call and proc return continuation");

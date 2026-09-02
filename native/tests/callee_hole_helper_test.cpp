@@ -516,6 +516,28 @@ void callee_hole_helper_matches_direct_call_semantics() {
       "callee-hole charge-entry call; proof=proof_entry; selector=e; "
       "preloaded R7=20 indirect-target=20 indirect flow";
 
+  CompileResult tail_charge_entry_transfers = natural_charge_entry_calls;
+  tail_charge_entry_transfers.optimizations.push_back(
+      OptimizationReport{.name = "tail-call-lowering"});
+  for (const std::size_t index : {2U, 7U}) {
+    tail_charge_entry_transfers.steps.at(index).opcode = 0x87;
+    tail_charge_entry_transfers.steps.at(index).comment =
+        "callee-hole charge-entry tail transfer; proof=proof_entry; selector=e; "
+        "preloaded R7=20 indirect-target=20 indirect flow";
+  }
+  require(optimizer_static_proof_gate_accepts_for_testing(gate_options,
+                                                           tail_charge_entry_transfers),
+          "callee-hole gate should compose a proved charge-entry tail transfer");
+  CompileResult unproved_tail_charge_entry = tail_charge_entry_transfers;
+  unproved_tail_charge_entry.optimizations.pop_back();
+  require(!optimizer_static_proof_gate_accepts_for_testing(gate_options,
+                                                            unproved_tail_charge_entry),
+          "callee-hole gate should reject a tail-transfer marker without tail-call proof");
+  tail_charge_entry_transfers.steps.at(2).opcode = 0x31;
+  require(!optimizer_static_proof_gate_accepts_for_testing(gate_options,
+                                                            tail_charge_entry_transfers),
+          "callee-hole gate should reject a tail-transfer marker on a falling-through opcode");
+
   CompileResult typed_terminal_entry = natural_charge_entry_calls;
   typed_terminal_entry.steps.at(8).opcode = 0xb0;
   typed_terminal_entry.steps.at(8).mnemonic = "К X->П 0";

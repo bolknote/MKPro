@@ -304,6 +304,12 @@ IrOp jump_from_call(const IrOp& op, std::string_view replacement, std::string fa
     out.meta.comment =
         replace_comment_prefix(op.meta.comment, "call function", replacement, std::move(fallback));
   }
+  constexpr std::string_view kChargeEntryCall = "callee-hole charge-entry call; ";
+  constexpr std::string_view kChargeEntryTailTransfer =
+      "callee-hole charge-entry tail transfer; ";
+  if (out.meta.comment.has_value() && starts_with(*out.meta.comment, kChargeEntryCall)) {
+    out.meta.comment->replace(0, kChargeEntryCall.size(), kChargeEntryTailTransfer);
+  }
   out.target_meta = op.target_meta;
   out.target_meta.comment =
       replace_comment_prefix(out.target_meta.comment, "call function", "proc call", "proc call");

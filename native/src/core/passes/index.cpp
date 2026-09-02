@@ -62,6 +62,21 @@ struct RunOnIrResult {
   std::vector<PreloadReport> preloads;
 };
 
+PassResult phase_ordered_callee_hole(const std::vector<IrOp>& ops,
+                                     const PassContext& context) {
+  if (!context.options.defer_return_suffix_until_callee_hole)
+    return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
+  return callee_hole_straight_line_helper(ops, context);
+}
+
+IrPass phase_ordered_callee_hole_pass() {
+  return IrPass{
+      .name = "phase-ordered-callee-hole",
+      .run = phase_ordered_callee_hole,
+      .layout_safe = false,
+  };
+}
+
 std::vector<MachineItem> attach_finalization_flow_identity_labels(
     const std::vector<MachineItem>& items) {
   std::set<std::string> names;
@@ -243,6 +258,11 @@ const std::vector<IrPass>& pass_pipeline() {
       // address-sensitive forms have appeared.
       early_exact_stack_dead_store_elimination_pass(),
       redundant_prologue_elimination_pass(),
+      // A measured candidate may extract a generic call-hole skeleton before
+      // suffix and tail-call lowering. This preserves explicit call/return
+      // continuations long enough for return-suffix sharing; ordinary pass
+      // order is unchanged for every other candidate.
+      phase_ordered_callee_hole_pass(),
       // Run the transactional sum/difference suffix canonicalizer before
       // continuation composition and tail-call lowering erase the explicit
       // `call; return` boundary. Later opportunities created by other passes

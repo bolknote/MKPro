@@ -56183,6 +56183,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.callee_hole_straight_line_helper ||
          options.disable_interprocedural_opts || options.coalesce_copies ||
          options.disable_return_suffix_gadget ||
+         options.defer_return_suffix_until_callee_hole ||
          options.aggressive_indirect_call_threshold || options.aggressive_indirect_call ||
          options.dual_use_constant_indirect_flow || options.aggressive_post_layout_indirect_flow ||
          options.preloaded_indirect_flow || options.forward_indirect_flow ||
@@ -57010,6 +57011,8 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";return_stack_script=" << options.return_stack_script
       << ";disable_return_stack_script=" << options.disable_return_stack_script
       << ";disable_return_suffix_gadget=" << options.disable_return_suffix_gadget
+      << ";defer_return_suffix_until_callee_hole="
+      << options.defer_return_suffix_until_callee_hole
       << ";maximum_natural_target_anchors=" << options.maximum_natural_target_anchors
       << ";preloaded_indirect_flow=" << options.preloaded_indirect_flow
       << ";forward_indirect_flow=" << options.forward_indirect_flow
@@ -57134,7 +57137,8 @@ int estimated_candidate_search_cost_ms(std::string_view name) {
     return 20;
   if (name == "packed-score-accumulator-reverse-suffix-free-layout" ||
       name == "packed-score-single-use-shared-tail" ||
-      name == "packed-score-single-use-shared-tail-composed")
+      name == "packed-score-single-use-shared-tail-composed" ||
+      name == "packed-score-callee-hole-then-return-suffix")
     return 100;
   if (name == "fractional-constant-selector" ||
       name == "fractional-constant-selector-dead-int")
@@ -58023,6 +58027,8 @@ constexpr std::string_view kCalleeHoleCallMarker = "callee-hole indirect call;";
 constexpr std::string_view kCalleeHoleSkeletonCallMarker = "callee-hole skeleton call";
 constexpr std::string_view kCalleeHoleChargeMarker = "callee-hole selector-value=";
 constexpr std::string_view kCalleeHoleChargeEntryCallMarker = "callee-hole charge-entry call; ";
+constexpr std::string_view kCalleeHoleChargeEntryTailTransferMarker =
+    "callee-hole charge-entry tail transfer; ";
 constexpr std::string_view kCalleeHoleChargeEntryStoreMarker = "callee-hole charge-entry store; ";
 constexpr std::string_view kCalleeHoleEntryEqualityMarker =
     "callee-hole entry-X equivalence ";
@@ -58120,9 +58126,16 @@ bool callee_hole_charge_literal_precedes_store(const std::vector<ResolvedStep>& 
     reversed_digits.push_back(static_cast<char>('0' + digit.opcode));
     --index;
   }
-  return !reversed_digits.empty() &&
-         std::string(reversed_digits.rbegin(), reversed_digits.rend()) ==
-             std::to_string(charge.value);
+  if (reversed_digits.empty())
+    return false;
+  const std::string digits(reversed_digits.rbegin(), reversed_digits.rend());
+  try {
+    std::size_t consumed = 0;
+    const int value = std::stoi(digits, &consumed);
+    return consumed == digits.size() && value == charge.value;
+  } catch (const std::exception&) {
+    return false;
+  }
 }
 
 std::optional<std::string> callee_hole_proof_id_from_comment(
@@ -58523,18 +58536,25 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
   }
   std::set<std::string> poisoned;
   bool all_poisoned = false;
-  std::set<std::size_t> proved_charge_entry_calls;
+  std::set<std::size_t> proved_charge_entry_transfers;
   std::vector<std::size_t> charged_reuse_calls;
   for (std::size_t index = 0; index < steps.size(); ++index) {
     if (resolved_flow.address_operand.at(index))
       continue;
     const ResolvedStep& step = steps.at(index);
-    if (step.comment.has_value() && step.comment->starts_with(kCalleeHoleChargeEntryCallMarker)) {
+    const bool charge_entry_call =
+        step.comment.has_value() && step.comment->starts_with(kCalleeHoleChargeEntryCallMarker);
+    const bool charge_entry_tail_transfer =
+        step.comment.has_value() &&
+        step.comment->starts_with(kCalleeHoleChargeEntryTailTransferMarker);
+    if (charge_entry_call || charge_entry_tail_transfer) {
+      const std::string_view marker = charge_entry_tail_transfer
+                                          ? kCalleeHoleChargeEntryTailTransferMarker
+                                          : kCalleeHoleChargeEntryCallMarker;
       const std::optional<CalleeHoleChargeEntryMarker> call =
-          callee_hole_charge_entry_marker_from_comment(step.comment,
-                                                        kCalleeHoleChargeEntryCallMarker);
+          callee_hole_charge_entry_marker_from_comment(step.comment, marker);
       if (!call.has_value())
-        return reject("malformed charge-entry call marker at address " +
+        return reject("malformed charge-entry transfer marker at address " +
                       std::to_string(step.address));
       if (duplicate_charge_entries.contains(call->proof))
         return reject("duplicate charge-entry store for proof " + call->proof);
@@ -58545,6 +58565,8 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
                             steps.at(index - 1U).comment, options);
       const bool is_call = step.opcode == 0x53 ||
                            (step.opcode >= 0xa0 && step.opcode <= 0xae);
+      const bool is_tail_transfer =
+          step.opcode == 0x51 || (step.opcode >= 0x80 && step.opcode <= 0x8e);
       const bool reaches_entry =
           entry != charge_entries.end() && entry->second.second == call->register_name &&
           index < resolved_flow.successors.size() &&
@@ -58556,17 +58578,34 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
       if (!charge.has_value())
         return reject("charge-entry call has no selector charge at address " +
                       std::to_string(step.address));
-      if (!is_call)
+      if (charge_entry_call && !is_call)
         return reject("charge-entry marker is not attached to a call at address " +
                       std::to_string(step.address));
+      if (charge_entry_tail_transfer &&
+          (!is_tail_transfer || !has_optimization_named(optimizations, "tail-call-lowering"))) {
+        return reject("charge-entry tail-transfer marker is not backed by tail-call lowering at "
+                      "address " +
+                      std::to_string(step.address));
+      }
       if (!reaches_entry)
         return reject("charge-entry call does not resolve to its store at address " +
                       std::to_string(step.address));
-      if (!callee_hole_charge_literal_precedes_store(steps, index, *charge, options))
+      if (!callee_hole_charge_literal_precedes_store(steps, index, *charge, options)) {
+        std::string context;
+        const std::size_t begin = index > 3U ? index - 3U : 0U;
+        for (std::size_t previous = begin; previous < index; ++previous) {
+          if (!context.empty())
+            context += ",";
+          context += std::to_string(steps.at(previous).address) + ":" +
+                     std::to_string(steps.at(previous).opcode);
+          if (steps.at(previous).comment.has_value())
+            context += "[" + *steps.at(previous).comment + "]";
+        }
         return reject("charge-entry call is not preceded by its annotated literal at address " +
-                      std::to_string(step.address));
+                      std::to_string(step.address) + "; preceding=" + context);
+      }
       charged_values[call->register_name][charge->target].insert(charge->value);
-      proved_charge_entry_calls.insert(index);
+      proved_charge_entry_transfers.insert(index);
     }
     const std::optional<std::string> store_register = store_register_for_opcode(step.opcode);
     if (store_register.has_value()) {
@@ -58722,7 +58761,7 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
       if (std::find(successors.begin(), successors.end(), entry.first) == successors.end())
         continue;
       saw_predecessor = true;
-      if (!proved_charge_entry_calls.contains(source))
+      if (!proved_charge_entry_transfers.contains(source))
         return reject("charge-entry store has an unproved predecessor for proof " + proof);
     }
     if (!saw_predecessor)
@@ -70868,6 +70907,161 @@ void refresh_single_indirect_target_comment_addresses(
   }
 }
 
+bool refresh_callee_hole_late_selector_charge_comments(
+    std::vector<MachineItem>& items, const CompileOptions& options) {
+  std::map<std::string, int> label_addresses;
+  int address = 0;
+  for (const MachineItem& item : items) {
+    if (item.kind == MachineItemKind::Label) {
+      if (!label_addresses.emplace(item.name, address).second)
+        return false;
+    } else {
+      ++address;
+    }
+  }
+
+  struct SelectorRole {
+    std::string label;
+    core::LateBoundDecimalSelectorPart part;
+  };
+  const auto selector_role = [](const MachineItem& item)
+      -> std::optional<SelectorRole> {
+    std::optional<SelectorRole> selected;
+    const auto consider = [&](std::string_view prefix,
+                              core::LateBoundDecimalSelectorPart part,
+                              const CellRole& role) -> bool {
+      if (!role.starts_with(prefix))
+        return true;
+      const std::string label = role.substr(prefix.size());
+      if (label.empty() ||
+          (selected.has_value() &&
+           (selected->label != label || selected->part != part))) {
+        return false;
+      }
+      selected = SelectorRole{.label = label, .part = part};
+      return true;
+    };
+    for (const CellRole& role : item.roles) {
+      if (!consider("late-decimal-selector-high:",
+                    core::LateBoundDecimalSelectorPart::High, role) ||
+          !consider("late-decimal-selector-low:",
+                    core::LateBoundDecimalSelectorPart::Low, role) ||
+          !consider("late-decimal-selector-single:",
+                    core::LateBoundDecimalSelectorPart::Single, role)) {
+        return std::nullopt;
+      }
+    }
+    return selected;
+  };
+
+  for (MachineItem& item : items) {
+    if (!item.comment.has_value() ||
+        !item.comment->starts_with("callee-hole selector-value=")) {
+      continue;
+    }
+    const std::optional<SelectorRole> role = selector_role(item);
+    if (!role.has_value())
+      continue;
+    const auto target = label_addresses.find(role->label);
+    if (target == label_addresses.end() || target->second < 0 ||
+        target->second > 99 || item.kind != MachineItemKind::Op || item.raw) {
+      return false;
+    }
+    const int expected_digit =
+        role->part == core::LateBoundDecimalSelectorPart::High
+            ? target->second / 10
+            : target->second % 10;
+    if (item.opcode != expected_digit ||
+        (role->part == core::LateBoundDecimalSelectorPart::Single &&
+         target->second > 9)) {
+      return false;
+    }
+    const bool dead_scope =
+        item.comment->find("; selector-scope=dead") != std::string::npos;
+    item.comment = "callee-hole selector-value=" +
+                   std::to_string(target->second) + " indirect-target=" +
+                   std::to_string(target->second) +
+                   (dead_scope ? "; selector-scope=dead" : "");
+  }
+
+  // The same relayout also moves the leaf entries named by a callee-hole
+  // dispatch. Rebind the delivered multi-target CFG annotation from symbolic
+  // labels instead of retaining the pre-relayout numeric addresses.
+  constexpr std::string_view kLeafTargetsMarker = "leaf-targets=";
+  for (MachineItem& item : items) {
+    const std::optional<std::map<int, std::string>> leaves =
+        callee_hole_leaf_targets_from_comment(item.comment, options);
+    if (!leaves.has_value())
+      continue;
+    const std::size_t marker = item.comment->find(kLeafTargetsMarker);
+    const std::size_t values_begin = marker + kLeafTargetsMarker.size();
+    const std::size_t suffix = item.comment->find(';', values_begin);
+    std::string rebound;
+    for (const auto& [unused_address, label] : *leaves) {
+      (void)unused_address;
+      const auto target = label_addresses.find(label);
+      if (target == label_addresses.end())
+        return false;
+      if (!rebound.empty())
+        rebound += ',';
+      rebound += std::to_string(target->second) + ':' + label;
+    }
+    item.comment = item.comment->substr(0, values_begin) + rebound +
+                   (suffix == std::string::npos ? "" : item.comment->substr(suffix));
+  }
+
+  // A relayout can move a charged selector's fixed-point target after the
+  // literal itself has been rebound. Keep the reuse claim in lockstep with
+  // the authoritative indirect-target annotation. The final callee-hole gate
+  // still derives the charge inventory independently and rejects any claim
+  // that is not backed by an actual literal-to-register transfer.
+  for (MachineItem& item : items) {
+    if (item.kind != MachineItemKind::Op || item.raw || !item.comment.has_value())
+      continue;
+    const int family = item.opcode & 0xf0;
+    if (family != 0x80 && family != 0xa0)
+      continue;
+    const std::string register_name =
+        core::register_name_for_index(item.opcode & 0x0f);
+    const std::string marker =
+        "reused runtime-charged R" + register_name + "=";
+    const std::size_t value_begin = item.comment->find(marker);
+    if (value_begin == std::string::npos)
+      continue;
+    const std::size_t digits_begin = value_begin + marker.size();
+    std::size_t digits_end = digits_begin;
+    while (digits_end < item.comment->size() &&
+           std::isdigit(static_cast<unsigned char>(item.comment->at(digits_end)))) {
+      ++digits_end;
+    }
+    const std::optional<int> target =
+        indirect_target_from_comment(item.comment, options);
+    if (digits_end == digits_begin || !target.has_value())
+      return false;
+    item.comment->replace(digits_begin, digits_end - digits_begin,
+                          std::to_string(*target));
+  }
+  return true;
+}
+
+bool refresh_callee_hole_late_selector_charge_comments(
+    CompileResult& result, const CompileOptions& options) {
+  if (!refresh_callee_hole_late_selector_charge_comments(result.items, options))
+    return false;
+  std::size_t step_index = 0;
+  for (const MachineItem& item : result.items) {
+    if (item.kind == MachineItemKind::Label)
+      continue;
+    if (step_index >= result.steps.size())
+      return false;
+    result.steps.at(step_index++).comment = item.comment;
+  }
+  if (step_index != result.steps.size())
+    return false;
+  result.listing = combine_listing(result, address_space_model_for_options(options));
+  return true;
+}
+
 std::optional<CompileResult>
 apply_finalization_absolute_relayout(
     const CompileResult& selected, const CompileOptions& options,
@@ -71826,6 +72020,9 @@ apply_finalization_single_digit_selector_to_selected_result(
     return std::nullopt;
   }
   MachineItem& low = finalized.items.at(plan->low_digit_item);
+  const bool rebinds_callee_hole_charge =
+      low.comment.has_value() &&
+      low.comment->starts_with("callee-hole selector-value=");
   low.roles.erase(
       std::remove_if(low.roles.begin(), low.roles.end(), [](const CellRole& role) {
         return role.starts_with("late-decimal-selector-low:");
@@ -71847,6 +72044,9 @@ apply_finalization_single_digit_selector_to_selected_result(
   if (!rebound.diagnostics.empty())
     return std::nullopt;
   finalized.items = rebound.items;
+  if (rebinds_callee_hole_charge &&
+      !refresh_callee_hole_late_selector_charge_comments(finalized.items, options))
+    return std::nullopt;
   finalized.removed_cell_addresses.push_back(plan->leading_zero_address);
   finalized.applied = 1;
   finalized.optimizations.push_back(core::passes::AppliedOptimization{
@@ -73471,6 +73671,8 @@ CompileResult apply_finalization_fixed_point_to_selected_result(
       }
     };
 
+    accept(apply_finalization_zero_path_underflow_to_selected_result(
+        source, selected, candidate_options));
     accept(apply_finalization_dead_store_to_selected_result(
         source, selected, candidate_options));
     accept(apply_finalization_compiler_padding_to_selected_result(
@@ -73495,6 +73697,8 @@ CompileResult apply_finalization_fixed_point_to_selected_result(
     if (selected.steps.size() >= round_cells)
       break;
   }
+  refresh_callee_hole_late_selector_charge_comments(selected,
+                                                     candidate_options);
   return selected;
 }
 
@@ -73741,7 +73945,8 @@ CompileResult compile_source_for_optimizer_profile(
       }
     };
     consider_final_layout(options, false);
-    if (!options.disable_return_suffix_gadget) {
+    if (!options.disable_return_suffix_gadget &&
+        !options.defer_return_suffix_until_callee_hole) {
       CompileOptions suffix_free = options;
       suffix_free.disable_return_suffix_gadget = true;
       consider_final_layout(suffix_free, true);
@@ -74965,6 +75170,16 @@ CompileResult compile_source_for_optimizer_profile(
         "packed-score-single-use-shared-tail-composed",
         "Combined measured one-use shared-tail outlining with reverse procedure layout and "
         "generic callee-hole sharing");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.packed_score_accumulator_helpers = true;
+          candidate_options.proc_layout_strategy = "reverse";
+          candidate_options.callee_hole_straight_line_helper = true;
+          candidate_options.defer_return_suffix_until_callee_hole = true;
+        },
+        "packed-score-callee-hole-then-return-suffix",
+        "Compared the generic phase order that extracts a callee-hole skeleton before "
+        "canonicalizing shareable return suffixes inside it");
     if (allow_aggressive_post_layout) {
       add_candidate(
           [](CompileOptions& candidate_options) {
@@ -77149,13 +77364,15 @@ CompileResult compile_source_for_optimizer_profile(
         ++finalized_layout_attempts;
         CompileOptions finalized_options = finalist.options;
         // Dark-side suffix placement is a property of the finalized machine
-        // artifact, not of the lowering flags that happened to expose it. Run
-        // the expensive atomic proof for the best-ranked finalist of every
-        // overflowing program, while retaining the historical composed
-        // lowering trigger for later finalists. The ordinary sibling is still
-        // compiled below and wins whenever the dark layout is neutral or worse.
+        // artifact, not of the lowering flags that happened to expose it. A
+        // locally smaller pre-layout form must not monopolize that proof and
+        // evict a different lowering that becomes smaller only after layout.
+        // Keep the expensive search bounded, but compare the first two exact
+        // proof inputs. The ordinary sibling is still compiled below and wins
+        // whenever the dark layout is neutral or worse.
+        constexpr std::size_t kAtomicAbsoluteDarkFrontierWidth = 2U;
         const bool apply_atomic_absolute_dark_rescue =
-            finalization_index == 1U ||
+            finalization_index <= kAtomicAbsoluteDarkFrontierWidth ||
             (finalized_options.inline_floor_packed_row_expressions &&
              finalized_options.stack_ssa_function_entries &&
              finalized_options.branch_y_payload_forwarding);
@@ -77192,6 +77409,11 @@ CompileResult compile_source_for_optimizer_profile(
             finalized = std::move(ordinary);
             finalized_options = std::move(ordinary_options);
           }
+        }
+        if (finalization_index <= kAtomicAbsoluteDarkFrontierWidth &&
+            finalized.implemented) {
+          finalized = apply_finalization_fixed_point_to_selected_result(
+              source, std::move(finalized), finalized_options, options);
         }
         const auto accepted_equivalent = std::find_if(
             finalist_group.equivalents.begin(), finalist_group.equivalents.end(),

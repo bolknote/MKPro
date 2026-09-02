@@ -69,7 +69,7 @@
    01 | 41    | X→П 1                   | set best_score from X parameter
    02 | 08    | 8                       |
    03 | 40    | X→П 0                   | set slot
-   04 | 06    | 6                       | callee-hole selector-value=40 indirect-target=40
+   04 | 06    | 6                       | callee-hole selector-value=6 indirect-target=6
    05 | AC    | К ПП c                  | callee-hole charge-entry call; proof=__callee_hole_helper_0; selector=e; preloaded Rc=88888889 indirect-target=89 shifted-forward indirect flow
    06 | 15    | F 10ˣ                   | stack-carried packed digit pow10; callee-hole leaf entry __fn_mark_one
    07 | 61    | П→X 1                   | recall best_score
@@ -118,9 +118,9 @@
    50 | AB    | К ПП b                  | expr cell_mask(x, y); direct divergent dual-mode call; preloaded Rb=2.2600017E-1 indirect-target=17 indirect flow
    51 | 37    | К ∧                     | bit_and()
    52 | EA    | К x=0 a                 | false branch for ==; preloaded Ra=66 indirect-target=66 shifted-forward indirect flow
-   53 | 03 06 | 36                      | callee-hole selector-value=51 indirect-target=51
+   53 | 03 06 | 36                      | callee-hole selector-value=36 indirect-target=36
    55 | AC    | К ПП c                  | callee-hole charge-entry call; proof=__callee_hole_helper_0; selector=e; preloaded Rc=88888889 indirect-target=89 shifted-forward indirect flow
-   56 | AE    | К ПП e                  | packed_score accumulator helper; reused runtime-charged Re=51 indirect-target=36 direct flow
+   56 | AE    | К ПП e                  | packed_score accumulator helper; reused runtime-charged Re=36 indirect-target=36 direct flow
    57 | 61    | П→X 1                   | recall best_score
    58 | 36    | К max                   | max-assignment update
    59 | 41    | X→П 1                   | set best_score
@@ -156,16 +156,16 @@
    89 | 4E    | X→П e                   | callee-hole charge-entry store; proof=__callee_hole_helper_0; selector=e
    90 | 67    | П→X 7                   | recall lines_7
    91 | 63    | П→X 3                   | recall x
-   92 | AE    | К ПП e                  | callee-hole indirect call; proof=__callee_hole_helper_0; leaf-targets=40:__fn_mark_one,51:__packed_score_accumulator
+   92 | AE    | К ПП e                  | callee-hole indirect call; proof=__callee_hole_helper_0; leaf-targets=6:__fn_mark_one,36:__packed_score_accumulator
    93 | 66    | П→X 6                   | recall lines_6
    94 | 62    | П→X 2                   | recall y
-   95 | AE    | К ПП e                  | callee-hole indirect call; proof=__callee_hole_helper_0; leaf-targets=40:__fn_mark_one,51:__packed_score_accumulator
+   95 | AE    | К ПП e                  | callee-hole indirect call; proof=__callee_hole_helper_0; leaf-targets=6:__fn_mark_one,36:__packed_score_accumulator
    96 | 65    | П→X 5                   | recall lines_5
    97 | 63    | П→X 3                   | recall x
    98 | 62    | П→X 2                   | recall y
    99 | 10    | +                       | expr +
    A0 | AD    | К ПП d                  | proc call normalize; preloaded Rd=4.1200076E-1 indirect-target=76 indirect flow
-   A1 | AE    | К ПП e                  | callee-hole indirect call; proof=__callee_hole_helper_0; leaf-targets=40:__fn_mark_one,51:__packed_score_accumulator
+   A1 | AE    | К ПП e                  | callee-hole indirect call; proof=__callee_hole_helper_0; leaf-targets=6:__fn_mark_one,36:__packed_score_accumulator
    A2 | 64    | П→X 4                   | recall lines_4
    A3 | 63    | П→X 3                   | recall x
    A4 | 62    | П→X 2                   | recall y

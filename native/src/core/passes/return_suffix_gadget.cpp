@@ -58,12 +58,32 @@ bool has_shared_straight_line_helper_label(const std::vector<IrOp>& ops) {
   return false;
 }
 
+bool has_callee_hole_helper_label(const std::vector<IrOp>& ops) {
+  constexpr std::string_view kPrefix = "__callee_hole_helper_";
+  return std::any_of(ops.begin(), ops.end(), [kPrefix](const IrOp& op) {
+    return op.kind == IrKind::Label && op.name.starts_with(kPrefix);
+  });
+}
+
 bool is_shareable_return(const IrOp& op) {
   return op.kind == IrKind::Return && !has_rewrite_barrier(op);
 }
 
+bool has_late_decimal_selector_role(const IrOp& op) {
+  const auto contains_role = [](const std::vector<CellRole>& roles) {
+    return std::any_of(roles.begin(), roles.end(), [](const CellRole& role) {
+      return role.starts_with("late-decimal-selector-high:") ||
+             role.starts_with("late-decimal-selector-low:") ||
+             role.starts_with("late-decimal-selector-single:") ||
+             role.starts_with("late-decimal-selector-register:") ||
+             role == "late-decimal-selector-store";
+    });
+  };
+  return contains_role(op.meta.roles) || contains_role(op.target_meta.roles);
+}
+
 bool is_shareable_body_op(const IrOp& op) {
-  if (has_rewrite_barrier(op))
+  if (has_rewrite_barrier(op) || has_late_decimal_selector_role(op))
     return false;
   switch (op.kind) {
   case IrKind::Store:
@@ -93,7 +113,7 @@ bool is_callable_body_op(const IrOp& op) {
 }
 
 bool is_tail_call_gadget_body_op(const IrOp& op) {
-  if (has_rewrite_barrier(op))
+  if (has_rewrite_barrier(op) || has_late_decimal_selector_role(op))
     return false;
   switch (op.kind) {
   case IrKind::Store:
@@ -586,6 +606,10 @@ void merge_semantic_call_range(std::vector<IrOp>& ops, int target_start, int sou
 PassResult return_suffix_gadget(const std::vector<IrOp>& ops, const PassContext& context) {
   if (context.options.disable_return_suffix_gadget)
     return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
+  if (context.options.defer_return_suffix_until_callee_hole &&
+      !has_callee_hole_helper_label(ops)) {
+    return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
+  }
   if (has_numeric_outline_flow_target(ops))
     return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
   if (has_shared_straight_line_helper_label(ops))

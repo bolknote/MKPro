@@ -368,6 +368,10 @@ struct CompileOptions {
   bool return_stack_script = false;
   bool disable_return_stack_script = false;
   bool disable_return_suffix_gadget = false;
+  // Candidate-search phase ordering: let callee-hole extraction establish a
+  // shared skeleton before return-suffix canonicalization inspects that
+  // skeleton on the next fixed-point iteration.
+  bool defer_return_suffix_until_callee_hole = false;
   // Internal final-layout frontier control. Zero keeps every jointly proved
   // natural target; a positive value bounds simultaneous helper anchors so
   // downstream layout composition can compare locally non-dominating forms.
