@@ -28,9 +28,12 @@ a catalog path from a basename: read it from the manifest.
 
 1. Choose exactly one primary section.
 2. Put the `.txt` listing and `.md` description together in that section.
-3. Add one manifest row with the same section in both paths and in `section`.
-4. Keep tags sorted and use source or collection metadata for provenance.
-5. Run:
+3. Document all register initialization, switch settings, and the first launch
+   command. For emulator saves, distinguish required setup from incidental
+   saved state.
+4. Add one manifest row with the same section in both paths and in `section`.
+5. Keep tags sorted and use source or collection metadata for provenance.
+6. Run:
 
    ```sh
    node scripts/validate-games-catalog.cjs

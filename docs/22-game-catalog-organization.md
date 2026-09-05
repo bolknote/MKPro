@@ -104,6 +104,27 @@ Keeping each `.txt`/`.md` pair together preserves the common relative link from
 the description to its listing. A separate directory per entry is unnecessary
 until entries acquire additional local assets.
 
+## Imports from Emulator State
+
+An emulator save is not just a program listing. When an imported program needs
+register values, an angle-switch position, or a nonzero entry address, the
+companion Markdown card must say exactly how to prepare and start it.
+
+For stateful formats such as C3000 `.c3` files:
+
+- decode the saved `R0…Re` values instead of silently discarding them;
+- distinguish required new-game initialization from a transient snapshot left
+  after setup or play;
+- keep the source card's launch instructions, including the physical angle
+  switch and the first `БП`/`С/П` sequence;
+- if the source card omits preparation, recover it from the cited primary
+  source before publishing the entry, or state clearly that the program is not
+  yet runnable.
+
+The stack and indicator may be useful forensic evidence, but they are not a
+substitute for a documented new-game setup. A catalog entry should let someone
+enter the listing into a clean calculator and reach the first playable state.
+
 ## Relationship to the mk61-52.ru Filters
 
 The public catalog at `mk61-52.ru/games.html` provides a useful vocabulary, but

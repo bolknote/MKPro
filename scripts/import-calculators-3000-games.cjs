@@ -9,6 +9,8 @@ const OUT = path.resolve(
   process.argv[3] || path.join(__dirname, '../tmp/imports/calculators-3000'),
 );
 const SOURCE_PAGE = 'http://old-dos.ru/index.php?page=files&mode=files&do=show&id=4952';
+const TM_1988_04_ARCHIVE =
+  'http://arbinada.ddns.net/pmk-files/magazines/%D0%A2%D0%B5%D1%85%D0%BD%D0%B8%D0%BA%D0%B0%20%D0%BC%D0%BE%D0%BB%D0%BE%D0%B4%D0%B5%D0%B6%D0%B8%201985-1988%20%D0%9F%D0%9C%D0%9A.zip';
 const BOOK = 'Я. К. Трохименко, «Игры с микро-ЭВМ». Киев: «Техніка», 1986.';
 const DECODER = new TextDecoder('windows-1251');
 
@@ -101,6 +103,8 @@ const ENTRIES = [
     tags: ['vs-calculator'],
     source: C3000_SOURCE,
     sourceNote: 'Карточка программы в «Калькуляторах 3000» 6.2.',
+    snapshotNote:
+      'Это уже сгенерированная расстановка передатчиков, а не обязательные начальные константы. Для новой игры введите любое случайное восьмизначное число, как указано выше.',
   },
   {
     sourceFile: 'KosmPosadka.c3',
@@ -111,6 +115,8 @@ const ENTRIES = [
     tags: ['classic', 'space'],
     source: `Электроника БРП-4; ${C3000_SOURCE}`,
     sourceNote: '«Электроника БРП-4» (как указано в карточке C3000).',
+    snapshotNote:
+      'Большая часть снимка совпадает с лунным тестовым примером из карточки; `R2 = 2` — текущее рабочее состояние. Для нового сценария введите исходные данные по инструкции выше.',
   },
   {
     sourceFile: 'Шашки(Алексей Чувыров).C3',
@@ -121,6 +127,8 @@ const ENTRIES = [
     tags: ['variant', 'vs-calculator'],
     source: C3000_SOURCE,
     sourceNote: 'Программа и инструкция Алексея Чувырова в «Калькуляторах 3000» 6.2.',
+    snapshotNote:
+      'Снимок содержит уже подготовленную позицию в `R1`/`R2` и рабочие значения, оставшиеся после подготовки. Для новой партии выполните последовательность автора из раздела выше.',
   },
   {
     sourceFile: 'Шашки(Олег Баран).C3',
@@ -129,8 +137,37 @@ const ENTRIES = [
     author: 'Олег Баран',
     section: 'logic',
     tags: ['classic', 'magazine', 'variant', 'vs-calculator'],
-    source: `Техника — молодежи, 1988, № 4; ${C3000_SOURCE}`,
-    sourceNote: '«Техника — молодежи», 1988, № 4 (как указано в карточке C3000).',
+    source: `В. Алексеев, «Белые начинают... и проигрывают», Техника — молодежи, 1988, № 4, с. 48–49; ${TM_1988_04_ARCHIVE}; ${C3000_SOURCE}`,
+    sourceNote:
+      `В. Алексеев, «Белые начинают... и проигрывают», «Техника — молодежи», 1988, № 4, с. 48–49; [скан статьи](${TM_1988_04_ARCHIVE}).`,
+    preparation: [
+      'Переключатель `Р—Г` установить в положение `Р`.',
+      'Ввести счётные коэффициенты:',
+      '',
+      '`1111111 КИНВ хП4  1,0001 хП6  5 ВП 8 /-/ хП7  76 хП9  145 хПe  81 хПc  92 хПd`',
+      '',
+      'Вместо `76 хП9` журнал допускает `69 хП9`.',
+      '',
+      'В `Rb` нужен машинный ноль с показателем `02`. Один из вариантов его получения:',
+      '',
+      '`33 В↑ 99 К∨ К{x} ВП 2 хПb`',
+      '',
+      'Другой вариант из статьи: `333 В↑ 993 К⊕ К{x} ВП 2 хПb`.',
+      '',
+      'Ввести цифрограммы начальной позиции: `8,6731008 хП0`; для `R1` выполнить `8800888 В↑ 80000467 К∨ хП1` (на индикаторе будет `8,8008СЕ7`).',
+      '',
+      'Запуск: `Сх БП 16 С/П`. Примерно через 2,5 минуты ПМК выдаст номер шашки; положительное число означает ход вправо, отрицательное — влево.',
+      '',
+      'Каждый ход нужно отразить в цифрограмме двумя командами: снять шашку с исходного поля и поставить на новое. Код стороны: `0` — ПМК, `1` — игрок:',
+      '',
+      '`В/О <сторона> ПП <поле_откуда> /-/ С/П`',
+      '',
+      '`В/О <сторона> ПП <поле_куда> С/П`',
+      '',
+      'После хода игрока нажать `С/П`, чтобы ПМК начал ответный ход. Число `81` означает ввод резервной шашки ПМК на поле 13; его нужно подтвердить: `В/О 0 ПП 13 С/П`.',
+    ].join('\n'),
+    snapshotNote:
+      'В карточке C3000 регистры не были подготовлены; полная подготовка восстановлена по журнальному первоисточнику.',
   },
 ];
 
@@ -220,6 +257,14 @@ function decodeTextC3(buffer, filePath) {
   const machine = source.match(/^MachineFileName = "([^"]*)"\r?$/m)?.[1] || '';
   const hex = source.match(/^    Data = ([0-9A-F]+)\r?$/m)?.[1];
   if (!hex) throw new Error(`ProgramMemory.Data not found in ${filePath}`);
+  const processorBlob = (name) => {
+    const match = source.match(new RegExp(`^    ${name} = ([0-9A-F]+)\\r?$`, 'm'));
+    return match ? Buffer.from(match[1], 'hex') : null;
+  };
+  const processorInteger = (name) => {
+    const match = source.match(new RegExp(`^    ${name} = ([0-9A-F]+)\\r?$`, 'm'));
+    return match ? Number.parseInt(match[1], 16) : null;
+  };
   return {
     title: field('Title'),
     author: field('Author'),
@@ -227,6 +272,11 @@ function decodeTextC3(buffer, filePath) {
     description: normalizeDescription(field('Description')),
     machine,
     codes: trimUnusedCells([...Buffer.from(hex, 'hex')]),
+    state: decodeProcessorState(
+      processorBlob('Registers'),
+      processorInteger('IP'),
+      processorInteger('Angle'),
+    ),
   };
 }
 
@@ -245,6 +295,7 @@ function decodeBinaryC3(buffer, filePath) {
   if (dataStart + dataLength > buffer.length) {
     throw new Error(`Invalid ProgramMemory.Data length in ${filePath}`);
   }
+  const registersOffset = binaryMarkerOffset(buffer, 'Registers', dataStart + dataLength);
   return {
     title: binaryString(buffer, 'Title'),
     author: binaryString(buffer, 'Author'),
@@ -252,7 +303,65 @@ function decodeBinaryC3(buffer, filePath) {
     description: normalizeDescription(binaryString(buffer, 'Description')),
     machine: binaryString(buffer, 'MachineFileName'),
     codes: trimUnusedCells([...buffer.subarray(dataStart, dataStart + dataLength)]),
+    state: decodeProcessorState(
+      binaryBlobAt(buffer, registersOffset, 'Registers'),
+      binaryInteger(buffer, 'IP', dataStart + dataLength),
+      binaryInteger(buffer, 'Angle', registersOffset),
+    ),
   };
+}
+
+function binaryBlobAt(buffer, offset, name) {
+  const lengthOffset = offset + 1 + name.length;
+  const length = buffer.readUInt32LE(lengthOffset);
+  const start = lengthOffset + 4;
+  if (start + length > buffer.length) throw new Error(`Invalid ${name} field length`);
+  return buffer.subarray(start, start + length);
+}
+
+function binaryInteger(buffer, name, from = 0) {
+  const offset = binaryMarkerOffset(buffer, name, from);
+  return buffer.readUInt32LE(offset + 1 + name.length);
+}
+
+function decodeProcessorState(registerBytes, ip, angle) {
+  if (!registerBytes || registerBytes.length !== REGISTER_NAMES.length * 64) {
+    throw new Error('Invalid C3 processor register block');
+  }
+  return {
+    ip,
+    angle,
+    registers: REGISTER_NAMES.map((name, index) => ({
+      name: `R${name}`,
+      value: decodeC3Number(registerBytes.subarray(index * 64, (index + 1) * 64)),
+    })),
+  };
+}
+
+function decodeC3Number(bytes) {
+  const cells = Array.from({ length: 16 }, (_, index) => bytes.readUInt32LE(index * 4));
+  const digits = cells.slice(0, 8).reverse();
+  if (digits.every((digit) => digit === 0)) return '0';
+
+  const negative = cells[15] === 9;
+  const exponent = cells[12] * (cells[14] === 9 ? -1 : 1);
+  if (digits.every((digit) => digit <= 9)) {
+    const text = digits.join('');
+    const point = 1 + exponent;
+    let value;
+    if (point <= 0) value = `0,${'0'.repeat(-point)}${text}`;
+    else if (point >= text.length) value = `${text}${'0'.repeat(point - text.length)}`;
+    else value = `${text.slice(0, point)},${text.slice(point)}`;
+    value = value.replace(/^0+(?=\d)/, '');
+    if (value.includes(',')) value = value.replace(/0+$/, '').replace(/,$/, '');
+    if (value.startsWith(',')) value = `0${value}`;
+    return `${negative ? '-' : ''}${value}`;
+  }
+
+  const glyphs = digits.map((digit) => '0123456789-LСГЕ_'[digit] || '?');
+  const mantissa = `${glyphs[0]},${glyphs.slice(1).join('')}`;
+  const suffix = exponent === 0 ? '' : ` ВП ${exponent}`;
+  return `${negative ? '-' : ''}${mantissa}${suffix}`;
 }
 
 function binaryString(buffer, name) {
@@ -348,13 +457,40 @@ function buildMarkdown(entry, card, actualName, txtName) {
   lines.push(`- Исходный файл: \`${actualName.normalize('NFC')}\``);
   lines.push(`- Модель: ${friendlyMachine(card.machine)}`);
   lines.push(`- Программа: [${txtName}](${txtName})`);
-  lines.push('', '## Описание из карточки C3000', '');
-  lines.push(card.description || 'Описание в исходной карточке отсутствует.');
-  lines.push('', '## Примечание об импорте', '');
-  lines.push(
-    'Листинг декодирован из файла `.c3`; состояние стека, регистров и индикатора эмулятора не переносилось.',
-  );
+  lines.push('', '## Подготовка, запуск и правила', '');
+  lines.push(entry.preparation || card.description || 'Инструкция в исходной карточке отсутствует.');
+  if (entry.preparation && card.description) {
+    lines.push('', 'Исходная карточка C3000 содержала только ссылку:', '', card.description);
+  }
+  lines.push('', '## Состояние регистров в исходном `.c3`', '');
+  lines.push(...formatRegisterSnapshot(entry, card.state));
   return `${lines.join('\n').trimEnd()}\n`;
+}
+
+function formatRegisterSnapshot(entry, state) {
+  const nonzero = state.registers.filter(({ value }) => value !== '0');
+  if (nonzero.length === 0) {
+    return [
+      'В сохранённом снимке `R0…Re` равны нулю. Скрытых начальных констант в файле нет: перед первым пуском нужно выполнить подготовку из раздела выше.',
+      ...(entry.snapshotNote ? ['', entry.snapshotNote] : []),
+    ];
+  }
+
+  const lines = [
+    'Файл `.c3` хранил не только листинг, но и текущий снимок памяти. Его ненулевые регистры расшифрованы здесь:',
+    '',
+    '| Регистр | Значение |',
+    '| --- | ---: |',
+    ...nonzero.map(({ name, value }) => `| \`${name}\` | \`${value}\` |`),
+  ];
+  if (nonzero.length < REGISTER_NAMES.length) {
+    lines.push('', 'Остальные регистры `R0…Re` равны нулю.');
+  }
+  lines.push(
+    '',
+    entry.snapshotNote || 'Это снимок текущего состояния, а не замена инструкции: для новой игры используйте подготовку из раздела выше.',
+  );
+  return lines;
 }
 
 function friendlyMachine(machine) {
@@ -372,6 +508,7 @@ function buildReadme() {
     `Source archive: [Old-DOS.ru](${SOURCE_PAGE})`,
     '',
     'The generated program/description pairs are already arranged by the repository genre taxonomy.',
+    'Each description keeps the launch instructions and decodes the memory-register snapshot stored in the C3 file.',
     'Review them and merge the rows from `manifest-rows.tsv` into `games/manifest.tsv`.',
     'The source corpus is provenance only: the manifest collection field is intentionally empty.',
     '',
