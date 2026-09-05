@@ -27,6 +27,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(mkpro_core STATIC
   src/core/address_formula_solver.cpp
   src/core/ast_json.cpp
+  src/core/callee_hole_boundary_normalization.cpp
   src/core/compiler.cpp
   src/core/constant_folder.cpp
   src/core/cyclic_end_return.cpp
@@ -210,6 +211,7 @@ add_executable(mkpro_tests
   tests/emulator_indexed_packed_pow10_test.cpp
   tests/sign_toggle_arg_test.cpp
   tests/callee_hole_helper_test.cpp
+  tests/callee_hole_boundary_normalization_test.cpp
   tests/emulator_packed_position_test.cpp
   tests/emulator_recall_side_effects_test.cpp
   tests/emulator_regression_test.cpp
@@ -471,6 +473,8 @@ set(MKPRO_NATIVE_TEST_NAMES
   safe_minmax_matches_typescript_contract
   alternating_sign_toggle_arg_matches_literal_semantics
   callee_hole_helper_matches_direct_call_semantics
+    callee_hole_boundary_fusion_preserves_stack_and_control
+    callee_hole_boundary_fusion_final_artifact_contract
   segmented_bitplanes_match_typescript_contract
   setup_program_matches_typescript_contract
   terminal_report_tail_rewrites_only_with_explicit_proofs

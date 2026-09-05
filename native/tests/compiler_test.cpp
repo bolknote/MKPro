@@ -773,15 +773,17 @@ void compiler_feature_profile_rf_optimizer_is_size_monotonic_contract() {
   const CompileResult without_rf = compile_full(source, without_rf_options);
   require(without_rf.implemented && !has_error_diagnostic(without_rf),
           "standard-profile optimizer root should compile the regression fixture");
-  require(without_rf.steps.size() == 139,
-          "the corrected finalization pipeline should keep tic-tac-toe-4x4 at 139 cells, got " +
+  require(without_rf.steps.size() == 134,
+          "interprocedural region fusion should keep tic-tac-toe-4x4 at 134 cells, got " +
               std::to_string(without_rf.steps.size()));
-  require(has_optimization(without_rf, "indirect-selector-seed-reuse") &&
-              has_optimization(without_rf, "empty-return-startup-component-transaction") &&
-              has_optimization(without_rf, "underflow-sentinel-selector-split") &&
-              has_optimization(without_rf, "stable-indirect-selector-family-reassignment") &&
-              has_optimization(without_rf, "selector-seed-full-layout-repayment"),
-          "the corrected fixture should exercise composed selector/layout proofs");
+  require(has_optimization(without_rf, "callee-hole-boundary-normalization") &&
+              has_optimization(without_rf, "callee-hole-interprocedural-region-fusion") &&
+              std::any_of(without_rf.proofs.begin(), without_rf.proofs.end(),
+                          [](const ProofReport& proof) {
+                            return proof.id == "callee-hole-indirect-call-targets" &&
+                                   proof.status == "proved";
+                          }),
+          "the fixture should exercise composed region/selector/layout proofs");
 
   CompileOptions with_rf_options = without_rf_options;
   with_rf_options.feature_profile = FeatureProfile::Mk61SMiniExpanded;

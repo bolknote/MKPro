@@ -492,11 +492,14 @@ void callee_hole_helper_matches_direct_call_semantics() {
       step(9, 0),
       step(20, 0x4e,
            "callee-hole charge-entry store; proof=proof_entry; selector=e"),
-      step(21, 0x61),
-      step(22, 0xae,
+      step(21, 0x61, "callee-hole entry-X equivalence proof_entry"),
+      step(22, 0x61),
+      step(23, 0x61),
+      step(24, 0x61),
+      step(25, 0xae,
            "callee-hole indirect call; proof=proof_entry; "
            "leaf-targets=30:leaf_a,40:leaf_b"),
-      step(23, 0x52),
+      step(26, 0x52),
       step(30, 0x0d, "callee-hole leaf entry leaf_a"),
       step(31, 0x52),
       step(40, 0x0d, "callee-hole leaf entry leaf_b"),
@@ -506,6 +509,11 @@ void callee_hole_helper_matches_direct_call_semantics() {
                                                            natural_charge_entry_calls),
           "callee-hole gate should preserve a charge-entry marker followed by proved "
           "natural-target metadata");
+  CompileResult stable_live_stack = natural_charge_entry_calls;
+  std::erase_if(stable_live_stack.steps,
+                [](const ResolvedStep& step) { return step.address == 24; });
+  require(!optimizer_static_proof_gate_accepts_for_testing(gate_options, stable_live_stack),
+          "a stable selector also needs its charged entry stack erased before dispatch");
   natural_charge_entry_calls.steps.at(2).comment =
       "callee-hole charge-entry call; proof=proof_entry; selector=ee; "
       "preloaded R7=20 indirect-target=20 indirect flow";
@@ -611,7 +619,8 @@ void callee_hole_helper_matches_direct_call_semantics() {
       step(9, 0x53, "callee-hole skeleton call; selector-scope=dead"),
       step(10, 0x20),
       step(11, 0x47),
-      step(20, 0x61, "callee-hole selector-scope entry proof_s"),
+      step(20, 0x61, "callee-hole selector-scope entry proof_s; "
+                    "callee-hole entry-X equivalence proof_s"),
       step(21, 0x61),
       step(22, 0x61),
       step(23, 0x61),

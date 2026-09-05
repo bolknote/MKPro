@@ -365,7 +365,8 @@ IrOp canonical_addition(const IrOp& source) {
 }
 
 std::vector<IrOp> canonicalize_sum_difference_tails(const std::vector<IrOp>& ops,
-                                                    int& canonicalized_groups) {
+    int& canonicalized_groups,
+    const std::function<bool(std::size_t)>& accepts_continuation = {}) {
   std::map<std::pair<std::string, std::string>, RecallArithmeticGroup> groups;
   for (int start = 0; start + 2 < static_cast<int>(ops.size()); ++start) {
     if (!is_direct_recall_arithmetic(ops, start, 0x10) &&
@@ -374,6 +375,8 @@ std::vector<IrOp> canonicalize_sum_difference_tails(const std::vector<IrOp>& ops
     }
     const auto key = std::pair{ops.at(static_cast<std::size_t>(start)).register_name,
                                ops.at(static_cast<std::size_t>(start + 1)).register_name};
+    if (accepts_continuation && !accepts_continuation(static_cast<std::size_t>(start + 3)))
+      continue;
     RecallArithmeticGroup& group = groups[key];
     if (ops.at(static_cast<std::size_t>(start + 2)).opcode == 0x10)
       group.additions.push_back(start);
@@ -561,6 +564,21 @@ IrOp gadget_jump(const std::string& label, const IrOp& source) {
   op.meta.mnemonic = "БП";
   op.meta.comment = "return suffix gadget";
   op.meta.source_line = source.meta.source_line;
+  constexpr std::string_view charge_call = "callee-hole charge-entry call; ";
+  constexpr std::string_view charge_tail = "callee-hole charge-entry tail transfer; ";
+  const bool replaces_charge_call = source.kind == IrKind::Call &&
+      source.meta.comment.has_value() && source.meta.comment->starts_with(charge_call);
+  if (replaces_charge_call ||
+      (source.kind == IrKind::Jump && source.meta.comment.has_value() &&
+       source.meta.comment->starts_with(charge_tail))) {
+    // The final verifier must still prove that this structural alias reaches
+    // the same shared selector store. Losing the protocol marker would hide
+    // an entry edge from that complete-predecessor proof.
+    op.meta.comment = source.meta.comment;
+    if (replaces_charge_call)
+      op.meta.comment->replace(0, charge_call.size(), charge_tail);
+    op.meta.semantic_call_origins = source.meta.semantic_call_origins;
+  }
   op.target_meta.comment = "return suffix gadget";
   return op;
 }
@@ -602,6 +620,12 @@ void merge_semantic_call_range(std::vector<IrOp>& ops, int target_start, int sou
 }
 
 } // namespace
+
+std::vector<IrOp> canonicalize_outlining_arithmetic_tails(
+    const std::vector<IrOp>& ops, int& groups,
+    const std::function<bool(std::size_t)>& accepts_continuation) {
+  return canonicalize_sum_difference_tails(ops, groups, accepts_continuation);
+}
 
 PassResult return_suffix_gadget(const std::vector<IrOp>& ops, const PassContext& context) {
   if (context.options.disable_return_suffix_gadget)

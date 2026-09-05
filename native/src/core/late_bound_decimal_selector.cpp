@@ -30,6 +30,64 @@ struct Pair {
   int target_address = 0;
 };
 
+void refresh_bound_protocol_annotations(LateBoundDecimalSelectorResult& result) {
+  constexpr std::string_view charge_marker = "callee-hole selector-value=";
+  constexpr std::string_view leaf_marker = "; leaf-targets=";
+  constexpr std::string_view dead_scope = "; selector-scope=dead";
+  std::map<std::string, int> targets;
+  for (const auto& proof : result.proofs) {
+    targets[proof.target_label] = proof.target_address;
+    const auto owned = [&](std::size_t index) {
+      return index < result.items.size() && result.items[index].comment.has_value() &&
+             result.items[index].comment->starts_with(charge_marker);
+    };
+    if (!owned(proof.high_item_index) || !owned(proof.low_item_index))
+      continue;
+    const bool dead = result.items[proof.high_item_index].comment->find(dead_scope) !=
+                      std::string::npos;
+    const std::string annotation = std::string(charge_marker) +
+        std::to_string(proof.target_address) + " indirect-target=" +
+        std::to_string(proof.target_address) + (dead ? std::string(dead_scope) : "");
+    result.items[proof.high_item_index].comment = annotation;
+    result.items[proof.low_item_index].comment = annotation;
+    for (std::size_t i = proof.low_item_index + 1; i < result.items.size(); ++i) {
+      MachineItem& item = result.items[i];
+      if (item.kind == MachineItemKind::Label) continue;
+      if (item.opcode >= 0x40 && item.opcode <= 0x4e && owned(i))
+        item.comment = annotation;
+      break;
+    }
+  }
+  for (MachineItem& item : result.items) {
+    if (!item.comment.has_value() ||
+        !item.comment->starts_with("callee-hole indirect call;"))
+      continue;
+    const auto marker = item.comment->find(leaf_marker);
+    if (marker == std::string::npos) continue;
+    const auto start = marker + leaf_marker.size();
+    const auto suffix = item.comment->find(';', start);
+    const auto end = suffix == std::string::npos ? item.comment->size() : suffix;
+    std::string rebound;
+    bool complete = true;
+    for (std::size_t begin = start; begin < end;) {
+      const auto comma = item.comment->find(',', begin);
+      const auto token_end = comma == std::string::npos || comma > end ? end : comma;
+      const auto colon = item.comment->find(':', begin);
+      if (colon == std::string::npos || colon >= token_end) { complete = false; break; }
+      const std::string label = item.comment->substr(colon + 1, token_end - colon - 1);
+      const auto target = targets.find(label);
+      if (target == targets.end()) { complete = false; break; }
+      if (!rebound.empty()) rebound += ",";
+      rebound += std::to_string(target->second) + ":" + label;
+      begin = token_end + 1;
+    }
+    // Unrelated fixed-address families have no late-bound proof. Leave their
+    // annotations alone; the final family-specific verifier owns them.
+    if (complete && !rebound.empty())
+      item.comment = item.comment->substr(0, start) + rebound + item.comment->substr(end);
+  }
+}
+
 void append_error(std::vector<Diagnostic>& diagnostics, std::string code, std::string message) {
   diagnostics.push_back(Diagnostic{
       .severity = DiagnosticSeverity::Error,
@@ -366,6 +424,10 @@ rebind_late_bound_decimal_selectors(const std::vector<MachineItem>& items,
     result.items = items;
     result.applied = 0;
     result.proofs.clear();
+  } else {
+    // Rebinding is one transaction: executable digits and the proof-facing
+    // annotations must describe the same delivered label addresses.
+    refresh_bound_protocol_annotations(result);
   }
   return result;
 }

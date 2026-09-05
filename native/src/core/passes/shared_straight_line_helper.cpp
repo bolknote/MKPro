@@ -1,5 +1,7 @@
 #include "mkpro/core/passes/shared_straight_line_helper.hpp"
 
+#include "mkpro/core/callee_hole_boundary_normalization.hpp"
+
 #include "mkpro/core/passes/liveness_analysis.hpp"
 
 #include "mkpro/core/formal_address.hpp"
@@ -788,6 +790,7 @@ struct SelectedHoleHelper {
   // Each caller then passes the charged value in X instead of duplicating the
   // same X->P selector command before its skeleton call.
   bool shared_charge_entry = false;
+  bool xyz_entry_repair = false;
   std::map<int, int> charge_values;
   // Leaf label by frozen numeric address; the labels keep the leaves alive in
   // the CFG and the addresses are re-validated by the final static proof.
@@ -1095,7 +1098,7 @@ std::optional<std::vector<bool>> assign_hole_positions(std::vector<HoleOccurrenc
 std::vector<SelectedHoleHelper> select_hole_helpers(const std::vector<IrOp>& ops,
                                                     const std::map<std::string, int>& labels,
                                                     int official_last,
-                                                    AddressSpaceModel address_model) {
+                                                    AddressSpaceModel address_model, bool repair_entry) {
   const std::vector<HoleCandidate> candidates = collect_hole_candidates(ops, labels);
   if (candidates.empty())
     return {};
@@ -1206,6 +1209,23 @@ std::vector<SelectedHoleHelper> select_hole_helpers(const std::vector<IrOp>& ops
     const auto stable_register_it =
         std::find_if(kHoleSelectorRegisters.begin(), kHoleSelectorRegisters.end(),
                      register_is_available);
+    if (!repair_entry && stable_register_it != kHoleSelectorRegisters.end() &&
+        !hole_body_erases_mutating_charge(body, *hole_positions, *stable_register_it)) {
+      // A stable selector does not mutate its register, but charging it still
+      // replaces X and may lift the data stack. Stability alone is not an
+      // entry-value proof; a live accumulator needs the repaired ABI below.
+      continue;
+    }
+    if (repair_entry &&
+        (stable_register_it == kHoleSelectorRegisters.end() ||
+         globally_used_registers.contains(std::string(*stable_register_it)) ||
+         !std::all_of(occurrences.begin(), occurrences.end(), [&](const HoleOccurrence& occurrence) {
+           return prove_ir_stack_entry_equality(
+               ops, static_cast<std::size_t>(occurrence.start),
+               xyz_preserving_selector_charge_state());
+         }))) {
+      continue;
+    }
     const bool late_bound_selector =
         !leaves_stable && stable_register_it != kHoleSelectorRegisters.end() &&
         hole_net_savings(occurrences, candidate.cells, true) > 0;
@@ -1341,6 +1361,12 @@ std::vector<SelectedHoleHelper> select_hole_helpers(const std::vector<IrOp>& ops
     helper.late_bound_selector = late_bound_selector;
     helper.shared_charge_entry = !mutating_selector && !reused_selector &&
                                  (leaves_stable || late_bound_selector);
+    helper.xyz_entry_repair = repair_entry;
+    if (repair_entry &&
+        (!helper.shared_charge_entry ||
+         hole_net_savings(occurrences, candidate.cells, late_bound_selector) - 2 <= 0)) {
+      continue;
+    }
     helper.charge_values = std::move(charge_values);
     helper.leaf_labels = leaf_labels;
     helper.hole_positions = *hole_positions;
@@ -1377,8 +1403,18 @@ std::vector<IrOp> hole_charge_ops(int charge_value, int leaf_target,
                                   const std::string& register_name,
                                   const std::string& helper_label, bool reused_selector,
                                   bool shared_charge_entry,
-                                  const IrOp& source) {
+                                  const IrOp& source, bool xyz_entry_repair) {
   std::vector<IrOp> result;
+  if (xyz_entry_repair) {
+    IrOp lift;
+    lift.kind = IrKind::Plain;
+    lift.opcode = 0x0e;
+    lift.meta.mnemonic = "B-up";
+    lift.meta.comment = "callee-hole selector stack preservation";
+    lift.meta.roles.push_back("callee-hole-entry-lift");
+    lift.meta.source_line = source.meta.source_line;
+    result.push_back(std::move(lift));
+  }
   const std::string text = late_bound_selector ? "00" : std::to_string(charge_value);
   const std::string scope_suffix = reused_selector ? "; selector-scope=dead" : "";
   const std::string selector_comment =
@@ -1456,8 +1492,7 @@ std::string hole_leaf_labels_text(const std::map<int, std::string>& leaf_labels)
 
 } // namespace
 
-PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
-                                            const PassContext& context) {
+PassResult callee_hole_straight_line_helper_impl(const std::vector<IrOp>& ops, const PassContext& context, bool repair_entry) {
   if (!context.options.callee_hole_straight_line_helper)
     return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
   if (has_numeric_outline_flow_target(ops))
@@ -1469,7 +1504,7 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
           effective_optimizer_feature_profile(context.options));
   const int official_last = official_program_last_address(address_model);
   const std::vector<SelectedHoleHelper> selected =
-      select_hole_helpers(ops, labels, official_last, address_model);
+      select_hole_helpers(ops, labels, official_last, address_model, repair_entry);
   if (selected.empty())
     return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
 
@@ -1486,6 +1521,8 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
         hole_net_savings(helper.occurrences, helper.cells, helper.late_bound_selector);
     if (helper.shared_charge_entry)
       saved_cells += static_cast<int>(helper.occurrences.size()) - 1;
+    if (helper.xyz_entry_repair)
+      saved_cells -= static_cast<int>(helper.occurrences.size()) + 1;
     for (const HoleOccurrence& occurrence : helper.occurrences) {
       replacement_by_start[occurrence.start] = HoleReplacement{
           .end = occurrence.end,
@@ -1514,7 +1551,8 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
                           replacement->second.helper->label,
                           replacement->second.helper->reused_selector,
                           replacement->second.helper->shared_charge_entry,
-                          ops.at(static_cast<std::size_t>(index)));
+                          ops.at(static_cast<std::size_t>(index)),
+                          replacement->second.helper->xyz_entry_repair);
       result.insert(result.end(), charge.begin(), charge.end());
       index = replacement->second.end;
       continue;
@@ -1536,11 +1574,22 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
       store.meta.mnemonic = "X->П " + helper.register_name;
       store.meta.comment = "callee-hole charge-entry store; proof=" + helper.label +
                            "; selector=" + helper.register_name;
+      if (helper.xyz_entry_repair)
+        *store.meta.comment += "; entry-repair=preserve-xyz";
       if (helper.late_bound_selector)
         store.meta.roles.push_back("late-decimal-selector-store");
       if (!helper.body.empty())
         store.meta.source_line = helper.body.front().meta.source_line;
       result.push_back(std::move(store));
+      if (helper.xyz_entry_repair) {
+        IrOp restore;
+        restore.kind = IrKind::Plain;
+        restore.opcode = 0x25;
+        restore.meta.mnemonic = "F reverse";
+        restore.meta.comment = "callee-hole restored X/Y/Z after selector charge";
+        restore.meta.roles.push_back("callee-hole-entry-rotate");
+        result.push_back(std::move(restore));
+      }
     }
 
     const std::string hole_comment =
@@ -1594,9 +1643,9 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
         }
       }
       IrOp body_op = mark_helper_body_op(std::move(body_source));
-      if ((helper.mutating_selector || helper.reused_selector) && !marked_entry_proof) {
+      if ((!helper.xyz_entry_repair || helper.reused_selector) && !marked_entry_proof) {
         std::string marker;
-        if (helper.mutating_selector)
+        if (!helper.xyz_entry_repair)
           marker = "callee-hole entry-X equivalence " + helper.label;
         if (helper.reused_selector) {
           if (!marker.empty())
@@ -1631,6 +1680,15 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
     for (const auto& [target, label] : helper.leaf_labels) {
       (void)target;
       const std::string marker = "callee-hole leaf entry " + label;
+      std::optional<std::string> call_origin;
+      for (const IrOp& source : ops) {
+        if (source.kind == IrKind::Call && source.meta.comment.has_value() &&
+            std::holds_alternative<std::string>(source.target) &&
+            std::get<std::string>(source.target) == label) {
+          call_origin = source.meta.comment->substr(0, source.meta.comment->find(';'));
+          break;
+        }
+      }
       for (std::size_t index = 0; index < result.size(); ++index) {
         const IrOp& op = result.at(index);
         if (op.kind != IrKind::Label || op.name != label)
@@ -1644,6 +1702,11 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
           } else if (entry_op.meta.comment->find(marker) == std::string::npos) {
             entry_op.meta.comment = *entry_op.meta.comment + "; " + marker;
           }
+          if (call_origin.has_value() &&
+              entry_op.meta.comment->find("; callee-hole call-origin=") == std::string::npos) {
+            entry_op.meta.comment = *entry_op.meta.comment +
+                                    "; callee-hole call-origin=" + *call_origin;
+          }
           break;
         }
         break;
@@ -1651,6 +1714,17 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
     }
   }
 
+  int automatic_lifts = 0;
+  for (std::size_t index = result.size(); index-- > 0;) {
+    const auto& op = result[index];
+    if (op.kind == IrKind::Plain && op.opcode == 0x0e &&
+        op.meta.roles == std::vector<CellRole>{"callee-hole-entry-lift"} &&
+        selector_charge_has_automatic_entry_lift(result, index)) {
+      result.erase(result.begin() + static_cast<std::ptrdiff_t>(index));
+      ++automatic_lifts;
+    }
+  }
+  saved_cells += automatic_lifts;
   std::vector<AppliedOptimization> optimizations{
       AppliedOptimization{
           .name = "callee-hole-straight-line-helper",
@@ -1660,11 +1734,54 @@ PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
                     std::to_string(saved_cells) + " cell(s) saved).",
       },
   };
+  if (automatic_lifts > 0)
+    optimizations.push_back(AppliedOptimization{
+        .name = "callee-hole-automatic-entry-lift",
+        .detail = "Removed " + std::to_string(automatic_lifts) +
+                  " explicit selector-entry lifts: every incoming path closes decimal "
+                  "entry before the first digit supplies the same stack lift; final "
+                  "stack/X1/X2 and selector proofs remain mandatory.",
+    });
   return PassResult{
       .ops = std::move(result),
       .applied = applied,
       .optimizations = std::move(optimizations),
   };
+}
+
+PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
+                                           const PassContext& context) {
+  const auto cells = [](const std::vector<IrOp>& value) {
+    int size = 0;
+    for (const IrOp& op : value) size += cells_per_op(op);
+    return size;
+  };
+  PassResult baseline = callee_hole_straight_line_helper_impl(ops, context, false);
+  PassResult repaired = callee_hole_straight_line_helper_impl(ops, context, true);
+  if (repaired.applied > 0 && cells(repaired.ops) < cells(baseline.ops) &&
+      callee_hole_return_stack_fits(repaired.ops))
+    baseline = std::move(repaired);
+  if (!context.options.callee_hole_straight_line_helper ||
+      !context.options.callee_hole_boundary_normalization ||
+      has_numeric_outline_flow_target(ops))
+    return baseline;
+  auto normalized = normalize_callee_hole_boundaries(ops);
+  if (normalized.expanded_calls == 0)
+    return baseline;
+  PassResult candidate = callee_hole_straight_line_helper_impl(normalized.ops, context, true);
+  if (candidate.applied == 0 || cells(candidate.ops) >= cells(baseline.ops) ||
+      !callee_hole_return_stack_fits(candidate.ops))
+    return baseline;
+  candidate.optimizations.push_back(AppliedOptimization{
+      .name = "callee-hole-boundary-normalization",
+      .detail = "Exposed " + std::to_string(normalized.expanded_calls) +
+                " short symbolic call boundary/boundaries for a larger shared region; "
+                "proved X/Y/Z restoration, X1/X2 convergence on every leaf and bounded "
+                "return depth; repaid expansion with " +
+                std::to_string(cells(baseline.ops) - cells(candidate.ops)) +
+                " fewer IR cells. Final layout still competes against the unchanged incumbent.",
+  });
+  return candidate;
 }
 
 IrPass callee_hole_straight_line_helper_pass() {

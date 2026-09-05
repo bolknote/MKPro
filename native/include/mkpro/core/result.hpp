@@ -354,6 +354,10 @@ struct CompileOptions {
   // equality proof shows that its adjusted charge disappears from X/Y/Z/T/X2
   // before the dispatch. Verified by callee_hole_indirect_call_targets_proved.
   bool callee_hole_straight_line_helper = false;
+  // Compare a larger interprocedural region after exposing short symbolic
+  // tails and proving an X/Y/Z-preserving selector-charge ABI. The complete
+  // candidate, not an expanded intermediate, competes on final size.
+  bool callee_hole_boundary_normalization = false;
   bool disable_interprocedural_opts = false;
   bool coalesce_copies = false;
   // Run a dedicated first IR phase that uses a bounded exact-return-stack

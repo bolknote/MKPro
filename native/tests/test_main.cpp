@@ -180,6 +180,8 @@ void rules_match_typescript_contract();
 void safe_minmax_matches_typescript_contract();
 void alternating_sign_toggle_arg_matches_literal_semantics();
 void callee_hole_helper_matches_direct_call_semantics();
+void callee_hole_boundary_fusion_preserves_stack_and_control();
+void callee_hole_boundary_fusion_final_artifact_contract();
 void segmented_bitplanes_match_typescript_contract();
 void setup_program_matches_typescript_contract();
 void terminal_report_tail_rewrites_only_with_explicit_proofs();
@@ -442,6 +444,8 @@ int main(int argc, char** argv) {
       MKPRO_TEST(safe_minmax_matches_typescript_contract),
       MKPRO_TEST(alternating_sign_toggle_arg_matches_literal_semantics),
       MKPRO_TEST(callee_hole_helper_matches_direct_call_semantics),
+      MKPRO_TEST(callee_hole_boundary_fusion_preserves_stack_and_control),
+      MKPRO_TEST(callee_hole_boundary_fusion_final_artifact_contract),
       MKPRO_TEST(segmented_bitplanes_match_typescript_contract),
       MKPRO_TEST(setup_program_matches_typescript_contract),
       MKPRO_TEST(terminal_report_tail_rewrites_only_with_explicit_proofs),

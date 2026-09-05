@@ -3611,3 +3611,66 @@ inputs, metadata barriers and independently entered blocks.
 Компонентная раскладка может временно добавить не более двух ячеек моста, только если обычная раскладка не удовлетворяет доказанным адресным ограничениям. Такой промежуточный артефакт не публикуется напрямую.
 
 Одинаковый downstream pipeline применяется к исходной и кандидатной раскладке: `error-padding-code-overlay`, `address-code-overlay`, затем terminal/cyclic. После каждого выбранного этапа заново строится authoritative CFG. Выросший кандидат принимается только тогда, когда его доказанный конечный размер строго меньше доказанного конечного размера baseline; равенство и неполное доказательство отклоняются. Это общий size-first механизм и не использует имена программ, функций или исходные паттерны конкретной игры.
+
+## Interprocedural region fusion
+
+Selector-entry materialization also uses the calculator's automatic decimal
+stack lift. An explicit `B-up` is removed only when every incoming path closes
+number entry with a direct call, a stable indirect call (`R7`-`Re`), or a direct
+store. Open digits, `Enter`, raw code, manual protocols, and unresolved incoming
+flow cannot establish this premise. The delivered CFG rechecks the premise;
+the original stack/X1/X2 convergence and selector-address proofs still apply.
+The compiler reports this saving as `callee-hole-automatic-entry-lift`.
+
+This family does not change accumulator origins or numeric representations.
+Sharing a numeric value with a continuation address needs a separate proof of
+all arithmetic and observable uses. In particular, translating a floating-point
+accumulator by an address-sized constant is not justified by real-number
+algebra: MK-61 decimal rounding can change comparisons and tie-breaking.
+
+The candidate belongs to the bounded IR-recovery cost family in automatic
+search, alongside callee-hole/return-suffix composition. It does not inherit
+the generic unknown-candidate cost that could exclude it before comparison.
+
+Terminal symbolic jumps into straight-line returning leaves (at most 32 IR
+operations) are also compared in call/return form. This exposes a shared final
+callback rather than only a common prefix. Expansion alone is never published.
+
+Selector stability is not a stack-preservation proof: even an R7..RE charge
+overwrites X and may lift Y/Z/T. The ordinary charge ABI must prove that this
+difference disappears before dispatch. Otherwise the compiler compares the
+X/Y/Z-preserving ABI, with X1/X2 convergence and bounded return-depth proofs.
+The same obligation is checked again on the delivered artifact. Late selector
+rebinding updates both digits and owned proof annotations atomically; suffix
+outlining preserves charge-entry provenance for the predecessor check.
+
+`callee-hole-boundary-normalization` exposes short, symbolic tail-call wrappers
+before the existing callee-hole outliner compares repeated regions. Local
+suffix extraction can otherwise hide a larger common region behind different
+call boundaries. Matching uses typed operations and call identities, never a
+source program, procedure name, comment, or game-specific arithmetic formula.
+
+Wrapper expansion is limited to an eight-cell straight-line prefix. Protected
+or raw operations, indirect/opaque calls, fixed-address operands, and observable
+boundaries are not expanded. Dead internal entry labels may disappear only
+when no direct or typed indirect reference remains. The existing sum/difference
+canonicalizer is reused with an additional continuation proof: differences in
+physical X1 and hidden X2 must disappear before any observation on every called
+entry. Source call provenance is retained when a wrapper boundary is exposed.
+
+A shared selector entry can preserve live X/Y/Z with `B-up; address; PP entry`,
+followed by `store selector; F-reverse` at the shared entry. This clobbers T and
+last-X1; it is allowed only when a common equality analysis proves that those
+values, and any X2 difference, are erased before use on every leaf path. The
+same analysis runs again on final machine code. Every charged entry must retain
+its lift/rotation protocol, with no incoming edge that bypasses the lift. The
+initial implementation uses a globally unused stable selector register.
+
+The prefix proof explores at most 128 instructions per level and five nested
+calls. A separate exact return-stack exploration rejects recursion, unresolved
+flow, more than five live return addresses, or more than 10000 proof states.
+These are fail-closed analysis bounds, not limits on compiler runtime or source
+program behavior. Expansion is committed only when fusion repays all new IR
+cells and the resulting call graph fits the return stack. Automatic selection
+also compares the complete final layout against its unchanged incumbent, so a
+locally attractive outline cannot justify a larger delivered program.

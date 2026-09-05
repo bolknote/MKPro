@@ -165,7 +165,7 @@ void example_sizes_match_typescript_baselines() {
   };
   const std::map<std::string, std::size_t> PENDING_BASELINE{
       {"nekromant", 137},
-      {"tic-tac-toe-4x4", 139},
+      {"tic-tac-toe-4x4", 134},
   };
 
   const std::filesystem::path root = std::filesystem::current_path();
@@ -727,8 +727,16 @@ void example_sizes_match_typescript_baselines() {
           mark_details.contains("valueAwareNestedCallInputNames") &&
           mark_details.at("valueAwareNestedCallInputNames") == "best_score" &&
           mark_details.contains("valueAwareSchedulerPlanStatus") &&
-          mark_details.at("valueAwareSchedulerPlanStatus") ==
-              "blocked-by-stack-mutating-callee";
+          (mark_details.at("valueAwareSchedulerPlanStatus") ==
+               "blocked-by-stack-mutating-callee" ||
+           (mark_details.at("valueAwareSchedulerPlanStatus") ==
+                "nested-call-inputs-not-direct-scheduler-savings" &&
+            mark_details.contains("valueAwareSchedulerTrafficShape") &&
+            mark_details.at("valueAwareSchedulerTrafficShape") ==
+                "nested-call-inputs-only" &&
+            mark_details.contains("valueAwareEstimatedNetSavingsExcludes") &&
+            mark_details.at("valueAwareEstimatedNetSavingsExcludes") ==
+                "persistent-nested-call-input-stores"));
       require((control_crossing || nested_input) &&
                   mark_details.contains("valueAwareEstimatedNetSavingsAfterMaterialization") &&
                   std::stoi(mark_details.at(
