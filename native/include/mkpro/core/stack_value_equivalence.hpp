@@ -12,6 +12,8 @@ namespace mkpro::core {
 struct StackValueEqualityState {
   std::array<bool, 4> stack_equal = {false, true, true, true};
   bool x2_equal = false;
+  // Physical last-X (F Bx) is distinct from the hidden decimal-entry X2.
+  bool x1_equal = true;
 };
 
 enum class StackValueEqualityStepKind {
@@ -28,8 +30,24 @@ enum class StackValueEqualityTransfer {
 };
 
 inline bool stack_values_fully_equal(const StackValueEqualityState& state) {
-  return state.x2_equal && state.stack_equal.at(0) && state.stack_equal.at(1) &&
+  return state.x1_equal && state.x2_equal && state.stack_equal.at(0) && state.stack_equal.at(1) &&
          state.stack_equal.at(2) && state.stack_equal.at(3);
+}
+
+inline int stack_value_equality_key(const StackValueEqualityState& state) {
+  int key = (state.x2_equal ? 16 : 0) | (state.x1_equal ? 32 : 0);
+  for (std::size_t slot = 0; slot < state.stack_equal.size(); ++slot)
+    if (state.stack_equal.at(slot))
+      key |= 1 << static_cast<int>(slot);
+  return key;
+}
+
+// Documented arithmetic/stack functions save their old X in physical X1.
+// Entry, memory transfers and F Bx itself preserve it. Keep this separate from
+// X2Effect: arithmetic commonly preserves X2 while overwriting X1.
+inline bool opcode_saves_physical_x1(int opcode) {
+  return (opcode >= 0x10 && opcode <= 0x26 && opcode != 0x1f) ||
+         opcode == 0x2a || (opcode >= 0x30 && opcode <= 0x3b);
 }
 
 // Decimal-entry opcodes are context-sensitive on the MK-61.  The first digit
@@ -90,11 +108,13 @@ inline StackValueEqualityTransfer transfer_stack_value_equality(
   } else if (opcode == 0x0e) {  // B-up: X, X, Y, Z
     state.stack_equal = {old.at(0), old.at(0), old.at(1), old.at(2)};
     state.x2_equal = old.at(0);
-  } else if (opcode == 0x0f) {  // F Bx: Y, Z, T, T
-    state.stack_equal = {old.at(1), old.at(2), old.at(3), old.at(3)};
+  } else if (opcode == 0x0f) {  // F Bx: X1, X, Y, Z
+    state.stack_equal = {state.x1_equal, old.at(0), old.at(1), old.at(2)};
     state.x2_equal = old.at(0);
   } else if (opcode == 0x14) {  // X <-> Y
     state.stack_equal = {old.at(1), old.at(0), old.at(2), old.at(3)};
+  } else if (opcode == 0x25) {  // F reverse: Y, Z, T, X
+    state.stack_equal = {old.at(1), old.at(2), old.at(3), old.at(0)};
   } else {
     const OpcodeInfo& info = opcode_by_code(opcode);
     if (info.takes_address || info.stack_effect == StackEffect::Barrier ||
@@ -136,6 +156,8 @@ inline StackValueEqualityTransfer transfer_stack_value_equality(
       state.x2_equal = old.at(0);
   }
 
+  if (opcode_saves_physical_x1(opcode))
+    state.x1_equal = old.at(0);
   return stack_values_fully_equal(state) ? StackValueEqualityTransfer::Converged
                                          : StackValueEqualityTransfer::Continue;
 }

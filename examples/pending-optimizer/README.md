@@ -15,11 +15,25 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 125 | 105 | +20 | pending optimizer |
-| `nekromant.mkpro` | 133 | 105 | +28 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 140 | 105 | +35 | pending optimizer |
+| `nekromant.mkpro` | 137 | 105 | +32 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
+
+The earlier 125-cell 4x4 and 133-cell Nekromant results are invalidated by
+correctness fixes: logical
+over-window address operands must not be decoded from analysis placeholder
+bytes, and the hardware empty-return continuation must remain at physical 01.
+Relayout also refreshes derived selector annotations and ordinary symbolic
+address caches; continuation proofs now track physical last-X1. With these
+constraints enforced, generic packed selector seed reuse and stable selector
+family reassignment select 140 cells instead of the corrected 143-cell
+incumbent. This is not a reduction from the old, incorrect 125-cell artifact.
+The 133-cell Nekromant layout likewise entered a helper at physical 01 instead
+of its relocated main entry; keeping the hardware continuation fixed yields
+137 cells. Historical measurements below do not supersede these corrected
+baselines.
 
 ## Live Optimization Notes
 

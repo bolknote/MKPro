@@ -72,6 +72,7 @@ add_library(mkpro_core STATIC
   src/core/passes/helpers.cpp
   src/core/passes/indirect_addressing.cpp
   src/core/passes/indirect_selector_integer_part.cpp
+  src/core/passes/indirect_selector_seed_reuse.cpp
   src/core/passes/index.cpp
   src/core/passes/jump_thread.cpp
   src/core/passes/jump_to_next.cpp
@@ -253,6 +254,7 @@ add_executable(mkpro_tests
   tests/setup_format_contract_test.cpp
   tests/parser_test.cpp
   tests/phase_selector_materializer_test.cpp
+  tests/indirect_selector_seed_reuse_test.cpp
   tests/passes_test.cpp
   tests/post_layout_control_flow_test.cpp
   tests/post_layout_indirect_flow_test.cpp
@@ -444,6 +446,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   packed_score_helpers_match_typescript_contract
   parser_matches_initial_v2_source_contract
   phase_selector_materializer_requires_proved_raw_phase_and_factor
+  indirect_selector_seed_reuse_preserves_observations
   expression_parser_matches_initial_contract
   parser_accepts_all_example_sources
   pass_pipeline_matches_initial_typescript_contract

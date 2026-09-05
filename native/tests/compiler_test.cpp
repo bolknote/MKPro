@@ -773,18 +773,15 @@ void compiler_feature_profile_rf_optimizer_is_size_monotonic_contract() {
   const CompileResult without_rf = compile_full(source, without_rf_options);
   require(without_rf.implemented && !has_error_diagnostic(without_rf),
           "standard-profile optimizer root should compile the regression fixture");
-  require(without_rf.steps.size() == 125,
-          "the generic finalization pipeline should keep tic-tac-toe-4x4 at 125 cells, got " +
+  require(without_rf.steps.size() == 140,
+          "the corrected finalization pipeline should keep tic-tac-toe-4x4 at 140 cells, got " +
               std::to_string(without_rf.steps.size()));
-  require(has_optimization(without_rf, "finalization-dead-store-elimination") &&
-              has_optimization(without_rf,
-                               "finalization-redundant-literal-reload") &&
-              has_optimization(without_rf, "empty-return-startup-layout") &&
-              has_optimization(without_rf, "empty-return-tail-call-fusion") &&
-              has_optimization(without_rf, "empty-return-main-edge-compaction") &&
+  require(has_optimization(without_rf, "indirect-selector-seed-reuse") &&
+              has_optimization(without_rf, "empty-return-startup-component-transaction") &&
               has_optimization(without_rf, "underflow-sentinel-selector-split") &&
-              has_optimization(without_rf, "single-digit-late-bound-selector"),
-          "the 125-cell fixture should exercise the composed generic erasure/layout proofs");
+              has_optimization(without_rf, "stable-indirect-selector-family-reassignment") &&
+              has_optimization(without_rf, "selector-seed-full-layout-repayment"),
+          "the corrected fixture should exercise composed selector/layout proofs");
 
   CompileOptions with_rf_options = without_rf_options;
   with_rf_options.feature_profile = FeatureProfile::Mk61SMiniExpanded;
@@ -802,35 +799,39 @@ void compiler_feature_profile_rf_optimizer_is_size_monotonic_contract() {
               " RF-free=" + std::to_string(without_rf.steps.size()));
   require(has_optimization(with_rf, "rf-allocation-policy-search"),
           "regression fixture should exercise the full standard-profile optimizer root");
-  require(std::any_of(with_rf.candidates.begin(), with_rf.candidates.end(),
-                      [](const CandidateReport& candidate) {
-                        return candidate.site == "feature-profile-search" &&
-                               candidate.variant == "mk61-root" && candidate.selected;
-                      }),
-          "expanded optimizer report should expose the selected standard root");
-  require(std::any_of(with_rf.candidates.begin(), with_rf.candidates.end(),
-                      [](const CandidateReport& candidate) {
-                        return candidate.site == "feature-profile-search" &&
-                               candidate.variant == "mk61s-mini-expand-root" &&
-                               !candidate.selected;
-                      }),
-          "expanded optimizer report should expose the non-winning expanded root");
-  require(step_opcodes(with_rf) == step_opcodes(without_rf),
-          "selected RF-free optimizer root should preserve its proved final byte sequence");
+  const auto find_root = [](const CompileResult& result, const std::string& variant) {
+    return std::find_if(result.candidates.begin(), result.candidates.end(),
+                        [&](const CandidateReport& candidate) {
+                          return candidate.site == "feature-profile-search" &&
+                                 candidate.variant == variant;
+                        });
+  };
+  const auto standard_root = find_root(with_rf, "mk61-root");
+  const auto expanded_root = find_root(with_rf, "mk61s-mini-expand-root");
+  require(standard_root != with_rf.candidates.end() &&
+              standard_root->steps == static_cast<int>(without_rf.steps.size()) &&
+              expanded_root != with_rf.candidates.end() && expanded_root->steps > 0 &&
+              standard_root->selected != expanded_root->selected,
+          "expanded optimizer report should expose both roots and select exactly one");
+  const auto& selected_root = standard_root->selected ? *standard_root : *expanded_root;
+  require(selected_root.steps == static_cast<int>(with_rf.steps.size()),
+          "the selected profile root should describe the delivered artifact");
+  if (standard_root->selected)
+    require(step_opcodes(with_rf) == step_opcodes(without_rf),
+            "selected RF-free optimizer root should preserve its proved final byte sequence");
   require(with_rf.listing.find("A5") != std::string::npos,
           "selected standard optimizer root should be reformatted in expanded address space");
 
   const CompileResult cached_with_rf = compile_full(source, with_rf_options);
   require(step_opcodes(cached_with_rf) == step_opcodes(with_rf),
           "cached RF-enabled search should preserve the selected final byte sequence");
-  require(std::any_of(cached_with_rf.candidates.begin(), cached_with_rf.candidates.end(),
-                      [&](const CandidateReport& candidate) {
-                        return candidate.site == "feature-profile-search" &&
-                               candidate.variant == "mk61s-mini-expand-root" &&
-                               candidate.steps > static_cast<int>(cached_with_rf.steps.size()) &&
-                               !candidate.selected;
-                      }),
-          "cached RF-enabled search should retain the independent expanded-root result");
+  for (const auto* original_root : {&*standard_root, &*expanded_root}) {
+    const auto cached_root = find_root(cached_with_rf, original_root->variant);
+    require(cached_root != cached_with_rf.candidates.end() &&
+                cached_root->steps == original_root->steps &&
+                cached_root->selected == original_root->selected,
+            "cached RF-enabled search should retain both independent profile results");
+  }
 }
 
 void compiler_lowers_initial_v2_subset() {

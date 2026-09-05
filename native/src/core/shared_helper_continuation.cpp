@@ -243,12 +243,7 @@ bool range_has_executable_entry(
 }
 
 int equality_state_key(const StackValueEqualityState& state) {
-  int key = state.x2_equal ? 16 : 0;
-  for (std::size_t index = 0; index < state.stack_equal.size(); ++index) {
-    if (state.stack_equal.at(index))
-      key |= 1 << static_cast<int>(index);
-  }
-  return key;
+  return stack_value_equality_key(state);
 }
 
 bool apply_x2_edge(StackValueEqualityState& state, X2Effect effect) {

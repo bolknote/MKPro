@@ -362,6 +362,10 @@ struct CompileOptions {
   // those forms. Removing the store can surrender more profitable layout
   // coincidences, so candidate search decides per program.
   bool exact_stack_dead_store_elimination = false;
+  // Admit a two-producer selector-seed rewrite with no immediate cell saving.
+  // Automatic search enables it only on a separate regenerated candidate and
+  // requires a strictly smaller proof-valid final artifact before selection.
+  bool allow_size_neutral_selector_seed_reuse = false;
   bool aggressive_indirect_call_threshold = false;
   bool dual_use_constant_indirect_flow = false;
   bool aggressive_post_layout_indirect_flow = false;

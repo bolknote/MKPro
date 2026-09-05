@@ -45775,14 +45775,7 @@ bool stack_entry_function_continuations_proved(const std::vector<MachineItem>& i
 
   const auto state_key = [](const core::StackValueEqualityState& state,
                             bool number_entry_open) {
-    int key = state.x2_equal ? 16 : 0;
-    for (std::size_t index = 0; index < state.stack_equal.size(); ++index) {
-      if (state.stack_equal.at(index))
-        key |= 1 << static_cast<int>(index);
-    }
-    if (number_entry_open)
-      key |= 32;
-    return key;
+    return core::stack_value_equality_key(state) | (number_entry_open ? 64 : 0);
   };
   const auto apply_x2 = [](core::StackValueEqualityState& state, X2Effect effect) {
     switch (effect) {
@@ -51863,7 +51856,6 @@ std::optional<ProvedDirectAddressSet> collect_fixed_direct_address_targets(
     return std::nullopt;
   }
   ProvedDirectAddressSet proof;
-  std::size_t cell = 0;
   std::optional<std::size_t> previous_cell;
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
     const MachineItem& item = items.at(item_index);
@@ -51872,7 +51864,12 @@ std::optional<ProvedDirectAddressSet> collect_fixed_direct_address_targets(
     if (item.kind == MachineItemKind::Address &&
         (item.formal_opcode.has_value() || std::holds_alternative<int>(item.target))) {
       try {
-        const int target = formal_address_info(resolved.steps.at(cell).opcode, model).actual;
+        // Over-window analysis bytes are display placeholders, not hardware
+        // address encodings. Decode only an explicit formal operand; otherwise
+        // its numeric IR target is the authoritative command address.
+        const int target = item.formal_opcode.has_value()
+                               ? formal_address_info(*item.formal_opcode, model).actual
+                               : std::get<int>(item.target);
         if (target < 0 || target >= core::machine_cell_count(items))
           return std::nullopt;
         proof.targets.emplace(item_index, target);
@@ -51893,7 +51890,6 @@ std::optional<ProvedDirectAddressSet> collect_fixed_direct_address_targets(
       }
     }
     previous_cell = item_index;
-    ++cell;
   }
   return proof;
 }
@@ -53452,6 +53448,50 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   std::map<std::string, std::string> post_layout_preload_overrides;
   std::optional<std::vector<PreloadReport>> final_layout_effective_preloads;
   std::vector<core::passes::AppliedOptimization> post_layout_optimizations;
+  // A neutral seed rewrite moves stores into both caller continuations. Let
+  // the existing whole-call-family proof sink their common operand before
+  // natural selector addresses freeze the geometry. This remains part of the
+  // separately ranked candidate, not a locally profitable layout assumption.
+  if (options.allow_size_neutral_selector_seed_reuse &&
+      std::any_of(optimized.optimizations.begin(), optimized.optimizations.end(),
+                  [](const core::passes::AppliedOptimization& optimization) {
+                    return optimization.name == "indirect-selector-seed-reuse";
+                  })) {
+    const AddressSpaceModel early_model = address_space_model_for_options(options);
+    for (int iteration = 0; iteration < 8; ++iteration) {
+      const auto indirect = collect_proved_indirect_flow_set(post_layout_items, early_model);
+      const auto direct = collect_fixed_direct_address_targets(post_layout_items, options,
+                                                                early_model);
+      if (!indirect.has_value() || !direct.has_value())
+        break;
+      const auto hoist = choose_helper_invariant_recall_hoist(
+          post_layout_items,
+          core::HelperInvariantRecallHoistOptions{
+              .allow_before_call_commutative_tail = false,
+              .proved_indirect_flow_targets = indirect->targets,
+              .fixed_indirect_flow_targets = indirect->fixed_numeric_targets,
+              .fixed_direct_address_targets = direct->targets,
+              .retargetable_direct_address_items = direct->retargetable_items,
+          },
+          options);
+      if (hoist.applied <= 0 || !hoist.proof.final_artifact_proved ||
+          hoist.proof.insertion != core::HelperInvariantRecallInsertion::HelperRoot ||
+          std::any_of(hoist.proof.calls.begin(), hoist.proof.calls.end(), [](const auto& call) {
+            return call.placement != core::HelperInvariantRecallPlacement::BeforeCall;
+          }) ||
+          !helper_hoist_preserves_fixed_indirect_targets(*indirect, hoist.proof) ||
+          core::machine_cell_count(hoist.items) >= core::machine_cell_count(post_layout_items))
+        break;
+      post_layout_items = hoist.items;
+      post_layout_optimizations.insert(post_layout_optimizations.end(),
+                                        hoist.optimizations.begin(), hoist.optimizations.end());
+      post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+          .name = "pre-layout-helper-invariant-recall-hoist",
+          .detail = "Composed selector-seed reuse with the existing complete-call-family "
+                    "stack/X2 proof before natural selector addresses were fixed.",
+      });
+    }
+  }
   const auto borrowed_entry_selector_registers_for = [](const std::vector<MachineItem>& items) {
     std::set<std::string> registers;
     for (const MachineItem& item : items) {
@@ -56184,6 +56224,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.disable_interprocedural_opts || options.coalesce_copies ||
          options.disable_return_suffix_gadget ||
          options.defer_return_suffix_until_callee_hole ||
+         options.allow_size_neutral_selector_seed_reuse ||
          options.aggressive_indirect_call_threshold || options.aggressive_indirect_call ||
          options.dual_use_constant_indirect_flow || options.aggressive_post_layout_indirect_flow ||
          options.preloaded_indirect_flow || options.forward_indirect_flow ||
@@ -57003,6 +57044,8 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";disable_interprocedural_opts=" << options.disable_interprocedural_opts
       << ";coalesce_copies=" << options.coalesce_copies
       << ";exact_stack_dead_store_elimination=" << options.exact_stack_dead_store_elimination
+      << ";allow_size_neutral_selector_seed_reuse="
+      << options.allow_size_neutral_selector_seed_reuse
       << ";aggressive_indirect_call_threshold=" << options.aggressive_indirect_call_threshold
       << ";aggressive_indirect_call=" << options.aggressive_indirect_call
       << ";dual_use_constant_indirect_flow=" << options.dual_use_constant_indirect_flow
@@ -71062,6 +71105,66 @@ bool refresh_callee_hole_late_selector_charge_comments(
   return true;
 }
 
+// Relayout changes complete selector families, not just the target number in
+// their old explanatory text. Rebuild legacy proof annotations only from a
+// closed CFG and delivered preloads which resolve to every advertised use.
+// Work on a copy: a stale charge or an inconsistent selector must not leave a
+// half-refreshed artifact behind.
+bool refresh_proved_layout_annotations(CompileResult& result,
+                                       const CompileOptions& options) {
+  const AddressSpaceModel model = address_space_model_for_options(options);
+  const auto normalized = core::normalize_natural_target_overflow_formals(result.items, model);
+  if (!normalized.has_value())
+    return false;
+  core::PostLayoutControlFlowOptions flow_options;
+  flow_options.address_space_model = model;
+  flow_options.empty_return_target = 1;
+  const auto flow = core::build_post_layout_control_flow(*normalized, flow_options);
+  if (!flow.proved)
+    return false;
+
+  std::vector<PreloadReport> proved_preloads;
+  std::set<std::string> proved_registers;
+  for (const PreloadReport& preload : result.preloads) {
+    const auto decoded = core::evaluate_indirect_address(
+        preload.register_name, preload.value, core::IndirectOperationKind::Flow, model);
+    if (!decoded.has_value() || !decoded->actual_flow_target.has_value())
+      continue;
+    bool used = false;
+    bool matches = true;
+    for (const auto& [source_item, targets] : flow.indirect_flow_targets) {
+      const auto reg = indirect_register_from_opcode(normalized->at(source_item).opcode);
+      if (!reg.has_value() || *reg != preload.register_name)
+        continue;
+      used = true;
+      matches = matches && targets.size() == 1U &&
+                targets.front().address == *decoded->actual_flow_target;
+    }
+    if (used && matches) {
+      proved_preloads.push_back(preload);
+      proved_registers.insert(preload.register_name);
+    }
+  }
+  for (const auto& [source_item, targets] : flow.indirect_flow_targets) {
+    (void)targets;
+    const MachineItem& item = normalized->at(source_item);
+    if (!item.comment.has_value() || item.comment->find("preloaded R") == std::string::npos)
+      continue;
+    const auto reg = indirect_register_from_opcode(item.opcode);
+    if (!reg.has_value() || !proved_registers.contains(*reg))
+      return false;
+  }
+
+  std::vector<MachineItem> refreshed = result.items;
+  remove_preloaded_indirect_flow_comment_annotations(refreshed);
+  append_missing_preloaded_indirect_flow_comments(refreshed, proved_preloads, options);
+  refresh_single_indirect_target_comment_addresses(refreshed, flow);
+  if (!refresh_callee_hole_late_selector_charge_comments(refreshed, options))
+    return false;
+  result.items = std::move(refreshed);
+  return true;
+}
+
 std::optional<CompileResult>
 apply_finalization_absolute_relayout(
     const CompileResult& selected, const CompileOptions& options,
@@ -71901,7 +72004,7 @@ apply_finalization_cell_erasure_to_selected_result(
                                 ? std::move(*absolute_relayout)
                                 : selected;
   if (!absolute_relayout.has_value()) {
-    candidate.items = *retargeted_finalized;
+    candidate.items = *reduced;
     candidate.preloads = selector_rebind.preloads;
   }
   for (const core::passes::AppliedOptimization& optimization :
@@ -73551,12 +73654,22 @@ select_absolute_dark_layout_for_final_artifact(const CompileResult& selected,
 std::optional<CompileResult>
 apply_absolute_dark_layout_once(const std::string& source,
                                 const CompileResult& selected,
-                                const CompileOptions& options) {
+                                const CompileOptions& options,
+                                bool allow_proved_prefix_repayment = false) {
   const bool trace = std::getenv("MKPRO_NATIVE_TRACE_CANDIDATES") != nullptr;
   if (selected.manual_startup_sequence.has_value())
     return std::nullopt;
-  const std::optional<SelectedAbsoluteDarkLayout> layout =
+  std::optional<SelectedAbsoluteDarkLayout> layout =
       select_absolute_dark_layout_for_final_artifact(selected, options);
+  if (!layout.has_value() && allow_proved_prefix_repayment &&
+      core::machine_cell_count(selected.items) < static_cast<int>(selected.steps.size())) {
+    // The caller already owns a complete selector/data/CFG proof for this
+    // smaller prefix. Do not discard its saving merely because the next
+    // absolute-layout transaction cannot remove another cell.
+    layout = SelectedAbsoluteDarkLayout{
+        .items = selected.items, .preloads = selected.preloads, .optimizations = {},
+    };
+  }
   if (!layout.has_value()) {
     if (trace)
       std::cerr << "[selected-dark-layout] no selected layout\n";
@@ -73572,6 +73685,9 @@ apply_absolute_dark_layout_once(const std::string& source,
         .detail = optimization.detail,
     });
   }
+
+  if (!refresh_proved_layout_annotations(candidate, options))
+    return std::nullopt;
 
   const ResolvedProgram resolved = resolve_machine_items(candidate.items, options);
   if (!resolved.diagnostics.empty() || resolved.steps.size() >= selected.steps.size()) {
@@ -73634,13 +73750,57 @@ apply_absolute_dark_layout_to_selected_result(const std::string& source,
                                                const CompileOptions& options) {
   std::optional<CompileResult> best =
       apply_absolute_dark_layout_once(source, selected, options);
-  for (const CompileResult& seed :
-       underflow_selector_split_layout_seeds(selected, options)) {
+  auto seeds = underflow_selector_split_layout_seeds(selected, options);
+  for (const CompileResult& seed : seeds) {
     const std::optional<CompileResult> candidate =
         apply_absolute_dark_layout_once(source, seed, options);
     if (candidate.has_value() &&
         (!best.has_value() || candidate_beats_best(*candidate, *best, options))) {
       best = *candidate;
+    }
+  }
+  {
+    seeds.insert(seeds.begin(), selected);
+    for (const CompileResult& seed : seeds) {
+      const auto model = address_space_model_for_options(options);
+      const auto normalized = core::normalize_natural_target_overflow_formals(seed.items, model);
+      if (!normalized.has_value())
+        continue;
+      core::PostLayoutControlFlowOptions flow_options;
+      flow_options.address_space_model = model;
+      flow_options.empty_return_target = 1;
+      const auto control = core::build_post_layout_control_flow(*normalized, flow_options);
+      if (!control.proved)
+        continue;
+      const auto bounded = core::late_bound_decimal_selector_target_labels(*normalized);
+      if (!bounded.has_value())
+        continue;
+      core::NaturalTargetComponentLayoutOptions layout_options;
+      layout_options.address_space_model = model;
+      layout_options.maximum_subset_states = 512;
+      layout_options.maximum_anchor_combinations = 32;
+      layout_options.maximum_anchors = options.maximum_natural_target_anchors;
+      layout_options.required_bounded_target_labels.assign(bounded->begin(), bounded->end());
+      layout_options.maximum_bounded_target_address = 99;
+      layout_options.allow_size_neutral_bounded_layout = true;
+      for (const auto& reassigned : core::reassign_stable_indirect_selector_families(
+               *normalized, seed.preloads, control, layout_options)) {
+        const auto rebound = core::rebind_late_bound_decimal_selectors(
+            reassigned.items, {.minimum_target_address = 0, .maximum_target_address = 99});
+        if (!rebound.diagnostics.empty())
+          continue;
+        CompileResult alternative = seed;
+        alternative.items = rebound.items;
+        alternative.preloads = reassigned.preloads;
+        for (const auto& optimization : reassigned.optimizations)
+          alternative.optimizations.push_back({.name = optimization.name,
+                                                 .detail = optimization.detail});
+        const auto candidate = apply_absolute_dark_layout_once(
+            source, alternative, options, /*allow_proved_prefix_repayment=*/true);
+        if (candidate.has_value() && candidate->steps.size() < selected.steps.size() &&
+            (!best.has_value() || candidate_beats_best(*candidate, *best, options)))
+          best = *candidate;
+      }
     }
   }
   return best;
@@ -73731,6 +73891,18 @@ std::optional<CompileResult> entered_contract_failure(const std::string& source,
 }
 
 } // namespace
+
+bool refresh_proved_layout_annotations_for_testing(
+    CompileResult& result, const CompileOptions& options) {
+  return refresh_proved_layout_annotations(result, options);
+}
+
+std::optional<std::map<std::size_t, int>> fixed_direct_address_targets_for_testing(
+    const std::vector<MachineItem>& items, const CompileOptions& options) {
+  const auto proof = collect_fixed_direct_address_targets(
+      items, options, address_space_model_for_options(options));
+  return proof.has_value() ? std::optional{proof->targets} : std::nullopt;
+}
 
 namespace {
 
@@ -78089,6 +78261,58 @@ CompileResult compile_source_for_optimizer_profile(
     try {
       best = apply_finalization_fixed_point_to_selected_result(
           source, std::move(best), best_options, options);
+
+      // A selector seed may have two incoming producers before helper sharing
+      // unifies their continuations. Cloning the store is locally neutral, not
+      // an unconditional optimization. Regenerate one independent candidate;
+      // compare only complete, proof-valid layouts and preserve the incumbent
+      // when the candidate does not repay the transformation. Admission uses
+      // machine consumers/producers, never source names or a game recognizer.
+      bool has_selector_seed = false;
+      for (std::size_t index = 0; index + 1U < best.steps.size(); ++index) {
+        has_selector_seed = has_selector_seed ||
+            (best.steps.at(index).opcode == 8 &&
+             best.steps.at(index + 1U).opcode >= 0x40 &&
+             best.steps.at(index + 1U).opcode <= 0x43);
+      }
+      const bool has_packed_producer =
+          std::any_of(best.steps.begin(), best.steps.end(), [](const ResolvedStep& step) {
+            return step.opcode == 0x38;
+          });
+      if (!best_options.allow_size_neutral_selector_seed_reuse &&
+          has_selector_seed && has_packed_producer) {
+        CompileOptions seed_options = best_options;
+        seed_options.allow_size_neutral_selector_seed_reuse = true;
+        CompileResult candidate = compile_source_once(
+            source, seed_options, source_has_entered,
+            /*apply_final_layout_size_rescue=*/true);
+        const bool reused_seed = has_optimization_named(
+            candidate.optimizations, "indirect-selector-seed-reuse");
+        if (candidate.implemented && reused_seed &&
+            (!candidate_needs_static_proof_gate(seed_options) ||
+             !optimizer_static_gate_rejection_reason(seed_options, candidate).has_value())) {
+          candidate = apply_finalization_fixed_point_to_selected_result(
+              source, std::move(candidate), seed_options, options);
+          const bool proved = !candidate_needs_static_proof_gate(seed_options) ||
+              !optimizer_static_gate_rejection_reason(seed_options, candidate).has_value();
+          if (trace_candidates)
+            std::cerr << "[candidate-trace] selector-seed-repayment steps="
+                      << candidate.steps.size() << " incumbent=" << best.steps.size()
+                      << " proved=" << (proved ? "yes" : "no") << '\n';
+          if (proved && candidate.steps.size() < best.steps.size() &&
+              candidate_beats_best(candidate, best, options)) {
+            candidate.optimizations.push_back(OptimizationReport{
+                .name = "selector-seed-full-layout-repayment",
+                .detail = "Selected a proof-valid selector-equivalent seed rewrite "
+                          "only after full layout repaid its neutral IR form (" +
+                          std::to_string(candidate.steps.size()) + " vs " +
+                          std::to_string(best.steps.size()) + " cells).",
+            });
+            best_options = seed_options;
+            best = std::move(candidate);
+          }
+        }
+      }
 
       // The ordinary source allocator intentionally gives every state name a
       // distinct provisional register. Once the winning lowering/layout is

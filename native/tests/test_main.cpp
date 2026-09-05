@@ -158,6 +158,7 @@ void packed_display_helpers_match_typescript_contract();
 void packed_score_helpers_match_typescript_contract();
 void parser_matches_initial_v2_source_contract();
 void phase_selector_materializer_requires_proved_raw_phase_and_factor();
+void indirect_selector_seed_reuse_preserves_observations();
 void expression_parser_matches_initial_contract();
 void parser_accepts_all_example_sources();
 void pass_pipeline_matches_initial_typescript_contract();
@@ -417,6 +418,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(packed_score_helpers_match_typescript_contract),
       MKPRO_TEST(parser_matches_initial_v2_source_contract),
       MKPRO_TEST(phase_selector_materializer_requires_proved_raw_phase_and_factor),
+      MKPRO_TEST(indirect_selector_seed_reuse_preserves_observations),
       MKPRO_TEST(expression_parser_matches_initial_contract),
       MKPRO_TEST(parser_accepts_all_example_sources),
       MKPRO_TEST(pass_pipeline_matches_initial_typescript_contract),

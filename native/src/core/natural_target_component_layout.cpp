@@ -418,8 +418,29 @@ std::optional<OverflowTargetNormalization> normalize_overflow_formals(
     } else if (const int* target = std::get_if<int>(&item.target)) {
       intended_target = *target;
     }
-    if (!intended_target.has_value() || *intended_target <= official_last)
+    if (!intended_target.has_value())
       continue;
+    if (*intended_target <= official_last) {
+      // An ordinary encoded operand is only a cache when its target is a
+      // symbolic command identity. A preceding erasure or block move may have
+      // changed the label's address. Keeping the old byte would silently turn
+      // it into a different command (and freeze that wrong target in layout).
+      // Explicit numeric operands, raw/dual-use cells and side-space aliases
+      // retain their separate physical-address contract.
+      if (std::holds_alternative<std::string>(item.target) && !item.raw &&
+          item.roles.empty()) {
+        try {
+          if (formal_address_info(*item.formal_opcode, model).kind ==
+              FormalAddressKind::Official) {
+            item.formal_opcode.reset();
+            normalized.changed = true;
+          }
+        } catch (const std::exception&) {
+          return std::nullopt;
+        }
+      }
+      continue;
+    }
     if (item.raw || !item.roles.empty())
       return std::nullopt;
     try {
@@ -4709,6 +4730,25 @@ std::optional<CandidateArtifact> try_candidate(
       .natural_target = required.target_address,
     });
   }
+  if (control_flow.empty_return_target.has_value()) {
+    const auto& continuation = *control_flow.empty_return_target;
+    const bool already_pinned = std::any_of(
+        options.required_absolute_targets.begin(), options.required_absolute_targets.end(),
+        [&](const NaturalTargetRequiredAbsoluteTarget& target) {
+          return target.target_item == continuation.item_index &&
+                 target.target_address == continuation.address;
+        });
+    if (!already_pinned) {
+      const auto location = locate_origin(segments, continuation.item_index);
+      if (!location.has_value())
+        return reject("empty-return continuation identity cannot be located");
+      placements.push_back(NaturalTargetPlacement{
+          .target_segment = location->first,
+          .target_offset = location->second,
+          .natural_target = continuation.address,
+      });
+    }
+  }
   std::vector<SplitBridgeDonor> split_bridge_donors;
   const auto command_is_control_identity =
       [&](const std::size_t command_origin) {
@@ -5037,7 +5077,9 @@ std::optional<CandidateArtifact> try_candidate(
         new_address_by_origin.find(control_flow.empty_return_target->item_index);
     if (rebound == new_address_by_origin.end())
       return reject("empty-return target identity was lost");
-    final_options.empty_return_target = rebound->second;
+    if (rebound->second != control_flow.empty_return_target->address)
+      return reject("empty-return hardware continuation changed physical address");
+    final_options.empty_return_target = control_flow.empty_return_target->address;
   }
   const AuthoritativePostLayoutControlFlow final_flow =
       build_post_layout_control_flow(candidate.items, final_options);

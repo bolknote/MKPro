@@ -145,6 +145,7 @@ bool has_fallthrough_barrier_before(const std::vector<MachineItem>& items,
 struct SymbolicState {
   std::array<std::string, 4> stack;
   std::string x2;
+  std::string x1;
   std::array<std::string, kRegisterCount> registers;
 };
 
@@ -152,6 +153,7 @@ SymbolicState initial_symbolic_state() {
   SymbolicState result;
   result.stack = {"stack.X", "stack.Y", "stack.Z", "stack.T"};
   result.x2 = "stack.X2";
+  result.x1 = "stack.X1";
   for (int index = 0; index < kRegisterCount; ++index)
     result.registers.at(static_cast<std::size_t>(index)) = "reg." + std::to_string(index);
   return result;
@@ -175,6 +177,8 @@ bool execute_symbolic_op(SymbolicState& state, const MachineItem& item, bool all
   }
   const int opcode = item.opcode;
   const std::array<std::string, 4> old = state.stack;
+  if (opcode_saves_physical_x1(opcode))
+    state.x1 = old.at(0);
 
   if (is_direct_register_alias(opcode)) {
     rejection = "symbolic transfer encountered an undocumented direct-register alias";
@@ -211,13 +215,17 @@ bool execute_symbolic_op(SymbolicState& state, const MachineItem& item, bool all
     state.x2 = old.at(0);
     return true;
   }
-  if (opcode == 0x0f) { // F Bx: Y, Z, T, T
-    state.stack = {old.at(1), old.at(2), old.at(3), old.at(3)};
+  if (opcode == 0x0f) { // F Bx: X1, X, Y, Z
+    state.stack = {state.x1, old.at(0), old.at(1), old.at(2)};
     state.x2 = old.at(0);
     return true;
   }
   if (opcode == 0x14) { // X <-> Y
     state.stack = {old.at(1), old.at(0), old.at(2), old.at(3)};
+    return true;
+  }
+  if (opcode == 0x25) { // F reverse: Y, Z, T, X
+    state.stack = {old.at(1), old.at(2), old.at(3), old.at(0)};
     return true;
   }
 
@@ -322,14 +330,7 @@ std::optional<std::size_t> next_cell_item(const std::vector<MachineItem>& items,
 }
 
 int equality_state_key(const StackValueEqualityState& state, bool number_entry_active) {
-  int key = state.x2_equal ? 16 : 0;
-  for (std::size_t index = 0; index < state.stack_equal.size(); ++index) {
-    if (state.stack_equal.at(index))
-      key |= 1 << static_cast<int>(index);
-  }
-  if (number_entry_active)
-    key |= 32;
-  return key;
+  return stack_value_equality_key(state) | (number_entry_active ? 64 : 0);
 }
 
 bool apply_flow_x2(StackValueEqualityState& state, const OpcodeInfo& info, bool jump,
@@ -381,6 +382,7 @@ ContinuationProof prove_continuation(const std::vector<MachineItem>& items,
   for (std::size_t index = 0; index < initial.stack_equal.size(); ++index)
     initial.stack_equal.at(index) = original.stack.at(index) == rewritten.stack.at(index);
   initial.x2_equal = original.x2 == rewritten.x2;
+  initial.x1_equal = original.x1 == rewritten.x1;
   if (stack_values_fully_equal(initial)) {
     proof.proved = true;
     return proof;

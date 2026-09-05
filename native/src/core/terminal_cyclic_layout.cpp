@@ -1352,8 +1352,9 @@ struct SemanticContinuationState {
   bool x1_equal = false;
 
   bool operator<(const SemanticContinuationState& other) const {
-    return std::tie(execution, equality.stack_equal, equality.x2_equal, x1_equal) <
+    return std::tie(execution, equality.stack_equal, equality.x2_equal, equality.x1_equal, x1_equal) <
            std::tie(other.execution, other.equality.stack_equal, other.equality.x2_equal,
+                    other.equality.x1_equal,
                     other.x1_equal);
   }
 };

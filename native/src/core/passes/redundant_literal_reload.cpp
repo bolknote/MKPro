@@ -292,7 +292,9 @@ bool equality_state_merge(StackValueEqualityState& destination,
   for (std::size_t slot = 0; slot < merged.stack_equal.size(); ++slot)
     merged.stack_equal.at(slot) = destination.stack_equal.at(slot) && incoming.stack_equal.at(slot);
   merged.x2_equal = destination.x2_equal && incoming.x2_equal;
-  if (merged.stack_equal == destination.stack_equal && merged.x2_equal == destination.x2_equal)
+  merged.x1_equal = destination.x1_equal && incoming.x1_equal;
+  if (merged.stack_equal == destination.stack_equal && merged.x2_equal == destination.x2_equal &&
+      merged.x1_equal == destination.x1_equal)
     return false;
   destination = merged;
   return true;

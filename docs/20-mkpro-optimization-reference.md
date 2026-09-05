@@ -3493,6 +3493,89 @@ JSON and human `--analysis` output expose the score, unit, CFG counts, loop
 bound, policy, and availability reason. A selected equal-size alternative also
 records `runtime-cost-tie-break` with the two compared scores.
 
+## Indirect selector seed reuse
+
+`indirect-selector-seed-reuse` removes a separate scalar initializer when an
+earlier computed value belongs to the same observable selector class. The
+initial implementation uses the fixed `8.<seven BCD nibbles>` result of `K OR`
+to initialize an R0-R3 memory selector. Its first indirect access discards the
+fractional tail and decrements both representations to exactly 7. This is an
+opcode/consumer property, not a recognition of source names or a game formula.
+
+The separately ranked neutral candidate also reuses the existing complete-call-family
+invariant-recall proof before natural selector addresses are fixed. This lets common
+operands move into a helper without artificial padding at already frozen addresses;
+the composed candidate still has to win on final emitted cells.
+
+`stable-indirect-selector-family-reassignment` adds up to eight deterministic
+allocation alternatives within that transaction. A fixed data constant can serve
+a different complete flow family while an address-only or proved retunable selector
+serves the displaced family. Calls, jumps and conditional branches are admitted;
+mutating low registers, writes, aliases and incomplete target sets are rejected.
+The existing deferred-selector reconciliation and natural component solver must
+prove the final runtime addresses and all data projections. No provisional
+selector mismatch or non-decreasing complete candidate is published.
+
+The pass runs before physical layout and only with wholly symbolic control
+flow. Every incoming execution context must pass the producer. The speculative
+store must not expose or overwrite a live register value on any other path.
+Ordinary reads, counter-loop uses, indirect-flow uses, aliases, independent manual
+entries, unknown targets and observations before convergence are rejected. A relational
+proof follows X/Y/Z/T, physical last-X (X1), hidden X2, decimal-entry state and the selector through the exact
+call/return CFG. The transformed CFG is independently rebuilt. Search is bounded
+to 256 predecessor steps and 100000 relational states; exceeding either bound
+rejects the candidate without changing code. One moved store replaces a literal
+and its store, saving one cell; no runtime emulator is used for acceptance.
+An opt-in candidate also admits two incoming producers: its two stores replace
+the literal/store pair with no immediate saving. Automatic selection regenerates
+this candidate independently and requires a strictly smaller proof-valid final
+layout. Target sets shared by several call contexts may include more registers;
+the first-use seed proof still determines the exact target 7 in its own context.
+An unobserved scratch-register difference may cross a typed resumable prompt
+only with completely equal visible/hidden stack state. The proof follows the
+authoritative resume and manual-phase edges until the register is overwritten
+or canonically initialized; any intervening ordinary or aliased read rejects
+the candidate. A prompt is not treated as permission to forget live differences.
+For a typed terminal `halt`, no later source instruction can observe Z/T. The
+display/result pair X/Y, saved X2 and canonical selector must still agree.
+Closed-entry dot may restore equal X2 when X is also equal, without demanding
+equality of dead deeper slots. Resumable stops retain the full-stack requirement.
+
+## Stable indirect selector family reassignment
+
+Post-layout search may exchange complete indirect-flow families between a
+fixed data constant and a retunable selector. The fixed constant keeps its
+data value; exact component placement brings its new target to the address
+that value already denotes. The retunable family follows the displaced target.
+The search is independent of selector-seed rewriting and accepts only proved,
+non-growing intermediate layouts, with strict final size repayment.
+
+Calls and conditional or unconditional jumps share this mechanism. Manual
+continuation anchors retain their protocol and command identity. Runtime-written
+selectors, uncertain aliases and unproved data projections are rejected. Final
+preload and late-bound charge annotations are rebuilt from the delivered
+values and CFG, never used to manufacture a missing target proof.
+
+## Symbolic address cache normalization
+
+An over-window listing in analysis mode contains provisional address bytes.
+Direct-target proofs take ordinary numeric targets from the IR, never by
+hardware-decoding those display placeholders. Only an explicitly encoded
+formal operand is decoded through the calculator's address-space model.
+
+An ordinary encoded address attached to a symbolic label is a cache, not a
+second fixed target. Removing a preceding cell must retain the label's command
+identity and rebuild its byte. Finalization publishes the normalized artifact,
+not the version carrying the stale encoding. Explicit numeric addresses, raw
+operands, executable overlays and side-space aliases keep their separate
+physical-address contracts. Emulator tests cover both relocation and rejection
+boundaries, using the production byte-code emitter.
+
+An admitted empty-return continuation is also a physical constraint, not a
+relocatable return label. Component placement pins that command to the original
+hardware address and checks the address again in the final CFG. Moving other
+helpers must not silently change cold-start or empty-stack return behavior.
+
 ## Proof-closed post-layout repayment
 
 Компонентная раскладка может временно добавить не более двух ячеек моста, только если обычная раскладка не удовлетворяет доказанным адресным ограничениям. Такой промежуточный артефакт не публикуется напрямую.

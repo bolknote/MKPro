@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cstdlib>
+#include <iostream>
 #include <map>
 #include <optional>
 #include <set>
@@ -655,6 +657,181 @@ exchange_shared_helper_dual_mode_selector_families(
                 "selector followed the relocated family; re-proved every indirect "
                 "target and external entry by command identity.",
   });
+  return result;
+}
+
+std::vector<SharedHelperDualModeSelectorExchangeResult>
+reassign_stable_indirect_selector_families(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const NaturalTargetComponentLayoutOptions& options) {
+  std::vector<SharedHelperDualModeSelectorExchangeResult> result;
+  const bool trace = std::getenv("MKPRO_NATIVE_TRACE_SELECTOR_FAMILIES") != nullptr;
+  if (!control_flow.proved)
+    return result;
+  const auto is_flow = [](int opcode) {
+    const int family = opcode & 0xf0;
+    return family == 0x70 || family == 0x80 || family == 0x90 ||
+           family == 0xa0 || family == 0xc0 || family == 0xe0;
+  };
+  struct Family {
+    int reg;
+    std::size_t preload;
+    PostLayoutCommandIdentity target;
+    std::vector<std::size_t> uses;
+  };
+  std::vector<Family> families;
+  for (int reg = 7; reg <= 14; ++reg) {
+    const auto preload = preload_for_register(preloads, reg);
+    if (!preload.has_value() || preloads.at(*preload).setup_expression ||
+        preloads.at(*preload).setup_target_name.has_value()) {
+      if (trace && preload.has_value())
+        std::cerr << "[selector-families] exclude R" << reg << " generated setup\n";
+      continue;
+    }
+    Family family{reg, *preload, {}, {}};
+    bool complete = true;
+    for (std::size_t index = 0; index < items.size(); ++index) {
+      const MachineItem& item = items.at(index);
+      if (item.kind != MachineItemKind::Op)
+        continue;
+      if (item.raw || item.opcode == 0x40 + reg ||
+          ((item.opcode & 0xf0) == 0xb0 &&
+           (!item.indirect_memory_targets.has_value() ||
+            std::find(item.indirect_memory_targets->begin(),
+                      item.indirect_memory_targets->end(), reg) !=
+                item.indirect_memory_targets->end()))) {
+        complete = false;
+        if (trace)
+          std::cerr << "[selector-families] exclude R" << reg << " write/raw item="
+                    << index << " opcode=" << item.opcode << '\n';
+        break;
+      }
+      if (!is_flow(item.opcode) || (item.opcode & 0x0f) != reg)
+        continue;
+      const auto targets = control_flow.indirect_flow_targets.find(index);
+      if (targets == control_flow.indirect_flow_targets.end() ||
+          targets->second.size() != 1U ||
+          (!family.uses.empty() &&
+           family.target.item_index != targets->second.front().item_index)) {
+        complete = false;
+        if (trace)
+          std::cerr << "[selector-families] exclude R" << reg << " flow item="
+                    << index << " opcode=" << item.opcode << " target-count="
+                    << (targets == control_flow.indirect_flow_targets.end() ? 0 : targets->second.size()) << '\n';
+        break;
+      }
+      family.target = targets->second.front();
+      family.uses.push_back(index);
+    }
+    if (complete && !family.uses.empty())
+      families.push_back(std::move(family));
+  }
+
+  std::size_t attempted = 0;
+  for (const Family& fixed : families) {
+    for (const Family& flexible : families) {
+      if (fixed.reg == flexible.reg || fixed.target.item_index == flexible.target.item_index)
+        continue;
+      // Do not permute two already-flexible addresses. The missing degree of
+      // freedom is specifically the target served by an unchangeable data value.
+      if (rebind_stable_preloaded_indirect_flow_selector(
+              items, preloads.at(fixed.preload), control_flow, fixed.target.address,
+              flexible.target.address, options.address_space_model).has_value())
+        continue;
+      const auto rebound = rebind_stable_preloaded_indirect_flow_selector(
+          items, preloads.at(flexible.preload), control_flow, flexible.target.address,
+          fixed.target.address, options.address_space_model);
+      if (!rebound.has_value())
+        continue;
+      if (++attempted > 8U)
+        return result;
+      if (trace)
+        std::cerr << "[selector-families] R" << fixed.reg << "/R" << flexible.reg
+                  << " fixed=" << fixed.target.address << " flexible=" << flexible.target.address << '\n';
+
+      auto seed_items = items;
+      auto seed_preloads = preloads;
+      seed_preloads.at(flexible.preload).value = *rebound;
+      for (std::size_t index : fixed.uses) {
+        auto& item = seed_items.at(index);
+        item.opcode = (item.opcode & 0xf0) | flexible.reg;
+        item.mnemonic = opcode_by_code(item.opcode).name;
+      }
+      for (std::size_t index : flexible.uses) {
+        auto& item = seed_items.at(index);
+        item.opcode = (item.opcode & 0xf0) | fixed.reg;
+        item.mnemonic = opcode_by_code(item.opcode).name;
+      }
+      // Only stable selector operands changed. Typed target identities, flow
+      // kinds, guards, instructions and external-entry protocols are unchanged.
+      // The provisional mismatch is never publishable: deferred reconciliation
+      // requires the unchanged fixed value to decode to the final target below.
+      PostLayoutControlFlowOptions flow_options;
+      flow_options.address_space_model = options.address_space_model;
+      if (control_flow.empty_return_target.has_value())
+        flow_options.empty_return_target = control_flow.empty_return_target->address;
+      const auto seed_control = build_post_layout_control_flow(seed_items, flow_options);
+      if (!seed_control.proved) {
+        if (trace)
+          for (const auto& reason : seed_control.reasons)
+            std::cerr << "[selector-families] provisional CFG: " << reason << '\n';
+        continue;
+      }
+      if (seed_control.execution_successors != control_flow.execution_successors ||
+          seed_control.execution_states.size() != control_flow.execution_states.size() ||
+          !std::equal(seed_control.execution_states.begin(), seed_control.execution_states.end(),
+                      control_flow.execution_states.begin(), [](const auto& left, const auto& right) {
+                        return left.item_index == right.item_index && left.address == right.address &&
+                               left.return_stack == right.return_stack;
+                      }))
+        continue;
+      auto layout_options = options;
+      layout_options.required_absolute_targets.push_back({
+          .target_item = flexible.target.item_index,
+          .target_address = fixed.target.address,
+      });
+      for (std::size_t index : flexible.uses)
+        layout_options.deferred_selector_reconciliations.push_back({
+            .source_item = index,
+            .target_item = flexible.target.item_index,
+            .final_target_address = fixed.target.address,
+        });
+      layout_options.allow_size_neutral_absolute_layout = true;
+      layout_options.allow_size_neutral_flow_rebind = true;
+      layout_options.maximum_transactional_growth_cells = 0;
+      const auto placed = optimize_natural_target_component_layout(
+          seed_items, seed_preloads, seed_control, layout_options);
+      if (trace)
+        std::cerr << "[selector-families] placed=" << placed.applied
+                  << " proved=" << placed.plan.proved << " final=" << placed.plan.final_artifact_proved
+                  << " deferred=" << placed.plan.deferred_selector_reconciliations_proved
+                  << " cells=" << cell_count(placed.items) << '\n';
+      if (placed.applied <= 0 || !placed.plan.proved || !placed.plan.final_artifact_proved ||
+          !placed.plan.deferred_selector_reconciliations_proved ||
+          !placed.plan.final_control_flow.proved || cell_count(placed.items) > cell_count(items)) {
+        if (trace)
+          for (const auto& reason : placed.plan.reasons)
+            std::cerr << "[selector-families] " << reason << '\n';
+        continue;
+      }
+      SharedHelperDualModeSelectorExchangeResult alternative;
+      alternative.items = placed.items;
+      alternative.preloads = placed.preloads;
+      alternative.control_flow = placed.plan.final_control_flow;
+      alternative.applied = 1;
+      alternative.optimizations.push_back({
+          .name = "stable-indirect-selector-family-reassignment",
+          .detail = "Reassigned complete stable flow families R" +
+                    preloads.at(fixed.preload).register_name + " and R" +
+                    preloads.at(flexible.preload).register_name +
+                    "; preserved data projections and re-proved final runtime selector "
+                    "decoding, CFG, call/return and stack/X2 identities after exact placement.",
+      });
+      result.push_back(std::move(alternative));
+    }
+  }
   return result;
 }
 

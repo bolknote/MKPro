@@ -60,6 +60,19 @@ struct SharedHelperDualModeSelectorExchangeResult {
   std::vector<std::string> reasons;
 };
 
+// Independently proved, non-growing selector-allocation alternatives. A fixed
+// data constant can serve a different complete flow family while a retunable
+// selector follows the displaced family. Calls and conditional/unconditional
+// jumps are treated uniformly; R0-R6 and runtime-written selectors are excluded.
+// These are transaction seeds, not standalone size wins. The caller must rank
+// the complete downstream artifact against its original incumbent.
+std::vector<SharedHelperDualModeSelectorExchangeResult>
+reassign_stable_indirect_selector_families(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const NaturalTargetComponentLayoutOptions& options = {});
+
 // Mark one source-agnostic three-call helper family for an atomic layout.
 // The operation is analysis-only: command order and machine semantics are not
 // changed before the natural component solver has proved an exact placement.
