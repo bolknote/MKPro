@@ -1,7 +1,10 @@
+#include "mkpro/compiler.hpp"
+#include "mkpro/core/opcodes.hpp"
 #include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
 
+#include <algorithm>
 #include <array>
 #include <string>
 #include <vector>
@@ -62,6 +65,66 @@ std::array<std::string, 5> predecrement_selector_trace(const std::string& select
 } // namespace
 
 void emulator_indirect_incdec_facts_match_typescript_contract() {
+  for (int selector = 0; selector <= 6; ++selector) {
+    emulator::MK61 calc;
+    require(calc.load_program({0xd0 + selector, 0x50}).diagnostics.empty(),
+            "mutating indirect recall fact must load");
+    for (std::size_t index = 0; index < kDataRegisters.size(); ++index)
+      calc.set_register(kDataRegisters.at(index), std::to_string(4000 + index));
+    calc.set_register(std::to_string(selector), "9");
+    calc.press_sequence({"\u0412/\u041e", "\u0421/\u041f"});
+    require(calc.run_until_stable(200, 5).stopped,
+            "mutating indirect recall fact must stop");
+    const int updated = selector <= 3 ? 8 : 10;
+    require(std::stoi(compact(calc.read_register(std::to_string(selector)))) == updated,
+            "indirect recall must write the updated selector back to memory");
+    require(std::stoi(compact(calc.display_text())) == 4000 + updated,
+            "indirect recall must return selected memory, not the updated counter, in X");
+  }
+
+  for (const bool increment : {false, true}) {
+    for (const bool expression_consumer : {false, true}) {
+      const std::string source =
+          "program CounterValue {\n state {\n n: counter " +
+          std::string(increment ? "0..99" : "1..14") +
+          " = 9\n }\n loop {\n n " + (increment ? "+=" : "-=") +
+          " 1\n show(" + (expression_consumer ? "n * 2" : "n") + " )\n }\n}\n";
+      CompileOptions options;
+      options.disable_candidate_search = true;
+      const CompileResult result = compile_source(source, options);
+      require(result.implemented && result.diagnostics.empty(),
+              "value-producing counter update fixture must compile");
+      const int counter = register_index(result.registers.at("n"));
+      require(std::any_of(result.steps.begin(), result.steps.end(),
+                          [counter](const ResolvedStep& step) {
+                            return step.opcode == 0xd0 + counter;
+                          }),
+              "counter result regression must exercise the indirect mutation lowering");
+      std::vector<int> codes;
+      for (const ResolvedStep& step : result.steps)
+        codes.push_back(step.opcode);
+      emulator::MK61 calc;
+      require(calc.load_program(codes).diagnostics.empty(),
+              "counter result fixture must load without truncation");
+      for (std::size_t index = 0; index < kDataRegisters.size(); ++index)
+        calc.set_register(kDataRegisters.at(index), std::to_string(4000 + index));
+      for (const PreloadReport& preload : result.preloads)
+        calc.set_register(preload.register_name, preload.value);
+      calc.press_sequence({"\u0412/\u041e", "\u0421/\u041f"});
+      for (int turn = 1; turn <= 3; ++turn) {
+        const int updated = 9 + (increment ? turn : -turn);
+        require(calc.run_until_stable(2000, 5).stopped,
+                "counter result consumer lost its observable stop");
+        require(std::stod(calc.display_text()) == updated * (expression_consumer ? 2 : 1),
+                "counter result consumer used selected memory instead of the updated counter");
+        require(std::stoi(compact(calc.read_register(result.registers.at("n")))) == updated,
+                "value-producing counter update did not persist the new counter");
+        if (turn != 3)
+          calc.press("\u0421/\u041f");
+      }
+    }
+  }
+
   for (const int r : {0, 1, 2, 3})
     require(std::stoi(after_indirect_access(r, "5")) == 4,
             "R0..R3 should pre-decrement on indirect access");

@@ -61,6 +61,9 @@ struct BuildCfgOptions {
   bool indirect_call_fallthrough = false;
   bool unknown_indirect_flow_to_all = true;
   bool unresolved_direct_flow_to_all = true;
+  // Machine-flow clients keep physical stop/resume edges by default. Source
+  // lifetime clients may cut only compiler-owned, unanchored terminal stops.
+  bool terminal_stop_fallthrough = true;
 };
 
 CfgTargetIndexes build_target_indexes(const std::vector<IrOp>& ops);

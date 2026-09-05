@@ -3684,6 +3684,18 @@ continuation; nested returns pop that continuation. Loop iterations reuse the
 same analysis state. Ordinary stop/resume preserves the pending return suffix.
 An empty hardware return targets physical address 01, not program entry 00.
 
+Lifetime analysis uses source termination rather than physical fallthrough at
+compiler-owned `StopDisposition::Terminal` stops. In particular, a terminal arm
+physically adjacent to its caller must not invent recursion and exhaust the
+return-context proof. This applies both to matched-call analysis and to its
+ordinary fixed-point fallback. Unentered instructions remain independently
+covered. `show()`, unknown stops, raw operations and manual interaction anchors
+retain their continuation; comments such as `halt` do not prove termination.
+The shared CFG builder keeps physical stop/resume edges by default and exposes
+`terminal_stop_fallthrough = false` only for source-flow proof consumers.
+Tests cover terminal versus resumable recursive adjacency, callee clobbers,
+unentered code, and compiled/emulated caller values across stops and returns.
+
 Per-instruction liveness remains the union of all invocation contexts for DSE.
 Register interference, however, is built separately in each invocation before
 combining edges. Otherwise two disjoint caller values would falsely interfere
@@ -3707,9 +3719,23 @@ subsequent instruction can observe the missing jump's entry boundary. This
 extends the existing predecessor-closed proof; it does not assume that any
 arbitrary entry-closing instruction preserves X2 or stack behavior.
 
-Raw or operator-anchored digits/stores and protected target cells do not supply
-this proof. All existing command-identity, external-entry, return-stack,
+Raw or operator-anchored digits/stores do not supply this proof. Metadata roles
+on the retained target store remain unchanged; they do not prohibit the fold
+because the target itself is neither deleted nor replaced. All existing
+command-identity, external-entry, return-stack,
 selector, and final-artifact checks still apply. Emulator comparisons cover
 multi-digit, fractional, exponent, and Enter-prefixed input, subsequent numeric
 entry, decimal-point/X2 observation, and physical last-X. Ordinary digit-to-digit
 fallthrough remains prohibited because it concatenates two numbers.
+
+## Indirect counter mutation and value production
+
+An indirect recall through R0..R6 updates its selector register, but delivers
+the selected memory value to X, not the new counter. A mutation-only lowering
+therefore discards the indirect result and invalidates cached X facts. A
+value-producing update forwarded into a display or expression explicitly
+recalls the updated counter before forwarding it. This contract is shared by
+unit increments and decrements; ordinary mutation-only uses keep their
+one-cell implementation. Emulator facts distinguish the selector write-back
+from the recalled value, and compiler regressions exercise both direct display
+and arithmetic consumers with unrelated canary values in other registers.

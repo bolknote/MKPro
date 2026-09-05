@@ -860,6 +860,41 @@ bool reason_contains(const core::NaturalTargetComponentLayoutPlan& plan,
 
 void natural_target_component_layout_is_generic_and_proof_gated() {
   {
+    Fixture retained_target;
+    retained_target.items = {
+        MachineItem::label("entry"), op(0x53),
+        MachineItem::address(std::string("body")), stop(),
+        MachineItem::label("body"), op(0x01), op(0x02), op(0x51),
+        MachineItem::address(std::string("sink")), MachineItem::label("sink"),
+        op(0x4e), op(0x02), op(0x0e), op(0x0f), op(0x52),
+    };
+    retained_target.items.at(10).roles.push_back("test-retained-store-identity");
+    core::NaturalTargetComponentLayoutOptions options;
+    options.allow_standalone_fallthrough_jump_fold = true;
+    const auto result = core::optimize_natural_target_component_layout(
+        retained_target.items, retained_target.preloads, flow(retained_target), options);
+    require(result.plan.proved && result.plan.final_artifact_proved &&
+                result.plan.stack_and_x2_equivalent && result.plan.call_return_equivalent &&
+                result.removed_cells == 2 && result.plan.fallthrough_jump_folds == 1,
+            "metadata on a retained entry-closing store must not prevent a proved jump fold");
+    require(std::any_of(result.items.begin(), result.items.end(),
+                        [](const MachineItem& item) {
+                          return item.kind == MachineItemKind::Op && item.opcode == 0x4e &&
+                                 item.roles == std::vector<CellRole>{
+                                     "test-retained-store-identity"};
+                        }),
+            "number-entry stitching must preserve all metadata on the retained target");
+    require(observe(retained_target.items, retained_target.preloads).state ==
+                observe(result.items, result.preloads).state,
+            "retained-target metadata changed stack, last-X, or return behavior");
+    retained_target.items.at(10).raw = true;
+    require(core::optimize_natural_target_component_layout(
+                retained_target.items, retained_target.preloads, flow(retained_target), options)
+                .applied == 0,
+            "a raw target store must still block number-entry stitching");
+  }
+
+  {
     // Test the entry-state proof independently of any selector or game. The
     // jump follows digits, but its target store closes entry before a later
     // digit, X2-sensitive decimal point, or last-X observation can see it.

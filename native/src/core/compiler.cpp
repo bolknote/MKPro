@@ -16831,7 +16831,9 @@ bool emit_indirect_unit_increment(LoweringContext& context, const std::string& t
   context.emitter.emit_op(0xd0 + register_it->second,
                           "К П->X " + register_text_for(context, target), comment, source_line);
   context.emitter.items.back().logical_register_name = target;
-  mark_current_x(context, target);
+  // The selector changes in memory, but X receives selected memory, not the
+  // updated selector. emit_op already invalidated the previous X facts.
+  context.emitter.items.back().discarded_indirect_recall_value = true;
   context.optimizations.push_back(OptimizationReport{
       .name = "indirect-incdec-counter",
       .detail = "Incremented " + target + " by using К П->X " + register_text_for(context, target) +
@@ -22730,14 +22732,19 @@ bool lower_stack_carried_update_expression_to_x(LoweringContext& context,
                                      ? add_expression(std::move(base), std::move(delta))
                                      : subtract_expression(std::move(base), std::move(delta));
   if (unit_update && op == "+") {
-    if (!lower_increment_update(context, target, line) &&
-        !lower_expression_to_x(context, update_expression)) {
-      return false;
+    if (lower_increment_update(context, target, line)) {
+      // Mutation-only indirect recall does not produce the counter value in X.
+      emit_recall(context, target);
+      return true;
     }
+    return lower_expression_to_x(context, update_expression);
+  }
+  if (unit_update && op == "-" && can_lower_indirect_decrement_update(context, target, line)) {
+    if (!lower_decrement_update(context, target, "set ", line))
+      return false;
+    emit_recall(context, target);
     return true;
   }
-  if (unit_update && op == "-" && can_lower_indirect_decrement_update(context, target, line))
-    return lower_decrement_update(context, target, "set ", line);
   return lower_expression_to_x(context, update_expression);
 }
 

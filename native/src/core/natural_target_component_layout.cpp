@@ -818,7 +818,6 @@ bool apply_transparent_fallthrough_jump_fold(
       target_entry.kind == MachineItemKind::Op && target_entry.opcode >= 0x40 &&
       target_entry.opcode <= 0x4e && !target_entry.raw &&
       !target_entry.manual_interaction.has_value() &&
-      target_entry.roles.empty() &&
       opcode_by_code(target_entry.opcode).stack_effect == StackEffect::Preserves &&
       opcode_by_code(target_entry.opcode).x2_effect == X2Effect::Preserves;
   if (predecessor.kind != MachineItemKind::Op ||

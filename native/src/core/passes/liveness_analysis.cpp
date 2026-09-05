@@ -132,7 +132,8 @@ std::optional<LivenessInfo> matched_call_liveness(const std::vector<IrOp>& ops,
     return std::nullopt;
   }
 
-  const ControlFlowGraph graph = build_control_flow_graph(ops);
+  const ControlFlowGraph graph =
+      build_control_flow_graph(ops, BuildCfgOptions{.terminal_stop_fallthrough = false});
   if (!graph.targets_are_exact())
     return std::nullopt;
 
@@ -398,6 +399,7 @@ LivenessInfo compute_liveness(const std::vector<IrOp>& ops, LivenessOptions opti
                .indirect_call_fallthrough = true,
                .unknown_indirect_flow_to_all = options.unknown_indirect_flow_to_all,
                .unresolved_direct_flow_to_all = options.unresolved_direct_flow_to_all,
+               .terminal_stop_fallthrough = false,
            });
   const std::size_t size = ops.size();
   std::vector<std::vector<int>> successors(size);

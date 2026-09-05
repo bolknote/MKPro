@@ -1,5 +1,6 @@
 #include "mkpro/compiler.hpp"
 #include "mkpro/core/compiler_behavior_digest.hpp"
+#include "mkpro/core/opcodes.hpp"
 #include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
@@ -3336,8 +3337,22 @@ program DecrementTest {
           "decrement/test compile should not report diagnostics");
   require(has_optimization(decrement_test, "current-x-negated-zero-test"),
           "counter decrement followed by <= 0 should match current TS negated-zero test path");
-  require(decrement_test.listing.find("set remaining") != std::string::npos,
-          "current TS path stores the decremented counter before the <= 0 branch");
+  {
+    // remaining is dead after the terminal result. Its physical store is not
+    // required, but the branch and its output must consume the updated value.
+    std::vector<int> codes;
+    for (const ResolvedStep& step : decrement_test.steps)
+      codes.push_back(step.opcode);
+    emulator::MK61 calc;
+    require(calc.load_program(codes).diagnostics.empty(),
+            "decrement/test fixture must load without truncation");
+    for (const PreloadReport& preload : decrement_test.preloads)
+      calc.set_register(preload.register_name, preload.value);
+    calc.press_sequence({"\u0412/\u041e", "\u0421/\u041f"});
+    require(calc.run_until_stable(2000, 5).stopped &&
+                std::stod(calc.display_text()) == -2,
+            "decrement/test branch must observe the updated counter even without a dead store");
+  }
 
   CompileOptions expression_call_options;
   expression_call_options.disable_candidate_search = true;

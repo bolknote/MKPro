@@ -145,6 +145,44 @@ void cfg_matches_typescript_contract() {
   using core::passes::loop_counter_register;
 
   {
+    const BuildCfgOptions source_flow{.terminal_stop_fallthrough = false};
+    for (const StopDisposition disposition : {StopDisposition::Unknown,
+                                               StopDisposition::Resumable,
+                                               StopDisposition::Terminal}) {
+      IrOp interaction = halt();
+      interaction.meta.stop_disposition = disposition;
+      const std::vector<IrOp> ops = {interaction, plain(0x01, "1")};
+      require_edges(build_cfg_edges(ops), 0, {{1, CfgEdgeKind::Fallthrough}},
+                    "physical CFG retains stop/resume even for a source halt");
+      if (disposition == StopDisposition::Terminal) {
+        require_edges(build_cfg_edges(ops, source_flow), 0, {},
+                      "typed source halt terminates source flow");
+      } else {
+        require_edges(build_cfg_edges(ops, source_flow), 0,
+                      {{1, CfgEdgeKind::Fallthrough}},
+                      "unknown or resumable stop retains its continuation");
+      }
+    }
+
+    IrOp terminal = halt();
+    terminal.meta.stop_disposition = StopDisposition::Terminal;
+    terminal.meta.raw = true;
+    require_edges(build_cfg_edges({terminal, plain(0x01, "1")}, source_flow), 0,
+                  {{1, CfgEdgeKind::Fallthrough}}, "raw stop is not a source termination proof");
+    terminal.meta.raw = false;
+    terminal.meta.manual_interaction = ManualInteractionAnchor{
+        .protocol_id = 4, .phase = 0, .kind = ManualInteractionAnchorKind::PromptStop};
+    require_edges(build_cfg_edges({terminal, plain(0x01, "1")}, source_flow), 0,
+                  {{1, CfgEdgeKind::Fallthrough}},
+                  "manual continuation overrides a conflicting terminal annotation");
+    terminal.meta.manual_interaction.reset();
+    terminal.opcode = 0x01;
+    require_edges(build_cfg_edges({terminal, plain(0x02, "2")}, source_flow), 0,
+                  {{1, CfgEdgeKind::Fallthrough}},
+                  "a non-stop opcode is not a source termination proof");
+  }
+
+  {
     const std::vector<IrOp> ops = {
         plain(0x01, "1"),
         label("head"),

@@ -1,4 +1,6 @@
 #include "mkpro/core/passes/liveness_analysis.hpp"
+#include "mkpro/compiler.hpp"
+#include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
 
@@ -121,6 +123,105 @@ IrOp ret() {
 } // namespace
 
 void liveness_analysis_matches_typescript_contract() {
+  {
+    IrOp terminal = halt();
+    terminal.meta.stop_disposition = StopDisposition::Terminal;
+    IrOp returning;
+    returning.kind = IrKind::CondJump;
+    returning.opcode = 0x5e;
+    returning.condition = "==0";
+    returning.target = std::string("returning");
+    // The leaf's terminal arm is physically followed by its caller. Treating
+    // the terminal stop as resumable invents recursive calls and defeats the
+    // bounded return-context proof, although the source has no recursion.
+    const std::vector<IrOp> program = {
+        store("1"), call_to("outer"), recall("1"), store("2"), call_to("outer"),
+        recall("2"), jump_to("done"), label("leaf"), returning, terminal,
+        label("outer"), call_to("leaf"), ret(), label("returning"), store("3"),
+        ret(), label("done"), terminal,
+    };
+    const auto info = core::passes::compute_liveness(program);
+    const auto graph = core::passes::build_register_interference_graph(program, info);
+    require(info.matched_call_contexts && info.control_flow_targets_are_exact,
+            "typed termination must not create fictitious recursive return contexts");
+    require(info.live_out.at(9).empty() && info.live_out.at(17).empty(),
+            "a source terminal stop acquired live-out values from physical adjacency");
+    require(!graph.interferes("1", "2") && graph.interferes("1", "3") &&
+                graph.interferes("2", "3"),
+            "terminal-arm analysis lost disjoint caller phases or real callee clobbers");
+
+    for (const StopDisposition disposition : {StopDisposition::Unknown,
+                                               StopDisposition::Resumable}) {
+      auto resumable = program;
+      resumable.at(9).meta.stop_disposition = disposition;
+      const auto conservative = core::passes::compute_liveness(resumable);
+      require(!conservative.matched_call_contexts && conservative.live_out.at(9).contains("1"),
+              "a resumable stop must retain the recursive continuation and conservative fallback");
+    }
+    auto manual = program;
+    manual.at(9).meta.manual_interaction = ManualInteractionAnchor{
+        .protocol_id = 4, .phase = 0, .kind = ManualInteractionAnchorKind::PromptStop};
+    require(!core::passes::compute_liveness(manual).matched_call_contexts,
+            "manual stop/resume was discarded by a terminal annotation");
+    auto raw = program;
+    raw.at(9).meta.raw = true;
+    const auto raw_info = core::passes::compute_liveness(raw);
+    require(!raw_info.matched_call_contexts && raw_info.live_out.at(9).contains("1"),
+            "raw terminal metadata weakened the conservative continuation proof");
+
+    const auto no_calls = core::passes::compute_liveness({store("1"), terminal, recall("1")});
+    require(no_calls.live_out.at(1).empty() && no_calls.live_in.at(2).contains("1"),
+            "ordinary fixed-point liveness must cut source termination without erasing unentered code");
+  }
+
+  {
+    const std::string source = R"mkpro(program TerminatingCallee {
+      state {
+        phase: counter 0..9 = 0
+        first: counter 0..99 = 0
+        second: counter 0..99 = 0
+      }
+      loop {
+        first = phase + 3
+        tick()
+        show(first)
+        second = phase + 5
+        tick()
+        show(second)
+      }
+      fn tick() {
+        phase += 1
+        if phase == 3 {
+          halt(phase)
+        }
+        show(phase)
+      }
+    })mkpro";
+    CompileOptions options;
+    options.disable_candidate_search = true;
+    const CompileResult result = compile_source(source, options);
+    require(result.implemented && result.diagnostics.empty(),
+            "a callee with terminal and resumable arms must compile");
+    std::vector<int> codes;
+    for (const ResolvedStep& step : result.steps)
+      codes.push_back(step.opcode);
+    emulator::MK61 calc;
+    require(calc.load_program(codes).diagnostics.empty(),
+            "terminal-callee compiler fixture must load without truncation");
+    for (const PreloadReport& preload : result.preloads)
+      calc.set_register(preload.register_name, preload.value);
+    calc.press_sequence({"\u0412/\u041e", "\u0421/\u041f"});
+    const std::vector<int> expected = {1, 3, 2, 6, 3};
+    for (std::size_t index = 0; index < expected.size(); ++index) {
+      require(calc.run_until_stable(2000, 5).stopped,
+              "a callee stop or its matched return continuation was lost");
+      require(std::stod(calc.display_text()) == expected.at(index),
+              "callee termination changed a value retained across an ordinary stop/resume");
+      if (index + 1U < expected.size())
+        calc.press("\u0421/\u041f");
+    }
+  }
+
   {
     // The same helper runs in two disjoint caller phases. A union at its
     // return instruction is useful for DSE but is not an interference clique.

@@ -179,8 +179,14 @@ ControlFlowGraph build_control_flow_graph(const std::vector<IrOp>& ops, BuildCfg
     case IrKind::IndirectRecall:
     case IrKind::Plain:
     case IrKind::OrphanAddress:
-    case IrKind::Stop:
       fallthrough();
+      break;
+    case IrKind::Stop:
+      if (options.terminal_stop_fallthrough || op.opcode != 0x50 || op.meta.raw ||
+          op.meta.manual_interaction.has_value() ||
+          op.meta.stop_disposition != StopDisposition::Terminal) {
+        fallthrough();
+      }
       break;
     case IrKind::Jump:
       direct_jump_to(op.target);
