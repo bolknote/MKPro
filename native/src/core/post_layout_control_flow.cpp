@@ -573,7 +573,9 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
     if (opcode == kReturnOpcode) {
       if (state.returns.empty()) {
         if (!result.empty_return_target.has_value()) {
-          add_reason(result, "reachable В/О has an empty return stack");
+          add_reason(result, options.empty_return_target.has_value()
+                                 ? "reachable В/О has an unresolved or non-executable typed empty-return target"
+                                 : "reachable В/О has an empty return stack");
         } else {
           enqueue(result.empty_return_target->address, state.returns);
         }
@@ -709,11 +711,13 @@ build_post_layout_control_flow(const std::vector<MachineItem>& items,
   if (options.empty_return_target.has_value()) {
     const std::optional<PostLayoutCommandIdentity> target =
         resolve_indirect_target(items, index, *options.empty_return_target);
-    if (!target.has_value()) {
-      add_reason(result, "typed empty-return target is unresolved or not executable");
-    } else {
+    if (target.has_value()) {
       result.empty_return_target = *target;
     }
+    // This is a policy for an empty-stack return, not an unconditional entry
+    // edge. In an intermediate layout its destination can still be an address
+    // operand. Reject that destination only if exact reachability encounters a
+    // return without a frame, including all admitted manual resume states.
   }
   const std::map<std::size_t, ManualProtocol> protocols =
       validate_manual_protocols(items, index, result);

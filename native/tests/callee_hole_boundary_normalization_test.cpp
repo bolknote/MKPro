@@ -591,7 +591,9 @@ void callee_hole_boundary_fusion_final_artifact_contract() {
   automatic_options.budget = 999999;
   const auto automatic = compile_source(source, automatic_options);
   require(automatic.implemented && automatic.steps.size() <= normalized.steps.size(),
-          "automatic final-ABI refinement must not discard a smaller proved entry composition");
+          "automatic final-ABI refinement must not discard a smaller proved entry composition: "
+          "automatic=" + std::to_string(automatic.steps.size()) +
+          ", independently finalized=" + std::to_string(normalized.steps.size()));
 }
 
 } // namespace mkpro::tests

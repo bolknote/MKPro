@@ -64,7 +64,9 @@ struct PostLayoutControlFlowOptions {
   // Exact opt-in hardware continuation for В/О with no return frame.  The
   // ordinary proof remains fail-closed; profiles that have separately pinned
   // the MK-61 empty-return behavior may name physical 01 (or an opaque label)
-  // here.
+  // here. The target must resolve if an empty-stack return is reachable. An
+  // unused policy does not create an external entry or invalidate a layout
+  // whose returns all have proved caller frames.
   std::optional<IrTarget> empty_return_target;
 };
 

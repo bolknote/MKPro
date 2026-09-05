@@ -153,6 +153,48 @@ void post_layout_control_flow_matches_typed_contract() {
   }
 
   {
+    const std::vector<MachineItem> closed_call = {
+        op(0x53, "ПП"), MachineItem::address(std::string("leaf")),
+        stop(StopDisposition::Terminal), MachineItem::label("leaf"),
+        op(0x52, "В/О"),
+    };
+    const auto ordinary = core::build_post_layout_control_flow(closed_call);
+    require(ordinary.proved && ordinary.maximum_observed_return_depth == 1,
+            "the ordinary helper return must retain its exact caller frame");
+    for (const IrTarget& target : {IrTarget{1}, IrTarget{99},
+                                  IrTarget{std::string("absent_policy_target")}}) {
+      core::PostLayoutControlFlowOptions options;
+      options.empty_return_target = target;
+      const auto unused = core::build_post_layout_control_flow(closed_call, options);
+      require(unused.proved && !unused.empty_return_target.has_value() &&
+                  unused.execution_states == ordinary.execution_states &&
+                  unused.execution_successors == ordinary.execution_successors &&
+                  unused.external_entries == ordinary.external_entries,
+              "an unused empty-return policy must not reject or enlarge the exact CFG");
+    }
+
+    core::PostLayoutControlFlowOptions options;
+    options.empty_return_target = 1; // The address operand, not a command.
+    auto empty_path = closed_call;
+    empty_path.front() = op(0x51, "БП");
+    const auto empty = core::build_post_layout_control_flow(empty_path, options);
+    require(!empty.proved && reason_contains(empty, "typed empty-return target"),
+            "a reachable empty return must still reject an operand as its destination");
+
+    auto manual_resume = closed_call;
+    manual_resume.at(2).stop_disposition = StopDisposition::Resumable;
+    const auto resumed = core::build_post_layout_control_flow(manual_resume, options);
+    require(!resumed.proved && reason_contains(resumed, "typed empty-return target"),
+            "an empty return reached after manual resume must validate the same policy");
+
+    const auto valid = core::build_post_layout_control_flow(
+        {op(0x52, "В/О"), stop(StopDisposition::Terminal)}, options);
+    require(valid.proved && valid.empty_return_target.has_value() &&
+                valid.empty_return_target->address == 1 && valid.execution_states.size() == 2,
+            "a reachable empty return must keep its real executable policy edge");
+  }
+
+  {
     std::vector<MachineItem> cyclic;
     cyclic.push_back(op(0x52, "В/О"));                       // 00
     cyclic.push_back(MachineItem::label("typed_main"));

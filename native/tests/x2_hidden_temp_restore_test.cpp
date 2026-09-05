@@ -41,7 +41,22 @@ void x2_hidden_temp_restore_matches_typescript_contract() {
     return core::passes::x2_hidden_temp_restore_pass().run(p, ctx);
   };
   const auto run_dse = [&](const std::vector<IrOp>& p) {
-    return core::passes::dead_store_elimination_pass().run(p, ctx);
+    const auto ordinary = core::passes::dead_store_elimination_pass().run(p, ctx);
+    bool materialized_flow = false;
+    for (const auto& op : p)
+      materialized_flow = materialized_flow || op.kind == IrKind::IndirectCall ||
+                          op.kind == IrKind::IndirectJump ||
+                          op.kind == IrKind::IndirectCondJump;
+    if (!materialized_flow)
+      return ordinary;
+    // These fixtures pin numeric indirect destinations. Ordinary DSE cannot
+    // erase their cells without a relocation transaction. Check that barrier,
+    // then inspect the liveness result in its actual finalization phase. The
+    // final artifact's address rebinding is covered by the compiler tests;
+    // this pass test does not execute the intermediate, unretargeted IR.
+    require(ordinary.applied == 0 && mkpro::ir_ops_to_json(ordinary.ops) == mkpro::ir_ops_to_json(p),
+            "ordinary X2/DSE composition must preserve materialized control geometry");
+    return core::passes::finalization_dead_store_elimination(p, ctx);
   };
   const auto is_plain_dot = [](const IrOp& op, int opcode) {
     return op.kind == IrKind::Plain && op.opcode == opcode;

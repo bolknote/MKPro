@@ -36,7 +36,10 @@ struct SharedHelperContinuationOptions {
   std::map<std::size_t, std::vector<int>> proved_indirect_flow_targets;
 
   // Bound for the path-sensitive X2 convergence proof after each ordinary
-  // continuation.  This is a safety limit, not an optimization heuristic.
+  // continuation, including bodies of resolved nested calls. A return itself
+  // synchronizes X2, so the proof never invents a caller continuation. Unknown
+  // targets, opaque entries and non-converged cycles fail closed. This is a
+  // safety limit, not an optimization heuristic.
   int maximum_convergence_states = 512;
 };
 

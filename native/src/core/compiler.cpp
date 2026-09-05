@@ -78700,8 +78700,14 @@ CompileResult compile_source_for_optimizer_profile(
         if (!abi_option_keys.insert(implemented_candidate_key(abi_options)).second)
           continue;
         CompileResult candidate = cached_compile_source_once(abi_options);
-        if (!candidate.implemented)
-          continue;
+        // Ordinary lowering may still have out-of-range address operands.
+        // Those are layout failures, not evidence against the entry ABI:
+        // component placement can make the same candidate both valid and
+        // smaller. As in the main final frontier, decide only after layout.
+        if (trace_candidates)
+          std::cerr << "[candidate-trace] final-helper-abi-start mask=" << mask
+                    << " ordinary-implemented=" << (candidate.implemented ? "yes" : "no")
+                    << " ordinary-steps=" << candidate.steps.size() << '\n';
         std::string input_key = "options:" + implemented_candidate_key(abi_options);
         const auto fingerprint = final_layout_input_fingerprints.find(
             compile_once_cache_key(abi_options));

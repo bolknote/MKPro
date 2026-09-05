@@ -1,8 +1,11 @@
 #include "mkpro/core/shared_helper_wrapper.hpp"
+#include "mkpro/core/emit/machine_emitter.hpp"
+#include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <stdexcept>
 #include <string>
@@ -168,6 +171,115 @@ void shared_helper_wrapper_rewrites_only_proved_continuations() {
       core::optimize_shared_helper_wrapper(x2_restore);
   require(x2_rejected.applied == 0,
           "an observable X2 difference after the redirected call must fail closed");
+
+  // The common continuation is followed by two nested calls before its first
+  // X2 overwrite. The proof must inspect their bodies instead of treating a
+  // call as either an unconditional barrier or an opaque preserving summary.
+  std::vector<MachineItem> nested = {
+      MachineItem::op(0x52, "return"), MachineItem::label("main"),
+      MachineItem::op(0x60, "recall 0"),
+      MachineItem::op(0x53, "call"), MachineItem::address(std::string("route")),
+      MachineItem::op(0x4a, "store a"), MachineItem::op(0x60, "recall 0"),
+      MachineItem::op(0x53, "call"), MachineItem::address(std::string("commit")),
+      MachineItem::op(0x4b, "store b"), MachineItem::op(0x60, "recall 0"),
+      MachineItem::op(0x53, "call"), MachineItem::address(std::string("kernel")),
+      MachineItem::op(0x4c, "store c"), MachineItem::op(0x0a, "decimal X2"),
+      MachineItem::op(0x4d, "store d"), MachineItem::op(0x50, "stop"),
+      MachineItem::op(0x51, "jump"), MachineItem::address(std::string("main")),
+      MachineItem::label("route"), MachineItem::op(0x60, "recall 0"),
+      MachineItem::op(0x53, "call"), MachineItem::address(std::string("kernel")),
+      MachineItem::op(0x38, "or"), MachineItem::op(0x49, "store 9"),
+      MachineItem::label("nested_call"),
+      MachineItem::op(0x53, "call"), MachineItem::address(std::string("sanitize")),
+      MachineItem::op(0x42, "store 2"), MachineItem::op(0x52, "return"),
+      MachineItem::label("commit"),
+      MachineItem::op(0x53, "call"), MachineItem::address(std::string("kernel")),
+      MachineItem::op(0x38, "or"), MachineItem::op(0x49, "store 9"),
+      MachineItem::op(0x52, "return"),
+      MachineItem::label("kernel"), MachineItem::op(0x31, "abs"),
+      MachineItem::op(0x52, "return"), MachineItem::label("sanitize"),
+      MachineItem::op(0x53, "call"), MachineItem::address(std::string("relay")),
+      MachineItem::op(0x52, "return"), MachineItem::label("relay"),
+      MachineItem::op(0x54, "nop"), MachineItem::op(0x03, "3"),
+      MachineItem::op(0x52, "return"),
+  };
+  for (auto& item : nested)
+    if (item.kind == MachineItemKind::Op && item.opcode == 0x50)
+      item.stop_disposition = StopDisposition::Resumable;
+  const auto nested_proof = core::verify_shared_helper_continuation(nested, "kernel");
+  require(nested_proof.proved,
+          "a literal inside a known nested callee must prove X2 convergence");
+  const auto nested_rewrite = core::optimize_shared_helper_wrapper(nested);
+  require(nested_rewrite.applied == 1 && nested_rewrite.removed_cells == 2 &&
+              nested_rewrite.proof.final_control_flow_proved,
+          "interprocedural convergence must enable the ordinary structural wrapper");
+  const auto observe = [](const std::vector<MachineItem>& items, const std::string& input) {
+    const auto resolved = resolve_machine_items(items, {});
+    require(resolved.diagnostics.empty(), "nested continuation fixture must resolve");
+    std::vector<int> codes;
+    for (const auto& step : resolved.steps) codes.push_back(step.opcode);
+    emulator::MK61 calc;
+    require(calc.load_program(codes).diagnostics.empty(), "nested fixture must fit");
+    calc.set_register("0", input);
+    calc.set_register("Y", "73"); calc.set_register("Z", "29");
+    calc.set_register("T", "17");
+    calc.input_number(input, true);
+    calc.press_sequence({"В/О", "С/П"});
+    std::vector<std::array<std::string, 12>> result;
+    for (int round = 0; round < 2; ++round) {
+      require(calc.run_until_stable(2000, 6).stopped,
+              "nested continuations must return through both callers and stop");
+      result.push_back({calc.display_text(), calc.read_register("X"),
+                        calc.read_register("Y"), calc.read_register("Z"),
+                        calc.read_register("T"), calc.read_register("X1"),
+                        calc.read_register("2"), calc.read_register("9"),
+                        calc.read_register("a"), calc.read_register("b"),
+                        calc.read_register("c"), calc.read_register("d")});
+      if (round == 0) calc.press("С/П");
+    }
+    return result;
+  };
+  for (const std::string input : {"0", "12", "-7", "8.1234567"})
+    require(observe(nested, input) == observe(nested_rewrite.items, input),
+            "nested wrapper must preserve display, stack, last-X, X2 observations and state: " + input);
+
+  auto unsafe_nested = nested;
+  unsafe_nested.at(item_at_address(unsafe_nested, label_address(unsafe_nested, "relay"))) =
+      MachineItem::op(0x0a, "decimal X2");
+  require(!core::verify_shared_helper_continuation(unsafe_nested, "kernel").proved,
+          "reading X2 inside a callee before overwriting it must reject sharing");
+  auto recursive_nested = nested;
+  const auto relay_item = item_at_address(recursive_nested,
+                                          label_address(recursive_nested, "relay"));
+  recursive_nested.at(relay_item) = MachineItem::op(0x53, "call");
+  recursive_nested.at(relay_item + 1) = MachineItem::address(std::string("relay"));
+  require(!core::verify_shared_helper_continuation(recursive_nested, "kernel").proved,
+          "recursive calls before X2 convergence cannot be assumed to return");
+  auto opaque_nested = nested;
+  opaque_nested.at(item_at_address(opaque_nested,
+                                   label_address(opaque_nested, "relay"))).raw = true;
+  require(!core::verify_shared_helper_continuation(opaque_nested, "kernel").proved,
+          "an opaque callee entry cannot supply a convergence proof");
+
+  auto indirect_nested = nested;
+  const auto indirect_item = item_at_address(indirect_nested,
+                                             label_address(indirect_nested, "nested_call"));
+  indirect_nested.at(indirect_item) = MachineItem::op(0xae, "indirect call e");
+  indirect_nested.erase(indirect_nested.begin() + static_cast<std::ptrdiff_t>(indirect_item + 1));
+  core::SharedHelperContinuationOptions indirect_options;
+  indirect_options.proved_indirect_flow_targets[indirect_item] = {
+      label_address(indirect_nested, "sanitize")};
+  require(core::verify_shared_helper_continuation(indirect_nested, "kernel", indirect_options).proved,
+          "a complete known indirect target must admit the same callee-body proof");
+  require(!core::verify_shared_helper_continuation(indirect_nested, "kernel").proved,
+          "an indirect call without a complete target set must remain opaque");
+  indirect_nested.push_back(MachineItem::label("unsafe_target"));
+  indirect_nested.push_back(MachineItem::op(0x0a, "decimal X2"));
+  indirect_nested.push_back(MachineItem::op(0x52, "return"));
+  indirect_options.proved_indirect_flow_targets[indirect_item].push_back(
+      label_address(indirect_nested, "unsafe_target"));
+  require(!core::verify_shared_helper_continuation(indirect_nested, "kernel", indirect_options).proved,
+          "every possible indirect callee, not just the first target, must converge");
 }
 
 } // namespace mkpro::tests

@@ -326,6 +326,10 @@ bool x2_difference_converges(const std::vector<MachineItem>& items, const Artifa
       return false;
     }
     const MachineItem& item = items.at(item_index);
+    if (item.raw || item.manual_interaction.has_value()) {
+      reasons.push_back("X2 convergence reaches an opaque or operator-controlled instruction");
+      return false;
+    }
     if (item.kind == MachineItemKind::Label) {
       const std::optional<std::size_t> next = next_cell_item(items, item_index);
       if (!next.has_value()) {
@@ -365,9 +369,38 @@ bool x2_difference_converges(const std::vector<MachineItem>& items, const Artifa
       state.x2_equal = true;
       continue;
     }
-    if (direct_call || kind == IrKind::Call || kind == IrKind::IndirectCall) {
-      reasons.push_back("a nested call can observe the moved return's unequal X2 value");
-      return false;
+    if (direct_call || kind == IrKind::Call) {
+      const std::optional<std::size_t> operand = next_cell_item(items, item_index);
+      if (!operand.has_value() || items.at(*operand).kind != MachineItemKind::Address ||
+          items.at(*operand).formal_opcode.has_value()) {
+        reasons.push_back("nested X2 proof requires an ordinary resolved call entry");
+        return false;
+      }
+      const auto target = address_target(items.at(*operand), index,
+                                         options.address_space_model);
+      if (!target.has_value() ||
+          !enqueue_successor(work, index, *target, state, false, reasons)) {
+        reasons.push_back("nested call in X2 proof has no resolved command identity");
+        return false;
+      }
+      // Calls preserve X2 and close numeric entry. Follow their actual body,
+      // never an optimistic caller continuation. A return synchronizes X2
+      // from the equal visible X and ends this proof, so no unmatched return
+      // edge or guessed callee summary is needed. Recursion before convergence
+      // is rejected by the same finite-state cycle/budget checks as a jump.
+      continue;
+    }
+    if (kind == IrKind::IndirectCall) {
+      const auto targets = options.proved_indirect_flow_targets.find(item_index);
+      if (targets == options.proved_indirect_flow_targets.end() || targets->second.empty()) {
+        reasons.push_back("nested indirect call in X2 proof lacks a complete target set");
+        return false;
+      }
+      for (int target : targets->second) {
+        if (!enqueue_successor(work, index, target, state, false, reasons))
+          return false;
+      }
+      continue;
     }
 
     if (direct_jump || direct_conditional) {

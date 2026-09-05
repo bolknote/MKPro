@@ -3774,7 +3774,40 @@ the additional subsets are explored while the requested size remains unmet.
 Every alternative is re-lowered and fully laid out before comparison. Exact
 final-layout proof-input fingerprints share finalized work, while each option
 set still passes its own static proof gate. Failed lowering or proof retains
-the incumbent. The existing size-first/runtime-tie-break comparator selects
+the incumbent. An ordinary intermediate with unresolved or out-of-range
+addresses is not rejected before this final-layout attempt: placement can
+repair those addresses and reveal a smaller valid artifact. The existing
+size-first/runtime-tie-break comparator selects
 the result; no source names, game identities or bytecode templates participate.
 The chosen combination and before/after cell counts appear in the optimization
 report as `final-helper-abi-refinement` (or the existing one-X report name).
+
+## Interprocedural X2 convergence for shared continuations
+
+Moving an identical continuation into a shared helper can change the hidden
+X2 value because its return now executes after that continuation. The equality
+proof follows ordinary resolved calls and all proved indirect-call targets
+until the difference is overwritten, instead of rejecting every nested call.
+It checks the callee instructions with the same stack/X1/X2 transfer model as
+the caller. A return synchronizes X2 from equal visible X, ending the proof;
+the analysis never guesses a callee summary or an unmatched return destination.
+
+Reading old X2 before convergence, unknown targets, raw/operator-controlled
+entries, non-converged cycles and the existing finite state bound all reject
+the candidate. Side-space direct calls remain outside this ordinary-entry
+proof. The separate final-layout CFG and return-stack checks still apply.
+This supports structural continuation sharing without identifying a source
+program, procedure name, formula or fixed address. Synthetic emulator tests
+cover nested calls, repeated returns, visible stack, physical last-X and an
+explicit decimal-point observation of X2.
+
+## Reachability-scoped empty-return policy
+
+An optional empty-return destination is a hardware continuation policy, not
+an unconditional CFG entry. Intermediate layouts may place an address operand
+at that destination while every reachable return still has a caller frame.
+Such an unused policy neither rejects the layout nor adds an execution edge.
+If exact return-stack exploration reaches an empty return, its destination
+must resolve to an executable command. The same check applies to paths reached
+after resumable stops and typed manual input. Missing destinations, operand
+cells and unknown empty-return behavior still fail closed when actually used.
