@@ -61,6 +61,7 @@ add_library(mkpro_core STATIC
   src/core/passes/cfg.cpp
   src/core/passes/conditional_branch_trampoline.cpp
   src/core/passes/constant_folding.cpp
+  src/core/passes/exact_decimal_remainder.cpp
   src/core/passes/cse_display_block.cpp
   src/core/passes/dead_code_after_halt.cpp
   src/core/passes/dead_proc_elimination.cpp
@@ -255,6 +256,7 @@ add_executable(mkpro_tests
   tests/parser_test.cpp
   tests/phase_selector_materializer_test.cpp
   tests/indirect_selector_seed_reuse_test.cpp
+  tests/exact_decimal_remainder_test.cpp
   tests/passes_test.cpp
   tests/post_layout_control_flow_test.cpp
   tests/post_layout_indirect_flow_test.cpp
@@ -316,6 +318,8 @@ add_executable(mkpro_tests
   tests/redundant_literal_reload_test.cpp
 )
 target_link_libraries(mkpro_tests PRIVATE mkpro_debug)
+
+get_filename_component(MKPRO_REPOSITORY_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 
 add_executable(mkpro_validate_trig tools/validate_mk61_trig.cpp)
 target_link_libraries(mkpro_validate_trig PRIVATE mkpro_debug)
@@ -447,6 +451,8 @@ set(MKPRO_NATIVE_TEST_NAMES
   parser_matches_initial_v2_source_contract
   phase_selector_materializer_requires_proved_raw_phase_and_factor
   indirect_selector_seed_reuse_preserves_observations
+  exact_decimal_remainder_correction_preserves_observations
+  compiler_exact_decimal_remainder_correction_is_generic
   expression_parser_matches_initial_contract
   parser_accepts_all_example_sources
   pass_pipeline_matches_initial_typescript_contract
@@ -515,7 +521,7 @@ set(MKPRO_NATIVE_TEST_NAMES
 )
 foreach(test_name IN LISTS MKPRO_NATIVE_TEST_NAMES)
   add_test(NAME "mkpro.${test_name}" COMMAND mkpro_tests --exact "${test_name}")
-  set_tests_properties("mkpro.${test_name}" PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+  set_tests_properties("mkpro.${test_name}" PROPERTIES WORKING_DIRECTORY "${MKPRO_REPOSITORY_ROOT}")
 endforeach()
 
 set(MKPRO_EMULATOR_REGRESSION_TEST_NAMES
@@ -538,7 +544,7 @@ foreach(test_name IN LISTS MKPRO_EMULATOR_REGRESSION_TEST_NAMES)
 endforeach()
 
 file(GLOB MKPRO_EMULATOR_REGRESSION_EXAMPLE_FILES CONFIGURE_DEPENDS
-  "${CMAKE_SOURCE_DIR}/examples/*.mkpro"
+  "${MKPRO_REPOSITORY_ROOT}/examples/*.mkpro"
 )
 foreach(example_file IN LISTS MKPRO_EMULATOR_REGRESSION_EXAMPLE_FILES)
   get_filename_component(example_name "${example_file}" NAME_WE)
@@ -547,14 +553,14 @@ foreach(example_file IN LISTS MKPRO_EMULATOR_REGRESSION_EXAMPLE_FILES)
     COMMAND mkpro_tests --load-example "${example_file}"
   )
   set_tests_properties("mkpro.emulator_regression.example_load.${example_name}" PROPERTIES
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    WORKING_DIRECTORY "${MKPRO_REPOSITORY_ROOT}"
     LABELS "emulator;integration;slow"
     COST 20
   )
 endforeach()
 
 file(GLOB MKPRO_EMULATOR_REGRESSION_PENDING_OPTIMIZER_FILES CONFIGURE_DEPENDS
-  "${CMAKE_SOURCE_DIR}/examples/pending-optimizer/*.mkpro"
+  "${MKPRO_REPOSITORY_ROOT}/examples/pending-optimizer/*.mkpro"
 )
 foreach(source_file IN LISTS MKPRO_EMULATOR_REGRESSION_PENDING_OPTIMIZER_FILES)
   get_filename_component(source_name "${source_file}" NAME_WE)
@@ -563,7 +569,7 @@ foreach(source_file IN LISTS MKPRO_EMULATOR_REGRESSION_PENDING_OPTIMIZER_FILES)
     COMMAND mkpro_tests --pending-optimizer-source "${source_file}"
   )
   set_tests_properties("mkpro.emulator_regression.pending_optimizer.${source_name}" PROPERTIES
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    WORKING_DIRECTORY "${MKPRO_REPOSITORY_ROOT}"
     LABELS "emulator;integration;slow"
     COST 20
   )

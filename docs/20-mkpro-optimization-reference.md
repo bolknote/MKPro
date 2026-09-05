@@ -3576,6 +3576,36 @@ relocatable return label. Component placement pins that command to the original
 hardware address and checks the address again in the final CFG. Moving other
 helpers must not silently change cold-start or empty-stack return behavior.
 
+## Exact decimal remainder correction
+
+The `exact-decimal-remainder-correction` IR pass removes a sign/zero control
+diamond around a scaled signed fractional quotient. For
+`r = frac(int(x) / m)`, it replaces `m*r`, followed by adding `m` when the result
+is nonpositive, with `m * (frac(r - 1) + 1)`. It matches typed opcode/data-flow
+structure, not source function names, labels, comments, or a particular game.
+
+This is an exact-decimal transformation, not a real-arithmetic modulo identity
+applied blindly to rounded calculator values. Its positive integer divisor
+must be `2^a * 5^b`. With `p = max(a, b)`, the proof requires `p <= 7` and
+`m * 10^p <= 100000000`. The original and replacement share the same possibly
+rounded quotient. Its fraction has quantum at least `10^-p`; the subsequent
+shift by one and all scaled numerators fit eight significant digits. Thus no
+additional rounding is introduced, including for very large ordinary inputs.
+Nonterminating divisors and insufficient precision fail closed. Emulator
+counterexamples pin both exclusions: widths 3 and 128 cannot be admitted.
+
+The correction must have a single entry, while incoming edges to the retained
+join label are allowed. Raw/error artifacts, numeric/formal address geometry,
+opaque indirect control flow, protected roles and manual stepping through the
+rewritten body are rejected. Argument-ABI roles on untouched symbolic calls
+are preserved and do not freeze unrelated code. The replacement preserves the ordinary decimal
+X/Y/Z/T contract, last-X1, hidden-X2 continuation and return-stack behavior.
+One literal divisor and both conditional branches are removed; the replacement
+cost includes its five arithmetic/literal commands. Multi-digit divisors save
+more cells than single-digit ones. Compiler and emulator regressions cover
+unrelated names, multiple divisors, signed/fractional and rounding-boundary
+inputs, metadata barriers and independently entered blocks.
+
 ## Proof-closed post-layout repayment
 
 Компонентная раскладка может временно добавить не более двух ячеек моста, только если обычная раскладка не удовлетворяет доказанным адресным ограничениям. Такой промежуточный артефакт не публикуется напрямую.

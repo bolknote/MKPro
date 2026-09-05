@@ -18,6 +18,7 @@
 #include "mkpro/core/passes/indirect_addressing.hpp"
 #include "mkpro/core/passes/indirect_selector_integer_part.hpp"
 #include "mkpro/core/passes/indirect_selector_seed_reuse.hpp"
+#include "mkpro/core/passes/exact_decimal_remainder.hpp"
 #include "mkpro/core/passes/jump_thread.hpp"
 #include "mkpro/core/passes/jump_to_next.hpp"
 #include "mkpro/core/passes/last_x_reuse.hpp"
@@ -263,6 +264,7 @@ const std::vector<IrPass>& pass_pipeline() {
       // suffix and tail-call lowering. This preserves explicit call/return
       // continuations long enough for return-suffix sharing; ordinary pass
       // order is unchanged for every other candidate.
+      exact_decimal_remainder_correction_pass(),
       indirect_selector_seed_reuse_pass(),
       phase_ordered_callee_hole_pass(),
       // Run the transactional sum/difference suffix canonicalizer before

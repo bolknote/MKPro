@@ -773,8 +773,8 @@ void compiler_feature_profile_rf_optimizer_is_size_monotonic_contract() {
   const CompileResult without_rf = compile_full(source, without_rf_options);
   require(without_rf.implemented && !has_error_diagnostic(without_rf),
           "standard-profile optimizer root should compile the regression fixture");
-  require(without_rf.steps.size() == 140,
-          "the corrected finalization pipeline should keep tic-tac-toe-4x4 at 140 cells, got " +
+  require(without_rf.steps.size() == 139,
+          "the corrected finalization pipeline should keep tic-tac-toe-4x4 at 139 cells, got " +
               std::to_string(without_rf.steps.size()));
   require(has_optimization(without_rf, "indirect-selector-seed-reuse") &&
               has_optimization(without_rf, "empty-return-startup-component-transaction") &&
