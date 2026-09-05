@@ -396,6 +396,72 @@ void callee_hole_boundary_fusion_preserves_stack_and_control() {
               std::equal(raw_selector.begin(), raw_selector.end(), rejected.items.begin(),
                          machine_items_equal),
           "failed rebinding must not publish either changed digits or changed annotations");
+
+  const std::string entry_source = R"mkpro(
+program FunctionEntryAlternatives {
+  state {
+    value: packed = 2
+  }
+  fn adjust(direction) {
+    value = (value + direction) * 2 + 3
+  }
+  loop {
+    adjust(1)
+    show(value)
+    adjust(-1)
+    show(value)
+  }
+}
+)mkpro";
+  const auto run_entry = [](const CompileResult& compiled) {
+    require(compiled.implemented && compiled.steps.size() <= 105,
+            "generic entry-ABI fixture must fit the physical emulator");
+    std::vector<int> codes;
+    for (const auto& step : compiled.steps) codes.push_back(step.opcode);
+    emulator::MK61 calc;
+    require(calc.load_program(codes).diagnostics.empty(), "entry-ABI fixture must load");
+    for (const auto& preload : compiled.preloads) {
+      std::string value;
+      for (char ch : preload.value) {
+        switch (ch) {
+          case 'A': value += '-'; break;
+          case 'B': value += 'L'; break;
+          case 'C': value += "С"; break;
+          case 'D': value += "Г"; break;
+          case 'E': value += "Е"; break;
+          case 'F': value += '_'; break;
+          default: value += ch; break;
+        }
+      }
+      calc.set_register(preload.register_name, value);
+    }
+    calc.press_sequence({"В/О", "С/П"});
+    std::vector<std::string> values;
+    for (int round = 0; round < 4; ++round) {
+      require(calc.run_until_stable(2000, 6).stopped,
+              "each entry ABI must preserve the return continuation across stops");
+      values.push_back(calc.display_text());
+      values.push_back(calc.read_register(compiled.registers.at("value")));
+      if (round != 3) calc.press("С/П");
+    }
+    return values;
+  };
+  CompileOptions entry_options;
+  entry_options.analysis = true;
+  entry_options.budget = 999999;
+  entry_options.disable_candidate_search = true;
+  entry_options.hoist_procs = true;
+  const auto entry_expected = run_entry(compile_source(entry_source, entry_options));
+  for (unsigned mask = 1; mask < 8; ++mask) {
+    auto variant = entry_options;
+    variant.stack_argument_helper_entries = (mask & 1U) != 0;
+    variant.single_x_expression_helper_entries = (mask & 1U) != 0;
+    variant.x_param_value_functions = (mask & 6U) != 0;
+    variant.sign_normalized_x_param = (mask & 2U) != 0;
+    variant.x_param_y_stack_stored_entry = (mask & 4U) != 0;
+    require(run_entry(compile_source(entry_source, variant)) == entry_expected,
+            "entry ABI subsets must preserve displays, persistent state and repeated returns");
+  }
 }
 
 void callee_hole_boundary_fusion_final_artifact_contract() {
@@ -425,7 +491,8 @@ void callee_hole_boundary_fusion_final_artifact_contract() {
   const auto rejection = optimizer_static_proof_gate_rejection_reason_for_testing(options, result);
   require(!rejection.has_value(), "complete fused artifact must pass its final proof: " +
                                  rejection.value_or(""));
-  require(result.steps.size() <= 134, "complete traversal sharing must retain its measured saving");
+  require(result.steps.size() <= 133,
+          "traversal sharing must compose with the retained selector-store fallthrough");
   const auto helper_summary = [&](const std::string& label) -> const SizeHelperSummaryReport* {
     const auto& helpers = result.size_attribution.helpers;
     const auto it = std::find_if(helpers.begin(), helpers.end(), [&](const auto& helper) {
@@ -473,6 +540,34 @@ void callee_hole_boundary_fusion_final_artifact_contract() {
                          "final proof must reject a missing entry rotation");
   reject_opcode_mutation(find_step("callee-hole leaf entry __packed_score_accumulator"), 0x0f,
                          "final proof must reject a leaf observing the overwritten X1");
+  std::optional<std::size_t> fallthrough_entry;
+  for (std::size_t index = 1; index < result.steps.size(); ++index) {
+    const auto& step = result.steps[index];
+    const auto& previous = result.steps[index - 1];
+    if (step.comment.has_value() &&
+        step.comment->starts_with("callee-hole charge-entry store;") &&
+        previous.opcode >= 0 && previous.opcode <= 9 &&
+        previous.address + 1 == step.address)
+      fallthrough_entry = index;
+  }
+  require(fallthrough_entry.has_value(),
+          "the final artifact must actually enter a retained selector store without a jump");
+  reject_opcode_mutation(*fallthrough_entry - 1,
+                         (result.steps[*fallthrough_entry - 1].opcode + 1) % 10,
+                         "fallthrough must reject digits inconsistent with the bound selector");
+  for (bool raw : {false, true}) {
+    CompileResult opaque = result;
+    std::size_t executable = 0;
+    for (MachineItem& item : opaque.items) {
+      if (item.kind == MachineItemKind::Label) continue;
+      if (executable++ != *fallthrough_entry) continue;
+      if (raw) item.raw = true;
+      else item.manual_interaction.emplace();
+      break;
+    }
+    require(optimizer_static_proof_gate_rejection_reason_for_testing(options, opaque).has_value(),
+            "raw or operator-anchored selector stores cannot prove fallthrough entry");
+  }
   CompileResult stale = result;
   stale.steps[find_step("callee-hole selector-value=")].comment =
       "callee-hole selector-value=0 indirect-target=0";
@@ -483,6 +578,20 @@ void callee_hole_boundary_fusion_final_artifact_contract() {
       "return suffix gadget";
   require(optimizer_static_proof_gate_rejection_reason_for_testing(options, unmarked).has_value(),
           "losing one charge-entry marker must fail the complete-predecessor proof");
+
+  CompileOptions normalized_options = options;
+  normalized_options.sign_normalized_x_param = true;
+  const auto normalized = compile_source(source, normalized_options);
+  require(normalized.implemented && normalized.steps.size() <= 132 &&
+              !optimizer_static_proof_gate_rejection_reason_for_testing(normalized_options,
+                                                                       normalized).has_value(),
+          "shared traversal must compose with proved sign-only parameter normalization");
+  CompileOptions automatic_options;
+  automatic_options.analysis = true;
+  automatic_options.budget = 999999;
+  const auto automatic = compile_source(source, automatic_options);
+  require(automatic.implemented && automatic.steps.size() <= normalized.steps.size(),
+          "automatic final-ABI refinement must not discard a smaller proved entry composition");
 }
 
 } // namespace mkpro::tests

@@ -3756,8 +3756,9 @@ program StackCarriedIndirectUnitDecrementConsumer {
             "unit decrement consumer should emit one indirect decrement");
     require(count_steps_with_comment(result, "set score") == 0,
             "unit decrement consumer should not add a store after indirect decrement");
-    require(count_steps_with_comment(result, "recall score") == 0,
-            "unit decrement consumer should not recall decremented score for halt(score)");
+    require(count_steps_with_comment(result, "recall score") == 1,
+            "an indirect decrement returns selected memory, so its value consumer must "
+            "recall the updated counter");
   }
 
   {
@@ -4048,7 +4049,7 @@ program StackCarriedLoopPrefixRead {
   loop {
     show(tmp)
     tmp = x + y
-    halt(tmp)
+    show(tmp)
   }
 }
 )mkpro",

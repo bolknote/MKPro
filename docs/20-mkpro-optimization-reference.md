@@ -3696,6 +3696,12 @@ The shared CFG builder keeps physical stop/resume edges by default and exposes
 Tests cover terminal versus resumable recursive adjacency, callee clobbers,
 unentered code, and compiled/emulated caller values across stops and returns.
 
+Ordinary and early exact-stack DSE require a wholly symbolic control-flow
+surface. A stronger lifetime proof does not authorize erasing cells beneath
+materialized numeric targets: those deletions belong to the finalization
+transaction, which retargets selectors and re-proves the resulting CFG. The
+same dead value remains removable before its helper target is materialized.
+
 Per-instruction liveness remains the union of all invocation contexts for DSE.
 Register interference, however, is built separately in each invocation before
 combining edges. Otherwise two disjoint caller values would falsely interfere
@@ -3728,6 +3734,21 @@ multi-digit, fractional, exponent, and Enter-prefixed input, subsequent numeric
 entry, decimal-point/X2 observation, and physical last-X. Ordinary digit-to-digit
 fallthrough remains prohibited because it concatenates two numbers.
 
+The final callee-hole proof also accepts a retained selector-entry store reached
+directly from its bound decimal literal. It re-derives the selector value and
+leaf address from the final digits, proves an uninterrupted literal and a
+closed predecessor (or explicit Enter), and rechecks the entry rotation and
+stack equality. The shared store's other incoming edges each retain their own
+charge proof; only the literal must have a single uninterrupted entry path.
+Raw or manually anchored entry protocols, stale annotations, skipped digits
+and missing stack repair are rejected. No removed jump marker is trusted as a
+substitute for this final-code proof.
+
+Size attribution keeps a shared suffix's cells in one physical region, while
+its register-read closure also follows ordinary fallthrough between adjacent
+regions. Such an edge contributes no call cells. This prevents a removed tail
+jump from hiding persistent inputs read inside the shared continuation.
+
 ## Indirect counter mutation and value production
 
 An indirect recall through R0..R6 updates its selector register, but delivers
@@ -3739,3 +3760,21 @@ unit increments and decrements; ordinary mutation-only uses keep their
 one-cell implementation. Emulator facts distinguish the selector write-back
 from the recalled value, and compiler regressions exercise both direct display
 and arithmetic consumers with unrelated canary values in other registers.
+
+## Final helper-entry ABI composition
+
+After ordinary candidate selection and final layout, the size-rescue search
+revisits a finite neighbourhood of function-entry choices on the selected
+option set: one-X shared-expression entries, sign-normalized parameters, and
+stored X/Y parameter entries. It compares all nonempty subsets, at most seven,
+on one immutable seed rather than greedily accumulating whichever option was
+enumerated first. Already fitting programs keep the previous one-X probe;
+the additional subsets are explored while the requested size remains unmet.
+
+Every alternative is re-lowered and fully laid out before comparison. Exact
+final-layout proof-input fingerprints share finalized work, while each option
+set still passes its own static proof gate. Failed lowering or proof retains
+the incumbent. The existing size-first/runtime-tie-break comparator selects
+the result; no source names, game identities or bytecode templates participate.
+The chosen combination and before/after cell counts appear in the optimization
+report as `final-helper-abi-refinement` (or the existing one-X report name).

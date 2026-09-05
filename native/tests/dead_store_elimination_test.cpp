@@ -259,23 +259,24 @@ void dead_store_elimination_matches_typescript_contract() {
     };
     const core::passes::PassResult ordinary =
         run_dead_store_elimination(program);
-    require(ordinary.applied == 0,
-            "without the exact-stack option the ordinary pass must keep the "
-            "store joined through the other call continuation");
     const core::passes::PassResult exact =
         run_exact_stack_dead_store_elimination(program);
+    require(exact.applied == 0,
+            "the early exact-stack phase must leave stores already proved dead by ordinary "
+            "matched-call liveness to the ordinary phase");
+    const core::passes::PassResult ordinary_after_exact =
+        run_dead_store_elimination(exact.ops);
     CompileOptions options;
     const core::passes::PassResult finalized =
         core::passes::finalization_dead_store_elimination(
             program, core::passes::PassContext{.options = options});
-    for (const core::passes::PassResult* result : {&exact, &finalized}) {
+    for (const core::passes::PassResult* result : {&ordinary, &ordinary_after_exact, &finalized}) {
       require(result->applied == 1 && result->ops.front().kind == IrKind::Call &&
                   result->ops.front().meta.manual_interaction.has_value() &&
                   result->ops.front().meta.manual_interaction->kind ==
                       ManualInteractionAnchorKind::ContinuousResume,
-              "the exact-return-stack proof should ignore another call site's "
-              "continuation and transfer the continuous-resume anchor in both "
-              "the exact-stack ordinary pass and finalization DSE");
+              "matched call continuations must ignore another caller and transfer "
+              "the continuous-resume anchor in ordinary, composed and finalization DSE");
     }
   }
 
@@ -348,7 +349,7 @@ void dead_store_elimination_matches_typescript_contract() {
     };
     const core::passes::PassResult ordinary = run_dead_store_elimination(program);
     require(ordinary.applied == 0,
-            "without the exact-stack option the ordinary pass must keep the raw store");
+            "ordinary DSE must preserve geometry until materialized targets can be retargeted");
     const core::passes::PassResult exact = run_exact_stack_dead_store_elimination(program);
     CompileOptions options;
     const core::passes::PassResult finalized =
@@ -359,6 +360,15 @@ void dead_store_elimination_matches_typescript_contract() {
     require(finalized.applied == 1 && store_count(finalized.ops) == store_count(program) - 1,
             "finalization DSE should prove the raw store dead across the resolved "
             "indirect call to a register-free helper");
+
+    auto symbolic = program;
+    for (IrOp& operation : symbolic) {
+      if (operation.kind != IrKind::IndirectCall) continue;
+      operation = call_to("grid_norm");
+    }
+    const auto relocatable = run_dead_store_elimination(symbolic);
+    require(relocatable.applied == 1 && store_count(relocatable.ops) == store_count(program) - 1,
+            "the same dead value must be removed while helper identities are still symbolic");
   }
 
   {
@@ -374,6 +384,9 @@ void dead_store_elimination_matches_typescript_contract() {
         run_exact_stack_dead_store_elimination(program);
     require(exact.applied == 0 && exact.ops.size() == program.size(),
             "early exact-stack DSE must fail closed on numeric direct targets");
+    const auto ordinary = run_dead_store_elimination(program);
+    require(ordinary.applied == 0 && ordinary.ops.size() == program.size(),
+            "ordinary DSE must not shift a numeric direct target either");
   }
 
   // The same shape with a helper that reads the stored register on one branch

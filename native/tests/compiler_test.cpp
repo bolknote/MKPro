@@ -3851,11 +3851,33 @@ program ImpureDivmodProducers {
           "impure producer fallback should not report diagnostics");
   require(has_optimization(impure_divmod_producers, "single-use-producer-forwarding"),
           "an independent pure producer should still be forwarded beside an impure definition");
-  require(std::any_of(impure_divmod_producers.steps.begin(),
-                      impure_divmod_producers.steps.end(), [](const ResolvedStep& step) {
-                        return step.comment == "set left";
-                      }),
-          "the random() producer itself must remain materialized at its original statement");
+  require(std::count_if(impure_divmod_producers.steps.begin(),
+                       impure_divmod_producers.steps.end(), [](const ResolvedStep& step) {
+                         return step.opcode == 0x3b;
+                       }) == 1,
+          "the impure producer must be evaluated exactly once even if its store is dead");
+  for (const char* seed : {"0", "0.25", "0.9"}) {
+    emulator::MK61 actual;
+    emulator::MK61 reference;
+    std::vector<int> codes;
+    for (const ResolvedStep& step : impure_divmod_producers.steps) codes.push_back(step.opcode);
+    require(actual.load_program(codes).diagnostics.empty() &&
+                reference.load_program({0x3b, 1, 0, 0x12, 3, 4, 0, 0x10, 0x50})
+                    .diagnostics.empty(),
+            "impure producer and random()*10+340 reference must load");
+    for (const PreloadReport& preload : impure_divmod_producers.preloads) {
+      actual.set_register(preload.register_name, preload.value);
+      reference.set_register(preload.register_name, preload.value);
+    }
+    actual.set_register("X", seed);
+    reference.set_register("X", seed);
+    actual.press_sequence({"В/О", "С/П"});
+    reference.press_sequence({"В/О", "С/П"});
+    require(actual.run_until_stable(2000, 6).stopped &&
+                reference.run_until_stable(2000, 6).stopped &&
+                actual.display_text() == reference.display_text(),
+            "removing an impure producer's dead store must preserve RNG position and result");
+  }
 
   const CompileResult leading_digit_rmw = compile_source(R"mkpro(
 program LeadingDigitRmw {
@@ -5383,12 +5405,18 @@ program OneBasedModuloNormalize {
           "one-based modulo normalization should not report diagnostics");
   require(has_optimization(one_based_modulo_normalize, "one-based-modulo-normalization"),
           "one-based modulo normalization should report the TS strategy name");
-  require(std::any_of(one_based_modulo_normalize.steps.begin(),
-                      one_based_modulo_normalize.steps.end(),
-                      [](const ResolvedStep& step) {
-                        return step.comment == "one-based modulo normalize line";
-                      }),
-          "one-based modulo normalization should emit the TS store comment");
+  {
+    emulator::MK61 calc;
+    std::vector<int> codes;
+    for (const ResolvedStep& step : one_based_modulo_normalize.steps) codes.push_back(step.opcode);
+    require(calc.load_program(codes).diagnostics.empty(),
+            "one-based modulo normalization must load after dead-store elimination");
+    for (const PreloadReport& preload : one_based_modulo_normalize.preloads)
+      calc.set_register(preload.register_name, preload.value);
+    calc.press_sequence({"В/О", "С/П"});
+    require(calc.run_until_stable(1000, 6).stopped && std::stod(calc.display_text()) == 4,
+            "normalizing eight must display four even when its terminal store is dead");
+  }
   require(
       std::none_of(one_based_modulo_normalize.steps.begin(), one_based_modulo_normalize.steps.end(),
                    [](const ResolvedStep& step) {

@@ -217,7 +217,8 @@ program RegisterHelperStackEq {
     part_a()
     part_b()
     part_c()
-    halt(out)
+    // The next iteration reads out: its register is observable across this stop.
+    show(out)
   }
 
   fn part_a() {
@@ -332,7 +333,7 @@ program RepeatedUnaryArgEq {
     c -= sqr(a)
     d = a + b
     c -= sqr(b)
-    halt(c)
+    show(c)
   }
 }
 )mkpro";

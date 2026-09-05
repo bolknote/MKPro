@@ -202,13 +202,13 @@ enum class DeadStoreEliminationContext {
   Finalization,
 };
 
-// The early exact-stack pass changes instruction geometry before any
-// address-sensitive optimizer is allowed to run. It therefore accepts only an
+// Pre-layout DSE changes instruction geometry without a selector-retargeting
+// transaction. Both ordinary and early exact-stack DSE therefore accept only an
 // IR whose complete control-flow surface is relocatable through symbolic
 // labels. Numeric operands, orphan address bytes, and already materialized
 // indirect flow must be handled by the finalization transaction, which has the
 // selector-retarget and final-CFG proof infrastructure needed to erase cells.
-bool early_exact_stack_layout_is_relocatable(const std::vector<IrOp>& ops) {
+bool dead_store_layout_is_relocatable(const std::vector<IrOp>& ops) {
   for (const IrOp& op : ops) {
     switch (op.kind) {
       case IrKind::Jump:
@@ -249,9 +249,8 @@ PassResult eliminate_dead_stores(const std::vector<IrOp>& ops,
       elimination_context == DeadStoreEliminationContext::EarlyExactStack;
   const bool finalization_context =
       elimination_context == DeadStoreEliminationContext::Finalization;
-  if (early_exact_context &&
-      (!context.options.exact_stack_dead_store_elimination ||
-       !early_exact_stack_layout_is_relocatable(ops))) {
+  if ((early_exact_context && !context.options.exact_stack_dead_store_elimination) ||
+      (!finalization_context && !dead_store_layout_is_relocatable(ops))) {
     return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
   }
 
@@ -280,8 +279,8 @@ PassResult eliminate_dead_stores(const std::vector<IrOp>& ops,
     if (early_exact_context && !live_after_store)
       continue;
     if (live_after_store) {
-      // Ordinary liveness joins every В/О with every call continuation, so a
-      // store that only feeds its own call's continuation looks live through
+      // When bounded matched-call liveness falls back to joined returns, a
+      // store that only feeds its own call's continuation can look live through
       // the other call sites. For the narrow store→call→overwrite shape the
       // bounded exact-return-stack proof below separates the continuations;
       // it fails closed on unresolved edges. The early candidate additionally

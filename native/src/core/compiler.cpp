@@ -58639,8 +58639,19 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
     const bool charge_entry_tail_transfer =
         step.comment.has_value() &&
         step.comment->starts_with(kCalleeHoleChargeEntryTailTransferMarker);
-    if (charge_entry_call || charge_entry_tail_transfer) {
-      const std::string_view marker = charge_entry_tail_transfer
+    // A post-layout jump fold retains the selector store and its identity.
+    // Re-derive the charge from the delivered digits rather than requiring
+    // the removed transfer's marker. All other incoming edges still need
+    // their own proof below.
+    const bool charge_entry_fallthrough =
+        step.comment.has_value() &&
+        step.comment->starts_with(kCalleeHoleChargeEntryStoreMarker) && index > 0 &&
+        !resolved_flow.address_operand.at(index - 1) &&
+        steps.at(index - 1).opcode >= 0 && steps.at(index - 1).opcode <= 9;
+    if (charge_entry_call || charge_entry_tail_transfer || charge_entry_fallthrough) {
+      const std::string_view marker = charge_entry_fallthrough
+                                          ? kCalleeHoleChargeEntryStoreMarker
+                                      : charge_entry_tail_transfer
                                           ? kCalleeHoleChargeEntryTailTransferMarker
                                           : kCalleeHoleChargeEntryCallMarker;
       const std::optional<CalleeHoleChargeEntryMarker> call =
@@ -58659,12 +58670,16 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
                            (step.opcode >= 0xa0 && step.opcode <= 0xae);
       const bool is_tail_transfer =
           step.opcode == 0x51 || (step.opcode >= 0x80 && step.opcode <= 0x8e);
+      const std::size_t transfer_index = charge_entry_fallthrough ? index - 1 : index;
       const bool reaches_entry =
           entry != charge_entries.end() && entry->second.second == call->register_name &&
-          index < resolved_flow.successors.size() &&
-          std::find(resolved_flow.successors.at(index).begin(),
-                    resolved_flow.successors.at(index).end(), entry->second.first) !=
-              resolved_flow.successors.at(index).end();
+          (!charge_entry_fallthrough ||
+           (entry->second.first == index &&
+            steps.at(transfer_index).address + 1 == step.address)) &&
+          transfer_index < resolved_flow.successors.size() &&
+          std::find(resolved_flow.successors.at(transfer_index).begin(),
+                    resolved_flow.successors.at(transfer_index).end(), entry->second.first) !=
+              resolved_flow.successors.at(transfer_index).end();
       if (entry == charge_entries.end() || entry->second.second != call->register_name)
         return reject("charge-entry call does not match its store for proof " + call->proof);
       if (!charge.has_value())
@@ -58699,13 +58714,16 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
                       std::to_string(step.address) + "; preceding=" + context);
       }
       const auto& entry_step = steps.at(entry->second.first);
-      if (entry_step.comment.has_value() &&
-          entry_step.comment->find("entry-repair=preserve-xyz") != std::string::npos) {
+      const bool repairs_entry = entry_step.comment.has_value() &&
+          entry_step.comment->find("entry-repair=preserve-xyz") != std::string::npos;
+      if (repairs_entry) {
         const std::size_t rotation = entry->second.first + 1;
         if (rotation + 1 >= steps.size() || steps.at(rotation).opcode != 0x25 ||
             !repaired_entry_converges(rotation + 1)) {
           return reject("callee-hole selector charge does not preserve its entry stack");
         }
+      }
+      if (repairs_entry || charge_entry_fallthrough) {
         std::size_t digit = index;
         while (digit > 0 && steps.at(digit - 1).opcode >= 0 &&
                steps.at(digit - 1).opcode <= 9 &&
@@ -58714,6 +58732,15 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
         if (digit == index || digit == 0)
           return reject("callee-hole repaired charge has no guarded decimal entry");
         const bool explicit_lift = steps.at(digit - 1).opcode == 0x0e;
+        if (charge_entry_fallthrough) {
+          for (std::size_t part = digit - (explicit_lift ? 1U : 0U); part <= index; ++part) {
+            const MachineItem* item = items_by_step.at(part);
+            if (resolved_flow.address_operand.at(part) || item == nullptr || item->raw ||
+                item->manual_interaction.has_value() ||
+                (part < index && steps.at(part).address + 1 != steps.at(part + 1).address))
+              return reject("callee-hole fallthrough charge has an opaque decimal entry");
+          }
+        }
         if (!explicit_lift) {
           bool saw_closer = false;
           for (std::size_t source = 0; source < resolved_flow.successors.size(); ++source) {
@@ -58721,14 +58748,20 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
             if (std::find(successors.begin(), successors.end(), digit) == successors.end())
               continue;
             if (!core::selector_charge_entry_closer_opcode(steps[source].opcode) ||
-                (items_by_step[source] != nullptr && items_by_step[source]->raw))
+                (items_by_step[source] != nullptr &&
+                 (items_by_step[source]->raw ||
+                  (charge_entry_fallthrough &&
+                   items_by_step[source]->manual_interaction.has_value()))))
               return reject("callee-hole automatic entry lift has an unclosed predecessor");
             saw_closer = true;
           }
           if (!saw_closer)
             return reject("callee-hole automatic entry lift has no proved predecessor");
         }
-        for (std::size_t guarded = digit + (explicit_lift ? 0U : 1U); guarded <= index; ++guarded) {
+        // The shared store can also be reached by other proved charges. Only
+        // the literal (and an explicit transfer, if retained) is indivisible.
+        for (std::size_t guarded = digit + (explicit_lift ? 0U : 1U);
+             guarded <= transfer_index; ++guarded) {
           for (std::size_t source = 0; source < resolved_flow.successors.size(); ++source) {
             const auto& successors = resolved_flow.successors.at(source);
             if (source + 1 != guarded &&
@@ -58738,7 +58771,7 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
         }
       }
       charged_values[call->register_name][charge->target].insert(charge->value);
-      proved_charge_entry_transfers.insert(index);
+      proved_charge_entry_transfers.insert(transfer_index);
     }
     const std::optional<std::string> store_register = store_register_for_opcode(step.opcode);
     if (store_register.has_value()) {
@@ -62853,6 +62886,25 @@ SizeAttributionReport build_size_attribution_report(
         continue;
       ++helper_nested_call_cells[region.label];
       helper_nested_call_labels[region.label].insert(labels.begin(), labels.end());
+    }
+  }
+  // Physical attribution ends at another separately addressed entry, not
+  // necessarily at a semantic return. A fallthrough into a shared suffix
+  // inherits its may-reads just like an explicit tail transfer, at zero call
+  // cells. Otherwise removing a jump would make a persistent input look like
+  // an output whose store can be deferred beyond its actual consumer.
+  for (const HelperRegionRange& region : helper_regions) {
+    if (region.end <= region.start || region.end >= steps.size() ||
+        address_operand.at(region.end - 1))
+      continue;
+    const ResolvedStep& last = steps.at(region.end - 1);
+    if (last.address + 1 != steps.at(region.end).address || last.opcode == 0x50 ||
+        last.opcode == 0x52 || opcode_by_code(last.opcode).takes_address ||
+        indirect_flow_register_for_opcode(last.opcode).has_value())
+      continue;
+    for (const HelperRegionRange& suffix : helper_regions) {
+      if (suffix.start == region.end)
+        helper_nested_call_labels[region.label].insert(suffix.label);
     }
   }
   auto transitive_helper_reads = helper_recall_names;
@@ -78615,61 +78667,99 @@ CompileResult compile_source_for_optimizer_profile(
     }
   }
 
-  // One-X helper entries are deliberately composed only after every ordinary
-  // candidate family has finished.  Enabling them earlier can change the
-  // greedy incumbent and prevent unrelated, larger structural reductions from
-  // being discovered.  This final transaction starts from the proved winner,
-  // rebuilds/finalizes the complete artifact, and is accepted only by the
-  // ordinary size-first comparator.
-  if (needs_size_rescue && !best_options.single_x_expression_helper_entries) {
-    try {
-      CompileOptions single_x_options = best_options;
-      single_x_options.stack_argument_helper_entries = true;
-      single_x_options.single_x_expression_helper_entries = true;
-      CompileResult single_x_candidate = cached_compile_source_once(single_x_options);
-      if (std::getenv("MKPRO_NATIVE_TRACE_CANDIDATES") != nullptr) {
-        std::cerr << "[candidate-trace] final-single-x primary implemented="
-                  << (single_x_candidate.implemented ? "yes" : "no")
-                  << " steps=" << single_x_candidate.steps.size()
-                  << " incumbent=" << best.steps.size() << "\n";
-      }
-      const bool initial_static_proof =
-          single_x_candidate.implemented &&
-          (!candidate_needs_static_proof_gate(single_x_options) ||
-           !optimizer_static_gate_rejection_reason(single_x_options,
-                                                   single_x_candidate)
-                .has_value());
-      if (initial_static_proof) {
-        single_x_candidate = apply_finalization_fixed_point_to_selected_result(
-            source, std::move(single_x_candidate), single_x_options, options);
-        const bool final_static_proof =
-            !candidate_needs_static_proof_gate(single_x_options) ||
-            !optimizer_static_gate_rejection_reason(single_x_options,
-                                                    single_x_candidate)
-                 .has_value();
-        if (std::getenv("MKPRO_NATIVE_TRACE_CANDIDATES") != nullptr) {
-          std::cerr << "[candidate-trace] final-single-x finalized implemented="
-                    << (single_x_candidate.implemented ? "yes" : "no")
-                    << " proved=" << (final_static_proof ? "yes" : "no")
-                    << " steps=" << single_x_candidate.steps.size()
-                    << " incumbent=" << best.steps.size() << "\n";
+  // Helper sharing changes the profitability of parameter ABIs. Revisit the
+  // finite entry-ABI neighbourhood on one immutable finalized option seed,
+  // not on the original lowering or an enumeration-order-dependent incumbent.
+  // Three independent choices admit at most seven nonempty subsets. Preserve
+  // the legacy one-X probe for already fitting results; additional subsets are
+  // only needed while the requested size target remains unmet.
+  if (needs_size_rescue) {
+    const CompileOptions abi_base_options = best_options;
+    const bool explore_abi_subsets = best.implemented && best.steps.size() > rescue_threshold;
+    std::set<std::string> abi_option_keys{implemented_candidate_key(abi_base_options)};
+    std::map<std::string, CompileResult> abi_finalized_inputs;
+    for (unsigned mask = 1; mask < (explore_abi_subsets ? 8U : 2U); ++mask) {
+      try {
+        CompileOptions abi_options = abi_base_options;
+        std::vector<std::string> entries;
+        if ((mask & 1U) != 0) {
+          abi_options.stack_argument_helper_entries = true;
+          abi_options.single_x_expression_helper_entries = true;
+          entries.push_back("one-X expression entry");
         }
-        if (final_static_proof &&
-            candidate_beats_best(single_x_candidate, best, options)) {
-          single_x_candidate.optimizations.push_back(OptimizationReport{
-              .name = "single-x-expression-helper-entries-final",
-              .detail =
-                  "Recompiled the proved final winner with one-X shared-expression entries "
-                  "and retained the strictly smaller finalized artifact.",
-          });
-          best_options = std::move(single_x_options);
-          best = std::move(single_x_candidate);
+        if ((mask & 2U) != 0) {
+          abi_options.x_param_value_functions = true;
+          abi_options.sign_normalized_x_param = true;
+          entries.push_back("sign-normalized parameter");
         }
+        if ((mask & 4U) != 0) {
+          abi_options.x_param_value_functions = true;
+          abi_options.x_param_y_stack_stored_entry = true;
+          entries.push_back("stored X/Y parameter entry");
+        }
+        if (!abi_option_keys.insert(implemented_candidate_key(abi_options)).second)
+          continue;
+        CompileResult candidate = cached_compile_source_once(abi_options);
+        if (!candidate.implemented)
+          continue;
+        std::string input_key = "options:" + implemented_candidate_key(abi_options);
+        const auto fingerprint = final_layout_input_fingerprints.find(
+            compile_once_cache_key(abi_options));
+        if (fingerprint != final_layout_input_fingerprints.end() &&
+            !fingerprint->second.empty())
+          input_key = "input:" + fingerprint->second;
+        const auto cached = abi_finalized_inputs.find(input_key);
+        if (cached != abi_finalized_inputs.end()) {
+          candidate = cached->second;
+        } else {
+          // A locally larger ABI can enable a smaller component layout. Do not
+          // reject or rank it until all ordinary final-layout passes have run.
+          candidate = compile_source_once(
+              source, abi_options, source_has_entered,
+              /*apply_final_layout_size_rescue=*/true);
+          if (!candidate.implemented &&
+              can_retry_lowering_attempt_in_analysis(candidate, abi_options)) {
+            abi_options.analysis = true;
+            candidate = compile_source_once(
+                source, abi_options, source_has_entered,
+                /*apply_final_layout_size_rescue=*/true);
+          }
+          if (candidate.implemented &&
+              (!candidate_needs_static_proof_gate(abi_options) ||
+               !optimizer_static_gate_rejection_reason(abi_options, candidate).has_value())) {
+            candidate = apply_finalization_fixed_point_to_selected_result(
+                source, std::move(candidate), abi_options, options);
+          }
+          abi_finalized_inputs.emplace(input_key, candidate);
+        }
+        const bool proved = candidate.implemented &&
+            (!candidate_needs_static_proof_gate(abi_options) ||
+             !optimizer_static_gate_rejection_reason(abi_options, candidate).has_value());
+        if (trace_candidates) {
+          std::cerr << "[candidate-trace] final-helper-abi mask=" << mask
+                    << " implemented=" << (candidate.implemented ? "yes" : "no")
+                    << " steps=" << candidate.steps.size()
+                    << " incumbent=" << best.steps.size()
+                    << " proved=" << (proved ? "yes" : "no") << '\n';
+        }
+        if (!proved || !candidate_beats_best(candidate, best, options))
+          continue;
+        candidate.optimizations.push_back(OptimizationReport{
+            .name = mask == 1U ? "single-x-expression-helper-entries-final"
+                              : "final-helper-abi-refinement",
+            .detail = "Compared " + join_strings(entries, ", ") +
+                      " on the same finalized option seed; selected the proof-valid "
+                      "size-first result (" + std::to_string(candidate.steps.size()) +
+                      " vs " + std::to_string(best.steps.size()) + " cells).",
+        });
+        best_options = std::move(abi_options);
+        best = std::move(candidate);
+      } catch (const std::exception& error) {
+        if (trace_candidates)
+          std::cerr << "[candidate-trace] final-helper-abi exception: " << error.what() << '\n';
+        // An ABI alternative cannot displace the previously proved artifact
+        // merely because lowering, relocation or a proof was unavailable.
       }
-    } catch (const std::exception& error) {
-      if (std::getenv("MKPRO_NATIVE_TRACE_CANDIDATES") != nullptr)
-        std::cerr << "[candidate-trace] final-single-x exception: " << error.what() << "\n";
-      // Opportunistic final composition: keep the previously proved winner.
     }
   }
 
