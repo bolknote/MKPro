@@ -2578,11 +2578,19 @@ program ExactStackDeadStore {
               exact_stack_baseline.diagnostics.empty() &&
               exact_stack_dse.diagnostics.empty(),
           "exact-stack DSE high-level fixture should compile in both forms");
-  require(exact_stack_dse.steps.size() + 1U == exact_stack_baseline.steps.size(),
-          "early exact-stack DSE should remove exactly the raw entered() store");
-  require(has_optimization(exact_stack_dse,
-                           "exact-stack-dead-store-elimination"),
-          "high-level exact-stack fixture should report the early proof");
+  require(exact_stack_dse.steps.size() <= exact_stack_baseline.steps.size(),
+          "early exact-stack DSE must not grow a fixture already handled by ordinary DSE");
+  for (const CompileResult* result : {&exact_stack_baseline, &exact_stack_dse}) {
+    const int y_store = 0x40 + register_index(result->registers.at("y"));
+    require(std::count_if(result->steps.begin(), result->steps.end(),
+                          [y_store](const ResolvedStep& step) {
+                            return step.opcode == y_store;
+                          }) == 1,
+            "matched-call DSE must remove raw entered() storage but retain normalized y");
+    require(has_optimization(*result, "dead-store-elimination") ||
+                has_optimization(*result, "exact-stack-dead-store-elimination"),
+            "high-level exact-stack fixture should report the proof that removed the store");
+  }
 
   const auto run_exact_stack_fixture = [](const CompileResult& result) {
     std::vector<int> codes;

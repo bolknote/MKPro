@@ -122,6 +122,79 @@ IrOp ret() {
 
 void liveness_analysis_matches_typescript_contract() {
   {
+    // The same helper runs in two disjoint caller phases. A union at its
+    // return instruction is useful for DSE but is not an interference clique.
+    const std::vector<IrOp> program = {
+        store("1"), call_to("outer"), recall("1"), store("2"), call_to("outer"),
+        recall("2"), jump_to("done"), label("outer"), call_to("leaf"), ret(),
+        label("leaf"), store("3"), ret(), label("done"), halt(),
+    };
+    const auto info = core::passes::compute_liveness(program);
+    const auto graph = core::passes::build_register_interference_graph(program, info);
+    require(info.matched_call_contexts, "nested direct calls lost their matched return contexts");
+    require(info.live_in.at(12).contains("1") && info.live_in.at(12).contains("2"),
+            "per-instruction liveness must retain the union of both caller phases");
+    require(!graph.interferes("1", "2"),
+            "unrelated caller phases acquired a fictitious interference edge");
+    require(graph.interferes("1", "3") && graph.interferes("2", "3"),
+            "callee definitions must conflict with every live caller value");
+    require(!info.live_out.at(1).contains("2") && !info.live_out.at(4).contains("1"),
+            "return liveness escaped into another invocation's continuation");
+
+    auto overlapping = program;
+    overlapping.insert(overlapping.begin() + 6, recall("1"));
+    require(core::passes::build_register_interference_graph(overlapping).interferes("1", "2"),
+            "a real cross-call lifetime was incorrectly split into separate phases");
+
+    auto indirect = program;
+    for (const std::size_t index : {1U, 4U}) {
+      indirect.at(index).kind = IrKind::IndirectCall;
+      indirect.at(index).register_name = "e";
+      indirect.at(index).opcode = 0xae;
+      indirect.at(index).meta.indirect_flow_targets =
+          std::vector<IrTarget>{std::string("outer"), std::string("leaf")};
+    }
+    const auto indirect_info = core::passes::compute_liveness(indirect);
+    require(indirect_info.matched_call_contexts &&
+                !core::passes::build_register_interference_graph(indirect, indirect_info)
+                     .interferes("1", "2"),
+            "proved multi-target callbacks did not retain matched return suffixes");
+    indirect.at(1).meta.indirect_flow_targets.reset();
+    const auto unknown = core::passes::compute_liveness(indirect);
+    require(!unknown.matched_call_contexts && !unknown.control_flow_targets_are_exact &&
+                unknown.live_in.at(1).contains("e"),
+            "an unknown callback weakened the conservative fallback");
+
+    auto recursive = program;
+    recursive.at(8).target = std::string("outer");
+    require(!core::passes::compute_liveness(recursive).matched_call_contexts,
+            "recursive return depth must use the conservative fixed point");
+    auto raw = program;
+    raw.at(11).meta.raw = true;
+    require(!core::passes::compute_liveness(raw).matched_call_contexts,
+            "raw machine-state changes established a matched-call proof");
+
+    auto stopped = program;
+    IrOp interaction = halt();
+    interaction.meta.manual_interaction = ManualInteractionAnchor{
+        .protocol_id = 3, .phase = 0, .kind = ManualInteractionAnchorKind::PromptStop};
+    stopped.insert(stopped.begin() + 12, interaction);
+    const auto stopped_info = core::passes::compute_liveness(stopped);
+    require(stopped_info.matched_call_contexts && stopped_info.live_in.at(12).contains("1") &&
+                stopped_info.live_in.at(12).contains("2"),
+            "stop/resume discarded a live caller or its return context");
+
+    auto unreachable = program;
+    unreachable.push_back(jump_to("done"));
+    unreachable.push_back(label("unentered"));
+    unreachable.push_back(recall("a"));
+    unreachable.push_back(ret());
+    const auto unreachable_info = core::passes::compute_liveness(unreachable);
+    require(unreachable_info.live_in.at(unreachable.size() - 2U).contains("a"),
+            "physically present unreachable code disappeared from the allocation proof");
+  }
+
+  {
     const std::vector<IrOp> program = {label("loop"), recall("3"), plain(0x10, "+"),
                                        jump_to("loop")};
     const core::passes::LivenessInfo info = core::passes::compute_liveness(program);

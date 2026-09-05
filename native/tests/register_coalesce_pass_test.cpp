@@ -1,6 +1,8 @@
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/passes/liveness_analysis.hpp"
 #include "mkpro/core/passes/register_coalesce.hpp"
+#include "mkpro/compiler.hpp"
+#include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
 
@@ -70,6 +72,120 @@ core::passes::PassResult run_register_coalesce(const std::vector<IrOp>& ops,
 } // namespace
 
 void register_coalesce_matches_typescript_contract() {
+  {
+    const auto label = [](const std::string& name) {
+      IrOp op;
+      op.kind = IrKind::Label;
+      op.name = name;
+      return op;
+    };
+    const auto flow = [](IrKind kind, int opcode, const std::string& target = "") {
+      IrOp op;
+      op.kind = kind;
+      op.opcode = opcode;
+      op.target = target;
+      return op;
+    };
+    const auto digit = [](int value) {
+      IrOp op;
+      op.kind = IrKind::Plain;
+      op.opcode = value;
+      return op;
+    };
+    const std::vector<IrOp> program = {
+        digit(5), store("1"), flow(IrKind::Call, 0x53, "outer"), recall("1"), halt(),
+        digit(7), store("2"), flow(IrKind::Call, 0x53, "outer"), recall("2"), halt(),
+        flow(IrKind::Jump, 0x51, "done"), label("outer"),
+        flow(IrKind::Call, 0x53, "inner"), flow(IrKind::Return, 0x52), label("inner"),
+        digit(3), store("3"), flow(IrKind::Return, 0x52), label("done"), halt(),
+    };
+    const auto mapping = core::passes::compute_non_overlapping_register_mapping(program);
+    require(mapping.contains("2") && mapping.at("2") == "1",
+            "matched caller lifetimes did not free a physical register");
+    const auto optimized = run_register_coalesce(program);
+    require(optimized.applied > 0, "matched-call allocation did not reach the ordinary IR pass");
+    const auto codes = [](const std::vector<IrOp>& ops) {
+      const auto addresses = core::passes::calculate_label_addresses(ops);
+      std::vector<IrOp> resolved = ops;
+      for (IrOp& operation : resolved) {
+        if (operation.kind != IrKind::Call && operation.kind != IrKind::Jump)
+          continue;
+        const auto* target = std::get_if<std::string>(&operation.target);
+        require(target != nullptr && addresses.contains(*target),
+                "matched-call fixture must resolve every forward label");
+        operation.target_meta.formal_opcode = official_address_to_opcode(addresses.at(*target));
+      }
+      std::vector<int> result;
+      for (const LayoutIrCell& cell : lower_ir_to_layout(resolved).cells)
+        result.push_back(cell.opcode);
+      return result;
+    };
+    const auto observe = [&](const std::vector<IrOp>& ops) {
+      emulator::MK61 calc;
+      require(calc.load_program(codes(ops)).diagnostics.empty(),
+              "matched-call fixture did not load on the real emulator");
+      calc.press_sequence({"В/О", "С/П"});
+      std::vector<std::string> observations;
+      for (int stop = 0; stop < 3; ++stop) {
+        require(calc.run_until_stable(2000, 5).stopped,
+                "matched-call fixture lost a stop or return continuation");
+        observations.push_back(calc.display_text(true));
+        observations.push_back(calc.program_counter());
+        observations.push_back(calc.read_register("3"));
+        for (const char* reg : {"x", "y", "z", "t", "x1"})
+          observations.push_back(calc.read_register(reg));
+        if (stop != 2)
+          calc.press("С/П");
+      }
+      return observations;
+    };
+    require(observe(program) == observe(optimized.ops),
+            "register reuse changed a display, nested return, or callee register");
+  }
+
+  {
+    const std::string source = R"mkpro(program CallerPhases {
+      state {
+        epoch: counter 0..99 = 0
+        first: counter 0..99 = 0
+        second: counter 0..99 = 0
+      }
+      loop {
+        first = epoch + 3
+        tick()
+        show(first)
+        second = epoch + 5
+        tick()
+        show(second)
+      }
+      fn tick() {
+        epoch += 1
+        show(epoch)
+      }
+    })mkpro";
+    CompileOptions options;
+    options.disable_candidate_search = true;
+    const CompileResult result = compile_source(source, options);
+    require(result.implemented && result.diagnostics.empty(),
+            "ordinary source with phased caller values must compile");
+    std::vector<int> codes;
+    for (const ResolvedStep& step : result.steps)
+      codes.push_back(step.opcode);
+    emulator::MK61 calc;
+    require(calc.load_program(codes).diagnostics.empty(),
+            "phased-caller compiler fixture did not load");
+    for (const PreloadReport& preload : result.preloads)
+      calc.set_register(preload.register_name, preload.value);
+    calc.press_sequence({"В/О", "С/П"});
+    for (const int expected : {1, 3, 2, 6, 3, 5, 4, 8}) {
+      require(calc.run_until_stable(2000, 5).stopped,
+              "phased-caller source lost an observable stop");
+      require(std::stod(calc.display_text()) == expected,
+              "phased-caller source changed a value retained across a call");
+      calc.press("С/П");
+    }
+  }
+
   {
     core::passes::RegisterInterferenceGraph graph;
     for (int index = 0; index < 20; ++index)

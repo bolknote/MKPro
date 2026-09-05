@@ -12,12 +12,23 @@ struct RegisterEffects {
   bool may_define_any_register = false;
 };
 
+struct CallContextLifetime {
+  std::size_t instruction = 0;
+  RegisterValueSet live_in;
+  RegisterValueSet live_out;
+};
+
 struct LivenessInfo {
   std::vector<RegisterValueSet> live_in;
   std::vector<RegisterValueSet> live_out;
   bool control_flow_targets_are_exact = true;
   std::vector<int> conservative_flow_sources;
   bool includes_physical_register_universe = true;
+  // The public per-instruction sets remain conservative unions. Interference
+  // must use the separate rows: unioning two invocations of a shared helper
+  // before making a clique invents conflicts between unrelated callers.
+  bool matched_call_contexts = false;
+  std::vector<CallContextLifetime> call_context_lifetimes;
 };
 
 struct LivenessOptions {

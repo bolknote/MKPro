@@ -3674,3 +3674,42 @@ program behavior. Expansion is committed only when fusion repays all new IR
 cells and the resulting call graph fits the return stack. Automatic selection
 also compares the complete final layout against its unchanged incumbent, so a
 locally attractive outline cannot justify a larger delivered program.
+
+## Matched-call register lifetimes
+
+Register liveness follows a bounded expansion of instruction identities and
+return continuations instead of connecting every return to every caller. Direct
+calls and indirect calls with complete typed target sets push their own
+continuation; nested returns pop that continuation. Loop iterations reuse the
+same analysis state. Ordinary stop/resume preserves the pending return suffix.
+An empty hardware return targets physical address 01, not program entry 00.
+
+Per-instruction liveness remains the union of all invocation contexts for DSE.
+Register interference, however, is built separately in each invocation before
+combining edges. Otherwise two disjoint caller values would falsely interfere
+inside their common helper. Callee definitions, indirect may-defs, real
+cross-call lifetimes, fixed registers and manual-register anchors retain their
+existing constraints. Physically present unreachable fragments remain covered
+through conservative unknown caller prefixes.
+
+Raw code, unresolved control targets, resumable-error padding, return depth
+above five, or an expansion exceeding 8192 states / 65536 edges selects the
+original conservative fixed point. These are proof-complexity bounds, not
+execution limits. The analysis changes no arithmetic or source constructs and
+does not use program names, function names, or game-specific layouts.
+
+## Postdominating number-entry closure
+
+Post-layout fallthrough stitching can remove a direct jump after a decimal
+digit when the target starts with an ordinary direct register store. The
+store consumes the unchanged X value and closes number entry before any
+subsequent instruction can observe the missing jump's entry boundary. This
+extends the existing predecessor-closed proof; it does not assume that any
+arbitrary entry-closing instruction preserves X2 or stack behavior.
+
+Raw or operator-anchored digits/stores and protected target cells do not supply
+this proof. All existing command-identity, external-entry, return-stack,
+selector, and final-artifact checks still apply. Emulator comparisons cover
+multi-digit, fractional, exponent, and Enter-prefixed input, subsequent numeric
+entry, decimal-point/X2 observation, and physical last-X. Ordinary digit-to-digit
+fallthrough remains prohibited because it concatenates two numbers.

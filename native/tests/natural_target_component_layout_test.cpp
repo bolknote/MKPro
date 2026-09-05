@@ -860,6 +860,65 @@ bool reason_contains(const core::NaturalTargetComponentLayoutPlan& plan,
 
 void natural_target_component_layout_is_generic_and_proof_gated() {
   {
+    // Test the entry-state proof independently of any selector or game. The
+    // jump follows digits, but its target store closes entry before a later
+    // digit, X2-sensitive decimal point, or last-X observation can see it.
+    const std::vector<std::vector<int>> prefixes = {
+        {0x01, 0x02}, {0x0e, 0x08, 0x08}, {0x43, 0x08, 0x08},
+        {0x00, 0x0a, 0x05}, {0x03, 0x0c, 0x02},
+    };
+    const std::vector<std::vector<int>> suffixes = {
+        {0x02, 0x0e, 0x0f}, {0x0a, 0x0f},
+    };
+    core::NaturalTargetComponentLayoutOptions options;
+    options.allow_standalone_fallthrough_jump_fold = true;
+    for (const int store_opcode : {0x40, 0x43, 0x4e}) {
+      for (const auto& prefix : prefixes) {
+        for (const auto& suffix : suffixes) {
+          Fixture input;
+          input.items = {MachineItem::label("entry_boundary_root"), op(0x53),
+                         MachineItem::address("entry_boundary_body"), stop(),
+                         MachineItem::label("entry_boundary_body")};
+          for (const int opcode : prefix)
+            input.items.push_back(op(opcode));
+          input.items.push_back(op(0x51));
+          input.items.push_back(MachineItem::address("entry_boundary_sink"));
+          input.items.push_back(MachineItem::label("entry_boundary_sink"));
+          const std::size_t target_store = input.items.size();
+          input.items.push_back(op(store_opcode));
+          for (const int opcode : suffix)
+            input.items.push_back(op(opcode));
+          input.items.push_back(op(0x52));
+
+          const auto rewritten = core::optimize_natural_target_component_layout(
+              input.items, input.preloads, flow(input), options);
+          std::string reasons;
+          for (const auto& reason : rewritten.plan.reasons)
+            reasons += reason + " | ";
+          require(rewritten.plan.proved && rewritten.plan.final_artifact_proved &&
+                      rewritten.plan.control_flow_equivalent &&
+                      rewritten.plan.call_return_equivalent &&
+                      rewritten.plan.stack_and_x2_equivalent &&
+                      rewritten.plan.fallthrough_jump_folds == 1 &&
+                      rewritten.removed_cells == 2,
+                  "a postdominating direct store must repay a digit-entry jump: " + reasons);
+          const Observation before = observe(input.items, input.preloads);
+          const Observation after = observe(rewritten.items, rewritten.preloads);
+          require(before.stopped && after.stopped && before.state == after.state,
+                  "postdominating store changed stack/X1/X2 or nested return behavior");
+
+          Fixture opaque = input;
+          opaque.items.at(target_store).raw = true;
+          const auto rejected = core::optimize_natural_target_component_layout(
+              opaque.items, opaque.preloads, flow(opaque), options);
+          require(rejected.applied == 0 && rejected.plan.fallthrough_jump_folds == 0,
+                  "an opaque target store must not establish an entry-closing proof");
+        }
+      }
+    }
+  }
+
+  {
     const Fixture input = late_runtime_selector_fixture(true, false);
     core::NaturalTargetComponentLayoutOptions options;
     options.maximum_anchors = 1;

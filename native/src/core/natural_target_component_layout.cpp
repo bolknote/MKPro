@@ -797,19 +797,32 @@ bool apply_transparent_fallthrough_jump_fold(
   if (!source_is_terminal) {
     return fail("jump-fold pair does not terminate its fallthrough component");
   }
-  // BP closes number entry. Erasing it after a digit, decimal point, sign, or
-  // exponent-entry command can glue the target's later number-entry command to
-  // the source even though X/Y/Z/T and X2 are otherwise identical. Requiring a
-  // preceding ordinary executable cell proves that the entry context was
-  // already closed on the only fallthrough path into this unlabelled jump.
+  // BP closes number entry. Usually its predecessor must have closed it
+  // already. There is also a local postdominating proof: after a digit, an
+  // ordinary direct store at the target consumes exactly the same X and
+  // closes entry itself before any later command can observe entry state.
+  // Do not generalize this to recalls, arbitrary unary commands, opaque
+  // stores, or operator-interaction anchors merely because they end entry.
   if (source->second == 0) {
     return fail("jump-fold source has no local number-entry-closing predecessor");
   }
   const MachineItem& predecessor =
       source_segment.cells.at(static_cast<std::size_t>(source->second - 1))
           .value.item;
+  const MachineItem& target_entry =
+      segments.at(target->first).cells.at(static_cast<std::size_t>(target->second)).value.item;
+  const bool target_store_closes_digit_entry =
+      predecessor.kind == MachineItemKind::Op && predecessor.opcode >= 0x00 &&
+      predecessor.opcode <= 0x09 && !predecessor.raw &&
+      !predecessor.manual_interaction.has_value() &&
+      target_entry.kind == MachineItemKind::Op && target_entry.opcode >= 0x40 &&
+      target_entry.opcode <= 0x4e && !target_entry.raw &&
+      !target_entry.manual_interaction.has_value() &&
+      target_entry.roles.empty() &&
+      opcode_by_code(target_entry.opcode).stack_effect == StackEffect::Preserves &&
+      opcode_by_code(target_entry.opcode).x2_effect == X2Effect::Preserves;
   if (predecessor.kind != MachineItemKind::Op ||
-      is_number_entry_opcode(predecessor.opcode)) {
+      (is_number_entry_opcode(predecessor.opcode) && !target_store_closes_digit_entry)) {
     return fail("jump-fold would remove an observable number-entry boundary");
   }
   const Cell& command_cell =
