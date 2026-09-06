@@ -15,25 +15,24 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 134 | 105 | +29 | pending optimizer |
-| `nekromant.mkpro` | 137 | 105 | +32 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 132 | 105 | +27 | pending optimizer |
+| `nekromant.mkpro` | 135 | 105 | +30 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
 
 The earlier 125-cell 4x4 and 133-cell Nekromant results are invalidated by
-correctness fixes: logical
-over-window address operands must not be decoded from analysis placeholder
-bytes, and the hardware empty-return continuation must remain at physical 01.
-Relayout also refreshes derived selector annotations and ordinary symbolic
-address caches; continuation proofs now track physical last-X1. With these
-constraints enforced, generic packed selector seed reuse and stable selector
-family reassignment select 140 cells instead of the corrected 143-cell
-incumbent. This is not a reduction from the old, incorrect 125-cell artifact.
-The 133-cell Nekromant layout likewise entered a helper at physical 01 instead
-of its relocated main entry; keeping the hardware continuation fixed yields
-137 cells. Historical measurements below do not supersede these corrected
-baselines.
+correctness fixes: logical over-window operands must not be decoded from
+analysis placeholder bytes, and every reachable empty-return continuation
+must retain its physical address. Relayout refreshes derived selector facts
+and ordinary symbolic address caches; continuation proofs track physical X1
+and X2, including nested calls and manual resumes. An unused empty-return
+policy no longer pins an unrelated command identity.
+
+The current 132-cell 4x4 includes full finalization of helper ABI candidates.
+The 135-cell Nekromant additionally benefits from scalar-delta lowering without
+an artificial unit multiplication. Historical measurements below do not
+supersede the current table and do not establish that either program fits yet.
 
 ## Live Optimization Notes
 

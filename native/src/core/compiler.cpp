@@ -10085,17 +10085,31 @@ bool analysis_simple_stack_load(const Expression& expression) {
 }
 
 std::optional<std::string>
+stack_affine_exponent_input_for_analysis(const Expression& expression) {
+  if (expression.kind == "identifier")
+    return expression.name;
+  // Preserve the source tree, including the order of decimal rounding. This
+  // is an input-use proof, not an algebraic reassociation of the exponent.
+  if (expression.kind == "binary" && (expression.op == "+" || expression.op == "-") &&
+      expression.left != nullptr && expression.right != nullptr) {
+    if (expression.right->kind == "number")
+      return stack_affine_exponent_input_for_analysis(*expression.left);
+    if (expression.left->kind == "number")
+      return stack_affine_exponent_input_for_analysis(*expression.right);
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string>
 pow10_index_name_from_stack_term_for_analysis(const Expression& expression) {
   if (expression.kind == "call") {
     const std::string callee = lower_ascii(expression.callee);
-    if (callee == "pow10" && expression.args.size() == 1 &&
-        expression.args.front().kind == "identifier") {
-      return expression.args.front().name;
+    if (callee == "pow10" && expression.args.size() == 1) {
+      return stack_affine_exponent_input_for_analysis(expression.args.front());
     }
     if (callee == "pow" && expression.args.size() == 2 && expression.args.at(0).kind == "number" &&
-        normalize_number_key(expression.args.at(0).raw) == "10" &&
-        expression.args.at(1).kind == "identifier") {
-      return expression.args.at(1).name;
+        normalize_number_key(expression.args.at(0).raw) == "10") {
+      return stack_affine_exponent_input_for_analysis(expression.args.at(1));
     }
   }
   if (expression.kind != "binary" || expression.op != "*" || expression.left == nullptr ||
@@ -10103,15 +10117,52 @@ pow10_index_name_from_stack_term_for_analysis(const Expression& expression) {
     return std::nullopt;
   if (const std::optional<std::string> left =
           pow10_index_name_from_stack_term_for_analysis(*expression.left)) {
-    if (analysis_simple_stack_load(*expression.right))
+    if (analysis_simple_stack_load(*expression.right) &&
+        !expression_contains_identifier(*expression.right, *left))
       return left;
   }
   if (const std::optional<std::string> right =
           pow10_index_name_from_stack_term_for_analysis(*expression.right)) {
-    if (analysis_simple_stack_load(*expression.left))
+    if (analysis_simple_stack_load(*expression.left) &&
+        !expression_contains_identifier(*expression.left, *right))
       return right;
   }
   return std::nullopt;
+}
+
+// Analysis and emission share the same normalized update. In particular, do
+// not extract just one coefficient from a product: every multiplication and
+// every exponent adjustment must survive with its original association.
+std::optional<std::tuple<std::string, std::string, Expression>>
+indexed_packed_pow10_delta_update(const Expression& target, const Expression& expression) {
+  Expression normalized = expression;
+  if (expression.kind == "call") {
+    const std::string name = lower_ascii(expression.callee);
+    if (name != "packed_add" && name != "digit_add")
+      return std::nullopt;
+    const std::optional<Expression> expanded =
+        packed_grid_expression_macro(name, expression.args);
+    if (!expanded.has_value())
+      return std::nullopt;
+    normalized = *expanded;
+  }
+  if (normalized.kind != "binary" || (normalized.op != "+" && normalized.op != "-") ||
+      normalized.left == nullptr || normalized.right == nullptr)
+    return std::nullopt;
+  const std::string target_json = expression_to_json(target);
+  const Expression* delta = nullptr;
+  if (expression_to_json(*normalized.left) == target_json) {
+    delta = normalized.right.get();
+  } else if (normalized.op == "+" && expression_to_json(*normalized.right) == target_json) {
+    delta = normalized.left.get();
+  }
+  if (delta == nullptr)
+    return std::nullopt;
+  const std::optional<std::string> input =
+      pow10_index_name_from_stack_term_for_analysis(*delta);
+  if (!input.has_value())
+    return std::nullopt;
+  return std::tuple{normalized.op, *input, *delta};
 }
 
 std::optional<std::string>
@@ -10122,21 +10173,8 @@ indexed_packed_pow10_delta_stack_index_name_for_analysis(const V2Statement& stat
   if (target.kind != "indexed")
     return std::nullopt;
   const Expression expression = parse_expression(*statement.expr, statement.line);
-  if (expression.kind == "call" && lower_ascii(expression.callee) == "packed_add" &&
-      expression.args.size() == 3) {
-    if (expression_to_json(expression.args.at(0)) == expression_to_json(target) &&
-        expression.args.at(1).kind == "identifier" &&
-        analysis_simple_stack_load(expression.args.at(2))) {
-      return expression.args.at(1).name;
-    }
-    return std::nullopt;
-  }
-  if (expression.kind != "binary" || (expression.op != "+" && expression.op != "-") ||
-      expression.left == nullptr || expression.right == nullptr ||
-      expression_to_json(*expression.left) != expression_to_json(target)) {
-    return std::nullopt;
-  }
-  return pow10_index_name_from_stack_term_for_analysis(*expression.right);
+  const auto delta = indexed_packed_pow10_delta_update(target, expression);
+  return delta.has_value() ? std::optional<std::string>{std::get<1>(*delta)} : std::nullopt;
 }
 
 // score += packed_score(bank[selector], index) reads its pow10 index exactly
@@ -22970,7 +23008,7 @@ struct IndexedPackedUpdateTailRule {
   int selector_register = 0;
   std::string y_name;
   Expression target;
-  Expression factor;
+  Expression delta_expression;
   std::string op;
   Expression mask;
   int update_line = 0;
@@ -23150,57 +23188,51 @@ std::optional<FractionalReportTail> fractional_report_tail(const LoweringContext
       .halt_line = branch.then_body.empty() ? branch.line : branch.then_body.front().line};
 }
 
-std::optional<std::pair<std::string, Expression>>
-pow10_identifier_factor(const Expression& expression) {
-  if (expression.kind == "call") {
-    const std::string callee = lower_ascii(expression.callee);
-    if (callee == "pow10" && expression.args.size() == 1 &&
-        expression.args.front().kind == "identifier") {
-      return std::pair{expression.args.front().name, number_expression("1")};
+bool emit_stack_carried_pow10_delta(LoweringContext& context, const Expression& delta, int line) {
+  const std::optional<std::string> input =
+      pow10_index_name_from_stack_term_for_analysis(delta);
+  if (!input.has_value())
+    return false;
+  const auto emit = [&](const auto& self, const Expression& expression) -> bool {
+    if (expression.kind == "identifier")
+      return expression.name == *input;
+    if (expression.kind == "call") {
+      const std::string name = lower_ascii(expression.callee);
+      const Expression* exponent = nullptr;
+      if (name == "pow10" && expression.args.size() == 1U)
+        exponent = &expression.args.front();
+      else if (name == "pow" && expression.args.size() == 2U)
+        exponent = &expression.args.at(1);
+      if (exponent == nullptr || !self(self, *exponent))
+        return false;
+      context.emitter.emit_op(0x15, "F 10^x", "stack-carried packed digit pow10", line);
+      clear_current_x_facts(context);
+      return true;
     }
-    if (callee == "pow" && expression.args.size() == 2 && expression.args.at(0).kind == "number" &&
-        normalize_number_key(expression.args.at(0).raw) == "10" &&
-        expression.args.at(1).kind == "identifier") {
-      return std::pair{expression.args.at(1).name, number_expression("1")};
-    }
-  }
-  if (expression.kind != "binary" || expression.op != "*" || expression.left == nullptr ||
-      expression.right == nullptr)
-    return std::nullopt;
-  if (const std::optional<std::pair<std::string, Expression>> left =
-          pow10_identifier_factor(*expression.left)) {
-    if (is_simple_stack_load(*expression.right))
-      return std::pair{left->first, *expression.right};
-  }
-  if (const std::optional<std::pair<std::string, Expression>> right =
-          pow10_identifier_factor(*expression.right)) {
-    if (is_simple_stack_load(*expression.left))
-      return std::pair{right->first, *expression.left};
-  }
-  return std::nullopt;
-}
-
-std::optional<std::tuple<std::string, std::string, Expression>>
-indexed_packed_pow10_delta_update(const Expression& target, const Expression& expression) {
-  if (expression.kind == "call" && lower_ascii(expression.callee) == "packed_add" &&
-      expression.args.size() == 3) {
-    if (!expression_equals(expression.args.at(0), target) ||
-        expression.args.at(1).kind != "identifier" ||
-        !is_simple_stack_load(expression.args.at(2))) {
-      return std::nullopt;
-    }
-    return std::tuple{std::string("+"), expression.args.at(1).name, expression.args.at(2)};
-  }
-
-  if (expression.kind != "binary" || (expression.op != "+" && expression.op != "-") ||
-      expression.left == nullptr || expression.right == nullptr ||
-      !expression_equals(*expression.left, target))
-    return std::nullopt;
-  const std::optional<std::pair<std::string, Expression>> pow10 =
-      pow10_identifier_factor(*expression.right);
-  if (!pow10.has_value())
-    return std::nullopt;
-  return std::tuple{expression.op, pow10->first, pow10->second};
+    if (expression.kind != "binary" || expression.left == nullptr || expression.right == nullptr)
+      return false;
+    const bool left_input = expression_contains_identifier(*expression.left, *input);
+    const bool right_input = expression_contains_identifier(*expression.right, *input);
+    if (left_input == right_input)
+      return false;
+    const Expression& carried = left_input ? *expression.left : *expression.right;
+    const Expression& other = left_input ? *expression.right : *expression.left;
+    if (!analysis_simple_stack_load(other) || !self(self, carried) ||
+        !lower_expression_to_x(context, other))
+      return false;
+    const auto opcode = binary_opcode(expression.op);
+    if (!opcode.has_value())
+      return false;
+    if (expression.op == "-" && right_input)
+      context.emitter.emit_op(0x14, "X<->Y", "preserve scalar operand order", line);
+    context.emitter.emit_op(opcode->first, opcode->second,
+                            expression.op == "*" ? "stack-carried packed digit delta"
+                                                 : "stack-carried exponent adjustment",
+                            line);
+    clear_current_x_facts(context);
+    return true;
+  };
+  return emit(emit, delta);
 }
 
 std::optional<std::string> direct_indexed_selector_name(const Expression& target) {
@@ -23213,14 +23245,12 @@ bool emit_indexed_packed_pow10_delta_from_stack_index(LoweringContext& context,
                                                       const Expression& target,
                                                       const std::string& selector,
                                                       int selector_register, const std::string& op,
-                                                      const Expression& factor, int line,
+                                                      const Expression& delta_expression, int line,
                                                       bool index_in_y) {
   if (index_in_y)
     context.emitter.emit_op(0x14, "X↔Y", "stack-carried packed digit index", line);
-  context.emitter.emit_op(0x15, "F 10^x", "stack-carried packed digit pow10", line);
-  if (!lower_expression_to_x(context, factor))
+  if (!emit_stack_carried_pow10_delta(context, delta_expression, line))
     return false;
-  context.emitter.emit_op(0x12, "*", "stack-carried packed digit delta", line);
   const PreparedIndexedSelector prepared_selector{.selector = selector};
   context.emitter.emit_op(0xd0 + selector_register,
                           "К П->X " + core::register_name_for_index(selector_register),
@@ -23233,6 +23263,8 @@ bool emit_indexed_packed_pow10_delta_from_stack_index(LoweringContext& context,
   const std::optional<std::pair<int, std::string>> opcode = binary_opcode(op);
   if (!opcode.has_value())
     return false;
+  if (op == "-")
+    context.emitter.emit_op(0x14, "X<->Y", "preserve indexed subtraction order", line);
   context.emitter.emit_op(opcode->first, opcode->second, "indexed packed digit update", line);
   emit_prepared_indirect_indexed_store(context, target, prepared_selector, line);
   return true;
@@ -23240,11 +23272,9 @@ bool emit_indexed_packed_pow10_delta_from_stack_index(LoweringContext& context,
 
 bool emit_predecrement_indexed_packed_pow10_delta_from_stacked_value(
     LoweringContext& context, const Expression& target, const std::string& selector,
-    int selector_register, const std::string& op, const Expression& factor, int line) {
-  context.emitter.emit_op(0x15, "F 10^x", "stack-carried packed digit pow10", line);
-  if (!lower_expression_to_x(context, factor))
+    int selector_register, const std::string& op, const Expression& delta_expression, int line) {
+  if (!emit_stack_carried_pow10_delta(context, delta_expression, line))
     return false;
-  context.emitter.emit_op(0x12, "*", "stack-carried packed digit delta", line);
   const std::optional<std::pair<int, std::string>> opcode = binary_opcode(op);
   if (!opcode.has_value())
     return false;
@@ -23295,7 +23325,7 @@ bool lower_indexed_packed_pow10_delta_statement(LoweringContext& context,
 
   const std::string& op = std::get<0>(*delta);
   const std::string& index_name = std::get<1>(*delta);
-  const Expression& factor = std::get<2>(*delta);
+  const Expression& delta_expression = std::get<2>(*delta);
   const std::optional<std::string> direct_selector = direct_indexed_selector_name(target);
   const std::optional<int> direct_selector_register =
       direct_selector.has_value()
@@ -23307,7 +23337,7 @@ bool lower_indexed_packed_pow10_delta_statement(LoweringContext& context,
                                context.emitter.current_x_aliases.contains(index_name);
     if (x_holds_index) {
       if (!emit_indexed_packed_pow10_delta_from_stack_index(context, target, *direct_selector,
-                                                            *direct_selector_register, op, factor,
+                                                            *direct_selector_register, op, delta_expression,
                                                             statement.line, false))
         return false;
       context.optimizations.push_back(OptimizationReport{
@@ -23321,7 +23351,7 @@ bool lower_indexed_packed_pow10_delta_statement(LoweringContext& context,
 
     if (context.current_y_variable == index_name) {
       if (!emit_indexed_packed_pow10_delta_from_stack_index(context, target, *direct_selector,
-                                                            *direct_selector_register, op, factor,
+                                                            *direct_selector_register, op, delta_expression,
                                                             statement.line, true))
         return false;
       context.current_y_variable.reset();
@@ -23354,11 +23384,9 @@ bool lower_indexed_packed_pow10_delta_statement(LoweringContext& context,
   attach_indexed_memory_targets(context, target);
   clear_current_x_facts(context);
   emit_recall(context, index_name);
-  context.emitter.emit_op(0x15, "F 10^x", "indexed packed digit pow10", statement.line);
   clear_current_x_facts(context);
-  if (!lower_expression_to_x(context, factor))
+  if (!emit_stack_carried_pow10_delta(context, delta_expression, statement.line))
     return false;
-  context.emitter.emit_op(0x12, "*", "indexed packed digit delta", statement.line);
   const std::optional<std::pair<int, std::string>> opcode = binary_opcode(op);
   if (!opcode.has_value())
     return false;
@@ -23610,7 +23638,7 @@ std::optional<IndexedPackedUpdateTailRule> x_param_indexed_fractional_report_tai
       .selector_register = *selector_register,
       .y_name = std::get<1>(*delta),
       .target = target,
-      .factor = std::get<2>(*delta),
+      .delta_expression = std::get<2>(*delta),
       .op = std::get<0>(*delta),
       .mask = report->mask,
       .update_line = update.line,
@@ -23911,9 +23939,7 @@ void emit_x_param_indexed_fractional_report_tail(
     LoweringContext& context, const IndexedPackedUpdateTailRule& update) {
   emit_store(context, update.selector, "set " + update.selector + " from X parameter");
   context.emitter.emit_op(0x14, "X<->Y", "stack-carried packed digit index", update.update_line);
-  context.emitter.emit_op(0x15, "F 10^x", "stack-carried packed digit pow10", update.update_line);
-  (void)lower_expression_to_x(context, update.factor);
-  context.emitter.emit_op(0x12, "*", "stack-carried packed digit delta", update.update_line);
+  (void)emit_stack_carried_pow10_delta(context, update.delta_expression, update.update_line);
   const PreparedIndexedSelector prepared_selector{.selector = update.selector};
   context.emitter.emit_op(0xd0 + update.selector_register,
                           "К П->X " + core::register_name_for_index(update.selector_register),
@@ -23924,6 +23950,8 @@ void emit_x_param_indexed_fractional_report_tail(
   context.emitter.items.back().logical_register_name = update.selector;
   attach_indexed_memory_targets(context, update.target);
   const std::optional<std::pair<int, std::string>> op = binary_opcode(update.op);
+  if (update.op == "-")
+    context.emitter.emit_op(0x14, "X<->Y", "preserve indexed subtraction order", update.update_line);
   if (op.has_value())
     context.emitter.emit_op(op->first, op->second, "indexed packed digit update",
                             update.update_line);
@@ -24014,10 +24042,8 @@ bool lower_x_param_indexed_fractional_report_tail_rule(LoweringContext& context,
     context.emitter.emit_op(0x14, "X↔Y", "stack-carried packed digit index", match->update_line);
     mark_current_x(context, match->y_name);
     context.emitter.emit_label(x_param_y_stack_stored_entry_label(rule.name), {.hidden = true});
-    context.emitter.emit_op(0x15, "F 10^x", "stack-carried packed digit pow10", match->update_line);
-    if (!lower_expression_to_x(context, match->factor))
+    if (!emit_stack_carried_pow10_delta(context, match->delta_expression, match->update_line))
       return false;
-    context.emitter.emit_op(0x12, "*", "stack-carried packed digit delta", match->update_line);
     const PreparedIndexedSelector prepared_selector{.selector = match->selector};
     context.emitter.emit_op(0xd0 + match->selector_register,
                             "К П->X " + core::register_name_for_index(match->selector_register),
@@ -24030,6 +24056,8 @@ bool lower_x_param_indexed_fractional_report_tail_rule(LoweringContext& context,
     const std::optional<std::pair<int, std::string>> op = binary_opcode(match->op);
     if (!op.has_value())
       return false;
+    if (match->op == "-")
+      context.emitter.emit_op(0x14, "X<->Y", "preserve indexed subtraction order", match->update_line);
     context.emitter.emit_op(op->first, op->second, "indexed packed digit update",
                             match->update_line);
     emit_prepared_indirect_indexed_store(context, match->target, prepared_selector,
@@ -51858,7 +51886,12 @@ struct ProvedDirectAddressSet {
 std::optional<ProvedDirectAddressSet> collect_fixed_direct_address_targets(
     const std::vector<MachineItem>& items, const CompileOptions& options,
     AddressSpaceModel model) {
-  const ResolvedProgram resolved = resolve_machine_items(items, options);
+  // This is an intermediate identity analysis, not the delivered listing.
+  // Preserve all over-window operands while layout still has a chance to
+  // shrink them. The final resolver separately uses the requested strict mode.
+  CompileOptions resolution_options = options;
+  resolution_options.analysis = true;
+  const ResolvedProgram resolved = resolve_machine_items(items, resolution_options);
   if (resolved.steps.size() !=
       static_cast<std::size_t>(core::machine_cell_count(items))) {
     return std::nullopt;

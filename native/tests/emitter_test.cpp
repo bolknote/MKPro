@@ -2,6 +2,7 @@
 
 #include "test_support.hpp"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,36 @@ void require_item(const MachineItem& item, MachineItemKind kind, int opcode,
 } // namespace
 
 void emitter_matches_initial_typescript_contract() {
+  {
+    MachineEmitter emitter;
+    emitter.emit_jump(0x51, "BP", 109, "provisional over-window identity");
+    while (emitter.items.size() < 110U)
+      emitter.emit_op(0x50, "STOP");
+    const ResolvedProgram strict = resolve_machine_items(emitter.items);
+    require(std::any_of(strict.diagnostics.begin(), strict.diagnostics.end(),
+                        [](const Diagnostic& diagnostic) {
+                          return diagnostic.severity == DiagnosticSeverity::Error &&
+                                 diagnostic.code == "address-out-of-range";
+                        }),
+            "a long artifact must not implicitly enable provisional address resolution");
+
+    CompileOptions analysis;
+    analysis.analysis = true;
+    const ResolvedProgram provisional = resolve_machine_items(emitter.items, analysis);
+    require(provisional.diagnostics.empty() && provisional.steps.size() == 110U &&
+                provisional.steps.at(1).opcode == 109,
+            "explicit analysis must preserve over-window identities for later layout");
+    require(!resolve_machine_items({MachineItem::address(-1)}, analysis).diagnostics.empty(),
+            "analysis must still reject an invalid negative address");
+
+    CompileOptions expanded;
+    expanded.feature_profile = FeatureProfile::Mk61SMiniExpanded;
+    const ResolvedProgram physical = resolve_machine_items(emitter.items, expanded);
+    require(physical.diagnostics.empty() && physical.steps.size() == 110U &&
+                physical.steps.at(1).opcode == 0xa9,
+            "strict resolution must use the selected target's physical address space");
+  }
+
   {
     MachineEmitter emitter;
     emitter.emit_number("-12.3e-4");

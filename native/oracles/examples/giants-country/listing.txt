@@ -37,7 +37,7 @@
    33 |  03  | 3                       |
    34 |  4E  | X→П e                   | setup Re
    35 |  09  | 9                       |
-   36 |  05  | 5                       |
+   36 |  06  | 6                       |
    37 |  48  | X→П 8                   | setup R8
    38 |  05  | 5                       |
    39 |  00  | 0                       |
@@ -113,7 +113,7 @@
    37 |  04  | 4                       |
    38 |  62  | П→X 2                   | recall strength
    39 |  10  | +                       | expr +
-   40 |  A8  | К ПП 8                  | shared straight-line helper; preloaded R8=95 indirect-target=95 shifted-forward indirect flow
+   40 |  A8  | К ПП 8                  | shared straight-line helper; preloaded R8=96 indirect-target=96 shifted-forward indirect flow
    41 |  E9  | К x=0 9                 | false branch for ==; preloaded R9=50 indirect-target=50 shifted-forward indirect flow
    42 |  D2  | К П→X 2                 | decrement strength
    43 |  D6  | К П→X 6                 | increment score
@@ -135,7 +135,7 @@
    59 |  51  | БП                      | if end
    60 |  66  | 66                      | if end
    61 |  62  | П→X 2                   | recall strength
-   62 |  A8  | К ПП 8                  | shared straight-line helper; preloaded R8=95 indirect-target=95 shifted-forward indirect flow
+   62 |  A8  | К ПП 8                  | shared straight-line helper; preloaded R8=96 indirect-target=96 shifted-forward indirect flow
    63 |  5E  | F x=0                   | false branch for ==
    64 |  66  | 66                      | false branch for ==
    65 |  D2  | К П→X 2                 | decrement strength
@@ -161,17 +161,18 @@
    85 |  29  | К ÷                     | halt literal ЕГГ0Г
    86 |  87  | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow
    87 |  D5  | К П→X 5                 | increment floor
-   88 |  04  | 4                       |
-   89 |  11  | −                       | condition compare
-   90 |  5E  | F x=0                   | false branch for ==
-   91 |  94  | 94                      | false branch for ==
-   92 |  01  | 1                       |
-   93 |  45  | X→П 5                   | set floor
-   94 |  52  | В/О                     | implicit return from proc
-   95 |  61  | П→X 1                   | recall tile
-   96 |  11  | −                       | expr -
-   97 |  42  | X→П 2                   | set strength
-   98 |  61  | П→X 1                   | recall tile
-   99 |  07  | 7                       | shared straight-line helper body
-   A0 |  11  | −                       | condition compare
-   A1 |  52  | В/О                     | shared straight-line helper return
+   88 |  65  | П→X 5                   | recall floor
+   89 |  04  | 4                       |
+   90 |  11  | −                       | condition compare
+   91 |  5E  | F x=0                   | false branch for ==
+   92 |  95  | 95                      | false branch for ==
+   93 |  01  | 1                       |
+   94 |  45  | X→П 5                   | set floor
+   95 |  52  | В/О                     | implicit return from proc
+   96 |  61  | П→X 1                   | recall tile
+   97 |  11  | −                       | expr -
+   98 |  42  | X→П 2                   | set strength
+   99 |  61  | П→X 1                   | recall tile
+   A0 |  07  | 7                       | shared straight-line helper body
+   A1 |  11  | −                       | condition compare
+   A2 |  52  | В/О                     | shared straight-line helper return

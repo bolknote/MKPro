@@ -3811,3 +3811,45 @@ If exact return-stack exploration reaches an empty return, its destination
 must resolve to an executable command. The same check applies to paths reached
 after resumable stops and typed manual input. Missing destinations, operand
 cells and unknown empty-return behavior still fail closed when actually used.
+
+## Stack-carried scalar delta canonicalization
+
+Indexed decimal updates share one normalized expression between input-lifetime
+analysis and emission. Existing `packed_add` and `digit_add` macros are expanded
+through their language definitions, then treated like explicit arithmetic.
+A single-use exponent input can remain in X or Y through literal `+`/`-`
+adjustments and products with independent simple coefficients. The complete
+expression tree is retained: no coefficient is dropped, products are not
+reassociated, and `10^(index - 1)` is not replaced by a rounded coefficient.
+This keeps equivalent index conventions eligible for the same indexed-update
+and shared-callback lowering without recognizing source names or a program.
+
+Every additional use of the exponent input, effectful coefficient, unsupported
+exponent expression, and existing lifetime/selector violation rejects this
+stack-input proof. The usual lowering remains available. A stack-first update
+also restores operand order before noncommutative subtraction; a preloaded
+old element already has the correct order. Emulator cases cover one-based and
+shifted indices, nested products, subtraction, a repeated-input rejection, and
+preservation of unselected bank elements.
+
+## Reachability-aware empty-return layout anchors
+
+A resolved empty-return policy is a hardware rule, not by itself a CFG edge.
+Natural-target placement pins its command identity only if the authoritative
+execution states contain a return with an empty return stack. This includes
+all typed manual-resume entries. When every reachable return has a caller,
+the old occupant of the policy address may move; the physical policy address
+itself is retained unchanged for the rebuilt final CFG. Final identity-trace,
+call/return, stack and X2 equivalence checks still apply. Synthetic positive
+layout/emulator coverage is paired with rejecting reachable-return and
+manual-resume counterexamples.
+
+## Provisional resolution versus delivered addresses
+
+Only explicit analysis resolution may keep an over-window logical address as
+an unencoded placeholder. Artifact length alone never enables this mode.
+Internal fixed-target identity collection opts into analysis while the final
+resolver uses the requested delivery mode and target profile. Thus layout can
+still improve an oversized candidate without making a 254-cell dispatch look
+executable on an MK-61. Explicit formal side-space operands retain their
+separate encoding contract; expanded target profiles use their actual window.

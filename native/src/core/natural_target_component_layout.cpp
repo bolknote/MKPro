@@ -4742,7 +4742,17 @@ std::optional<CandidateArtifact> try_candidate(
       .natural_target = required.target_address,
     });
   }
-  if (control_flow.empty_return_target.has_value()) {
+  // A configured hardware policy is not an execution edge. Only a reachable
+  // empty-stack return pins its continuation; closed calls may otherwise move
+  // the command that happened to occupy the unused policy address.
+  const bool observes_empty_return = std::any_of(
+      control_flow.execution_states.begin(), control_flow.execution_states.end(),
+      [&](const PostLayoutExecutionState& state) {
+        return state.return_stack.empty() && state.item_index < items.size() &&
+               items.at(state.item_index).kind == MachineItemKind::Op &&
+               items.at(state.item_index).opcode == kReturnOpcode;
+      });
+  if (observes_empty_return && control_flow.empty_return_target.has_value()) {
     const auto& continuation = *control_flow.empty_return_target;
     const bool already_pinned = std::any_of(
         options.required_absolute_targets.begin(), options.required_absolute_targets.end(),
@@ -4764,7 +4774,7 @@ std::optional<CandidateArtifact> try_candidate(
   std::vector<SplitBridgeDonor> split_bridge_donors;
   const auto command_is_control_identity =
       [&](const std::size_t command_origin) {
-        return control_flow.empty_return_target.has_value() &&
+        return observes_empty_return && control_flow.empty_return_target.has_value() &&
                control_flow.empty_return_target->item_index == command_origin;
       };
   for (const auto& [command_origin, targets] :
@@ -5085,12 +5095,14 @@ std::optional<CandidateArtifact> try_candidate(
       static_cast<std::size_t>(options.maximum_execution_states);
   final_options.main_entry = 0;
   if (control_flow.empty_return_target.has_value()) {
-    const auto rebound =
-        new_address_by_origin.find(control_flow.empty_return_target->item_index);
-    if (rebound == new_address_by_origin.end())
-      return reject("empty-return target identity was lost");
-    if (rebound->second != control_flow.empty_return_target->address)
-      return reject("empty-return hardware continuation changed physical address");
+    if (observes_empty_return) {
+      const auto rebound =
+          new_address_by_origin.find(control_flow.empty_return_target->item_index);
+      if (rebound == new_address_by_origin.end())
+        return reject("empty-return target identity was lost");
+      if (rebound->second != control_flow.empty_return_target->address)
+        return reject("empty-return hardware continuation changed physical address");
+    }
     final_options.empty_return_target = control_flow.empty_return_target->address;
   }
   const AuthoritativePostLayoutControlFlow final_flow =

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -99,6 +100,7 @@ program IndexedPackedPow10Probe {
     digit_index: packed = 0
     first_index: counter 0..5 = 3
     second_index: counter 0..5 = 2
+    report: packed = 0
   }
 
   fn apply_delta() {
@@ -131,6 +133,55 @@ program IndexedPackedPow10Probe {
   require(trim_ascii(mark_run.calc.read_register("6")) == "44344,4",
           "helper should subtract 10^2 from buckets[6], got " +
               trim_ascii(mark_run.calc.read_register("6")));
+
+  struct DeltaCase {
+    std::string expression;
+    std::string first;
+    std::string second;
+    std::optional<bool> stack_carried;
+  };
+  const std::vector<DeltaCase> cases = {
+      {"digit_add(buckets[cursor], digit_index, delta)", "44344,4", "44434,4", true},
+      {"packed_add(buckets[cursor], digit_index - 1, delta)", "44344,4", "44434,4", true},
+      {"buckets[cursor] + delta * pow10(digit_index - 1)", "44344,4", "44434,4", true},
+      {"buckets[cursor] + delta * pow(10, digit_index + 1)", "34444,4", "43444,4", true},
+      {"buckets[cursor] + pow10((digit_index - 1) + 2) * delta", "34444,4", "43444,4", true},
+      {"buckets[cursor] + pow10(4 - digit_index) * delta", "44434,4", "44344,4", true},
+      {"buckets[cursor] + (pow10(digit_index) * delta) * 2", "42444,4", "44244,4", true},
+      // A frontend may group the independent coefficients into a composite
+      // expression. That requires a separate deeper-stack liveness proof;
+      // either ordinary or stack-carried lowering must retain all factors.
+      {"buckets[cursor] + delta * (pow10(digit_index) * 2)", "42444,4", "44244,4", std::nullopt},
+      // This larger update makes the report fractional (0.8), so the first
+      // call terminates before the second bucket can be changed.
+      {"buckets[cursor] + ((pow10(digit_index) * delta) * 2) * 3", "38444,4", "44444,4", std::nullopt},
+      {"buckets[cursor] - pow10(digit_index) * delta", "45444,4", "44544,4", true},
+      // The second use of the input must not be silently treated as a saved
+      // coefficient after the stack-only input has already been consumed.
+      {"buckets[cursor] + pow10(digit_index) * digit_index", "47444,4", "44644,4", false},
+  };
+  const std::string original = "packed_add(buckets[cursor], digit_index, delta)";
+  for (const DeltaCase& test : cases) {
+    std::string source = mark_source;
+    const auto offset = source.find(original);
+    require(offset != std::string::npos, "delta fixture must contain its update expression");
+    source.replace(offset, original.size(), test.expression);
+    const CompileResult compiled = compile_source(source, options);
+    if (test.stack_carried.has_value())
+      require(has_optimization(compiled, "indexed-packed-y-stack-pow10-delta") == *test.stack_carried,
+              "stack-input eligibility for " + test.expression);
+    RunOutcome run = run_compiled(compiled, test.expression);
+    require(run.stopped, "scalar delta case should halt: " + test.expression);
+    require(trim_ascii(run.calc.read_register("7")) == test.first,
+            test.expression + ": first bucket should be " + test.first + ", got " +
+                trim_ascii(run.calc.read_register("7")));
+    require(trim_ascii(run.calc.read_register("6")) == test.second,
+            test.expression + ": second bucket should be " + test.second + ", got " +
+                trim_ascii(run.calc.read_register("6")));
+    require(trim_ascii(run.calc.read_register("4")) == "44444,4" &&
+                trim_ascii(run.calc.read_register("5")) == "44444,4",
+            "unselected buckets must survive " + test.expression);
+  }
 }
 
 } // namespace mkpro::tests

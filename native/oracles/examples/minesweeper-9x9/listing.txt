@@ -20,10 +20,10 @@
    16 |  05  | 5                       |
    17 |  4D  | X→П d                   | setup Rd
    18 |  04  | 4                       |
-   19 |  03  | 3                       |
+   19 |  02  | 2                       |
    20 |  47  | X→П 7                   | setup R7
    21 |  06  | 6                       |
-   22 |  07  | 7                       |
+   22 |  06  | 6                       |
    23 |  48  | X→П 8                   | setup R8
    24 |  3B  | К СЧ                    | random()
    25 |  09  | 9                       |
@@ -41,74 +41,73 @@
 ------+-------+-------------------------+----------------
    00 | 50    | С/П                     | read probe
    01 | 43    | X→П 3                   | read probe
-   02 | A7    | К ПП 7                  | spatial hit mines; preloaded R7=43 indirect-target=43 shifted-forward indirect flow
+   02 | A7    | К ПП 7                  | spatial hit mines; preloaded R7=42 indirect-target=42 shifted-forward indirect flow
    03 | 57    | F x≠0                   | false branch for !=
    04 | 06    | 06                      | false branch for !=
    05 | 29    | К ÷                     | halt literal ЕГГ0Г
    06 | 63    | П→X 3                   | recall probe
    07 | 01 01 | 11                      |
    09 | 11    | −                       | expr -
-   10 | A7    | К ПП 7                  | spatial hit mines; preloaded R7=43 indirect-target=43 shifted-forward indirect flow
+   10 | A7    | К ПП 7                  | spatial hit mines; preloaded R7=42 indirect-target=42 shifted-forward indirect flow
    11 | 4E    | X→П e                   | neighbor_count total
    12 | 63    | П→X 3                   | recall probe
    13 | 01 00 | 10                      |
    15 | 11    | −                       | expr -
-   16 | A8    | К ПП 8                  | shared straight-line helper; preloaded R8=67 indirect-target=67 shifted-forward indirect flow
+   16 | A8    | К ПП 8                  | shared straight-line helper; preloaded R8=66 indirect-target=66 shifted-forward indirect flow
    17 | 63    | П→X 3                   | recall probe
    18 | 09    | 9                       |
    19 | 11    | −                       | expr -
    20 | 53    | ПП                      | shared straight-line helper
-   21 | 72    | 72                      | shared straight-line helper
+   21 | 71    | 71                      | shared straight-line helper
    22 | 11    | −                       | expr -
    23 | 53    | ПП                      | shared straight-line helper
-   24 | 72    | 72                      | shared straight-line helper
+   24 | 71    | 71                      | shared straight-line helper
    25 | 10    | +                       | expr +
-   26 | A8    | К ПП 8                  | shared straight-line helper; preloaded R8=67 indirect-target=67 shifted-forward indirect flow
+   26 | A8    | К ПП 8                  | shared straight-line helper; preloaded R8=66 indirect-target=66 shifted-forward indirect flow
    27 | 63    | П→X 3                   | recall probe
    28 | 09    | 9                       |
    29 | 10    | +                       | expr +
    30 | 53    | ПП                      | shared straight-line helper
-   31 | 72    | 72                      | shared straight-line helper
-   32 | A8    | К ПП 8                  | shared straight-line helper; preloaded R8=67 indirect-target=67 shifted-forward indirect flow
+   31 | 71    | 71                      | shared straight-line helper
+   32 | A8    | К ПП 8                  | shared straight-line helper; preloaded R8=66 indirect-target=66 shifted-forward indirect flow
    33 | 63    | П→X 3                   | recall probe
    34 | 01 01 | 11                      |
    36 | 10    | +                       | expr +
-   37 | A7    | К ПП 7                  | spatial hit mines; preloaded R7=43 indirect-target=43 shifted-forward indirect flow
+   37 | A7    | К ПП 7                  | spatial hit mines; preloaded R7=42 indirect-target=42 shifted-forward indirect flow
    38 | 6E    | П→X e                   | neighbor_count total
    39 | 10    | +                       | neighbor_count add hit
-   40 | 4E    | X→П e                   | neighbor_count total
-   41 | 50    | С/П                     | show __inline_show_41_0
-   42 | 8D    | К БП d                  | loop back; preloaded Rd=0.5 indirect-target=0 shifted-forward indirect flow
-   43 | 6A    | П→X a                   | preload stack const 4
-   44 | 13    | ÷                       | bit mask quotient
-   45 | 40    | X→П 0                   | bit mask quotient
-   46 | 35    | К {x}                   | bit mask remainder fraction
-   47 | 04    | 4                       |
-   48 | 12    | ×                       | bit mask remainder scale
-   49 | 6B    | П→X b                   | preload stack const 2
-   50 | 24    | F xʸ                    | bit mask power
-   51 | 6D    | П→X d                   | preload const 0.5
-   52 | 10    | +                       | bit mask round bias
-   53 | 34    | К [x]                   | bit mask round
-   54 | 60    | П→X 0                   | bit mask quotient
-   55 | 34    | К [x]                   | bit mask digit index
-   56 | 6C    | П→X c                   | preload stack const 1
-   57 | 10    | +                       | bit mask decade index
-   58 | 15    | F 10ˣ                   | bit mask decade
-   59 | 13    | ÷                       | bit mask fractional place
-   60 | 69    | П→X 9                   | preload stack const 8
-   61 | 10    | +                       | bit mask anchor
-   62 | 62    | П→X 2                   | spatial hit mask
-   63 | 37    | К ∧                     | spatial hit test
-   64 | 35    | К {x}                   | spatial hit membership fraction
-   65 | 32    | К ЗН                    | spatial hit to count
-   66 | 52    | В/О                     | spatial hit return
-   67 | A7    | К ПП 7                  | spatial hit mines; preloaded R7=43 indirect-target=43 shifted-forward indirect flow
-   68 | 6E    | П→X e                   | neighbor_count total
-   69 | 10    | +                       | neighbor_count add hit
-   70 | 4E    | X→П e                   | neighbor_count total
-   71 | 52    | В/О                     | shared straight-line helper return
-   72 | A8    | К ПП 8                  | shared straight-line helper; preloaded R8=67 indirect-target=67 shifted-forward indirect flow
-   73 | 63    | П→X 3                   | recall probe
-   74 | 01    | 1                       | shared straight-line helper body
-   75 | 52    | В/О                     | shared straight-line helper return
+   40 | 50    | С/П                     | show __inline_show_41_0
+   41 | 8D    | К БП d                  | loop back; preloaded Rd=0.5 indirect-target=0 shifted-forward indirect flow
+   42 | 6A    | П→X a                   | preload stack const 4
+   43 | 13    | ÷                       | bit mask quotient
+   44 | 40    | X→П 0                   | bit mask quotient
+   45 | 35    | К {x}                   | bit mask remainder fraction
+   46 | 04    | 4                       |
+   47 | 12    | ×                       | bit mask remainder scale
+   48 | 6B    | П→X b                   | preload stack const 2
+   49 | 24    | F xʸ                    | bit mask power
+   50 | 6D    | П→X d                   | preload const 0.5
+   51 | 10    | +                       | bit mask round bias
+   52 | 34    | К [x]                   | bit mask round
+   53 | 60    | П→X 0                   | bit mask quotient
+   54 | 34    | К [x]                   | bit mask digit index
+   55 | 6C    | П→X c                   | preload stack const 1
+   56 | 10    | +                       | bit mask decade index
+   57 | 15    | F 10ˣ                   | bit mask decade
+   58 | 13    | ÷                       | bit mask fractional place
+   59 | 69    | П→X 9                   | preload stack const 8
+   60 | 10    | +                       | bit mask anchor
+   61 | 62    | П→X 2                   | spatial hit mask
+   62 | 37    | К ∧                     | spatial hit test
+   63 | 35    | К {x}                   | spatial hit membership fraction
+   64 | 32    | К ЗН                    | spatial hit to count
+   65 | 52    | В/О                     | spatial hit return
+   66 | A7    | К ПП 7                  | spatial hit mines; preloaded R7=42 indirect-target=42 shifted-forward indirect flow
+   67 | 6E    | П→X e                   | neighbor_count total
+   68 | 10    | +                       | neighbor_count add hit
+   69 | 4E    | X→П e                   | neighbor_count total
+   70 | 52    | В/О                     | shared straight-line helper return
+   71 | A8    | К ПП 8                  | shared straight-line helper; preloaded R8=66 indirect-target=66 shifted-forward indirect flow
+   72 | 63    | П→X 3                   | recall probe
+   73 | 01    | 1                       | shared straight-line helper body
+   74 | 52    | В/О                     | shared straight-line helper return

@@ -177,7 +177,7 @@ program SegmentedClear {
   direct_options.budget = 999;
   direct_options.segmented_bitplanes = true;
   direct_options.disable_candidate_search = true;
-  const CompileResult direct = compile_source(R"mkpro(
+  const std::string direct_source = R"mkpro(
 program SegmentedDirectDispatch {
   field: board(0..9, 0..9)
 
@@ -199,8 +199,8 @@ program SegmentedDirectDispatch {
     halt(answer)
   }
 }
-)mkpro",
-                                              direct_options);
+)mkpro";
+  const CompileResult direct = compile_source(direct_source, direct_options);
   require(!direct.implemented,
           "oversized direct segmented bitplane dispatch must not claim to fit the MK-61");
   require(std::any_of(direct.diagnostics.begin(), direct.diagnostics.end(),
@@ -209,6 +209,11 @@ program SegmentedDirectDispatch {
                                diagnostic.message.find("outside 00..A4") != std::string::npos;
                       }),
           "oversized direct segmented bitplane dispatch should diagnose the physical address");
+  CompileOptions analysis_options = direct_options;
+  analysis_options.analysis = true;
+  const CompileResult provisional_direct = compile_source(direct_source, analysis_options);
+  require(provisional_direct.implemented && provisional_direct.steps.size() > 105U,
+          "explicit analysis must retain the oversized dispatch for optimizer research");
   require(direct.registers.at("__seg_bitplane_selector") != "7",
           "reserved R7 should force direct four-plane segmented dispatch");
   require(has_optimization(direct, "segmented-bitplane-update"),

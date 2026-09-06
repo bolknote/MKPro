@@ -860,6 +860,60 @@ bool reason_contains(const core::NaturalTargetComponentLayoutPlan& plan,
 
 void natural_target_component_layout_is_generic_and_proof_gated() {
   {
+    // The unused hardware continuation happens to point at this main body.
+    // It is not a second external entry and must not freeze that body at 01.
+    const std::vector<MachineItem> items = {
+        op(0x8a), MachineItem::label("movable_body"),
+        op(0x53), MachineItem::address("closed_leaf"),
+        op(0x53), MachineItem::address("closed_leaf"), stop(),
+        MachineItem::label("closed_leaf"), op(0x22), op(0x52),
+        MachineItem::label("two_cell_padding"), op(0x0d), stop(),
+        MachineItem::label("one_cell_padding"), stop(),
+    };
+    auto input = items;
+    input.front().indirect_flow_targets = std::vector<IrTarget>{"movable_body"};
+    const std::vector<PreloadReport> preloads = {{.register_name = "a", .value = "1"}};
+    core::PostLayoutControlFlowOptions flow_options;
+    flow_options.empty_return_target = 1;
+    const auto input_flow = core::build_post_layout_control_flow(input, flow_options);
+    require(input_flow.proved, "closed-call policy fixture must have authoritative flow");
+    core::NaturalTargetComponentLayoutOptions options;
+    options.required_absolute_targets.push_back({.target_item = 2, .target_address = 4});
+    options.allow_size_neutral_absolute_layout = true;
+    options.require_size_neutral_absolute_layout = true;
+    const auto moved = core::optimize_natural_target_component_layout(
+        input, preloads, input_flow, options);
+    require(moved.applied > 0 && moved.plan.final_artifact_proved &&
+                moved.plan.absolute_targets_proved && moved.plan.call_return_equivalent &&
+                moved.plan.stack_and_x2_equivalent && cell_count(moved.items) == cell_count(input),
+            "an unused empty-return policy must allow neutral relocation of closed calls");
+    const auto before = observe(input, preloads);
+    const auto after = observe(moved.items, moved.preloads);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "moving the unused policy occupant must preserve emulator stack and last-X");
+
+    // Returning with no caller makes physical 01 observable and therefore
+    // incompatible with moving that continuation identity to 04.
+    auto reachable = input;
+    reachable.at(6) = op(0x52);
+    const auto reachable_flow = core::build_post_layout_control_flow(reachable, flow_options);
+    require(reachable_flow.proved, "reachable empty-return loop must be modeled");
+    require(core::optimize_natural_target_component_layout(
+                reachable, preloads, reachable_flow, options).applied == 0,
+            "a reachable empty return must retain its physical hardware continuation");
+
+    // A manual resume enters the leaf without a call frame and observes the
+    // same policy. Looking only at the initial run would miss this edge.
+    auto resumed = input;
+    resumed.at(6).stop_disposition = StopDisposition::Resumable;
+    const auto resumed_flow = core::build_post_layout_control_flow(resumed, flow_options);
+    require(resumed_flow.proved, "manual-resume empty return must be modeled");
+    require(core::optimize_natural_target_component_layout(
+                resumed, preloads, resumed_flow, options).applied == 0,
+            "manual resume must retain the observable empty-return continuation");
+  }
+
+  {
     Fixture retained_target;
     retained_target.items = {
         MachineItem::label("entry"), op(0x53),

@@ -137,7 +137,7 @@ void example_sizes_match_typescript_baselines() {
       {"cave-highlevel-baseline", 103},
       {"cave-sketch", 38},
       {"cave-treasure", 103},
-      {"clock", 30},
+      {"clock", 31}, // The incremented counter needs a value recall after D0..D6.
       {"dangerous-loading", 75},
       {"dungeon", 75},
       {"e-94-digits", 64},
@@ -145,13 +145,13 @@ void example_sizes_match_typescript_baselines() {
       {"fox-hunt-100", 102},
       {"fox-hunt-mk61", 65},
       {"game-100-pig", 97},
-      {"giants-country", 102},
+      {"giants-country", 103}, // Preserve the same indirect-counter value contract.
       {"human", 23},
       {"jack-pot", 94},
       {"labyrinth777", 105},
       {"lunar", 44},
-      {"minesweeper-9x7", 76},
-      {"minesweeper-9x9", 76},
+      {"minesweeper-9x7", 75},
+      {"minesweeper-9x9", 75},
       {"raja-yoga", 77},
       {"rambo-iii", 103},
       {"river-battle", 90},
@@ -164,8 +164,8 @@ void example_sizes_match_typescript_baselines() {
       {"zagaday-tsifru", 105},
   };
   const std::map<std::string, std::size_t> PENDING_BASELINE{
-      {"nekromant", 137},
-      {"tic-tac-toe-4x4", 134},
+      {"nekromant", 135},
+      {"tic-tac-toe-4x4", 132},
   };
 
   const std::filesystem::path root = std::filesystem::current_path();
