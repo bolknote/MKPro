@@ -3643,6 +3643,19 @@ find_branch_to_stop_tail_selector_rewrite(const std::vector<MachineItem>& items,
 // non-retargetable address encoding: every numeric direct operand and every
 // typed indirect target must lie before the erased operand (this pass runs
 // before selector values exist, so no preload retargeting is attempted).
+bool reachable_only_with_empty_return_stack(
+    const AuthoritativePostLayoutControlFlow& flow, std::size_t item_index) {
+  bool reachable = false;
+  for (const PostLayoutExecutionState& state : flow.execution_states) {
+    if (state.item_index != item_index)
+      continue;
+    reachable = true;
+    if (!state.return_stack.empty())
+      return false;
+  }
+  return reachable;
+}
+
 std::optional<BranchRewrite>
 find_empty_stack_loop_return_rewrite(const std::vector<MachineItem>& raw_items,
                                      AddressSpaceModel model) {
@@ -3696,21 +3709,11 @@ find_empty_stack_loop_return_rewrite(const std::vector<MachineItem>& raw_items,
 
     // Every execution state of the branch must carry an empty return stack;
     // an unexplored branch (no execution state) fails closed.
-    bool reachable = false;
-    bool always_empty_stack = true;
-    for (const PostLayoutExecutionState& state : flow->execution_states) {
-      if (state.item_index != static_cast<std::size_t>(branch.item_index))
-        continue;
-      reachable = true;
-      if (!state.return_stack.empty()) {
-        always_empty_stack = false;
-        break;
-      }
-    }
-    if (!reachable || !always_empty_stack) {
+    if (!reachable_only_with_empty_return_stack(
+            *flow, static_cast<std::size_t>(branch.item_index))) {
       if (trace_post_layout_enabled()) {
         std::cerr << "[empty-stack-loop-return] branch at " << branch.address
-                  << (reachable ? " has a non-empty return stack" : " is unexplored") << "\n";
+                  << " has an unproved or non-empty return stack\n";
       }
       continue;
     }
@@ -4647,6 +4650,70 @@ optimize_post_layout_empty_stack_loop_return(const std::vector<MachineItem>& ite
                             "at 01 after an empty-stack В/О).",
               },
           },
+      .applied = applied,
+  };
+}
+
+PostLayoutIndirectFlowResult optimize_post_layout_empty_return_selector_release(
+    const std::vector<MachineItem>& items, int selector_register,
+    AddressSpaceModel model) {
+  const auto unchanged = [&] { return PostLayoutIndirectFlowResult{.items = items}; };
+  // R0-R6 indirect instructions can mutate their selector. A plain return
+  // cannot replace those effects, even when the destination happens to be 01.
+  if (selector_register < 7 || selector_register > 14)
+    return unchanged();
+  const auto normalized = normalize_natural_target_overflow_formals(items, model);
+  if (!normalized.has_value() || normalized->size() != items.size())
+    return unchanged();
+  PostLayoutControlFlowOptions flow_options;
+  flow_options.address_space_model = model;
+  flow_options.empty_return_target = 1;
+  const auto before = build_post_layout_control_flow(*normalized, flow_options);
+  if (!before.proved)
+    return unchanged();
+
+  auto candidate = items;
+  int applied = 0;
+  for (const auto& [index, targets] : before.indirect_flow_targets) {
+    const MachineItem& source = items.at(index);
+    if (source.kind != MachineItemKind::Op || source.raw ||
+        source.opcode != 0x80 + selector_register || targets.size() != 1U ||
+        targets.front().address != 1 ||
+        !reachable_only_with_empty_return_stack(before, index))
+      continue;
+    MachineItem replacement = MachineItem::op(0x52, "В/О");
+    replacement.source_line = source.source_line;
+    // Keep the same compiler-owned marker as the direct loop-return lowering.
+    replacement.comment = "optimized БП 01";
+    candidate.at(index) = std::move(replacement);
+    ++applied;
+  }
+  if (applied == 0 || machine_cell_count(candidate) != machine_cell_count(items))
+    return unchanged();
+
+  const auto verified = normalize_natural_target_overflow_formals(candidate, model);
+  if (!verified.has_value())
+    return unchanged();
+  const auto after = build_post_layout_control_flow(*verified, flow_options);
+  if (!after.proved || !after.empty_return_target.has_value() ||
+      after.empty_return_target->address != 1 ||
+      after.external_entries != before.external_entries ||
+      after.execution_states != before.execution_states ||
+      after.execution_successors != before.execution_successors ||
+      after.indirect_memory_targets != before.indirect_memory_targets)
+    return unchanged();
+
+  return PostLayoutIndirectFlowResult{
+      .items = std::move(candidate),
+      .optimizations = {{
+          .name = "empty-return-selector-release",
+          .detail = "Replaced " + std::to_string(applied) +
+                    " stable indirect jumps to physical 01 with same-width returns "
+                    "after proving empty return stacks, identical external entries, "
+                    "execution successors and memory targets. Selector borrowing "
+                    "requires removal of its complete flow family and a profitable "
+                    "downstream transaction.",
+      }},
       .applied = applied,
   };
 }

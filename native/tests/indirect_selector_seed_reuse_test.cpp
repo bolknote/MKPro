@@ -9,6 +9,7 @@
 
 #include "test_support.hpp"
 
+#include <algorithm>
 #include <array>
 #include <map>
 #include <string>
@@ -104,6 +105,108 @@ void reject(const std::vector<MachineItem>& items, const std::string& why) {
 } // namespace
 
 void indirect_selector_seed_reuse_preserves_observations() {
+  {
+    auto loop = op(0x8b);
+    loop.indirect_flow_targets = std::vector<IrTarget>{std::string("main")};
+    auto call = op(0xac);
+    call.indirect_flow_targets = std::vector<IrTarget>{std::string("worker")};
+    auto prompt = stop();
+    prompt.stop_disposition = StopDisposition::Resumable;
+    std::vector<MachineItem> items{
+        loop, MachineItem::label("main"), call, op(0x6c), prompt, loop,
+        MachineItem::label("worker"), op(0x61), op(0x62), op(0x10), op(0x52), op(0x54),
+    };
+    std::vector<PreloadReport> preloads{
+        {.register_name = "b", .value = "1"}, {.register_name = "c", .value = "5"},
+    };
+    core::PostLayoutControlFlowOptions control_options;
+    control_options.empty_return_target = 1;
+    const auto control = core::build_post_layout_control_flow(items, control_options);
+    require(control.proved, "selector-release composition needs a proved original CFG");
+    core::NaturalTargetComponentLayoutOptions layout_options;
+    layout_options.allow_size_neutral_absolute_layout = true;
+    layout_options.require_size_neutral_absolute_layout = true;
+    layout_options.required_absolute_targets = {{.target_item = 7, .target_address = 6}};
+    const auto variants = core::reassign_stable_indirect_selector_families(
+        items, preloads, control, layout_options);
+    require(!variants.empty(),
+            "releasing the complete loop family must let a data-fixed helper move");
+    const auto play = [&](const std::vector<MachineItem>& program,
+                          const std::vector<PreloadReport>& setup) {
+      emulator::MK61 calc;
+      for (const auto& preload : setup)
+        calc.set_register(preload.register_name, preload.value);
+      calc.set_register("1", "2");
+      calc.set_register("2", "3");
+      require(calc.load_program(codes(raise_machine_to_ir(program))).diagnostics.empty(),
+              "released-selector composition must load");
+      calc.press_sequence({"В/О", "С/П"});
+      std::vector<std::string> states;
+      for (const std::string input : {"", "44", "-7"}) {
+        if (!input.empty()) {
+          calc.input_number(input);
+          calc.press("С/П");
+        }
+        require(calc.run_until_stable(1500, 6).stopped,
+                "released-selector composition must preserve every prompt");
+        states.push_back(compact(calc.display_text()));
+        for (const std::string reg : {"x", "y", "z", "t", "x1", "0", "1", "2", "3", "c"}) {
+          const auto value = calc.read_register(reg);
+          // C is the numeric data constant 5, not an observation of the
+          // debugger's leading-zero padding after indirect flow decoding.
+          states.push_back(reg == "c" ? std::to_string(std::stod(value)) : compact(value));
+        }
+      }
+      return states;
+    };
+    const auto expected = play(items, preloads);
+    for (const auto& variant : variants) {
+      require(variant.control_flow.proved && variant.control_flow.empty_return_target.has_value() &&
+                  variant.control_flow.empty_return_target->address == 1,
+              "selector release must preserve the physical empty-return continuation");
+      require(std::any_of(variant.optimizations.begin(), variant.optimizations.end(),
+                          [](const auto& applied) { return applied.name == "empty-return-selector-release"; }),
+              "the alternative must explain the neutral selector-release stage");
+      require(codes(raise_machine_to_ir(variant.items)).size() ==
+                  codes(raise_machine_to_ir(items)).size(),
+              "selector release must not claim a size saving before downstream fusion");
+      const auto actual = play(variant.items, variant.preloads);
+      require(actual.size() == expected.size(), "selector-release observation arity must match");
+      for (std::size_t index = 0; index < expected.size(); ++index)
+        require(actual.at(index) == expected.at(index),
+                "selector-release observation " + std::to_string(index) + ": expected " +
+                    expected.at(index) + ", got " + actual.at(index));
+    }
+    auto written = items;
+    written.at(7) = op(0x4b);
+    require(core::reassign_stable_indirect_selector_families(
+                written, preloads, core::build_post_layout_control_flow(written, control_options),
+                layout_options).empty(),
+            "a runtime-written selector must not become a borrowed call address");
+    auto observable = items;
+    observable.at(3) = op(0x6b);
+    require(core::reassign_stable_indirect_selector_families(
+                observable, preloads, core::build_post_layout_control_flow(observable, control_options),
+                layout_options).empty(),
+            "retuning must reject an observable numeric use of the freed selector");
+    auto incomplete = items;
+    incomplete.at(0).indirect_flow_targets.reset();
+    require(core::reassign_stable_indirect_selector_families(
+                incomplete, preloads, core::build_post_layout_control_flow(incomplete, control_options),
+                layout_options).empty(),
+            "a partially known loop family must never be treated as fully released");
+    auto partial = items;
+    partial.at(5) = op(0x7b);
+    partial.at(5).indirect_flow_targets = std::vector<IrTarget>{std::string("main")};
+    const auto partial_control = core::build_post_layout_control_flow(partial, control_options);
+    require(partial_control.proved, "partial-family rejection fixture must have a complete CFG");
+    const auto partial_variants = core::reassign_stable_indirect_selector_families(
+        partial, preloads, partial_control, layout_options);
+    for (const auto& variant : partial_variants)
+      require(std::none_of(variant.optimizations.begin(), variant.optimizations.end(),
+                           [](const auto& applied) { return applied.name == "empty-return-selector-release"; }),
+              "a surviving conditional use must prevent borrowing the loop selector");
+  }
   {
     const std::vector<MachineItem> original = {
         op(0x52), op(0x61), op(0x53), MachineItem::address("worker"), stop(),

@@ -121,6 +121,126 @@ std::vector<int> resolved_opcodes(const std::vector<MachineItem>& items) {
 } // namespace
 
 void post_layout_indirect_flow_matches_typescript_contract() {
+  {
+    const auto loop_jump = [](int reg, const std::string& target) {
+      auto item = MachineItem::op(0x80 + reg, "indirect loop jump");
+      item.indirect_flow_targets = std::vector<IrTarget>{target};
+      return item;
+    };
+    auto resume = MachineItem::op(0x50, "stop");
+    resume.stop_disposition = StopDisposition::Resumable;
+    const std::vector<MachineItem> original{
+        loop_jump(11, "head"), MachineItem::label("head"),
+        MachineItem::op(0x60, "recall 0"), MachineItem::op(0x53, "call"),
+        MachineItem::address("worker"), resume, MachineItem::op(0x40, "store 0"),
+        loop_jump(11, "head"), MachineItem::label("worker"),
+        MachineItem::op(0x61, "recall 1"), MachineItem::op(0x10, "+"),
+        MachineItem::op(0x52, "return"),
+    };
+    const auto released = core::optimize_post_layout_empty_return_selector_release(original, 11);
+    require(released.applied == 2 && core::machine_cell_count(released.items) ==
+                core::machine_cell_count(original),
+            "stable selector release must replace both jumps without changing geometry");
+    std::vector<std::vector<std::string>> observations;
+    for (const auto* program : {&original, &released.items}) {
+      emulator::MK61 calc;
+      calc.set_register("0", "3");
+      calc.set_register("1", "2");
+      calc.set_register("b", "1");
+      calc.set_register("x", "19");
+      calc.set_register("y", "23");
+      calc.set_register("z", "29");
+      calc.set_register("t", "31");
+      require(calc.load_program(resolved_opcodes(*program)).diagnostics.empty(),
+              "empty-return selector fixture must load");
+      calc.press_sequence({"В/О", "С/П"});
+      std::vector<std::string> states;
+      const auto snapshot = [&] {
+        require(calc.run_until_stable(1000, 6).stopped,
+                "both selector layouts must stop after returning from the worker");
+        states.push_back(calc.display_text());
+        states.push_back(calc.program_counter());
+        for (const std::string reg : {"x", "y", "z", "t", "x1", "0", "1", "2", "3",
+                                      "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e"}) {
+          const std::string value = calc.read_register(reg);
+          // Indirect selection zero-pads this integer address in memory.
+          // Hardware recall, unlike the raw debugger accessor, observes 1.
+          states.push_back(reg == "b" ? std::to_string(std::stod(value)) : value);
+        }
+      };
+      snapshot();
+      for (const std::string value : {"7", "-4", "23"}) {
+        calc.input_number(value);
+        calc.press("С/П");
+        snapshot();
+      }
+      observations.push_back(std::move(states));
+    }
+    require(observations.at(0).size() == observations.at(1).size(),
+            "same-width loop observations must have the same arity");
+    for (std::size_t index = 0; index < observations.at(0).size(); ++index)
+      require(observations.at(0).at(index) == observations.at(1).at(index),
+              "empty-return observation " + std::to_string(index) + ": expected " +
+                  observations.at(0).at(index) + ", got " + observations.at(1).at(index));
+
+    auto unknown = original;
+    unknown.at(0).indirect_flow_targets.reset();
+    require(core::optimize_post_layout_empty_return_selector_release(unknown, 11).applied == 0,
+            "an unknown selector destination must not be guessed");
+    auto wrong_target = original;
+    wrong_target.at(0).indirect_flow_targets = std::vector<IrTarget>{std::string("worker")};
+    wrong_target.at(7).indirect_flow_targets = std::vector<IrTarget>{std::string("worker")};
+    require(core::optimize_post_layout_empty_return_selector_release(wrong_target, 11).applied == 0,
+            "empty returns may only replace jumps to physical 01");
+    auto terminal = resume;
+    terminal.stop_disposition = StopDisposition::Terminal;
+    for (const int opcode : {0x6b, 0xdb}) {
+      auto load = MachineItem::op(opcode, "observe selector");
+      if (opcode == 0xdb)
+        load.indirect_memory_targets = std::vector<int>{1};
+      const std::vector<MachineItem> probe{
+          loop_jump(11, "load"), MachineItem::label("load"), load, terminal,
+      };
+      const auto rewritten = core::optimize_post_layout_empty_return_selector_release(probe, 11);
+      require(rewritten.applied == 1, "hardware selector observation must retain its loop premise");
+      std::vector<std::vector<std::string>> states;
+      for (const auto* program : {&probe, &rewritten.items}) {
+        emulator::MK61 calc;
+        calc.set_register("b", "1");
+        calc.set_register("1", "773");
+        require(calc.load_program(resolved_opcodes(*program)).diagnostics.empty(),
+                "selector normalization fact must load");
+        calc.press_sequence({"В/О", "С/П"});
+        require(calc.run_until_stable(1000, 6).stopped,
+                "selector normalization fact must stop");
+        std::vector<std::string> observed{calc.display_text()};
+        for (const std::string reg : {"x", "y", "z", "t", "x1", "1"})
+          observed.push_back(calc.read_register(reg));
+        states.push_back(std::move(observed));
+      }
+      require(states.at(0) == states.at(1),
+              "leading-zero selector padding must be unobservable through hardware recall and indexing");
+    }
+    std::vector<MachineItem> framed{
+        loop_jump(12, "main"), MachineItem::label("head"), terminal,
+        MachineItem::label("main"), MachineItem::op(0x53, "call"),
+        MachineItem::address("worker"), terminal, MachineItem::label("worker"),
+        loop_jump(11, "head"),
+    };
+    require(core::build_post_layout_control_flow(framed).proved,
+            "framed rejection fixture must have a complete CFG");
+    require(core::optimize_post_layout_empty_return_selector_release(framed, 11).applied == 0,
+            "a jump inside a called worker must not pop its return frame");
+    std::vector<MachineItem> unreachable{
+        MachineItem::op(0x54, "nop"), MachineItem::label("head"), terminal,
+        loop_jump(11, "head"),
+    };
+    require(core::optimize_post_layout_empty_return_selector_release(unreachable, 11).applied == 0,
+            "an unexplored jump must not establish an empty-return premise");
+    for (int reg = 0; reg <= 6; ++reg)
+      require(core::optimize_post_layout_empty_return_selector_release(original, reg).applied == 0,
+              "selectors with implicit mutation must never be replaced by returns");
+  }
   CompileOptions options;
   options.delivery = DeliveryMode::Manual;
   options.budget = 999999;

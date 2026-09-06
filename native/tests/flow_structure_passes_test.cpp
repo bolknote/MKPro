@@ -319,6 +319,11 @@ void flow_structure_passes_match_typescript_contract() {
             "tail-call-lowering preserves the selector while replacing КПП with КБП");
     require(result.ops.size() == 3,
             "tail-call-lowering should remove exactly the immediate return cell");
+    require(result.ops.front().meta.mnemonic == "К БП c",
+            "tail-call-lowering should name the indirect jump and its selector in IR");
+    const auto lowered = mkpro::lower_ir_to_machine(result.ops);
+    require(!lowered.empty() && lowered.front().mnemonic == "К БП c",
+            "tail-call-lowering should retain the correct mnemonic in the machine listing");
   }
 
   // --- tail-branch-inversion ----------------------------------------------

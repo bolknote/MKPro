@@ -1,4 +1,5 @@
 #include "mkpro/core/shared_helper_dual_mode_layout.hpp"
+#include "mkpro/core/post_layout_indirect_flow.hpp"
 
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/opcodes.hpp"
@@ -730,6 +731,7 @@ reassign_stable_indirect_selector_families(
   }
 
   std::size_t attempted = 0;
+  std::vector<std::optional<PostLayoutIndirectFlowResult>> release_cache(15);
   for (const Family& fixed : families) {
     for (const Family& flexible : families) {
       if (fixed.reg == flexible.reg || fixed.target.item_index == flexible.target.item_index)
@@ -750,86 +752,103 @@ reassign_stable_indirect_selector_families(
       if (trace)
         std::cerr << "[selector-families] R" << fixed.reg << "/R" << flexible.reg
                   << " fixed=" << fixed.target.address << " flexible=" << flexible.target.address << '\n';
+      auto& released = release_cache.at(static_cast<std::size_t>(flexible.reg));
+      if (!released.has_value())
+        released = optimize_post_layout_empty_return_selector_release(
+            items, flexible.reg, options.address_space_model);
+      const bool complete_release = released->applied > 0 &&
+          static_cast<std::size_t>(released->applied) == flexible.uses.size();
 
-      auto seed_items = items;
-      auto seed_preloads = preloads;
-      seed_preloads.at(flexible.preload).value = *rebound;
-      for (std::size_t index : fixed.uses) {
-        auto& item = seed_items.at(index);
-        item.opcode = (item.opcode & 0xf0) | flexible.reg;
-        item.mnemonic = opcode_by_code(item.opcode).name;
-      }
-      for (std::size_t index : flexible.uses) {
-        auto& item = seed_items.at(index);
-        item.opcode = (item.opcode & 0xf0) | fixed.reg;
-        item.mnemonic = opcode_by_code(item.opcode).name;
-      }
-      // Only stable selector operands changed. Typed target identities, flow
-      // kinds, guards, instructions and external-entry protocols are unchanged.
-      // The provisional mismatch is never publishable: deferred reconciliation
-      // requires the unchanged fixed value to decode to the final target below.
-      PostLayoutControlFlowOptions flow_options;
-      flow_options.address_space_model = options.address_space_model;
-      if (control_flow.empty_return_target.has_value())
-        flow_options.empty_return_target = control_flow.empty_return_target->address;
-      const auto seed_control = build_post_layout_control_flow(seed_items, flow_options);
-      if (!seed_control.proved) {
+      // Keep the old exchange candidate. A release is an additional bounded
+      // alternative, never a replacement for a previously profitable swap.
+      // There are at most eight pairs and two layout attempts per pair; the
+      // same-width empty-return proof is cached once per selector register.
+      for (const bool release : {false, true}) {
+        if (release && !complete_release)
+          continue;
+        auto seed_items = release ? released->items : items;
+        auto seed_preloads = preloads;
+        seed_preloads.at(flexible.preload).value = *rebound;
+        for (std::size_t index : fixed.uses) {
+          auto& item = seed_items.at(index);
+          item.opcode = (item.opcode & 0xf0) | flexible.reg;
+          item.mnemonic = opcode_by_code(item.opcode).name;
+        }
+        if (!release) {
+          for (std::size_t index : flexible.uses) {
+            auto& item = seed_items.at(index);
+            item.opcode = (item.opcode & 0xf0) | fixed.reg;
+            item.mnemonic = opcode_by_code(item.opcode).name;
+          }
+        }
+        // A swap defers the fixed selector's exact address until placement. A
+        // release already has matching targets: the eliminated family no
+        // longer observes the selector, while the data projection was proved
+        // by the same stable-preload rebinder used for ordinary exchanges.
+        PostLayoutControlFlowOptions flow_options;
+        flow_options.address_space_model = options.address_space_model;
+        if (release)
+          flow_options.empty_return_target = 1;
+        else if (control_flow.empty_return_target.has_value())
+          flow_options.empty_return_target = control_flow.empty_return_target->address;
+        const auto seed_control = build_post_layout_control_flow(seed_items, flow_options);
+        if (!seed_control.proved ||
+            seed_control.external_entries != control_flow.external_entries ||
+            seed_control.execution_successors != control_flow.execution_successors ||
+            seed_control.execution_states != control_flow.execution_states ||
+            seed_control.indirect_memory_targets != control_flow.indirect_memory_targets)
+          continue;
+        auto layout_options = options;
+        if (!release) {
+          layout_options.required_absolute_targets.push_back({
+              .target_item = flexible.target.item_index,
+              .target_address = fixed.target.address,
+          });
+          for (std::size_t index : flexible.uses)
+            layout_options.deferred_selector_reconciliations.push_back({
+                .source_item = index,
+                .target_item = flexible.target.item_index,
+                .final_target_address = fixed.target.address,
+            });
+        }
+        layout_options.allow_size_neutral_absolute_layout = true;
+        layout_options.allow_size_neutral_flow_rebind = true;
+        layout_options.maximum_transactional_growth_cells = 0;
+        const auto placed = optimize_natural_target_component_layout(
+            seed_items, seed_preloads, seed_control, layout_options);
         if (trace)
-          for (const auto& reason : seed_control.reasons)
-            std::cerr << "[selector-families] provisional CFG: " << reason << '\n';
-        continue;
-      }
-      if (seed_control.execution_successors != control_flow.execution_successors ||
-          seed_control.execution_states.size() != control_flow.execution_states.size() ||
-          !std::equal(seed_control.execution_states.begin(), seed_control.execution_states.end(),
-                      control_flow.execution_states.begin(), [](const auto& left, const auto& right) {
-                        return left.item_index == right.item_index && left.address == right.address &&
-                               left.return_stack == right.return_stack;
-                      }))
-        continue;
-      auto layout_options = options;
-      layout_options.required_absolute_targets.push_back({
-          .target_item = flexible.target.item_index,
-          .target_address = fixed.target.address,
-      });
-      for (std::size_t index : flexible.uses)
-        layout_options.deferred_selector_reconciliations.push_back({
-            .source_item = index,
-            .target_item = flexible.target.item_index,
-            .final_target_address = fixed.target.address,
+          std::cerr << "[selector-families] release=" << release
+                    << " placed=" << placed.applied << " proved=" << placed.plan.proved
+                    << " final=" << placed.plan.final_artifact_proved
+                    << " deferred=" << placed.plan.deferred_selector_reconciliations_proved
+                    << " cells=" << cell_count(placed.items) << '\n';
+        if (placed.applied <= 0 || !placed.plan.proved || !placed.plan.final_artifact_proved ||
+            (!layout_options.deferred_selector_reconciliations.empty() &&
+             !placed.plan.deferred_selector_reconciliations_proved) ||
+            !placed.plan.final_control_flow.proved || cell_count(placed.items) > cell_count(items)) {
+          if (trace)
+            for (const auto& reason : placed.plan.reasons)
+              std::cerr << "[selector-families] " << reason << '\n';
+          continue;
+        }
+        SharedHelperDualModeSelectorExchangeResult alternative;
+        alternative.items = placed.items;
+        alternative.preloads = placed.preloads;
+        alternative.control_flow = placed.plan.final_control_flow;
+        alternative.applied = 1;
+        if (release)
+          alternative.optimizations = released->optimizations;
+        alternative.optimizations.push_back({
+            .name = "stable-indirect-selector-family-reassignment",
+            .detail = "Reassigned complete stable flow families R" +
+                      preloads.at(fixed.preload).register_name + " and R" +
+                      preloads.at(flexible.preload).register_name +
+                      (release ? " after eliminating the latter's empty-stack loop jumps" : " by exchange") +
+                      "; preserved data projections and re-proved final runtime selector "
+                      "decoding, CFG, call/return and stack/X2 identities after exact placement.",
         });
-      layout_options.allow_size_neutral_absolute_layout = true;
-      layout_options.allow_size_neutral_flow_rebind = true;
-      layout_options.maximum_transactional_growth_cells = 0;
-      const auto placed = optimize_natural_target_component_layout(
-          seed_items, seed_preloads, seed_control, layout_options);
-      if (trace)
-        std::cerr << "[selector-families] placed=" << placed.applied
-                  << " proved=" << placed.plan.proved << " final=" << placed.plan.final_artifact_proved
-                  << " deferred=" << placed.plan.deferred_selector_reconciliations_proved
-                  << " cells=" << cell_count(placed.items) << '\n';
-      if (placed.applied <= 0 || !placed.plan.proved || !placed.plan.final_artifact_proved ||
-          !placed.plan.deferred_selector_reconciliations_proved ||
-          !placed.plan.final_control_flow.proved || cell_count(placed.items) > cell_count(items)) {
-        if (trace)
-          for (const auto& reason : placed.plan.reasons)
-            std::cerr << "[selector-families] " << reason << '\n';
-        continue;
+        result.push_back(std::move(alternative));
       }
-      SharedHelperDualModeSelectorExchangeResult alternative;
-      alternative.items = placed.items;
-      alternative.preloads = placed.preloads;
-      alternative.control_flow = placed.plan.final_control_flow;
-      alternative.applied = 1;
-      alternative.optimizations.push_back({
-          .name = "stable-indirect-selector-family-reassignment",
-          .detail = "Reassigned complete stable flow families R" +
-                    preloads.at(fixed.preload).register_name + " and R" +
-                    preloads.at(flexible.preload).register_name +
-                    "; preserved data projections and re-proved final runtime selector "
-                    "decoding, CFG, call/return and stack/X2 identities after exact placement.",
-      });
-      result.push_back(std::move(alternative));
     }
   }
   return result;

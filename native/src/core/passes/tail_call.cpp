@@ -298,7 +298,7 @@ IrOp jump_from_call(const IrOp& op, std::string_view replacement, std::string fa
   out.register_name = op.register_name;
   out.opcode = indirect ? 0x80 + register_index(op.register_name) : 0x51;
   out.meta = op.meta;
-  out.meta.mnemonic = "БП";
+  out.meta.mnemonic = indirect ? "К БП " + op.register_name : "БП";
   out.meta.comment = replace_comment_prefix(op.meta.comment, "proc call", replacement, fallback);
   if (out.meta.comment == op.meta.comment) {
     out.meta.comment =

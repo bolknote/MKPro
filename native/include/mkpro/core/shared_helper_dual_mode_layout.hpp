@@ -66,6 +66,9 @@ struct SharedHelperDualModeSelectorExchangeResult {
 // jumps are treated uniformly; R0-R6 and runtime-written selectors are excluded.
 // These are transaction seeds, not standalone size wins. The caller must rank
 // the complete downstream artifact against its original incumbent.
+// A stable selector whose complete family consists of proved empty-stack loop
+// jumps also supplies a release alternative: those jumps become same-width
+// returns, and the selector can adopt another family without an inverse swap.
 std::vector<SharedHelperDualModeSelectorExchangeResult>
 reassign_stable_indirect_selector_families(
     const std::vector<MachineItem>& items,

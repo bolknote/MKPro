@@ -3853,3 +3853,33 @@ resolver uses the requested delivery mode and target profile. Thus layout can
 still improve an oversized candidate without making a 254-cell dispatch look
 executable on an MK-61. Explicit formal side-space operands retain their
 separate encoding contract; expanded target profiles use their actual window.
+
+### `empty-return-selector-release`
+
+A same-width indirect jump through a stable R7-RE selector may become `В/О`
+when its sole proved target is physical 01 and every reachable execution
+context has an empty return stack. This shares the empty-stack premise with
+`post-layout-empty-stack-loop-return`; unknown destinations, unreachable
+sites, return frames and mutating R0-R6 selectors fail closed. The final CFG
+must preserve external entries, execution states and successors, and indirect
+memory targets. The physical empty-return continuation remains 01.
+
+This is a neutral transaction stage, not an independent size reduction.
+Stable-selector family reassignment may consume it only if every old flow use
+of that selector was removed. The existing preload rebinder must also prove
+all remaining numeric/data projections before the selector adopts another
+complete family. Ordinary inverse-swap candidates are retained separately.
+There are at most eight selector pairs and two layout attempts per pair;
+the empty-return proof is cached once per selector register.
+
+Only the final downstream artifact may compete on size. Exact placement
+re-proves runtime selector decoding, CFG, call/return and stack/X2 behavior.
+Compiler/core fixtures and emulator checks cover repeated manual resumes,
+full stack and register observations, nested calls, fixed numeric constants,
+unknown targets, written selectors and observable selector data uses.
+
+Integer-selector emulator probes distinguish raw debugger zero-padding from
+hardware-observable values: `00000001` and `1` are compared numerically only
+for the known integer selector, while display and stack observations remain
+exact. Separate hardware register-recall and indirect-memory probes check
+that the padding difference cannot change those observations.

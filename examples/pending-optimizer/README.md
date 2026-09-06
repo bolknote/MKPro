@@ -15,7 +15,7 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 132 | 105 | +27 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 130 | 105 | +25 | pending optimizer |
 | `nekromant.mkpro` | 135 | 105 | +30 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
@@ -29,13 +29,19 @@ and ordinary symbolic address caches; continuation proofs track physical X1
 and X2, including nested calls and manual resumes. An unused empty-return
 policy no longer pins an unrelated command identity.
 
-The current 132-cell 4x4 includes full finalization of helper ABI candidates.
+The current 130-cell 4x4 includes full finalization of helper ABI candidates
+and stable-selector release through proved empty-stack loop returns.
 The 135-cell Nekromant additionally benefits from scalar-delta lowering without
 an artificial unit multiplication. Historical measurements below do not
 supersede the current table and do not establish that either program fits yet.
 
 ## Live Optimization Notes
 
+- A complete stable indirect loop family may become same-width empty-stack
+  returns to physical 01. Its selector can then serve another helper without
+  an inverse family swap. The neutral step is admitted only inside a fully
+  proved, smaller downstream artifact; ordinary exchange candidates remain
+  available. This reduces 4x4 from 132 to 130 cells without changing its source.
 - Preserve the source UI and behavior: the player retry stop for an occupied
   cell must still expose `X=-99999999`, ordinary answers must expose the stack
   pair `X:Y`, documented `1..4` inputs and ordinary signed/fractional aliases

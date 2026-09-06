@@ -1,5 +1,6 @@
 #pragma once
 
+#include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/ir.hpp"
 #include "mkpro/core/passes/helpers.hpp"
 #include "mkpro/core/result.hpp"
@@ -54,6 +55,14 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
 PostLayoutIndirectFlowResult
 optimize_post_layout_empty_stack_loop_return(const std::vector<MachineItem>& items,
                                              const CompileOptions& options = {});
+
+// Size-neutral counterpart for a stable R7-RE selector. Each replaced indirect
+// jump must target physical 01 and execute with an empty return stack in every
+// admitted context. The caller may reuse the selector only after accounting
+// for all its former flow uses, and must rank the complete downstream artifact.
+PostLayoutIndirectFlowResult optimize_post_layout_empty_return_selector_release(
+    const std::vector<MachineItem>& items, int selector_register,
+    AddressSpaceModel model = AddressSpaceModel::Standard);
 
 // Converts direct `ПП addr` / `БП addr` into one-cell indirect flow through a
 // stable register whose exact value at the branch site is proved by the
