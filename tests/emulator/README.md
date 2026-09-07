@@ -44,3 +44,29 @@ Smoke run:
 ```sh
 node tests/emulator/smoke-games.cjs
 ```
+
+Pustyshka / hidden-memory experiments:
+
+```sh
+node tests/emulator/probe-pustyshka.cjs
+node tests/emulator/trace-pustyshka.cjs --corruption
+```
+
+The first script reproduces keyboard protocols and their failure cases. The
+second traces the ROM marker search and verifies the cause by intercepting one
+ALU input in an explicitly labelled counterfactual copy. Neither changes the
+emulator core. See [the mechanism analysis](../../docs/23-pustyshka-hidden-memory-experiment.md).
+
+Continuous program-mode write/read protocols:
+
+```sh
+node tests/emulator/probe-pustyshka-program.cjs
+```
+
+This verifies one full decimal value or three integers in 0..999, including
+repeated reads, erased ordinary registers, stack cleanup, nested calls, raw
+numeric words, and all 105 program bytes. The exact programs are stored in
+`fixtures/pustyshka-{triple,scalar,demo}.hex`; the demo generates its own inputs.
+`probe-pustyshka-program.cpp` runs broader cases on the unchanged native emulator
+using the same fixtures and its public API. Commands, placement constraints,
+and build instructions are in [the program protocol](../../docs/24-pustyshka-program-protocol.md).

@@ -56,6 +56,8 @@ Hardware internals and chip-level detail live separately in
 | [18-f-opcodes-and-demo-program.md](./18-f-opcodes-and-demo-program.md) | F-opcode insertion methods and compact-game lessons |
 | [20-mkpro-optimization-reference.md](./20-mkpro-optimization-reference.md) | Comprehensive MK-Pro optimizer and strategy reference |
 | [22-game-catalog-organization.md](./22-game-catalog-organization.md) | Game catalog taxonomy, manifest metadata, and migration plan |
+| [23-pustyshka-hidden-memory-experiment.md](./23-pustyshka-hidden-memory-experiment.md) | Pustyshka false memory markers, hidden words, and ROM timing limits (Russian) |
+| [24-pustyshka-program-protocol.md](./24-pustyshka-program-protocol.md) | Executable hidden-memory write/read routines, register contracts, and tested layouts (Russian) |
 
 ## Primary Sources
 

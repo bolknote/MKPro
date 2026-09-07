@@ -1026,6 +1026,50 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `post-layout-empty-stack-loop-return` — converts a direct `БП` to physical 01 into a one-cell `В/О` when every execution state of the branch carries an empty return stack. The MK-61 sets the program counter to 00 after an empty-stack `В/О` and the next fetched command is the one at physical 01 (the cell at 00 is skipped; pinned by `emulator_vo_empty_continuation_facts`), so the converted command transfers to the same target with the same stack. The pass runs first in the post-layout pipeline, before any selector value or anchor address is solved, so all later layout machinery rebuilds the geometry of the shrunk artifact itself; a deletion is admitted only when every numeric direct operand and every non-symbolic indirect target lies before the erased operand cell (label-typed indirect targets follow the shifted layout through the late binder and the retunable-selector machinery). The converted `В/О` carries the ecosystem-wide `optimized БП 01` marker so later machine-to-IR raises keep modeling its physical-01 continuation. The `empty_stack_loop_return` lowering option manufactures the eligible shape by placing a one-cell `К НОП` entry pad at physical 00 so the main loop head lands on 01. Finalization also amortizes one inserted `В/О@00` across all direct `БП 00` edges proved either reachable only with an empty stack or unreachable in a freshly rebuilt complete CFG; fixed dual-use selector targets are retained by the generic component solver, and only a strictly smaller re-proved artifact is published.
 - `post-layout-charged-selector-flow` — runs after every selector charge (including late-bound decimal charges) has been materialized. A flow-sensitive value analysis over the authoritative execution-state graph proves that a stable register holds one exact literal on every path reaching a direct `ПП addr`, `БП addr`, or ordinary X conditional; when that literal decodes to the same backward target and is a fixed point of the selector write-back, the two-cell direct flow becomes its one-cell `К ... r` form. Conditional conversion additionally accounts for the hardware X2 difference: direct conditionals update hidden X2 on fallthrough while indirect conditionals preserve it. A greatest-fixed-point CFG proof requires every changed fallthrough to overwrite X2 before a restore, unknown effect, or external observation; closed preserving SCCs are accepted because the difference cannot escape. `FL0..FL3` remain excluded. Value sources are deliberately narrow (literal preloads, uninterrupted integer digit entry stored via `X->П r`, recalls of tracked registers, `/-/` of a known X, and the machine's own write-back); everything else — arithmetic, fractional entry, indirect stores, manual external entries — poisons the tracked slot. The operand-erasure transaction follows every numeric direct target by executable-item identity and clears stale formal encodings, while symbolic operands continue to follow labels; an address/code overlay whose operand byte is also executable remains immovable. A successful rewrite carries `runtime-charged-selector-consumer` proof metadata into later layouts. A subsequent absolute relayout may keep such a consumer only by preserving its typed target identity at the original physical address and independently re-proving the runtime value flow; ordinary preload rebinding is never assumed for the dynamically written register. Late-bound decimal targets may instead use the common binder to rewrite their charge digits. Unmarked, malformed, out-of-range, arithmetic-dependent, ambiguously joined, or X2-observable charges remain immovable. The callee-hole static gate re-validates each such reuse against its independently derived charge inventory.
 - `single-digit-late-bound-selector` — after final layout, contracts a compiler-marked `0N` decimal selector charge to one digit when its target is in physical `00..09`. The fixed-width pair is not shortened speculatively: the exact execution-state graph first proves that the raw `X2` spelling difference (`0N` versus `N`) converges before any restore, display, stop, or other observation. The surviving digit becomes a one-cell late-bound marker, all affected selector charges are rebound after the deletion, and the ordinary absolute component transaction re-proves direct and indirect targets, external entries, data stack, `X2`, indirect memory, setup preloads, and return stack. Arbitrary decimal literals, raw cells, independently entered low digits, and targets outside `00..09` are rejected.
+- `formal-program-counter-context` keeps the encoded hardware counter separate
+  from its physical command identity. Sequential execution follows decimal
+  counter carry, including A4 -> A5, B1 -> B2, F9 -> 00 and FA..FF -> 01..06.
+  Direct address words are fetched through that counter, so a two-cell command
+  can consume its operand from a different physical neighbour at a branch
+  boundary. The execution graph records that operand identity and retains
+  formal return frames across calls, returns, resumable stops and manual phases.
+  The same physical command reached through different formal counters is not
+  merged into one execution context. Oversized, not-yet-placed artifacts keep
+  their separate linear logical address space. Stock MK-61 has 105 command
+  cells (00..A4); the expanded MK61S profile has 112 (00..B1). A5..B1 are
+  seven ordinary physical cells only in that expanded profile, not short-side
+  aliases. Logical overflow begins at the selected limit and is not physical
+  00. Exact indirect aliases are supplied through
+  typed `indirect_flow_formal_targets` on the instruction, preserved through
+  machine/IR round trips and exposed as `indirectFlowFormalTargets` in JSON.
+  An explicit `proved_indirect_formal_targets` map must agree with attached
+  metadata, and either representation must project exactly to the complete
+  physical target set. Selector lowering and preload retargeting preserve
+  noncanonical encodings; ordinary entries retain relocatable logical targets
+  before placement. Empty, duplicate, conflicting or stale facts fail closed.
+  Stop-tail reuse follows the encoded counter after its prompt rather than
+  assuming that the continuation is the next physical cell.
+  Emulator contracts cover short/long/super-dark entries, hexadecimal low
+  digits, split jump/call words, saved return counters and manual continuation.
+
+- `post-layout-execution-context-transport` compares rooted pairs of exact
+  execution states rather than sets projected to physical command addresses.
+  Edges retain taken/fallthrough direction, call/return/resume kind and the
+  encoded selector alternative. Address-word identities, caller continuations
+  and manual-entry labels follow the command relocation. Multiple encodings
+  of one physical indirect target cannot be freely permuted: a caller must
+  supply any non-identity selector transport from its separate data/preload
+  proof. A single forced entry may change side branch when all continuations
+  agree, including returns through different formal counters. Pair exploration
+  is deterministic and bounded; missing, contradictory or unmatched evidence
+  rejects the rewrite. This CFG proof complements, not replaces, data-stack,
+  X2 and raw return-address observation proofs. Error-padding overlays use
+  this transport while retaining their instruction-effect and padding checks.
+  Tests pin the B1/06 projection counterexample, safe side-entry and saved-frame
+  changes, branch direction, explicit selector remapping and logical-to-physical
+  placement at the selected 105- or 112-cell limit. Cross-profile graph
+  comparisons are rejected; expanded-memory CFG contracts separately cover
+  A5..B1, boundary calls, resumable stops and single-cell error padding.
 - `helper-invariant-recall-hoist` — after all layout and selector-flow rewrites, moves a direct-register recall common to every direct `ПП` or proved single-target `К ПП` call into a straight-line helper. A recall immediately before a call may also move to the helper tail when the return is consumed at once by commutative `К И`/`К ИЛИ`; mixed before-call and after-return sites then share the same tail recall. The symbolic pair proof validates the operand permutation rather than relying on source order. Noncommutative or otherwise observable continuations retain the root form or fail closed. A bounded relational CFG proof covers `X/Y/Z/T`, `X2`, registers, branches, loops, exact call targets, and the return stack. Unknown control flow, an unequal observed operand, live `X2`, opaque memory, or an unproved target rejects the candidate. Ordinary numeric direct operands follow the surviving command identity; formal/dark/dual-use targets keep their byte and physical address, replacing only the minimum required removed recalls with semantic `К НОП` padding. Late decimal selector charges are rebound after a winning rewrite. The transformation is source- and helper-name-independent and remains eligible only when the final artifact is smaller.
 - `early-helper-invariant-recall-hoist` runs the same complete-call-set and
   relational stack/X2 proof on typed IR before physical layout. Symbolic
@@ -4004,13 +4048,92 @@ The ordinary scheduler remains available through the separate
 completed program, not just the saved recalls: shorter expression code can
 otherwise lose a more valuable address-layout coincidence.
 
+#### Tested-intersection reuse in conditional bit clearing
+
+For a full native predicate `bit_and(a, mask) != 0` immediately followed on
+its true edge by `a = bit_and(a, bit_not(mask))`, reuse the tested intersection:
+`a XOR (a AND mask)`. The predicate and conditional store remain in their original
+order. The lowering requires the same collection and mask in both expressions,
+and an operand preparation that preserves the collection in Y.
+
+Native K AND and K XOR retain Y. Their seven payload nibbles obey
+`a XOR (a AND m) = a AND NOT m`, while both final operations normalize the
+leading digit to 8. Consequently the true continuation needs one XOR instead
+of an X2 restore gap, dot, complement and AND. This does not assume that the
+fractional part is the full result, and does not replace the predicate with
+decimal subtraction or update state speculatively.
+
+The stock-emulator contract checks all 256 nibble pairs in all seven payload
+positions against the independent Boolean truth table and the unfused native
+sequence. Compiler/emulator comparisons additionally cover zero, signed,
+fractional, integral and exponent-bearing operands. Changed predicates and
+different clear masks retain the ordinary lowering.
+
+#### Preserving an existing X argument while sharing a helper operand
+
+The bounded input-ABI alternative inserts `recall common; swap` at the helper
+root. It leaves the helper's existing X argument in place and parks the common
+operand in Y, eliminating matching before-call or after-return recalls. A
+matching caller swap is removed only inside the same complete-call-family
+proof. This is separate from the swapped-return ABI: the emitted location and
+command-identity map must prove which permutation was actually chosen.
+
+The relational continuation proof includes X/Y/Z/T, all registers, physical X1
+and hidden X2. Reordered operands never establish X2 equality by themselves.
+Within a proved open decimal mantissa, a sign edit may pass only when visible
+X and its hidden entry context are already equal. Unknown entry modes,
+unsynchronized VP, raw/manual swaps and independently addressed commands stay
+barriers. The sign transfer does not manufacture equality for parked stack
+values or physical last-X.
+
+`pre-layout-helper-entry-operand-abi` applies this proof within the existing
+caller-preloaded indexed-prefix layout alternative, before natural selector
+addresses become fixed. Ordinary scheduling remains a separate final-size
+competitor. Fixed numeric targets retain their geometry; symbolic targets and
+surviving calls are reindexed by identity before final CFG/return-stack checks.
+No source names, game formulas or numerical input assumptions are inspected.
+
+Stock-emulator fixtures cover the 34-to-32-cell transformation and a
+40-to-38-cell variant crossing signed literal entry, complete register/stack
+observations at both stops, VP continuation, and direct/indirect call families.
+
+#### Return-operand ABI selection in `helper-invariant-recall-hoist`
+
+Compiler candidate selection compares the existing helper root/plain-tail forms
+with a bounded two-result ABI: `recall common; swap; V/O`. The swap leaves the
+helper result in X at V/O. A leading caller-side swap after the removed common
+recall can then disappear as part of the same transaction. Equal numeric X at
+return does **not** prove equal hidden VP restoration contexts: the candidate
+marks X2 unproved and requires an independent synchronization on every path
+before a restore. The stock emulator distinguishes a delayed-VP counterexample
+(`100` versus `1600`), which must be rejected rather than optimized.
+This is not an assumption that commutativity kills Y: the relational proof must
+preserve every observed register, X/Y/Z/T, X1, X2, return and continuation.
+
+The search adds two output orders per complete helper/register candidate, not
+per-call permutation combinations. Existing raw/manual and independently
+addressable cells remain barriers. Two inserted helper cells and every erased
+caller cell are charged before selection; fixed targets may reject an otherwise
+profitable ABI. The emitted item-identity map is authoritative for subsequent
+indirect-target checks, including both tail insertions and erased permutations.
+The same candidates participate in atomic entry-materialization/recall
+compositions and in pre-layout selector-seed repayment. No source identifiers
+or game-specific formulas are inspected.
+
+A stock-MK61 synthetic baseline removes three cells from three mixed before-call
+and after-return sites while keeping live Y and proving X2 convergence before
+an observable post-stop VP continuation. Negative cases retain a different
+live Y, unsynchronized VP restoration, raw/manual swaps, independently entered
+swaps and fixed-address helpers.
+
 #### Staged arguments and stack permutations in `helper-invariant-recall-hoist`
 
 The common direct-register recall may precede a contiguous bundle of up to
 four direct argument recalls rather than immediately precede the call. A
 commutative K AND/K OR continuation may also contain up to four caller-side
-stack permutations (swap or cyclic rotation). These commands remain in their
-original order; only the common recall moves to the helper root or tail.
+stack permutations (swap or cyclic rotation). Except for a separately proved
+return-ABI swap fold, these commands remain in their original order; only the
+common recall moves to the helper root or tail.
 
 The relational proof replays argument preparation, the helper, any moved tail
 recall **before** V/O, and the caller's permutations in physical execution
