@@ -148,7 +148,7 @@ const std::vector<LoweringVariant> kLoweringVariants = {
 };
 
 std::string token_line(const std::vector<ResolvedStep>& steps) {
-  std::string value = format_program_tokens(steps);
+  std::string value = format_analysis_program_tokens(steps);
   std::replace(value.begin(), value.end(), '\n', ' ');
   return value;
 }
@@ -282,8 +282,10 @@ void golden_listing_contract_matches_typescript_contract() {
     require(result.implemented, "golden listing should compile example: " + name);
     require(result.diagnostics.empty(), "golden listing example should not report diagnostics: " + name);
 
-    const std::string setup_program =
-        result.setup_program.has_value() ? format_program_tokens(result.setup_program->steps) : "";
+    // This oracle describes the entire setup sequence, including oversized
+    // analysis artifacts. Hardware-byte export has its own capacity contract.
+    const std::string setup_program = result.setup_program.has_value()
+        ? format_analysis_program_tokens(result.setup_program->steps) : "";
     const std::optional<std::string> actual_variants =
         source.size() <= kVariantFingerprintSourceByteLimit
             ? std::optional<std::string>(variant_fingerprint(source, base_options))

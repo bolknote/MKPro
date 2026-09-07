@@ -546,8 +546,9 @@ void tic_tac_toe_4x4_source_manual_ui_contract_is_explicit() {
   const CompileResult compiled = compile_source(text, options);
   require(compiled.implemented && compiled.diagnostics.empty(),
           "full source UI contract should compile through generic lowering");
-  require(compiled.steps.size() <= 156U,
-          "focused no-search source must not regress above its proved 156-cell result");
+  // The playable source's size has its own baseline. This contract checks the
+  // original input protocol even when correcting game semantics changes size;
+  // frozen structural fixtures retain the older optimization-specific bounds.
   require(std::any_of(compiled.preloads.begin(), compiled.preloads.end(),
                       [](const PreloadReport& preload) {
                         return preload.retunable_natural_fractional_prefix == "0.226000";
@@ -616,6 +617,58 @@ void tic_tac_toe_4x4_source_manual_ui_contract_is_explicit() {
   require(second_count == 1 && second != nullptr && second->kind == MachineItemKind::Op &&
               second->manual_interaction->kind == ManualInteractionAnchorKind::ContinuousResume,
           "full source should retain one typed continuous C/P phase");
+
+  const auto mask_assignment = text.find("    line = cell_mask(x, y)");
+  require(mask_assignment != std::string::npos, "input phase must compute its cell mask");
+  const auto guard_start = text.find("    if ", mask_assignment);
+  const auto guard_end = text.find('{', guard_start);
+  require(guard_start != std::string::npos && guard_end != std::string::npos,
+          "input phase must retain its occupied-cell guard");
+  const std::string update_and_guard = text.substr(mask_assignment, guard_end - mask_assignment);
+  const auto original_listing = parse_reference_listing(fixture_root() / "games/logic/tic-tac-toe-4x4.txt");
+  std::vector<int> original_update(original_listing.begin() + 39, original_listing.begin() + 52);
+  original_update.push_back(0x50);
+  struct Query { std::string x; std::string y; std::string occupied; int expected; };
+  for (const auto& query : std::array<Query, 6>{{
+           {"1", "1", "0", 0}, {"1", "1", "8.104", 1}, {"3", "3", "8.104", 1},
+           {"4", "4", "8.104", 0}, {"1", "3.2", "8.1", 0}, {"2.8", "1", "8.1", 0},
+       }}) {
+    const std::string fixture =
+        "program OccupancyContract {\n"
+        "  grid: board(1..4, 1..4)\n"
+        "  state {\n"
+        "    x: packed = " + query.x + "\n"
+        "    y: packed = " + query.y + "\n"
+        "    occupied: packed\n"
+        "    previous_occupied: packed\n"
+        "    line: packed\n"
+        "  }\n"
+        "  occupied = entered()\n"
+        + update_and_guard +
+        "{\n show(1)\n }\n else {\n show(0)\n }\n halt(occupied)\n}\n";
+    const auto membership = compile_source(fixture, options);
+    require(membership.implemented && membership.diagnostics.empty() && membership.steps.size() <= 105U,
+            "actual occupied-cell guard must compile within real emulator memory");
+    emulator::MK61 calc({.extended = true, .angle_mode = "deg"});
+    require(calc.load_program(step_opcodes(membership.steps)).diagnostics.empty(),
+            "actual occupied-cell guard must load completely");
+    for (const auto& preload : membership.preloads)
+      calc.set_register(preload.register_name, preload.value);
+    calc.press("В/О").set_register("X", query.occupied).press("С/П");
+    run_to_stop(calc, "actual occupied-cell guard");
+    require(display_integer(calc) == query.expected,
+            "occupied-cell guard must compare old and updated values, including partial masks");
+    emulator::MK61 original({.extended = true, .angle_mode = "deg"});
+    original.load_program(original_update);
+    original.set_register("9", query.occupied).set_register("1", query.x)
+        .set_register("2", query.y).set_register("c", "2.2600029E-1");
+    original.press_sequence({"В/О", "С/П"}); run_to_stop(original, "original occupied-cell update");
+    require((compact(original.display_text()) == "0,") == (query.expected == 1),
+            "occupied response must follow the original before/after comparison");
+    calc.press("С/П"); run_to_stop(calc, "occupied-cell committed update");
+    require(compact(calc.display_text()) == compact(original.read_register("9")),
+            "occupied-cell update must match the original raw packed word on every branch");
+  }
 }
 
 void tic_tac_toe_4x4_source_uses_reference_angle_mode() {
@@ -638,4 +691,298 @@ void tic_tac_toe_4x4_source_uses_reference_angle_mode() {
               !compiled.interaction_protocols.front().phases.at(1).admitted_domain.known(),
           "source should expose two generic manual-input phases with an unknown admitted domain");
 }
+} // namespace mkpro::tests
+
+namespace mkpro::tests {
+namespace {
+
+std::string response_contract_rule(const std::string& source, const std::string& name) {
+  const auto start = source.find("fn " + name + "(");
+  require(start != std::string::npos, "response contract is missing rule " + name);
+  const auto body = source.find('{', start);
+  require(body != std::string::npos, "response contract rule has no body: " + name);
+  unsigned depth = 0;
+  for (std::size_t end = body; end < source.size(); ++end) {
+    if (source[end] == '{') ++depth;
+    if (source[end] == '}' && --depth == 0)
+      return source.substr(start, end - start + 1U) + "\n";
+  }
+  throw std::runtime_error("unclosed response contract rule " + name);
+}
+
+std::string response_contract_ui(const std::string& source) {
+  const auto loop = source.find("  loop {");
+  require(loop != std::string::npos, "response contract needs the source UI loop");
+  const auto first_input = source.find("    x = entered()", loop);
+  require(first_input != std::string::npos, "response contract needs the explicit X input phase");
+  return source.substr(loop + std::string("  loop {").size(),
+                       first_input - loop - std::string("  loop {").size());
+}
+
+emulator::MK61 compile_response_contract(const std::string& source,
+                                        const std::array<std::string, 4>& banks,
+                                        int x, int y, bool occupied) {
+  std::string fields;
+  for (const auto& bank : banks) {
+    if (!fields.empty()) fields += ", ";
+    fields += bank;
+  }
+  std::string fixture =
+      "program ResponseContract {\n"
+      "  grid: board(1..4, 1..4)\n"
+      "  state {\n"
+      "    expected_mode_only(\"deg\")\n"
+      "    lines: packed[4..7] = [" + fields + "]\n"
+      "    x: packed = " + std::to_string(x) + "\n"
+      "    y: packed = " + std::to_string(y) + "\n"
+      "    display_x: packed = 0\n"
+      "    best_score: packed\n"
+      "    line: packed\n"
+      "    slot: packed\n"
+      "    report: packed\n"
+      "  }\n";
+  fixture += occupied ? "  occupied_cell()\n" : "  mark_lines_and_check(1)\n";
+  fixture += response_contract_ui(source);
+  // Keep the actual coordinate observable after the response stop. It must
+  // not have been overwritten by either the retry sentinel or the win report.
+  fixture += "  halt(x)\n";
+  for (const std::string& name : {"mark_one", "mark_lines_and_check", "normalize", "occupied_cell"})
+    fixture += response_contract_rule(source, name);
+  fixture += "}\n";
+
+  CompileOptions options;
+  options.analysis = true;
+  options.budget = 105;
+  options.disable_candidate_search = true;
+  options.hoist_procs = true;
+  options.x_param_value_functions = true;
+  const auto result = compile_source(fixture, options);
+  std::string diagnostics;
+  for (const auto& diagnostic : result.diagnostics)
+    diagnostics += diagnostic.message + "; ";
+  require(result.implemented && result.diagnostics.empty(),
+          std::string(occupied ? "occupied" : "winning") +
+              " source response closure must compile: " + diagnostics);
+  require(result.steps.size() <= 105U,
+          "source response closure must fit real emulator memory: " +
+              std::to_string(result.steps.size()));
+  emulator::MK61 calc({.extended = true, .angle_mode = "deg"});
+  require(calc.load_program(step_opcodes(result.steps)).diagnostics.empty(),
+          "source response closure must load completely");
+  for (const auto& preload : result.preloads)
+    calc.set_register(preload.register_name, preload.value);
+  calc.press_sequence({"В/О", "С/П"});
+  run_to_stop(calc, "source response closure");
+  return calc;
+}
+
+} // namespace
+
+void tic_tac_toe_4x4_source_responses_match_original_listing() {
+  const auto root = fixture_root();
+  const auto reference = parse_reference_listing(root / "games/logic/tic-tac-toe-4x4.txt");
+  const auto source = read_text(root / "examples/pending-optimizer/tic-tac-toe-4x4.mkpro");
+
+  const std::array<std::array<std::string, 4>, 2> positions = {{
+      {"43543.4", "43444.4", "45532.4", "44227.4"},
+      {"44444.4", "44444.4", "44474.4", "44447.4"},
+  }};
+  for (std::size_t position = 0; position < positions.size(); ++position) {
+    auto original = boot_reference_game(reference);
+    for (std::size_t bank = 0; bank < 4U; ++bank)
+      original.set_register(std::to_string(bank + 4U), positions[position][bank]);
+    original.set_register("9", position == 0 ? mk61_hex_literal("8.E33") : "0");
+    original.set_register("a", "-ГE-2").set_register("0", "1");
+    original.press_sequence({"БП", "0", "7", "С/П"});
+    run_to_stop(original, "original winning response");
+    require(original.program_counter() == "04", "original win must reach its ordinary UI stop");
+    require(compact(original.display_text()).starts_with("8,"),
+            "the reference position must produce a winning report");
+    const int x = read_integer(original, "1");
+    const int y = read_integer(original, "2");
+    auto translated = compile_response_contract(source, positions[position], x, y, false);
+    require(compact(translated.display_text()) == compact(original.display_text()),
+            "winning response must be the original fractional report, not the full bit mask: " +
+                compact(translated.display_text()) + " != " + compact(original.display_text()));
+    require(compact(translated.read_register("Y")) == compact(original.read_register("Y")),
+            "winning response must preserve the original Y coordinate");
+    for (std::size_t bank = 4; bank <= 7; ++bank) {
+      require(compact(translated.read_register(std::to_string(bank))) ==
+                  compact(original.read_register(std::to_string(bank))),
+              "winning response must finish every line bank, including R" + std::to_string(bank));
+    }
+    translated.press("С/П");
+    run_to_stop(translated, "coordinate after winning response");
+    require(display_integer(translated) == x, "winning report must not overwrite the X coordinate");
+  }
+
+  auto original = boot_reference_game(reference);
+  enter_x(original, "1", "first reference X");
+  enter_y_and_run(original, "1", "first reference Y");
+  enter_x(original, "1", "occupied reference X");
+  enter_y_and_run(original, "1", "occupied reference Y");
+  const std::array<std::string, 4> neutral = {"44444.4", "44444.4", "44444.4", "44444.4"};
+  const int x = read_integer(original, "1");
+  auto translated = compile_response_contract(source, neutral, x, read_integer(original, "2"), true);
+  require(compact(translated.display_text()) == compact(original.display_text()),
+          "occupied response must preserve the reference sentinel");
+  require(compact(translated.read_register("Y")) == compact(original.read_register("Y")),
+          "occupied response must preserve the reference Y coordinate");
+  translated.press("С/П");
+  run_to_stop(translated, "coordinate after occupied response");
+  require(display_integer(translated) == x, "occupied sentinel must not overwrite the X coordinate");
+}
+
+void tic_tac_toe_4x4_source_scores_match_original_listing() {
+  const auto root = fixture_root();
+  const auto reference = parse_reference_listing(root / "games/logic/tic-tac-toe-4x4.txt");
+  const auto source = read_text(root / "examples/pending-optimizer/tic-tac-toe-4x4.mkpro");
+  const std::array<std::array<std::string, 4>, 3> positions = {{
+      {"44444.4", "44444.4", "44444.4", "44444.4"},
+      {"44444.4", "44444.4", "44543.4", "44543.4"},
+      {"43543.4", "43444.4", "45532.4", "44227.4"},
+  }};
+  for (const auto& banks : positions) {
+    std::string fields;
+    for (const auto& bank : banks) {
+      if (!fields.empty()) fields += ", ";
+      fields += bank;
+    }
+    for (int x = 1; x <= 4; ++x) {
+      for (int y = 1; y <= 4; ++y) {
+        auto original = boot_reference_game(reference);
+        for (std::size_t bank = 0; bank < 4U; ++bank)
+          original.set_register(std::to_string(bank + 4U), banks[bank]);
+        original.set_register("1", std::to_string(x)).set_register("2", std::to_string(y));
+        // Enter the original shared traversal with its original score seed.
+        // Its empty return reaches 01; the two UI recalls move the score to Z.
+        original.input_number("98", true).press_sequence({"БП", "5", "8", "С/П"});
+        run_to_stop(original, "original candidate score");
+        require(original.program_counter() == "04", "reference score must return through the UI");
+
+        const std::string fixture =
+            "program ScoreContract {\n"
+            "  grid: board(1..4, 1..4)\n"
+            "  state {\n"
+            "    expected_mode_only(\"deg\")\n"
+            "    lines: packed[4..7] = [" + fields + "]\n"
+            "    x: packed = " + std::to_string(x) + "\n"
+            "    y: packed = " + std::to_string(y) + "\n"
+            "    score: packed\n"
+            "    line: packed\n"
+            "  }\n"
+            "  candidate_score()\n"
+            "  halt(score)\n" +
+            response_contract_rule(source, "candidate_score") +
+            response_contract_rule(source, "normalize") + "}\n";
+        CompileOptions options;
+        options.analysis = true;
+        options.budget = 105;
+        options.disable_candidate_search = true;
+        options.hoist_procs = true;
+        options.x_param_value_functions = true;
+        const auto result = compile_source(fixture, options);
+        std::string diagnostics;
+        for (const auto& diagnostic : result.diagnostics)
+          diagnostics += diagnostic.message + "; ";
+        require(result.implemented && result.diagnostics.empty(),
+                "actual source score closure must compile: " + diagnostics);
+        require(result.steps.size() <= 105U, "source score closure must fit the real emulator");
+        emulator::MK61 translated({.extended = true, .angle_mode = "deg"});
+        require(translated.load_program(step_opcodes(result.steps)).diagnostics.empty(),
+                "source score closure must load completely");
+        for (const auto& preload : result.preloads)
+          translated.set_register(preload.register_name, preload.value);
+        translated.press_sequence({"В/О", "С/П"});
+        run_to_stop(translated, "source candidate score");
+        require(compact(translated.display_text()) == compact(original.read_register("Z")),
+                "candidate score must preserve the original seed and arithmetic order at " +
+                    std::to_string(x) + ":" + std::to_string(y) + ": " +
+                    compact(translated.display_text()) + " != " +
+                    compact(original.read_register("Z")));
+      }
+    }
+  }
+}
+
+void tic_tac_toe_4x4_source_moves_match_original_listing() {
+  const auto root = fixture_root();
+  const auto reference = parse_reference_listing(root / "games/logic/tic-tac-toe-4x4.txt");
+  const auto source = read_text(root / "examples/pending-optimizer/tic-tac-toe-4x4.mkpro");
+  struct Position {
+    std::array<std::string, 4> banks;
+    std::string occupied;
+  };
+  const std::array<Position, 3> positions = {{
+      {{"44444.4", "44444.4", "44444.4", "44444.4"}, "0"},
+      {{"44444.4", "44444.4", "44543.4", "44543.4"}, "8.104"},
+      {{"43543.4", "43444.4", "45532.4", "44227.4"}, "8.E33"},
+  }};
+  for (const auto& position : positions) {
+    auto original = boot_reference_game(reference);
+    std::string fields;
+    for (std::size_t bank = 0; bank < 4U; ++bank) {
+      original.set_register(std::to_string(bank + 4U), position.banks[bank]);
+      if (!fields.empty()) fields += ", ";
+      fields += position.banks[bank];
+    }
+    const auto occupied = mk61_hex_literal(position.occupied);
+    original.set_register("9", occupied).set_register("a", "-ГE-2").set_register("0", "1");
+    original.press_sequence({"БП", "0", "7", "С/П"});
+    run_to_stop(original, "original move selection");
+
+    const std::string fixture =
+        "program MoveContract {\n"
+        "  grid: board(1..4, 1..4)\n"
+        "  state {\n"
+        "    expected_mode_only(\"deg\")\n"
+        "    lines: packed[4..7] = [" + fields + "]\n"
+        "    occupied: packed\n"
+        "    x: packed\n"
+        "    y: packed\n"
+        "    best_y: packed = 0\n"
+        "    best_score: packed = -1\n"
+        "    score: packed\n"
+        "    line: packed\n"
+        "    slot: packed\n"
+        "  }\n"
+        "  occupied = entered()\n"
+        "  choose_calculator_move()\n"
+        "  preview(y)\n"
+        "  halt(x)\n" +
+        response_contract_rule(source, "choose_calculator_move") +
+        response_contract_rule(source, "candidate_score") +
+        response_contract_rule(source, "normalize") +
+        response_contract_rule(source, "draw") + "}\n";
+    CompileOptions options;
+    options.analysis = true;
+    options.budget = 105;
+    options.disable_candidate_search = true;
+    options.hoist_procs = true;
+    options.x_param_value_functions = true;
+    options.packed_score_accumulator_helpers = true;
+    const auto result = compile_source(fixture, options);
+    std::string diagnostics;
+    for (const auto& diagnostic : result.diagnostics) diagnostics += diagnostic.message + "; ";
+    require(result.implemented && result.diagnostics.empty(),
+            "actual move-selection closure must compile: " + diagnostics);
+    require(result.steps.size() <= 105U,
+            "actual move-selection closure must fit the real emulator: " +
+                std::to_string(result.steps.size()));
+    emulator::MK61 translated({.extended = true, .angle_mode = "deg"});
+    require(translated.load_program(step_opcodes(result.steps)).diagnostics.empty(),
+            "actual move-selection closure must load completely");
+    for (const auto& preload : result.preloads)
+      translated.set_register(preload.register_name, preload.value);
+    translated.press("В/О").set_register("X", occupied).press("С/П");
+    run_to_stop(translated, "source move selection");
+    require(display_integer(translated) == read_integer(original, "1") &&
+                read_integer(translated, "Y") == read_integer(original, "2"),
+            "source move selection and tie breaking must match the original for " + position.occupied + ": " +
+                compact(translated.display_text()) + ":" + compact(translated.read_register("Y")) +
+                " != " + compact(original.read_register("1")) + ":" +
+                compact(original.read_register("2")));
+  }
+}
+
 } // namespace mkpro::tests

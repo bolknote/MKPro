@@ -165,7 +165,7 @@ void example_sizes_match_typescript_baselines() {
   };
   const std::map<std::string, std::size_t> PENDING_BASELINE{
       {"nekromant", 135},
-      {"tic-tac-toe-4x4", 130},
+      {"tic-tac-toe-4x4", 164},
   };
 
   const std::filesystem::path root = std::filesystem::current_path();
@@ -711,6 +711,11 @@ void example_sizes_match_typescript_baselines() {
           find_size_helper(result, "mark_lines_and_check");
       require(mark_lines != nullptr, "tic-tac-toe should retain its line-update helper");
       const auto& mark_details = mark_lines->details;
+      const auto detail_has_name = [&](const std::string& key, const std::string& field) {
+        const auto found = mark_details.find(key);
+        return found != mark_details.end() &&
+               ("," + found->second + ",").find("," + field + ",") != std::string::npos;
+      };
       const bool control_crossing =
           mark_details.contains("valueAwareMixedStateControlCrossingNames") &&
           mark_details.at("valueAwareMixedStateControlCrossingNames") == "best_score" &&
@@ -737,11 +742,30 @@ void example_sizes_match_typescript_baselines() {
             mark_details.contains("valueAwareEstimatedNetSavingsExcludes") &&
             mark_details.at("valueAwareEstimatedNetSavingsExcludes") ==
                 "persistent-nested-call-input-stores"));
-      require((control_crossing || nested_input) &&
-                  mark_details.contains("valueAwareEstimatedNetSavingsAfterMaterialization") &&
-                  std::stoi(mark_details.at(
-                      "valueAwareEstimatedNetSavingsAfterMaterialization")) <= 0 &&
-                  !mark_details.contains("valueAwareMixedStateTempCarrierNames"),
+      // The faithful response protocol adds a persistent output to this helper.
+      // Its report can now discuss other stack inputs (such as Y) as well as
+      // the sign. A positive gross estimate for those inputs is not permission
+      // to remove best_score: the complete callee-ABI cost still blocks it.
+      const bool nested_input_with_output =
+          detail_has_name("valueAwareNestedCallInputNames", "best_score") &&
+          detail_has_name("valueAwareStateOutputNames", "display_x") &&
+          !detail_has_name("valueAwareProfitableStackInputNames", "best_score") &&
+          !detail_has_name("valueAwareSuggestedResidentInputNames", "best_score") &&
+          mark_details.contains("valueAwareStateOutputPlanStatus") &&
+          mark_details.at("valueAwareStateOutputPlanStatus") == "requires-persistent-state-store" &&
+          mark_details.contains("valueAwareSchedulerPlanStatus") &&
+          ((mark_details.at("valueAwareSchedulerPlanStatus") == "callee-abi-lower-bound-not-positive" &&
+            mark_details.contains("valueAwareCalleeAbiNetAfterLowerBoundCells") &&
+            std::stoi(mark_details.at("valueAwareCalleeAbiNetAfterLowerBoundCells")) <= 0) ||
+           (mark_details.at("valueAwareSchedulerPlanStatus") == "blocked-by-stack-mutating-callee" &&
+            mark_details.contains("valueAwareEstimatedNetSavingsAfterMaterialization") &&
+            std::stoi(mark_details.at("valueAwareEstimatedNetSavingsAfterMaterialization")) <= 0));
+      const bool old_nonpositive_model =
+          (control_crossing || nested_input) &&
+          mark_details.contains("valueAwareEstimatedNetSavingsAfterMaterialization") &&
+          std::stoi(mark_details.at("valueAwareEstimatedNetSavingsAfterMaterialization")) <= 0;
+      require((old_nonpositive_model || nested_input_with_output) &&
+                  !detail_has_name("valueAwareMixedStateTempCarrierNames", "best_score"),
               "tic-tac-toe best_score must remain persistent across nested calls "
               "instead of being reported as a removable local stack carrier");
       const SizeOpportunityReport* mark_lines_traffic =

@@ -1,5 +1,6 @@
 #include "mkpro/compiler.hpp"
 #include "mkpro/core/emit/stack_residency_analysis.hpp"
+#include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
 
@@ -1159,6 +1160,71 @@ program MixedAssignmentHelperEntry {
                 "expr pow10(left) + int(pow10(0.226 * right)) + bias stack entry",
                 0x53) >= 2,
             "compatible stored helper calls should share one primary stack entry");
+
+    // Store forwarding must use the continuation of the enclosing source
+    // construct, not just the lexical suffix after the helper expression.
+    const std::string live_argument_state = R"mkpro(
+  state {
+    left: packed = 1
+    right: packed = 2
+    source_left: packed = 3
+    source_right: packed = 4
+    bias: packed = 5
+    out: packed = 0
+    observed: packed = 0
+    remaining: counter 0..2 = 2
+  }
+)mkpro";
+    const std::string live_argument_body = R"mkpro(
+    left = source_right
+    right = source_left
+    out += pow10(left) + int(pow10(right * 0.226)) + bias
+    out += pow10(left) + int(pow10(right * 0.226)) + bias
+    left = source_left
+    right = source_right
+    out += pow10(left) + int(pow10(right * 0.226)) + bias
+)mkpro";
+    const std::vector<std::pair<std::string, std::string>> live_argument_sources = {
+        {"program CallerObservesArguments {\n" + live_argument_state +
+            "  loop { fill()\n observe() }\n"
+            "  fn fill() {\n" + live_argument_body + "  }\n"
+            "  fn observe() { halt(out + 10 * left + right) }\n}\n", "21065"},
+        {"program BranchJoinObservesArguments {\n" + live_argument_state +
+            "  loop {\n if source_left > 0 {\n" + live_argument_body +
+            "    }\n halt(out + 10 * left + right)\n }\n}\n", "21065"},
+        {"program BackedgeObservesArguments {\n" + live_argument_state +
+            "  while remaining >= 1 {\n observed = 10 * left + right\n" +
+            live_argument_body + "    remaining--\n  }\n halt(out + observed)\n}\n", "42096"},
+    };
+    for (const auto& [source, expected_value] : live_argument_sources) {
+      const CompileResult live = compile_source(source, stack_entry_options);
+      require_clean_compile(live, "helper arguments live beyond their lexical block");
+      require(has_optimization(live, "stored-assignment-helper-stack-entry"),
+              "live argument fixture must exercise the stored helper entry lowering: " +
+                  source.substr(0, source.find('\n')) + "\n" + live.listing);
+      require(!has_optimization(live, "dead-helper-argument-store-forwarding"),
+              "caller, branch-join or backedge observations must prevent dropping live stores");
+      require(live.steps.size() <= 105U,
+              "live argument regression must run on a physical standard MK-61");
+      std::vector<int> codes;
+      for (const ResolvedStep& step : live.steps)
+        codes.push_back(step.opcode);
+      emulator::MK61 calculator;
+      require(calculator.load_program(codes).diagnostics.empty(),
+              "live argument fixture must load without virtual addresses");
+      for (const PreloadReport& preload : live.preloads) {
+        require(preload.register_name != "f", "standard fixture must not allocate MK61S Rf");
+        calculator.set_register(preload.register_name, preload.value);
+      }
+      calculator.press_sequence({"В/О", "С/П"});
+      require(calculator.run_until_stable(20000, 8).stopped,
+              "live argument fixture must terminate");
+      emulator::MK61 expected;
+      expected.input_number(expected_value, true);
+      require(calculator.display_text() == expected.display_text(),
+              "live helper arguments must remain 3 and 4 across their real continuation: " +
+                  calculator.display_text());
+    }
 
     const std::string late_stack_entry_source = R"mkpro(
 program LateStackHelperEntry {

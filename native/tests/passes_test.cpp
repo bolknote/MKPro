@@ -1,4 +1,5 @@
 #include "mkpro/core/opcodes.hpp"
+#include "mkpro/core/register_allocator.hpp"
 #include "mkpro/core/passes/branch_target_x_reuse.hpp"
 #include "mkpro/core/passes/conditional_branch_trampoline.hpp"
 #include "mkpro/core/passes/flow_x_reuse.hpp"
@@ -9,6 +10,8 @@
 #include "mkpro/core/passes/jump_to_next.hpp"
 #include "mkpro/core/passes/pre_shift_stack_lift.hpp"
 #include "mkpro/core/passes/preloaded_indirect_flow.hpp"
+#include "mkpro/core/passes/redundant_literal_reload.hpp"
+#include "mkpro/emulator/mk61.hpp"
 #include "mkpro/core/passes/redundant_prologue.hpp"
 #include "mkpro/core/passes/return_suffix_gadget.hpp"
 #include "mkpro/core/passes/return_trampoline.hpp"
@@ -364,6 +367,201 @@ void indirect_flow_target_marker_requires_strict_boundary() {
 
 void pass_pipeline_matches_initial_typescript_contract() {
   {
+    CompileOptions options;
+    options.late_literal_preloads = true;
+    std::set<std::string> reserved;
+    for (int index = 0; index < 15; ++index)
+      reserved.insert(core::register_name_for_index(index));
+    reserved.erase("a");
+    const auto run = [&](const std::vector<IrOp>& ops,
+                          const std::set<std::string>& unavailable) {
+      return core::passes::late_literal_preloads(
+          ops, core::passes::PassContext{.options = options}, unavailable);
+    };
+    IrOp terminal = stop("halt");
+    terminal.meta.stop_disposition = StopDisposition::Terminal;
+    const std::vector<IrOp> original = {
+        recall("0"), store("0"), plain(1), plain(2), plain(3), plain(4),
+        plain(5), plain(6), plain(7), plain(8), plain(0x10),
+        recall("1"), plain(0x10), terminal,
+    };
+    const auto pooled = run(original, reserved);
+    require(pooled.applied == 7 && pooled.preloads.size() == 1U &&
+                pooled.preloads.front().register_name == "a" &&
+                pooled.preloads.front().value == "12345678",
+            "late data pooling must use a proved unused standard register");
+    require(machine_cell_count(pooled.ops) == machine_cell_count(original) - 7,
+            "an eight-digit preload must replace seven program cells");
+
+    const auto execute = [&](const std::vector<IrOp>& ops,
+                             const std::string& initial_x = "7",
+                             bool observe_last_x = false) {
+      std::vector<int> codes;
+      const auto labels = core::passes::calculate_label_addresses(ops);
+      for (const MachineItem& item : lower_ir_to_machine(ops)) {
+        if (item.kind == MachineItemKind::Label)
+          continue;
+        if (item.kind == MachineItemKind::Address) {
+          const int address = std::holds_alternative<int>(item.target)
+              ? std::get<int>(item.target) : labels.at(std::get<std::string>(item.target));
+          require(address >= 0 && address < 100,
+                  "literal fixture addresses must fit ordinary decimal MK-61 cells");
+          codes.push_back((address / 10) * 16 + address % 10);
+        } else {
+          codes.push_back(item.opcode);
+        }
+      }
+      for (int count = 0; count < 4; ++count) {
+        codes.push_back(count == 0 && observe_last_x ? 0x0f : 0x25);
+        codes.push_back(0x50);
+      }
+      emulator::MK61 calculator;
+      require(calculator.load_program(codes).diagnostics.empty(),
+              "literal fixture must load on a standard MK-61");
+      calculator.set_register("0", initial_x).set_register("1", "3");
+      calculator.set_register("7", "0");
+      // Identical entry machine state; the original never reads this slot.
+      calculator.set_register("a", "12345678");
+      calculator.press_sequence({"В/О", "С/П"});
+      require(calculator.run_until_stable(1000, 8).stopped,
+              "literal fixture must stop");
+      std::vector<std::string> observed{calculator.display_text()};
+      // Subsequent stack operations observe Y/Z/T as well as the result.
+      for (int count = 0; count < 4; ++count) {
+        calculator.press("С/П");
+        require(calculator.run_until_stable(1000, 8).stopped,
+                "stack observation must stop after the next rotation");
+        observed.push_back(calculator.display_text());
+      }
+      return observed;
+    };
+    require(execute(original) == execute(pooled.ops),
+            "literal pooling must preserve calculator output and stack contents");
+
+    for (const IrOp& memory_prefix : {
+             recall("0"), known_target_indirect_recall("7", "0"),
+             known_target_indirect_store("7", "0")}) {
+      auto after_memory = original;
+      after_memory.at(1) = memory_prefix;
+      if (memory_prefix.kind == IrKind::IndirectStore ||
+          memory_prefix.kind == IrKind::IndirectRecall)
+        after_memory.at(1).meta.indirect_memory_targets = std::vector<int>{0};
+      auto manual_pool = after_memory;
+      manual_pool.at(2) = recall("a");
+      manual_pool.erase(manual_pool.begin() + 3, manual_pool.begin() + 10);
+      require(execute(after_memory) == execute(manual_pool),
+              "memory prefix must give literal entry the same physical lift as recall: " +
+                  std::to_string(memory_prefix.opcode));
+      const auto memory_pool = run(after_memory, reserved);
+      require(memory_pool.applied == 7,
+              "late literal proof must support the emulator-proved memory prefix: " +
+                  std::to_string(memory_prefix.opcode));
+    }
+
+    auto branched = original;
+    branched.insert(branched.begin() + 11,
+                    {cjump_to("!=0", 0x57, "literal_join"),
+                     store("2"), label("literal_join")});
+    const auto branch_pool = run(branched, reserved);
+    require(branch_pool.applied == 7,
+            "an address-taking conditional is flow, not an opaque X2 consumer");
+    for (const std::string& input : {std::string{"7"}, std::string{"-12345678"}})
+      require(execute(branched, input) == execute(branch_pool.ops, input),
+              "both conditional outcomes must preserve literal output and the complete stack");
+
+    std::vector<IrOp> called = {jump_to("literal_main"), label("literal_helper")};
+    called.insert(called.end(), original.begin(), original.begin() + 11);
+    called.insert(called.end(), {ret(), label("literal_main"), call_to("literal_helper"),
+                                 store("3"), call_to("literal_helper"),
+                                 recall("1"), plain(0x10), terminal});
+    const auto call_pool = run(called, reserved);
+    require(call_pool.applied == 7,
+            "exact matched returns must carry pending X2 inequality to the caller");
+    require(execute(called) == execute(call_pool.ops) &&
+                execute(called, "7", true) == execute(call_pool.ops, "7", true),
+            "all call contexts must preserve output, X/Y/Z/T and physical last-X");
+
+    auto followed_by_digit = called;
+    followed_by_digit.insert(followed_by_digit.end() - 3, {plain(4), store("2")});
+    const auto digit_pool = run(followed_by_digit, reserved);
+    require(digit_pool.applied == 7,
+            "ordinary decimal entry must not be treated as an opaque X2 restore");
+    require(execute(followed_by_digit) == execute(digit_pool.ops) &&
+                execute(followed_by_digit, "7", true) == execute(digit_pool.ops, "7", true),
+            "decimal entry in the caller must preserve physical stack and last-X observations");
+
+    auto no_lift = original;
+    no_lift.at(1) = plain(0x0e);
+    require(run(no_lift, reserved).applied == 0,
+            "Enter suppression is not proof of a fresh literal stack lift");
+    auto observable_x2 = original;
+    observable_x2.at(11) = plain(0x0a);
+    require(run(observable_x2, reserved).applied == 0,
+            "a decimal-point restore must preserve the original entered X2");
+    auto exponent = original;
+    exponent.at(10) = plain(0x0c);
+    require(run(exponent, reserved).applied == 0,
+            "a mantissa still consumed by VP is not an ordinary integer literal");
+    auto raw = original;
+    raw.at(5).meta.raw = true;
+    require(run(raw, reserved).applied == 0, "raw numeric cells must remain intact");
+    auto indirect = original;
+    indirect.at(1) = known_target_indirect_store("2", "a");
+    require(run(indirect, reserved).applied == 0,
+            "an indirectly written register is not a spare literal pool slot");
+    auto fixed_target = original;
+    fixed_target.insert(fixed_target.begin(), numeric_jump(7));
+    require(run(fixed_target, reserved).applied == 0,
+            "a numeric entry with an unproved automatic lift must fail closed");
+    reserved.insert("a");
+    require(run(original, reserved).applied == 0,
+            "exhausting R0-RE must not allocate MK61S-only Rf");
+  }
+
+  {
+    CompileOptions options;
+    options.defer_return_suffix_until_callee_hole = true;
+    const auto run = [&](const std::vector<IrOp>& ops) {
+      return core::passes::run_ir_passes(lower_ir_to_machine(ops), options);
+    };
+    const auto has_store = [](const core::passes::RunPassesResult& result,
+                              int opcode) {
+      return std::any_of(result.items.begin(), result.items.end(),
+                         [&](const MachineItem& item) {
+                           return item.kind == MachineItemKind::Op && item.opcode == opcode;
+                         });
+    };
+    const auto forwarded = run({store("4"), recall("4"), plain(0x10), stop("halt")});
+    require(!has_store(forwarded, 0x44) && has_store(forwarded, 0x0e),
+            "early cleanup must free a dead register while retaining the consumed stack lift");
+    require(std::any_of(forwarded.optimizations.begin(), forwarded.optimizations.end(),
+                        [](const auto& optimization) {
+                          return optimization.name == "relocatable-ir-cleanup";
+                        }),
+            "phase-ordered extraction must report the preceding cleanup fixed point");
+
+    const auto across_input =
+        run({store("4"), stop("read x"), recall("4"), plain(0x10), stop("halt")});
+    require(has_store(across_input, 0x44),
+            "early cleanup must not free state read after manual input");
+
+    IrOp opaque_call;
+    opaque_call.kind = IrKind::IndirectCall;
+    opaque_call.register_name = "7";
+    opaque_call.opcode = 0xa7;
+    opaque_call.meta.mnemonic = "K PP 7";
+    const auto across_opaque_call =
+        run({store("4"), opaque_call, recall("4"), plain(0x10), stop("halt")});
+    require(has_store(across_opaque_call, 0x44),
+            "early cleanup must keep state an unresolved indirect callee can observe");
+
+    IrOp raw_store = store("4");
+    raw_store.meta.raw = true;
+    const auto raw = run({raw_store, recall("4"), plain(0x10), stop("halt")});
+    require(has_store(raw, 0x44), "early cleanup must preserve raw register writes");
+  }
+
+  {
     const std::vector<core::passes::IrPass>& pipeline = core::passes::pass_pipeline();
     const auto pass_index = [&](std::string_view name) {
       const auto found = std::find_if(pipeline.begin(), pipeline.end(), [&](const auto& pass) {
@@ -435,6 +633,8 @@ void pass_pipeline_matches_initial_typescript_contract() {
     const std::vector<MachineItem> items = {
         MachineItem::op(0x4f, "X->П f / R0 alias"),
         MachineItem::op(0x40, "X->П 0"),
+        // Keep the stored value live independently of current-X forwarding.
+        MachineItem::op(0x07, "7"),
         MachineItem::op(0x6f, "П->X f / R0 alias"),
         MachineItem::op(0x10, "+"),
         MachineItem::op(0x50, "С/П"),

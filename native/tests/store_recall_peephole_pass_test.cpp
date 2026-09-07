@@ -1,8 +1,13 @@
 #include "mkpro/core/passes/store_recall_peephole.hpp"
+#include "mkpro/core/opcodes.hpp"
+#include "mkpro/emulator/mk61.hpp"
 
 #include "ir_pass_test_support.hpp"
 #include "test_support.hpp"
 
+#include <algorithm>
+#include <array>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -361,6 +366,98 @@ void store_recall_peephole_matches_typescript_contract() {
       message += "\n  - deferred case now passes (promote to covered): " + label;
   }
   require(message.empty(), "store-recall-peephole parity divergence set changed:" + message);
+
+  const auto selector_fixture = [&](int opcode) {
+    return std::vector<IrOp>{
+        recall("5"), recall("0"), store("8"), plain(0x25, "rotate"),
+        known_target_indirect_recall("8", "3"), plain(opcode, "bitwise"),
+        store("b"), recall("6"), recall("5"), recall("4"), plain(0x10, "+"),
+        plain(0x0a, "."), halt()};
+  };
+  const auto scheduled = [](const core::passes::PassResult& result) {
+    return std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                       [](const auto& optimization) {
+                         return optimization.name == "stable-indirect-selector-operand-scheduling";
+                       });
+  };
+  const auto observe = [&](const std::vector<IrOp>& program, const std::string& left,
+                           const std::string& right) {
+    std::map<std::string, int> labels;
+    int address = 0;
+    for (const auto& op : program) {
+      if (op.kind == IrKind::Label) labels[op.name] = address;
+      else address += core::passes::cells_per_op(op);
+    }
+    std::vector<int> codes;
+    for (const auto& op : program) {
+      if (op.kind == IrKind::Label) continue;
+      codes.push_back(op.opcode);
+      if (opcode_by_code(op.opcode).takes_address) {
+        const int target = std::holds_alternative<std::string>(op.target)
+                               ? labels.at(std::get<std::string>(op.target))
+                               : std::get<int>(op.target);
+        codes.push_back((target / 10) * 16 + target % 10);
+      }
+    }
+    emulator::MK61 machine;
+    require(machine.load_program(codes).diagnostics.empty(), "selector scheduling fixture loads");
+    machine.set_register("0", "3");
+    machine.set_register("3", right);
+    machine.set_register("4", "17");
+    machine.set_register("5", left);
+    machine.set_register("6", "23");
+    machine.set_register("8", "29");
+    machine.set_register("X", "19");
+    machine.set_register("Y", "31");
+    machine.set_register("Z", "37");
+    machine.set_register("T", "41");
+    machine.press_sequence({"В/О", "С/П"});
+    require(machine.run_until_stable(1000, 6).stopped, "selector scheduling fixture stops");
+    return std::array<std::string, 9>{
+        machine.display_text(), machine.read_register("X"), machine.read_register("Y"),
+        machine.read_register("Z"), machine.read_register("T"), machine.read_register("X1"),
+        machine.read_register("b"), machine.read_register("8"), machine.read_register("0")};
+  };
+  for (int opcode : {0x37, 0x38, 0x39}) {
+    const auto input = selector_fixture(opcode);
+    const auto output = run(input);
+    require(scheduled(output) && output.ops.size() + 1U == input.size(),
+            "stable bitwise selector scheduling saves exactly one instruction");
+    for (const auto& [left, right] : std::array<std::pair<std::string, std::string>, 5>{{
+             {"8.1234567", "8.7654321"}, {"110", "3"}, {"-8.1234567", "8.7654321"},
+             {"0.000001", "-0.125"}, {"12345678", "87654321"}}})
+      require(observe(input, left, right) == observe(output.ops, left, right),
+              "selector scheduling must preserve result, memory, complete stack and X2");
+
+    for (int observing_opcode : {0x10, 0x0f, 0x0c}) {
+      auto live = input;
+      live.insert(live.begin() + 6, plain(observing_opcode, "live input"));
+      const auto retained = run(live);
+      require(!scheduled(retained), "live Y, last-X or X2 must block selector scheduling");
+      require(observe(live, "8.1234567", "8.7654321") ==
+                  observe(retained.ops, "8.1234567", "8.7654321"),
+              "rejected scheduling must preserve the observed stack");
+    }
+    auto direct_stop = input;
+    direct_stop.insert(direct_stop.begin() + 6, halt());
+    require(!scheduled(run(direct_stop)), "an immediate stop observes the retained operand");
+    auto alias = input;
+    alias[0] = recall("8");
+    require(!scheduled(run(alias)), "selector charging may not clobber the other operand");
+    auto mutating = input;
+    mutating[2] = store("0");
+    mutating[4] = known_target_indirect_recall("0", "3");
+    require(!scheduled(run(mutating)), "auto-mutating indirect selectors remain ordered");
+    for (bool manual : {false, true}) {
+      auto opaque = input;
+      if (manual) opaque[3].meta.manual_interaction.emplace();
+      else opaque[3].meta.raw = true;
+      require(!scheduled(run(opaque)), "raw/manual entry protocols are scheduling barriers");
+    }
+    auto unknown = input;
+    unknown[4].meta.comment.reset();
+    require(!scheduled(run(unknown)), "unproved indirect targets cannot be rescheduled");
+  }
 }
 
 } // namespace mkpro::tests

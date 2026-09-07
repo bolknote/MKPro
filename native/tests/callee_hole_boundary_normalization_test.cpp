@@ -64,8 +64,18 @@ IrOp stopping(bool terminal) {
   return op;
 }
 
-std::vector<IrOp> fixture(bool observe_last_x = false) {
+std::vector<IrOp> fixture(bool observe_last_x = false, bool seed_accumulator = false) {
   std::vector<IrOp> ops{transfer(IrKind::Jump, "start"), named("walk_quotients")};
+  if (seed_accumulator) {
+    ops.push_back(operation(2));
+    ops.push_back(operation(7));
+    IrOp prepare;
+    prepare.kind = IrKind::Store;
+    prepare.opcode = 0x43;
+    prepare.register_name = "3";
+    prepare.meta.comment = "prepare display value";
+    ops.push_back(prepare);
+  }
   for (int i = 0; i < 4; ++i) {
     ops.push_back(recall(7 - i));
     ops.push_back(recall(i == 1 ? 2 : 1));
@@ -78,6 +88,16 @@ std::vector<IrOp> fixture(bool observe_last_x = false) {
   }
   ops.push_back(returning());
   ops.push_back(named("walk_products"));
+  if (seed_accumulator) {
+    ops.push_back(operation(5));
+    ops.push_back(operation(3));
+    IrOp prepare;
+    prepare.kind = IrKind::Store;
+    prepare.opcode = 0x43;
+    prepare.register_name = "3";
+    prepare.meta.comment = "prepare screen value";
+    ops.push_back(prepare);
+  }
   for (int i = 0; i < 2; ++i) {
     ops.push_back(recall(7 - i));
     ops.push_back(recall(i == 0 ? 1 : 2));
@@ -183,6 +203,110 @@ bool fused(const core::passes::PassResult& result) {
 } // namespace
 
 void callee_hole_boundary_fusion_preserves_stack_and_control() {
+  const auto unequal = core::xyz_preserving_selector_charge_state();
+  const std::vector<IrOp> returned_value{
+      transfer(IrKind::Call, "leaf"), recall(1), operation(0x10), stopping(true),
+      named("leaf"), operation(0x54), returning()};
+  require(core::prove_ir_stack_entry_equality(returned_value, 0, unequal),
+          "a caller may erase T/X1/X2 differences after a matched return");
+  auto indirect_return = returned_value;
+  indirect_return[0].kind = IrKind::IndirectCall;
+  indirect_return[0].opcode = 0xa7;
+  indirect_return[0].register_name = "7";
+  indirect_return[0].meta.indirect_flow_targets =
+      std::vector<IrTarget>{std::string("leaf")};
+  require(core::prove_ir_stack_entry_equality(indirect_return, 0, unequal),
+          "a typed indirect call must use the same matched-return equality proof");
+  indirect_return[0].meta.indirect_flow_targets.reset();
+  require(!core::prove_ir_stack_entry_equality(indirect_return, 0, unequal),
+          "an unknown indirect target must not borrow a guessed continuation");
+
+  IrOp conditional = transfer(IrKind::CondJump, "other");
+  conditional.opcode = 0x57;
+  const std::vector<IrOp> both_paths{
+      transfer(IrKind::Call, "leaf"), conditional, recall(1), operation(0x10),
+      transfer(IrKind::Jump, "done"), named("other"), recall(2), operation(0x12),
+      named("done"), stopping(true), named("leaf"), operation(0x54), returning()};
+  require(core::prove_ir_stack_entry_equality(both_paths, 0, unequal),
+          "both outcomes of an equal-X branch may erase the pending differences");
+  auto unsafe_path = both_paths;
+  unsafe_path[6] = operation(0x0f);
+  require(!core::prove_ir_stack_entry_equality(unsafe_path, 0, unequal),
+          "one branch reading old physical X1 must reject the whole rewrite");
+  auto differing_condition = unequal;
+  differing_condition.stack_equal[0] = false;
+  require(!core::prove_ir_stack_entry_equality(both_paths, 0, differing_condition),
+          "control flow cannot inspect a differing X before convergence");
+
+  std::vector<IrOp> callers{
+      transfer(IrKind::Call, "leaf"), recall(1), operation(0x10),
+      transfer(IrKind::Call, "leaf"), recall(2), operation(0x12), stopping(true),
+      named("leaf"), operation(0x54), returning()};
+  require(core::prove_ir_stack_entry_equality(callers, 8, unequal),
+          "all reachable return-stack contexts of a shared entry must be admitted");
+  callers[4] = operation(0x0f);
+  require(!core::prove_ir_stack_entry_equality(callers, 8, unequal),
+          "a good first caller cannot hide an unsafe second caller");
+
+  auto observed = returned_value;
+  observed[1] = stopping(true);
+  require(!core::prove_ir_stack_entry_equality(observed, 0, unequal),
+          "a stop before caller convergence exposes the unequal stack");
+  observed = returned_value;
+  observed[1] = operation(0x0a);
+  require(!core::prove_ir_stack_entry_equality(observed, 5, unequal),
+          "decimal-point entry after return cannot restore an unequal X2");
+  observed = returned_value;
+  observed[5].meta.raw = true;
+  require(!core::prove_ir_stack_entry_equality(observed, 0, unequal),
+          "raw callees remain opaque to the cross-return proof");
+  observed = returned_value;
+  observed[1].meta.manual_interaction.emplace();
+  require(!core::prove_ir_stack_entry_equality(observed, 0, unequal),
+          "manual interaction remains an observation barrier");
+
+  auto virtual_layout = returned_value;
+  virtual_layout.insert(virtual_layout.begin() + 4, 110, operation(0x54));
+  require(core::prove_ir_stack_entry_equality(virtual_layout, 0, unequal),
+          "logical targets beyond 105 must remain available to intermediate proofs");
+
+  const auto run_return_fixture = [&](bool charged, const std::string& input,
+                                       bool observe_x2) {
+    std::vector<IrOp> program{recall(4), recall(3), recall(2), recall(1), operation(0x10)};
+    if (charged) {
+      program.push_back(operation(0x0e));
+      program.push_back(operation(7));
+      program.push_back(operation(8));
+      IrOp store;
+      store.kind = IrKind::Store;
+      store.register_name = "e";
+      store.opcode = 0x4e;
+      program.push_back(store);
+      program.push_back(operation(0x25));
+    }
+    auto body = returned_value;
+    if (observe_x2)
+      body.insert(body.begin() + 3, operation(0x0a));
+    program.insert(program.end(), body.begin(), body.end());
+    emulator::MK61 calc;
+    require(calc.load_program(bytecode(program)).diagnostics.empty(),
+            "cross-return equality fixture must fit an ordinary MK-61");
+    calc.set_register("1", input);
+    calc.set_register("2", "3");
+    calc.set_register("3", "5");
+    calc.set_register("4", "7");
+    calc.press_sequence({"В/О", "С/П"});
+    require(calc.run_until_stable(2000, 6).stopped,
+            "cross-return equality fixture must return to its own caller and stop");
+    return Snapshot{calc.display_text(), calc.read_register("X"), calc.read_register("Y"),
+                    calc.read_register("Z"), calc.read_register("T"), calc.read_register("X1")};
+  };
+  for (const auto& input : {"0", "11", "-7", "0.125", "12345"})
+    for (bool observe_x2 : {false, true})
+      require(run_return_fixture(false, input, observe_x2) ==
+                  run_return_fixture(true, input, observe_x2),
+              "caller convergence must preserve the physical stack, last-X and X2 restore");
+
   CompileOptions options;
   options.callee_hole_straight_line_helper = true;
   options.callee_hole_boundary_normalization = true;
@@ -201,6 +325,36 @@ void callee_hole_boundary_fusion_preserves_stack_and_control() {
   for (const auto& input : {"0", "11", "-7", "0.125", "12345"})
     require(observations(source, input) == observations(result.ops, input),
             std::string("shared walk must preserve X/Y/Z/T/X1 and display for ") + input);
+
+  const auto seeded = fixture(false, true);
+  const auto seeded_result = core::passes::callee_hole_straight_line_helper(seeded, {options});
+  const auto count_first_bank = [](const std::vector<IrOp>& ops) {
+    return std::count_if(ops.begin(), ops.end(), [](const IrOp& op) {
+      return op.kind == IrKind::Recall && op.register_name == "7";
+    });
+  };
+  require(count_first_bank(seeded) == 2 && count_first_bank(seeded_result.ops) == 1,
+          "a proved observation suffix must include the first pair after display preparation");
+  require(std::any_of(seeded_result.optimizations.begin(), seeded_result.optimizations.end(),
+                      [](const auto& op) {
+                        return op.name == "callee-hole-proved-observation-suffix";
+                      }), "a widened observation suffix must explain its entry proof");
+  require(std::count_if(seeded_result.ops.begin(), seeded_result.ops.end(), [](const IrOp& op) {
+            return op.kind == IrKind::Store && op.register_name == "3";
+          }) == 2, "the display preparations must remain outside the shared suffix");
+  require(bytecode(seeded_result.ops).size() + 5 <= bytecode(seeded).size(),
+          "a live literal accumulator must not erase the sharing benefit");
+  for (const auto& input : {"0", "11", "-7", "0.125", "12345"})
+    require(observations(seeded, input) == observations(seeded_result.ops, input),
+            "literal-entry sharing must preserve the accumulator, stack and both returns");
+  const auto seeded_x1 = fixture(true, true);
+  const auto seeded_x1_result =
+      core::passes::callee_hole_straight_line_helper(seeded_x1, {options});
+  require(count_first_bank(seeded_x1_result.ops) == 2,
+          "a first callback observing old X1 must prevent widened literal-entry sharing");
+  for (const auto& input : {"0", "-7", "12345"})
+    require(observations(seeded_x1, input) == observations(seeded_x1_result.ops, input),
+            "rejecting a widened entry must retain the original last-X behavior");
 
   auto renamed = source;
   for (IrOp& op : renamed) {
@@ -466,8 +620,8 @@ program FunctionEntryAlternatives {
 
 void callee_hole_boundary_fusion_final_artifact_contract() {
   const auto root = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path();
-  std::ifstream input(root / "examples/pending-optimizer/tic-tac-toe-4x4.mkpro");
-  require(input.is_open(), "4x4 regression source must be available");
+  std::ifstream input(root / "native/tests/fixtures/finalization-selector-release.mkpro");
+  require(input.is_open(), "fixed boundary-fusion regression source must be available");
   const std::string source((std::istreambuf_iterator<char>(input)),
                            std::istreambuf_iterator<char>());
   CompileOptions options;
@@ -483,6 +637,10 @@ void callee_hole_boundary_fusion_final_artifact_contract() {
   options.defer_return_suffix_until_callee_hole = true;
   options.x_param_value_functions = true;
   options.allow_size_neutral_selector_seed_reuse = true;
+  // Keep a scratch register independently of the retired predicate-to-literal
+  // rewrite: this fixture exercises final layout, not constant-pool pressure.
+  options.suppress_constant_preloads.insert("-1");
+  options.reserve_suppressed_constant_preload_slots.insert("-1");
   const CompileResult result = compile_source(source, options);
   require(result.implemented &&
               std::none_of(result.diagnostics.begin(), result.diagnostics.end(),
@@ -589,6 +747,9 @@ void callee_hole_boundary_fusion_final_artifact_contract() {
   CompileOptions automatic_options;
   automatic_options.analysis = true;
   automatic_options.budget = 999999;
+  automatic_options.suppress_constant_preloads = options.suppress_constant_preloads;
+  automatic_options.reserve_suppressed_constant_preload_slots =
+      options.reserve_suppressed_constant_preload_slots;
   const auto automatic = compile_source(source, automatic_options);
   require(automatic.implemented && automatic.steps.size() <= normalized.steps.size(),
           "automatic final-ABI refinement must not discard a smaller proved entry composition: "

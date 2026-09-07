@@ -57,6 +57,9 @@ void dead_code_after_halt_matches_typescript_contract();
 void dead_proc_elimination_matches_typescript_contract();
 void dead_store_before_commutative_matches_typescript_contract();
 void dead_store_elimination_matches_typescript_contract();
+void finalization_selector_bounds_preserve_machine_contract();
+void fractional_selector_bounds_do_not_require_zero_target();
+void compiler_explicit_variant_repeats_finalization_after_layout();
 void display_byte_helpers_match_typescript_contract();
 void display_lowering_helpers_match_typescript_contract();
 void duplicate_failure_tail_matches_typescript_contract();
@@ -129,6 +132,8 @@ void expression_lowering_helpers_match_typescript_contract();
 void flow_structure_passes_match_typescript_contract();
 void flow_x_reuse_matches_typescript_contract();
 void formal_address_matches_typescript_contract();
+void virtual_addresses_preserve_logical_control_flow();
+void deferred_fractional_selectors_bind_after_logical_layout();
 void format_primitives_match_typescript_contract();
 void golden_listing_contract_matches_typescript_contract();
 void setup_formatting_matches_typescript_contract();
@@ -205,6 +210,12 @@ void tic_tac_toe_4x4_manual_ui_contract_probe_matches_emulator();
 void tic_tac_toe_4x4_reference_transcript_matches_original_listing();
 void tic_tac_toe_4x4_reference_ui_normalizes_coordinates();
 void tic_tac_toe_4x4_source_manual_ui_contract_is_explicit();
+void tic_tac_toe_4x4_source_marking_matches_original_listing();
+void tic_tac_toe_4x4_source_responses_match_original_listing();
+void tic_tac_toe_4x4_source_scores_match_original_listing();
+void tic_tac_toe_4x4_source_moves_match_original_listing();
+void compiler_stack_carried_index_update_prefix_preserves_continuation();
+void compiler_retained_operand_update_compare_preserves_observations();
 void tic_tac_toe_4x4_source_uses_reference_angle_mode();
 void v2_const_matches_typescript_contract();
 void x2_register_dataflow_matches_typescript_contract();
@@ -325,6 +336,9 @@ int main(int argc, char** argv) {
       MKPRO_TEST(dead_proc_elimination_matches_typescript_contract),
       MKPRO_TEST(dead_store_before_commutative_matches_typescript_contract),
       MKPRO_TEST(dead_store_elimination_matches_typescript_contract),
+      MKPRO_TEST(finalization_selector_bounds_preserve_machine_contract),
+      MKPRO_TEST(fractional_selector_bounds_do_not_require_zero_target),
+      MKPRO_TEST(compiler_explicit_variant_repeats_finalization_after_layout),
       MKPRO_TEST(display_byte_helpers_match_typescript_contract),
       MKPRO_TEST(display_lowering_helpers_match_typescript_contract),
       MKPRO_TEST(duplicate_failure_tail_matches_typescript_contract),
@@ -394,6 +408,8 @@ int main(int argc, char** argv) {
       MKPRO_TEST(flow_structure_passes_match_typescript_contract),
       MKPRO_TEST(flow_x_reuse_matches_typescript_contract),
       MKPRO_TEST(formal_address_matches_typescript_contract),
+      MKPRO_TEST(virtual_addresses_preserve_logical_control_flow),
+      MKPRO_TEST(deferred_fractional_selectors_bind_after_logical_layout),
       MKPRO_TEST(format_primitives_match_typescript_contract),
       MKPRO_TEST(golden_listing_contract_matches_typescript_contract),
       MKPRO_TEST(functions_match_typescript_contract),
@@ -470,6 +486,12 @@ int main(int argc, char** argv) {
       MKPRO_TEST(tic_tac_toe_4x4_reference_transcript_matches_original_listing),
       MKPRO_TEST(tic_tac_toe_4x4_reference_ui_normalizes_coordinates),
       MKPRO_TEST(tic_tac_toe_4x4_source_manual_ui_contract_is_explicit),
+      MKPRO_TEST(tic_tac_toe_4x4_source_marking_matches_original_listing),
+    MKPRO_TEST(tic_tac_toe_4x4_source_responses_match_original_listing),
+    MKPRO_TEST(tic_tac_toe_4x4_source_scores_match_original_listing),
+    MKPRO_TEST(tic_tac_toe_4x4_source_moves_match_original_listing),
+    MKPRO_TEST(compiler_stack_carried_index_update_prefix_preserves_continuation),
+    MKPRO_TEST(compiler_retained_operand_update_compare_preserves_observations),
       MKPRO_TEST(tic_tac_toe_4x4_source_uses_reference_angle_mode),
       MKPRO_TEST(v2_const_matches_typescript_contract),
       MKPRO_TEST(x2_register_dataflow_matches_typescript_contract),

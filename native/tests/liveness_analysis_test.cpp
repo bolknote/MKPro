@@ -1,4 +1,5 @@
 #include "mkpro/core/passes/liveness_analysis.hpp"
+#include "mkpro/core/opcodes.hpp"
 #include "mkpro/compiler.hpp"
 #include "mkpro/emulator/mk61.hpp"
 
@@ -6,6 +7,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -123,6 +125,303 @@ IrOp ret() {
 } // namespace
 
 void liveness_analysis_matches_typescript_contract() {
+  {
+    // The proof needs selection, not mathematical ordering (zero is special
+    // on the real machine), and it must not treat a rounded zero difference
+    // as proof that the original inputs were equal.
+    const std::vector<std::string> values{
+        "-999", "-3", "-1", "-0.125", "0", "0.125", "1", "2", "999",
+        "1e90", "-1e90", "1e-90"};
+    const auto number = [](std::string text) {
+      std::replace(text.begin(), text.end(), ',', '.');
+      std::istringstream input(text);
+      std::string mantissa;
+      std::string exponent;
+      std::string extra;
+      input >> mantissa;
+      if (input >> exponent)
+        mantissa += "e" + exponent;
+      require(!(input >> extra), "unexpected calculator number format: " + text);
+      std::size_t used = 0;
+      const double result = std::stod(mantissa, &used);
+      require(used == mantissa.size(), "partial calculator number parse: " + text);
+      return result;
+    };
+    for (const std::string& candidate : values) {
+      for (const std::string& previous : values) {
+        emulator::MK61 calc;
+        require(calc.load_program({0x61, 0x62, 0x36, 0x43, 0x11, 0x44, 0x50})
+                    .diagnostics.empty(), "select fact must load on stock MK-61");
+        calc.set_register("1", candidate);
+        calc.set_register("2", previous);
+        calc.set_register("Z", "317");
+        calc.press_sequence({"В/О", "С/П"});
+        require(calc.run_until_stable(2000, 5).stopped, "select fact must reach its stop");
+        const double selected = number(calc.read_register("3"));
+        const double difference = number(calc.read_register("4"));
+        require(selected == std::stod(candidate) || selected == std::stod(previous),
+                "Kmax selection: candidate=" + candidate + " previous=" + previous +
+                    " selected=" + calc.read_register("3") + " difference=" + calc.read_register("4"));
+        require(difference == 0 || selected == std::stod(previous),
+                "a nonzero candidate-minus-selection must retain the previous input");
+      }
+    }
+  }
+
+  {
+    const auto condition = [](int opcode, const std::string& target) {
+      IrOp op;
+      op.kind = IrKind::CondJump;
+      op.opcode = opcode;
+      op.condition = opcode == 0x5e ? "==0" : opcode == 0x57 ? "!=0" : "<0";
+      op.target = target;
+      return op;
+    };
+    const auto terminal = [] {
+      IrOp op = halt();
+      op.meta.stop_disposition = StopDisposition::Terminal;
+      return op;
+    };
+    const auto fixture = [&](bool inverted) {
+      std::vector<IrOp> program{
+          plain(7, "7"), store("a"), call_to("save_first"),
+          plain(1, "1"), plain(0x0b, "negate"), store("0"), label("scan"),
+          recall("9"), recall("0"), plain(0x36, "max"), store("0"), plain(0x11, "-"),
+          condition(inverted ? 0x57 : 0x5e, inverted ? "update" : "next")};
+      if (inverted) {
+        program.push_back(jump_to("next"));
+        program.push_back(label("update"));
+      }
+      const std::vector<IrOp> tail{
+          recall("8"), store("b"), label("next"),
+          recall("2"), plain(1, "1"), plain(0x11, "-"), store("2"), condition(0x5e, "scan"),
+          recall("0"), condition(0x5c, "consume"), plain(0, "0"), terminal(),
+          label("consume"), recall("b"), terminal(),
+          label("save_first"), recall("a"), store("6"), ret()};
+      program.insert(program.end(), tail.begin(), tail.end());
+      return program;
+    };
+    const core::passes::LivenessOptions options{
+        .equal_entry_value_classes = {{"a", "literal:0"}, {"b", "literal:0"}}};
+    const auto proved = [&](const std::vector<IrOp>& program) {
+      const auto info = core::passes::compute_liveness(program, options);
+      return info.guarded_disjoint_pairs.contains({"a", "b"}) &&
+          !core::passes::build_register_interference_graph(program, info).interferes("a", "b");
+    };
+    const auto observe = [&](std::vector<IrOp> program, const std::string& candidate, bool alias) {
+      const auto addresses = core::passes::calculate_label_addresses(program);
+      for (IrOp& op : program) {
+        if (op.kind == IrKind::Recall || op.kind == IrKind::Store) {
+          if (alias && op.register_name == "b")
+            op.register_name = "a";
+          op.opcode = (op.kind == IrKind::Recall ? 0x60 : 0x40) + register_index(op.register_name);
+        }
+        if (op.kind != IrKind::Label && opcode_by_code(op.opcode).takes_address) {
+          const auto* target = std::get_if<std::string>(&op.target);
+          require(target != nullptr && addresses.contains(*target), "guard fixture target missing");
+          op.target_meta.formal_opcode = official_address_to_opcode(addresses.at(*target));
+        }
+      }
+      std::vector<int> codes;
+      for (const auto& cell : lower_ir_to_layout(program).cells)
+        codes.push_back(cell.opcode);
+      require(codes.size() <= 105U, "guard fixture may not use virtual physical memory");
+      emulator::MK61 calc;
+      require(calc.load_program(codes).diagnostics.empty(), "guard fixture must load without Rf");
+      for (const char* reg : {"a", "b", "5"})
+        calc.set_register(reg, "0");
+      calc.set_register("2", "2");
+      calc.set_register("8", "17");
+      calc.set_register("9", candidate);
+      calc.set_register("Y", "73");
+      calc.set_register("Z", "29");
+      calc.set_register("T", "19");
+      calc.press_sequence({"В/О", "С/П"});
+      require(calc.run_until_stable(4000, 5).stopped, "guard fixture lost its return or terminal stop");
+      std::vector<std::string> result{calc.display_text()};
+      for (const char* reg : {"X", "Y", "Z", "T", "X1", "0", "2", "5", "6"})
+        result.push_back(calc.read_register(reg));
+      return result;
+    };
+    for (const bool inverted : {false, true}) {
+      const auto program = fixture(inverted);
+      require(core::passes::build_register_interference_graph(program).interferes("a", "b"),
+              "guard fixture must expose a conflict missed by ordinary CFG liveness");
+      require(proved(program), "payload-write cut must expose the retained sentinel on either branch form");
+      for (const char* value : {"-3", "-1", "0", "2", "9"})
+        require(observe(program, value, false) == observe(program, value, true),
+                "guarded register sharing changed stack/X1, output, or matched returns");
+    }
+    auto no_calls = fixture(false);
+    no_calls.erase(no_calls.end() - 4, no_calls.end());
+    no_calls.erase(no_calls.begin() + 2);
+    no_calls.insert(no_calls.begin() + 2, {recall("a"), store("6")});
+    require(proved(no_calls), "inlining the last helper must not disable guarded lifetime analysis");
+    auto detached = fixture(false);
+    const std::vector<IrOp> detached_tail{
+        label("detached"), plain(7, "7"), store("a"),
+        plain(2, "2"), store("0"), jump_to("consume")};
+    detached.insert(detached.end(), detached_tail.begin(), detached_tail.end());
+    require(!proved(detached), "a standalone fragment must retain its arbitrary-entry contract");
+    auto closed_options = options;
+    closed_options.closed_program_entry = true;
+    require(core::passes::compute_liveness(detached, closed_options)
+                .guarded_disjoint_pairs.contains({"a", "b"}),
+            "an unreachable context cannot lengthen a complete program's payload lifetime");
+    for (const char* value : {"-3", "0", "2"})
+      require(observe(detached, value, false) == observe(detached, value, true),
+              "closed-entry coalescing changed the physical program's observations");
+    detached.insert(detached.begin() + 3, {recall("3"), condition(0x5e, "detached")});
+    require(core::passes::compute_liveness(detached, closed_options)
+                .guarded_disjoint_pairs.empty(),
+            "a reachable alternate entry must still prevent complete-program coalescing");
+    auto pooled = fixture(false);
+    pooled.at(3) = recall("e");
+    pooled.erase(pooled.begin() + 4);
+    pooled.insert(pooled.begin(), label("pooled_entry"));
+    pooled.push_back(jump_to("pooled_entry"));
+    auto pooled_options = options;
+    pooled_options.equal_entry_value_classes["e"] = "literal:-1";
+    require(core::passes::compute_liveness(pooled, pooled_options)
+                .guarded_disjoint_pairs.contains({"a", "b"}),
+            "an immutable setup constant must survive a conservative disconnected entry");
+    pooled.insert(pooled.begin() + 4, {recall("3"), store("e")});
+    require(core::passes::compute_liveness(pooled, pooled_options).guarded_disjoint_pairs.empty(),
+            "a written setup register must not become an arbitrary-entry invariant");
+    auto read_old = fixture(false);
+    read_old.insert(read_old.begin() + 6, {recall("b"), store("5")});
+    require(!proved(read_old) && observe(read_old, "-3", false) != observe(read_old, "-3", true),
+            "a real read before the guarded definition must prevent coalescing");
+    auto overwrite_guard = fixture(false);
+    const auto consume = std::find_if(overwrite_guard.begin(), overwrite_guard.end(), [](const IrOp& op) {
+      return op.kind == IrKind::CondJump && op.opcode == 0x5c;
+    });
+    overwrite_guard.insert(consume - 1, {plain(2, "2"), store("0")});
+    require(!proved(overwrite_guard) &&
+                observe(overwrite_guard, "-3", false) != observe(overwrite_guard, "-3", true),
+            "an independent guard overwrite must invalidate the sentinel implication");
+    auto manual = fixture(false);
+    IrOp input = halt();
+    input.meta.stop_disposition = StopDisposition::Resumable;
+    manual.insert(manual.begin() + 5, input);
+    require(!proved(manual), "manual input must not inherit the pre-stop literal X fact");
+    auto manual_select = fixture(false);
+    manual_select.at(10).meta.manual_interaction = ManualInteractionAnchor{
+        .protocol_id = 81, .phase = 0, .kind = ManualInteractionAnchorKind::PromptStop};
+    require(!proved(manual_select), "a manual interaction cannot be summarized as select retention");
+    auto extra_entry = fixture(false);
+    extra_entry.insert(extra_entry.begin() + 10, label("unproved_store"));
+    extra_entry.insert(extra_entry.begin() + 3, {recall("3"), condition(0x5e, "unproved_store")});
+    require(!proved(extra_entry), "an extra entry into the select window must reject its summary");
+    auto unknown = fixture(false);
+    unknown.insert(unknown.begin() + 3, indirect_recall("d", std::nullopt));
+    require(!proved(unknown), "unknown indirect memory cannot authorize lifetime splitting");
+    auto opaque = fixture(false);
+    opaque.front().meta.raw = true;
+    require(!proved(opaque), "raw effects must preserve conservative lifetime analysis");
+    auto different = options;
+    different.equal_entry_value_classes["b"] = "literal:1";
+    require(core::passes::compute_liveness(fixture(false), different).guarded_disjoint_pairs.empty(),
+            "distinct setup values must not share a register through this proof");
+    auto renamed = fixture(false);
+    for (IrOp& op : renamed)
+      if (op.register_name == "a") op.register_name = "c";
+      else if (op.register_name == "b") op.register_name = "e";
+    const auto renamed_info = core::passes::compute_liveness(renamed, {
+        .equal_entry_value_classes = {{"c", "literal:0"}, {"e", "literal:0"}}});
+    require(renamed_info.guarded_disjoint_pairs.contains({"c", "e"}),
+            "guarded liveness must be independent of source/register names");
+    auto oversized = fixture(false);
+    oversized.insert(oversized.begin(), 110, plain(0x54, "nop"));
+    require(proved(oversized), "logical addresses beyond 105 must not hide a conditional lifetime");
+  }
+
+  {
+    const std::string source = R"mkpro(program ConditionalPayload {
+      state {
+        first: packed = 0
+        saved: packed = 0
+        value: packed
+        guard: packed
+        remaining: counter 0..2 = 2
+      }
+      loop {
+        show(0)
+        value = entered()
+        first = value + 7
+        remember()
+        guard = -1
+        while remaining >= 1 {
+          guard = max(value, guard)
+          if value == guard {
+            saved = value * 2
+          }
+          remaining--
+        }
+        if guard < 0 { halt(0) }
+        halt(saved)
+      }
+      fn remember() { show(first) }
+    })mkpro";
+    const auto compile_and_run = [&](const std::string& text, bool should_share) {
+      CompileOptions probe_options;
+      probe_options.disable_candidate_search = true;
+      probe_options.collect_logical_register_allocation = true;
+      const auto probe = compile_source(text, probe_options);
+      require(probe.implemented && !probe.logical_register_assignments.empty(),
+              "guarded compiler fixture must obtain a logical register assignment");
+      const auto home = [&](const std::string& name) {
+        const auto found = std::find_if(probe.logical_register_assignments.begin(),
+            probe.logical_register_assignments.end(), [&](const auto& assignment) {
+              return assignment.name == name;
+            });
+        require(found != probe.logical_register_assignments.end(), "guarded fixture lost source state");
+        return found->register_name;
+      };
+      if ((home("first") == home("saved")) != should_share) {
+        CompileOptions diagnostic_options;
+        diagnostic_options.disable_candidate_search = true;
+        const auto diagnostic = compile_source(text, diagnostic_options);
+        require(false, "logical allocation ignored a guarded lifetime or merged a real overlap: " +
+                  home("first") + " / " + home("saved") + "\n" + diagnostic.listing);
+      }
+      CompileOptions options;
+      options.disable_candidate_search = true;
+      options.forced_logical_register_assignments = probe.logical_register_assignments;
+      const auto result = compile_source(text, options);
+      require(result.implemented && result.diagnostics.empty() && result.steps.size() <= 105U,
+              "guarded allocation must re-lower and validate on an ordinary MK-61");
+      std::vector<int> codes;
+      for (const auto& step : result.steps)
+        codes.push_back(step.opcode);
+      for (const int value : {-3, 0, 2}) {
+        emulator::MK61 calc;
+        require(calc.load_program(codes).diagnostics.empty(), "guarded compiler fixture must load");
+        for (const auto& preload : result.preloads) {
+          require(preload.register_name != "f", "guarded allocation must not use Rf");
+          calc.set_register(preload.register_name, preload.value);
+        }
+        calc.press_sequence({"В/О", "С/П"});
+        require(calc.run_until_stable(3000, 5).stopped && std::stod(calc.display_text()) == 0,
+                "guarded source input prompt changed");
+        calc.press(std::to_string(value < 0 ? -value : value));
+        if (value < 0)
+          calc.press("/-/");
+        calc.press("С/П");
+        require(calc.run_until_stable(3000, 5).stopped && std::stod(calc.display_text()) == value + 7,
+                "caller-visible value changed before the selection loop");
+        calc.press("С/П");
+        require(calc.run_until_stable(4000, 5).stopped &&
+                    std::stod(calc.display_text()) == (value < 0 ? 0 : value * 2),
+                "guarded payload or its initial value changed after matched return");
+      }
+    };
+    compile_and_run(source, true);
+    std::string unguarded = source;
+    unguarded.insert(unguarded.find("if guard < 0"), "guard = 2\n        ");
+    compile_and_run(unguarded, false);
+  }
+
   {
     IrOp terminal = halt();
     terminal.meta.stop_disposition = StopDisposition::Terminal;

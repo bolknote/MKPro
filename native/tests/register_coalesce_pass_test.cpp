@@ -73,6 +73,136 @@ core::passes::PassResult run_register_coalesce(const std::vector<IrOp>& ops,
 
 void register_coalesce_matches_typescript_contract() {
   {
+    CompileOptions options;
+    options.coalesce_copies = true;
+    const auto plain = [](int opcode) {
+      IrOp op;
+      op.kind = IrKind::Plain;
+      op.opcode = opcode;
+      return op;
+    };
+    const auto stop = [](bool terminal) {
+      IrOp op = halt();
+      op.meta.stop_disposition = terminal ? StopDisposition::Terminal : StopDisposition::Resumable;
+      return op;
+    };
+    const auto label = [](const std::string& name) {
+      IrOp op;
+      op.kind = IrKind::Label;
+      op.name = name;
+      return op;
+    };
+    const auto call = [](const std::string& target) {
+      IrOp op;
+      op.kind = IrKind::Call;
+      op.opcode = 0x53;
+      op.target = target;
+      return op;
+    };
+    IrOp finish;
+    finish.kind = IrKind::Return;
+    finish.opcode = 0x52;
+    IrOp indexed = indirect_recall("d", false);
+    indexed.meta.indirect_memory_targets = std::vector<int>{7};
+    const std::vector<IrOp> epochs{
+        recall("1"), store("d"), call("observe"), stop(false),
+        plain(7), store("d"), indexed, stop(true),
+        label("observe"), recall("d"), finish};
+    const auto run = [&](const std::vector<IrOp>& code) {
+      return core::passes::register_web_copy_coalesce(code, {options});
+    };
+    const auto optimized = run(epochs);
+    require(optimized.applied == 1 && optimized.ops.size() + 1 == epochs.size(),
+            "a direct-value web must coalesce independently of a later indirect-selector epoch");
+    require(std::any_of(optimized.ops.begin(), optimized.ops.end(), [](const IrOp& op) {
+              return op.kind == IrKind::IndirectRecall && op.register_name == "d";
+            }), "web splitting must preserve the selector's physical register");
+
+    auto reused_helper = epochs;
+    reused_helper.insert(reused_helper.begin() + 7, call("observe"));
+    require(run(reused_helper).applied == 0,
+            "one shared read instruction must keep the same operand across all caller contexts");
+    auto hardware_observer = epochs;
+    hardware_observer[2] = indexed;
+    require(run(hardware_observer).applied == 0,
+            "an indirect use in the copied web must pin that web, not just its later epoch");
+    auto unknown = epochs;
+    unknown[6].meta.indirect_memory_targets.reset();
+    require(run(unknown).applied == 0, "unresolved indirect memory must reject web coalescing");
+    auto opaque = epochs;
+    opaque[1].meta.raw = true;
+    require(run(opaque).applied == 0, "raw register contracts must remain fixed");
+    auto extended = epochs;
+    extended[0] = recall("f");
+    require(run(extended).applied == 0, "Rf must not become a standard allocation color");
+    const std::vector<IrOp> diverging{
+        recall("1"), store("d"), plain(9), store("1"), recall("d"), recall("1"), stop(true)};
+    require(run(diverging).applied == 0,
+            "a source overwrite while the destination remains live must keep the copy");
+
+    IrOp choose = call("otherwise");
+    choose.kind = IrKind::CondJump;
+    choose.opcode = 0x57;
+    IrOp join = call("join");
+    join.kind = IrKind::Jump;
+    join.opcode = 0x51;
+    const std::vector<IrOp> merged_definitions{
+        recall("3"), choose, recall("1"), store("d"), join,
+        label("otherwise"), plain(9), store("d"), label("join"), recall("d"), stop(true)};
+    require(run(merged_definitions).applied == 1,
+            "a joined web may move ordinary definitions when the old source is dead");
+    options.preloaded_constant_registers["1"] = "5";
+    require(run(epochs).applied == 1,
+            "a read-only constant copy can disappear without introducing a constant write");
+    require(run(merged_definitions).applied == 0,
+            "web coalescing must not make a compiler-owned constant pool register mutable");
+    options.preloaded_constant_registers.clear();
+
+    const auto observe = [&](const std::vector<IrOp>& code, const std::string& input) {
+      const auto labels = core::passes::calculate_label_addresses(code);
+      auto resolved = code;
+      for (auto& op : resolved)
+        if (opcode_by_code(op.opcode).takes_address && op.kind != IrKind::Label) {
+          const auto* target = std::get_if<std::string>(&op.target);
+          require(target != nullptr && labels.contains(*target), "web fixture needs symbolic targets");
+          op.target_meta.formal_opcode = official_address_to_opcode(labels.at(*target));
+        }
+      std::vector<int> bytes;
+      for (const auto& cell : lower_ir_to_layout(resolved).cells)
+        bytes.push_back(cell.opcode);
+      require(bytes.size() <= 105, "web fixture must fit an ordinary MK-61");
+      emulator::MK61 calc;
+      require(calc.load_program(bytes).diagnostics.empty(), "web fixture must load");
+      calc.set_register("1", input);
+      calc.set_register("7", "2.5");
+      calc.set_register("Y", "73");
+      calc.set_register("Z", "29");
+      calc.set_register("T", "17");
+      calc.press_sequence({"В/О", "С/П"});
+      std::vector<std::string> result;
+      for (int phase = 0; phase < 2; ++phase) {
+        require(calc.run_until_stable(2000, 6).stopped, "web fixture must preserve stops and returns");
+        result.push_back(calc.display_text());
+        for (const char* reg : {"X", "Y", "Z", "T", "X1"})
+          result.push_back(calc.read_register(reg));
+        if (phase == 0)
+          calc.press("С/П");
+        else
+          result.push_back(calc.read_register("d"));
+      }
+      return result;
+    };
+    for (const auto& input : {"0", "-7", "0.125", "12345"})
+      require(observe(epochs, input) == observe(optimized.ops, input),
+              "web coalescing must preserve stack, displays, return continuations and selector use");
+
+    auto logical = epochs;
+    logical.insert(logical.begin() + 8, 110, plain(0x54));
+    require(run(logical).applied == 1,
+            "logical helper addresses above 105 must not hide a relocatable copy opportunity");
+  }
+
+  {
     const auto label = [](const std::string& name) {
       IrOp op;
       op.kind = IrKind::Label;

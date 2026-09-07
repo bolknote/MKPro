@@ -1,0 +1,99 @@
+// Frozen structural regression for repeated post-layout finalization.
+// This is not the playable 4x4 port. Its unit-coefficient packed update is
+// intentional: changing that arithmetic changes the selector-release layout
+// whose second DSE opportunity this fixture is required to exercise.
+program SelectorReleaseRegression {
+  grid: board(1..4, 1..4)
+  state {
+    expected_mode_only("deg")
+    occupied: packed = 0
+    previous_occupied: packed
+    lines: packed[4..7] = [44444.4, 44444.4, 44444.4, 44444.4]
+    x: packed = 0
+    y: packed = 0
+    best_y: packed = 0
+    best_score: packed
+    score: packed
+    line: packed
+    slot: packed
+  }
+  fn draw() {
+    halt(0)
+  }
+  fn occupied_cell() {
+    x = -99999999
+  }
+  loop {
+    preview(y)
+    show(x)
+    x = entered()
+    y = entered()
+    y = grid_norm(y)
+    x = grid_norm(x)
+    line = cell_mask(x, y)
+    previous_occupied = occupied
+    occupied = bit_or(occupied, line)
+    if previous_occupied != occupied {
+      mark_lines_and_check(-1)
+      choose_calculator_move()
+      occupied = bit_or(occupied, line)
+      mark_lines_and_check(1)
+    } else {
+      occupied_cell()
+    }
+  }
+  fn mark_one() {
+    slot--
+    lines[slot] = packed_add(lines[slot], line, best_score)
+    report = bit_and(lines[slot], 88888834)
+    if frac(report) != 0 {
+      halt(report)
+    }
+  }
+  fn mark_lines_and_check(mark_sign) {
+    best_score = mark_sign
+    slot = 8
+    line = x
+    mark_one()
+    line = y
+    mark_one()
+    normalize(x + y)
+    mark_one()
+    normalize(x - y)
+    mark_one()
+  }
+  fn choose_calculator_move() {
+    y = 4
+    while y >= 1 {
+      x = 4
+      while x >= 1 {
+        unless bit_and(occupied, cell_mask(x, y)) {
+          candidate_score()
+          best_score = max(score, best_score)
+          if score == best_score {
+            slot = x
+            best_y = y
+          }
+        }
+        x--
+      }
+      y--
+    }
+    if best_score < 0 {
+      draw()
+    }
+    x = slot
+    y = best_y
+    line = cell_mask(x, y)
+  }
+  fn candidate_score() {
+    score = packed_score(lines[7], x) + packed_score(lines[6], y)
+    normalize(x + y)
+    score += packed_score(lines[5], line)
+    normalize(x - y)
+    score += packed_score(lines[4], line)
+  }
+  fn normalize(raw_line) {
+    line = grid_norm(raw_line)
+  }
+}

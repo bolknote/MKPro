@@ -1,4 +1,7 @@
 #include "mkpro/core/passes/flow_x_reuse.hpp"
+#include "mkpro/core/passes/dead_store_elimination.hpp"
+#include "mkpro/core/emit/machine_emitter.hpp"
+#include "mkpro/emulator/mk61.hpp"
 
 #include "ir_pass_test_support.hpp"
 #include "test_support.hpp"
@@ -44,6 +47,149 @@ void flow_x_reuse_matches_typescript_contract() {
     if (!ok)
       failures.push_back(label);
   };
+
+  {
+    IrOp branch = cjump("end");
+    branch.opcode = 0x57;
+    branch.condition = "!=0";
+    const std::vector<IrOp> program{recall("3"), store("4"), branch,
+                                   recall("4"), plain(0x10, "+"), label("end"), halt()};
+    const auto forwarded = core::passes::stack_lift_recall_forwarding(program, ctx);
+    require(forwarded.applied == 1 && forwarded.ops.size() == program.size() &&
+                forwarded.ops[3].kind == IrKind::Plain && forwarded.ops[3].opcode == 0x0e,
+            "required stack duplication must not force a redundant register read");
+    const auto dead = core::passes::dead_store_elimination(forwarded.ops, ctx);
+    require(dead.applied == 1 && dead.ops.size() + 1 == program.size(),
+            "stack-preserving forwarding must expose the otherwise-live store to DSE");
+
+    auto numeric = program;
+    numeric[2] = numeric_cjump(5);
+    const auto fixed = core::passes::stack_lift_recall_forwarding(numeric, ctx);
+    require(fixed.applied == 1 && fixed.ops.size() == numeric.size() &&
+                fixed.ops[2].target == numeric[2].target,
+            "one-for-one stack forwarding must not relocate fixed numeric targets");
+    auto opaque = program;
+    opaque[3].meta.raw = true;
+    require(core::passes::stack_lift_recall_forwarding(opaque, ctx).applied == 0,
+            "raw recall effects must not be rewritten");
+    opaque = program;
+    opaque[3].meta.roles.push_back("test:opcode-is-data");
+    require(core::passes::stack_lift_recall_forwarding(opaque, ctx).applied == 0,
+            "role-bound opcode identities must not be changed by stack forwarding");
+    require(core::passes::stack_lift_recall_forwarding(
+                {store("4"), recall("4"), plain(0x20, "pi"), plain(0x0c, "VP"), halt()}, ctx)
+                .applied == 0,
+            "observable X2 resynchronization must keep its original recall");
+    require(core::passes::stack_lift_recall_forwarding(
+                {store("4"), plain(0x09, "9"), recall("4"), plain(0x10, "+"), halt()}, ctx)
+                .applied == 0,
+            "a changed X value must not substitute for the stored register");
+
+    const auto observe = [&](const std::vector<IrOp>& ops, const std::string& value) {
+      const auto image = resolve_machine_items(lower_ir_to_machine(ops));
+      require(image.diagnostics.empty(), "forwarded arithmetic fixture must resolve");
+      std::vector<int> bytes;
+      for (const auto& step : image.steps)
+        bytes.push_back(step.opcode);
+      emulator::MK61 calculator;
+      require(calculator.load_program(bytes).diagnostics.empty(), "forwarded fixture must load");
+      calculator.set_register("3", value);
+      calculator.set_register("Y", "11");
+      calculator.set_register("Z", "13");
+      calculator.set_register("T", "17");
+      calculator.press_sequence({"В/О", "С/П"});
+      require(calculator.run_until_stable(12000, 8).stopped, "forwarded fixture must stop");
+      std::vector<std::string> output;
+      for (const std::string reg : {"X", "Y", "Z", "T", "X1"})
+        output.push_back(calculator.read_register(reg));
+      calculator.press(".");
+      output.push_back(calculator.display_text());
+      return output;
+    };
+    for (const std::string value : {"0", "7", "-7", "12345678", "1.2345678E-05", "9.8765432E50"}) {
+      const auto expected = observe(program, value);
+      require(observe(forwarded.ops, value) == expected && observe(dead.ops, value) == expected,
+              "stack-lift forwarding and DSE must preserve stack, result and X2 for " + value);
+    }
+  }
+
+  for (const int target : {105, 137, 257}) {
+    IrOp transfer = indirect_jump("8");
+    transfer.meta.indirect_flow_targets = std::vector<IrTarget>{std::string("virtual_tail")};
+    std::vector<IrOp> program{recall("4"), transfer};
+    while (program.size() < static_cast<std::size_t>(target))
+      program.push_back(plain(0x54, "nop"));
+    program.insert(program.end(), {label("virtual_tail"), recall("4"), halt()});
+    const auto result = run(program);
+    require(result.applied == 1 && count_recall(result.ops, "4") == 1,
+            "typed virtual flow must expose redundant recalls beyond the physical window");
+    program[1].meta.indirect_flow_targets =
+        std::vector<IrTarget>{std::string("missing_label")};
+    require(run(program).applied == 0,
+            "an unresolved typed target must still reject the proof");
+  }
+
+  {
+    IrOp transfer = indirect_jump("8");
+    transfer.meta.indirect_flow_targets =
+        std::vector<IrTarget>{std::string("left"), std::string("right")};
+    const std::vector<IrOp> program{recall("4"), transfer, label("left"), recall("4"),
+                                   halt(), jump("end"), label("right"), recall("4"),
+                                   halt(), label("end"), halt()};
+    require(run(program).applied == 2,
+            "finite symbolic target sets must retain every target's X proof");
+    transfer.meta.indirect_flow_targets = std::vector<IrTarget>{std::string("tail")};
+    require(run({recall("8"), transfer, label("tail"), recall("8"), halt()}).applied == 0,
+            "stable selector class alone must not preserve a whole-word X alias");
+  }
+
+  {
+    std::vector<IrOp> program{recall("4"), jump("node_260")};
+    program.insert(program.end(), {label("node_0"), recall("4"), halt(), jump("end")});
+    for (int index = 1; index <= 260; ++index) {
+      program.push_back(label("node_" + std::to_string(index)));
+      program.push_back(jump("node_" + std::to_string(index - 1)));
+    }
+    program.insert(program.end(), {label("end"), halt()});
+    require(run(program).applied == 1,
+            "X propagation must converge through more than 200 reverse-layout edges");
+  }
+
+  {
+    IrOp transfer = indirect_call("8");
+    transfer.meta.indirect_flow_targets = std::vector<IrTarget>{std::string("callee")};
+    std::vector<IrOp> program{jump("main"), label("callee"), recall("4"), ret(),
+                             label("main"), recall("4"), transfer, store("5"), plain(0x0d, "clear"),
+                             plain(0x01, "1"), plain(0x0e, "enter"), plain(0x02, "2"),
+                             plain(0x0e, "enter"), plain(0x03, "3"), plain(0x0e, "enter"),
+                             plain(0x04, "4"), halt()};
+    // The helper follows the two-cell startup jump in both images.
+    const std::size_t callee_address = 2;
+    const auto optimized = run(program);
+    require(optimized.applied == 1, "typed call must remove only the redundant callee recall");
+    const auto observe = [&](const std::vector<IrOp>& ops) {
+      const auto resolved = resolve_machine_items(lower_ir_to_machine(ops));
+      require(resolved.diagnostics.empty(), "symbolic call fixture must resolve physically");
+      std::vector<int> codes;
+      for (const auto& step : resolved.steps)
+        codes.push_back(step.opcode);
+      emulator::MK61 calculator;
+      require(calculator.load_program(codes).diagnostics.empty(), "call fixture must load");
+      calculator.set_register("4", "7");
+      calculator.set_register("8", std::to_string(callee_address));
+      calculator.press_sequence({"В/О", "С/П"});
+      require(calculator.run_until_stable(12000, 8).stopped, "call fixture must return and stop");
+      require(calculator.read_register("5") == "7,", "callee must return the original input");
+      std::vector<std::string> result;
+      for (const std::string name : {"X", "Y", "Z", "T", "X1", "4", "5", "8"})
+        result.push_back(calculator.read_register(name));
+      calculator.press(".");
+      result.push_back(calculator.display_text());
+      return result;
+    };
+    require(observe(program) == observe(optimized.ops),
+            "symbolic flow reuse must preserve output, stack, X2 and the call return");
+  }
 
   {
     const std::vector<IrOp> program = {recall("4"), jump("tail"), plain(0x00, "0"), label("tail"),
@@ -461,6 +607,78 @@ void flow_x_reuse_matches_typescript_contract() {
     const std::vector<IrOp> program = {recall("1"), indirect_jump("7"), recall("1"), halt()};
     const auto result = run(program);
     check_applied(result.applied, 0, "avoids unknown indirect flow targets");
+  }
+
+  {
+    // Return proofs must resolve logical identities independently of whether
+    // the current candidate can already be encoded in physical program RAM.
+    for (const int target_address : {7, 105, 137, 257}) {
+      std::vector<IrOp> program = {halt()};
+      while (static_cast<int>(program.size()) < target_address)
+        program.push_back(plain(0x54, "NOP"));
+      program.push_back(label("logical_return_helper"));
+      program.push_back(plain(0x54, "NOP"));
+      program.push_back(ret());
+      const auto return_context = core::passes::direct_return_analysis_context(program);
+      const auto transparent = [](const IrOp& op) {
+        return op.kind == IrKind::Plain && op.opcode == 0x54;
+      };
+      IrOp invoke = indirect_call("8");
+      invoke.meta.indirect_flow_targets =
+          std::vector<IrTarget>{std::string("logical_return_helper")};
+      require(core::passes::known_return_call_target_index(invoke, return_context) ==
+                  target_address,
+              "return proof must resolve a typed callee label in virtual code");
+      require(core::passes::known_return_call_returns_through_transparent_range(
+                  program, invoke, return_context, transparent),
+              "virtual callee must participate in transparent-return analysis");
+
+      invoke.meta.indirect_flow_targets = std::vector<IrTarget>{target_address};
+      require(core::passes::known_return_call_returns_through_transparent_range(
+                  program, invoke, return_context, transparent),
+              "typed numeric logical target must not be capped at physical RAM");
+
+      invoke.meta.comment = "indirect-target=" + std::to_string(target_address);
+      invoke.meta.indirect_flow_targets = std::vector<IrTarget>{std::string("missing")};
+      require(!core::passes::known_return_call_target_index(invoke, return_context),
+              "missing typed callee must not fall back to a stale numeric comment");
+      invoke.meta.indirect_flow_targets = std::vector<IrTarget>{};
+      require(!core::passes::known_return_call_target_index(invoke, return_context),
+              "empty typed callee set must not fall back to a numeric comment");
+      invoke.meta.indirect_flow_targets =
+          std::vector<IrTarget>{std::string("logical_return_helper"), 0};
+      require(!core::passes::known_return_call_target_index(invoke, return_context),
+              "single-callee return proof must reject multiple possible callees");
+      invoke.meta.indirect_flow_targets = std::vector<IrTarget>{-1};
+      require(!core::passes::known_return_call_target_index(invoke, return_context),
+              "unresolved logical target must not establish a return proof");
+    }
+
+    IrOp invoke = indirect_call("8");
+    invoke.meta.indirect_flow_targets = std::vector<IrTarget>{std::string("noop")};
+    const std::vector<IrOp> program = {store("4"), recall("4"), invoke,
+                                     plain(0x0c, "VP"), halt(), label("noop"), ret()};
+    const auto result = run(program);
+    require(result.applied == 1 && count_recall(result.ops, "4") == 0,
+            "typed indirect return must expose its X2 synchronization to recall removal");
+
+    IrOp nested = indirect_call("9");
+    nested.meta.indirect_flow_targets = std::vector<IrTarget>{std::string("leaf")};
+    const std::vector<IrOp> nested_program = {
+        store("4"), recall("4"), invoke, plain(0x0c, "VP"), halt(),
+        label("noop"), nested, ret(), label("leaf"), ret()};
+    require(run(nested_program).applied == 1,
+            "typed nested calls must preserve matched stack and X2 return proofs");
+    auto consumer = nested_program;
+    consumer.insert(consumer.end() - 1, plain(0x10, "+"));
+    require(run(consumer).applied == 0,
+            "nested callee consuming Y must retain the recall stack lift");
+
+    const std::vector<IrOp> selector_alias = {
+        recall("8"), recall("8"), invoke, halt(), label("noop"), ret()};
+    const auto aliases = core::passes::compute_x2_register_states(selector_alias);
+    require(aliases.at(4).has_value() && !aliases.at(4)->contains("8"),
+            "stable indirect selector must not retain an unproved whole-word X2 alias");
   }
 
   // Cases whose native divergence from TS is expected until the X2

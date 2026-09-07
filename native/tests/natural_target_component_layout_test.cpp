@@ -1760,6 +1760,7 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
 
   {
     const Fixture input = multi_anchor_fixture();
+    const auto original_items = input.items;
     const core::AuthoritativePostLayoutControlFlow input_flow = flow(input);
     require(input_flow.proved, "multi-anchor synthetic fixture should have an exact CFG");
     const auto rewritten = core::optimize_natural_target_component_layout(
@@ -1782,6 +1783,29 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
     const Observation after = observe(rewritten.items, rewritten.preloads);
     require(before.stopped && after.stopped && before.state == after.state,
             "joint natural-target layout must preserve the observable machine state");
+    require(input.items.size() == original_items.size(),
+            "layout search must not mutate the source artifact");
+    for (std::size_t index = 0; index < input.items.size(); ++index) {
+      const auto& actual = input.items.at(index);
+      const auto& original = original_items.at(index);
+      require(actual.kind == original.kind && actual.opcode == original.opcode &&
+                  actual.mnemonic == original.mnemonic && actual.comment == original.comment &&
+                  actual.roles == original.roles &&
+                  actual.indirect_flow_targets == original.indirect_flow_targets,
+              "a speculative layout branch leaked command or proof metadata mutations");
+    }
+    const auto repeated = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, input_flow);
+    require(repeated.plan.final_artifact_proved && repeated.removed_cells == 5 &&
+                preload_map(repeated.preloads) == preload_map(rewritten.preloads),
+            "immutable layout sharing must preserve deterministic candidate selection");
+    const auto first_codes = resolve_machine_items(rewritten.items, {}).steps;
+    const auto second_codes = resolve_machine_items(repeated.items, {}).steps;
+    require(first_codes.size() == second_codes.size(),
+            "repeated layout search changed the delivered size");
+    for (std::size_t index = 0; index < first_codes.size(); ++index)
+      require(first_codes.at(index).opcode == second_codes.at(index).opcode,
+              "repeated layout search changed a delivered opcode or flow address");
   }
 
   {

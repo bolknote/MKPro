@@ -3180,16 +3180,12 @@ program BitOrTestAndSet {
           "native compiler should lower bit_or test-and-set branches");
   require(bit_or_test_and_set.diagnostics.empty(),
           "bit_or test-and-set branch compile should not report diagnostics");
-  require(has_optimization(bit_or_test_and_set, "bit-or-test-and-set-branch"),
-          "bit_or test-and-set branch should report the TS strategy name");
-  require(has_optimization(bit_or_test_and_set, "preloaded-constant"),
-          "bit_or test-and-set negative argument should use the current TS preloaded constant path");
-  require(bit_or_test_and_set.listing.find("bit_or test-and-set occupied") != std::string::npos,
-          "membership/update branch should fuse into bit_or test-and-set lowering");
-  require(bit_or_test_and_set.listing.find("preload const -1") != std::string::npos,
-          "negative x-parameter argument should be loaded through the current TS preload path");
-  require(bit_or_test_and_set.listing.find("assign mask") == std::string::npos,
-          "test-and-set mask temporary should not be spilled before the branch");
+  require(!has_optimization(bit_or_test_and_set, "bit-or-test-and-set-branch"),
+          "a raw AND predicate must not be replaced by an OR-induced change test");
+  require(!has_optimization(bit_or_test_and_set, "retained-operand-update-compare"),
+          "update comparison forwarding requires an actual before/after comparison");
+  require(bit_or_test_and_set.listing.find("bit_or test-and-set occupied") == std::string::npos,
+          "raw AND must retain its native format digit and conditional update order");
 
   const CompileResult counted_while = compile_source(R"mkpro(
 program CountedWhile {
@@ -7141,17 +7137,17 @@ program MaskMembershipClear {
 )mkpro",
                                                              membership_options);
   require(mask_membership_clear.implemented,
-          "native compiler should lower mask membership clear through a delta branch");
+          "native compiler should lower a raw mask predicate before its guarded clear");
   require(mask_membership_clear.diagnostics.empty(),
           "mask membership clear compile should not report diagnostics");
-  require(has_optimization(mask_membership_clear, "membership-clear-delta-branch"),
-          "mask membership clear should report the TS strategy name");
+  require(has_optimization(mask_membership_clear, "membership-clear-x2-reuse"),
+          "mask clear should reuse Y/X2 without speculatively changing state before the branch");
   require(std::none_of(mask_membership_clear.steps.begin(), mask_membership_clear.steps.end(),
                        [](const ResolvedStep& step) {
                          return step.comment.has_value() &&
                                 step.comment->find("membership fraction") != std::string::npos;
                        }),
-          "mask membership clear delta branch should avoid the generic membership fraction path");
+          "a raw AND predicate must not gain an implicit fractional extraction");
 
   const CompileResult membership_single_set = compile_source(R"mkpro(
 program MembershipSingleSetCollection {
@@ -7257,8 +7253,11 @@ program FractionalMembershipMaskX2Set {
           "fractional membership X2 restore should not report diagnostics");
   require(has_optimization(fractional_membership_x2, "membership-collection-x2-restore"),
           "fractional membership set should report X2 collection restore");
-  require(has_optimization(fractional_membership_x2, "fractional-membership-mask-test"),
-          "fractional membership set should skip redundant fractional extraction");
+  require(std::none_of(fractional_membership_x2.steps.begin(), fractional_membership_x2.steps.end(),
+                       [](const ResolvedStep& step) {
+                         return step.comment == "membership fraction";
+                       }),
+          "a raw AND condition must not gain fractional extraction after its native result");
   require(!has_optimization(fractional_membership_x2, "membership-mask-stack-test-reuse"),
           "fractional membership X2 restore should not use the scratch-mask path");
   require(
@@ -10293,7 +10292,7 @@ program TinyMultiUseRule {
   CompileOptions analysis_options;
   analysis_options.analysis = true;
 
-  // compiler.test.ts "derives negative x-parameter arguments from bit_or test-and-set success values"
+  // A raw AND test does not establish an OR-change residual or its sign.
   const CompileResult bit_or_negative_arg = compile_source(R"mkpro(
 program BitOrTestAndSetNegativeArg {
   state {
@@ -10326,19 +10325,15 @@ program BitOrTestAndSetNegativeArg {
 )mkpro",
                                                           analysis_options);
   require(bit_or_negative_arg.implemented, "bit_or test-and-set negative-arg program should compile");
-  require(has_optimization(bit_or_negative_arg, "bit-or-test-and-set-negative-arg"),
-          "bit_or test-and-set should derive a negative x-parameter argument");
-  require(std::any_of(bit_or_negative_arg.steps.begin(), bit_or_negative_arg.steps.end(),
+  require(bit_or_negative_arg.diagnostics.empty(), "raw AND negative-argument program must remain valid");
+  require(!has_optimization(bit_or_negative_arg, "bit-or-test-and-set-negative-arg"),
+          "raw AND must not invent a negative OR-change argument");
+  require(std::none_of(bit_or_negative_arg.steps.begin(), bit_or_negative_arg.steps.end(),
                       [](const ResolvedStep& step) {
                         return step.comment.has_value() &&
                                *step.comment == "bit_or test-and-set value = -1";
                       }),
-          "bit_or negative-arg should emit the value = -1 success derivation");
-  require(std::none_of(bit_or_negative_arg.steps.begin(), bit_or_negative_arg.steps.end(),
-                       [](const ResolvedStep& step) {
-                         return step.comment.has_value() && *step.comment == "preload const -1";
-                       }),
-          "bit_or negative-arg should not preload a literal -1");
+          "raw AND must preserve the literal argument instead of deriving it from an unrelated residual");
 
   // NOTE (test-parity audit, compiler.test.ts "inlines packed bit report temps before register
   // allocation"): the behavioral contract (report temp never allocated; no set/recall report;

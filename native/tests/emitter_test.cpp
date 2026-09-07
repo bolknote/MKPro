@@ -1,4 +1,5 @@
 #include "mkpro/core/emit/machine_emitter.hpp"
+#include "mkpro/core/resolved_address.hpp"
 
 #include "test_support.hpp"
 
@@ -36,8 +37,13 @@ void emitter_matches_initial_typescript_contract() {
     analysis.analysis = true;
     const ResolvedProgram provisional = resolve_machine_items(emitter.items, analysis);
     require(provisional.diagnostics.empty() && provisional.steps.size() == 110U &&
-                provisional.steps.at(1).opcode == 109,
+                provisional.steps.at(1).opcode == -1 &&
+                resolved_logical_target(provisional.steps.at(1)) == 109 &&
+                provisional.steps.at(1).address_target ==
+                    ResolvedAddress{LogicalCodeAddress{109}},
             "explicit analysis must preserve over-window identities for later layout");
+    require(physical_program_image_rejection(provisional.steps).has_value(),
+            "a provisional logical identity must not escape into a physical image");
     require(!resolve_machine_items({MachineItem::address(-1)}, analysis).diagnostics.empty(),
             "analysis must still reject an invalid negative address");
 
