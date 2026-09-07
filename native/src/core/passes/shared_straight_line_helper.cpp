@@ -956,11 +956,18 @@ bool hole_register_is_locally_dead(const std::string& register_name,
 }
 
 std::vector<HoleCandidate> collect_hole_candidates(const std::vector<IrOp>& ops,
-                                                   const std::map<std::string, int>& labels) {
+                                                   const std::map<std::string, int>& labels,
+                                                   bool repair_entry) {
   std::map<std::string, std::vector<HoleOccurrence>> by_key;
   std::set<int> protected_indexes = generated_body_indexes(ops, /*allow_direct_calls=*/true);
   const std::set<int> display_indexes = display_sensitive_block_indexes(ops);
-  protected_indexes.insert(display_indexes.begin(), display_indexes.end());
+  // Keep the original whole-block barrier for the weaker entry-X proof.
+  // The repaired ABI independently proves every entry's X/Y/Z and eventual
+  // T/X1/X2 equality, so an earlier display preparation need not poison an
+  // otherwise ordinary suffix. is_shareable_body_op still excludes the
+  // sensitive operation itself, raw/manual barriers and unknown effects.
+  if (!repair_entry)
+    protected_indexes.insert(display_indexes.begin(), display_indexes.end());
 
   for (int start = 0; start < static_cast<int>(ops.size()); ++start) {
     if (protected_indexes.contains(start))
@@ -1099,7 +1106,7 @@ std::vector<SelectedHoleHelper> select_hole_helpers(const std::vector<IrOp>& ops
                                                     const std::map<std::string, int>& labels,
                                                     int official_last,
                                                     AddressSpaceModel address_model, bool repair_entry) {
-  const std::vector<HoleCandidate> candidates = collect_hole_candidates(ops, labels);
+  const std::vector<HoleCandidate> candidates = collect_hole_candidates(ops, labels, repair_entry);
   if (candidates.empty())
     return {};
 
@@ -1516,6 +1523,8 @@ PassResult callee_hole_straight_line_helper_impl(const std::vector<IrOp>& ops, c
   std::map<int, HoleReplacement> replacement_by_start;
   int applied = 0;
   int saved_cells = 0;
+  int proved_observation_suffixes = 0;
+  const auto display_indexes = display_sensitive_block_indexes(ops);
   for (const SelectedHoleHelper& helper : selected) {
     saved_cells +=
         hole_net_savings(helper.occurrences, helper.cells, helper.late_bound_selector);
@@ -1524,6 +1533,8 @@ PassResult callee_hole_straight_line_helper_impl(const std::vector<IrOp>& ops, c
     if (helper.xyz_entry_repair)
       saved_cells -= static_cast<int>(helper.occurrences.size()) + 1;
     for (const HoleOccurrence& occurrence : helper.occurrences) {
+      if (helper.xyz_entry_repair && display_indexes.contains(occurrence.start))
+        ++proved_observation_suffixes;
       replacement_by_start[occurrence.start] = HoleReplacement{
           .end = occurrence.end,
           .helper = &helper,
@@ -1741,6 +1752,14 @@ PassResult callee_hole_straight_line_helper_impl(const std::vector<IrOp>& ops, c
                   " explicit selector-entry lifts: every incoming path closes decimal "
                   "entry before the first digit supplies the same stack lift; final "
                   "stack/X1/X2 and selector proofs remain mandatory.",
+    });
+  if (proved_observation_suffixes > 0)
+    optimizations.push_back(AppliedOptimization{
+        .name = "callee-hole-proved-observation-suffix",
+        .detail = "Shared " + std::to_string(proved_observation_suffixes) +
+                  " ordinary suffix entry/entries in display-sensitive blocks without "
+                  "moving their observation barriers; every entry passes the repaired "
+                  "stack-value proof and the final control/return-stack/selector proof.",
     });
   return PassResult{
       .ops = std::move(result),

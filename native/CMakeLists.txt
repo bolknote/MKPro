@@ -43,8 +43,10 @@ add_library(mkpro_core STATIC
   src/core/emit/lowering/proc_raw_setup.cpp
   src/core/emit/stack_residency_analysis.cpp
   src/core/formal_address.cpp
+  src/core/resolved_address.cpp
   src/core/format.cpp
   src/core/indirect_addressing.cpp
+  src/core/selector_writeback.cpp
   src/core/interprocedural_dse.cpp
   src/core/interprocedural_value_propagation.cpp
   src/core/ir.cpp
@@ -86,6 +88,7 @@ add_library(mkpro_core STATIC
   src/core/passes/r0_fractional_sentinel.cpp
   src/core/passes/recall_removal.cpp
   src/core/passes/register_coalesce.cpp
+  src/core/passes/register_web_coalesce.cpp
   src/core/passes/redundant_prologue.cpp
   src/core/passes/redundant_literal_reload.cpp
   src/core/passes/return_suffix_gadget.cpp
@@ -175,6 +178,8 @@ add_executable(mkpro_tests
   tests/dead_proc_elimination_test.cpp
   tests/dead_store_before_commutative_test.cpp
   tests/dead_store_elimination_test.cpp
+  tests/finalization_selector_bounds_test.cpp
+  tests/fractional_selector_bounds_test.cpp
   tests/display_byte_helper_test.cpp
   tests/display_lowering_test.cpp
   tests/duplicate_failure_tail_test.cpp
@@ -232,6 +237,7 @@ add_executable(mkpro_tests
   tests/flow_structure_passes_test.cpp
   tests/flow_x_reuse_pass_test.cpp
   tests/formal_address_test.cpp
+  tests/virtual_address_test.cpp
   tests/format_test.cpp
   tests/functions_test.cpp
   tests/indirect_addressing_test.cpp
@@ -296,6 +302,9 @@ add_executable(mkpro_tests
   tests/test_main.cpp
   tests/trig_fractional_pack_test.cpp
   tests/tic_tac_toe_4x4_reference_test.cpp
+  tests/tic_tac_toe_4x4_marking_test.cpp
+  tests/stack_carried_index_prefix_test.cpp
+  tests/retained_operand_update_compare_test.cpp
   tests/v2_const_test.cpp
   tests/x2_register_dataflow_test.cpp
   tests/x2_shape_data_model_test.cpp
@@ -367,6 +376,9 @@ set(MKPRO_NATIVE_TEST_NAMES
   dead_proc_elimination_matches_typescript_contract
   dead_store_before_commutative_matches_typescript_contract
   dead_store_elimination_matches_typescript_contract
+  finalization_selector_bounds_preserve_machine_contract
+  fractional_selector_bounds_do_not_require_zero_target
+  compiler_explicit_variant_repeats_finalization_after_layout
   display_byte_helpers_match_typescript_contract
   display_lowering_helpers_match_typescript_contract
   duplicate_failure_tail_matches_typescript_contract
@@ -427,6 +439,8 @@ set(MKPRO_NATIVE_TEST_NAMES
   flow_structure_passes_match_typescript_contract
   flow_x_reuse_matches_typescript_contract
   formal_address_matches_typescript_contract
+  virtual_addresses_preserve_logical_control_flow
+  deferred_fractional_selectors_bind_after_logical_layout
   format_primitives_match_typescript_contract
   golden_listing_contract_matches_typescript_contract
   functions_match_typescript_contract
@@ -499,6 +513,12 @@ set(MKPRO_NATIVE_TEST_NAMES
   tic_tac_toe_4x4_reference_transcript_matches_original_listing
   tic_tac_toe_4x4_reference_ui_normalizes_coordinates
   tic_tac_toe_4x4_source_manual_ui_contract_is_explicit
+  tic_tac_toe_4x4_source_marking_matches_original_listing
+  tic_tac_toe_4x4_source_responses_match_original_listing
+  tic_tac_toe_4x4_source_scores_match_original_listing
+  tic_tac_toe_4x4_source_moves_match_original_listing
+  compiler_stack_carried_index_update_prefix_preserves_continuation
+  compiler_retained_operand_update_compare_preserves_observations
   tic_tac_toe_4x4_source_uses_reference_angle_mode
   v2_const_matches_typescript_contract
   x2_register_dataflow_matches_typescript_contract

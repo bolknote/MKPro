@@ -205,11 +205,24 @@ void print_json_steps(const std::vector<mkpro::ResolvedStep>& steps, std::string
   std::cout << "[\n";
   for (std::size_t index = 0; index < steps.size(); ++index) {
     const auto& step = steps[index];
-    std::cout << indent << "  {\"address\": " << step.address << ", \"opcode\": " << step.opcode
-              << ", \"hex\": ";
+    std::cout << indent << "  {\"address\": " << step.address << ", \"opcode\": ";
+    if (step.opcode < 0)
+      std::cout << "null";
+    else
+      std::cout << step.opcode;
+    std::cout << ", \"hex\": ";
     print_json_string(std::cout, step.hex);
     std::cout << ", \"mnemonic\": ";
     print_json_string(std::cout, step.mnemonic);
+    if (step.address_target.has_value()) {
+      if (const auto* logical = std::get_if<mkpro::LogicalCodeAddress>(&*step.address_target)) {
+        std::cout << ", \"target\": {\"space\": \"logical\", \"index\": "
+                  << logical->index << "}";
+      } else {
+        std::cout << ", \"target\": {\"space\": \"formal\", \"opcode\": "
+                  << std::get<mkpro::FormalCodeAddress>(*step.address_target).opcode << "}";
+      }
+    }
     if (step.comment.has_value()) {
       std::cout << ", \"comment\": ";
       print_json_string(std::cout, *step.comment);
@@ -784,6 +797,8 @@ void append_manual_address_operand_patch_keys(std::vector<std::string>& tokens, 
 void append_step_keys(std::vector<std::string>& tokens,
                       const std::vector<mkpro::ResolvedStep>& steps,
                       mkpro::AddressSpaceModel model) {
+  if (const auto reason = mkpro::physical_program_image_rejection(steps, model))
+    throw std::runtime_error("Cannot export calculator keys: " + *reason);
   std::optional<std::string> previous_cell_key;
   for (std::size_t index = 0; index < steps.size(); ++index) {
     const mkpro::ResolvedStep& step = steps[index];

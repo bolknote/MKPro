@@ -21,6 +21,13 @@ PassResult redundant_literal_reload(const std::vector<IrOp>& ops,
 PassResult finalization_redundant_literal_reload(
     const std::vector<IrOp>& ops, const PassContext& context);
 
+// Pre-layout data-pool candidate. Reserved setup registers and every possible
+// direct/indirect memory observer remain unavailable. Rf is never a spare
+// standard register. Numeric entry, X2 and fixed flow geometry fail closed.
+PassResult late_literal_preloads(const std::vector<IrOp>& ops,
+                                 const PassContext& context,
+                                 const std::set<std::string>& reserved_registers);
+
 // Find one post-layout digit reload whose visible X is already equal and whose
 // extra stack/X2 lift is proved to converge across the exact call/return CFG.
 // Geometry is deliberately not changed here; the caller must perform its

@@ -10,6 +10,8 @@
 
 namespace mkpro::core {
 
+struct AuthoritativePostLayoutControlFlow;
+
 struct StackEntryProofNode {
   int opcode = -1;
   StackValueEqualityStepKind kind = StackValueEqualityStepKind::Flow;
@@ -27,6 +29,14 @@ using StackEntryProofReader =
 // must converge on every possible callee entry before any observation there.
 bool prove_stack_entry_equality(const StackEntryProofReader& reader,
                                 std::size_t entry, StackValueEqualityState state);
+// Continue the equality proof through exact caller/return contexts. Both
+// executions have equal memory and decimal-entry modes at entry; every
+// reachable instance of the entry address must hide the differing stack
+// components before a consumer or externally observable stop.
+bool prove_post_layout_stack_entry_equality(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow, int entry_address,
+    StackValueEqualityState state);
 bool prove_ir_stack_entry_equality(const std::vector<IrOp>& ops,
                                    std::size_t entry, StackValueEqualityState state);
 

@@ -48,6 +48,27 @@ CfgTargetIndexes build_target_indexes(const std::vector<IrOp>& ops) {
   return indexes;
 }
 
+std::optional<std::vector<IrTarget>> indirect_flow_targets_for_analysis(const IrOp& op) {
+  if (op.kind != IrKind::IndirectJump && op.kind != IrKind::IndirectCall &&
+      op.kind != IrKind::IndirectCondJump)
+    return std::nullopt;
+  if (op.meta.indirect_flow_targets.has_value()) {
+    if (op.meta.indirect_flow_targets->empty())
+      return std::nullopt;
+    return *op.meta.indirect_flow_targets;
+  }
+  if (const std::optional<int> target = known_indirect_flow_target(op))
+    return std::vector<IrTarget>{IrTarget{*target}};
+  const std::vector<std::string> labels = computed_dispatch_target_labels(op);
+  if (labels.empty())
+    return std::nullopt;
+  std::vector<IrTarget> targets;
+  targets.reserve(labels.size());
+  for (const std::string& label : labels)
+    targets.push_back(IrTarget{label});
+  return targets;
+}
+
 std::optional<NumericFlowTargetLayoutGuard>
 numeric_flow_target_layout_guard(const std::vector<IrOp>& ops) {
   const CfgTargetIndexes indexes = build_target_indexes(ops);
@@ -139,21 +160,7 @@ ControlFlowGraph build_control_flow_graph(const std::vector<IrOp>& ops, BuildCfg
       }
     };
     auto indirect_targets = [&]() -> std::optional<std::vector<IrTarget>> {
-      if (op.meta.indirect_flow_targets.has_value()) {
-        if (op.meta.indirect_flow_targets->empty())
-          return std::nullopt;
-        return *op.meta.indirect_flow_targets;
-      }
-      if (const std::optional<int> target = known_indirect_flow_target(op))
-        return std::vector<IrTarget>{IrTarget{*target}};
-      const std::vector<std::string> labels = computed_dispatch_target_labels(op);
-      if (labels.empty())
-        return std::nullopt;
-      std::vector<IrTarget> targets;
-      targets.reserve(labels.size());
-      for (const std::string& label : labels)
-        targets.push_back(IrTarget{label});
-      return targets;
+      return indirect_flow_targets_for_analysis(op);
     };
     auto indirect_jump_to_targets = [&]() {
       const std::optional<std::vector<IrTarget>> targets = indirect_targets();

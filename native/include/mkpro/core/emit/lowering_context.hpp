@@ -358,6 +358,8 @@ struct LoweringContext {
   bool setup_only_counted_loop_init = false;
   bool empty_stack_loop_return = false;
   bool x_param_value_functions = false;
+  bool preloaded_indexed_update_prefix = false;
+  bool cached_expression_operand_forwarding = false;
   bool sign_normalized_x_param = false;
   bool x_param_y_stack_stored_entry = false;
   bool stack_argument_function_entries = false;

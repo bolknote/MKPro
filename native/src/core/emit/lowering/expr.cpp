@@ -573,6 +573,43 @@ bool lower_current_x_derivation_or_shared_helper(
   return api.lower_expression_to_x(expression);
 }
 
+bool lower_cached_expression_operand(ExpressionEmitApi& api, LoweringContext& context,
+                                      const Expression& left, const Expression& right,
+                                      int opcode, const std::string& mnemonic,
+                                      bool commutative) {
+  if (!context.cached_expression_operand_forwarding || !api.x_holds_expression)
+    return false;
+  const bool left_cached = api.x_holds_expression(left);
+  const bool right_cached = api.x_holds_expression(right);
+  if (left_cached == right_cached)
+    return false;
+  const Expression& cached = left_cached ? left : right;
+  const Expression& other = left_cached ? right : left;
+  // Existing named-value scheduling handles identifiers and dependent uses.
+  // A fresh scalar load occupies exactly one slot above an anonymous value.
+  if (cached.kind == "identifier" || !is_simple_stack_load(other) ||
+      (other.kind == "identifier" &&
+       (current_x_holds_name(api, other.name) || context.deferred_values.contains(other.name) ||
+        context.stack_only_state_fields.contains(other.name))))
+    return false;
+  if (!api.lower_expression_to_x(other))
+    return false;
+  if (!left_cached && !commutative)
+    api.emitter.emit_op(0x14, "<->", "cached expression operand order");
+  api.emitter.emit_op(opcode, mnemonic, "cached expression operand " + mnemonic);
+  api.emitter.current_x_variable.reset();
+  api.emitter.current_x_expression.reset();
+  api.emitter.current_x_aliases.clear();
+  api.emitter.current_x_known_zero = false;
+  context.current_x_memory_aliases.clear();
+  context.optimizations.push_back(OptimizationReport{
+      .name = "cached-expression-operand-forwarding",
+      .detail = "Consumed a proved current-X expression with one fresh scalar operand, "
+                "preserving arithmetic operand order without reloading the expression.",
+  });
+  return true;
+}
+
 bool lower_commutative_with_current_x(ExpressionEmitApi& api, LoweringContext& context,
                                       const Expression& expression, int opcode) {
   if (!api.emitter.current_x_variable.has_value() || expression.left == nullptr ||
@@ -1151,6 +1188,13 @@ bool lower_binary_expression_to_x(ExpressionEmitApi& api, LoweringContext& conte
       {"*", 0x12},
       {"/", 0x13},
   };
+
+  if (const auto opcode = arithmetic_opcodes.find(expression.op);
+      opcode != arithmetic_opcodes.end() &&
+      lower_cached_expression_operand(api, context, *expression.left, *expression.right,
+                                      opcode->second, expression.op,
+                                      expression.op == "+" || expression.op == "*"))
+    return true;
 
   if (expression.op == "+" && expression.left->kind == "call" && expression.right->kind == "call" &&
       (api.call_needs_binary_temp(*expression.left) ||
@@ -1796,6 +1840,10 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
       });
       return false;
     }
+    if ((callee == "bit_and" || callee == "bit_or" || callee == "bit_xor") &&
+        lower_cached_expression_operand(api, context, expression.args.at(0), expression.args.at(1),
+                                        binary_it->second.first, binary_it->second.second, true))
+      return true;
     if (lower_commutative_call_with_destructive_selector_last(api, context, expression,
                                                               binary_it->second))
       return true;

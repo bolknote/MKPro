@@ -21,6 +21,8 @@
 #include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/format.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
+#include "mkpro/core/selector_writeback.hpp"
+#include "mkpro/core/search_frontier.hpp"
 #include "mkpro/core/interprocedural_dse.hpp"
 #include "mkpro/core/interprocedural_value_propagation.hpp"
 #include "mkpro/core/late_bound_decimal_selector.hpp"
@@ -4717,6 +4719,241 @@ enum class ResidualTempAvailability {
   Mixed,
 };
 
+// An effect-only projection shares the IR liveness solver (including matched
+// call/return contexts) without allocating registers or physical addresses.
+// Block exits are real continuation points, not an assumption that state dies
+// at a closing brace. Unknown effects conservatively read the whole universe.
+struct SourceLifetimeProjection {
+  std::vector<IrOp> ops;
+  std::map<const std::vector<V2Statement>*, std::size_t> block_exits;
+  std::map<const V2Statement*, std::size_t> statement_exits;
+  std::set<std::string> names;
+  std::map<std::string, const V2Rule*> rules;
+  int next_label = 0;
+
+  std::string fresh_label() {
+    return "source_lifetime_" + std::to_string(next_label++);
+  }
+
+  void label(const std::string& name) {
+    IrOp op;
+    op.kind = IrKind::Label;
+    op.name = name;
+    ops.push_back(std::move(op));
+  }
+
+  void flow(IrKind kind, const std::string& target = {}) {
+    IrOp op;
+    op.kind = kind;
+    op.target = target;
+    op.opcode = kind == IrKind::CondJump ? 0x5e : kind == IrKind::Call ? 0x53
+                : kind == IrKind::Return ? 0x52 : kind == IrKind::Stop ? 0x50 : 0x51;
+    if (kind == IrKind::Stop)
+      op.meta.stop_disposition = StopDisposition::Terminal;
+    ops.push_back(std::move(op));
+  }
+
+  void effect(IrKind kind, const std::string& name) {
+    IrOp op;
+    op.kind = kind;
+    op.register_name = name;
+    op.meta.logical_register_analysis = true;
+    ops.push_back(std::move(op));
+  }
+
+  void opaque_reads() {
+    for (const std::string& name : names)
+      effect(IrKind::Recall, name);
+  }
+
+  bool expression_calls_rule(const Expression& expression) const {
+    if (expression.kind == "call" && rules.contains(expression.callee))
+      return true;
+    for (const auto* child : {expression.index.get(), expression.expr.get(),
+                             expression.left.get(), expression.right.get()}) {
+      if (child != nullptr && expression_calls_rule(*child))
+        return true;
+    }
+    return std::any_of(expression.args.begin(), expression.args.end(),
+                       [&](const Expression& arg) { return expression_calls_rule(arg); });
+  }
+
+  void expression_call_barrier(const std::optional<std::string>& text, int line) {
+    if (!text.has_value() || text->empty())
+      return;
+    try {
+      if (expression_calls_rule(parse_expression(*text, line)))
+        opaque_reads();
+    } catch (const std::exception&) {
+      opaque_reads();
+    }
+  }
+
+  void block(const std::vector<V2Statement>& statements,
+             const std::string& break_label = {}, const std::string& continue_label = {}) {
+    for (const V2Statement& statement : statements)
+      append(statement, break_label, continue_label);
+    block_exits[&statements] = ops.size();
+    label(fresh_label());
+  }
+
+  void append(const V2Statement& statement, const std::string& break_label,
+              const std::string& continue_label) {
+    const std::string header = fresh_label();
+    if (statement.kind == "v2_loop" || statement.kind == "v2_while")
+      label(header);
+
+    V2Statement local = statement;
+    local.body.clear();
+    local.then_body.clear();
+    local.else_body.clear();
+    for (V2MatchCase& match_case : local.cases)
+      match_case.action.reset();
+    local.otherwise.reset();
+    for (const std::string& name : names) {
+      if (statement_reads_identifier(local, name, false))
+        effect(IrKind::Recall, name);
+    }
+    expression_call_barrier(local.expr, local.line);
+    expression_call_barrier(local.target, local.line);
+    for (const std::string& arg : local.args)
+      expression_call_barrier(arg, local.line);
+    if (local.predicate.has_value()) {
+      for (const std::string* text : {&local.predicate->left, &local.predicate->right,
+                                      &local.predicate->collection, &local.predicate->item})
+        expression_call_barrier(*text, local.line);
+    }
+
+    if (statement.kind == "v2_assign" || statement.kind == "v2_update" ||
+        statement.kind == "v2_read") {
+      if (const auto target = scalar_assignment_target_name(statement); target.has_value())
+        effect(IrKind::Store, *target);
+    } else if (statement.kind == "v2_invoke") {
+      const auto callee = statement.name.has_value() ? rules.find(*statement.name) : rules.end();
+      if (callee == rules.end()) {
+        opaque_reads();
+      } else {
+        for (const std::string& param : callee->second->params)
+          effect(IrKind::Store, param);
+        flow(IrKind::Call, "source_proc_" + callee->first);
+      }
+    } else if (statement.kind == "v2_if") {
+      const std::string otherwise = fresh_label();
+      const std::string end = fresh_label();
+      flow(IrKind::CondJump, otherwise);
+      block(statement.then_body, break_label, continue_label);
+      flow(IrKind::Jump, end);
+      label(otherwise);
+      block(statement.else_body, break_label, continue_label);
+      label(end);
+    } else if (statement.kind == "v2_loop" || statement.kind == "v2_while") {
+      const std::string end = fresh_label();
+      if (statement.kind == "v2_while")
+        flow(IrKind::CondJump, end);
+      block(statement.body, end, header);
+      flow(IrKind::Jump, header);
+      label(end);
+    } else if (statement.kind == "v2_block") {
+      block(statement.body, break_label, continue_label);
+    } else if (statement.kind == "v2_match") {
+      const std::string end = fresh_label();
+      const std::string otherwise = fresh_label();
+      std::vector<std::string> entries;
+      for (const V2MatchCase& match_case : statement.cases) {
+        (void)match_case;
+        entries.push_back(fresh_label());
+        flow(IrKind::CondJump, entries.back());
+      }
+      flow(IrKind::Jump, otherwise);
+      for (std::size_t index = 0; index < statement.cases.size(); ++index) {
+        label(entries[index]);
+        if (statement.cases[index].action != nullptr)
+          append(*statement.cases[index].action, break_label, continue_label);
+        flow(IrKind::Jump, end);
+      }
+      label(otherwise);
+      if (statement.otherwise != nullptr)
+        append(*statement.otherwise, break_label, continue_label);
+      label(end);
+    } else if (statement.kind == "v2_return") {
+      flow(IrKind::Return);
+    } else if (statement.kind == "v2_stop") {
+      flow(IrKind::Stop);
+    } else if (statement.kind == "v2_break" || statement.kind == "v2_continue") {
+      const std::string& target = statement.kind == "v2_break" ? break_label : continue_label;
+      if (target.empty())
+        opaque_reads();
+      else
+        flow(IrKind::Jump, target);
+    } else if (statement.kind != "v2_show" && statement.kind != "v2_preview") {
+      opaque_reads();
+    }
+    statement_exits[&statement] = ops.size();
+    label(fresh_label());
+  }
+
+  explicit SourceLifetimeProjection(const V2Program& program)
+      : rules(rule_map_for_program(program)) {
+    for (const V2StateField& field : program.state)
+      names.insert(field.name);
+    for (const V2Rule& rule : program.rules)
+      names.insert(rule.params.begin(), rule.params.end());
+    // Assignments and input lowering also introduce implicit state names;
+    // those values need the same lifetime proof as explicitly declared fields.
+    const std::function<void(const V2Statement&)> collect = [&](const V2Statement& statement) {
+      if (statement.kind == "v2_assign" || statement.kind == "v2_update" ||
+          statement.kind == "v2_read") {
+        if (const auto target = scalar_assignment_target_name(statement); target.has_value())
+          names.insert(*target);
+      }
+      for (const auto* body : {&statement.body, &statement.then_body, &statement.else_body}) {
+        for (const V2Statement& child : *body)
+          collect(child);
+      }
+      for (const V2MatchCase& match_case : statement.cases) {
+        if (match_case.action != nullptr)
+          collect(*match_case.action);
+      }
+      if (statement.otherwise != nullptr)
+        collect(*statement.otherwise);
+    };
+    for (const V2Statement& statement : program.body)
+      collect(statement);
+    for (const V2Rule& rule : program.rules) {
+      for (const V2Statement& statement : rule.body)
+        collect(statement);
+    }
+    block(program.body);
+    flow(IrKind::Stop);
+    for (const V2Rule& rule : program.rules) {
+      label("source_proc_" + rule.name);
+      block(rule.body);
+      flow(IrKind::Return);
+    }
+  }
+};
+
+bool source_values_dead_after_statement(const V2Program& program,
+                                        const V2Statement& statement,
+                                        const std::vector<std::string>& values) {
+  const SourceLifetimeProjection projection(program);
+  const auto exit = projection.statement_exits.find(&statement);
+  if (exit == projection.statement_exits.end() ||
+      std::any_of(values.begin(), values.end(), [&](const std::string& value) {
+        return !projection.names.contains(value);
+      })) {
+    // A detached/speculative statement has no proved caller continuation.
+    // Source lines or equal expression text are not statement identities.
+    return false;
+  }
+  const auto liveness = core::passes::compute_liveness(
+      projection.ops, {.include_physical_register_universe = false});
+  const auto& live_after = liveness.live_in.at(exit->second);
+  return std::none_of(values.begin(), values.end(), [&](const std::string& value) {
+    return live_after.contains(value);
+  });
+}
+
 struct ResidualTempRewriteState {
   const std::map<std::string, const V2Rule*>* proc_map = nullptr;
   std::string target;
@@ -4963,12 +5200,16 @@ void apply_residual_temp_call_writes(const std::string& block,
   std::set<std::string> target_seen;
   if (residual_temp_statements_may_write_identifier(rule_it->second->body, state.target,
                                                     *state.proc_map, target_seen)) {
-    apply_residual_temp_write(state, state.target);
+    if (state.target_available != ResidualTempAvailability::None)
+      state.target_available = ResidualTempAvailability::Mixed;
   }
   std::set<std::string> source_seen;
   if (residual_temp_statements_may_write_identifier(rule_it->second->body, state.source,
                                                     *state.proc_map, source_seen)) {
-    apply_residual_temp_write(state, state.source);
+    if (state.source_available != ResidualTempAvailability::None)
+      state.source_available = ResidualTempAvailability::Mixed;
+    if (state.target_available == ResidualTempAvailability::All)
+      state.target_available = ResidualTempAvailability::Mixed;
   }
 }
 
@@ -4976,6 +5217,13 @@ Expression rewrite_residual_temp_expression(const Expression& expression,
                                             ResidualTempRewriteState& state) {
   if (state.failed)
     return expression;
+  if (expression.kind == "call" && state.proc_map != nullptr &&
+      state.proc_map->contains(expression.callee)) {
+    // A value-returning call can read or modify globals not named in its
+    // arguments. Do not treat those effects as a pure expression traversal.
+    state.failed = true;
+    return expression;
+  }
   if (state.source_available == ResidualTempAvailability::All &&
       expression_equals(expression, state.residual)) {
     state.rewrites += 1;
@@ -5047,9 +5295,6 @@ void rewrite_residual_temp_predicate(V2Predicate& predicate, int line,
   rewrite_text(predicate.item);
 }
 
-std::vector<V2Statement> rewrite_residual_temp_block(std::vector<V2Statement> statements,
-                                                     const std::map<std::string, const V2Rule*>& proc_map,
-                                                     int& reused);
 void rewrite_residual_temp_statement(V2Statement& statement, ResidualTempRewriteState& state);
 
 std::vector<V2Statement> rewrite_residual_temp_suffix(std::vector<V2Statement> statements,
@@ -5062,7 +5307,22 @@ std::vector<V2Statement> rewrite_residual_temp_suffix(std::vector<V2Statement> s
 void rewrite_residual_temp_statement(V2Statement& statement, ResidualTempRewriteState& state) {
   if (state.failed)
     return;
+  // These edges need their own continuation proof, not the lexical suffix.
+  // Raw effects and early exits are not rewritten by this coalescing pass.
+  if (statement.kind == "v2_raw" || statement.kind == "v2_return" ||
+      statement.kind == "v2_break" || statement.kind == "v2_continue") {
+    state.failed = true;
+    return;
+  }
   if (statement.kind == "v2_assign" || statement.kind == "v2_update") {
+    if (statement.kind == "v2_update" &&
+        ((statement.target == state.source &&
+          state.source_available != ResidualTempAvailability::None) ||
+         (statement.target == state.target &&
+          state.target_available != ResidualTempAvailability::None))) {
+      state.failed = true;
+      return;
+    }
     rewrite_residual_temp_expression_text(statement.expr, statement.line, state);
     if (statement.target.has_value()) {
       try {
@@ -5091,6 +5351,10 @@ void rewrite_residual_temp_statement(V2Statement& statement, ResidualTempRewrite
       return;
   }
   if (statement.kind == "v2_invoke" && statement.name.has_value()) {
+    if (state.proc_map == nullptr || !state.proc_map->contains(*statement.name)) {
+      state.failed = true;
+      return;
+    }
     reject_residual_temp_call_reads(*statement.name, state);
     if (state.failed)
       return;
@@ -5158,71 +5422,114 @@ void rewrite_residual_temp_statement(V2Statement& statement, ResidualTempRewrite
   }
 }
 
-std::vector<V2Statement> rewrite_residual_temp_children(std::vector<V2Statement> statements,
-                                                        const std::map<std::string, const V2Rule*>& proc_map,
-                                                        int& reused) {
-  for (V2Statement& statement : statements) {
-    statement.body = rewrite_residual_temp_block(std::move(statement.body), proc_map, reused);
-    statement.then_body =
-        rewrite_residual_temp_block(std::move(statement.then_body), proc_map, reused);
-    statement.else_body =
-        rewrite_residual_temp_block(std::move(statement.else_body), proc_map, reused);
-    for (V2MatchCase& match_case : statement.cases) {
-      if (match_case.action != nullptr) {
-        std::vector<V2Statement> rewritten =
-            rewrite_residual_temp_block(std::vector<V2Statement>{*match_case.action}, proc_map,
-                                        reused);
-        *match_case.action = statement_from_rewritten_vector(std::move(rewritten), match_case.line);
-      }
-    }
-    if (statement.otherwise != nullptr) {
-      std::vector<V2Statement> rewritten =
-          rewrite_residual_temp_block(std::vector<V2Statement>{*statement.otherwise}, proc_map,
-                                      reused);
-      *statement.otherwise = statement_from_rewritten_vector(std::move(rewritten), statement.line);
-    }
+// Speculative rewrites must not mutate shared match actions on a failed proof.
+V2Statement clone_residual_temp_statement(V2Statement statement) {
+  for (auto* body : {&statement.body, &statement.then_body, &statement.else_body}) {
+    for (V2Statement& child : *body)
+      child = clone_residual_temp_statement(std::move(child));
   }
-  return statements;
+  for (V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr)
+      match_case.action = std::make_shared<V2Statement>(
+          clone_residual_temp_statement(*match_case.action));
+  }
+  if (statement.otherwise != nullptr)
+    statement.otherwise = std::make_shared<V2Statement>(
+        clone_residual_temp_statement(*statement.otherwise));
+  return statement;
 }
 
-std::vector<V2Statement> rewrite_residual_temp_block(std::vector<V2Statement> statements,
-                                                     const std::map<std::string, const V2Rule*>& proc_map,
-                                                     int& reused) {
-  std::vector<V2Statement> rewritten =
-      rewrite_residual_temp_children(std::move(statements), proc_map, reused);
-  for (std::size_t index = 0; index < rewritten.size(); ++index) {
-    V2Statement& assignment = rewritten.at(index);
+bool rewrite_residual_temp_block(std::vector<V2Statement>& statements,
+                                const SourceLifetimeProjection& projection,
+                                const core::passes::LivenessInfo& liveness);
+
+bool rewrite_residual_temp_children(V2Statement& statement,
+                                   const SourceLifetimeProjection& projection,
+                                   const core::passes::LivenessInfo& liveness) {
+  for (auto* body : {&statement.body, &statement.then_body, &statement.else_body}) {
+    if (rewrite_residual_temp_block(*body, projection, liveness))
+      return true;
+  }
+  for (V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr &&
+        rewrite_residual_temp_children(*match_case.action, projection, liveness))
+      return true;
+  }
+  return statement.otherwise != nullptr &&
+         rewrite_residual_temp_children(*statement.otherwise, projection, liveness);
+}
+
+bool rewrite_residual_temp_block(std::vector<V2Statement>& statements,
+                                const SourceLifetimeProjection& projection,
+                                const core::passes::LivenessInfo& liveness) {
+  for (V2Statement& statement : statements) {
+    if (rewrite_residual_temp_children(statement, projection, liveness))
+      return true;
+  }
+  const auto exit = projection.block_exits.find(&statements);
+  if (exit == projection.block_exits.end())
+    return false;
+  const auto& live_after = liveness.live_in.at(exit->second);
+  for (std::size_t index = 0; index < statements.size(); ++index) {
+    V2Statement& assignment = statements.at(index);
     const std::optional<std::string> source = residual_temp_reuse_source(assignment);
     if (!source.has_value() || !assignment.target.has_value() || !assignment.expr.has_value())
       continue;
+    if (!projection.names.contains(*source) ||
+        !projection.names.contains(*assignment.target))
+      continue;
     ResidualTempRewriteState state{
-        .proc_map = &proc_map,
+        .proc_map = &projection.rules,
         .target = *assignment.target,
         .source = *source,
         .residual = parse_expression(*assignment.expr, assignment.line),
     };
-    std::vector<V2Statement> suffix(rewritten.begin() + static_cast<std::ptrdiff_t>(index) + 1,
-                                    rewritten.end());
+    std::vector<V2Statement> suffix;
+    for (std::size_t next = index + 1; next < statements.size(); ++next)
+      suffix.push_back(clone_residual_temp_statement(statements[next]));
     suffix = rewrite_residual_temp_suffix(std::move(suffix), state);
-    if (state.failed || state.rewrites == 0)
+    if (std::getenv("MKPRO_TRACE_SOURCE_LIVENESS") != nullptr) {
+      std::cerr << "[source-liveness] " << state.target << " -> " << state.source
+                << " failed=" << state.failed << " rewrites=" << state.rewrites
+                << " live-after=";
+      for (const std::string& name : live_after)
+        std::cerr << name << ',';
+      std::cerr << '\n';
+    }
+    if (state.failed || state.rewrites == 0 ||
+        (state.source_available != ResidualTempAvailability::None &&
+         live_after.contains(state.source)) ||
+        (state.target_available != ResidualTempAvailability::None &&
+         live_after.contains(state.target)))
       continue;
     assignment.target = state.source;
     assignment.op = "__dead_source_residual_temp_reuse";
-    reused += 1;
-    rewritten.erase(rewritten.begin() + static_cast<std::ptrdiff_t>(index) + 1, rewritten.end());
-    rewritten.insert(rewritten.end(), std::make_move_iterator(suffix.begin()),
-                     std::make_move_iterator(suffix.end()));
+    statements.erase(statements.begin() + static_cast<std::ptrdiff_t>(index) + 1, statements.end());
+    statements.insert(statements.end(), std::make_move_iterator(suffix.begin()),
+                      std::make_move_iterator(suffix.end()));
+    return true;
   }
-  return rewritten;
+  return false;
 }
 
 void reuse_dead_source_residual_temps(V2Program& program,
                                       std::vector<OptimizationReport>& optimizations) {
   int reused = 0;
-  const std::map<std::string, const V2Rule*> proc_map = rule_map_for_program(program);
-  program.body = rewrite_residual_temp_block(std::move(program.body), proc_map, reused);
-  for (V2Rule& rule : program.rules)
-    rule.body = rewrite_residual_temp_block(std::move(rule.body), proc_map, reused);
+  for (;;) {
+    const SourceLifetimeProjection projection(program);
+    const auto liveness = core::passes::compute_liveness(
+        projection.ops, {.include_physical_register_universe = false});
+    bool changed = rewrite_residual_temp_block(program.body, projection, liveness);
+    for (V2Rule& rule : program.rules) {
+      if (!changed)
+        changed = rewrite_residual_temp_block(rule.body, projection, liveness);
+    }
+    if (!changed)
+      break;
+    ++reused;
+    // Rewriting reads changes caller lifetimes too. Never reuse stale facts
+    // for the next candidate, and never move bodies out of the procedure map.
+  }
   if (reused == 0)
     return;
   optimizations.push_back(OptimizationReport{
@@ -10084,6 +10391,28 @@ bool analysis_simple_stack_load(const Expression& expression) {
   return expression.kind == "identifier" || expression.kind == "number";
 }
 
+// The carried power and, in the stacked-update form, the previous array
+// element occupy two calculator stack slots. An independent coefficient may
+// use the other two, but must not evict either live value. Measure the source
+// tree in its original left-to-right association rather than reassociating
+// decimal arithmetic to make a deeper expression appear to fit.
+std::optional<int> packed_coefficient_stack_pressure(const Expression& expression) {
+  if (analysis_simple_stack_load(expression))
+    return 1;
+  if (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr)
+    return packed_coefficient_stack_pressure(*expression.expr);
+  if (expression.kind != "binary" || expression.left == nullptr || expression.right == nullptr ||
+      (expression.op != "+" && expression.op != "-" && expression.op != "*" &&
+       expression.op != "/"))
+    return std::nullopt;
+  const auto left = packed_coefficient_stack_pressure(*expression.left);
+  const auto right = packed_coefficient_stack_pressure(*expression.right);
+  if (!left.has_value() || !right.has_value())
+    return std::nullopt;
+  const int pressure = std::max(*left, 1 + *right);
+  return pressure <= 2 ? std::optional<int>{pressure} : std::nullopt;
+}
+
 std::optional<std::string>
 stack_affine_exponent_input_for_analysis(const Expression& expression) {
   if (expression.kind == "identifier")
@@ -10117,13 +10446,13 @@ pow10_index_name_from_stack_term_for_analysis(const Expression& expression) {
     return std::nullopt;
   if (const std::optional<std::string> left =
           pow10_index_name_from_stack_term_for_analysis(*expression.left)) {
-    if (analysis_simple_stack_load(*expression.right) &&
+    if (packed_coefficient_stack_pressure(*expression.right).has_value() &&
         !expression_contains_identifier(*expression.right, *left))
       return left;
   }
   if (const std::optional<std::string> right =
           pow10_index_name_from_stack_term_for_analysis(*expression.right)) {
-    if (analysis_simple_stack_load(*expression.left) &&
+    if (packed_coefficient_stack_pressure(*expression.left).has_value() &&
         !expression_contains_identifier(*expression.left, *right))
       return right;
   }
@@ -10441,47 +10770,6 @@ bool all_x_param_calls_have_y_stack_producer(const V2Program& program, const std
   return ok && calls > 0;
 }
 
-bool all_x_param_calls_are_unit_literals(const LoweringContext& context,
-                                         const V2Program& program,
-                                         const std::string& proc_name) {
-  int calls = 0;
-  bool ok = true;
-  const auto visit = [&](const auto& self, const std::vector<V2Statement>& statements) -> void {
-    for (const V2Statement& statement : statements) {
-      if (statement.kind == "v2_invoke" && statement.name == proc_name) {
-        ++calls;
-        if (statement.args.size() != 1U) {
-          ok = false;
-        } else {
-          const Expression argument = parse_expression(statement.args.front(), statement.line);
-          const std::optional<double> value = numeric_value_of_expression(context, argument);
-          if (!value.has_value() || std::fabs(std::fabs(*value) - 1.0) >= 1e-12)
-            ok = false;
-        }
-      } else if (statement_contains_expression_call_for_y_stack_analysis(statement, proc_name)) {
-        ok = false;
-      }
-
-      self(self, statement.body);
-      self(self, statement.then_body);
-      self(self, statement.else_body);
-      for (const V2MatchCase& match_case : statement.cases) {
-        if (match_case.action != nullptr)
-          self(self, std::vector<V2Statement>{*match_case.action});
-      }
-      if (statement.otherwise != nullptr)
-        self(self, std::vector<V2Statement>{*statement.otherwise});
-    }
-  };
-
-  visit(visit, program.body);
-  for (const V2Rule& rule : program.rules) {
-    if (rule.name != proc_name)
-      visit(visit, rule.body);
-  }
-  return ok && calls > 0;
-}
-
 std::map<std::string, XParamYStackProcLowering> collect_x_param_y_stack_proc_lowerings(
     const V2Program& program, const std::map<std::string, XParamProcLowering>& x_param_procs) {
   std::map<std::string, XParamYStackProcLowering> result;
@@ -10608,58 +10896,96 @@ bool stack_analysis_bit_or_update(const Expression& expression, const std::strin
   return (left == collection && right == temp) || (left == temp && right == collection);
 }
 
-std::optional<std::string> stack_analysis_bit_and_membership_for_temp(
-    const LoweringContext& context, const std::string& expression_text, const std::string& zero_text,
-    const std::string& temp, int line) {
-  const Expression zero = parse_expression(zero_text, line);
-  if (!is_zero_expression(context, zero))
-    return std::nullopt;
-  const Expression expression = parse_expression(expression_text, line);
-  if (expression.kind != "call" || lower_ascii(expression.callee) != "bit_and" ||
-      expression.args.size() != 2U)
-    return std::nullopt;
-  const Expression& left = expression.args.at(0);
-  const Expression& right = expression.args.at(1);
-  if (left.kind == "identifier" && right.kind == "identifier" && right.name == temp)
-    return left.name;
-  if (left.kind == "identifier" && left.name == temp && right.kind == "identifier")
-    return right.name;
-  return std::nullopt;
-}
+struct RetainedOperandUpdateCompare {
+  std::string state;
+  std::string snapshot;
+  std::string operand;
+  int opcode = 0;
+  std::string mnemonic;
+  std::size_t copy_index = 0;
+  std::size_t branch_index = 0;
+  std::size_t consumed = 0;
+  std::optional<std::size_t> producer_index;
+  bool reverse_comparison = false;
+  bool true_when_equal = true;
+};
 
-bool stack_analysis_bit_or_test_and_set_branch(const LoweringContext& context,
-                                               const V2Program& program,
-                                               const V2Statement& assign,
-                                               const V2Statement& branch) {
-  if (assign.kind != "v2_assign" || !assign.target.has_value() || !assign.expr.has_value() ||
-      branch.kind != "v2_if" || !branch.predicate.has_value())
-    return false;
-  const Expression assigned = parse_expression(*assign.expr, assign.line);
-  if (!expression_pure_for_substitution(assigned))
-    return false;
-  const V2Predicate& predicate = *branch.predicate;
-  if (predicate.kind != "v2_compare" || predicate.op != "!=" || branch.else_body.empty())
-    return false;
-  std::optional<std::string> collection = stack_analysis_bit_and_membership_for_temp(
-      context, predicate.left, predicate.right, *assign.target, branch.line);
-  if (!collection.has_value()) {
-    collection = stack_analysis_bit_and_membership_for_temp(context, predicate.right,
-                                                            predicate.left, *assign.target,
-                                                            branch.line);
+std::optional<RetainedOperandUpdateCompare> retained_operand_update_compare(
+    const LoweringContext& context, const V2Program& program,
+    const std::vector<V2Statement>& statements, std::size_t index) {
+  const auto match = [&](std::size_t copy_index,
+                         std::optional<std::size_t> producer_index)
+      -> std::optional<RetainedOperandUpdateCompare> {
+    if (copy_index + 2U >= statements.size())
+      return std::nullopt;
+    const V2Statement& copy = statements.at(copy_index);
+    const V2Statement& update = statements.at(copy_index + 1U);
+    const V2Statement& branch = statements.at(copy_index + 2U);
+    if (copy.kind != "v2_assign" || !copy.target.has_value() || !copy.expr.has_value() ||
+        update.kind != "v2_assign" || !update.target.has_value() || !update.expr.has_value() ||
+        branch.kind != "v2_if" || !branch.predicate.has_value())
+      return std::nullopt;
+    const Expression snapshot = parse_expression(*copy.target, copy.line);
+    const Expression before = parse_expression(*copy.expr, copy.line);
+    const Expression destination = parse_expression(*update.target, update.line);
+    const Expression operation = parse_expression(*update.expr, update.line);
+    if (snapshot.kind != "identifier" || before.kind != "identifier" ||
+        destination.kind != "identifier" || destination.name != before.name ||
+        snapshot.name == before.name || context.constants.contains(snapshot.name) ||
+        context.constants.contains(before.name) || operation.kind != "call" ||
+        operation.args.size() != 2U || operation.args.at(0).kind != "identifier" ||
+        operation.args.at(0).name != before.name || operation.args.at(1).kind != "identifier" ||
+        operation.args.at(1).name == snapshot.name)
+      return std::nullopt;
+
+    // These native binary operations preserve their left operand in Y. This
+    // is a stack-transfer property, not an identity about a particular mask.
+    const std::string callee = lower_ascii(operation.callee);
+    int opcode = 0;
+    std::string mnemonic;
+    if (callee == "bit_and") { opcode = 0x37; mnemonic = "К ∧"; }
+    else if (callee == "bit_or") { opcode = 0x38; mnemonic = "К ∨"; }
+    else if (callee == "bit_xor") { opcode = 0x39; mnemonic = "К ⊕"; }
+    else return std::nullopt;
+
+    const V2Predicate& predicate = *branch.predicate;
+    if (predicate.kind != "v2_compare" || (predicate.op != "==" && predicate.op != "!="))
+      return std::nullopt;
+    const Expression left = parse_expression(predicate.left, branch.line);
+    const Expression right = parse_expression(predicate.right, branch.line);
+    if (left.kind != "identifier" || right.kind != "identifier")
+      return std::nullopt;
+    const bool ordinary = left.name == snapshot.name && right.name == before.name;
+    const bool reversed = left.name == before.name && right.name == snapshot.name;
+    if ((!ordinary && !reversed) ||
+        statements_read_identifier_before_write_for_y_stack(program, branch.then_body, snapshot.name) ||
+        statements_read_identifier_before_write_for_y_stack(program, branch.else_body, snapshot.name))
+      return std::nullopt;
+
+    if (producer_index.has_value()) {
+      const V2Statement& producer = statements.at(*producer_index);
+      if (producer.kind != "v2_assign" || !producer.target.has_value() ||
+          !producer.expr.has_value() || *producer.target != operation.args.at(1).name ||
+          *producer.target == before.name || *producer.target == snapshot.name)
+        return std::nullopt;
+      const Expression produced = parse_expression(*producer.expr, producer.line);
+      if (!expression_pure_for_substitution(produced) ||
+          expression_contains_identifier(produced, snapshot.name))
+        return std::nullopt;
+    }
+    return RetainedOperandUpdateCompare{
+        .state = before.name, .snapshot = snapshot.name, .operand = operation.args.at(1).name,
+        .opcode = opcode, .mnemonic = std::move(mnemonic), .copy_index = copy_index,
+        .branch_index = copy_index + 2U, .consumed = copy_index + 3U - index,
+        .producer_index = producer_index, .reverse_comparison = reversed,
+        .true_when_equal = (predicate.op == "==") != branch.negated,
+    };
+  };
+  if (index + 3U < statements.size()) {
+    if (auto plan = match(index + 1U, index))
+      return plan;
   }
-  if (!collection.has_value() || *collection == *assign.target)
-    return false;
-  const V2Statement& update = branch.else_body.front();
-  if (update.kind != "v2_assign" || !update.target.has_value() || *update.target != *collection ||
-      !update.expr.has_value())
-    return false;
-  if (!stack_analysis_bit_or_update(parse_expression(*update.expr, update.line), *collection,
-                                    *assign.target))
-    return false;
-  std::vector<V2Statement> else_tail(branch.else_body.begin() + 1, branch.else_body.end());
-  return !statements_read_identifier_before_write_for_y_stack(program, branch.then_body,
-                                                              *assign.target) &&
-         !statements_read_identifier_before_write_for_y_stack(program, else_tail, *assign.target);
+  return match(index, std::nullopt);
 }
 
 bool x_param_packed_score_accumulator_available_for_stack_analysis(
@@ -11021,6 +11347,17 @@ int stack_only_covered_run(
   const V2Statement* fourth =
       index + 3U < statements.size() ? &statements.at(index + 3U) : nullptr;
 
+  if (const auto plan = retained_operand_update_compare(context, program, statements, index)) {
+    if (plan->snapshot == name)
+      return static_cast<int>(plan->consumed);
+    if (plan->producer_index.has_value() && plan->operand == name) {
+      const V2Statement& branch = statements.at(plan->branch_index);
+      if (!statements_read_identifier_before_write_for_y_stack(program, branch.then_body, name) &&
+          !statements_read_identifier_before_write_for_y_stack(program, branch.else_body, name))
+        return static_cast<int>(plan->consumed);
+    }
+  }
+
   if (context.stack_resident_temps) {
     const std::optional<core::emit::StackResidentFusionSite> fusion =
         core::emit::find_stack_resident_fusion_site(statements, index);
@@ -11049,9 +11386,6 @@ int stack_only_covered_run(
       if (stack_carried > 0)
         return stack_carried;
     }
-    if (next != nullptr && stack_analysis_bit_or_test_and_set_branch(context, program, statement,
-                                                                     *next))
-      return 2;
     if (next != nullptr && next->kind == "v2_assign" && next->target.has_value() &&
         next->expr.has_value() &&
         stack_analysis_bit_or_update(parse_expression(*next->expr, next->line), *next->target,
@@ -11261,6 +11595,17 @@ std::set<std::string> collect_stack_only_state_fields(LoweringContext& context,
                                                        allow_stack_carried_local,
                                                        allow_stack_carried_show_read_local);
         if (covered_run > 0) {
+          if (const auto plan = retained_operand_update_compare(context, program, statements, index);
+              plan.has_value() && static_cast<std::size_t>(covered_run) == plan->consumed &&
+              (plan->snapshot == name ||
+               (plan->producer_index.has_value() && plan->operand == name))) {
+            // Cover the consumed value, not later definitions in either arm.
+            // A new value of this same field may need a register across a stop.
+            const V2Statement& branch = statements.at(plan->branch_index);
+            if (!self(self, branch.then_body, current_rule) ||
+                !self(self, branch.else_body, current_rule))
+              return false;
+          }
           covered = true;
           if (stack_only_covered_run_writes_target(statements, index, covered_run, name,
                                                    return_only_procs))
@@ -13216,8 +13561,23 @@ bool emit_indexed_recall(LoweringContext& context, const Expression& expression,
   const std::optional<std::string> element =
       constant_indexed_state_element(context, expression, source_line);
   if (!element.has_value()) {
+    const std::size_t preparation_start = context.emitter.items.size();
     if (const std::optional<PreparedIndexedSelector> selector =
             prepare_indirect_index_selector(context, expression, source_line)) {
+      // A selector copied out of a self-mutating register is an address,
+      // not an additional expression operand. RCL; STO; rotate; indirect RCL
+      // has the same X/Y/Z/T projection as a single ordinary value recall.
+      if (context.emitter.items.size() == preparation_start + 2U) {
+        const MachineItem& recall = context.emitter.items.at(preparation_start);
+        const MachineItem& store = context.emitter.items.at(preparation_start + 1U);
+        if (recall.kind == MachineItemKind::Op && recall.opcode >= 0x60 &&
+            recall.opcode <= 0x6e && store.kind == MachineItemKind::Op &&
+            store.opcode == 0x40 + register_index_for(context, selector->selector)) {
+          context.emitter.emit_op(0x25, "F reverse", "discard prepared selector from value stack",
+                                  source_line);
+          clear_current_x_facts(context);
+        }
+      }
       emit_prepared_indirect_indexed_recall(context, expression, *selector, source_line);
       return true;
     }
@@ -23217,7 +23577,7 @@ bool emit_stack_carried_pow10_delta(LoweringContext& context, const Expression& 
       return false;
     const Expression& carried = left_input ? *expression.left : *expression.right;
     const Expression& other = left_input ? *expression.right : *expression.left;
-    if (!analysis_simple_stack_load(other) || !self(self, carried) ||
+    if (!packed_coefficient_stack_pressure(other).has_value() || !self(self, carried) ||
         !lower_expression_to_x(context, other))
       return false;
     const auto opcode = binary_opcode(expression.op);
@@ -23229,6 +23589,14 @@ bool emit_stack_carried_pow10_delta(LoweringContext& context, const Expression& 
                             expression.op == "*" ? "stack-carried packed digit delta"
                                                  : "stack-carried exponent adjustment",
                             line);
+    if (expression.op == "*" && !analysis_simple_stack_load(other)) {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "stack-carried-pow10-computed-coefficient",
+          .detail = "Evaluated an independent arithmetic coefficient in at most two spare "
+                    "stack slots, preserving the carried power, previous indexed value "
+                    "and coefficient association at line " + std::to_string(line) + ".",
+      });
+    }
     clear_current_x_facts(context);
     return true;
   };
@@ -23683,21 +24051,24 @@ bool x_param_proc_preserves_caller_y(const LoweringContext& context, const std::
 }
 
 std::optional<PredecrementIndexedStackRulePlan>
-predecrement_indexed_stack_rule_candidate(const LoweringContext& context,
+predecrement_indexed_stack_rule_candidate(LoweringContext& context,
                                           const V2Rule& rule) {
-  if (!rule.params.empty() || rule.body.size() != 3U)
+  if (!rule.params.empty() || rule.body.size() < 2U)
     return std::nullopt;
   const V2Statement& decrement = rule.body.at(0);
   const V2Statement& assign = rule.body.at(1);
-  const V2Statement& branch = rule.body.at(2);
   if (!statement_is_unit_decrement(decrement) || !decrement.target.has_value() ||
       !assign.target.has_value() || !assign.expr.has_value()) {
     return std::nullopt;
   }
-  const std::optional<IndexedPackedReportBranch> report =
-      indexed_packed_pow10_delta_report_branch(context, assign, branch);
-  if (!report.has_value() || !report->fractional)
-    return std::nullopt;
+  if (!context.preloaded_indexed_update_prefix) {
+    if (rule.body.size() != 3U)
+      return std::nullopt;
+    const std::optional<IndexedPackedReportBranch> report =
+        indexed_packed_pow10_delta_report_branch(context, assign, rule.body.at(2));
+    if (!report.has_value() || !report->fractional)
+      return std::nullopt;
+  }
   const Expression target = parse_expression(*assign.target, assign.line);
   const std::optional<std::string> selector = direct_indexed_selector_name(target);
   if (!selector.has_value() || *selector != *decrement.target)
@@ -23711,6 +24082,19 @@ predecrement_indexed_stack_rule_candidate(const LoweringContext& context,
       !context.stack_only_state_fields.contains(input)) {
     return std::nullopt;
   }
+  // The store performs the selector's decrement after evaluating the delta.
+  // No part of that expression may therefore observe the old selector.
+  if (expression_contains_identifier(std::get<2>(*delta), *selector))
+    return std::nullopt;
+  const std::vector<V2Statement> tail(rule.body.begin() + 2, rule.body.end());
+  if (statements_read_identifier_before_write(context, tail, input))
+    return std::nullopt;
+  // Caller-side bank addresses are advanced by exactly one per invocation.
+  // Keep that interprocedural summary true even for nonterminal continuations.
+  std::set<std::string> seen_rules;
+  if (statements_may_write_identifier_for_delayed_stack_value(context, tail, *selector,
+                                                              seen_rules))
+    return std::nullopt;
   const std::string key = bank_member_key(target.base, target.field);
   const auto bank_it = context.state_banks.find(key);
   if (bank_it == context.state_banks.end() || !bank_it->second->bank.has_value())
@@ -30921,7 +31305,7 @@ bool emit_y_preserving_membership_mask(LoweringContext& context, const Expressio
   return false;
 }
 
-bool lower_membership_clear_delta_branch(LoweringContext& context, const V2Statement& statement) {
+bool lower_membership_clear_x2_branch(LoweringContext& context, const V2Statement& statement) {
   if (statement.kind != "v2_if" || !statement.predicate.has_value())
     return false;
   const std::optional<MaskMembershipCondition> membership = match_mask_membership_condition(
@@ -30950,11 +31334,13 @@ bool lower_membership_clear_delta_branch(LoweringContext& context, const V2State
     context.emitter.items.back().comment = "membership clear source " + membership->collection;
   if (!emit_y_preserving_membership_mask(context, membership->mask, statement.line))
     return false;
-  context.emitter.emit_op(0x3a, "К ИНВ", "membership clear mask complement", statement.line);
-  context.emitter.emit_op(0x37, "К ∧", "clear membership bit before test", statement.line);
-  emit_store(context, membership->collection, "set " + membership->collection);
-  context.emitter.emit_op(0x11, "-", "membership clear delta test", statement.line);
+  context.emitter.emit_op(0x37, "К ∧", "test full native AND before conditional clear", statement.line);
   context.emitter.emit_jump(0x57, "F x≠0", false_label, "false branch for !=", statement.line);
+  context.emitter.emit_op(0x54, "К НОП", "guard X2 restore gap", clear.line);
+  context.emitter.emit_op(0x0a, ".", "restore membership clear mask from X2", clear.line);
+  context.emitter.emit_op(0x3a, "К ИНВ", "membership clear mask complement", statement.line);
+  context.emitter.emit_op(0x37, "К ∧", "clear membership bits after successful test", statement.line);
+  emit_store(context, membership->collection, "set " + membership->collection);
 
   std::vector<V2Statement> rest(then_body.begin() + 1, then_body.end());
   if (!lower_statement_block(context, rest))
@@ -30970,9 +31356,9 @@ bool lower_membership_clear_delta_branch(LoweringContext& context, const V2State
     context.emitter.emit_label(false_label, {.hidden = true});
   }
   context.optimizations.push_back(OptimizationReport{
-      .name = "membership-clear-delta-branch",
-      .detail = "Cleared " + membership->collection +
-                " before branching and used the old value in Y to test membership at line " +
+      .name = "membership-clear-x2-reuse",
+      .detail = "Tested the full native AND result before clearing " + membership->collection +
+                ", reusing the collection in Y and mask in X2 without an eager state update at line " +
                 std::to_string(statement.line) + ".",
   });
   return true;
@@ -32096,6 +32482,9 @@ void record_known_zero_proc_call(LoweringContext& context, const V2Rule& rule) {
     ++context.known_zero_proc_call_counts[rule.name];
 }
 
+bool lower_stack_carried_packed_digit_index_rule(LoweringContext& context, const V2Rule& rule,
+                                                bool emit_return = true);
+
 bool lower_invoke_statement(LoweringContext& context, const V2Statement& statement) {
   if (statement.kind != "v2_invoke" || !statement.name.has_value())
     return false;
@@ -32117,7 +32506,8 @@ bool lower_invoke_statement(LoweringContext& context, const V2Statement& stateme
       return false;
     }
     context.inline_call_stack.insert(rule.name);
-    const bool lowered = lower_statement_block(context, rule.body);
+    const bool lowered = lower_stack_carried_packed_digit_index_rule(context, rule, false) ||
+                         lower_statement_block(context, rule.body);
     context.inline_call_stack.erase(rule.name);
     if (lowered) {
       const int uses =
@@ -32218,7 +32608,8 @@ void compile_block_call(LoweringContext& context, const std::string& block_name,
       return;
     }
     context.inline_call_stack.insert(rule.name);
-    const bool lowered = lower_statement_block(context, rule.body);
+    const bool lowered = lower_stack_carried_packed_digit_index_rule(context, rule, false) ||
+                         lower_statement_block(context, rule.body);
     context.inline_call_stack.erase(rule.name);
     if (lowered) {
       if (const std::optional<std::string> return_x = proc_return_x_variable(context, rule)) {
@@ -33432,7 +33823,8 @@ bool emit_mask_membership_test_with_scratch(LoweringContext& context,
       .detail = "Kept " + scratch + " on the stack for a membership test at line " +
                 std::to_string(line) + ".",
   });
-  emit_membership_fraction_if_needed(context, membership.mask, "membership fraction", line);
+  // This matcher represents a raw bit_and() predicate, not frac(bit_and()).
+  // Its format digit is part of the value being tested.
   return true;
 }
 
@@ -33545,7 +33937,7 @@ bool emit_membership_collection_x2_test(LoweringContext& context,
   if (!context.emitter.items.empty())
     context.emitter.items.back().comment = "membership X2 collection " + membership.collection;
   context.emitter.emit_op(0x37, "К ∧", "membership test with X2-restorable collection", line);
-  emit_membership_fraction_if_needed(context, membership.mask, "membership fraction", line);
+  // Keep the raw bit_and() value, including its native format digit.
   context.optimizations.push_back(OptimizationReport{
       .name = "membership-collection-x2-restore",
       .detail = "Kept the membership mask in Y and " + membership.collection +
@@ -33591,8 +33983,7 @@ bool lower_mask_membership_set_reuse_if(LoweringContext& context, const V2Statem
   context.emitter.emit_label(false_label, {.hidden = true});
 
   if (x2_restore) {
-    if (expression_is_known_fractional(membership->mask))
-      context.emitter.emit_op(0x54, "К НОП", "guard X2 restore gap", set->line);
+    context.emitter.emit_op(0x54, "К НОП", "guard X2 restore gap", set->line);
     context.emitter.emit_op(0x0a, ".", "restore membership collection from X2", set->line);
     context.emitter.emit_op(0x38, "К ∨", "bit_set with X2-restored collection", set->line);
     emit_store(context, set->target, "set " + set->target);
@@ -34916,7 +35307,7 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
       return true;
     if (!entered_with_errors && has_errors(context.diagnostics))
       return false;
-    if (lower_membership_clear_delta_branch(context, statement))
+    if (lower_membership_clear_x2_branch(context, statement))
       return true;
     if (!entered_with_errors && has_errors(context.diagnostics))
       return false;
@@ -35546,16 +35937,20 @@ bool lower_self_decrement_indexed_fractional_report_tail_rule(LoweringContext& c
   return lowered;
 }
 
-// Lowers a no-argument rule whose whole body is an indexed pow10-delta update
+// Lowers a no-argument rule beginning with an indexed pow10-delta update
 // (optionally preceded by a unit decrement of the target selector) with a
 // stack-only index. Every call site materializes the index into X right
 // before the call (that is what made it stack-only, see
 // no_arg_invoke_consumes_stack_carried_packed_digit_index), so the update can
 // consume it from X directly or from Y after the selector decrement.
-bool lower_stack_carried_packed_digit_index_rule(LoweringContext& context, const V2Rule& rule) {
-  if (!rule.params.empty() || rule.body.empty() || rule.body.size() > 2)
+bool lower_stack_carried_packed_digit_index_rule(LoweringContext& context, const V2Rule& rule,
+                                                bool emit_return) {
+  if (!rule.params.empty() || rule.body.empty())
     return false;
-  const V2Statement& assign = rule.body.back();
+  const std::size_t update_index = statement_is_unit_decrement(rule.body.front()) ? 1U : 0U;
+  if (update_index >= rule.body.size())
+    return false;
+  const V2Statement& assign = rule.body.at(update_index);
   const std::optional<std::string> index_name =
       indexed_packed_pow10_delta_stack_index_name_for_analysis(assign);
   if (!index_name.has_value() || !assign.target.has_value())
@@ -35565,10 +35960,45 @@ bool lower_stack_carried_packed_digit_index_rule(LoweringContext& context, const
     return false;
   const Expression target = parse_expression(*assign.target, assign.line);
   const std::optional<std::string> direct_selector = direct_indexed_selector_name(target);
-  if (!direct_selector.has_value() || *direct_selector == *index_name ||
-      !direct_physical_indexed_selector_register(context, target, *direct_selector).has_value())
+  if (!direct_selector.has_value() || *direct_selector == *index_name)
     return false;
-  if (rule.body.size() == 2U) {
+  const auto stacked_value_plan = context.predecrement_indexed_stack_rules.find(rule.name);
+  const bool stacked_value = update_index == 1U &&
+      stacked_value_plan != context.predecrement_indexed_stack_rules.end();
+  const std::optional<int> selector_register = stacked_value
+      ? predecrement_physical_indexed_selector_register(context, target, *direct_selector)
+      : direct_physical_indexed_selector_register(context, target, *direct_selector);
+  if (!selector_register.has_value())
+    return false;
+  const std::vector<V2Statement> tail(
+      rule.body.begin() + static_cast<std::vector<V2Statement>::difference_type>(update_index + 1U),
+      rule.body.end());
+  // The caller-side coverage proof permits a continuation after the consuming
+  // update. Do not require a register for that dead input merely because the
+  // continuation has effects of its own; lower those effects normally.
+  if (statements_read_identifier_before_write(context, tail, *index_name))
+    return false;
+  bool lowered = false;
+  if (stacked_value) {
+    const auto delta = indexed_packed_pow10_delta_update(
+        target, parse_expression(*assign.expr, assign.line));
+    if (!delta.has_value())
+      return false;
+    lowered = emit_predecrement_indexed_packed_pow10_delta_from_stacked_value(
+        context, target, *direct_selector, *selector_register, std::get<0>(*delta),
+        std::get<2>(*delta), assign.line);
+    if (lowered) {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "predecrement-indexed-stacked-value-update",
+          .detail = "Updated " + stacked_value_plan->second.bank_key +
+                    " from a caller-preloaded element before its ordinary continuation; " +
+                    std::to_string(stacked_value_plan->second.call_sites) +
+                    " call sites prove the bank element, preserved Y and one selector "
+                    "decrement per invocation; estimated saving " +
+                    std::to_string(stacked_value_plan->second.estimated_savings) + " cells.",
+      });
+    }
+  } else if (update_index == 1U) {
     const V2Statement& decrement = rule.body.front();
     if (!statement_is_unit_decrement(decrement) || decrement.target != *direct_selector)
       return false;
@@ -35583,7 +36013,8 @@ bool lower_stack_carried_packed_digit_index_rule(LoweringContext& context, const
   } else {
     mark_current_x(context, *index_name);
   }
-  const bool lowered = lower_indexed_packed_pow10_delta_statement(context, assign);
+  if (!stacked_value)
+    lowered = lower_indexed_packed_pow10_delta_statement(context, assign);
   context.current_y_variable.reset();
   if (!lowered) {
     context.diagnostics.push_back(
@@ -35591,14 +36022,27 @@ bool lower_stack_carried_packed_digit_index_rule(LoweringContext& context, const
                    "Cannot lower stack-carried packed digit update in '" + rule.name + "'"));
     return false;
   }
-  context.emitter.emit_op(0x52, "В/О", "implicit return from proc", rule.line);
+  if (!lower_statement_block(context, tail))
+    return false;
+  if (emit_return && (tail.empty() ||
+      (tail.back().kind != "v2_return" && !direct_terminal_statements_stop(context, tail))))
+    context.emitter.emit_op(0x52, "В/О", "implicit return from proc", rule.line);
   report_selected_stack_carried_pow10_index(
       context, rule.name, *index_name, *direct_selector, target, assign.line,
-      rule.body.size() == 2U ? "Y" : "X",
-      rule.body.size() == 2U ? "self-decrement-indexed-packed-digit-update"
+      stacked_value ? "X/Y" : update_index == 1U ? "Y" : "X",
+      stacked_value ? "predecrement-indexed-stacked-value"
+      : update_index == 1U ? "self-decrement-indexed-packed-digit-update"
                              : "direct-indexed-packed-digit-update",
-      rule.body.size() == 2U ? "stack-carried-pow10-index-through-self-decrement"
+      stacked_value ? "stacked-old-value-through-predecrement-store"
+      : update_index == 1U ? "stack-carried-pow10-index-through-self-decrement"
                              : "stack-carried-pow10-index-from-x");
+  if (!tail.empty()) {
+    context.optimizations.push_back(OptimizationReport{
+        .name = "stack-carried-index-update-prefix",
+        .detail = "Consumed the stack-only index at the indexed update in " + rule.name +
+                  " before lowering its continuation with no live use of the old index.",
+    });
+  }
   return true;
 }
 
@@ -39413,129 +39857,6 @@ bool statements_read_identifier_before_write(LoweringContext& context,
   return first_identifier_access(context, statements, name, seen_rules) == IdentifierAccess::Read;
 }
 
-std::optional<std::string> bit_and_membership_for_temp(const LoweringContext& context,
-                                                       const std::string& expression_text,
-                                                       const std::string& zero_text,
-                                                       const std::string& temp, int line) {
-  const Expression zero = parse_expression(zero_text, line);
-  if (!is_zero_expression(context, zero))
-    return std::nullopt;
-  const Expression expression = parse_expression(expression_text, line);
-  if (expression.kind != "call" || lower_ascii(expression.callee) != "bit_and" ||
-      expression.args.size() != 2)
-    return std::nullopt;
-  const Expression& left = expression.args.at(0);
-  const Expression& right = expression.args.at(1);
-  if (left.kind == "identifier" && right.kind == "identifier" && right.name == temp)
-    return left.name;
-  if (left.kind == "identifier" && left.name == temp && right.kind == "identifier")
-    return right.name;
-  return std::nullopt;
-}
-
-bool is_bit_or_update(const Expression& expression, const std::string& collection,
-                      const std::string& temp) {
-  if (expression.kind != "call" || lower_ascii(expression.callee) != "bit_or" ||
-      expression.args.size() != 2)
-    return false;
-  const auto identifier_name = [](const Expression& candidate) -> std::optional<std::string> {
-    if (candidate.kind != "identifier")
-      return std::nullopt;
-    return candidate.name;
-  };
-  const std::optional<std::string> left = identifier_name(expression.args.at(0));
-  const std::optional<std::string> right = identifier_name(expression.args.at(1));
-  return (left == collection && right == temp) || (left == temp && right == collection);
-}
-
-bool expression_is_cell_mask_call(const Expression& expression) {
-  return expression.kind == "call" && lower_ascii(expression.callee) == "cell_mask" &&
-         expression.args.size() == 2U;
-}
-
-struct BitOrTestAndSetBranch {
-  std::string collection;
-  std::vector<V2Statement> else_tail;
-  int update_line = 0;
-  bool source_is_cell_mask = false;
-};
-
-std::optional<BitOrTestAndSetBranch> bit_or_test_and_set_branch(LoweringContext& context,
-                                                                const V2Statement& assign,
-                                                                const V2Statement& branch) {
-  if (assign.kind != "v2_assign" || !assign.target.has_value() || !assign.expr.has_value() ||
-      branch.kind != "v2_if" || !branch.predicate.has_value())
-    return std::nullopt;
-  const Expression assigned = parse_expression(*assign.expr, assign.line);
-  if (!expression_is_deterministic_for_test_and_set(assigned))
-    return std::nullopt;
-  const V2Predicate& predicate = *branch.predicate;
-  if (predicate.kind != "v2_compare" || predicate.op != "!=" || branch.else_body.empty())
-    return std::nullopt;
-  std::optional<std::string> collection = bit_and_membership_for_temp(
-      context, predicate.left, predicate.right, *assign.target, branch.line);
-  if (!collection.has_value()) {
-    collection = bit_and_membership_for_temp(context, predicate.right, predicate.left,
-                                             *assign.target, branch.line);
-  }
-  if (!collection.has_value() || *collection == *assign.target)
-    return std::nullopt;
-  const V2Statement& update = branch.else_body.front();
-  if (update.kind != "v2_assign" || !update.target.has_value() || *update.target != *collection ||
-      !update.expr.has_value())
-    return std::nullopt;
-  if (!is_bit_or_update(parse_expression(*update.expr, update.line), *collection, *assign.target))
-    return std::nullopt;
-  std::vector<V2Statement> else_tail(branch.else_body.begin() + 1, branch.else_body.end());
-  if (statements_read_identifier_before_write(context, branch.then_body, *assign.target) ||
-      statements_read_identifier_before_write(context, else_tail, *assign.target))
-    return std::nullopt;
-  return BitOrTestAndSetBranch{
-      .collection = *collection,
-      .else_tail = std::move(else_tail),
-      .update_line = update.line,
-      .source_is_cell_mask = expression_is_cell_mask_call(assigned),
-  };
-}
-
-std::size_t lower_bit_or_test_and_set_negative_arg_prefix(LoweringContext& context,
-                                                          const std::vector<V2Statement>& tail) {
-  if (tail.empty())
-    return 0;
-  const V2Statement& call = tail.front();
-  if (call.kind != "v2_invoke" || !call.name.has_value() || call.args.size() != 1)
-    return 0;
-  const auto lowering_it = context.x_param_procs.find(*call.name);
-  if (lowering_it == context.x_param_procs.end())
-    return 0;
-  const Expression arg = parse_expression(call.args.front(), call.line);
-  const std::optional<double> value = numeric_value_of_expression(context, arg);
-  if (!value.has_value() || std::fabs(*value + 1.0) >= 1e-12)
-    return 0;
-  const bool normalize_in_callee =
-      context.sign_normalized_x_param && context.program != nullptr &&
-      all_x_param_calls_are_unit_literals(context, *context.program, *call.name);
-  if (normalize_in_callee) {
-    context.sign_normalized_x_param_procs.insert(*call.name);
-  } else {
-    context.emitter.emit_op(0x32, "К ЗН",
-                            "bit_or test-and-set " + lowering_it->second.param + " = -1",
-                            call.line);
-  }
-  mark_current_x(context, lowering_it->second.param);
-  context.emitter.emit_jump(0x53, "ПП", function_label(*call.name), "proc call " + *call.name,
-                            call.line);
-  clear_current_x_facts(context);
-  context.optimizations.push_back(OptimizationReport{
-      .name = "bit-or-test-and-set-negative-arg",
-      .detail = "Derived " + lowering_it->second.param +
-                " = -1 from the negative changed value in a bit_or test-and-set success path at "
-                "line " +
-                std::to_string(call.line) + ".",
-  });
-  return 1;
-}
-
 int proved_expression_sign_for_unit_forwarding(const LoweringContext& context,
                                                 const Expression& expression) {
   if (const std::optional<NumericRange> range = numeric_range_for_expression(context, expression)) {
@@ -39613,54 +39934,94 @@ int proved_rule_exit_sign_for_unit_forwarding(const LoweringContext& context,
       context, parse_expression(*last.expr, last.line));
 }
 
-bool lower_bit_or_test_and_set_branch(LoweringContext& context, const V2Statement& assign,
-                                      const V2Statement& branch) {
-  const std::optional<BitOrTestAndSetBranch> match =
-      bit_or_test_and_set_branch(context, assign, branch);
-  if (!match.has_value() || !assign.expr.has_value())
+bool lower_retained_operand_update_compare(LoweringContext& context,
+                                            const std::vector<V2Statement>& statements,
+                                            std::size_t index, std::size_t& consumed) {
+  if (context.program == nullptr)
     return false;
-
-  emit_recall(context, match->collection);
-  if (!lower_expression_to_x(context, parse_expression(*assign.expr, assign.line)))
+  const auto plan = retained_operand_update_compare(context, *context.program, statements, index);
+  if (!plan.has_value())
     return false;
-  context.emitter.emit_op(0x38, "К ∨", "bit_or test-and-set value", assign.line);
-  emit_store(context, match->collection, "bit_or test-and-set " + match->collection);
-  context.emitter.emit_op(0x11, "-", "bit_or test-and-set changed", branch.line);
+  const bool snapshot_is_stack_only = context.stack_only_state_fields.contains(plan->snapshot);
+  const V2Statement& update = statements.at(plan->copy_index + 1U);
+  const V2Statement& branch = statements.at(plan->branch_index);
+  const bool invert_layout = context.invert_branch_order && branch.has_else_body;
+  const bool true_when_equal = plan->true_when_equal != invert_layout;
+  const auto& then_body = invert_layout ? branch.else_body : branch.then_body;
+  const auto& else_body = invert_layout ? branch.then_body : branch.else_body;
+  bool operand_in_x = context.emitter.current_x_variable == plan->operand ||
+                      context.emitter.current_x_aliases.contains(plan->operand);
+  if (plan->producer_index.has_value()) {
+    const V2Statement& producer = statements.at(*plan->producer_index);
+    if (!lower_expression_to_x(context, parse_expression(*producer.expr, producer.line)))
+      return false;
+    if (context.stack_only_state_fields.contains(plan->operand)) {
+      report_stack_only_state_field(context, plan->operand, producer.line);
+      mark_current_x(context, plan->operand);
+    } else {
+      emit_store(context, plan->operand, "set " + plan->operand);
+    }
+    operand_in_x = true;
+  }
 
-  const std::string changed_label = context.emitter.fresh_label("bit_or_test_set_changed");
-  const std::string end_label = context.emitter.fresh_label("bit_or_test_set_end");
-  context.emitter.emit_jump(0x5e, "F x=0", changed_label,
-                            "false branch for bit_or test-and-set occupied", branch.line);
+  // Compute an optional producer before reading the old state, exactly as in
+  // the source. No assumption about its stack pressure or a helper ABI is used.
+  if (operand_in_x) {
+    emit_recall(context, plan->state);
+    if (!snapshot_is_stack_only)
+      emit_store(context, plan->snapshot, "preserve live previous state");
+    context.emitter.emit_op(0x14, "X↔Y", "retained-operand update operand order", update.line);
+  } else {
+    emit_recall(context, plan->state);
+    if (!snapshot_is_stack_only)
+      emit_store(context, plan->snapshot, "preserve live previous state");
+    emit_recall(context, plan->operand);
+  }
+  context.emitter.emit_op(plan->opcode, plan->mnemonic, "retained-operand update", update.line);
   clear_current_x_facts(context);
-  context.emitter.current_x_known_zero = true;
-  if (!lower_statement_block(context, branch.then_body))
+  context.current_y_variable.reset();
+  emit_store(context, plan->state, "set " + plan->state);
+  if (plan->reverse_comparison)
+    context.emitter.emit_op(0x14, "X↔Y", "retained-operand comparison order", branch.line);
+  context.emitter.emit_op(0x11, "-", "compare previous and updated state", branch.line);
+  if (snapshot_is_stack_only)
+    report_stack_only_state_field(context, plan->snapshot, statements.at(plan->copy_index).line);
+  clear_current_x_facts(context);
+  context.current_y_variable.reset();
+
+  const std::string else_label = context.emitter.fresh_label("retained_update_else");
+  const std::string end_label = context.emitter.fresh_label("retained_update_end");
+  context.emitter.emit_jump(true_when_equal ? 0x5e : 0x57,
+                            true_when_equal ? "F x=0" : "F x≠0", else_label,
+                            "previous/update comparison false branch", branch.line);
+  context.emitter.current_x_known_zero = true_when_equal;
+  if (!lower_statement_block(context, then_body))
     return false;
   context.emitter.emit_jump(0x51, "БП", end_label, "if end", branch.line);
-  context.emitter.emit_label(changed_label, {.hidden = true});
+  context.emitter.emit_label(else_label, {.hidden = true});
   clear_current_x_facts(context);
-  const std::size_t consumed =
-      lower_bit_or_test_and_set_negative_arg_prefix(context, match->else_tail);
-  std::vector<V2Statement> rest;
-  if (consumed < match->else_tail.size())
-    rest.assign(match->else_tail.begin() + static_cast<std::ptrdiff_t>(consumed),
-                match->else_tail.end());
-  if (!lower_statement_block(context, rest))
+  context.current_y_variable.reset();
+  context.emitter.current_x_known_zero = !true_when_equal;
+  if (!lower_statement_block(context, else_body))
     return false;
   context.emitter.emit_label(end_label, {.hidden = true});
+  clear_current_x_facts(context);
+  context.current_y_variable.reset();
   context.optimizations.push_back(OptimizationReport{
-      .name = "bit-or-test-and-set-branch",
-      .detail = "Combined " + match->collection +
-                " membership test, bit_or update, and occupied branch at line " +
-                std::to_string(branch.line) + ".",
+      .name = "retained-operand-update-compare",
+      .detail = "Reused the old value of " + plan->state + " retained in Y by " + plan->mnemonic +
+                " for its update comparison, " +
+                (snapshot_is_stack_only ? "without materializing snapshot " : "while preserving live snapshot ") +
+                plan->snapshot + " and without assuming a one-bit operand.",
   });
-  if (match->source_is_cell_mask) {
+  if (plan->producer_index.has_value() && context.stack_only_state_fields.contains(plan->operand)) {
     context.optimizations.push_back(OptimizationReport{
-        .name = "cell-mask-occupied-test-set",
-        .detail = "Used the returned cell_mask directly for " + match->collection +
-                  " membership, update, and retry branching at line " +
-                  std::to_string(branch.line) + ".",
+        .name = "retained-operand-producer-forwarding",
+        .detail = "Forwarded " + plan->operand +
+                  " into an update/comparison region without a producer register store or reload.",
     });
   }
+  consumed = plan->consumed;
   return true;
 }
 
@@ -43241,17 +43602,18 @@ bool lower_stored_assignment_helper_entry(LoweringContext& context,
   if (!expression_preserves_previous_x_as_y_for_stack_analysis(ordered_second_value))
     return false;
 
-  const std::vector<V2Statement> tail(
-      statements.begin() + static_cast<std::ptrdiff_t>(start + 3U), statements.end());
-  const auto dead_after_consumer = [&](const std::string& name) {
-    if (consumer.kind == "v2_update" && consumer.target == name)
-      return false;
-    return (consumer.kind == "v2_assign" && consumer.target == name) ||
-           !statements_read_identifier_before_write(context, tail, name);
-  };
+  std::vector<std::string> values_after_consumer = temps;
+  if (consumer.kind == "v2_assign" && consumer.target.has_value())
+    std::erase(values_after_consumer, *consumer.target);
+  const bool consumer_needs_stored_value =
+      consumer.kind == "v2_update" && consumer.target.has_value() &&
+      std::find(temps.begin(), temps.end(), *consumer.target) != temps.end();
+  // A local suffix cannot prove a state write dead: the enclosing branch,
+  // loop backedge or procedure return may lead to the next observer. Reuse
+  // the whole-source matched-call lifetime proof at this exact consumer.
   const bool forward_dead_argument_stores =
-      temps.size() == 2U && dead_after_consumer(temps.front()) &&
-      dead_after_consumer(temps.back());
+      temps.size() == 2U && !consumer_needs_stored_value && context.program != nullptr &&
+      source_values_dead_after_statement(*context.program, consumer, values_after_consumer);
   if (forward_dead_argument_stores) {
     if (!lower_expression_to_x(context, ordered_first_value))
       return false;
@@ -43989,6 +44351,13 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     }
     if (has_errors(context.diagnostics))
       return false;
+    std::size_t retained_update_consumed = 0;
+    if (lower_retained_operand_update_compare(context, statements, index, retained_update_consumed)) {
+      index += retained_update_consumed - 1U;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
     std::size_t deferred_materialization_consumed = 0;
     if (lower_deferred_value_materialization_run(context, statements, index,
                                                  deferred_materialization_consumed)) {
@@ -44046,12 +44415,6 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     }
     if (has_errors(context.diagnostics))
       return false;
-    if (index + 1U < statements.size() &&
-        lower_bit_or_test_and_set_branch(context, statements.at(index),
-                                         statements.at(index + 1U))) {
-      ++index;
-      continue;
-    }
     if (has_errors(context.diagnostics))
       return false;
     if (index + 1U < statements.size() &&
@@ -46145,8 +46508,8 @@ build_logical_register_graph_model(const LoweringContext& context, const V2Progr
 
   std::set<std::string> mandatory_setup_owners;
   std::map<std::string, std::string> mandatory_setup_owner_values;
-  (void)build_preload_reports(context, program, items, &mandatory_setup_owners,
-                              &mandatory_setup_owner_values);
+  const auto setup_preloads = build_preload_reports(
+      context, program, items, &mandatory_setup_owners, &mandatory_setup_owner_values);
   for (const V2StateField& field : program.state) {
     if (!field.initial.has_value() || field.initial_stack.has_value() ||
         field.bank.has_value()) {
@@ -46155,7 +46518,7 @@ build_logical_register_graph_model(const LoweringContext& context, const V2Progr
     try {
       const std::string initial_text = trim_ascii(*field.initial);
       const Expression initial = parse_expression(initial_text, field.line);
-      if (initial.kind == "number") {
+      if (numeric_literal_value(initial).has_value()) {
         mandatory_setup_owner_values[field.name] =
             "literal:" + normalize_number_key(initial_text);
       }
@@ -46165,11 +46528,39 @@ build_logical_register_graph_model(const LoweringContext& context, const V2Progr
   }
 
   const std::vector<IrOp> ops = logical_register_ir(context, items);
+  auto lifetime_initial_values = mandatory_setup_owner_values;
+  std::set<std::string> physical_writes;
+  bool unknown_physical_write = false;
+  for (const IrOp& op : raise_machine_to_ir(items, context.feature_profile)) {
+    const auto effect = core::passes::register_effects(op);
+    physical_writes.insert(effect.must_defs.begin(), effect.must_defs.end());
+    physical_writes.insert(effect.may_defs.begin(), effect.may_defs.end());
+    unknown_physical_write = unknown_physical_write || effect.may_define_any_register;
+  }
+  if (!unknown_physical_write) {
+    for (const auto& preload : setup_preloads) {
+      if (physical_writes.contains(preload.register_name))
+        continue;
+      try {
+        if (!numeric_literal_value(parse_expression(preload.value, 0)).has_value())
+          continue;
+        const std::string value_class = "literal:" + normalize_number_key(preload.value);
+        lifetime_initial_values[physical_register_anchor(preload.register_name)] = value_class;
+        for (const auto& [name, index] : context.register_index_by_name)
+          if (core::register_name_for_index(index, context.feature_profile) == preload.register_name)
+            lifetime_initial_values[name] = value_class;
+      } catch (const std::exception&) {
+        // Opaque/late-bound setup values cannot become scalar proof constants.
+      }
+    }
+  }
   const core::passes::LivenessInfo liveness =
       core::passes::compute_liveness(ops, core::passes::LivenessOptions{
                                               .unknown_indirect_flow_to_all = true,
                                               .unresolved_direct_flow_to_all = true,
                                               .include_physical_register_universe = false,
+                                              .equal_entry_value_classes = lifetime_initial_values,
+                                              .closed_program_entry = true,
                                           });
   model.graph = core::passes::build_register_interference_graph(ops, liveness);
   for (const std::string& name : model.logical_names)
@@ -46195,8 +46586,9 @@ build_logical_register_graph_model(const LoweringContext& context, const V2Progr
     (void)value_class;
     for (auto left = owners.begin(); left != owners.end(); ++left) {
       for (auto right = std::next(left); right != owners.end(); ++right) {
+        const bool guarded = liveness.guarded_disjoint_pairs.contains({*left, *right});
         bool coalescing_proved = true;
-        for (std::size_t index = 0; index < ops.size(); ++index) {
+        for (std::size_t index = 0; !guarded && index < ops.size(); ++index) {
           const IrOp& op = ops.at(index);
           const core::passes::RegisterEffects effects =
               core::passes::register_effects(op);
@@ -46262,6 +46654,25 @@ build_logical_register_graph_model(const LoweringContext& context, const V2Progr
       continue;
     for (const std::string& owner : owners)
       model.preferred_colors[owner] = *shared_preference;
+  }
+  // A literal class can contain incompatible fixed loop counters and still
+  // have a proved-disjoint movable pair. Prefer a shared color for that pair
+  // instead of abandoning every opportunity in the whole class. The graph
+  // and precolors remain authoritative when preferences conflict.
+  for (const auto& [left, right] : liveness.guarded_disjoint_pairs) {
+    if (model.graph.interferes(left, right) || !model.preferred_colors.contains(left) ||
+        !model.preferred_colors.contains(right))
+      continue;
+    const auto fixed_left = model.fixed_colors.find(left);
+    const auto fixed_right = model.fixed_colors.find(right);
+    if (fixed_left != model.fixed_colors.end() && fixed_right != model.fixed_colors.end() &&
+        fixed_left->second != fixed_right->second)
+      continue;
+    const int color = fixed_left != model.fixed_colors.end() ? fixed_left->second :
+        fixed_right != model.fixed_colors.end() ? fixed_right->second :
+        std::min(model.preferred_colors.at(left), model.preferred_colors.at(right));
+    model.preferred_colors[left] = color;
+    model.preferred_colors[right] = color;
   }
   for (const std::string& name : model.logical_names) {
     if (entry_exclusive.contains(name))
@@ -52965,6 +53376,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   context.setup_only_counted_loop_init = options.setup_only_counted_loop_init;
   context.empty_stack_loop_return = options.empty_stack_loop_return;
   context.x_param_value_functions = options.x_param_value_functions;
+  context.preloaded_indexed_update_prefix = options.preloaded_indexed_update_prefix;
+  context.cached_expression_operand_forwarding = options.cached_expression_operand_forwarding;
   context.sign_normalized_x_param = options.sign_normalized_x_param;
   context.x_param_y_stack_stored_entry = options.x_param_y_stack_stored_entry;
   context.packed_score_accumulator_helpers = options.packed_score_accumulator_helpers;
@@ -53427,9 +53840,29 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   }
 
   trace_stage("ir-passes");
-  const core::passes::RunPassesResult optimized =
+  core::passes::RunPassesResult optimized =
       exact_decimal_series ? core::passes::RunPassesResult{.items = ir_pass_input}
                            : core::passes::run_ir_passes(ir_pass_input, pass_options);
+  if (options.late_literal_preloads && ast.v2.has_value() && !exact_decimal_series) {
+    std::set<std::string> reserved;
+    for (const PreloadReport& preload : build_preload_reports(context, *ast.v2, optimized.items))
+      reserved.insert(preload.register_name);
+    for (const PreloadReport& preload : optimized.preloads)
+      reserved.insert(preload.register_name);
+    const auto pooled = core::passes::late_literal_preloads(
+        raise_machine_to_ir(optimized.items, effective_optimizer_feature_profile(pass_options)),
+        core::passes::PassContext{.options = pass_options}, reserved);
+    if (pooled.applied > 0) {
+      optimized.items = lower_ir_to_machine(pooled.ops);
+      optimized.applied += pooled.applied;
+      optimized.optimizations.insert(optimized.optimizations.end(),
+                                     pooled.optimizations.begin(), pooled.optimizations.end());
+      optimized.preloads.insert(optimized.preloads.end(),
+                                pooled.preloads.begin(), pooled.preloads.end());
+      for (const PreloadReport& preload : pooled.preloads)
+        pass_options.preloaded_constant_registers[preload.register_name] = preload.value;
+    }
+  }
   result.registers = context.registers;
   hide_internal_constant_report_registers(result.registers);
   if (ast.v2.has_value())
@@ -56278,7 +56711,8 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.dual_use_constant_indirect_flow || options.aggressive_post_layout_indirect_flow ||
          options.preloaded_indirect_flow || options.forward_indirect_flow ||
          options.runtime_indirect_call_flow ||
-         options.general_constant_preloads || options.stack_resident_temps ||
+         options.general_constant_preloads || options.late_literal_preloads ||
+         options.stack_resident_temps ||
          options.stack_argument_helper_entries || options.single_x_expression_helper_entries ||
          options.stack_argument_function_entries ||
          options.stack_through_function_entries || options.stack_ssa_function_entries ||
@@ -56293,6 +56727,8 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.canonicalize_repeated_unary_update_args ||
          options.alternating_sign_toggle_args ||
          options.x_param_value_functions ||
+         options.preloaded_indexed_update_prefix ||
+         options.cached_expression_operand_forwarding ||
          options.sign_normalized_x_param ||
          options.x_param_y_stack_stored_entry ||
          options.branch_y_payload_forwarding ||
@@ -57110,6 +57546,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";forward_indirect_flow=" << options.forward_indirect_flow
       << ";runtime_indirect_call_flow=" << options.runtime_indirect_call_flow
       << ";general_constant_preloads=" << options.general_constant_preloads
+      << ";late_literal_preloads=" << options.late_literal_preloads
       << ";startup_aware_constant_preloads=" << options.startup_aware_constant_preloads
       << ";stack_resident_temps=" << options.stack_resident_temps
       << ";stack_argument_helper_entries=" << options.stack_argument_helper_entries
@@ -57141,6 +57578,8 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";callee_hole_straight_line_helper=" << options.callee_hole_straight_line_helper
       << ";callee_hole_boundary_normalization=" << options.callee_hole_boundary_normalization
       << ";x_param_value_functions=" << options.x_param_value_functions
+      << ";preloaded_indexed_update_prefix=" << options.preloaded_indexed_update_prefix
+      << ";cached_expression_operand_forwarding=" << options.cached_expression_operand_forwarding
       << ";sign_normalized_x_param=" << options.sign_normalized_x_param
       << ";x_param_y_stack_stored_entry=" << options.x_param_y_stack_stored_entry
       << ";inline_floor_packed_row_expressions=" << options.inline_floor_packed_row_expressions
@@ -57185,7 +57624,8 @@ std::string implemented_candidate_key(const CompileOptions& options) {
   for (const std::string& value : options.reserve_suppressed_constant_preload_slots)
     out << ";reserve_suppressed_constant_slot=" << value;
   for (const FractionalConstantSelectorPlan& plan : options.fractional_constant_selectors)
-    out << ";fractional_selector=" << normalize_number_key(plan.value) << ":" << plan.target;
+    out << ";fractional_selector=" << normalize_number_key(plan.value) << ":" << plan.target
+        << ":" << plan.deferred_binding;
   for (const SynthesizedDispatchPlan& plan : options.synthesized_dispatch_plans)
     out << ";synth_dispatch=" << plan.match_line << ":" << plan.selector_register << ":"
         << plan.indirect_register << ":" << plan.op_opcode << ":" << plan.scale << ":"
@@ -57200,6 +57640,22 @@ std::string implemented_candidate_key(const CompileOptions& options) {
         << assignment.preload_owner;
   }
   return out.str();
+}
+
+std::vector<LogicalRegisterAssignment> shared_logical_register_pins(
+    const std::vector<LogicalRegisterAssignment>& assignments) {
+  std::map<std::string, std::size_t> members;
+  for (const LogicalRegisterAssignment& assignment : assignments)
+    ++members[assignment.register_name];
+  std::vector<LogicalRegisterAssignment> shared;
+  for (const LogicalRegisterAssignment& assignment : assignments) {
+    if (members.at(assignment.register_name) > 1U)
+      shared.push_back(assignment);
+  }
+  // Preserve every proved alias and its entry-preload ownership. Singleton
+  // colors are placement decisions, not part of the noninterference proof;
+  // normal allocation can choose their physical registers for the new ABI.
+  return shared;
 }
 
 std::string compile_once_cache_key(const CompileOptions& options) {
@@ -58299,6 +58755,8 @@ bool callee_hole_entry_stack_difference_erased(const std::vector<ResolvedStep>& 
     if (core::stack_values_fully_equal(equality))
       return true;
     const int opcode = steps.at(index).opcode;
+    if (opcode < 0)
+      return false;
     core::StackValueEqualityStepKind kind = core::StackValueEqualityStepKind::Plain;
     bool reads_selector = false;
     if (opcode >= 0x60 && opcode <= 0x6e) {
@@ -58346,6 +58804,8 @@ std::optional<std::string> callee_hole_scope_name(const std::optional<std::strin
 
 bool callee_hole_step_reads_register(const ResolvedStep& step,
                                      const std::string& register_name) {
+  if (step.opcode < 0)
+    return true;
   const int register_id = register_index(register_name);
   if (step.opcode >= 0x60 && step.opcode <= 0x6e)
     return step.opcode - 0x60 == register_id;
@@ -58415,7 +58875,7 @@ CalleeHoleResolvedFlow callee_hole_resolved_flow(const std::vector<ResolvedStep>
   for (std::size_t index = 0; index + 1U < steps.size(); ++index) {
     if (flow.address_operand.at(index))
       continue;
-    if (opcode_by_code(steps.at(index).opcode).takes_address &&
+    if (resolved_step_takes_address(steps.at(index)) &&
         steps.at(index).address + 1 == steps.at(index + 1U).address) {
       flow.address_operand.at(index + 1U) = true;
     }
@@ -58475,16 +58935,15 @@ CalleeHoleResolvedFlow callee_hole_resolved_flow(const std::vector<ResolvedStep>
         items.at(index)->stop_disposition == StopDisposition::Terminal) {
       continue;
     }
-    if (opcode_by_code(step.opcode).takes_address) {
+    if (resolved_step_takes_address(step)) {
       if (index + 1U >= steps.size())
         continue;
-      int target = formal_address_info(steps.at(index + 1U).opcode).actual;
-      if (index + 1U < items.size() && items.at(index + 1U) != nullptr &&
-          !items.at(index + 1U)->formal_opcode.has_value()) {
-        if (const auto* logical = std::get_if<int>(&items.at(index + 1U)->target))
-          target = *logical;
-      }
-      add_target(index, target);
+      const auto target = resolved_step_target(steps.at(index + 1U),
+                                               address_space_model_for_options(options));
+      if (target.has_value())
+        add_target(index, *target);
+      else
+        add_all_executable(index);
       if (step.opcode != 0x51 && step.opcode != 0x53)
         add_fallthrough();
       continue;
@@ -58605,13 +59064,16 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
       callee_hole_items_by_step(items, steps.size());
   const CalleeHoleResolvedFlow resolved_flow =
       callee_hole_resolved_flow(steps, items_by_step, options);
+  std::optional<core::AuthoritativePostLayoutControlFlow> repaired_entry_flow;
   const auto repaired_entry_converges = [&](std::size_t start) {
-    return core::prove_stack_entry_equality(
+    const bool prefix_proved = core::prove_stack_entry_equality(
         [&](std::size_t index) -> std::optional<core::StackEntryProofNode> {
           if (index >= steps.size() || resolved_flow.address_operand.at(index))
             return std::nullopt;
           core::StackEntryProofNode node;
           node.opcode = steps.at(index).opcode;
+          if (node.opcode < 0)
+            return std::nullopt;
           if (index < items_by_step.size() && items_by_step.at(index) != nullptr)
             node.barrier = items_by_step.at(index)->raw;
           std::size_t next = index + 1;
@@ -58630,6 +59092,16 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
           }
           return node;
         }, start, core::xyz_preserving_selector_charge_state());
+    if (prefix_proved)
+      return true;
+    if (!repaired_entry_flow.has_value()) {
+      core::PostLayoutControlFlowOptions flow_options;
+      flow_options.address_space_model = address_space_model_for_options(options);
+      repaired_entry_flow = core::build_post_layout_control_flow(items, flow_options);
+    }
+    return start < steps.size() && core::prove_post_layout_stack_entry_equality(
+        items, *repaired_entry_flow, steps[start].address,
+        core::xyz_preserving_selector_charge_state());
   };
   std::map<std::string, std::map<int, std::set<int>>> charged_values;
   std::map<std::string, std::vector<std::size_t>> scoped_charge_calls;
@@ -59812,6 +60284,43 @@ std::optional<std::string> indirect_flow_targets_rejection_reason(
     }
   }
 
+  // R7..RE do not count up/down, but their address decode can still truncate
+  // ordinary fractional data. A selector target proof alone cannot establish
+  // that the compiler-owned constant remains available at subsequent reads.
+  for (const PreloadReport& preload : preloads) {
+    if (!core::is_stable_indirect_selector(preload.register_name))
+      continue;
+    const auto decoded = core::evaluate_indirect_address(
+        preload.register_name, preload.value, core::IndirectOperationKind::Flow, model);
+    if (!decoded.has_value() || !decoded->result_value.has_value())
+      continue;
+    bool changes_number = false;
+    try {
+      changes_number = normalize_number_key(preload.value) !=
+                       normalize_number_key(*decoded->result_value);
+    } catch (const std::exception&) {
+      continue;
+    }
+    if (!changes_number)
+      continue;
+    const int reg = register_index(preload.register_name);
+    const bool has_data_recall = std::any_of(items.begin(), items.end(), [&](const auto& item) {
+      return item.kind == MachineItemKind::Op && item.opcode == 0x60 + reg;
+    });
+    if (!has_data_recall)
+      continue;
+    const auto control = core::build_post_layout_control_flow(
+        items, {.address_space_model = model, .empty_return_target = 1});
+    for (std::size_t item = 0; item < items.size(); ++item) {
+      if (items[item].kind != MachineItemKind::Op ||
+          indirect_flow_register_for_opcode(items[item].opcode) != preload.register_name)
+        continue;
+      std::string failure;
+      if (!core::selector_writeback_is_unobserved(items, control, item, preload, model, &failure))
+        return "static proof gate rejected candidate; selector-data-writeback: " + failure;
+    }
+  }
+
   for (const std::string& register_name : borrowed_selector_registers)
     selector_registers.erase(register_name);
   if (!selector_registers.empty()) {
@@ -60043,9 +60552,11 @@ bool dead_integer_fractional_selector_target_erases_before_x_use(
           steps.at(*index + 1U).address != step.address + 1) {
         return false;
       }
-      const FormalAddressInfo target = formal_address_info(
-          steps.at(*index + 1U).opcode, address_space_model_for_options(options));
-      index = unique_resolved_step_index_by_address(steps, target.actual);
+      const auto target = resolved_step_target(
+          steps.at(*index + 1U), address_space_model_for_options(options));
+      if (!target.has_value())
+        return false;
+      index = unique_resolved_step_index_by_address(steps, *target);
       continue;
     }
     if (step.opcode >= 0x80 && step.opcode <= 0x8e) {
@@ -60580,7 +61091,7 @@ address_code_overlay_comment_payload(const std::optional<std::string>& comment) 
 
 bool address_code_overlay_step_matches_payload(const ResolvedStep& step, bool formal,
                                                const std::string& payload) {
-  if (payload.empty())
+  if (payload.empty() || step.opcode < 0)
     return false;
   if (payload == "address byte")
     return !formal;
@@ -60806,21 +61317,10 @@ std::optional<int> size_report_indirect_target(const std::optional<std::string>&
 }
 
 std::optional<int> size_report_direct_target(
-    const ResolvedStep& operand, const std::map<int, std::size_t>& index_by_address) {
-  if (!operand.mnemonic.empty() && operand.mnemonic.front() == '>' &&
-      index_by_address.contains(operand.opcode)) {
-    return operand.opcode;
-  }
-  const int official = code_to_address(operand.opcode);
-  if (index_by_address.contains(official))
-    return official;
-  try {
-    const int formal = formal_address_info(operand.opcode).actual;
-    if (index_by_address.contains(formal))
-      return formal;
-  } catch (...) {
-  }
-  return std::nullopt;
+    const ResolvedStep& operand, const std::map<int, std::size_t>& index_by_address,
+    AddressSpaceModel model) {
+  const auto target = resolved_step_target(operand, model);
+  return target.has_value() && index_by_address.contains(*target) ? target : std::nullopt;
 }
 
 std::string size_report_comment_label(const ResolvedStep& step) {
@@ -61017,16 +61517,16 @@ size_report_flow_target_stats(const std::vector<ResolvedStep>& steps,
                               const CompileOptions& options) {
   std::map<int, SizeReportFlowTargetStats> stats;
   for (std::size_t index = 0; index + 1U < steps.size(); ++index) {
-    if (!opcode_by_code(steps.at(index).opcode).takes_address)
+    if (!resolved_step_takes_address(steps.at(index)))
       continue;
-    const FormalAddressInfo info =
-        formal_address_info(steps.at(index + 1U).opcode, address_space_model_for_options(options));
-    if (info.kind != FormalAddressKind::Official) {
+    const auto logical =
+        resolved_logical_target(steps.at(index + 1U), address_space_model_for_options(options));
+    if (!logical.has_value()) {
       ++index;
       continue;
     }
-    const int target = info.actual;
-    if (target < 0 || target > official_last_program_address_for_options(options)) {
+    const int target = *logical;
+    if (target < 0) {
       ++index;
       continue;
     }
@@ -61050,14 +61550,16 @@ std::string size_report_target_occupant_text(const ResolvedStep& step) {
 
 std::string size_report_target_occupant_kind(const std::vector<ResolvedStep>& steps,
                                              std::size_t index) {
+  if (steps.at(index).address_target.has_value())
+    return "address-operand";
   if (index > 0) {
     const ResolvedStep& previous = steps.at(index - 1U);
     if (previous.address + 1 == steps.at(index).address &&
-        opcode_by_code(previous.opcode).takes_address) {
+        resolved_step_takes_address(previous)) {
       return "address-operand";
     }
   }
-  if (opcode_by_code(steps.at(index).opcode).takes_address)
+  if (resolved_step_takes_address(steps.at(index)))
     return "address-taking-opcode";
   if (steps.at(index).opcode == 0x50)
     return "stop";
@@ -61067,6 +61569,8 @@ std::string size_report_target_occupant_kind(const std::vector<ResolvedStep>& st
 }
 
 std::string size_report_opcode_text(int opcode) {
+  if (opcode < 0)
+    return "unencoded logical address";
   std::string text = opcode_by_code(opcode).name;
   if (text.empty())
     text = "opcode " + std::to_string(opcode);
@@ -61080,6 +61584,8 @@ std::string size_report_target_overlay_compatibility(const std::vector<ResolvedS
   if (index + 1U >= steps.size())
     return "no-next-cell";
   const int operand_opcode = steps.at(index).opcode;
+  if (operand_opcode < 0)
+    return "requires-physical-layout";
   const int target_actual = formal_address_info(operand_opcode).actual;
   const int next_opcode = steps.at(index + 1U).opcode;
   if (next_opcode == operand_opcode)
@@ -62444,8 +62950,8 @@ SizeAttributionReport build_size_attribution_report(
   for (std::size_t index = 0; index < steps.size(); ++index)
     index_by_address.emplace(steps.at(index).address, index);
 
-  // ResolvedStep intentionally keeps address operands as ordinary byte-sized
-  // listing entries.  Do not reinterpret an operand whose numeric value is
+  // ResolvedStep keeps address operands as distinct typed listing cells.
+  // Do not reinterpret an encoded operand whose numeric value is
   // itself an address-taking opcode as a second instruction.  Apart from
   // inventing bogus calls, that used to create overlapping helper regions and
   // merge unrelated symbolic-stack paths in the size report.
@@ -62453,7 +62959,7 @@ SizeAttributionReport build_size_attribution_report(
   for (std::size_t index = 0; index < steps.size(); ++index) {
     if (address_operand.at(index))
       continue;
-    if (!opcode_by_code(steps.at(index).opcode).takes_address || index + 1U >= steps.size())
+    if (!resolved_step_takes_address(steps.at(index)) || index + 1U >= steps.size())
       continue;
     if (steps.at(index).address + 1 == steps.at(index + 1U).address)
       address_operand.at(index + 1U) = true;
@@ -62545,9 +63051,9 @@ SizeAttributionReport build_size_attribution_report(
       });
       continue;
     }
-    if (index + 1U < steps.size() && opcode_by_code(step.opcode).takes_address) {
+    if (index + 1U < steps.size() && resolved_step_takes_address(step)) {
       const std::optional<int> target =
-          size_report_direct_target(steps.at(index + 1U), index_by_address);
+          size_report_direct_target(steps.at(index + 1U), index_by_address, address_space_model_for_options(options));
       if (target.has_value()) {
         add_called_region(*target, *label);
         call_sites.push_back(CallSite{
@@ -62854,7 +63360,7 @@ SizeAttributionReport build_size_attribution_report(
           --index;
           const ResolvedStep& producer = steps.at(index);
           if (producer.opcode == 0x50 || producer.opcode == 0x52 ||
-              opcode_by_code(producer.opcode).takes_address) {
+              resolved_step_takes_address(producer)) {
             break;
           }
           const std::optional<std::pair<std::string, std::string>> argument_store =
@@ -62932,7 +63438,7 @@ SizeAttributionReport build_size_attribution_report(
       continue;
     const ResolvedStep& last = steps.at(region.end - 1);
     if (last.address + 1 != steps.at(region.end).address || last.opcode == 0x50 ||
-        last.opcode == 0x52 || opcode_by_code(last.opcode).takes_address ||
+        last.opcode == 0x52 || resolved_step_takes_address(last) ||
         indirect_flow_register_for_opcode(last.opcode).has_value())
       continue;
     for (const HelperRegionRange& suffix : helper_regions) {
@@ -63744,7 +64250,7 @@ SizeAttributionReport build_size_attribution_report(
           if (index + 1U >= end || index + 1U >= steps.size())
             return std::nullopt;
           const std::optional<int> target =
-              size_report_direct_target(steps.at(index + 1U), index_by_address);
+              size_report_direct_target(steps.at(index + 1U), index_by_address, address_space_model_for_options(options));
           if (!target.has_value())
             return std::nullopt;
           const auto target_it = index_by_address.find(*target);
@@ -64112,7 +64618,7 @@ SizeAttributionReport build_size_attribution_report(
             std::size_t cause_index = *lost_before_index - 1U;
             if (cause_index > 0U &&
                 steps.at(cause_index - 1U).address + 1 == steps.at(cause_index).address &&
-                opcode_by_code(steps.at(cause_index - 1U).opcode).takes_address) {
+                resolved_step_takes_address(steps.at(cause_index - 1U))) {
               cause_index -= 1U;
             }
             const ResolvedStep& cause = steps.at(cause_index);
@@ -64751,10 +65257,10 @@ SizeAttributionReport build_size_attribution_report(
             return target_it != index_by_address.end() &&
                    target_it->second > start_index && target_it->second <= end_index;
           };
-          if (opcode_by_code(steps.at(source).opcode).takes_address &&
+          if (resolved_step_takes_address(steps.at(source)) &&
               source + 1U < steps.size()) {
             const std::optional<int> target =
-                size_report_direct_target(steps.at(source + 1U), index_by_address);
+                size_report_direct_target(steps.at(source + 1U), index_by_address, address_space_model_for_options(options));
             if (target.has_value() && enters_lifetime(*target)) {
               return "external-direct-entry@" +
                      safe_format_label_address(steps.at(source).address);
@@ -69037,8 +69543,9 @@ SizeAttributionReport build_size_attribution_report(
     occupant_kind_by_address[step.address] = kind;
     if (kind == "address-operand") {
       operand_executable_by_address[step.address] = size_report_opcode_text(step.opcode);
+      const auto target = resolved_step_target(step, address_space_model_for_options(options));
       operand_flow_target_by_address[step.address] =
-          safe_format_label_address(formal_address_info(step.opcode).actual);
+          target.has_value() ? safe_format_label_address(*target) : "unresolved";
       if (index > 0)
         operand_owner_by_address[step.address] =
             size_report_target_occupant_text(steps.at(index - 1U));
@@ -69846,6 +70353,7 @@ struct FractionalConstantSelectorSource {
 struct FractionalConstantSelectorPlanWithBenefit {
   FractionalConstantSelectorPlan plan;
   int benefit = 0;
+  int flow_rank = 0;
 };
 
 struct DirectFlowTargetStats {
@@ -69857,16 +70365,16 @@ std::map<int, DirectFlowTargetStats>
 direct_flow_target_stats(const std::vector<ResolvedStep>& steps, const CompileOptions& options) {
   std::map<int, DirectFlowTargetStats> stats;
   for (std::size_t index = 0; index + 1U < steps.size(); ++index) {
-    if (!opcode_by_code(steps.at(index).opcode).takes_address)
+    if (!resolved_step_takes_address(steps.at(index)))
       continue;
-    const FormalAddressInfo info =
-        formal_address_info(steps.at(index + 1U).opcode, address_space_model_for_options(options));
-    if (info.kind != FormalAddressKind::Official) {
+    const auto logical =
+        resolved_logical_target(steps.at(index + 1U), address_space_model_for_options(options));
+    if (!logical.has_value()) {
       ++index;
       continue;
     }
-    const int target = info.actual;
-    if (target < 0 || target > official_last_program_address_for_options(options)) {
+    const int target = *logical;
+    if (target < 0) {
       ++index;
       continue;
     }
@@ -69883,11 +70391,11 @@ int direct_flow_target_rank(const std::vector<ResolvedStep>& steps, int target,
                             const CompileOptions& options) {
   int rank = 0;
   for (std::size_t index = 0; index + 1U < steps.size(); ++index) {
-    if (!opcode_by_code(steps.at(index).opcode).takes_address)
+    if (!resolved_step_takes_address(steps.at(index)))
       continue;
-    const FormalAddressInfo info =
-        formal_address_info(steps.at(index + 1U).opcode, address_space_model_for_options(options));
-    if (info.kind == FormalAddressKind::Official && info.actual == target)
+    const auto logical =
+        resolved_logical_target(steps.at(index + 1U), address_space_model_for_options(options));
+    if (logical == target)
       rank += static_cast<int>(steps.size() - index);
     ++index;
   }
@@ -69976,6 +70484,33 @@ discover_fractional_constant_selector_plans(const CompileResult& result,
   std::vector<FractionalConstantSelectorPlanWithBenefit> plans;
   for (const FractionalConstantSelectorSource& source :
        fractional_constant_selector_sources(result, program)) {
+    // The source artifact may still have unencoded logical targets. Do not
+    // require an address byte (or an indirect selector value) for those
+    // positions before the layout solver has placed their command identities.
+    // A two-digit carrier leaves exactly six fractional mantissa digits; no
+    // rounding/truncation of a source constant is admitted by this seed.
+    if (result.steps.size() > program_step_limit_size_for_options(options) &&
+        !include_dead_integer_plans && source.value.substr(2).size() <= 6U) {
+      int deferred_benefit = 0;
+      int deferred_rank = 0;
+      for (const auto& [target, stats] : target_stats) {
+        const int benefit = stats.count - source.use_count;
+        const int rank = direct_flow_target_rank(result.steps, target, options);
+        if (benefit > deferred_benefit ||
+            (benefit == deferred_benefit && rank > deferred_rank)) {
+          deferred_benefit = benefit;
+          deferred_rank = rank;
+        }
+      }
+      if (deferred_benefit > 0) {
+        plans.push_back(FractionalConstantSelectorPlanWithBenefit{
+            .plan = FractionalConstantSelectorPlan{
+                .value = source.value, .target = 10, .deferred_binding = true},
+            .benefit = deferred_benefit,
+            .flow_rank = deferred_rank,
+        });
+      }
+    }
     for (const auto& [target, stats] : target_stats) {
       const std::optional<std::string> selector_value =
           fractional_selector_preload_value(source.value, target);
@@ -70012,6 +70547,7 @@ discover_fractional_constant_selector_plans(const CompileResult& result,
       plans.push_back(FractionalConstantSelectorPlanWithBenefit{
           .plan = FractionalConstantSelectorPlan{.value = source.value, .target = target},
           .benefit = ranking_benefit,
+          .flow_rank = direct_flow_target_rank(result.steps, target, options),
       });
     }
   }
@@ -70021,12 +70557,10 @@ discover_fractional_constant_selector_plans(const CompileResult& result,
                 const FractionalConstantSelectorPlanWithBenefit& right) {
               if (left.benefit != right.benefit)
                 return left.benefit > right.benefit;
-              const int left_rank = direct_flow_target_rank(result.steps, left.plan.target, options);
-              const int right_rank =
-                  direct_flow_target_rank(result.steps, right.plan.target, options);
-              if (left_rank != right_rank)
-                return left_rank > right_rank;
-              return left.plan.value < right.plan.value;
+              if (left.flow_rank != right.flow_rank)
+                return left.flow_rank > right.flow_rank;
+              return std::tie(left.plan.value, left.plan.deferred_binding, left.plan.target) <
+                     std::tie(right.plan.value, right.plan.deferred_binding, right.plan.target);
             });
   std::vector<FractionalConstantSelectorPlan> result_plans;
   result_plans.reserve(plans.size());
@@ -74497,6 +75031,11 @@ CompileResult compile_source_for_optimizer_profile(
         result = *post_dark_empty_return;
       }
     }
+    // Late geometry and selector release can unlock an earlier rejected
+    // erasure. Explicit lowering variants need the same bounded, strictly
+    // shrinking finalization fixed point as automatic candidate selection.
+    result = apply_finalization_fixed_point_to_selected_result(
+        source, std::move(result), options, options);
     write_compile_result_cache(source, options, result);
     return result;
   }
@@ -74843,6 +75382,8 @@ CompileResult compile_source_for_optimizer_profile(
           CompileOptions candidate_options = base_options;
           candidate_options.dual_use_constant_indirect_flow = true;
           candidate_options.fractional_constant_selectors = {plan};
+          if (plan.deferred_binding)
+            candidate_options.assume_dead_selector_integer_part = false;
           std::vector<std::string> forced =
               candidate_options.force_fractional_constant_selector_preloads;
           forced.push_back(plan.value);
@@ -74861,6 +75402,8 @@ CompileResult compile_source_for_optimizer_profile(
             plain_plans.resize(limit);
           for (const FractionalConstantSelectorPlan& discovered_plan : plain_plans) {
             for (int target_shift = 0; target_shift <= target_seed_slack; ++target_shift) {
+              if (discovered_plan.deferred_binding && target_shift != 0)
+                break;
               FractionalConstantSelectorPlan plan = discovered_plan;
               plan.target += target_shift;
               if (plan.target >=
@@ -74869,8 +75412,15 @@ CompileResult compile_source_for_optimizer_profile(
 
               CompileOptions candidate_options = base_options_for_plan(plan);
               const std::string key = implemented_candidate_key(candidate_options);
-              if (tried.insert(key).second)
-                add_configured_candidate(std::move(candidate_options), name, detail(plan));
+              if (tried.insert(key).second) {
+                add_configured_candidate(
+                    std::move(candidate_options),
+                    plan.deferred_binding ? name + "-deferred-layout" : name,
+                    plan.deferred_binding
+                        ? "Deferred the target of fractional constant " + plan.value +
+                              " to joint command-identity placement and exact preload rebinding"
+                        : detail(plan));
+              }
 
               CompileOptions refined_options = base_options_for_plan(plan);
               if (refined_options.tail_branch_inversion) {
@@ -75750,6 +76300,22 @@ CompileResult compile_source_for_optimizer_profile(
       "x-param-value-function",
       "Passed simple value-function arguments through X instead of allocating a parameter "
       "register");
+  add_candidate(
+      [](CompileOptions& candidate_options) {
+        candidate_options.x_param_value_functions = true;
+        candidate_options.preloaded_indexed_update_prefix = true;
+        candidate_options.cached_expression_operand_forwarding = true;
+      },
+      "preloaded-indexed-update-prefix",
+      "Compared a caller-preloaded indexed-update prefix with the ordinary ABI after "
+      "whole-program register allocation and final layout");
+  add_candidate(
+      [](CompileOptions& candidate_options) {
+        candidate_options.cached_expression_operand_forwarding = true;
+      },
+      "cached-expression-operand-forwarding",
+      "Compared proved current-X expression reuse with ordinary operand scheduling on "
+      "final artifact size");
   add_candidate(
       [](CompileOptions& candidate_options) {
         candidate_options.sign_normalized_x_param = true;
@@ -77435,6 +78001,27 @@ CompileResult compile_source_for_optimizer_profile(
 
   evaluate_queued_candidates();
 
+  // Representation-changing lowering can expose dead producers that were not
+  // dead in the original source. Compose the existing lifetime cleanup with
+  // both lowering roots before final layout, rather than only trying it as a
+  // standalone flag on the original options. Keep the roots immutable: this
+  // finite closure must not depend on which cleanup candidate wins first.
+  if (needs_size_rescue && selected_still_overflows_now()) {
+    const std::array<CompileOptions, 2> lifetime_roots{initial_options, best_options};
+    std::set<std::string> lifetime_root_keys;
+    for (CompileOptions lifetime_options : lifetime_roots) {
+      if (lifetime_options.dead_source_residual_temp_reuse)
+        continue;
+      lifetime_options.dead_source_residual_temp_reuse = true;
+      if (!lifetime_root_keys.insert(implemented_candidate_key(lifetime_options)).second)
+        continue;
+      add_configured_candidate(
+          lifetime_options, "lowering-seed-lifetime-composition",
+          "Recomputed dead-source temporary reuse after representation-changing lowering");
+    }
+    evaluate_queued_candidates();
+  }
+
   // Bounded search still needs to compose a locally profitable semantic
   // lowering with register-releasing constant demotions.  Keep a small
   // proof-gated frontier of the best domain-error candidates and extend each
@@ -77525,11 +78112,11 @@ CompileResult compile_source_for_optimizer_profile(
     };
     const std::size_t kBeamWidth = env_size("MKPRO_BEAM_WIDTH", 6);
     const int kBeamRounds = static_cast<int>(env_size("MKPRO_BEAM_ROUNDS", 6));
-    // Definitive search mode: feed the beam every single optimization flag as a
+    // Broader search mode: feed the beam every single optimization flag as a
     // standalone primitive (MKPRO_BEAM_PRIMITIVES), not just the curated
     // multi-flag closures. This lets the beam form arbitrary flag subsets the
-    // curated bundles never expressed, conclusively answering whether any
-    // untried combination of existing passes beats the incumbent.
+    // curated bundles never expressed. Width and depth still bound the search;
+    // failure to improve is not proof that no better combination exists.
     if (const char* prim = std::getenv("MKPRO_BEAM_PRIMITIVES");
         prim != nullptr && prim[0] != '\0' && prim[0] != '0') {
       const std::vector<std::function<void(CompileOptions&)>> primitive_toggles = {
@@ -77591,8 +78178,16 @@ CompileResult compile_source_for_optimizer_profile(
     struct BeamNode {
       CompileOptions options;
       std::size_t size;
+      std::string key;
     };
     std::set<std::string> beam_seen;
+    std::set<std::string> beam_expanded;
+    const auto beam_key = [](const BeamNode& node) -> const std::string& {
+      return node.key;
+    };
+    const auto beam_better = [](const BeamNode& left, const BeamNode& right) {
+      return left.size < right.size;
+    };
     auto beam_gate_ok = [&](const CompileOptions& candidate_options,
                             const CompileResult& result) -> bool {
       return !candidate_needs_static_proof_gate(candidate_options) ||
@@ -77605,8 +78200,9 @@ CompileResult compile_source_for_optimizer_profile(
     // hides, which a winner-only seed can never reach.
     std::vector<BeamNode> frontier;
     if (best.implemented) {
-      beam_seen.insert(implemented_candidate_key(best_options));
-      frontier.push_back(BeamNode{best_options, best.steps.size()});
+      const std::string key = implemented_candidate_key(best_options);
+      beam_seen.insert(key);
+      frontier.push_back(BeamNode{best_options, best.steps.size(), key});
     }
     for (const CandidateSpec& candidate : candidates) {
       const std::string key = implemented_candidate_key(candidate.options);
@@ -77620,15 +78216,14 @@ CompileResult compile_source_for_optimizer_profile(
       }
       if (!result.implemented || !beam_gate_ok(candidate.options, result))
         continue;
-      frontier.push_back(BeamNode{candidate.options, result.steps.size()});
+      frontier.push_back(BeamNode{candidate.options, result.steps.size(), key});
     }
-    std::sort(frontier.begin(), frontier.end(),
-              [](const BeamNode& a, const BeamNode& b) { return a.size < b.size; });
-    if (frontier.size() > kBeamWidth)
-      frontier.resize(kBeamWidth);
+    frontier = core::select_unexpanded_search_frontier(
+        std::move(frontier), beam_expanded, kBeamWidth, beam_key, beam_better);
     for (int round = 0; round < kBeamRounds && !frontier.empty(); ++round) {
-      std::vector<BeamNode> expanded = frontier;
+      std::vector<BeamNode> expanded;
       for (const BeamNode& node : frontier) {
+        beam_expanded.insert(node.key);
         for (const std::function<void(CompileOptions&)>& configure : beam_configures) {
           CompileOptions candidate_options = node.options;
           configure(candidate_options);
@@ -77653,14 +78248,19 @@ CompileResult compile_source_for_optimizer_profile(
             best_options = candidate_options;
             best = std::move(result);
           }
-          expanded.push_back(BeamNode{std::move(candidate_options), result_size});
+          expanded.push_back(BeamNode{std::move(candidate_options), result_size, key});
         }
       }
-      std::sort(expanded.begin(), expanded.end(),
-                [](const BeamNode& a, const BeamNode& b) { return a.size < b.size; });
-      if (expanded.size() > kBeamWidth)
-        expanded.resize(kBeamWidth);
-      frontier = std::move(expanded);
+      frontier = core::select_unexpanded_search_frontier(
+          std::move(expanded), beam_expanded, kBeamWidth, beam_key, beam_better);
+      // A logical layout can lose before placement and win after joint target
+      // binding. Retain the selected frontier, not only the ordinary-size
+      // incumbent, for the same final-layout proof and ranking as curated roots.
+      for (const BeamNode& node : frontier) {
+        add_configured_candidate(
+            node.options, "beam-search-layout-finalist",
+            "Retained an unexpanded multi-step candidate for physical layout ranking");
+      }
     }
     std::cerr << "[beam] best_main_cells=" << (best.implemented ? best.steps.size() : 0)
               << " best_key=" << implemented_candidate_key(best_options) << "\n";
@@ -78640,10 +79240,18 @@ CompileResult compile_source_for_optimizer_profile(
           }
         }
         if (shares_equal_entry_value) {
-          CompileOptions logical_options = best_options;
+          const CompileOptions logical_base_options = best_options;
+          for (const bool preserve_singletons : {true, false}) {
+          CompileOptions logical_options = logical_base_options;
           logical_options.collect_logical_register_allocation = false;
           logical_options.forced_logical_register_assignments =
-              logical_probe.logical_register_assignments;
+              preserve_singletons ? logical_probe.logical_register_assignments
+                                  : shared_logical_register_pins(
+                                        logical_probe.logical_register_assignments);
+          if (!preserve_singletons &&
+              logical_options.forced_logical_register_assignments.size() ==
+                  logical_probe.logical_register_assignments.size())
+            continue;
           CompileOptions compile_options = logical_options;
           CompileResult logical_candidate = compile_source_once(
               source, compile_options, source_has_entered,
@@ -78687,9 +79295,18 @@ CompileResult compile_source_for_optimizer_profile(
                       "with identical setup literals, then regenerated and "
                       "re-finalized the complete program.",
               });
+              if (!preserve_singletons) {
+                logical_candidate.optimizations.push_back(OptimizationReport{
+                    .name = "shared-only-logical-register-pinning",
+                    .detail = "Retained proved shared colors and entry preload ownership, "
+                              "but let normal profile-constrained allocation place singleton "
+                              "live ranges for the selected lowering and layout.",
+                });
+              }
               best_options = std::move(logical_options);
               best = std::move(logical_candidate);
             }
+          }
           }
         }
       }
@@ -78703,7 +79320,7 @@ CompileResult compile_source_for_optimizer_profile(
   // Helper sharing changes the profitability of parameter ABIs. Revisit the
   // finite entry-ABI neighbourhood on one immutable finalized option seed,
   // not on the original lowering or an enumeration-order-dependent incumbent.
-  // Three independent choices admit at most seven nonempty subsets. Preserve
+  // Four independent choices admit at most fifteen nonempty subsets. Preserve
   // the legacy one-X probe for already fitting results; additional subsets are
   // only needed while the requested size target remains unmet.
   if (needs_size_rescue) {
@@ -78711,7 +79328,7 @@ CompileResult compile_source_for_optimizer_profile(
     const bool explore_abi_subsets = best.implemented && best.steps.size() > rescue_threshold;
     std::set<std::string> abi_option_keys{implemented_candidate_key(abi_base_options)};
     std::map<std::string, CompileResult> abi_finalized_inputs;
-    for (unsigned mask = 1; mask < (explore_abi_subsets ? 8U : 2U); ++mask) {
+    for (unsigned mask = 1; mask < (explore_abi_subsets ? 16U : 2U); ++mask) {
       try {
         CompileOptions abi_options = abi_base_options;
         std::vector<std::string> entries;
@@ -78729,6 +79346,23 @@ CompileResult compile_source_for_optimizer_profile(
           abi_options.x_param_value_functions = true;
           abi_options.x_param_y_stack_stored_entry = true;
           entries.push_back("stored X/Y parameter entry");
+        }
+        if ((mask & 8U) != 0) {
+          abi_options.preloaded_indexed_update_prefix =
+              !abi_base_options.preloaded_indexed_update_prefix;
+          if (abi_options.preloaded_indexed_update_prefix) {
+            abi_options.cached_expression_operand_forwarding = true;
+            abi_options.forced_logical_register_assignments = shared_logical_register_pins(
+                abi_base_options.forced_logical_register_assignments);
+            // A changed entry ABI can expose common traversal bodies. Compose
+            // the existing generic sharing passes, not a source-specific walk.
+            abi_options.callee_hole_straight_line_helper = true;
+            abi_options.callee_hole_boundary_normalization = true;
+            abi_options.defer_return_suffix_until_callee_hole = true;
+          }
+          entries.push_back(abi_options.preloaded_indexed_update_prefix
+                                ? "caller-preloaded indexed update prefix"
+                                : "ordinary indexed update prefix");
         }
         if (!abi_option_keys.insert(implemented_candidate_key(abi_options)).second)
           continue;
@@ -78802,6 +79436,116 @@ CompileResult compile_source_for_optimizer_profile(
     }
   }
 
+  // Earlier copy candidates start from the base lowering and may be filtered
+  // by estimated search cost. Revisit an actual copy opportunity on the fully
+  // refined incumbent, retaining every already selected ABI/layout decision.
+  std::set<std::string> final_copy_probe_keys;
+  const auto consider_final_copy_coalescing = [&] {
+    if (!best.implemented || best_options.coalesce_copies)
+      return;
+    bool has_copy = false;
+    for (std::size_t index = 1; index < best.steps.size(); ++index) {
+      const int recall = best.steps[index - 1].opcode;
+      const int store = best.steps[index].opcode;
+      has_copy = has_copy ||
+          (recall >= 0x60 && recall <= 0x6e && store >= 0x40 && store <= 0x4e);
+    }
+    if (!has_copy)
+      return;
+    CompileOptions candidate_options = best_options;
+    candidate_options.coalesce_copies = true;
+    if (!final_copy_probe_keys.insert(compile_once_cache_key(candidate_options)).second)
+      return;
+    try {
+      CompileOptions compile_options = candidate_options;
+      CompileResult candidate = compile_source_once(
+          source, compile_options, source_has_entered,
+          /*apply_final_layout_size_rescue=*/true);
+      if (!candidate.implemented &&
+          can_retry_lowering_attempt_in_analysis(candidate, compile_options)) {
+        compile_options.analysis = true;
+        candidate = compile_source_once(source, compile_options, source_has_entered,
+                                        /*apply_final_layout_size_rescue=*/true);
+      }
+      const bool proved = !candidate_needs_static_proof_gate(compile_options) ||
+          !optimizer_static_gate_rejection_reason(compile_options, candidate).has_value();
+      if (trace_candidates)
+        std::cerr << "[candidate-trace] final-copy-coalescing implemented="
+                  << candidate.implemented << " proved=" << proved
+                  << " steps=" << candidate.steps.size()
+                  << " incumbent=" << best.steps.size() << '\n';
+      if (candidate.implemented && proved && candidate_beats_best(candidate, best, options)) {
+        candidate.optimizations.push_back(OptimizationReport{
+            .name = "final-copy-coalescing-selection",
+            .detail = "Selected copy coalescing on the independently finalized incumbent: " +
+                      std::to_string(best.steps.size()) + " -> " +
+                      std::to_string(candidate.steps.size()) + " cells.",
+        });
+        best_options = std::move(candidate_options);
+        best = std::move(candidate);
+      }
+    } catch (const std::exception&) {
+      // An unproved or unsupported alternative cannot replace the incumbent.
+    }
+  };
+  consider_final_copy_coalescing();
+
+  // Reconsider register allocation after DSE, not just before lowering. This
+  // bounded alternative exchanges a late flow selector for a data literal;
+  // the complete final artifact, not the local digit count, decides the winner.
+  // Run after every incumbent refinement so a newly chosen data pool cannot
+  // discard a better constant-demotion or helper-ABI branch of the search.
+  if (best.implemented && !best_options.late_literal_preloads) {
+    int digits = 0;
+    bool has_long_literal = false;
+    for (const ResolvedStep& step : best.steps) {
+      digits = step.opcode >= 0 && step.opcode <= 9 ? digits + 1 : 0;
+      has_long_literal = has_long_literal || digits >= 2;
+    }
+    if (has_long_literal) {
+      try {
+        CompileOptions candidate_options = best_options;
+        candidate_options.late_literal_preloads = true;
+        CompileOptions compile_options = candidate_options;
+        CompileResult candidate = compile_source_once(
+            source, compile_options, source_has_entered,
+            /*apply_final_layout_size_rescue=*/true);
+        if (!candidate.implemented &&
+            can_retry_lowering_attempt_in_analysis(candidate, compile_options)) {
+          compile_options.analysis = true;
+          candidate = compile_source_once(source, compile_options, source_has_entered,
+                                          /*apply_final_layout_size_rescue=*/true);
+        }
+        const bool proved = !candidate_needs_static_proof_gate(compile_options) ||
+            !optimizer_static_gate_rejection_reason(compile_options, candidate).has_value();
+        const bool used_pool = std::any_of(
+            candidate.optimizations.begin(), candidate.optimizations.end(),
+            [](const OptimizationReport& optimization) {
+              return optimization.name == "late-literal-preload";
+            });
+        if (trace_candidates) {
+          std::cerr << "[candidate-trace] late-literal-preload implemented="
+                    << candidate.implemented << " proved=" << proved
+                    << " applied=" << used_pool << " steps=" << candidate.steps.size() << "\n";
+        }
+        if (candidate.implemented && proved && used_pool &&
+            candidate_beats_best(candidate, best, options)) {
+          candidate.optimizations.push_back(OptimizationReport{
+              .name = "late-literal-preload-selection",
+              .detail = "Selected the independently finalized data-pool candidate: " +
+                        std::to_string(best.steps.size()) + " -> " +
+                        std::to_string(candidate.steps.size()) + " cells.",
+          });
+          best_options = std::move(candidate_options);
+          best = std::move(candidate);
+        }
+      } catch (const std::exception&) {
+        // An unsupported proof/layout leaves the proved incumbent unchanged.
+      }
+    }
+  }
+
+  consider_final_copy_coalescing();
   if (options.fast_candidate_search &&
       std::none_of(best.optimizations.begin(), best.optimizations.end(),
                    [](const OptimizationReport& optimization) {

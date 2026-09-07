@@ -3,6 +3,7 @@
 #include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/opcodes.hpp"
+#include "mkpro/core/passes/cfg.hpp"
 #include "mkpro/core/passes/liveness_analysis.hpp"
 
 #include <algorithm>
@@ -194,8 +195,8 @@ RegisterDataflowState drop_mutated_selector_fact(const RegisterDataflowState& in
 
 RegisterDataflowState transfer_indirect_flow_register_state(const RegisterDataflowState& input,
                                                             const IrOp& op) {
-  if (mkpro::core::is_stable_indirect_selector(op.register_name))
-    return clone_register_dataflow_state(input);
+  // Stable classes avoid +/-1, but can still discard a fractional part.
+  // Without a whole-word preservation proof, the old register alias is dead.
   return drop_mutated_selector_fact(input, op.register_name);
 }
 
@@ -211,8 +212,7 @@ transfer_indirect_conditional_register_state(const RegisterDataflowState& input,
       .y = input.y,
       .x2 = transfer_conditional_x2_register_set(input, effect),
   };
-  if (edge == X2DataflowEdgeKind::Jump &&
-      !mkpro::core::is_stable_indirect_selector(op.register_name)) {
+  if (edge == X2DataflowEdgeKind::Jump) {
     return drop_mutated_selector_fact(output, op.register_name);
   }
   return output;
@@ -378,102 +378,22 @@ struct RegisterValueEdge {
 
 std::vector<std::vector<RegisterValueEdge>>
 build_register_value_graph(const std::vector<IrOp>& ops) {
-  const std::map<std::string, int> labels = label_indexes(ops);
-  const std::map<int, int> addresses = address_indexes(ops);
+  const ControlFlowGraph control = build_control_flow_graph(ops);
   std::vector<std::vector<RegisterValueEdge>> successors(ops.size());
-  std::vector<int> call_returns;
-
   for (std::size_t index = 0; index < ops.size(); ++index) {
     const IrOp& op = ops.at(index);
-    const int next = static_cast<int>(index + 1U);
-    if ((op.kind == IrKind::Call ||
-         (op.kind == IrKind::IndirectCall && known_indirect_flow_target(op).has_value())) &&
-        next < static_cast<int>(ops.size())) {
-      call_returns.push_back(next);
+    // Retain the existing X2 boundary at a user interaction. Executable
+    // branch/call targets come from the authoritative typed CFG.
+    if (op.kind == IrKind::Stop && (op.semantic == "halt" || op.semantic == "unknown"))
+      continue;
+    for (const CfgEdge& edge : control.edges.at(index)) {
+      const X2DataflowEdgeKind kind =
+          edge.kind == CfgEdgeKind::Jump ? X2DataflowEdgeKind::Jump
+          : edge.kind == CfgEdgeKind::Fallthrough ? X2DataflowEdgeKind::Fallthrough
+                                                : X2DataflowEdgeKind::Normal;
+      successors.at(index).push_back(RegisterValueEdge{.target = edge.target, .kind = kind});
     }
   }
-
-  for (std::size_t index = 0; index < ops.size(); ++index) {
-    const IrOp& op = ops.at(index);
-    const int next = static_cast<int>(index + 1U);
-    auto fallthrough = [&]() {
-      if (next < static_cast<int>(ops.size())) {
-        successors.at(index).push_back(
-            RegisterValueEdge{.target = next, .kind = X2DataflowEdgeKind::Fallthrough});
-      }
-    };
-    auto normal = [&](int target) {
-      successors.at(index).push_back(
-          RegisterValueEdge{.target = target, .kind = X2DataflowEdgeKind::Normal});
-    };
-    auto jump_to_address = [&](int target) {
-      const auto found = addresses.find(target);
-      if (found != addresses.end()) {
-        successors.at(index).push_back(
-            RegisterValueEdge{.target = found->second, .kind = X2DataflowEdgeKind::Jump});
-      }
-    };
-    auto jump_to = [&](const IrTarget& target) {
-      if (const auto* address = std::get_if<int>(&target)) {
-        jump_to_address(*address);
-        return;
-      }
-      const auto* label = std::get_if<std::string>(&target);
-      if (label == nullptr)
-        return;
-      const auto found = labels.find(*label);
-      if (found != labels.end()) {
-        successors.at(index).push_back(
-            RegisterValueEdge{.target = found->second, .kind = X2DataflowEdgeKind::Jump});
-      }
-    };
-
-    switch (op.kind) {
-    case IrKind::Label:
-    case IrKind::Store:
-    case IrKind::Recall:
-    case IrKind::IndirectStore:
-    case IrKind::IndirectRecall:
-    case IrKind::Plain:
-    case IrKind::OrphanAddress:
-      fallthrough();
-      break;
-    case IrKind::Stop:
-      if (op.semantic != "halt" && op.semantic != "unknown")
-        fallthrough();
-      break;
-    case IrKind::Jump:
-      jump_to(op.target);
-      break;
-    case IrKind::CondJump:
-    case IrKind::Loop:
-      jump_to(op.target);
-      fallthrough();
-      break;
-    case IrKind::Call:
-      jump_to(op.target);
-      break;
-    case IrKind::IndirectJump:
-    case IrKind::IndirectCall:
-      if (const std::optional<int> target = known_indirect_flow_target(op))
-        jump_to_address(*target);
-      for (const std::string& label : computed_dispatch_target_labels(op))
-        jump_to(label);
-      break;
-    case IrKind::IndirectCondJump:
-      if (const std::optional<int> target = known_indirect_flow_target(op))
-        jump_to_address(*target);
-      for (const std::string& label : computed_dispatch_target_labels(op))
-        jump_to(label);
-      fallthrough();
-      break;
-    case IrKind::Return:
-      for (const int target : call_returns)
-        normal(target);
-      break;
-    }
-  }
-
   return successors;
 }
 
@@ -586,6 +506,8 @@ std::map<int, int> address_indexes(const std::vector<IrOp>& ops) {
 }
 
 std::set<int> compute_label_entry_indexes(const std::vector<IrOp>& ops) {
+  const auto labels = label_indexes(ops);
+  const auto addresses = address_indexes(ops);
   std::set<std::string> string_targets;
   std::set<int> numeric_targets;
   bool unknown_indirect_flow = false;
@@ -598,11 +520,19 @@ std::set<int> compute_label_entry_indexes(const std::vector<IrOp>& ops) {
         numeric_targets.insert(*numeric);
     }
     if (is_indirect_flow_op(op)) {
-      const std::optional<int> indirect_target = known_indirect_flow_target(op);
-      if (!indirect_target.has_value()) {
+      const auto targets = indirect_flow_targets_for_analysis(op);
+      if (!targets.has_value()) {
         unknown_indirect_flow = true;
       } else {
-        numeric_targets.insert(*indirect_target);
+        for (const IrTarget& target : *targets) {
+          if (const auto* label = std::get_if<std::string>(&target)) {
+            string_targets.insert(*label);
+            unknown_indirect_flow = unknown_indirect_flow || !labels.contains(*label);
+          } else if (const auto* address = std::get_if<int>(&target)) {
+            numeric_targets.insert(*address);
+            unknown_indirect_flow = unknown_indirect_flow || !addresses.contains(*address);
+          }
+        }
       }
     }
   }
@@ -1024,8 +954,7 @@ std::vector<int> stack_difference_call_return_indexes(const std::vector<IrOp>& o
     const int next = static_cast<int>(index + 1U);
     if (next >= static_cast<int>(ops.size()))
       continue;
-    if (op.kind == IrKind::Call ||
-        (op.kind == IrKind::IndirectCall && known_indirect_flow_target(op).has_value()))
+    if (op.kind == IrKind::Call || op.kind == IrKind::IndirectCall)
       returns.push_back(next);
   }
   return returns;
@@ -1042,6 +971,20 @@ std::optional<int> address_stable_flow_target_index(const std::map<int, int>& ad
   if (must_be_before.has_value() && found->second >= *must_be_before)
     return std::nullopt;
   return found->second;
+}
+
+std::optional<int> stable_indirect_flow_target_index(
+    const IrOp& op, const std::map<std::string, int>& labels,
+    const std::map<int, int>& addresses, std::optional<int> numeric_limit) {
+  const auto targets = indirect_flow_targets_for_analysis(op);
+  if (!targets.has_value() || targets->size() != 1U)
+    return std::nullopt;
+  if (const auto* label = std::get_if<std::string>(&targets->front())) {
+    const auto found = labels.find(*label);
+    return found == labels.end() ? std::nullopt : std::optional<int>{found->second};
+  }
+  return address_stable_flow_target_index(
+      addresses, std::get<int>(targets->front()), numeric_limit);
 }
 
 bool stack_difference_can_reach_consumer(
@@ -1164,15 +1107,13 @@ bool stack_difference_can_reach_consumer(
                      *depth, std::move(next_stack));
       }
       case IrKind::IndirectJump: {
-        const std::optional<int> target = known_indirect_flow_target(op);
         const std::optional<int> target_index =
-            address_stable_flow_target_index(addresses, target, indirect_numeric_limit);
+            stable_indirect_flow_target_index(op, labels, addresses, indirect_numeric_limit);
         return !target_index.has_value() ? true : visit(*target_index, *depth, return_stack);
       }
       case IrKind::IndirectCall: {
-        const std::optional<int> target = known_indirect_flow_target(op);
         const std::optional<int> target_index =
-            address_stable_flow_target_index(addresses, target, indirect_numeric_limit);
+            stable_indirect_flow_target_index(op, labels, addresses, indirect_numeric_limit);
         if (!target_index.has_value() || return_stack.size() >= 5U)
           return true;
         std::vector<int> next_stack = return_stack;
@@ -1180,9 +1121,8 @@ bool stack_difference_can_reach_consumer(
         return visit(*target_index, *depth, std::move(next_stack));
       }
       case IrKind::IndirectCondJump: {
-        const std::optional<int> target = known_indirect_flow_target(op);
         const std::optional<int> target_index =
-            address_stable_flow_target_index(addresses, target, indirect_numeric_limit);
+            stable_indirect_flow_target_index(op, labels, addresses, indirect_numeric_limit);
         return (!target_index.has_value() ? true : visit(*target_index, *depth, return_stack)) ||
                visit(index + 1, *depth, return_stack);
       }
@@ -1350,15 +1290,13 @@ bool x2_sync_can_expose_context_sensitive_restore(const std::vector<IrOp>& ops, 
                      std::move(next_stack), true);
       }
       case IrKind::IndirectJump: {
-        const std::optional<int> target = known_indirect_flow_target(op);
         const std::optional<int> target_index =
-            address_stable_flow_target_index(addresses, target, indirect_numeric_limit);
+            stable_indirect_flow_target_index(op, labels, addresses, indirect_numeric_limit);
         return !target_index.has_value() ? true : visit(*target_index, return_stack, true);
       }
       case IrKind::IndirectCall: {
-        const std::optional<int> target = known_indirect_flow_target(op);
         const std::optional<int> target_index =
-            address_stable_flow_target_index(addresses, target, indirect_numeric_limit);
+            stable_indirect_flow_target_index(op, labels, addresses, indirect_numeric_limit);
         if (!target_index.has_value() || return_stack.size() >= 5U)
           return true;
         std::vector<int> next_stack = return_stack;
@@ -1366,9 +1304,8 @@ bool x2_sync_can_expose_context_sensitive_restore(const std::vector<IrOp>& ops, 
         return visit(*target_index, std::move(next_stack), true);
       }
       case IrKind::IndirectCondJump: {
-        const std::optional<int> target = known_indirect_flow_target(op);
         const std::optional<int> target_index =
-            address_stable_flow_target_index(addresses, target, indirect_numeric_limit);
+            stable_indirect_flow_target_index(op, labels, addresses, indirect_numeric_limit);
         const X2Effect fallthrough =
             conditional_x2_effect_for_restore_scan(op, X2DataflowEdgeKind::Fallthrough);
         const X2Effect jump = conditional_x2_effect_for_restore_scan(op, X2DataflowEdgeKind::Jump);
@@ -4133,17 +4070,16 @@ bool is_known_return_call_op(const IrOp& op) {
   return op.kind == IrKind::Call || op.kind == IrKind::IndirectCall;
 }
 
-std::optional<int> direct_call_target_index(const IrOp& call,
-                                            const DirectReturnAnalysisContext& context) {
-  if (call.kind != IrKind::Call)
-    return std::nullopt;
-  if (const auto* label = std::get_if<std::string>(&call.target)) {
+static std::optional<int>
+return_analysis_target_index(const IrTarget& target,
+                             const DirectReturnAnalysisContext& context) {
+  if (const auto* label = std::get_if<std::string>(&target)) {
     const auto found = context.labels.find(*label);
     if (found == context.labels.end())
       return std::nullopt;
     return found->second;
   }
-  const auto* address = std::get_if<int>(&call.target);
+  const auto* address = std::get_if<int>(&target);
   if (address == nullptr)
     return std::nullopt;
   const auto found = context.addresses.find(*address);
@@ -4152,12 +4088,29 @@ std::optional<int> direct_call_target_index(const IrOp& call,
   return found->second;
 }
 
+std::optional<int> direct_call_target_index(const IrOp& call,
+                                            const DirectReturnAnalysisContext& context) {
+  if (call.kind != IrKind::Call)
+    return std::nullopt;
+  return return_analysis_target_index(call.target, context);
+}
+
 std::optional<int> known_return_call_target_index(const IrOp& call,
                                                   const DirectReturnAnalysisContext& context) {
   if (call.kind == IrKind::Call)
     return direct_call_target_index(call, context);
   if (call.kind != IrKind::IndirectCall)
     return std::nullopt;
+  if (call.meta.indirect_flow_targets.has_value()) {
+    const auto& targets = *call.meta.indirect_flow_targets;
+    if (targets.size() != 1U)
+      return std::nullopt;
+    // Typed targets identify operations in the logical program, not encoded
+    // hardware addresses. Keep this proof valid while an oversized candidate
+    // is still being optimized. Present but unresolved metadata must not fall
+    // back to a stale numeric comment and prove a different callee transparent.
+    return return_analysis_target_index(targets.front(), context);
+  }
   const std::optional<int> target = known_indirect_flow_target(call);
   if (!target.has_value())
     return std::nullopt;
@@ -4451,8 +4404,6 @@ transfer_x2_register_state_for_edge(const X2RegisterEdgeState& input, const IrOp
   }
   case IrKind::IndirectJump:
   case IrKind::IndirectCall:
-    if (mkpro::core::is_stable_indirect_selector(op.register_name))
-      return *input.x2;
     return remove_register_value(*input.x2, op.register_name);
   case IrKind::IndirectCondJump: {
     const X2Effect effect = conditional_x2_effect_for_graph_edge(op, edge);
@@ -4460,8 +4411,7 @@ transfer_x2_register_state_for_edge(const X2RegisterEdgeState& input, const IrOp
         transfer_conditional_x2_register_set_for_known_edge(input, effect);
     if (!projected.has_value())
       return std::nullopt;
-    if (edge == X2DataflowEdgeKind::Jump &&
-        !mkpro::core::is_stable_indirect_selector(op.register_name)) {
+    if (edge == X2DataflowEdgeKind::Jump) {
       return remove_register_value(*projected, op.register_name);
     }
     return projected;
@@ -5064,10 +5014,8 @@ X2ValueDataflowState internal_transfer_x2_value_dataflow_state(
   case IrKind::IndirectCall: {
     const X2ValueDataflowState closed = internal_close_x2_value_entry(input);
     const X2ValueDataflowState stable =
-        mkpro::core::is_stable_indirect_selector(op.register_name)
-            ? closed
-            : internal_drop_mutated_selector_x2_value_fact(closed, op.register_name,
-                                                           track_register_memory);
+        internal_drop_mutated_selector_x2_value_fact(closed, op.register_name,
+                                                     track_register_memory);
     return target_starts_with_vp ? x2eval::with_indirect_flow_vp_splice_source(stable) : stable;
   }
   case IrKind::IndirectCondJump: {
@@ -5104,10 +5052,8 @@ X2ValueDataflowState internal_transfer_x2_value_dataflow_state(
     if (edge != X2DataflowEdgeKind::Jump)
       return output;
     const X2ValueDataflowState stable =
-        mkpro::core::is_stable_indirect_selector(op.register_name)
-            ? output
-            : internal_drop_mutated_selector_x2_value_fact(output, op.register_name,
-                                                           track_register_memory);
+        internal_drop_mutated_selector_x2_value_fact(output, op.register_name,
+                                                     track_register_memory);
     return target_starts_with_vp ? x2eval::with_indirect_flow_vp_splice_source(stable) : stable;
   }
   case IrKind::Stop:
@@ -17229,16 +17175,6 @@ NumericLiteralRun literal_run_with_removable_suffix(const std::vector<IrOp>& ops
 }
 
 // --- stack-lift / vp-reachability proofs -----------------------------------
-std::optional<int> address_stable_flow_target_index(const std::map<int, int>& addresses,
-                                                     std::optional<int> target,
-                                                     int numeric_target_must_be_before_index) {
-  if (!target.has_value())
-    return std::nullopt;
-  const auto found = addresses.find(*target);
-  if (found == addresses.end() || found->second >= numeric_target_must_be_before_index)
-    return std::nullopt;
-  return found->second;
-}
 
 struct VpReachVisitor {
   const std::vector<IrOp>& ops;
@@ -17337,13 +17273,13 @@ struct VpReachVisitor {
           return visit(string_target ? *target + 1 : *target, std::move(next_stack));
         }
         case IrKind::IndirectJump: {
-          const std::optional<int> target_index = address_stable_flow_target_index(
-              addresses, known_indirect_flow_target(op), numeric_target_must_be_before_index);
+          const std::optional<int> target_index = stable_indirect_flow_target_index(
+              op, labels, addresses, numeric_target_must_be_before_index);
           return !target_index.has_value() ? true : visit(*target_index, return_stack);
         }
         case IrKind::IndirectCall: {
-          const std::optional<int> target_index = address_stable_flow_target_index(
-              addresses, known_indirect_flow_target(op), numeric_target_must_be_before_index);
+          const std::optional<int> target_index = stable_indirect_flow_target_index(
+              op, labels, addresses, numeric_target_must_be_before_index);
           if (!target_index.has_value() || return_stack.size() >= 5)
             return true;
           std::vector<int> next_stack;
@@ -17353,8 +17289,8 @@ struct VpReachVisitor {
           return visit(*target_index, std::move(next_stack));
         }
         case IrKind::IndirectCondJump: {
-          const std::optional<int> target_index = address_stable_flow_target_index(
-              addresses, known_indirect_flow_target(op), numeric_target_must_be_before_index);
+          const std::optional<int> target_index = stable_indirect_flow_target_index(
+              op, labels, addresses, numeric_target_must_be_before_index);
           const bool branch = !target_index.has_value() ? true : visit(*target_index, return_stack);
           return branch || visit(index + 1, return_stack);
         }

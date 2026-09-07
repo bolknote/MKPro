@@ -67,8 +67,6 @@ int safe_address_to_opcode(int address, std::vector<Diagnostic>& diagnostics,
   try {
     return official_address_to_opcode(address, address_space_model_for_options(options));
   } catch (const std::exception& error) {
-    if (options.analysis && address >= 0 && address <= 0xff)
-      return address & 0xff;
     append_diagnostic(diagnostics, DiagnosticSeverity::Error, "address-out-of-range", error.what());
     return -1;
   }
@@ -303,6 +301,20 @@ ResolvedProgram resolve_machine_items(const std::vector<MachineItem>& items,
       target_address = label_it->second;
     }
 
+    if (!item.formal_opcode.has_value() && options.analysis &&
+        target_address > official_program_last_address(address_space_model_for_options(options))) {
+      result.steps.push_back(ResolvedStep{
+          .address = address,
+          .opcode = -1,
+          .hex = "@" + std::to_string(target_address),
+          .mnemonic = "@" + std::to_string(target_address),
+          .comment = item.comment,
+          .address_target = LogicalCodeAddress{target_address},
+      });
+      ++address;
+      continue;
+    }
+
     const int opcode = item.formal_opcode.has_value()
                            ? *item.formal_opcode
                            : safe_address_to_opcode(target_address, result.diagnostics, options);
@@ -315,6 +327,10 @@ ResolvedProgram resolve_machine_items(const std::vector<MachineItem>& items,
                                      : safe_format_address(target_address,
                                                            address_space_model_for_options(options));
     result.steps.push_back(build_resolved_step(address, opcode, mnemonic, item.comment));
+    result.steps.back().address_target =
+        item.formal_opcode.has_value()
+            ? ResolvedAddress{FormalCodeAddress{*item.formal_opcode}}
+            : ResolvedAddress{LogicalCodeAddress{target_address}};
     ++address;
   }
 

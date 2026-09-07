@@ -41,6 +41,11 @@ std::optional<std::map<std::string, int>> color_precolored_register_graph(
     const PrecoloredRegisterAllocationOptions& options);
 
 PassResult register_coalesce(const std::vector<IrOp>& ops, const PassContext& context);
+// Coalesce reaching-definition webs, not all values ever stored in a register.
+// Entry values and hardware-sensitive webs retain their physical homes.
+PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
+                                      const PassContext& context);
+IrPass register_web_copy_coalesce_pass();
 IrPass register_coalesce_pass();
 
 } // namespace mkpro::core::passes

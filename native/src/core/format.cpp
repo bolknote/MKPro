@@ -462,10 +462,15 @@ std::optional<FlowInstruction> decode_flow_instruction(
       .opcode = step_opcode(step),
   };
 
+  if (instruction.opcode < 0 || instruction.opcode > 0xff)
+    return std::nullopt;
+
   const OpcodeInfo& info = opcode_by_code(instruction.opcode);
   if (info.takes_address && it->second + 1U < steps.size()) {
     instruction.operand_index = it->second + 1U;
-    instruction.target = formal_address_info(step_opcode(steps[it->second + 1U]), model).actual;
+    ResolvedStep operand = steps[it->second + 1U];
+    operand.opcode = step_opcode(operand);
+    instruction.target = resolved_step_target(operand, model);
   }
   return instruction;
 }
@@ -872,7 +877,10 @@ std::optional<std::string> manual_key_for_step(const std::vector<ResolvedStep>& 
                                                AddressSpaceModel model = AddressSpaceModel::Standard) {
   if (index >= steps.size())
     return std::nullopt;
-  if (index > 0 && opcode_by_code(steps.at(index - 1U).opcode).takes_address)
+  if (steps.at(index).opcode < 0)
+    return std::nullopt;
+  if (index > 0 && steps.at(index - 1U).opcode >= 0 &&
+      opcode_by_code(steps.at(index - 1U).opcode).takes_address)
     return format_address_operand_key(steps.at(index).opcode, model);
   const OpcodeInfo& info = opcode_by_code(steps.at(index).opcode);
   if (steps.at(index).opcode == 0x3e)
@@ -936,7 +944,9 @@ std::string manual_address_operand_patch_comment(int opcode,
 ListingRow step_to_listing_row(const ResolvedStep& step,
                                std::optional<std::string> previous_key = std::nullopt) {
   std::optional<std::string> comment = step.comment;
-  if (is_manual_address_operand_patch_opcode(step.opcode)) {
+  if (step.opcode < 0) {
+    append_listing_comment(comment, "logical address; requires final physical layout");
+  } else if (is_manual_address_operand_patch_opcode(step.opcode)) {
     append_listing_comment(comment, manual_address_operand_patch_comment(step.opcode, previous_key));
   } else if (std::optional<std::string> manual = non_manual_delivery_comment(step.opcode)) {
     append_listing_comment(comment, *manual);
@@ -1105,10 +1115,19 @@ std::string format_hex_steps(const std::vector<ResolvedStep>& steps, AddressSpac
 }
 
 std::string format_mk61s_steps(const std::vector<ResolvedStep>& steps) {
+  if (const auto reason = physical_program_image_rejection(steps))
+    throw std::runtime_error("Cannot export MK61S bytecode: " + *reason);
   return format_mk61s_steps_with_prefix(steps, "");
 }
 
 std::string format_mk61s_result(const CompileResult& result) {
+  const auto model = address_space_model_for_feature_profile(result.feature_profile);
+  if (const auto reason = physical_program_image_rejection(result.steps, model))
+    throw std::runtime_error("Cannot export MK61S bytecode: " + *reason);
+  if (result.setup_program.has_value()) {
+    if (const auto reason = physical_program_image_rejection(result.setup_program->steps, model))
+      throw std::runtime_error("Cannot export MK61S setup: " + *reason);
+  }
   std::ostringstream out;
   bool has_output = false;
   if (result.expected_mode.has_value()) {
@@ -1127,7 +1146,7 @@ std::string format_mk61s_result(const CompileResult& result) {
 
   if (!result.setup_program.has_value()) {
     append_line_break();
-    out << format_mk61s_steps(result.steps);
+    out << format_mk61s_steps_with_prefix(result.steps, "");
     return out.str();
   }
 
@@ -1258,6 +1277,12 @@ format_setup_preload_listing_steps(const std::vector<PreloadReport>& preloads) {
 }
 
 std::string format_program_tokens(const std::vector<ResolvedStep>& steps) {
+  if (const auto reason = physical_program_image_rejection(steps))
+    throw std::runtime_error("Cannot export program bytes: " + *reason);
+  return format_analysis_program_tokens(steps);
+}
+
+std::string format_analysis_program_tokens(const std::vector<ResolvedStep>& steps) {
   std::ostringstream out;
   for (std::size_t index = 0; index < steps.size(); ++index) {
     if (index > 0)

@@ -5,6 +5,7 @@
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/passes/helpers.hpp"
 #include "mkpro/core/stable_register_value_flow.hpp"
+#include "mkpro/core/selector_writeback.hpp"
 
 #include <algorithm>
 #include <array>
@@ -14,6 +15,7 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <memory>
 #include <numeric>
 #include <optional>
 #include <queue>
@@ -51,8 +53,25 @@ struct ArtifactIndex {
   int cells = 0;
 };
 
+// Layout branches copy geometry frequently, but command payloads (including
+// proof metadata) do not change when a segment is split or reordered. Keep
+// those payloads immutable and shared. A command rewrite replaces this value
+// with a newly owned payload; it cannot mutate a sibling search branch.
+class SharedLayoutItem {
+public:
+  SharedLayoutItem() : SharedLayoutItem(MachineItem{}) {}
+  SharedLayoutItem(MachineItem item)
+      : item_(std::make_shared<const MachineItem>(std::move(item))) {}
+
+  operator const MachineItem&() const { return *item_; }
+  const MachineItem* operator->() const { return item_.get(); }
+
+private:
+  std::shared_ptr<const MachineItem> item_;
+};
+
 struct OwnedItem {
-  MachineItem item;
+  SharedLayoutItem item;
   std::size_t origin = 0;
 };
 
@@ -86,6 +105,7 @@ struct SelectorCandidate {
   std::optional<std::string> value;
   int fixed_target = -1;
   bool rebindable_address = false;
+  bool rebindable_fractional_projection = false;
   std::optional<std::string> rebindable_natural_fractional_prefix;
   bool rebindable_late_bound_decimal_charge = false;
   int displaced_flow_uses = 0;
@@ -93,6 +113,7 @@ struct SelectorCandidate {
 
 bool selector_is_flexible(const SelectorCandidate& selector) {
   return selector.rebindable_address ||
+         selector.rebindable_fractional_projection ||
          selector.rebindable_natural_fractional_prefix.has_value() ||
          selector.rebindable_late_bound_decimal_charge;
 }
@@ -517,7 +538,7 @@ std::optional<std::vector<Cell>> make_cells(const std::vector<MachineItem>& item
   std::vector<OwnedItem> labels;
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
     OwnedItem owned{.item = items.at(item_index), .origin = item_index};
-    if (owned.item.kind == MachineItemKind::Label) {
+    if (owned.item->kind == MachineItemKind::Label) {
       labels.push_back(std::move(owned));
       continue;
     }
@@ -579,7 +600,7 @@ bool split_segment_with_bridge(
     std::optional<Cell> donated_command = std::nullopt) {
   if (segment_index >= segments.size() || prefix_cells == 0U ||
       prefix_cells >= segments.at(segment_index).cells.size() ||
-      segments.at(segment_index).cells.at(prefix_cells).value.item.kind ==
+      segments.at(segment_index).cells.at(prefix_cells).value.item->kind ==
           MachineItemKind::Address ||
       splits_late_decimal_selector_pair(segments.at(segment_index).cells,
                                         prefix_cells) ||
@@ -591,9 +612,9 @@ bool split_segment_with_bridge(
       selector_register >= 0 ? 0x80 + selector_register : kJumpOpcode;
   if (donated_command.has_value() &&
       (selector_register < 0 ||
-       donated_command->value.item.kind != MachineItemKind::Op ||
-       donated_command->value.item.opcode != bridge_opcode ||
-       donated_command->value.item.manual_interaction.has_value())) {
+       donated_command->value.item->kind != MachineItemKind::Op ||
+       donated_command->value.item->opcode != bridge_opcode ||
+       donated_command->value.item->manual_interaction.has_value())) {
     return false;
   }
 
@@ -653,11 +674,17 @@ int split_bridge_cells(const std::vector<TransparentSplitBridge>& bridges) {
 }
 
 std::vector<Segment> make_segments(std::vector<Cell> cells) {
+  // An address cell is classified together with its preceding command.
+  // Compute all boundaries before moving either payload into a segment.
+  std::vector<bool> cuts;
+  cuts.reserve(cells.size());
+  for (std::size_t index = 0; index < cells.size(); ++index)
+    cuts.push_back(safe_cut_after(cells, index));
   std::vector<Segment> segments;
   Segment current;
   current.ordinal = 0;
   for (std::size_t cell_index = 0; cell_index < cells.size(); ++cell_index) {
-    const bool cut = safe_cut_after(cells, cell_index);
+    const bool cut = cuts.at(cell_index);
     current.cells.push_back(std::move(cells.at(cell_index)));
     if (!cut && cell_index + 1U < cells.size())
       continue;
@@ -703,7 +730,7 @@ bool apply_transparent_segment_splits(
     const Segment& segment = segments.at(segment_index);
     if (prefix_cells >= segment.cells.size())
       return fail("split prefix reaches or exceeds the fallthrough segment");
-    if (segment.cells.at(prefix_cells).value.item.kind ==
+    if (segment.cells.at(prefix_cells).value.item->kind ==
         MachineItemKind::Address) {
       return fail("split boundary would detach an address operand");
     }
@@ -835,13 +862,13 @@ bool apply_transparent_fallthrough_jump_fold(
       (source_segment.cells.at(static_cast<std::size_t>(operand->second))
                .labels.empty() &&
        source_segment.cells.at(static_cast<std::size_t>(operand->second))
-               .value.item.kind == MachineItemKind::Address &&
+               .value.item->kind == MachineItemKind::Address &&
        !source_segment.cells.at(static_cast<std::size_t>(operand->second))
-            .value.item.raw &&
+            .value.item->raw &&
        !source_segment.cells.at(static_cast<std::size_t>(operand->second))
-            .value.item.manual_interaction.has_value() &&
+            .value.item->manual_interaction.has_value() &&
        source_segment.cells.at(static_cast<std::size_t>(operand->second))
-            .value.item.roles.empty());
+            .value.item->roles.empty());
   if (!command_cell.labels.empty() || !operand_is_transparent ||
       command.kind != MachineItemKind::Op ||
       (!direct_jump && !stable_indirect_jump) ||
@@ -1316,6 +1343,14 @@ bool register_has_nonflow_use(const std::vector<MachineItem>& items,
   });
 }
 
+struct NonFlowUseProjection {
+  bool proved = false;
+  bool has_fractional_recall = false;
+};
+
+NonFlowUseProjection prove_fractional_nonflow_projection(
+    const std::vector<MachineItem>& items, int register_index_value);
+
 std::optional<SelectorCandidate> late_bound_selector_candidate(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow, int register_index_value,
@@ -1482,6 +1517,26 @@ std::vector<SelectorCandidate> selector_candidates(
       // is admitted only with its exact runtime-proved ±magnitude.
       if (sign_toggle_written)
         continue;
+
+      // A projected data constant need not already be used as an address.
+      // Keep its target symbolic during opportunity discovery; the ordinary
+      // flexible-placement path supplies the physical range constraint and
+      // rebind_preloads proves the exact delivered fractional value afterwards.
+      // Integer-only constants retain their existing address-only treatment.
+      if (exact_existing_uses && value.find('.') != std::string::npos) {
+        const NonFlowUseProjection projection =
+            prove_fractional_nonflow_projection(items, index);
+        if (projection.proved && projection.has_fractional_recall) {
+          result.push_back(SelectorCandidate{
+              .register_index = index,
+              .register_name = name,
+              .origin = NaturalTargetSelectorOrigin::ExistingPreload,
+              .fixed_target = current_target,
+              .rebindable_fractional_projection = true,
+              .displaced_flow_uses = static_cast<int>(uses.size()),
+          });
+        }
+      }
 
       if (report.retunable_natural_fractional_prefix.has_value()) {
         const std::optional<std::string> family =
@@ -1666,7 +1721,7 @@ std::optional<std::vector<Cell>> convert_direct_flows(
       continue;
     }
     if (converted_commands.contains(cell.value.origin)) {
-      MachineItem& command = cell.value.item;
+      MachineItem command = cell.value.item;
       const auto original_flow = std::find_if(
           flows.begin(), flows.end(), [&](const DirectFlowSite& candidate) {
             return candidate.command == cell.value.origin;
@@ -1689,10 +1744,11 @@ std::optional<std::vector<Cell>> convert_direct_flows(
           !has_role(command, "late-decimal-selector-consumer")) {
         command.roles.push_back("late-decimal-selector-consumer");
       }
+      cell.value.item = std::move(command);
     }
     const auto displaced = displaced_by_command.find(cell.value.origin);
     if (displaced != displaced_by_command.end()) {
-      MachineItem& command = cell.value.item;
+      MachineItem command = cell.value.item;
       command.opcode = displaced->second.direct_opcode;
       command.mnemonic = opcode_by_code(command.opcode).name;
       command.indirect_flow_targets.reset();
@@ -1700,6 +1756,7 @@ std::optional<std::vector<Cell>> convert_direct_flows(
           std::remove(command.roles.begin(), command.roles.end(),
                       "late-decimal-selector-consumer"),
           command.roles.end());
+      cell.value.item = std::move(command);
       cells.push_back(std::move(cell));
       cells.push_back(Cell{
           .value = OwnedItem{
@@ -2769,11 +2826,6 @@ bool direct_recall_of(const MachineItem& item, int register_index_value) {
   return item.opcode == 0x60 + register_index_value;
 }
 
-struct NonFlowUseProjection {
-  bool proved = false;
-  bool has_fractional_recall = false;
-};
-
 NonFlowUseProjection prove_fractional_nonflow_projection(
     const std::vector<MachineItem>& items, int register_index_value) {
   NonFlowUseProjection result{.proved = true};
@@ -2795,6 +2847,10 @@ NonFlowUseProjection prove_fractional_nonflow_projection(
     }
     if (!direct_recall_of(item, register_index_value))
       continue;
+    if (item.manual_interaction.has_value()) {
+      result.proved = false;
+      return result;
+    }
     const std::optional<std::size_t> next = next_cell_item(items, item_index);
     if (!next.has_value() || items.at(*next).kind != MachineItemKind::Op ||
         items.at(*next).opcode != kFractionalPartOpcode ||
@@ -5125,6 +5181,33 @@ std::optional<CandidateArtifact> try_candidate(
   for (const TransparentSplitBridge& bridge : split_bridges)
     transparent_aliases.emplace(bridge.command_origin, bridge.target_origin);
   const TraceGraph* comparison_original_trace = &original_trace;
+  // Check writeback only after representation binding: a normalized
+  // negative-order encoding preserves its word, while the numerically equal
+  // plain decimal seed does not. Prematurely checking the seed would reject
+  // the very representation/layout composition this transaction proves.
+  for (const auto& rewrite : rewrites) {
+    const auto preload = std::find_if(candidate.preloads.begin(), candidate.preloads.end(),
+                                     [&](const auto& value) {
+      return value.register_name == rewrite.selector_register;
+    });
+    if (preload == candidate.preloads.end())
+      continue; // Dynamic decimal charges have their separate runtime proof.
+    std::string failure;
+    if (!selector_writeback_is_unobserved(items, control_flow,
+                                          rewrite.original_command_item, *preload,
+                                          options.address_space_model, &failure))
+      return reject("selector-data-writeback: " + failure);
+  }
+  for (const auto& displaced : displaced_flows) {
+    const int reg = encoded_register(items.at(displaced.command_origin).opcode);
+    const auto preload = std::find_if(preloads.begin(), preloads.end(), [&](const auto& value) {
+      return value.register_name == register_name(reg);
+    });
+    if (preload != preloads.end() &&
+        !selector_writeback_is_unobserved(items, control_flow, displaced.command_origin,
+                                          *preload, options.address_space_model))
+      return reject("displaced selector writeback changes a later data observation");
+  }
   std::optional<TraceGraph> canonical_original_trace;
   std::map<std::size_t, std::size_t> canonical_original_aliases;
   for (const TransparentSplitBridge& bridge : split_bridges) {
@@ -5382,6 +5465,16 @@ std::optional<std::string> rebind_stable_preloaded_indirect_flow_selector(
     }
     return std::nullopt;
   }
+  const NonFlowUseProjection projection =
+      prove_fractional_nonflow_projection(items, reg);
+  if (projection.proved && projection.has_fractional_recall) {
+    const auto rebound = rebind_stable_decimal_value(preload.value, new_target);
+    if (rebound.has_value() &&
+        fractional_projection_survives_rebind(preload.value, *rebound) &&
+        preload_value_targets(preload.register_name, *rebound, new_target, model)) {
+      return rebound;
+    }
+  }
   return rebind_proved_natural_fractional_selector_preload(
       items, preload, old_target, new_target, model);
 }
@@ -5568,6 +5661,54 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   }
   const ArtifactIndex index = index_artifact(logical_items);
   std::vector<std::size_t> bounded_target_origins;
+  // An atomic erasure can displace an immutable data selector while moving
+  // its address-only or certified fractional companions freely. Their decimal
+  // rebindings still have a two-digit target domain. Include that domain in
+  // placement, rather than selecting an unencodable order and abandoning the
+  // whole reconciliation when the final runtime proof rejects it.
+  // Keep this constraint local to completed reconciliation transactions:
+  // speculative neutral layouts retain their independent candidate frontier.
+  if (!options.deferred_selector_reconciliations.empty() &&
+      options.maximum_bounded_target_address >= 0 &&
+      options.maximum_bounded_target_address <= 99) {
+    std::set<int> examined_registers;
+    for (const auto& [source_item, targets] : control_flow.indirect_flow_targets) {
+      if (targets.size() != 1U || source_item >= items.size())
+        continue;
+      const int reg = encoded_register(items.at(source_item).opcode);
+      if (reg < 0 || reg > 0x0e || !examined_registers.insert(reg).second)
+        continue;
+      const std::string name = register_name(reg);
+      const auto preload = std::find_if(
+          preloads.begin(), preloads.end(),
+          [&](const PreloadReport& value) { return value.register_name == name; });
+      if (preload == preloads.end())
+        continue;
+      const auto& target = targets.front();
+      // A fractional family need not represent 00: removing its trailing
+      // zeros can change the address exposed by the delivered mantissa.
+      // Probe the bounded address domain, not one arbitrary sentinel, before
+      // deciding that a companion selector is fixed.
+      bool rebindable = false;
+      for (int probe_target = 0;
+           probe_target <= options.maximum_bounded_target_address; ++probe_target) {
+        if (probe_target == target.address)
+          continue;
+        if (rebind_stable_preloaded_indirect_flow_selector(
+                items, *preload, control_flow, target.address, probe_target,
+                options.address_space_model)) {
+          rebindable = true;
+          break;
+        }
+      }
+      if (rebindable &&
+          std::find(bounded_target_origins.begin(), bounded_target_origins.end(),
+                    target.item_index) == bounded_target_origins.end()) {
+        bounded_target_origins.push_back(target.item_index);
+      }
+    }
+    std::sort(bounded_target_origins.begin(), bounded_target_origins.end());
+  }
   if (!options.required_bounded_target_labels.empty()) {
     if (options.maximum_bounded_target_address < 0) {
       add_reason(result.plan, "bounded target address limit is negative");

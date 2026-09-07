@@ -2,6 +2,8 @@
 
 #include "mkpro/core/passes/helpers.hpp"
 
+#include <utility>
+
 namespace mkpro::core::passes {
 
 struct RegisterEffects {
@@ -29,6 +31,10 @@ struct LivenessInfo {
   // before making a clique invents conflicts between unrelated callers.
   bool matched_call_contexts = false;
   std::vector<CallContextLifetime> call_context_lifetimes;
+  // These pairs have equal, compiler-owned entry values and no feasible
+  // read of either old value after a write to the other, before its next
+  // definition. Ordinary live sets deliberately remain conservative unions.
+  std::set<std::pair<std::string, std::string>> guarded_disjoint_pairs = {};
 };
 
 struct LivenessOptions {
@@ -38,6 +44,13 @@ struct LivenessOptions {
   // R0..Re as unrelated nodes there would consume fifteen colors before any
   // source value is considered.
   bool include_physical_register_universe = true;
+  // Only explicit scalar literal classes may authorize entry-value sharing.
+  // Absence keeps the ordinary liveness/interference contract unchanged.
+  std::map<std::string, std::string> equal_entry_value_classes = {};
+  // A complete compiler-owned program starts at instruction zero. This only
+  // narrows the guarded proof's entry set; ordinary live sets still include
+  // disconnected fragments. Standalone IR fragments keep arbitrary entries.
+  bool closed_program_entry = false;
 };
 
 struct RegisterInterferenceGraph {

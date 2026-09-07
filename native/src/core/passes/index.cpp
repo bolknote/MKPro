@@ -208,43 +208,80 @@ RunOnIrResult run_passes_on_ir(std::vector<IrOp> initial, const CompileOptions& 
                                bool layout_only) {
   std::vector<IrOp> current = std::move(initial);
   RunOnIrResult aggregate;
-  bool changed_in_iteration = true;
-  int iteration = 0;
+  const auto run_pipeline = [&](const std::vector<IrPass>& pipeline) {
+    bool changed_in_iteration = true;
+    int iteration = 0;
+    while (changed_in_iteration && iteration < kMaxFixpointIterations) {
+      changed_in_iteration = false;
+      ++iteration;
 
-  while (changed_in_iteration && iteration < kMaxFixpointIterations) {
-    changed_in_iteration = false;
-    ++iteration;
+      for (const IrPass& pass : pipeline) {
+        if (layout_only && !pass.layout_safe)
+          continue;
 
-    for (const IrPass& pass : pass_pipeline()) {
-      if (layout_only && !pass.layout_safe)
-        continue;
+        const PassContext context{.options = options};
+        PassResult result = pass.run(current, context);
+        if (result.applied <= 0 || !direct_flow_labels_resolve(result.ops))
+          continue;
 
-      const PassContext context{.options = options};
-      PassResult result = pass.run(current, context);
-      if (result.applied <= 0)
-        continue;
-      if (!direct_flow_labels_resolve(result.ops))
-        continue;
-
-      aggregate.pass_counts[std::string(pass.name)] += result.applied;
-      changed_in_iteration = true;
-      aggregate.applied += result.applied;
-      for (const AppliedOptimization& optimization : result.optimizations) {
-        const auto existing = std::find_if(
-            aggregate.optimizations.begin(), aggregate.optimizations.end(),
-            [&](const AppliedOptimization& entry) { return entry.name == optimization.name; });
-        if (existing != aggregate.optimizations.end()) {
-          existing->detail += " (+" + optimization.detail + ")";
-        } else {
-          aggregate.optimizations.push_back(optimization);
+        aggregate.pass_counts[std::string(pass.name)] += result.applied;
+        changed_in_iteration = true;
+        aggregate.applied += result.applied;
+        for (const AppliedOptimization& optimization : result.optimizations) {
+          const auto existing = std::find_if(
+              aggregate.optimizations.begin(), aggregate.optimizations.end(),
+              [&](const AppliedOptimization& entry) { return entry.name == optimization.name; });
+          if (existing != aggregate.optimizations.end()) {
+            existing->detail += " (+" + optimization.detail + ")";
+          } else {
+            aggregate.optimizations.push_back(optimization);
+          }
         }
+        aggregate.preloads.insert(aggregate.preloads.end(), result.preloads.begin(),
+                                  result.preloads.end());
+        current = std::move(result.ops);
       }
-      aggregate.preloads.insert(aggregate.preloads.end(), result.preloads.begin(),
-                                result.preloads.end());
-      current = std::move(result.ops);
     }
+  };
 
+  if (!layout_only && options.defer_return_suffix_until_callee_hole) {
+    // Region extraction needs the registers and stack values exposed by the
+    // cleanup fixed point, not just those visible at the start of iteration 1.
+    // None of these passes creates physical flow selectors or rewrites the
+    // call/return ABI. Each still applies its normal raw, entry, X2 and CFG
+    // proofs. Keep this phase on the measured ordering candidate: removing a
+    // cell early can forfeit a later address/code coincidence, so the unchanged
+    // ordinary-order candidate must continue to compete on final artifact size.
+    static const std::vector<IrPass> cleanup = {
+        early_exact_stack_dead_store_elimination_pass(),
+        store_recall_peephole_pass(),
+        pre_shift_stack_lift_pass(),
+        flow_x_reuse_pass(),
+        stack_lift_recall_forwarding_pass(),
+        x2_noop_restore_pass(),
+        x2_dead_restore_before_overwrite_pass(),
+        x2_hidden_temp_restore_pass(),
+        x2_literal_restore_pass(),
+        dead_store_before_commutative_pass(),
+        dead_store_elimination_pass(),
+        last_x_reuse_pass(),
+        redundant_literal_reload_pass(),
+        register_coalesce_pass(),
+    };
+    run_pipeline(cleanup);
+    if (aggregate.applied > 0) {
+      aggregate.optimizations.insert(
+          aggregate.optimizations.begin(),
+          AppliedOptimization{
+              .name = "relocatable-ir-cleanup",
+              .detail = "Applied " + std::to_string(aggregate.applied) +
+                        " proved register/value cleanup(s) before shared-region extraction "
+                        "and flow-address materialization; final size still competes against "
+                        "the ordinary pass order.",
+          });
+    }
   }
+  run_pipeline(pass_pipeline());
 
   aggregate.ops = std::move(current);
   return aggregate;
@@ -259,6 +296,7 @@ const std::vector<IrPass>& pass_pipeline() {
       // wholly symbolic CFG, so later fixed-point iterations fail closed once
       // address-sensitive forms have appeared.
       early_exact_stack_dead_store_elimination_pass(),
+      register_web_copy_coalesce_pass(),
       redundant_prologue_elimination_pass(),
       // A measured candidate may extract a generic call-hole skeleton before
       // suffix and tail-call lowering. This preserves explicit call/return
@@ -287,6 +325,7 @@ const std::vector<IrPass>& pass_pipeline() {
       jump_to_next_threading_pass(),
       jump_thread_pass(),
       flow_x_reuse_pass(),
+      stack_lift_recall_forwarding_pass(),
       branch_target_x_reuse_pass(),
       call_entry_materialization_order_pass(),
       entry_stack_input_reuse_pass(),

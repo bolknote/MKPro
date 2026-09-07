@@ -33,6 +33,8 @@ std::optional<std::string>
 format_setup_preload_listing_steps(const std::vector<PreloadReport>& preloads,
                                    AddressSpaceModel model);
 std::string format_program_tokens(const std::vector<ResolvedStep>& steps);
+// Analysis/oracle serialization may contain @<logical-index>, not just bytes.
+std::string format_analysis_program_tokens(const std::vector<ResolvedStep>& steps);
 std::optional<std::string> format_setup_block(const std::vector<PreloadReport>& preloads);
 std::string to_keycaps(std::string mnemonic);
 

@@ -11,7 +11,7 @@ namespace mkpro::core {
 enum class IndirectSelectorMutation {
   PreDecrement,
   PreIncrement,
-  Stable,
+  Stable, // No +/-1 counter update; this does not imply data-word preservation.
 };
 
 enum class IndirectOperationKind {

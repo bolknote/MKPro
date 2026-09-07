@@ -67,6 +67,9 @@ struct BuildCfgOptions {
 };
 
 CfgTargetIndexes build_target_indexes(const std::vector<IrOp>& ops);
+// Exact logical identities, not a physical-address encoding request.
+// Typed metadata is authoritative; legacy annotations are used only if absent.
+std::optional<std::vector<IrTarget>> indirect_flow_targets_for_analysis(const IrOp& op);
 std::optional<NumericFlowTargetLayoutGuard>
 numeric_flow_target_layout_guard(const std::vector<IrOp>& ops);
 ControlFlowGraph build_control_flow_graph(const std::vector<IrOp>& ops,

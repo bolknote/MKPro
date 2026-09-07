@@ -1381,7 +1381,7 @@ private:
         continue;
       }
       const bool known_statement_block =
-          std::regex_search(line.text, std::regex(R"(^(match|if|while|loop)\b)")) ||
+          std::regex_search(line.text, std::regex(R"(^(match|if|unless|while|loop)\b)")) ||
           line.text == "raw {";
       if (starts_with(line.text, "input ") ||
           (ends_with(line.text, "{") && !known_statement_block)) {

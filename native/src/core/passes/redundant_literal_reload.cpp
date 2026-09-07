@@ -1,6 +1,8 @@
 #include "mkpro/core/passes/redundant_literal_reload.hpp"
 
 #include "mkpro/core/post_layout_control_flow.hpp"
+#include "mkpro/core/register_allocator.hpp"
+#include "mkpro/core/callee_hole_boundary_normalization.hpp"
 #include "mkpro/core/stack_value_equivalence.hpp"
 
 #include <algorithm>
@@ -257,8 +259,18 @@ bool physical_flow_targets_stay_stable(const std::vector<IrOp>& ops,
 }
 
 IrKind machine_opcode_kind(int opcode) {
-  const std::vector<IrOp> raised =
-      raise_machine_to_ir({MachineItem::op(opcode, opcode_by_code(opcode).name)});
+  const OpcodeInfo& info = opcode_by_code(opcode);
+  std::vector<MachineItem> instruction{MachineItem::op(opcode, info.name)};
+  // Raising an incomplete two-cell instruction classifies its opcode as a
+  // plain orphan. Supply an operand for classification only; the proof still
+  // follows the authoritative graph's real command/return identities.
+  if (info.takes_address) {
+    MachineItem operand;
+    operand.kind = MachineItemKind::Address;
+    operand.target = 0;
+    instruction.push_back(std::move(operand));
+  }
+  const std::vector<IrOp> raised = raise_machine_to_ir(instruction);
   return raised.empty() ? IrKind::Plain : raised.front().kind;
 }
 
@@ -410,14 +422,7 @@ bool repeated_literal_lift_converges_through_cfg(const std::vector<IrOp>& ops,
     const IrKind kind = machine_opcode_kind(item.opcode);
     if (kind == IrKind::Stop)
       return reject("unequal stack reaches stop at " + std::to_string(execution.address));
-    if (kind == IrKind::Return) {
-      if (transfer_stack_value_equality(state, item.opcode,
-          StackValueEqualityStepKind::Plain) ==
-          StackValueEqualityTransfer::Rejected) {
-        return reject("unequal stack reaches return at " +
-                      std::to_string(execution.address));
-      }
-    } else if (is_stack_equivalence_flow(kind)) {
+    if (kind == IrKind::Return || is_stack_equivalence_flow(kind)) {
       if ((kind == IrKind::CondJump || kind == IrKind::IndirectCondJump) &&
           !state.stack_equal.at(0)) {
         return reject("unequal X reaches conditional at " +
@@ -501,7 +506,8 @@ bool x2_only_difference_converges_after_address(
   const AuthoritativePostLayoutControlFlow flow =
       build_reload_equivalence_flow(items);
   if (!flow.proved || flow.execution_states.size() != flow.execution_successors.size())
-    return reject("authoritative CFG failed");
+    return reject("authoritative CFG failed" +
+                  (flow.reasons.empty() ? std::string{} : ": " + flow.reasons.front()));
 
   std::vector<std::vector<std::size_t>> predecessors(flow.execution_states.size());
   for (std::size_t source = 0; source < flow.execution_successors.size(); ++source) {
@@ -561,14 +567,26 @@ bool x2_only_difference_converges_after_address(
     const IrKind kind = machine_opcode_kind(item.opcode);
     if (kind == IrKind::Stop)
       return reject("unequal X2 reaches stop at " + std::to_string(execution.address));
-    if (kind == IrKind::Return) {
-      if (transfer_stack_value_equality(state, item.opcode,
-                                        StackValueEqualityStepKind::Plain) ==
-          StackValueEqualityTransfer::Rejected) {
-        return reject("unequal X2 reaches return at " +
-                      std::to_string(execution.address));
+    // Return only follows the already-proved matched continuation. Its
+    // opcode catalog barrier is control flow, not a data/X2 observation.
+    // Keep the pending inequality until the caller erases it; stops still
+    // require complete equality on every reachable path.
+    if (kind == IrKind::Plain && item.opcode >= 0 && item.opcode <= 9) {
+      // Entry mode is equal after the admitted closing consumer, but need not
+      // be known. Join both decimal transfers: an open entry uses equal X,
+      // while a fresh entry replaces X and synchronizes X2. Never pretend the
+      // latter synchronization is guaranteed merely because this is a digit.
+      StackValueEqualityState open = state;
+      StackValueEqualityState closed = state;
+      if (transfer_decimal_digit_equality(open, true) ==
+              StackValueEqualityTransfer::Rejected ||
+          transfer_decimal_digit_equality(closed, false) ==
+              StackValueEqualityTransfer::Rejected) {
+        return reject("decimal entry observes unequal visible operands");
       }
-    } else if (!is_stack_equivalence_flow(kind)) {
+      equality_state_merge(open, closed);
+      state = open;
+    } else if (kind != IrKind::Return && !is_stack_equivalence_flow(kind)) {
       StackValueEqualityStepKind step_kind = StackValueEqualityStepKind::Plain;
       if (kind == IrKind::Recall || kind == IrKind::IndirectRecall)
         step_kind = StackValueEqualityStepKind::Recall;
@@ -577,8 +595,10 @@ bool x2_only_difference_converges_after_address(
       const StackValueEqualityTransfer transfer =
           transfer_stack_value_equality(state, item.opcode, step_kind);
       if (transfer == StackValueEqualityTransfer::Rejected) {
-        return reject("X2 consumer observes leading-zero spelling at " +
-                      std::to_string(execution.address));
+        return reject("X2 consumer observes pending difference at " +
+                      std::to_string(execution.address) + " opcode=" +
+                      std::to_string(item.opcode) + " " + item.mnemonic +
+                      " " + item.comment.value_or(""));
       }
       if (transfer == StackValueEqualityTransfer::Converged)
         continue;
@@ -697,6 +717,174 @@ post_layout_single_digit_late_selector_plan(const std::vector<MachineItem>& item
     };
   }
   return std::nullopt;
+}
+
+PassResult late_literal_preloads(const std::vector<IrOp>& ops,
+                                 const PassContext& context,
+                                 const std::set<std::string>& reserved_registers) {
+  const auto unchanged = [&] { return PassResult{.ops = ops}; };
+  if (!context.options.late_literal_preloads)
+    return unchanged();
+
+  std::set<std::string> used = reserved_registers;
+  const auto reserve = [&](const std::string& name) {
+    if (name.empty())
+      return;
+    used.insert(name);
+    // The standard alias must not masquerade as an independent storage slot.
+    if (name == "f")
+      used.insert("0");
+  };
+  for (const auto& [name, value] : context.options.preloaded_constant_registers) {
+    (void)value;
+    reserve(name);
+  }
+  for (const IrOp& op : ops) {
+    if (op.meta.raw || op.kind == IrKind::OrphanAddress ||
+        op.target_meta.formal_opcode.has_value() || op.meta.logical_register_analysis ||
+        op.meta.logical_register_name.has_value() ||
+        op.meta.logical_indirect_memory_targets.has_value()) {
+      return unchanged();
+    }
+    reserve(op.register_name);
+    reserve(op.counter);
+    if (op.kind == IrKind::IndirectRecall || op.kind == IrKind::IndirectStore) {
+      const auto targets = known_indirect_memory_targets(op);
+      if (!targets.has_value() || targets->empty())
+        return unchanged();
+      for (const std::string& target : *targets)
+        reserve(target);
+    }
+  }
+  std::vector<std::string> spare;
+  for (int index = 14; index >= 0; --index) {
+    const std::string name = register_name_for_index(index);
+    if (!used.contains(name))
+      spare.push_back(name);
+  }
+  if (spare.empty())
+    return unchanged();
+
+  struct Literal {
+    std::string value;
+    std::vector<std::pair<int, int>> occurrences;
+    int saved = 0;
+  };
+  std::map<std::string, Literal> literals;
+  const std::vector<MachineItem> machine = lower_ir_to_machine(ops);
+  const bool trace = std::getenv("MKPRO_NATIVE_TRACE_LATE_LITERAL_PRELOAD") != nullptr;
+  int address = 0;
+  for (int index = 0; index < static_cast<int>(ops.size());) {
+    const IrOp& first = ops.at(static_cast<std::size_t>(index));
+    if (!is_rewrite_safe_digit(first)) {
+      address += cells_per_op(first);
+      ++index;
+      continue;
+    }
+    int end = index;
+    std::string value;
+    while (end < static_cast<int>(ops.size()) &&
+           is_rewrite_safe_digit(ops.at(static_cast<std::size_t>(end))) &&
+           same_linear_scope(first, ops.at(static_cast<std::size_t>(end)))) {
+      value += static_cast<char>('0' + ops.at(static_cast<std::size_t>(end)).opcode);
+      ++end;
+    }
+    const int length = end - index;
+    const int literal_address = address;
+    address += length;
+    const int start = index;
+    index = end;
+    if (length < 2 || length > 8 || value.front() == '0' ||
+        context.options.suppress_constant_preloads.contains(value) ||
+        end >= static_cast<int>(ops.size())) {
+      continue;
+    }
+    const IrOp& consumer = ops.at(static_cast<std::size_t>(end));
+    // A closed arithmetic/memory consumer reconciles number-entry mode.
+    // Decimal point, exponent, sign, stop and manual steps are observations,
+    // not ordinary uses of the numeric value.
+    const bool closes_entry = same_linear_scope(first, consumer) &&
+        !has_rewrite_barrier(consumer) && !consumer.meta.manual_interaction.has_value() &&
+        (consumer.kind == IrKind::Store || consumer.kind == IrKind::Recall ||
+         (consumer.kind == IrKind::Plain && consumer.opcode > 0x0c &&
+          consumer.opcode != 0x54));
+    bool memory_entry = false;
+    if (start > 0) {
+      const IrOp& previous = ops.at(static_cast<std::size_t>(start - 1));
+      memory_entry = same_linear_scope(previous, first) &&
+          !has_rewrite_barrier(previous) && !is_display_focus_sensitive(previous) &&
+          !previous.meta.manual_interaction.has_value() && previous.register_name != "f" &&
+          (previous.kind == IrKind::Store || previous.kind == IrKind::Recall ||
+           previous.kind == IrKind::IndirectStore || previous.kind == IrKind::IndirectRecall);
+    }
+    // A contiguous memory command closes entry and enables the same lift as
+    // recall. There is no intervening label/manual entry; the geometry gate
+    // below excludes numeric/indirect entries into the literal itself.
+    const bool entry_lift = closes_entry &&
+        (memory_entry || selector_charge_has_automatic_entry_lift(
+                             ops, static_cast<std::size_t>(start)));
+    const bool geometry = entry_lift && physical_flow_targets_stay_stable(ops, start);
+    const bool equality = geometry &&
+        x2_only_difference_converges_after_address(
+            machine, literal_address + length - 1, literal_address + length - 2);
+    if (trace) {
+      std::cerr << "[late-literal-preload] value=" << value
+                << " entry=" << entry_lift << " geometry=" << geometry
+                << " equality=" << equality << "\n";
+    }
+    if (!equality)
+      continue;
+    Literal& literal = literals[value];
+    literal.value = value;
+    literal.occurrences.emplace_back(start, end);
+    literal.saved += length - 1;
+  }
+  std::vector<Literal> ranked;
+  for (const auto& [value, literal] : literals) {
+    (void)value;
+    ranked.push_back(literal);
+  }
+  std::sort(ranked.begin(), ranked.end(), [](const Literal& left, const Literal& right) {
+    return left.saved != right.saved ? left.saved > right.saved : left.value < right.value;
+  });
+  struct Replacement { int end; std::string name; std::string value; };
+  std::map<int, Replacement> replacements;
+  PassResult result;
+  for (std::size_t index = 0; index < ranked.size() && index < spare.size(); ++index) {
+    const Literal& literal = ranked.at(index);
+    const std::string& name = spare.at(index);
+    result.preloads.push_back(PreloadReport{.register_name = name, .value = literal.value});
+    result.applied += literal.saved;
+    for (const auto& [start, end] : literal.occurrences)
+      replacements.emplace(start, Replacement{end, name, literal.value});
+  }
+  if (replacements.empty())
+    return unchanged();
+  for (int index = 0; index < static_cast<int>(ops.size()); ++index) {
+    const auto replacement = replacements.find(index);
+    if (replacement == replacements.end()) {
+      result.ops.push_back(ops.at(static_cast<std::size_t>(index)));
+      continue;
+    }
+    IrOp recall = ops.at(static_cast<std::size_t>(index));
+    recall.kind = IrKind::Recall;
+    recall.register_name = replacement->second.name;
+    recall.opcode = 0x60 + register_index(recall.register_name);
+    recall.meta.mnemonic = opcode_by_code(recall.opcode).name;
+    recall.meta.comment = "late preloaded literal " + replacement->second.value;
+    result.ops.push_back(std::move(recall));
+    index = replacement->second.end - 1;
+  }
+  result.optimizations.push_back(AppliedOptimization{
+      .name = "late-literal-preload",
+      .detail = "Reused " + std::to_string(result.preloads.size()) +
+                " unused R0-RE register(s) after IR cleanup, saving " +
+                std::to_string(result.applied) +
+                " literal cells before layout; proved automatic entry lift, "
+                "X2 convergence and unchanged fixed targets. Final selector allocation "
+                "still competes against the unmodified artifact.",
+  });
+  return result;
 }
 
 PassResult redundant_literal_reload(const std::vector<IrOp>& ops,

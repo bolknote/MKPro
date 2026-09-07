@@ -658,6 +658,11 @@ PassResult register_coalesce(const std::vector<IrOp>& ops, const PassContext& co
   int applied = 0;
 
   if (context.options.coalesce_copies) {
+    PassResult webs = register_web_copy_coalesce(current, context);
+    current = std::move(webs.ops);
+    applied += webs.applied;
+    optimizations.insert(optimizations.end(), webs.optimizations.begin(),
+                         webs.optimizations.end());
     CoalesceResult copies = coalesce_copies(current);
     current = std::move(copies.ops);
     applied += copies.applied;

@@ -85,6 +85,10 @@ std::string emulator_preload_literal(const std::string& value) {
 EquivalenceObservation run_equivalence_observation(const CompileResult& result,
                                                    const std::vector<int>& inputs) {
   EquivalenceObservation observation;
+  if (physical_program_image_rejection(result.steps).has_value() ||
+      (result.setup_program.has_value() &&
+       physical_program_image_rejection(result.setup_program->steps).has_value()))
+    return observation;
   try {
     emulator::MK61 calc;
     if (result.setup_program.has_value()) {

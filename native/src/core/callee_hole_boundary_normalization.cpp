@@ -3,8 +3,12 @@
 #include "mkpro/core/passes/helpers.hpp"
 #include "mkpro/core/passes/cfg.hpp"
 #include "mkpro/core/passes/return_suffix_gadget.hpp"
+#include "mkpro/core/post_layout_control_flow.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <deque>
+#include <iostream>
 #include <map>
 #include <set>
 #include <string>
@@ -120,6 +124,130 @@ bool prove_stack_entry_equality(const StackEntryProofReader& reader,
   return equality_prefix(reader, entry, state, 0);
 }
 
+bool prove_post_layout_stack_entry_equality(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow, int entry_address,
+    StackValueEqualityState initial) {
+  const bool trace = std::getenv("MKPRO_NATIVE_TRACE_STACK_ENTRY_EQUALITY") != nullptr;
+  const auto reject = [&](const char* reason) {
+    if (trace)
+      std::cerr << "[stack-entry-equality] entry=" << entry_address
+                << " rejected: " << reason << '\n';
+    return false;
+  };
+  if (!flow.proved || flow.execution_states.empty() ||
+      flow.execution_states.size() != flow.execution_successors.size())
+    return reject("exact execution graph is unavailable");
+
+  const auto merge = [](StackValueEqualityState& into,
+                        const StackValueEqualityState& from) {
+    const int before = stack_value_equality_key(into);
+    for (std::size_t slot = 0; slot < into.stack_equal.size(); ++slot)
+      into.stack_equal[slot] = into.stack_equal[slot] && from.stack_equal[slot];
+    into.x1_equal = into.x1_equal && from.x1_equal;
+    into.x2_equal = into.x2_equal && from.x2_equal;
+    return before != stack_value_equality_key(into);
+  };
+  std::vector<std::optional<StackValueEqualityState>> incoming(flow.execution_states.size());
+  std::deque<std::size_t> pending;
+  for (std::size_t index = 0; index < flow.execution_states.size(); ++index) {
+    if (flow.execution_states[index].address == entry_address) {
+      incoming[index] = initial;
+      pending.push_back(index);
+    }
+  }
+  if (pending.empty())
+    return reject("entry has no admitted caller context");
+
+  std::size_t explored = 0;
+  while (!pending.empty()) {
+    const std::size_t index = pending.front();
+    pending.pop_front();
+    StackValueEqualityState state = *incoming[index];
+    if (stack_values_fully_equal(state))
+      continue;
+    ++explored;
+    const auto& execution = flow.execution_states[index];
+    if (execution.item_index >= items.size())
+      return reject("execution state is outside the artifact");
+    const auto& item = items[execution.item_index];
+    if (item.kind != MachineItemKind::Op || item.raw || item.manual_interaction.has_value())
+      return reject("opaque or externally observed instruction");
+
+    // Classify a complete instruction: an address-taking opcode without its
+    // operand is raised as an orphan, not as the branch/call it represents.
+    std::vector<MachineItem> instruction{MachineItem::op(item.opcode,
+                                                        opcode_by_code(item.opcode).name)};
+    if (opcode_by_code(item.opcode).takes_address) {
+      MachineItem operand;
+      operand.kind = MachineItemKind::Address;
+      operand.target = 0;
+      instruction.push_back(std::move(operand));
+    }
+    const auto classified = raise_machine_to_ir(instruction);
+    if (classified.empty())
+      return reject("instruction has no typed effect");
+    const IrKind kind = classified.front().kind;
+    if (kind == IrKind::Stop || item.opcode == 0x29)
+      return reject("unequal stack reaches an observable stop");
+
+    const bool control = kind == IrKind::Jump || kind == IrKind::CondJump ||
+        kind == IrKind::Loop || kind == IrKind::Call || kind == IrKind::Return ||
+        kind == IrKind::IndirectJump || kind == IrKind::IndirectCondJump ||
+        kind == IrKind::IndirectCall;
+    if (control) {
+      if ((kind == IrKind::CondJump || kind == IrKind::IndirectCondJump) &&
+          !state.stack_equal[0])
+        return reject("branch observes a differing X");
+      // Memory remains equal: stores are admitted only with equal X, so loop
+      // counters and indirect selectors take identical paths in both runs.
+      // Calls and returns use the authoritative graph's exact return frames.
+      if (opcode_by_code(item.opcode).x2_effect == X2Effect::Affects)
+        state.x2_equal = state.stack_equal[0];
+    } else if (kind == IrKind::Plain && item.opcode >= 0 && item.opcode <= 9) {
+      // The two entry modes agree, but may be either open or closed. Keep
+      // only equality facts that survive both possible decimal-entry effects.
+      auto open = state;
+      auto closed = state;
+      if (transfer_decimal_digit_equality(open, true) == StackValueEqualityTransfer::Rejected ||
+          transfer_decimal_digit_equality(closed, false) == StackValueEqualityTransfer::Rejected)
+        return reject("decimal entry observes a differing value");
+      merge(open, closed);
+      state = open;
+    } else {
+      StackValueEqualityStepKind effect = StackValueEqualityStepKind::Plain;
+      if (kind == IrKind::Recall || kind == IrKind::IndirectRecall)
+        effect = StackValueEqualityStepKind::Recall;
+      else if (kind == IrKind::Store || kind == IrKind::IndirectStore)
+        effect = StackValueEqualityStepKind::Store;
+      else if (kind != IrKind::Plain)
+        return reject("unknown instruction kind");
+      if (transfer_stack_value_equality(state, item.opcode, effect) ==
+          StackValueEqualityTransfer::Rejected)
+        return reject("instruction consumes a differing stack component");
+    }
+    if (stack_values_fully_equal(state))
+      continue;
+    const auto& successors = flow.execution_successors[index];
+    if (successors.empty())
+      return reject("unequal stack reaches an unknown continuation");
+    for (const auto successor : successors) {
+      if (successor >= incoming.size())
+        return reject("successor is outside the execution graph");
+      if (!incoming[successor].has_value()) {
+        incoming[successor] = state;
+        pending.push_back(successor);
+      } else if (merge(*incoming[successor], state)) {
+        pending.push_back(successor);
+      }
+    }
+  }
+  if (trace)
+    std::cerr << "[stack-entry-equality] entry=" << entry_address
+              << " proved across " << explored << " execution state(s)\n";
+  return true;
+}
+
 StackValueEqualityState xyz_preserving_selector_charge_state() {
   StackValueEqualityState state;
   state.stack_equal = {true, true, true, false};
@@ -134,7 +262,7 @@ bool prove_ir_stack_entry_equality(const std::vector<IrOp>& ops,
   const auto start = executable(ops, entry);
   if (!labels.has_value() || !start.has_value())
     return false;
-  return prove_stack_entry_equality(
+  const bool prefix_proved = prove_stack_entry_equality(
       [&](std::size_t index) -> std::optional<StackEntryProofNode> {
         if (index >= ops.size())
           return std::nullopt;
@@ -159,6 +287,15 @@ bool prove_ir_stack_entry_equality(const std::vector<IrOp>& ops,
         }
         return node;
       }, *start, state);
+  if (prefix_proved)
+    return true;
+
+  int address = 0;
+  for (std::size_t index = 0; index < *start; ++index)
+    address += passes::cells_per_op(ops[index]);
+  const auto items = lower_ir_to_machine(ops);
+  const auto flow = build_post_layout_control_flow(items);
+  return prove_post_layout_stack_entry_equality(items, flow, address, state);
 }
 
 CalleeHoleBoundaryNormalization

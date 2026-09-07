@@ -3,6 +3,7 @@
 #include "mkpro/core/feature_profile.hpp"
 #include "mkpro/core/ir.hpp"
 #include "mkpro/core/machine_profile.hpp"
+#include "mkpro/core/resolved_address.hpp"
 
 #include <filesystem>
 #include <map>
@@ -27,10 +28,12 @@ struct Diagnostic {
 
 struct ResolvedStep {
   int address = 0;
+  // -1 denotes an unencoded logical address operand, never a machine opcode.
   int opcode = 0;
   std::string hex;
   std::string mnemonic;
   std::optional<std::string> comment;
+  std::optional<ResolvedAddress> address_target;
 };
 
 struct PreloadReport {
@@ -273,6 +276,10 @@ struct LogicalRegisterAssignment {
 struct FractionalConstantSelectorPlan {
   std::string value;
   int target = 0;
+  // In deferred mode target is only a representable carrier seed, not a
+  // destination constraint. The component-layout solver chooses the command
+  // identity and binds its final physical address together with the preload.
+  bool deferred_binding = false;
 };
 
 struct SynthesizedDispatchProofConstraint {
@@ -376,9 +383,11 @@ struct CompileOptions {
   bool return_stack_script = false;
   bool disable_return_stack_script = false;
   bool disable_return_suffix_gadget = false;
-  // Candidate-search phase ordering: let callee-hole extraction establish a
-  // shared skeleton before return-suffix canonicalization inspects that
-  // skeleton on the next fixed-point iteration.
+  // Candidate-search phase ordering: first converge proved register/value
+  // cleanup without materializing flow addresses, then let callee-hole
+  // extraction establish a shared skeleton before return-suffix
+  // canonicalization inspects it on the next fixed-point iteration. The
+  // ordinary ordering remains a competing final-size candidate.
   bool defer_return_suffix_until_callee_hole = false;
   // Internal final-layout frontier control. Zero keeps every jointly proved
   // natural target; a positive value bounds simultaneous helper anchors so
@@ -399,6 +408,9 @@ struct CompileOptions {
   bool forward_indirect_flow = false;
   bool runtime_indirect_call_flow = false;
   bool general_constant_preloads = false;
+  // Reuse a physically unused R0-RE after IR cleanup for a proved ordinary
+  // literal. Compete against flow-selector allocation on final artifact size.
+  bool late_literal_preloads = false;
   bool stack_resident_temps = false;
   bool share_random_cell = false;
   bool startup_aware_constant_preloads = false;
@@ -428,6 +440,13 @@ struct CompileOptions {
   // main loop head is the very first emitted command.
   bool empty_stack_loop_return = false;
   bool x_param_value_functions = false;
+  // Extend caller-preloaded indexed updates to ordinary continuations. The
+  // selector placement changes the whole layout, so retain the ordinary ABI
+  // as a separately finalized competitor instead of trusting local savings.
+  bool preloaded_indexed_update_prefix = false;
+  // Reuse anonymous expression operands already proved to be in X. A local
+  // saving may disturb final layout, so keep the ordinary scheduler candidate.
+  bool cached_expression_operand_forwarding = false;
   // Canonicalize unit-literal X parameters once in the callee so callers may
   // forward any already-live value with the required sign. Keep this as a
   // layout candidate: the extra callee cell can prevent address packing.

@@ -288,6 +288,12 @@ std::optional<IndirectAddressEvaluation> evaluate_indirect_address(
   result.operation = operation;
   result.transformed = *transformed;
   result.result_value = *transformed;
+  // A negative-order, explicitly normalized mantissa supplies address digits
+  // without overwriting its data word. `transformed` is the decoder input,
+  // not the value written back to the selector register in this case.
+  const std::string normalized = normalize_selector_value(value);
+  if (stable_exponent_mantissa_selector(normalized, mutation).has_value())
+    result.result_value = normalized;
 
   if (operation == IndirectOperationKind::Flow) {
     const int flow_target = flow_target_from_transformed(*transformed);
