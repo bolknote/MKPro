@@ -7140,8 +7140,8 @@ program MaskMembershipClear {
           "native compiler should lower a raw mask predicate before its guarded clear");
   require(mask_membership_clear.diagnostics.empty(),
           "mask membership clear compile should not report diagnostics");
-  require(has_optimization(mask_membership_clear, "membership-clear-x2-reuse"),
-          "mask clear should reuse Y/X2 without speculatively changing state before the branch");
+  require(has_optimization(mask_membership_clear, "membership-clear-intersection-reuse"),
+          "mask clear should reuse the tested intersection without changing state before the branch");
   require(std::none_of(mask_membership_clear.steps.begin(), mask_membership_clear.steps.end(),
                        [](const ResolvedStep& step) {
                          return step.comment.has_value() &&

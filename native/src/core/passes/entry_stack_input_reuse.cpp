@@ -508,6 +508,7 @@ early_helper_hoist_options(const std::vector<MachineItem>& items) {
   }
 
   HelperInvariantRecallHoistOptions options;
+  options.allow_swapped_return = true;
   options.prefer_before_return_plan = true;
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
     const MachineItem& item = items.at(item_index);

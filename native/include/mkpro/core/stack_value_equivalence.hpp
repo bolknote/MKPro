@@ -70,6 +70,19 @@ inline StackValueEqualityTransfer transfer_decimal_digit_equality(
                                          : StackValueEqualityTransfer::Continue;
 }
 
+// Edit the sign of a proved open mantissa. Both runs must be editing the
+// same freshly established literal with equal hidden entry context. This
+// does not authorize /-/ after a return, store, exponent edit or unknown
+// input mode. It preserves Y/Z/T and physical last-X rather than proving
+// any of those components equal as a side effect.
+inline StackValueEqualityTransfer transfer_decimal_sign_equality(
+    StackValueEqualityState& state, bool number_entry_active) {
+  if (!number_entry_active || !state.stack_equal.at(0) || !state.x2_equal)
+    return StackValueEqualityTransfer::Rejected;
+  return stack_values_fully_equal(state) ? StackValueEqualityTransfer::Converged
+                                         : StackValueEqualityTransfer::Continue;
+}
+
 // Transfer one identical opcode in both executions. `reads_distinct_register`
 // is true when a recall/indirect operation observes the selector register whose
 // hypothetical stable charge differs from the actual mutating charge.

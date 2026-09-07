@@ -31305,7 +31305,7 @@ bool emit_y_preserving_membership_mask(LoweringContext& context, const Expressio
   return false;
 }
 
-bool lower_membership_clear_x2_branch(LoweringContext& context, const V2Statement& statement) {
+bool lower_membership_clear_intersection_branch(LoweringContext& context, const V2Statement& statement) {
   if (statement.kind != "v2_if" || !statement.predicate.has_value())
     return false;
   const std::optional<MaskMembershipCondition> membership = match_mask_membership_condition(
@@ -31336,10 +31336,11 @@ bool lower_membership_clear_x2_branch(LoweringContext& context, const V2Statemen
     return false;
   context.emitter.emit_op(0x37, "К ∧", "test full native AND before conditional clear", statement.line);
   context.emitter.emit_jump(0x57, "F x≠0", false_label, "false branch for !=", statement.line);
-  context.emitter.emit_op(0x54, "К НОП", "guard X2 restore gap", clear.line);
-  context.emitter.emit_op(0x0a, ".", "restore membership clear mask from X2", clear.line);
-  context.emitter.emit_op(0x3a, "К ИНВ", "membership clear mask complement", statement.line);
-  context.emitter.emit_op(0x37, "К ∧", "clear membership bits after successful test", statement.line);
+  // K AND retains the collection in Y. Reuse the tested intersection:
+  // A XOR (A AND M) = A AND NOT M in each native payload nibble; both
+  // forms have the same leading-8 normalization. Keep the full predicate
+  // above: a fractional test or an eager decimal delta is not equivalent.
+  context.emitter.emit_op(0x39, "К ⊕", "clear membership bits using tested intersection", clear.line);
   emit_store(context, membership->collection, "set " + membership->collection);
 
   std::vector<V2Statement> rest(then_body.begin() + 1, then_body.end());
@@ -31356,9 +31357,9 @@ bool lower_membership_clear_x2_branch(LoweringContext& context, const V2Statemen
     context.emitter.emit_label(false_label, {.hidden = true});
   }
   context.optimizations.push_back(OptimizationReport{
-      .name = "membership-clear-x2-reuse",
+      .name = "membership-clear-intersection-reuse",
       .detail = "Tested the full native AND result before clearing " + membership->collection +
-                ", reusing the collection in Y and mask in X2 without an eager state update at line " +
+                ", reusing the intersection in X and collection in Y through XOR at line " +
                 std::to_string(statement.line) + ".",
   });
   return true;
@@ -35307,7 +35308,7 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
       return true;
     if (!entered_with_errors && has_errors(context.diagnostics))
       return false;
-    if (lower_membership_clear_x2_branch(context, statement))
+    if (lower_membership_clear_intersection_branch(context, statement))
       return true;
     if (!entered_with_errors && has_errors(context.diagnostics))
       return false;
@@ -52348,18 +52349,9 @@ std::optional<ProvedDirectAddressSet> collect_fixed_direct_address_targets(
 
 std::optional<std::size_t> helper_hoist_reindexed_item(
     std::size_t old_item, const core::HelperInvariantRecallHoistProof& proof) {
-  const std::set<std::size_t>& removed = proof.erased_recall_items;
-  if (removed.contains(old_item) || proof.erased_helper_entry_recall_item == old_item)
+  if (old_item >= proof.old_to_new_item_indices.size())
     return std::nullopt;
-  std::size_t result = old_item;
-  result -= static_cast<std::size_t>(std::distance(removed.begin(), removed.lower_bound(old_item)));
-  if (proof.erased_helper_entry_recall_item.has_value() &&
-      *proof.erased_helper_entry_recall_item < old_item) {
-    --result;
-  }
-  if (proof.helper_label_item_index < old_item)
-    ++result;
-  return result;
+  return proof.old_to_new_item_indices.at(old_item);
 }
 
 bool helper_hoist_preserves_fixed_indirect_targets(
@@ -52380,11 +52372,13 @@ core::HelperInvariantRecallHoistResult choose_helper_invariant_recall_hoist(
     const std::vector<MachineItem>& items,
     const core::HelperInvariantRecallHoistOptions& hoist_options,
     const CompileOptions& options) {
+  core::HelperInvariantRecallHoistOptions abi_options = hoist_options;
+  abi_options.allow_swapped_return = true;
   core::HelperInvariantRecallHoistResult ordinary =
-      core::optimize_helper_invariant_recall_hoist(items, hoist_options);
+      core::optimize_helper_invariant_recall_hoist(items, abi_options);
   core::HelperInvariantRecallHoistResult entry_x =
       core::passes::post_layout_call_entry_materialization_order(
-          items, hoist_options, core::passes::PassContext{.options = options});
+          items, abi_options, core::passes::PassContext{.options = options});
   if (entry_x.applied > 0 && entry_x.proof.final_artifact_proved &&
       (ordinary.applied <= 0 ||
        core::machine_cell_count(entry_x.items) <
@@ -53941,7 +53935,6 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
       const auto hoist = choose_helper_invariant_recall_hoist(
           post_layout_items,
           core::HelperInvariantRecallHoistOptions{
-              .allow_before_call_commutative_tail = false,
               .proved_indirect_flow_targets = indirect->targets,
               .fixed_indirect_flow_targets = indirect->fixed_numeric_targets,
               .fixed_direct_address_targets = direct->targets,
@@ -53949,10 +53942,6 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
           },
           options);
       if (hoist.applied <= 0 || !hoist.proof.final_artifact_proved ||
-          hoist.proof.insertion != core::HelperInvariantRecallInsertion::HelperRoot ||
-          std::any_of(hoist.proof.calls.begin(), hoist.proof.calls.end(), [](const auto& call) {
-            return call.placement != core::HelperInvariantRecallPlacement::BeforeCall;
-          }) ||
           !helper_hoist_preserves_fixed_indirect_targets(*indirect, hoist.proof) ||
           core::machine_cell_count(hoist.items) >= core::machine_cell_count(post_layout_items))
         break;
@@ -53963,6 +53952,45 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
           .name = "pre-layout-helper-invariant-recall-hoist",
           .detail = "Composed selector-seed reuse with the existing complete-call-family "
                     "stack/X2 proof before natural selector addresses were fixed.",
+      });
+    }
+  }
+  // Forwarded X arguments expose a different common-operand ABI. Keep this
+  // inside the indexed-prefix layout alternative: ordinary scheduling remains
+  // an independently finalized competitor, rather than trusting a local saving.
+  if (options.preloaded_indexed_update_prefix) {
+    const AddressSpaceModel early_model = address_space_model_for_options(options);
+    for (int iteration = 0; iteration < 8; ++iteration) {
+      const auto indirect = collect_proved_indirect_flow_set(post_layout_items, early_model);
+      const auto direct = collect_fixed_direct_address_targets(post_layout_items, options,
+                                                                early_model);
+      if (!indirect.has_value() || !direct.has_value())
+        break;
+      const auto hoist = choose_helper_invariant_recall_hoist(
+          post_layout_items,
+          core::HelperInvariantRecallHoistOptions{
+              .allow_before_call_commutative_tail = false,
+              .allow_x_preserving_root = true,
+              .proved_indirect_flow_targets = indirect->targets,
+              .fixed_indirect_flow_targets = indirect->fixed_numeric_targets,
+              .fixed_direct_address_targets = direct->targets,
+              .retargetable_direct_address_items = direct->retargetable_items,
+          },
+          options);
+      if (hoist.applied <= 0 || !hoist.proof.final_artifact_proved ||
+          hoist.proof.insertion != core::HelperInvariantRecallInsertion::HelperRoot ||
+          !helper_hoist_preserves_fixed_indirect_targets(*indirect, hoist.proof) ||
+          core::machine_cell_count(hoist.items) >= core::machine_cell_count(post_layout_items))
+        break;
+      post_layout_items = hoist.items;
+      post_layout_optimizations.insert(post_layout_optimizations.end(),
+                                      hoist.optimizations.begin(), hoist.optimizations.end());
+      post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+          .name = "pre-layout-helper-entry-operand-abi",
+          .detail = "Proved the complete common-operand call family before natural target "
+                    "binding, preserving the helper's X argument and independently "
+                    "reconverging stack/X1/X2. The full indexed-prefix layout competes "
+                    "against ordinary scheduling.",
       });
     }
   }

@@ -56,6 +56,20 @@ struct HelperInvariantRecallHoistOptions {
   // whichever proved plan removes more cells.
   bool allow_before_call_commutative_tail = true;
 
+  // Additional bounded output-ABI candidate: recall, swap, V/O. Unlike a
+  // plain tail recall, it leaves the helper result in X at V/O. This does not
+  // prove equal hidden VP restoration contexts: a later independent sync is
+  // mandatory. Matching leading caller swaps use the same relational proof.
+  // Compiler candidate selection enables this axis without changing the
+  // narrower root/plain-tail proof contract used by individual pass clients.
+  bool allow_swapped_return = false;
+
+  // Separate input-ABI candidate: recall common; swap; original helper body.
+  // Preserve its existing X argument while parking the common operand in Y.
+  // The complete caller family, hidden entry context and continuations still
+  // require an independent relational proof.
+  bool allow_x_preserving_root = false;
+
   // Keep a proved tail plan even when the independently evaluated root plan
   // is locally smaller. This is an internal composition axis: callers may
   // apply another proved rewrite to the tail plan and compare the complete
@@ -107,6 +121,14 @@ struct HelperInvariantRecallHoistProof {
   std::vector<HelperInvariantRecallCall> calls;
   std::set<std::size_t> erased_recall_items;
   std::set<std::size_t> nop_recall_items;
+  bool swap_return_operands = false;
+  // Mutually exclusive with swap_return_operands: the swap follows the root
+  // recall rather than preceding V/O. It retains the original argument in X.
+  bool preserve_entry_x = false;
+  std::set<std::size_t> erased_permutation_items;
+  // Authoritative emitted-item identity map, including tail insertions and
+  // caller permutations. Consumers must not reconstruct it from cell counts.
+  std::vector<std::optional<std::size_t>> old_to_new_item_indices;
   std::map<std::size_t, std::vector<int>> final_indirect_flow_targets;
   std::vector<std::string> reasons;
 };
@@ -127,8 +149,8 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
                                      const std::string& helper_label,
                                      const HelperInvariantRecallHoistOptions& options = {});
 
-// Insert one copy of the proved recall at the helper root/tail and erase its copy
-// at every call site.  A failed pre- or post-rewrite proof returns `items`
+// Insert the proved recall/output ABI at the helper root/tail and erase its
+// call-site copies and redundant swaps. A failed pre- or post-rewrite proof returns `items`
 // unchanged.
 HelperInvariantRecallHoistResult
 rewrite_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,

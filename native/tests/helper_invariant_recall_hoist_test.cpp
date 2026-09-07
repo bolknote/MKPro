@@ -1,6 +1,7 @@
 #include "mkpro/core/helper_invariant_recall_hoist.hpp"
 
 #include "mkpro/core/emit/machine_emitter.hpp"
+#include "mkpro/core/stack_value_equivalence.hpp"
 #include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
@@ -220,6 +221,8 @@ std::vector<std::string> observe_staged_operand(const std::vector<MachineItem>& 
   for (int reg = 1; reg <= 5; ++reg)
     calc.set_register(std::to_string(reg), std::to_string(reg + 1));
   calc.set_register("8", common);
+  if (opcode_count(items, 0xab) > 0)
+    calc.set_register("b", std::to_string(item_address(items, label_index(items, kRoot))));
   calc.set_register("X", "13");
   calc.set_register("Y", "29");
   calc.set_register("Z", "31");
@@ -230,12 +233,64 @@ std::vector<std::string> observe_staged_operand(const std::vector<MachineItem>& 
     require(calc.run_until_stable(2000, 6).stopped,
             "staged recall movement must preserve helper returns and both stops");
     observations.push_back(calc.display_text());
-    for (const char* reg : {"X", "Y", "Z", "T", "X1", "9", "a", "b"})
+    for (const char* reg : {"X", "Y", "Z", "T", "X1", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+                            "a", "b", "c", "d", "e"})
       observations.push_back(calc.read_register(reg));
     if (phase == 0)
       calc.press("С/П");
   }
   return observations;
+}
+
+std::vector<MachineItem> entry_operand_fixture(bool signed_literals) {
+  auto items = staged_operand_fixture(1);
+  if (!signed_literals)
+    return items;
+  for (std::size_t item = 0; item + 3U < items.size(); ++item) {
+    if (items.at(item).kind != MachineItemKind::Op || items.at(item).opcode != 0x0e ||
+        items.at(item + 1U).kind != MachineItemKind::Op || items.at(item + 1U).opcode != 0x0e ||
+        items.at(item + 2U).kind != MachineItemKind::Op || items.at(item + 2U).opcode != 0x0e)
+      continue;
+    const MachineItem save = items.at(item + 3U);
+    items.erase(items.begin() + static_cast<std::ptrdiff_t>(item),
+                items.begin() + static_cast<std::ptrdiff_t>(item + 4U));
+    items.insert(items.begin() + static_cast<std::ptrdiff_t>(item),
+                 {save, MachineItem::op(1, "literal"), MachineItem::op(0x0b, "literal sign"),
+                  MachineItem::op(0x61, "flush"), MachineItem::op(0x62, "flush"),
+                  MachineItem::op(0x63, "flush")});
+    item += 5U;
+  }
+  return items;
+}
+
+std::vector<MachineItem> return_order_fixture() {
+  std::vector<MachineItem> items;
+  for (int site = 0; site < 3; ++site) {
+    if (site == 0)
+      items.push_back(MachineItem::op(0x68, "common operand"));
+    items.push_back(MachineItem::op(0x61 + site, "argument"));
+    items.push_back(MachineItem::op(0x53, "call"));
+    items.push_back(MachineItem::address(std::string(kRoot)));
+    if (site != 0) {
+      items.push_back(MachineItem::op(0x68, "common operand"));
+      items.push_back(MachineItem::op(0x14, "retain common operand in Y"));
+    }
+    items.push_back(MachineItem::op(site == 1 ? 0x37 : 0x38, "join"));
+    // No stack flushing: both retained Y and the return's X2 remain observable.
+    items.push_back(MachineItem::op(0x49 + site, "save result"));
+  }
+  MachineItem prompt = MachineItem::op(0x50, "prompt");
+  prompt.stop_disposition = StopDisposition::Resumable;
+  items.push_back(prompt);
+  items.push_back(MachineItem::op(0x0c, "VP"));
+  items.push_back(MachineItem::op(2, "2"));
+  MachineItem finish = MachineItem::op(0x50, "finish");
+  finish.stop_disposition = StopDisposition::Terminal;
+  items.push_back(finish);
+  items.push_back(MachineItem::label(std::string(kRoot)));
+  items.push_back(MachineItem::op(0x22, "square"));
+  items.push_back(MachineItem::op(0x52, "return"));
+  return items;
 }
 
 std::vector<MachineItem> helper_with_inserted_op(int opcode) {
@@ -338,6 +393,107 @@ IndirectCallFixture indirect_call_fixture() {
 } // namespace
 
 void helper_invariant_recall_hoist_rewrites_only_proved_calls() {
+  {
+    core::StackValueEqualityState equality;
+    equality.stack_equal = {true, true, false, false};
+    equality.x1_equal = false;
+    equality.x2_equal = true;
+    const int before = core::stack_value_equality_key(equality);
+    require(core::transfer_decimal_sign_equality(equality, true) ==
+                core::StackValueEqualityTransfer::Continue &&
+                core::stack_value_equality_key(equality) == before,
+            "a proved literal sign edit must not invent equality for parked stack or last-X");
+    require(core::transfer_decimal_sign_equality(equality, false) ==
+                core::StackValueEqualityTransfer::Rejected,
+            "a sign edit outside proved mantissa entry must remain opaque");
+    equality.x2_equal = false;
+    require(core::transfer_decimal_sign_equality(equality, true) ==
+                core::StackValueEqualityTransfer::Rejected,
+            "equal visible literal X does not authorize an unequal hidden entry context");
+    equality.x2_equal = true;
+    equality.stack_equal[0] = false;
+    require(core::transfer_decimal_sign_equality(equality, true) ==
+                core::StackValueEqualityTransfer::Rejected,
+            "a sign edit must not consume different visible values");
+  }
+
+  for (const bool signed_literals : {false, true}) {
+    const auto original = entry_operand_fixture(signed_literals);
+    core::HelperInvariantRecallHoistOptions options;
+    options.allow_before_call_commutative_tail = false;
+    options.allow_x_preserving_root = true;
+    const auto accepted =
+        core::rewrite_helper_invariant_recall_hoist(original, std::string(kRoot), options);
+    require(accepted.applied == 1 && accepted.proof.final_artifact_proved &&
+                accepted.proof.insertion == core::HelperInvariantRecallInsertion::HelperRoot &&
+                accepted.proof.preserve_entry_x && !accepted.proof.swap_return_operands &&
+                cell_count(accepted.items) == cell_count(original) - 2,
+            "root recall/swap must preserve the existing X argument and save two cells");
+    const auto root = label_index(accepted.items, kRoot);
+    require(accepted.items.at(root + 1U).opcode == 0x68 &&
+                accepted.items.at(root + 2U).opcode == 0x14,
+            "the delivered root must contain the proved recall/swap, not a swapped return");
+    for (const auto& common : {"0", "4", "7.7777777", "8.1234567", "-0.25"})
+      require(observe_staged_operand(original, common) ==
+                  observe_staged_operand(accepted.items, common),
+              "entry ABI must preserve all stock registers, stack, X1 and post-stop VP");
+
+    auto live_x2 = original;
+    const auto join = std::find_if(live_x2.begin(), live_x2.end(), [](const MachineItem& item) {
+      return item.kind == MachineItemKind::Op && (item.opcode == 0x37 || item.opcode == 0x38);
+    });
+    require(join != live_x2.end(), "entry fixture must have an observed commutative join");
+    live_x2.insert(join + 1, {MachineItem::op(0x0c, "observe hidden entry context"),
+                             MachineItem::op(2, "exponent")});
+    require(core::rewrite_helper_invariant_recall_hoist(
+                live_x2, std::string(kRoot), options).applied == 0,
+            "entry permutation must reject VP before an independent hidden-context sync");
+
+    for (const bool manual : {false, true}) {
+      auto anchored = original;
+      require(!accepted.proof.erased_permutation_items.empty(),
+              "entry fixture must exercise removal of a caller swap");
+      auto& swap = anchored.at(*accepted.proof.erased_permutation_items.begin());
+      if (manual)
+        swap.manual_interaction.emplace();
+      else
+        swap.raw = true;
+      require(core::rewrite_helper_invariant_recall_hoist(
+                  anchored, std::string(kRoot), options).applied == 0,
+              "raw/manual caller swaps cannot be absorbed by the input ABI");
+    }
+
+    auto indirect = original;
+    for (std::size_t item = indirect.size(); item-- > 0;) {
+      if (indirect.at(item).kind == MachineItemKind::Address) {
+        indirect.at(item - 1U) = MachineItem::op(0xab, "indirect call");
+        indirect.erase(indirect.begin() + static_cast<std::ptrdiff_t>(item));
+      }
+    }
+    const int target = item_address(indirect, label_index(indirect, kRoot));
+    auto indirect_options = options;
+    for (std::size_t item = 0; item < indirect.size(); ++item)
+      if (indirect.at(item).kind == MachineItemKind::Op && indirect.at(item).opcode == 0xab)
+        indirect_options.proved_indirect_flow_targets.emplace(item, std::vector<int>{target});
+    const auto moved = core::rewrite_helper_invariant_recall_hoist(
+        indirect, std::string(kRoot), indirect_options);
+    require(moved.applied == 1 && moved.proof.final_artifact_proved &&
+                observe_staged_operand(indirect, "4") == observe_staged_operand(moved.items, "4"),
+            "entry ABI must preserve and retarget the complete indirect call family");
+    const int moved_target = item_address(moved.items, label_index(moved.items, kRoot));
+    for (const auto& [site, targets] : indirect_options.proved_indirect_flow_targets) {
+      (void)targets;
+      const auto mapped = moved.proof.old_to_new_item_indices.at(site);
+      require(mapped.has_value() && moved.proof.final_indirect_flow_targets.at(*mapped) ==
+                                       std::vector<int>{moved_target},
+              "the final indirect proof must follow surviving command identities");
+    }
+    indirect_options.fixed_indirect_flow_targets = indirect_options.proved_indirect_flow_targets;
+    require(core::rewrite_helper_invariant_recall_hoist(
+                indirect, std::string(kRoot), indirect_options).applied == 0,
+            "a fixed helper target cannot be moved to make the input ABI cheaper");
+  }
+
   for (const auto& [metadata, expected] :
        std::array<std::pair<std::string, std::vector<std::string>>, 2>{
            std::pair{std::string("callee-hole indirect call; proof=p; "
@@ -353,6 +509,127 @@ void helper_invariant_recall_hoist_rewrites_only_proved_calls() {
     require(raised.size() == 1U &&
                 core::passes::computed_dispatch_target_labels(raised.front()) == expected,
             "callee-hole CFG metadata should retain leaf identities before and after binding");
+  }
+
+  {
+    const auto original = return_order_fixture();
+    const auto plain =
+        core::rewrite_helper_invariant_recall_hoist(original, std::string(kRoot));
+    require(plain.applied == 1 && cell_count(plain.items) == cell_count(original) - 2,
+            "the existing plain-tail candidate stays available when the stop resynchronizes X2");
+    core::HelperInvariantRecallHoistOptions options;
+    options.allow_swapped_return = true;
+    const auto accepted =
+        core::rewrite_helper_invariant_recall_hoist(original, std::string(kRoot), options);
+    require(accepted.applied == 1 && accepted.proof.final_artifact_proved &&
+                accepted.proof.swap_return_operands &&
+                accepted.proof.erased_permutation_items.size() == 2U &&
+                cell_count(accepted.items) == cell_count(original) - 3 &&
+                opcode_count(accepted.items, 0x68) == 1 &&
+                opcode_count(accepted.items, 0x14) == 1,
+            "the result/common-operand ABI must save three cells and prove live Y and X2 convergence");
+    for (const auto& common : {"0", "4", "7.7777777"})
+      require(observe_staged_operand(original, common) ==
+                  observe_staged_operand(accepted.items, common),
+              "return ABI must preserve full stock-MK61 stack, X1, VP/X2 and matched returns");
+    for (const auto& call : accepted.proof.calls) {
+      const auto mapped = accepted.proof.old_to_new_item_indices.at(call.call_item_index);
+      require(mapped.has_value() && accepted.items.at(*mapped).opcode == 0x53,
+              "the emitted identity map must account for both inserted and erased swaps");
+    }
+
+    const auto with_live_vp = [](std::vector<MachineItem> items) {
+      const auto store = std::find_if(items.begin(), items.end(), [](const MachineItem& item) {
+        return item.kind == MachineItemKind::Op && item.opcode == 0x4b;
+      });
+      require(store != items.end(), "return ABI fixture must retain its final result store");
+      items.insert(store, {MachineItem::op(0x0c, "observe return X2"),
+                           MachineItem::op(2, "2")});
+      return items;
+    };
+    const auto live_x2 = with_live_vp(original);
+    const auto unsafe_abi = with_live_vp(accepted.items);
+    const auto source_observation = observe_staged_operand(live_x2, "4");
+    const auto unsafe_observation = observe_staged_operand(unsafe_abi, "4");
+    require(compact(source_observation.front()) == "100," &&
+                compact(unsafe_observation.front()) == "1600,",
+            "stock MK61 fact: equal returned X does not imply equal delayed VP restoration");
+    const auto rejected_x2 =
+        core::rewrite_helper_invariant_recall_hoist(live_x2, std::string(kRoot), options);
+    require(rejected_x2.applied == 0 && contains_reason(rejected_x2.proof, "X2"),
+            "return-operand permutation must fail closed before an unsynchronized VP");
+
+    auto wrong_y = original;
+    wrong_y.erase(wrong_y.begin() + static_cast<std::ptrdiff_t>(
+                      *accepted.proof.erased_permutation_items.rbegin()));
+    const auto retained_y =
+        core::rewrite_helper_invariant_recall_hoist(wrong_y, std::string(kRoot), options);
+    require(retained_y.applied == 0 || !retained_y.proof.swap_return_operands,
+            "a commutative result must not hide a different live retained operand");
+
+    for (const bool manual : {false, true}) {
+      auto anchored = original;
+      auto& swap = anchored.at(*accepted.proof.erased_permutation_items.begin());
+      if (manual)
+        swap.manual_interaction.emplace();
+      else
+        swap.raw = true;
+      require(core::rewrite_helper_invariant_recall_hoist(
+                  anchored, std::string(kRoot), options).applied == 0,
+              "raw/manual caller permutations cannot be folded into a return ABI");
+    }
+
+    auto external = original;
+    const auto target_item = *accepted.proof.erased_permutation_items.begin();
+    const auto root = label_index(external, kRoot);
+    external.insert(external.begin() + static_cast<std::ptrdiff_t>(root),
+                    {MachineItem::op(0x51, "external jump"),
+                     MachineItem::address(item_address(original, target_item))});
+    auto external_options = options;
+    external_options.fixed_direct_address_targets.emplace(
+        root + 1U, item_address(original, target_item));
+    external_options.retargetable_direct_address_items.insert(root + 1U);
+    const auto external_result = core::rewrite_helper_invariant_recall_hoist(
+        external, std::string(kRoot), external_options);
+    require(external_result.applied == 0 || !external_result.proof.swap_return_operands,
+            "an independently addressable caller swap cannot disappear");
+  }
+
+  {
+    auto indirect = return_order_fixture();
+    for (std::size_t item = indirect.size(); item-- > 0;) {
+      if (indirect.at(item).kind == MachineItemKind::Address) {
+        indirect.at(item - 1U) = MachineItem::op(0xab, "indirect call");
+        indirect.erase(indirect.begin() + static_cast<std::ptrdiff_t>(item));
+      }
+    }
+    core::HelperInvariantRecallHoistOptions options;
+    options.allow_swapped_return = true;
+    const int target = item_address(indirect, label_index(indirect, kRoot));
+    for (std::size_t item = 0; item < indirect.size(); ++item)
+      if (indirect.at(item).kind == MachineItemKind::Op && indirect.at(item).opcode == 0xab)
+        options.proved_indirect_flow_targets.emplace(item, std::vector<int>{target});
+    const auto accepted = core::rewrite_helper_invariant_recall_hoist(
+        indirect, std::string(kRoot), options);
+    require(accepted.applied == 1 && accepted.proof.final_artifact_proved &&
+                accepted.proof.swap_return_operands &&
+                cell_count(accepted.items) == cell_count(indirect) - 3 &&
+                observe_staged_operand(indirect, "4") ==
+                    observe_staged_operand(accepted.items, "4"),
+            "return ABI must retarget complete indirect call families and preserve emulator behavior");
+    const int moved_target = item_address(accepted.items, label_index(accepted.items, kRoot));
+    for (const auto& [old_item, targets] : options.proved_indirect_flow_targets) {
+      (void)targets;
+      const auto mapped = accepted.proof.old_to_new_item_indices.at(old_item);
+      require(mapped.has_value() &&
+                  accepted.proof.final_indirect_flow_targets.at(*mapped) ==
+                      std::vector<int>{moved_target},
+              "every final indirect target must follow the surviving command identity");
+    }
+    options.fixed_indirect_flow_targets = options.proved_indirect_flow_targets;
+    require(core::rewrite_helper_invariant_recall_hoist(
+                indirect, std::string(kRoot), options).applied == 0,
+            "a fixed helper address cannot shift merely because its return ABI is cheaper");
   }
 
   for (const int arguments : {1, 2, 3}) {
