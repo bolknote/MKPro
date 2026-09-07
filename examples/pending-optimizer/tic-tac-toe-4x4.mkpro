@@ -11,18 +11,21 @@ program TicTacToe4x4 {
     expected_mode_only("deg")
 
     occupied: packed = 0
+    previous_occupied: packed
     lines: packed[4..7] = [44444.4, 44444.4, 44444.4, 44444.4]
 
-    // The visible coordinates also carry raw keyboard input and the occupied
-    // retry sentinel. Every coordinate use is normalized explicitly below.
+    // Coordinates also carry raw keyboard input before normalization. Keep
+    // the displayed response separate so reports never overwrite a coordinate.
     x: packed = 0
     y: packed = 0
+    display_x: packed = 0
 
     best_y: packed = 0
     best_score: packed
     score: packed
     line: packed
     slot: packed
+    report: packed
   }
 
   fn draw() {
@@ -30,14 +33,14 @@ program TicTacToe4x4 {
   }
 
   fn occupied_cell() {
-    x = -99999999
+    display_x = -99999999
   }
 
   loop {
     // The documented answer is the stack pair X:Y.  preview(y) prepares Y;
-    // show(x) leaves the selected coordinate (or retry sentinel) visible.
+    // The response may be a coordinate, a retry sentinel, or a win report.
     preview(y)
-    show(x)
+    show(display_x)
     // Source UI is X ПП Y С/П: ПП executes only the first entered() store,
     // then С/П resumes at the second one with the new X value. Keep both
     // entered() assignments explicit: y = entered() is the second interactive
@@ -53,11 +56,15 @@ program TicTacToe4x4 {
     x = grid_norm(x)
     line = cell_mask(x, y)
 
-    if bit_and(occupied, line) != 0 {
+    // The original writes the union first, then compares old and new values.
+    // Testing intersection is not equivalent for a multi-bit mask, which can
+    // arise from the calculator's rounding of out-of-range keyboard input.
+    previous_occupied = occupied
+    occupied = bit_or(occupied, line)
+    if previous_occupied == occupied {
       occupied_cell()
     }
     else {
-      occupied = bit_or(occupied, line)
       mark_lines_and_check(-1)
       choose_calculator_move()
       occupied = bit_or(occupied, line)
@@ -69,16 +76,22 @@ program TicTacToe4x4 {
     // Walk the four line banks 7..4 by self-decrementing the shared selector,
     // so callers no longer spend a literal cell per bank index.
     slot--
-    lines[slot] = packed_add(lines[slot], line, best_score)
-    report = bit_and(lines[slot], 88888834)
-    if frac(report) != 0 {
-      halt(report)
+    // Lines are one-based: line 1 changes units, not tens. The original
+    // multiplies pow10(line) by +/-0.1. Keep that operation order rather
+    // than shifting the exponent: MK-61 rounding is observable here.
+    lines[slot] = packed_add(lines[slot], line, best_score / 10)
+    // A win records the fractional report but does not interrupt the traversal.
+    // The last winning line is reported after all four banks have been updated.
+    report = frac(bit_and(lines[slot], 88888834))
+    if report != 0 {
+      display_x = report
     }
   }
 
   fn mark_lines_and_check(mark_sign) {
     best_score = mark_sign
     slot = 8
+    display_x = x
     line = x
     mark_one()
     line = y
@@ -90,12 +103,14 @@ program TicTacToe4x4 {
   }
 
   fn choose_calculator_move() {
-    y = 4
+    // The original scans X first, then Y, both descending. Equal scores
+    // replace the previous best, so exchanging these loops changes the move.
+    x = 4
 
-    while y >= 1 {
-      x = 4
-      while x >= 1 {
-        unless bit_and(occupied, cell_mask(x, y)) {
+    while x >= 1 {
+      y = 4
+      while y >= 1 {
+        unless frac(bit_and(occupied, cell_mask(x, y))) {
           candidate_score()
           best_score = max(score, best_score)
           if score == best_score {
@@ -103,9 +118,9 @@ program TicTacToe4x4 {
             best_y = y
           }
         }
-        x--
+        y--
       }
-      y--
+      x--
     }
 
     if best_score < 0 {
@@ -118,7 +133,9 @@ program TicTacToe4x4 {
   }
 
   fn candidate_score() {
-    score = packed_score(lines[7], x) + packed_score(lines[6], y)
+    // The original starts its accumulator at 98. Keep the same left-to-right
+    // additions: eight-digit rounding affects score ties and the chosen move.
+    score = 98 + packed_score(lines[7], x) + packed_score(lines[6], y)
     normalize(x + y)
     score += packed_score(lines[5], line)
     normalize(x - y)

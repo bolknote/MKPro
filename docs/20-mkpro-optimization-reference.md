@@ -770,6 +770,12 @@ committed example oracles under `native/oracles/`.
 - `free-residual-dispatch-scratch` — frees residual dispatch scratch in a candidate pass.
 - `dual-use-constant-indirect-flow` — lets existing setup constant preloads double as immutable indirect-flow selectors in a candidate pass. For positive subunit constants the selector can also use the normalized mantissa shape directly: e.g. `0.22600029` may be preloaded as `2.2600029E-1`, whose stable indirect target is `29`, so numeric recalls do not need a `К{x}` recovery cell. That natural form is only credited when the target remains stable without retargeting; if deleting an address byte would move the target, the optimizer keeps the prefix form because retargeting the mantissa would change the numeric constant. When the requested target is not the mantissa-tail target, the older integer-prefix form is still used and numeric recalls recover the fractional part explicitly. The full selector/layout cross-product remains reserved for slow candidate search.
 - `retunable-natural-fractional-selector` — lets a compiler-generated numeric lowering certify that the final two mantissa digits are unobservable to every data use. The preload keeps the mathematical base value during lowering; natural-target component layout fills those digits from the final helper address and then repeats the numeric indirect decoder, ordinary-recall provenance, CFG, return-stack, data-stack, X2, selector-stability, and final-size proofs. The certificate is attached to the generated AST number and all emitted uses, so an ordinary user literal with the same numeric value cannot inherit it through helper deduplication or constant preloading.
+Natural-target layout branches share immutable command payloads, including
+proof metadata, while copying only their segment geometry. Rewriting an opcode
+creates a new payload, and final output materializes independent `MachineItem`
+values. This is a search-representation optimization: it does not change the
+candidate set, its deterministic ordering, size costs, or any proof gate.
+
 - `natural-target-companion-selector-rebind` — when component placement for one
   natural target relocates an unrelated existing indirect-flow target, rebinds
   that companion selector in the same transaction. The selector must already
@@ -3883,3 +3889,477 @@ hardware-observable values: `00000001` and `1` are compared numerically only
 for the known integer selector, while display and stack observations remain
 exact. Separate hardware register-recall and indirect-memory probes check
 that the padding difference cannot change those observations.
+
+## Finalization companion-selector bounds
+
+An atomic cell-erasure transaction can restore an immutable data selector's
+absolute target while relocating unrelated address-only or certified fractional
+selectors. Their decimal rebindings must still encode a target in `00..99`.
+Finalization therefore feeds those companion identities into the existing bounded
+component-placement solver, using the caller's tighter decimal bound when present.
+It does not wait for the final runtime decoder to reject an unencodable first
+ordering and discard an otherwise profitable erasure.
+
+Bounds are inferred only from the existing stable-preload retuning proof:
+exact typed target, literal runtime initialization, no register writes, and either
+no data use or complete compiler-owned provenance for the retunable data family.
+Ordinary data recalls, generated setup expressions, mutable registers, ambiguous
+targets and missing certificates cannot acquire a flexible bound. Final CFG,
+call/return, stack/X2, indirect-memory, data-projection, absolute-target and runtime
+selector checks remain mandatory. This extension is local to deferred-selector
+reconciliation transactions; unrelated speculative layout frontiers are unchanged.
+
+Explicit lowering variants also receive the existing bounded, strictly shrinking
+finalization fixed point after their late layout. This lets earlier rejected DSE
+compose with later selector release, just as it does for automatic candidates.
+No source, helper name, register assignment or application is recognized.
+
+A retunable fractional selector is not required to encode address `00`.
+Canonical delivery may remove the trailing zeros that would have carried that
+address, while other addresses in the same certified family remain valid.
+Companion-bound inference therefore searches the finite allowed address domain
+for a proved alternative instead of treating one failed probe as proof that the
+selector is fixed. The selected final value still has to pass the ordinary
+runtime decoder and data-projection proofs. Generated setup values and
+uncertified data reads do not gain rebinding rights.
+
+### `stack-carried-pow10-computed-coefficient`
+
+Indexed updates by `coefficient * pow10(index)` can retain the index and old
+array element on the calculator stack even when the coefficient is an
+arithmetic expression, rather than just a variable or literal. This extends the
+existing indexed pow10-delta lowering and its memory-target and call-site
+proofs; it does not recognize program names or substitute reference bytecode.
+
+The shared analysis and emitter accept identifiers, literals, unary negation,
+and binary `+`, `-`, `*`, `/`. They compute left-to-right stack pressure as
+`max(pressure(left), 1 + pressure(right))` and require at most two temporary
+slots. The coefficient must not read the carried index. Calls, indexed loads,
+and deeper expression trees use ordinary lowering instead. For example,
+`rate / 10` and `(rate + offset) / 10` fit; `rate / (divisor + offset)` does not.
+
+The original association of the coefficient and exponent is retained. In
+particular, this rule does not replace `pow10(index) * 0.1` with
+`pow10(index - 1)`: those expressions need not round identically on MK-61.
+The selected lowering is reported in optimization JSON/explain. Emulator
+coverage includes both signs, integer and fractional exponents, unrelated
+array banks, compound coefficients, repeated-index rejection, stack-pressure
+rejection, and rejection of a coefficient containing `random()`.
+
+### `stack-carried-index-update-prefix`
+
+A no-argument procedure may consume a stack-only packed-update index at its
+entry and then continue with ordinary statements. The update can be preceded
+by a unit decrement of its independent array selector. The continuation must
+not read the old index before redefining it, including through another call.
+Only the consuming prefix uses the stack-entry lowering; all remaining effects,
+branches and returns use the ordinary statement lowering.
+
+This closes the gap between caller-side stack-only analysis, which already
+allowed a continuation, and callee emission, which previously required the
+update to end the procedure. No array contents, procedure names or game-specific
+values participate in the decision. Compiler/emulator coverage includes direct
+and decrementing selectors, arithmetic and conditional continuations, and
+negative cases with a direct or transitive live read of the index.
+
+The caller-preloaded indexed-value ABI also applies to this prefix, rather than
+only to procedures ending in a fractional-report trap. Every call must prove
+the exact bank element selected by its unit decrement, and its index producer
+must preserve that preloaded element in Y. The coefficient keeps its original
+arithmetic association and may occupy at most the two remaining stack slots.
+The eventual indirect store performs the decrement; coefficients reading the
+selector and continuations writing it, directly or through another procedure,
+are rejected. The dead-index proof still covers the whole continuation.
+All register placement remains within the selected machine profile.
+
+`predecrement-indexed-stacked-value-update` reports the selected prefix. Tests
+exercise successive bank updates, both conditional outcomes, computed
+coefficients, live-index rejection and direct/transitive selector mutation on
+the stock MK-61 emulator, without requiring RF.
+
+Ordinary continuations use the separate
+`preloaded_indexed_update_prefix` candidate option. Its local saving is only an
+estimate: moving the selector can change register sharing and dark-address
+layout. Automatic search keeps the ordinary ABI, compares completed artifacts,
+and revisits this choice with the other helper-entry alternatives. Tests run
+both ABIs on the same stock-machine cases and require automatic selection not
+to exceed the smaller explicit result.
+
+An ordinary indexed recall which first copies its selector to a stable register
+discards that address from the value stack before recalling the element. A
+two-command register copy plus rotation and the indirect recall preserves the
+same stack projection as one value recall.
+
+### `cached-expression-operand-forwarding`
+
+A known current-X expression need not have a source variable name to be reused
+by arithmetic or bitwise operations. With one fresh scalar operand, consume the
+cached value directly instead of recomputing or rereading it. Subtraction and
+division retain their operand order; duplicate, deferred and stack-only operand
+cases use the existing schedulers. The expression fact is cleared after the
+operation, and ordinary invalidation still applies before every reuse.
+
+The ordinary scheduler remains available through the separate
+`cached_expression_operand_forwarding` candidate option. Selection uses the
+completed program, not just the saved recalls: shorter expression code can
+otherwise lose a more valuable address-layout coincidence.
+
+### `stable-indirect-selector-operand-scheduling`
+
+For `AND`/`OR`/`XOR`, prepare a stable indirect selector before loading the
+other operand when this removes the selector-discard rotation. The selector
+must be R7..RE, must not overwrite the other operand, and must have proved
+memory targets. Raw/manual protocols and numeric control-flow interiors are
+excluded. The result and memory agree, but operand exchange changes retained
+Y/Z/T and last-X: every continuation must prove these and X2 converge before
+observation. This is not permission to drop the rotation while keeping the
+original operand order. Ordinary arithmetic is not assumed commutative for
+noncanonical calculator values.
+
+### `callee-hole-proved-observation-suffix`
+
+A display-sensitive operation does not make every later instruction in its
+basic block observable. Callee-hole extraction may share an ordinary suffix
+using its X/Y/Z-preserving selector ABI when every occurrence proves T/X1/X2
+convergence before observation. The sensitive operation itself stays in the
+caller; raw/manual operations and unknown effects remain extraction barriers.
+Final stack, selector and return-stack proofs are unchanged. The weaker entry
+ABI retains its whole-block exclusion. This allows larger shared regions
+without depending on source variable names or reordering display preparation.
+
+### `shared-only-logical-register-pinning`
+
+A logical recoloring proves which live ranges may share a register; it need not
+freeze every singleton's physical color. Preserve complete shared classes and
+their setup-value owners, release singleton pins, and regenerate through the
+ordinary allocator for the selected machine profile. Register-bank constraints,
+counter register preferences and final artifact proofs still apply. The fully
+pinned allocation remains a competitor, so releasing placements is not assumed
+to improve the completed layout. Helper-ABI refinement can reuse the same
+proved sharing without inheriting unrelated placement decisions.
+
+### `retained-operand-update-compare`
+
+Fuse a scalar snapshot, a native bitwise update, and an equality comparison:
+
+```mkpro
+snapshot = state
+state = bit_or(state, operand)
+if snapshot == state {
+  unchanged()
+} else {
+  changed()
+}
+```
+
+Native `bit_and`, `bit_or`, and `bit_xor` retain the old left operand in Y.
+The comparison can therefore subtract the updated X from the retained Y instead
+of recalling both operands. A globally stack-only snapshot needs no register
+store; a live snapshot is still stored before the update. Equality, inequality,
+reversed comparison operands and negated branches use the same lowering.
+
+An immediately preceding pure producer of `operand` can be forwarded through X.
+It runs before the old state is recalled, preserving source evaluation order and
+avoiding assumptions about a producer's stack pressure or procedure ABI. The
+allocation proof also visits both branch bodies: a later definition of the same
+field must not inherit the deadness of the consumed value. Values surviving a
+stop, a nested call or an uncovered use retain their registers.
+
+This rule uses opcode stack effects, not a one-bit-mask identity. It does not
+recognize program names, coordinates, constants, or a particular mask formula.
+Arithmetic updates which pop Y and reversed update operands use ordinary
+lowering. Branches which read the old snapshot before overwriting it also use
+ordinary lowering.
+
+The former `bit-or-test-and-set-branch` rewrite is retired: testing a raw
+`bit_and` result is not equivalent to testing an OR-induced change. A native
+format digit can make the former nonzero even without fractional payload bits;
+partial overlap with a multi-bit mask is another counterexample. Source code
+which intends fractional membership must say `frac(bit_and(...))` explicitly.
+
+Raw AND predicates in guarded set/clear reuse retain their complete native
+result. `membership-clear-x2-reuse` replaces the former eager
+`membership-clear-delta-branch`: it branches before updating state, retains the
+collection in Y, and restores the clear mask from X2 using the required gap.
+The Boolean identity `A AND NOT M = A XOR (A AND M)` is not used as a blanket
+MK-61 rewrite: the native traces differ for A = 8 and M = `0._______`.
+Guarded set reuse likewise does not insert an unrequested fractional extraction.
+
+`compiler_retained_operand_update_compare_preserves_observations` compares
+compiled closures with ordinary native listings, covering the three bitwise
+operations, condition polarity and order, materialized live snapshots, new
+branch-local values across stops, unsupported updates, raw AND predicates,
+guarded set/clear, packed format digits and partial-overlap masks. Source-level
+4x4 contracts separately compare update-and-test behavior with the original
+listing, including nonintegral coordinate masks.
+
+### Logical code addresses and physical entry bytes
+
+Provisional code uses symbolic labels independently of the MK-61's program
+memory capacity. Resolving an analysis listing preserves every direct target
+as either `LogicalCodeAddress` or `FormalCodeAddress`. A logical target outside
+physical memory is printed as `@<decimal-index>` and has no encoded opcode
+(`opcode: null` in JSON). It is never truncated to eight bits, including beyond
+index 255. Explicit formal entries retain their entry byte and machine-profile
+interpretation; their aliased cell does not identify their full semantics.
+
+Resolved CFG consumers, callee-hole entry proofs, target statistics and size
+attribution use the typed target rather than interpreting a provisional index
+as a physical byte. A typed target that disagrees with a delivered operand is
+rejected, so metadata cannot mask a mutation of executable code. Physical-only
+address/code overlays remain unavailable until the relevant byte is encodable.
+
+Analysis and oracle tokens may contain logical relocations. Physical token,
+keyboard and MK61S exports reject an unplaced image. The stock emulator behavior
+digest likewise refuses such an image instead of executing an aliased prefix.
+Normal bytecode is emitted only after placement within the selected machine's
+memory. This representation is not additional memory in the real calculator.
+
+`virtual_addresses_preserve_logical_control_flow` covers targets beyond 105 and
+255, explicit formal entries, stale relocation metadata, rejected physical
+exports and ordinary CFG dead-code removal followed by relocation and execution
+on the MK-61 emulator. This address separation does not by itself change the
+candidate search policy or prove that a pending program fits physical memory.
+
+### Relocatable cleanup before shared-region extraction
+
+Eliding stores while forwarding two assigned arguments to a helper requires
+whole-source liveness at the exact consumer statement. A closing brace is not
+a death point: callers, branch joins and loop backedges may still observe the
+assigned values. The effect-only logical-register CFG and matched call/return
+analysis provide this proof; detached statements fail closed rather than being
+matched by line number or expression spelling.
+
+The alternative shared-region ordering first runs register/value cleanup to a
+bounded fixed point, before extracting a common call skeleton or materializing
+flow addresses. Current-X forwarding, stack-lift preservation, X2 proofs, dead
+stores and register coalescing use their existing safety checks. This lets a
+register freed by one cleanup enable the following extraction instead of becoming
+available only after address-sensitive lowering has frozen the layout.
+
+This is an ordering candidate, not a global replacement of the ordinary
+pipeline: an early deletion can lose a profitable address/code overlap. Both
+orders compete using the complete proof-valid final artifact, with size primary.
+JSON/explain records an effective early phase as `relocatable-ir-cleanup`. Raw
+cells, manual input boundaries and unresolved callees retain their ordinary
+conservative treatment. The phase neither adds registers nor changes the target
+profile; standard MK-61 allocation still has only R0 through RE.
+
+### Register copy coalescing by reaching-definition webs
+
+`register-web-copy-coalesce` extends copy coalescing from whole register names
+to connected definition/use webs. Reaching definitions and backward liveness
+use the authoritative execution graph, retaining distinct caller return stacks.
+All definitions reaching one emitted operand are joined: different invocations
+cannot silently change that instruction's register ABI. Read/modify/write and
+conditional memory definitions are joined conservatively.
+
+Entry values retain their setup registers. Indirect memory/flow operands, loop
+counters and ordinary entry values may have later independent lifetimes, but
+compiler-owned constant-pool colors cannot acquire newly retargeted writes:
+later passes may introduce further constant recalls beyond their current uses.
+Indirect memory/flow operands, loop
+counters, manual input and display-sensitive operations pin only the webs they
+touch, rather than every unrelated lifetime of the same register. Copy pairs
+require an exact recall predecessor on every admitted entry. Interference comes
+from definitions against live values, excluding only the equal source of that
+copy; later source/destination writes still prevent divergence.
+
+The bounded greedy merge uses only the source or destination's existing color,
+and checks every interference edge before changing an operand. It allocates no
+new register and never uses Rf. A successful merge removes only the copy store,
+preserving the recall's stack and X2 effects. Unknown flow/memory, raw code and
+fixed numeric address geometry fail closed. Symbolic targets beyond 105 remain
+eligible during analysis; final physical layout still must fit its target.
+
+The existing copy-coalescing candidate runs this before outlining and again in
+ordinary IR cleanup. A final replay also tests actual recall/store pairs on the
+fully refined incumbent, before and after late data-pool allocation; identical
+option sets are not retried. Whole-program size/proof comparison decides whether
+the result is selected; no source variable, helper name or game identity is used.
+
+### Guarded equal-entry register lifetimes
+
+The logical allocator can share two scalar states with the same explicit
+literal setup value when every write of either state is followed by a new
+definition of the other before any feasible read of its old value. This is a
+bounded, demand-driven refinement of the common matched-call lifetime graph;
+ordinary live-in/out sets remain conservative for other clients.
+
+For each queried old value, its next definitions cut the proof graph. Backward
+reachability identifies the remaining possible readers. A unique-entry
+`recall r; Kmax; store r; subtract; zero/nonzero branch` chain retains the old
+`r` on the nonzero-difference edge: selection returns one input and leaves the
+other available for comparison. The proof uses no ordering assumption about
+zero and never infers input equality from a rounded zero difference. The
+[MK-61 manual](https://djvu.online/file/yu7hPysU3evvO) documents selection of
+one of two inputs; stock-emulator cases pin the selection/comparison premise,
+including the zero quirk, signs, fractions and large/small exponents.
+
+If only that edge can reach an old-value reader, bounded integer constant
+propagation can retain a sentinel through the loop and rule out its final
+reader. Global caller-context facts seed the demand proof. Read-only scalar
+setup constants also seed disconnected entries; mutable setup values do not.
+The compiler checks physical writes before associating a preload with a logical
+or physical-anchor name. Inlining the last call does not disable the proof.
+For a complete compiler-owned program the guarded proof starts at instruction
+zero and ignores definitions in unreachable matched-call contexts. Ordinary
+live sets and standalone IR analysis remain conservative about disconnected
+entries. An actual branch into such a fragment makes it reachable again;
+unresolved transfers still reject the proof. No physical register or program
+memory is invented: the stock MK-61 allocation universe remains R0 through RE,
+with 105 physical cells. Rf is not a stock MK-61 storage register.
+Manual interaction
+forgets X/entry facts; may-defs invalidate constants. Unknown memory, raw code,
+extra entries into the select chain and proof-work exhaustion fail closed.
+The proof budget limits analysis, never execution of the user's loop.
+
+The allocator gives a proved-disjoint pair a common color preference even
+when the wider equal-literal class contains incompatible fixed loop counters.
+Interference and precolors remain authoritative. No source/game/helper name
+is recognized, no instruction is replaced with a stored listing, and the
+standard target still has only R0-Re and 105 physical cells.
+
+### Stack equality across matched call/return contexts
+
+Callee-hole entry repair and arithmetic boundary normalization first use their
+cheap straight-line equality proof. If equality has not converged inside a
+callee, the shared proof may continue through the authoritative execution CFG
+into its actual caller. Each entry is seeded in every reachable return-stack
+context, with a maximum of five physical return frames. Branches require equal
+conditions; memory stays equal because stores require equal X. Unknown targets,
+raw code, manual observations and stops with unequal stack components reject
+the rewrite. The final artifact uses the same cross-return proof.
+
+The analysis tracks X/Y/Z/T, physical last-X and decimal-entry X2 independently.
+Merges keep only equality facts true on every incoming path. Decimal digits
+must be safe for both possible shared entry modes. A finite monotone worklist
+handles loops without guessing an iteration count; unresolved CFGs and proof
+budget exhaustion remain conservative failures. Logical intermediate addresses
+above 105 are not confused with encoded dark-side addresses or additional
+physical memory. This proof allocates no registers, including Rf.
+
+### Late literal preloads in unused physical registers
+
+`late-literal-preload` revisits data allocation after IR cleanup. A register
+removed from the executable memory footprint may hold an ordinary two-to-eight
+digit integer even if its former source variable still has an allocation name.
+All setup owners, direct uses, loop counters and possible indirect memory
+targets remain reserved. An unresolved memory target or raw code rejects the
+candidate; Rf is never an additional standard register.
+
+Replacement requires a proved automatic stack lift at numeric entry, a closed
+consumer, and X2 convergence across the existing exact call/return CFG before
+observation. Leading zeroes, exponent/sign continuations, manual interaction,
+and movement of fixed flow targets fail closed. Literal savings rank the pool
+choices deterministically. The candidate then reruns complete layout and the
+ordinary proof gate, competing against leaving the register for flow selectors.
+Only a better complete artifact is selected, reported as
+`late-literal-preload-selection`; a locally shorter literal is not sufficient.
+CFG equality proofs classify address-taking opcodes with a complete instruction,
+not an orphan opcode. Exact branch/call edges come from the authoritative graph;
+an equal condition does not itself observe a differing hidden X2 value.
+Matched returns also propagate the pending inequality into their exact caller
+continuations instead of treating a control-flow barrier as a data observation.
+Every path must still converge before a stop or a real stack/X2 consumer.
+Ordinary digits join the open-entry and fresh-entry equality transfers. They
+require equal visible operands and never claim an X2 overwrite without knowing
+entry mode; decimal-point and exponent restorations retain their stricter gates.
+The data-pool alternative is compared after the incumbent's other refinements,
+so taking it cannot discard a smaller existing demotion or helper-ABI result.
+
+### Deferred fractional selectors and logical targets
+
+Return-transparency and recall-removal proofs resolve typed indirect-call targets
+against logical operation identities, including targets beyond physical program
+memory. A single exact label or logical index is enough; encoding it as a hardware
+address is deferred to final layout. Typed metadata is authoritative: an unresolved,
+empty, or multiple-target set cannot fall back to a legacy numeric comment and prove
+a different callee transparent. This does not relax physical export validation or
+the existing stack, X2, selector-writeback, and return-stack proof requirements.
+
+`stack-lift-recall-forwarding` handles the case where a register's value is
+already in X but deleting its recall would lose a required stack lift. It
+replaces a direct recall with `Enter` only after the shared CFG value proof and
+X2 exposure proof succeed. The replacement keeps one physical cell and the
+required stack duplication, so fixed numeric addresses do not move. Removing
+the register read can then expose its store to ordinary DSE. Raw/manual cells,
+opcode-role bindings, unknown flow, and observable X2 restoration are rejected.
+
+`flow-x-reuse` accepts exact typed CFG targets, including labels beyond the
+physical program window and finite indirect target sets. Missing targets still
+reject the pass; fixed numeric targets retain their layout guard. X facts use a
+worklist to reach a fixed point rather than an iteration limit tied to small
+programs. Indirect selectors invalidate their own whole-word X aliases even in
+the stable register class, since address decoding can modify fractional data.
+
+Dead-source residual-temporary reuse is guarded before allocation by an
+effect-only source projection into the shared IR liveness solver. Closing a
+source block does not kill a state value: branch joins, loop backedges, and
+matched caller continuations remain in the graph. Both the overwritten source
+and the elided temporary store must be dead at the block exit. A possible
+callee write is not a guaranteed kill. Facts are rebuilt after each accepted
+rewrite, and speculative match actions are deep-copied so a rejected candidate
+cannot mutate the source. This proof is independent of physical code addresses.
+
+While an ordinary candidate still exceeds the target budget, the normal search
+also composes dead-source residual-temporary reuse with its initial lowering
+seed and current best lowering. Both roots are captured before evaluation and
+deduplicated by the canonical option key. This bounded closure reruns lifetime
+reasoning after representation changes, when new dead producers may be visible;
+the ordinary proof gate and final physical-layout ranking still decide whether
+the result wins. It does not require `MKPRO_BEAM_SEARCH` or a source identity.
+
+Selector writeback proofs distinguish a numeric preload from an injected raw
+register word. Actual numeric setup stores a positive subunit literal such as
+`0.5` as `5e-1`; stable indirect flow preserves that word. Normalization is exact
+and limited to eight significant digits. If normalization would change the
+target already bound by the surrounding layout, the proof rejects the candidate
+rather than silently changing the edge. Ordinary `14.375` still loses its
+fractional part. Short negative constants are not fixed points either: `-850`
+becomes `-99999850`, so later display/data reads cannot reuse it unchanged.
+Emulator facts execute setup instructions, not only register injection, to pin
+these distinctions.
+
+Optional multi-step search (`MKPRO_BEAM_SEARCH`) separates the best delivered
+candidate from the unexpanded search frontier. An already expanded incumbent
+cannot occupy a later round's beam slot again: a locally larger, proof-valid
+enabling state may therefore survive to expose a smaller successor. Equal-size
+frontier ties use the canonical option key. Each selected round frontier also
+enters final physical-layout ranking; being larger before target binding is
+not itself a reason to lose that candidate. The existing width/depth bounds
+remain search heuristics, not a claim of exhaustive or globally optimal search.
+
+Direct-flow opportunity discovery counts logical command targets even when an
+analysis artifact is larger than physical program memory. A profitable
+fractional-constant candidate may reserve a representable two-digit carrier
+without requiring that its current address already reaches the prospective
+callee. The seed is not a target constraint: the existing component-layout
+solver chooses a command identity, its placement in `00..99`, and the delivered
+selector preload in one proof-checked transaction.
+
+A stable, literal register whose ordinary reads all immediately apply `K{x}`
+can be a flexible selector even before its first indirect-flow use, provided
+the discarded data component is dead after every new selector writeback.
+Rebinding requires the same canonical integer width and identical fractional
+suffix, so it cannot silently lose a mantissa digit. Runtime writes, raw data reads,
+manual observations of the unprojected recall, indirect memory uses, and
+computed setup expressions prevent this proof. New compiler seeds use at most
+six fractional digits alongside the two address digits; speculative savings
+are not accepted as a substitute for the final data-value proof.
+
+The transformation reuses natural-target layout, command-identity retargeting,
+call/return and stack/X2 equivalence, and independent runtime-selector decoding.
+Logical addresses never become wrapped hardware bytes. Only the complete
+relocated artifact can be exported to a physical calculator. Candidate reports
+identify deferred layout separately; selected size is measured after placement
+and remains the primary criterion.
+
+`Stable` means absence of the R0..R6 counter increment/decrement, not absence
+of writeback: an ordinary `14.375` used by `K PP 8` becomes `00000014`.
+`K{x}` cannot recover the lost fraction after that call. The command-identity
+CFG therefore proves that the changed word is overwritten or never observed
+on any continuation, including return paths and cycles. A normalized
+negative-order encoding such as `1.4375014E-1` instead retains the whole word
+while supplying mantissa digits for address 14. The decoder's `transformed`
+address bits and its `result_value` data word are distinct in that case.

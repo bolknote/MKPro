@@ -15,7 +15,7 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 130 | 105 | +25 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 164 | 105 | +59 | pending optimizer |
 | `nekromant.mkpro` | 135 | 105 | +30 | pending optimizer |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
@@ -29,14 +29,22 @@ and ordinary symbolic address caches; continuation proofs track physical X1
 and X2, including nested calls and manual resumes. An unused empty-return
 policy no longer pins an unrelated command identity.
 
-The current 130-cell 4x4 includes full finalization of helper ABI candidates
-and stable-selector release through proved empty-stack loop returns.
+The current 129-cell 4x4 includes full finalization of helper ABI candidates,
+stable-selector release through proved empty-stack loop returns, and a final
+dead-store erasure with representable companion-selector placement.
 The 135-cell Nekromant additionally benefits from scalar-delta lowering without
 an artificial unit multiplication. Historical measurements below do not
 supersede the current table and do not establish that either program fits yet.
 
 ## Live Optimization Notes
 
+- Atomic finalization now bounds rebindable companion targets during component
+  placement instead of rejecting an unencodable chosen order afterward.
+  Explicit lowering variants also replay the existing shrinking finalization
+  fixed point after late layout. Together these remove a proved-dead store,
+  reducing 4x4 from 130 to 129 cells without changing its high-level source or
+  its manual input protocol. The same selector, data-use and CFG proofs apply
+  to unrelated programs.
 - A complete stable indirect loop family may become same-width empty-stack
   returns to physical 01. Its selector can then serve another helper without
   an inverse family swap. The neutral step is admitted only inside a fully
@@ -286,3 +294,23 @@ supersede the current table and do not establish that either program fits yet.
   empty-return tail-call fusion, padding recovery, and fallthrough-component
   transactions compose to reduce `tic-tac-toe-4x4.mkpro` from 133 to 125 cells
   without changing its source or recognizing the game.
+
+For `tic-tac-toe-4x4`, the current 133-cell baseline includes the corrected
+one-based line update: line 1 changes units, so the coefficient of `pow10(line)`
+is `+/-0.1`, not `+/-1`. The previous 129-cell port changed the adjacent decimal
+digit and is not a valid behavior-preserving size comparison. The compiler
+handles the required computed coefficient through the generic bounded-stack
+pow10-delta lowering; the high-level source retains the original arithmetic
+order and the explicit keyboard-input protocol.
+
+После восстановления исходного поведения 4x4 занимает 164 ячейки: обновления
+линий используют коэффициент +/-0.1, ответ хранится отдельно от координат,
+выигрыш не прерывает обход банков, а оценка позиции накапливается от 98
+в исходном порядке. Занятость проверяется по дробной части битовой маски,
+клетки перебираются сначала по X, затем по Y, как в оригинале. Ранее приведённые
+меньшие размеры относятся к неполному порту и не являются эквивалентными
+результатами оптимизации. Проверки на эмуляторе сравнивают изменение линий,
+выигрыш, повтор занятой клетки, оценки всех 16 клеток и выбор хода
+на трёх состояниях поля с оригинальным листингом.
+
+Общее слияние `retained-operand-update-compare` сокращает корректный порт 4x4 с 184 до 164 ячеек. Оно использует сохранённый в Y операнд `К∧`, `К∨` или `К⊕` для сравнения состояния до и после обновления, сохраняя живые снимки и новые значения внутри ветвей. Ввод с маской из нескольких битов проверяется против оригинального листинга; проверка пересечения не подменяет сравнение старого и нового состояния. До лимита МК-61 остаётся 59 ячеек.
