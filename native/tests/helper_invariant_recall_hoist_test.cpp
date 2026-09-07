@@ -168,6 +168,76 @@ EmulatorOutcome run(const std::vector<MachineItem>& items) {
   };
 }
 
+std::vector<MachineItem> staged_operand_fixture(
+    int argument_count, const std::vector<int>& permutations = {0x14}) {
+  std::vector<MachineItem> items;
+  for (int site = 0; site < 3; ++site) {
+    if (site == 0)
+      items.push_back(MachineItem::op(0x68, "common operand"));
+    // Deliberately vary argument registers. In the three-argument fixture R3
+    // is also present at every call, but moving it fails the operand proof.
+    for (int argument = 1; argument <= argument_count; ++argument)
+      items.push_back(MachineItem::op(0x60 + site + argument, "argument"));
+    items.push_back(MachineItem::op(0x53, "call"));
+    items.push_back(MachineItem::address(std::string(kRoot)));
+    if (site != 0)
+      items.push_back(MachineItem::op(0x68, "common operand"));
+    if (site == 2)
+      for (const int opcode : permutations)
+        items.push_back(MachineItem::op(opcode, "stack permutation"));
+    items.push_back(MachineItem::op(site == 1 ? 0x37 : 0x38, "commutative join"));
+    append_forget_y(items);
+    items.push_back(MachineItem::op(0x49 + site, "save result"));
+  }
+  MachineItem prompt = MachineItem::op(0x50, "prompt");
+  prompt.stop_disposition = StopDisposition::Resumable;
+  items.push_back(prompt);
+  items.push_back(MachineItem::op(0x0c, "VP"));
+  items.push_back(MachineItem::op(2, "2"));
+  MachineItem finish = MachineItem::op(0x50, "finish");
+  finish.stop_disposition = StopDisposition::Terminal;
+  items.push_back(finish);
+  items.push_back(MachineItem::label(std::string(kRoot)));
+  if (argument_count == 1)
+    items.push_back(MachineItem::op(0x22, "square"));
+  else
+    for (int argument = 1; argument < argument_count; ++argument)
+      items.push_back(MachineItem::op(0x10, "add"));
+  items.push_back(MachineItem::op(0x52, "return"));
+  return items;
+}
+
+std::vector<std::string> observe_staged_operand(const std::vector<MachineItem>& items,
+                                               const std::string& common) {
+  const ResolvedProgram resolved = resolve_machine_items(items, {});
+  require(resolved.diagnostics.empty() && resolved.steps.size() <= 105U,
+          "staged helper fixture must resolve within stock MK-61 memory");
+  std::vector<int> codes;
+  for (const ResolvedStep& step : resolved.steps)
+    codes.push_back(step.opcode);
+  emulator::MK61 calc;
+  require(calc.load_program(codes).diagnostics.empty(), "staged helper fixture must load");
+  for (int reg = 1; reg <= 5; ++reg)
+    calc.set_register(std::to_string(reg), std::to_string(reg + 1));
+  calc.set_register("8", common);
+  calc.set_register("X", "13");
+  calc.set_register("Y", "29");
+  calc.set_register("Z", "31");
+  calc.set_register("T", "47");
+  calc.press_sequence({"В/О", "С/П"});
+  std::vector<std::string> observations;
+  for (int phase = 0; phase < 2; ++phase) {
+    require(calc.run_until_stable(2000, 6).stopped,
+            "staged recall movement must preserve helper returns and both stops");
+    observations.push_back(calc.display_text());
+    for (const char* reg : {"X", "Y", "Z", "T", "X1", "9", "a", "b"})
+      observations.push_back(calc.read_register(reg));
+    if (phase == 0)
+      calc.press("С/П");
+  }
+  return observations;
+}
+
 std::vector<MachineItem> helper_with_inserted_op(int opcode) {
   std::vector<MachineItem> items = alpha_fixture();
   const std::size_t root = label_index(items, kRoot);
@@ -283,6 +353,165 @@ void helper_invariant_recall_hoist_rewrites_only_proved_calls() {
     require(raised.size() == 1U &&
                 core::passes::computed_dispatch_target_labels(raised.front()) == expected,
             "callee-hole CFG metadata should retain leaf identities before and after binding");
+  }
+
+  for (const int arguments : {1, 2, 3}) {
+    const auto staged = staged_operand_fixture(arguments);
+    const auto accepted =
+        core::rewrite_helper_invariant_recall_hoist(staged, std::string(kRoot));
+    require(accepted.applied == 1 && accepted.proof.final_artifact_proved &&
+                accepted.proof.insertion == core::HelperInvariantRecallInsertion::BeforeReturn &&
+                accepted.proof.recall_opcode == 0x68 && accepted.proof.calls.size() == 3U,
+            "all staged candidates must be proved, not just the first common argument register");
+    require(cell_count(accepted.items) == cell_count(staged) - 2 &&
+                opcode_count(accepted.items, 0x68) == 1 &&
+                opcode_count(accepted.items, 0x14) == 1 &&
+                accepted.proof.calls.front().argument_preparation_items.size() ==
+                    static_cast<std::size_t>(arguments) &&
+                accepted.proof.calls.back().join_permutation_items.size() == 1U,
+            "move only the common recall, retaining every argument and caller-side permutation");
+    for (const auto& common : {"0", "4", "7.7777777"})
+      require(observe_staged_operand(staged, common) ==
+                  observe_staged_operand(accepted.items, common),
+              "staged hoisting must preserve results, full stack, X1, VP/X2 and matched returns");
+    const auto repeated = core::rewrite_helper_invariant_recall_hoist(staged, std::string(kRoot));
+    require(repeated.proof.recall_opcode == accepted.proof.recall_opcode &&
+                repeated.proof.output_cells == accepted.proof.output_cells &&
+                repeated.proof.insertion == accepted.proof.insertion,
+            "candidate selection must be deterministic");
+  }
+
+  {
+    const auto rotations = staged_operand_fixture(2, {0x25, 0x25, 0x25, 0x25});
+    const auto accepted =
+        core::rewrite_helper_invariant_recall_hoist(rotations, std::string(kRoot));
+    require(accepted.applied == 1 && opcode_count(accepted.items, 0x25) == 4 &&
+                observe_staged_operand(rotations, "4") ==
+                    observe_staged_operand(accepted.items, "4"),
+            "bounded pure stack permutations require their real X1/X2 transfer, not a swap special case");
+    const auto too_many = staged_operand_fixture(2, {0x25, 0x25, 0x25, 0x25, 0x25});
+    require(core::rewrite_helper_invariant_recall_hoist(too_many, std::string(kRoot)).applied == 0,
+            "permutation discovery must remain bounded");
+  }
+
+  {
+    const auto staged = staged_operand_fixture(1);
+    const auto accepted =
+        core::verify_helper_invariant_recall_hoist(staged, std::string(kRoot));
+    require(accepted.proved, "negative staged fixtures require a proved starting point");
+    std::vector<std::size_t> protected_items = {
+        accepted.calls.front().recall_item_index,
+        accepted.calls.front().argument_preparation_items.front(),
+        accepted.calls.front().call_item_index,
+        accepted.calls.front().operand_item_index,
+        accepted.calls.back().join_permutation_items.front(),
+        accepted.helper_return_item_index};
+    for (const std::size_t protected_item : protected_items) {
+      for (const bool manual : {false, true}) {
+        auto anchored = staged;
+        if (manual)
+          anchored.at(protected_item).manual_interaction.emplace();
+        else
+          anchored.at(protected_item).raw = true;
+        require(core::rewrite_helper_invariant_recall_hoist(anchored, std::string(kRoot)).applied ==
+                    0,
+                "raw/manual recalls, arguments, calls, returns and permutations must remain anchored");
+      }
+    }
+    auto live_y = staged;
+    live_y.insert(live_y.begin() +
+                      static_cast<std::ptrdiff_t>(accepted.calls.front().continuation_item_index),
+                  MachineItem::op(0x10, "observe retained Y"));
+    require(core::rewrite_helper_invariant_recall_hoist(live_y, std::string(kRoot)).applied == 0,
+            "commutativity does not prove the retained operand dead");
+
+    auto noncommutative = staged;
+    noncommutative.at(accepted.calls.back().continuation_item_index - 1U) =
+        MachineItem::op(0x11, "subtract");
+    require(core::rewrite_helper_invariant_recall_hoist(noncommutative, std::string(kRoot)).applied ==
+                0,
+            "a stack permutation must not authorize a noncommutative join");
+
+    auto restore_x2 = staged;
+    restore_x2.insert(
+        restore_x2.begin() + static_cast<std::ptrdiff_t>(
+                                accepted.calls.back().join_permutation_items.front()),
+        MachineItem::op(0x0c, "VP"));
+    require(core::rewrite_helper_invariant_recall_hoist(restore_x2, std::string(kRoot)).applied == 0,
+            "X2 restoration is not a pure stack permutation");
+
+    auto writes_operand = staged;
+    writes_operand.insert(
+        writes_operand.begin() + static_cast<std::ptrdiff_t>(accepted.helper_return_item_index),
+        MachineItem::op(0x48, "overwrite common operand"));
+    require(core::rewrite_helper_invariant_recall_hoist(writes_operand, std::string(kRoot)).applied ==
+                0,
+            "an invariant recall cannot cross a helper write of its register");
+
+    for (const std::size_t entry : {accepted.calls.front().argument_preparation_items.front(),
+                                    accepted.calls.front().call_item_index}) {
+      for (const bool indirect : {false, true}) {
+        auto entered = staged;
+        const std::size_t root = label_index(entered, kRoot);
+        const int target = item_address(entered, entry);
+        core::HelperInvariantRecallHoistOptions options;
+        if (indirect) {
+          entered.insert(entered.begin() + static_cast<std::ptrdiff_t>(root),
+                         MachineItem::op(0x8e, "unrelated indirect entry"));
+          options.proved_indirect_flow_targets.emplace(root, std::vector<int>{target});
+        } else {
+          entered.insert(entered.begin() + static_cast<std::ptrdiff_t>(root),
+                         {MachineItem::op(0x51, "unrelated direct entry"),
+                          MachineItem::address(target)});
+          options.fixed_direct_address_targets.emplace(root + 1U, target);
+          options.retargetable_direct_address_items.insert(root + 1U);
+        }
+        const auto rejected =
+            core::rewrite_helper_invariant_recall_hoist(entered, std::string(kRoot), options);
+        require(rejected.applied == 0 && contains_reason(rejected.proof, "bypasses a moved recall"),
+                "a separately addressed argument or call may bypass the moved common recall");
+      }
+    }
+
+    auto labelled = staged;
+    labelled.insert(labelled.begin() + static_cast<std::ptrdiff_t>(
+                                          accepted.calls.front().argument_preparation_items.front()),
+                    MachineItem::label("separate_argument_entry"));
+    const std::size_t root = label_index(labelled, kRoot);
+    labelled.insert(labelled.begin() + static_cast<std::ptrdiff_t>(root),
+                    {MachineItem::op(0x51, "enter preparation"),
+                     MachineItem::address("separate_argument_entry")});
+    require(core::rewrite_helper_invariant_recall_hoist(labelled, std::string(kRoot)).applied == 0,
+            "a referenced label must fence argument staging");
+
+    core::HelperInvariantRecallHoistOptions entry_proof;
+    entry_proof.simultaneous_entry_recall_opcode = 0x61;
+    for (const auto& call : accepted.calls)
+      entry_proof.entry_x_proved_call_items.insert(call.call_item_index);
+    require(core::rewrite_helper_invariant_recall_hoist(staged, std::string(kRoot), entry_proof)
+                    .applied == 0,
+            "an entry-X fact must not be reused across unproved argument preparation");
+  }
+
+  for (const bool retarget : {false, true}) {
+    auto addressed = staged_operand_fixture(1);
+    addressed.insert(addressed.begin(),
+                     {MachineItem::op(0x51, "enter first caller"), MachineItem::address(2)});
+    core::HelperInvariantRecallHoistOptions options;
+    options.fixed_direct_address_targets.emplace(1U, 2);
+    if (retarget)
+      options.retargetable_direct_address_items.insert(1U);
+    const auto accepted =
+        core::rewrite_helper_invariant_recall_hoist(addressed, std::string(kRoot), options);
+    require(accepted.applied == 1 && accepted.proof.final_artifact_proved &&
+                cell_count(accepted.items) == cell_count(addressed) - (retarget ? 2 : 1),
+            "staged call entries must preserve fixed geometry or retarget to the first argument");
+    const auto resolved = resolve_machine_items(accepted.items, {});
+    require(resolved.diagnostics.empty() && resolved.steps.at(2).opcode == (retarget ? 0x61 : 0x54),
+            "a removed entry recall must not redirect past argument preparation to PP");
+    require(observe_staged_operand(addressed, "4") ==
+                observe_staged_operand(accepted.items, "4"),
+            "emulator entry through a fixed/retargeted caller must execute all arguments");
   }
 
   const std::vector<MachineItem> baseline = alpha_fixture();

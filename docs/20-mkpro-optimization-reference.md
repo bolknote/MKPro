@@ -4004,6 +4004,47 @@ The ordinary scheduler remains available through the separate
 completed program, not just the saved recalls: shorter expression code can
 otherwise lose a more valuable address-layout coincidence.
 
+#### Staged arguments and stack permutations in `helper-invariant-recall-hoist`
+
+The common direct-register recall may precede a contiguous bundle of up to
+four direct argument recalls rather than immediately precede the call. A
+commutative K AND/K OR continuation may also contain up to four caller-side
+stack permutations (swap or cyclic rotation). These commands remain in their
+original order; only the common recall moves to the helper root or tail.
+
+The relational proof replays argument preparation, the helper, any moved tail
+recall **before** V/O, and the caller's permutations in physical execution
+order. It then proves convergence of X/Y/Z/T, X1, X2 and register values through
+the bounded continuation. Commutativity alone does not prove the retained Y
+operand dead. Raw/manual commands, unsupported effects and external entries
+that bypass the moved recall inside argument preparation fail closed.
+
+All complete register candidates and permitted root/tail plans are compared
+by exact cell count, including fixed-target NOP padding; ties retain stable
+candidate order. A rejected argument-register candidate cannot hide another
+proved invariant operand. The search has at most 15 register candidates and
+two placement modes per helper, with no source-name or game recognition.
+Retargetable entries at a deleted recall follow the first surviving argument
+command, not the call past those arguments. Fixed entries retain their
+address through the existing padding proof. Final artifact and flow-target
+verification remain mandatory.
+
+### `register-web-counter-role-coalescing`
+
+An ordinary `F L0`..`F L3` operation restricts its reaching-definition web to
+R0..R3 rather than permanently fixing that web to the original counter. Copy
+coalescing can therefore reuse a dead input register as the counter, removing
+the initialization copy without a spill. Every use, definition and FL opcode
+in that web follows the chosen register; later, separate selector or manual
+epochs retain their own constraints. A source needed after the loop, a setup
+constant pool, a shared incompatible operand or a raw/manual operation blocks
+the reuse. No counter is assigned to R4..RE or Rf.
+
+The common precolored allocator accepts per-node register domains. Empty
+domains reject allocation, fixed/preferred colors cannot override a domain,
+and domain-constrained unused colors are not assumed symmetric during exact
+search. Speculative web coalescing still requests greedy witnesses only.
+
 ### `register-web-joint-coloring`
 
 Copy coalescing can recolor the existing reaching-definition web graph when

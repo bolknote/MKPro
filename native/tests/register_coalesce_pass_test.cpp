@@ -73,6 +73,27 @@ core::passes::PassResult run_register_coalesce(const std::vector<IrOp>& ops,
 
 void register_coalesce_matches_typescript_contract() {
   {
+    core::passes::RegisterInterferenceGraph graph;
+    graph.neighbors["a"].insert("b");
+    graph.neighbors["b"].insert("a");
+    core::passes::PrecoloredRegisterAllocationOptions options;
+    options.color_count = 2;
+    options.allowed_colors = {{"a", {0, 1}}, {"b", {0}}};
+    const auto result = core::passes::color_precolored_register_graph(graph, options);
+    require(result.has_value() && result->at("a") == 1 && result->at("b") == 0,
+            "register domains must distinguish unused colors during exact backtracking");
+    options.greedy_only = true;
+    require(!core::passes::color_precolored_register_graph(graph, options).has_value(),
+            "a speculative domain coloring failure must not start exhaustive search");
+    options.fixed_colors["b"] = 1;
+    require(!core::passes::color_precolored_register_graph(graph, options).has_value(),
+            "fixed assignments must obey hardware register domains");
+    options.fixed_colors.clear();
+    options.allowed_colors["isolated"] = {};
+    require(!core::passes::color_precolored_register_graph({}, options).has_value(),
+            "an empty domain is not an unconstrained or absent value");
+  }
+  {
     CompileOptions options;
     options.coalesce_copies = true;
     const auto plain = [](int opcode) {
@@ -149,11 +170,12 @@ void register_coalesce_matches_typescript_contract() {
     loop.kind = IrKind::Loop;
     loop.opcode = 0x5b;
     loop.counter = "L1";
+    loop.meta.manual_interaction.emplace();
     const std::vector<IrOp> anchored_overwrite{
         recall("1"), store("d"), plain(1), store("1"), loop,
         label("after-counter"), recall("d"), recall("1"), stop(true)};
     require(run(anchored_overwrite).applied == 0,
-            "a hardware counter epoch must not move to make a copy appear removable");
+            "an operator-anchored counter epoch must not move to remove a copy");
     for (const char reg : std::string("023456789abcde"))
       options.preloaded_constant_registers[std::string(1, reg)] = "5";
     require(run(diverging).applied == 0,
@@ -226,7 +248,9 @@ void register_coalesce_matches_typescript_contract() {
                 nested_optimized.ops.size() + 1 == nested_recoloring.size(),
             "joint epoch allocation must cross matched nested calls without adding spills");
     const auto observe_recoloring = [&](const std::vector<IrOp>& code,
-                                         const std::string& input) {
+                                         const std::string& input,
+                                         const std::string& input_register = "1",
+                                         const std::string& watched_counter = "") {
       const auto labels = core::passes::calculate_label_addresses(code);
       auto resolved = code;
       for (auto& op : resolved)
@@ -239,7 +263,7 @@ void register_coalesce_matches_typescript_contract() {
       require(bytes.size() <= 105, "recolored fixture must fit stock MK-61 memory");
       emulator::MK61 calc;
       require(calc.load_program(bytes).diagnostics.empty(), "recolored fixture must load");
-      calc.set_register("1", input);
+      calc.set_register(input_register, input);
       calc.set_register("Y", "73");
       calc.set_register("Z", "29");
       calc.set_register("T", "17");
@@ -251,6 +275,8 @@ void register_coalesce_matches_typescript_contract() {
         observations.push_back(calc.display_text());
         for (const char* reg : {"X", "Y", "Z", "T", "X1"})
           observations.push_back(calc.read_register(reg));
+        if (!watched_counter.empty())
+          observations.push_back(calc.read_register(watched_counter));
         if (phase == 0)
           calc.press("С/П");
       }
@@ -260,6 +286,103 @@ void register_coalesce_matches_typescript_contract() {
       require(observe_recoloring(nested_recoloring, input) ==
                   observe_recoloring(nested_optimized.ops, input),
               "joint coloring must preserve stack, X1, VP-observed X2 and matched returns");
+    const auto counter_fixture = [&](int source, int destination) {
+      IrOp count = call("count");
+      count.kind = IrKind::Loop;
+      count.counter = "L" + std::to_string(destination);
+      count.opcode = std::vector<int>{0x5d, 0x5b, 0x58, 0x5a}.at(
+          static_cast<std::size_t>(destination));
+      return std::vector<IrOp>{
+          plain(0), store("e"), recall(std::to_string(source)),
+          store(std::to_string(destination)), call("count"), stop(false),
+          plain(0x0c), plain(2), stop(true),
+          label("count"), recall("e"), plain(1), plain(0x10), store("e"), count,
+          recall("e"), finish};
+    };
+    for (int source = 0; source < 4; ++source) {
+      for (int destination = 0; destination < 4; ++destination) {
+        if (source == destination)
+          continue;
+        const auto fixture = counter_fixture(source, destination);
+        const auto colored = run(fixture);
+        require(colored.applied == 1 && colored.ops.size() + 1 == fixture.size(),
+                "a dead source value must supply a counter epoch without a copy store");
+        require(std::any_of(colored.optimizations.begin(), colored.optimizations.end(),
+                            [](const auto& item) {
+                              return item.name == "register-web-counter-role-coalescing";
+                            }), "counter role reuse must explain its constrained allocation");
+        require(std::any_of(colored.ops.begin(), colored.ops.end(), [&](const IrOp& op) {
+                  return op.kind == IrKind::Loop &&
+                         op.counter == "L" + std::to_string(source);
+                }), "the executable FL operand must follow the selected counter web");
+        for (const auto& input : {"1", "2", "4", "3.75"})
+          require(observe_recoloring(fixture, input, std::to_string(source)) ==
+                      observe_recoloring(colored.ops, input, std::to_string(source)),
+                  "all twelve FL relocations must preserve iteration count, stack, X1, "
+                  "VP-observed X2 and return/stop continuations");
+
+        // Zero and negative FL counters do not terminate. Observe matching
+        // loop iterations, not a wall-time-dependent number of instructions.
+        // Insert the same checkpoint into the already proved original/rewrite.
+        const auto checkpoints = [&](std::vector<IrOp> code) {
+          const auto branch = std::find_if(code.begin(), code.end(), [](const IrOp& op) {
+            return op.kind == IrKind::Loop;
+          });
+          require(branch != code.end(), "counter fixture must contain its FL branch");
+          code.insert(branch, stop(false));
+          return code;
+        };
+        const auto observed_original = checkpoints(fixture);
+        const auto observed_colored = checkpoints(colored.ops);
+        for (const auto& input : {"0", "-2"})
+          require(observe_recoloring(observed_original, input, std::to_string(source),
+                                     std::to_string(destination)) ==
+                      observe_recoloring(observed_colored, input, std::to_string(source),
+                                         std::to_string(source)),
+                  "nonterminating FL counters must preserve each observed iteration and stack");
+
+        auto live_source = fixture;
+        live_source.insert(live_source.begin() + 5, recall(std::to_string(source)));
+        require(run(live_source).applied == 0,
+                "a source observed after the loop cannot become a destructive counter");
+      }
+    }
+    const auto counter = counter_fixture(0, 1);
+    require(run(counter_fixture(4, 1)).applied == 0,
+            "FL counters must never be retargeted outside R0..R3");
+    for (const bool manual : {false, true}) {
+      auto anchored = counter;
+      if (manual) anchored[14].meta.manual_interaction.emplace();
+      else anchored[14].meta.raw = true;
+      require(run(anchored).applied == 0,
+              "manual and raw counter operands retain their physical register");
+    }
+    auto malformed = counter;
+    malformed[14].counter = "L2";
+    require(run(malformed).applied == 0,
+            "inconsistent opcode/counter metadata must fail closed");
+    options.preloaded_constant_registers["0"] = "4";
+    require(run(counter).applied == 0,
+            "a compiler-owned pool entry cannot be borrowed as a mutable counter");
+    options.preloaded_constant_registers.clear();
+    auto later_selector = counter;
+    IrOp select = indirect_recall("1", false);
+    select.meta.indirect_memory_targets = std::vector<int>{6};
+    later_selector.insert(later_selector.begin() + 5, {plain(7), store("1"), select});
+    const auto separate_epochs = run(later_selector);
+    require(separate_epochs.applied == 1 &&
+                std::any_of(separate_epochs.ops.begin(), separate_epochs.ops.end(),
+                            [](const IrOp& op) {
+                              return op.kind == IrKind::IndirectRecall && op.register_name == "1";
+                            }), "moving a counter phase must leave a later selector phase anchored");
+    require(observe_recoloring(later_selector, "4", "0") ==
+                observe_recoloring(separate_epochs.ops, "4", "0"),
+            "phase-local counter relocation must preserve a subsequent indirect access");
+    auto large_counter = counter;
+    large_counter.insert(large_counter.begin() + 9, 110, plain(0x54));
+    require(run(large_counter).applied == 1,
+            "counter domains must operate on symbolic regions above 105 cells");
+
     const auto repeated = run(nested_recoloring);
     require(repeated.ops.size() == nested_optimized.ops.size(),
             "joint coloring must have deterministic size");

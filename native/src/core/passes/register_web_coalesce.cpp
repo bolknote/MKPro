@@ -17,9 +17,20 @@ namespace mkpro::core::passes {
 namespace {
 
 constexpr int kRegisters = 15;
+constexpr std::array<int, 4> kLoopOpcodes{0x5d, 0x5b, 0x58, 0x5a};
 using Node = std::size_t;
 using Nodes = std::set<Node>;
 using Reaching = std::array<Nodes, kRegisters>;
+
+std::optional<int> counter_register(const IrOp& op) {
+  if (op.kind != IrKind::Loop || op.counter.size() != 2 || op.counter[0] != 'L' ||
+      op.counter[1] < '0' || op.counter[1] > '3')
+    return std::nullopt;
+  const int reg = op.counter[1] - '0';
+  if (op.opcode != kLoopOpcodes[static_cast<std::size_t>(reg)])
+    return std::nullopt;
+  return reg;
+}
 
 bool append(Nodes& into, const Nodes& from) {
   const auto before = into.size();
@@ -55,12 +66,16 @@ struct Webs {
   std::vector<Node> parents;
   std::vector<int> colors;
   std::vector<bool> fixed;
+  std::vector<std::set<int>> allowed;
 
   Node add(int color, bool anchored = false) {
     const Node id = parents.size();
     parents.push_back(id);
     colors.push_back(color);
     fixed.push_back(anchored);
+    allowed.emplace_back();
+    for (int reg = 0; reg < kRegisters; ++reg)
+      allowed.back().insert(reg);
     return id;
   }
 
@@ -78,6 +93,12 @@ struct Webs {
     parents[b] = a;
     colors[a] = color;
     fixed[a] = fixed[a] || fixed[b];
+    for (auto candidate = allowed[a].begin(); candidate != allowed[a].end(); ) {
+      if (!allowed[b].contains(*candidate))
+        candidate = allowed[a].erase(candidate);
+      else
+        ++candidate;
+    }
     return a;
   }
 
@@ -128,6 +149,8 @@ PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
     }
     if (!op.register_name.empty() && !physical(op.register_name).has_value())
       return unchanged("nonstandard register operand");
+    if (op.kind == IrKind::Loop && !counter_register(op).has_value())
+      return unchanged("inconsistent loop counter operand");
     effects.push_back(register_effects(op));
     const auto& effect = effects.back();
     if (effect.uses_all_registers || effect.may_define_any_register)
@@ -231,12 +254,33 @@ PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
       webs.same_register(nodes);
     }
 
+  const auto movable_counter = [&](std::size_t site) {
+    const auto& op = ops[site];
+    return counter_register(op).has_value() && !has_rewrite_barrier(op) &&
+           !is_display_focus_sensitive(op) && op.meta.roles.empty() &&
+           op.target_meta.roles.empty();
+  };
   const auto anchored = [&](std::size_t site) {
     const auto& op = ops[site];
+    if (movable_counter(site))
+      return false;
     return (op.kind != IrKind::Store && op.kind != IrKind::Recall) ||
            has_rewrite_barrier(op) || is_display_focus_sensitive(op);
   };
   for (std::size_t site = 0; site < ops.size(); ++site) {
+    if (movable_counter(site)) {
+      // FL0..FL3 differ only in the register they decrement. This is a
+      // constraint on this definition web, not on every epoch of its name.
+      for (const auto& [reg, nodes] : uses[site]) {
+        (void)reg;
+        for (const Node node : nodes)
+          webs.allowed[webs.root(node)] = {0, 1, 2, 3};
+      }
+      for (const auto& [reg, node] : definitions[site]) {
+        (void)reg;
+        webs.allowed[webs.root(node)] = {0, 1, 2, 3};
+      }
+    }
     if (!anchored(site))
       continue;
     for (const auto& [reg, nodes] : uses[site]) {
@@ -353,6 +397,18 @@ PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
       const std::string key = name(node);
       graph.neighbors.try_emplace(key);
       allocation.preferred_colors.try_emplace(key, webs.colors[node]);
+      const auto [domain, inserted_domain] =
+          allocation.allowed_colors.emplace(key, webs.allowed[node]);
+      if (!inserted_domain) {
+        for (auto color = domain->second.begin(); color != domain->second.end(); ) {
+          if (!webs.allowed[node].contains(*color))
+            color = domain->second.erase(color);
+          else
+            ++color;
+        }
+      }
+      if (domain->second.empty())
+        return std::nullopt;
       if (webs.fixed[node]) {
         const auto [entry, inserted] = allocation.fixed_colors.emplace(key, webs.colors[node]);
         if (!inserted && entry->second != webs.colors[node])
@@ -400,6 +456,7 @@ PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
         continue;
       const int color = colors->at(name(node));
       if (color < 0 || color >= kRegisters ||
+          !webs.allowed[node].contains(color) ||
           (webs.fixed[node] && color != webs.colors[node]))
         return std::nullopt;
       result[node] = color;
@@ -412,6 +469,8 @@ PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
     return result;
   };
   const auto accepts = [&](Node a, Node b, int color, std::size_t copy_store) {
+    if (!webs.allowed[a].contains(color) || !webs.allowed[b].contains(color))
+      return false;
     if ((webs.fixed[a] && webs.colors[a] != color) ||
         (webs.fixed[b] && webs.colors[b] != color))
       return false;
@@ -474,6 +533,7 @@ PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
     return unchanged();
 
   std::vector<IrOp> result;
+  int relocated_counters = 0;
   for (std::size_t site = 0; site < ops.size(); ++site) {
     if (removed.contains(site))
       continue;
@@ -490,6 +550,16 @@ PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
         op.register_name = std::string(1, "0123456789abcde"[color]);
         op.opcode = (op.kind == IrKind::Store ? 0x40 : 0x60) + color;
         op.meta.mnemonic = opcode_by_code(op.opcode).name;
+      }
+    }
+    if (const auto original = counter_register(op)) {
+      const Node node = definitions[site].at(*original);
+      const int color = webs.colors[webs.root(node)];
+      if (color != *original) {
+        op.counter = "L" + std::to_string(color);
+        op.opcode = kLoopOpcodes[static_cast<std::size_t>(color)];
+        op.meta.mnemonic = opcode_by_code(op.opcode).name;
+        ++relocated_counters;
       }
     }
     result.push_back(std::move(op));
@@ -509,6 +579,12 @@ PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
         " web assignment change(s) from a joint, precolored interference graph. "
         "Deterministic greedy witnesses preserve setup, hardware and constant-pool anchors; "
         "failed coloring keeps the incumbent without exhaustive search."});
+  if (relocated_counters > 0)
+    optimizations.push_back({"register-web-counter-role-coalescing",
+        "Retargeted " + std::to_string(relocated_counters) +
+        " FL counter instruction(s) within R0..R3 while removing copy stores. "
+        "Web domains preserve live source values, entry/setup ownership, shared "
+        "operands and manual/hardware anchors without spills or Rf."});
   return {.ops = std::move(result), .applied = static_cast<int>(removed.size()),
           .optimizations = std::move(optimizations)};
 }

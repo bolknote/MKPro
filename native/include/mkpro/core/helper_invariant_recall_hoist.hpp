@@ -13,10 +13,10 @@
 namespace mkpro::core {
 
 // A direct or proved single-target indirect helper call whose common register
-// recall can be moved to the root of the helper.  A before-call recall is
-// stack-identical after the helper returns.  An after-return recall is accepted
-// only immediately before K AND or K OR and only when the bounded relational
-// CFG proof shows that every observable continuation is equivalent.
+// recall can move to the helper root or tail. Contiguous direct recalls may
+// prepare arguments between the common recall and the call; bounded stack
+// permutations may precede a K AND/K OR join. Every plan requires a relational
+// stack/register/X1/X2 proof through the complete observable continuation.
 enum class HelperInvariantRecallPlacement {
   BeforeCall,
   BeforeCallBeforeCommutative,
@@ -37,6 +37,11 @@ struct HelperInvariantRecallCall {
   std::size_t proved_continuation_cells = 0;
   HelperInvariantRecallPlacement placement = HelperInvariantRecallPlacement::BeforeCall;
   int commutative_opcode = -1;
+  // These commands stay at the call site, in their original order. The proof
+  // replays them on both sides of the moved recall rather than assuming the
+  // helper takes no arguments or that a commutative join kills the whole stack.
+  std::vector<std::size_t> argument_preparation_items;
+  std::vector<std::size_t> join_permutation_items;
 };
 
 struct HelperInvariantRecallHoistOptions {
@@ -122,7 +127,7 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
                                      const std::string& helper_label,
                                      const HelperInvariantRecallHoistOptions& options = {});
 
-// Insert one copy of the proved recall at the helper root and erase its copy
+// Insert one copy of the proved recall at the helper root/tail and erase its copy
 // at every call site.  A failed pre- or post-rewrite proof returns `items`
 // unchanged.
 HelperInvariantRecallHoistResult
@@ -130,7 +135,8 @@ rewrite_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
                                       const std::string& helper_label,
                                       const HelperInvariantRecallHoistOptions& options = {});
 
-// Scan labels and apply at most one profitable proved rewrite.
+// Compare all eligible helpers and apply the smallest profitable proved rewrite.
+// Equal-size plans retain deterministic label/candidate order.
 HelperInvariantRecallHoistResult
 optimize_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
                                        const HelperInvariantRecallHoistOptions& options = {});

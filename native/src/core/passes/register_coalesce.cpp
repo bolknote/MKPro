@@ -304,6 +304,10 @@ public:
       (void)color;
       nodes_.insert(node);
     }
+    for (const auto& [node, colors] : options.allowed_colors) {
+      (void)colors;
+      nodes_.insert(node);
+    }
   }
 
   std::optional<std::map<std::string, int>> solve() {
@@ -311,6 +315,9 @@ public:
       return std::nullopt;
     for (const auto& [node, color] : options_.fixed_colors) {
       if (color < 0 || color >= options_.color_count)
+        return std::nullopt;
+      const auto domain = options_.allowed_colors.find(node);
+      if (domain != options_.allowed_colors.end() && !domain->second.contains(color))
         return std::nullopt;
       assignments_[node] = color;
       anchored_colors_.insert(color);
@@ -347,6 +354,11 @@ public:
         if (!assignments_.contains(node))
           nodes_.insert(node);
       }
+      for (const auto& [node, colors] : options_.allowed_colors) {
+        (void)colors;
+        if (!assignments_.contains(node))
+          nodes_.insert(node);
+      }
       if (!search())
         return std::nullopt;
     }
@@ -355,6 +367,9 @@ public:
 
 private:
   bool accepts(const std::string& node, int color) const {
+    const auto domain = options_.allowed_colors.find(node);
+    if (domain != options_.allowed_colors.end() && !domain->second.contains(color))
+      return false;
     const auto neighbors = graph_.neighbors.find(node);
     if (neighbors == graph_.neighbors.end())
       return true;
@@ -415,7 +430,10 @@ private:
       }
       const bool unused_unanchored =
           !used_colors.contains(color) && !anchored_colors_.contains(color);
-      if (break_symmetry && unused_unanchored && tried_unused_unanchored)
+      // Domains distinguish unused colors: choosing R0 rather than R1 can
+      // consume the only legal register of a later counter/value web.
+      if (break_symmetry && options_.allowed_colors.empty() &&
+          unused_unanchored && tried_unused_unanchored)
         continue;
       colors.push_back(color);
       if (unused_unanchored)

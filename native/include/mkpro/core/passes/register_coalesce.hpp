@@ -35,6 +35,9 @@ struct PrecoloredRegisterAllocationOptions {
   // no coloring exists. In this mode failure is inconclusive and never starts
   // the exponential fallback search.
   bool greedy_only = false;
+  // Omission means every target register is admissible. An explicitly empty
+  // domain is unsatisfiable, including for an otherwise valid fixed color.
+  std::map<std::string, std::set<int>> allowed_colors;
 };
 
 // Exact DSATUR coloring for the source-level allocator. Fixed nodes model raw
@@ -46,7 +49,8 @@ std::optional<std::map<std::string, int>> color_precolored_register_graph(
 
 PassResult register_coalesce(const std::vector<IrOp>& ops, const PassContext& context);
 // Coalesce reaching-definition webs, not all values ever stored in a register.
-// Entry values and hardware-sensitive webs retain their physical homes.
+// Entry values and observable hardware webs retain their physical homes;
+// ordinary FL counter epochs may use any of the four counter registers.
 PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
                                       const PassContext& context);
 IrPass register_web_copy_coalesce_pass();
