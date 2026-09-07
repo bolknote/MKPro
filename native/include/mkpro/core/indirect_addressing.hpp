@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace mkpro::core {
 
@@ -48,6 +49,13 @@ std::optional<IndirectAddressEvaluation> evaluate_indirect_address(
 std::optional<IndirectAddressEvaluation> evaluate_indirect_address(
     std::string_view selector, std::string_view value, IndirectOperationKind operation,
     AddressSpaceModel model = AddressSpaceModel::Standard);
+
+// Preserve noncanonical runtime entry counters in typed flow metadata.
+// nullopt retains the ordinary relocatable physical/logical target contract.
+// A missing, non-flow, or incomplete evaluation yields an explicitly invalid
+// empty fact, never an invented canonical entry.
+std::optional<std::vector<int>> noncanonical_indirect_flow_entries(
+    const std::optional<IndirectAddressEvaluation>& evaluation);
 
 std::optional<int> memory_target_from_transformed(std::string_view transformed);
 std::optional<SuperDarkIndirectTarget> super_dark_target(

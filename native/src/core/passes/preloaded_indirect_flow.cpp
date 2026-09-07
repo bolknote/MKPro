@@ -309,7 +309,8 @@ std::string indirect_cond_name(const std::string& condition) {
 }
 
 IrOp indirect_flow_op(const IrOp& op, const std::string& register_name,
-                      const std::string& selector_value, int target, bool super_dark) {
+                      const std::string& selector_value, int target, bool super_dark,
+                      AddressSpaceModel model) {
   const int offset = register_index(register_name);
   const std::string suffix = "preloaded R" + register_name + "=" + selector_value +
                              " indirect-target=" + std::to_string(target) +
@@ -320,6 +321,8 @@ IrOp indirect_flow_op(const IrOp& op, const std::string& register_name,
   // supplied by the fixed-point layout calculation.
   result.meta.indirect_flow_targets = std::vector<IrTarget>{
       std::holds_alternative<std::string>(op.target) ? op.target : IrTarget{target}};
+  result.meta.indirect_flow_formal_targets = noncanonical_indirect_flow_entries(
+      evaluate_indirect_address(register_name, selector_value, IndirectOperationKind::Flow, model));
   result.register_name = register_name;
   result.target = 0;
   result.target_meta = {};
@@ -616,7 +619,8 @@ PassResult runtime_indirect_call_flow(const std::vector<IrOp>& ops, const PassCo
     if (plan != by_index.end() && op.kind == IrKind::Call) {
       IrOp rewritten_op = indirect_flow_op(op, plan->second.register_name,
                                            std::to_string(plan->second.target),
-                                           plan->second.target, false);
+                                           plan->second.target, false,
+                                           address_space_model_for_context(context));
       rewritten_op.meta.comment =
           "runtime indirect call; " + rewritten_op.meta.comment.value_or(std::string{});
       result.push_back(std::move(rewritten_op));
@@ -792,7 +796,7 @@ PassResult run_preloaded_indirect_flow(const std::vector<IrOp>& ops,
 
     result.push_back(indirect_flow_op(op, selected->second.register_name,
                                       selected->second.selector_value, *target,
-                                      selected->second.super_dark));
+                                      selected->second.super_dark, address_model));
     ++applied;
     if (selected->second.super_dark)
       ++super_dark_applied;

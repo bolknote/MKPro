@@ -99,6 +99,9 @@ struct MachineItem {
   // Flow integers are current physical command addresses and strings are
   // opaque exact labels. Memory integers are post-mutation R0..Re indices.
   std::optional<std::vector<IrTarget>> indirect_flow_targets;
+  // Complete encoded counters for noncanonical entries. An absent fact uses
+  // the ordinary physical/logical target contract; an empty fact is invalid.
+  std::optional<std::vector<int>> indirect_flow_formal_targets;
   std::optional<std::vector<int>> indirect_memory_targets;
   // Source-level register identity retained through provisional lowering.
   // These fields are proof metadata only: executable opcodes still refer to
@@ -158,6 +161,9 @@ struct IrMeta {
   StopDisposition stop_disposition = StopDisposition::Unknown;
   std::optional<ManualInteractionAnchor> manual_interaction;
   std::optional<std::vector<IrTarget>> indirect_flow_targets;
+  // Complete encoded counters for noncanonical entries. An absent fact uses
+  // the ordinary physical/logical target contract; an empty fact is invalid.
+  std::optional<std::vector<int>> indirect_flow_formal_targets;
   std::optional<std::vector<int>> indirect_memory_targets;
   std::optional<std::string> logical_register_name;
   std::optional<std::vector<std::string>> logical_indirect_memory_targets;

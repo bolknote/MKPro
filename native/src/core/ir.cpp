@@ -96,6 +96,7 @@ IrMeta meta_from_op(const MachineItem& item) {
   meta.stop_disposition = item.stop_disposition;
   meta.manual_interaction = item.manual_interaction;
   meta.indirect_flow_targets = item.indirect_flow_targets;
+  meta.indirect_flow_formal_targets = item.indirect_flow_formal_targets;
   meta.indirect_memory_targets = item.indirect_memory_targets;
   meta.logical_register_name = item.logical_register_name;
   meta.logical_indirect_memory_targets = item.logical_indirect_memory_targets;
@@ -160,6 +161,7 @@ MachineItem machine_op_from_meta(int opcode, const IrMeta& meta) {
   item.stop_disposition = meta.stop_disposition;
   item.manual_interaction = meta.manual_interaction;
   item.indirect_flow_targets = meta.indirect_flow_targets;
+  item.indirect_flow_formal_targets = meta.indirect_flow_formal_targets;
   item.indirect_memory_targets = meta.indirect_memory_targets;
   item.logical_register_name = meta.logical_register_name;
   item.logical_indirect_memory_targets = meta.logical_indirect_memory_targets;
@@ -295,6 +297,10 @@ std::string meta_to_json(const IrMeta& meta) {
     add_field(out, first, "indirectFlowTargets",
               target_array_to_json(*meta.indirect_flow_targets));
   }
+  if (meta.indirect_flow_formal_targets.has_value()) {
+    add_field(out, first, "indirectFlowFormalTargets",
+              int_array_to_json(*meta.indirect_flow_formal_targets));
+  }
   if (meta.indirect_memory_targets.has_value()) {
     add_field(out, first, "indirectMemoryTargets",
               int_array_to_json(*meta.indirect_memory_targets));
@@ -381,6 +387,10 @@ std::string machine_item_to_json(const MachineItem& item) {
     if (item.indirect_flow_targets.has_value()) {
       add_field(out, first, "indirectFlowTargets",
                 target_array_to_json(*item.indirect_flow_targets));
+    }
+    if (item.indirect_flow_formal_targets.has_value()) {
+      add_field(out, first, "indirectFlowFormalTargets",
+                int_array_to_json(*item.indirect_flow_formal_targets));
     }
     if (item.indirect_memory_targets.has_value()) {
       add_field(out, first, "indirectMemoryTargets",
@@ -835,6 +845,7 @@ bool machine_items_equal(const MachineItem& a, const MachineItem& b) {
            a.stop_disposition == b.stop_disposition &&
            a.manual_interaction == b.manual_interaction &&
            a.indirect_flow_targets == b.indirect_flow_targets &&
+           a.indirect_flow_formal_targets == b.indirect_flow_formal_targets &&
            a.indirect_memory_targets == b.indirect_memory_targets &&
            a.logical_register_name == b.logical_register_name &&
            a.logical_indirect_memory_targets == b.logical_indirect_memory_targets &&

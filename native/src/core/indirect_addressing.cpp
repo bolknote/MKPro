@@ -313,6 +313,19 @@ std::optional<IndirectAddressEvaluation> evaluate_indirect_address(
   return result;
 }
 
+std::optional<std::vector<int>> noncanonical_indirect_flow_entries(
+    const std::optional<IndirectAddressEvaluation>& evaluation) {
+  if (!evaluation.has_value() || evaluation->operation != IndirectOperationKind::Flow ||
+      !evaluation->formal_address.has_value() ||
+      !evaluation->actual_flow_target.has_value() ||
+      evaluation->formal_address->actual != *evaluation->actual_flow_target) {
+    return std::vector<int>{};
+  }
+  if (evaluation->formal_address->kind == FormalAddressKind::Official)
+    return std::nullopt;
+  return std::vector<int>{evaluation->formal_address->opcode};
+}
+
 std::optional<int> memory_target_from_transformed(std::string_view transformed) {
   const std::optional<TailPair> tail = transformed_tail_pair(transformed);
   if (!tail.has_value())

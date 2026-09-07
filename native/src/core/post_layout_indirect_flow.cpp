@@ -82,6 +82,7 @@ struct StopTailReuseBase {
   std::string register_name;
   int target = 0;
   int continuation_opcode = 0;
+  std::optional<std::vector<int>> formal_targets;
 };
 
 struct StopTailReuseRewrite {
@@ -113,6 +114,7 @@ struct BranchRewrite {
   std::optional<int> source_line;
   IrTarget target = 0;
   std::vector<CellRole> roles;
+  std::optional<std::vector<int>> formal_targets;
 };
 
 struct RetargetedMachine {
@@ -923,22 +925,6 @@ std::optional<int> mapped_machine_address(
              : std::optional<int>{new_address->second};
 }
 
-std::optional<std::vector<int>> mapped_return_addresses(
-    const std::vector<int>& addresses, const MachineLayout& before_layout,
-    const MachineLayout& after_layout,
-    const std::vector<std::optional<std::size_t>>& old_to_new_item) {
-  std::vector<int> mapped;
-  mapped.reserve(addresses.size());
-  for (const int address : addresses) {
-    const std::optional<int> next =
-        mapped_machine_address(address, before_layout, after_layout, old_to_new_item);
-    if (!next.has_value())
-      return std::nullopt;
-    mapped.push_back(*next);
-  }
-  return mapped;
-}
-
 bool same_conditional_x2_effect(const OpcodeInfo& left, const OpcodeInfo& right) {
   if (left.conditional_x2_effect.has_value() !=
       right.conditional_x2_effect.has_value()) {
@@ -1066,139 +1052,31 @@ bool final_error_padding_overlay_artifact_matches(
     return false;
   }
 
-  using StateKey = std::tuple<std::size_t, std::vector<int>>;
-  const auto before_state_key =
-      [&](const PostLayoutExecutionState& state) -> std::optional<StateKey> {
-    if (state.item_index >= old_to_new_item.size() ||
-        !old_to_new_item.at(state.item_index).has_value()) {
-      return std::nullopt;
-    }
-    const std::optional<std::vector<int>> returns =
-        mapped_return_addresses(state.return_stack, before_layout, after_layout,
-                                old_to_new_item);
-    if (!returns.has_value())
-      return std::nullopt;
-    return StateKey{*old_to_new_item.at(state.item_index), *returns};
-  };
-  const auto after_state_key = [](const PostLayoutExecutionState& state) {
-    return StateKey{state.item_index, state.return_stack};
-  };
-
-  std::set<StateKey> before_states;
   bool old_return_reachable = false;
   for (const PostLayoutExecutionState& state : before_control.execution_states) {
-    if (static_cast<int>(state.item_index) == old_padding_index)
+    if (static_cast<int>(state.item_index) == old_padding_index ||
+        state.item_index >= old_to_new_item.size() ||
+        !old_to_new_item.at(state.item_index).has_value())
       return false;
     old_return_reachable =
-        old_return_reachable ||
-        static_cast<int>(state.item_index) == old_return_index;
-    const std::optional<StateKey> key = before_state_key(state);
-    if (!key.has_value())
-      return false;
+        old_return_reachable || static_cast<int>(state.item_index) == old_return_index;
     const MachineItem& old_item = before.at(state.item_index);
-    const MachineItem& new_item = after.at(std::get<0>(*key));
-    if (old_item.kind != MachineItemKind::Op ||
-        new_item.kind != MachineItemKind::Op ||
+    const MachineItem& new_item = after.at(*old_to_new_item.at(state.item_index));
+    if (old_item.kind != MachineItemKind::Op || new_item.kind != MachineItemKind::Op ||
         old_item.opcode != new_item.opcode ||
-        old_item.stop_disposition != new_item.stop_disposition) {
+        old_item.stop_disposition != new_item.stop_disposition)
       return false;
-    }
     const OpcodeInfo& old_info = opcode_by_code(old_item.opcode);
     const OpcodeInfo& new_info = opcode_by_code(new_item.opcode);
     if (old_info.stack_effect != new_info.stack_effect ||
         old_info.x2_effect != new_info.x2_effect ||
-        !same_conditional_x2_effect(old_info, new_info)) {
+        !same_conditional_x2_effect(old_info, new_info))
       return false;
-    }
-    before_states.insert(*key);
   }
   if (!old_return_reachable)
     return false;
-
-  std::set<StateKey> after_states;
-  for (const PostLayoutExecutionState& state : after_control.execution_states)
-    after_states.insert(after_state_key(state));
-  if (before_states != after_states)
-    return false;
-
-  using EdgeKey = std::pair<StateKey, StateKey>;
-  std::set<EdgeKey> before_edges;
-  for (std::size_t state_index = 0;
-       state_index < before_control.execution_states.size(); ++state_index) {
-    const std::optional<StateKey> source =
-        before_state_key(before_control.execution_states.at(state_index));
-    if (!source.has_value())
-      return false;
-    for (const std::size_t successor :
-         before_control.execution_successors.at(state_index)) {
-      const std::optional<StateKey> target =
-          before_state_key(before_control.execution_states.at(successor));
-      if (!target.has_value())
-        return false;
-      before_edges.emplace(*source, *target);
-    }
-  }
-  std::set<EdgeKey> after_edges;
-  for (std::size_t state_index = 0;
-       state_index < after_control.execution_states.size(); ++state_index) {
-    const StateKey source =
-        after_state_key(after_control.execution_states.at(state_index));
-    for (const std::size_t successor :
-         after_control.execution_successors.at(state_index)) {
-      after_edges.emplace(
-          source, after_state_key(after_control.execution_states.at(successor)));
-    }
-  }
-  if (before_edges != after_edges)
-    return false;
-
-  using EntryKey =
-      std::tuple<std::size_t, std::vector<int>, int, bool, int, int, int>;
-  const auto manual_key = [](const std::optional<ManualInteractionAnchor>& manual) {
-    return std::tuple<bool, int, int, int>{
-        manual.has_value(),
-        manual.has_value() ? manual->protocol_id : -1,
-        manual.has_value() ? manual->phase : -1,
-        manual.has_value() ? static_cast<int>(manual->kind) : -1,
-    };
-  };
-  std::set<EntryKey> before_entries;
-  for (const PostLayoutExternalEntryState& entry :
-       before_control.external_entries) {
-    if (entry.entry.item_index >= old_to_new_item.size() ||
-        !old_to_new_item.at(entry.entry.item_index).has_value()) {
-      return false;
-    }
-    std::vector<int> returns;
-    returns.reserve(entry.return_stack.size());
-    for (const PostLayoutCommandIdentity& slot : entry.return_stack) {
-      const std::optional<int> mapped =
-          mapped_machine_address(slot.address, before_layout, after_layout,
-                                 old_to_new_item);
-      if (!mapped.has_value())
-        return false;
-      returns.push_back(*mapped);
-    }
-    const auto [has_manual, protocol, phase, kind] =
-        manual_key(entry.manual_interaction);
-    before_entries.emplace(
-        *old_to_new_item.at(entry.entry.item_index), std::move(returns),
-        static_cast<int>(entry.kind), has_manual, protocol, phase, kind);
-  }
-  std::set<EntryKey> after_entries;
-  for (const PostLayoutExternalEntryState& entry :
-       after_control.external_entries) {
-    std::vector<int> returns;
-    returns.reserve(entry.return_stack.size());
-    for (const PostLayoutCommandIdentity& slot : entry.return_stack)
-      returns.push_back(slot.address);
-    const auto [has_manual, protocol, phase, kind] =
-        manual_key(entry.manual_interaction);
-    after_entries.emplace(entry.entry.item_index, std::move(returns),
-                          static_cast<int>(entry.kind), has_manual, protocol,
-                          phase, kind);
-  }
-  return before_entries == after_entries;
+  return prove_post_layout_execution_relocation(
+             before, after, before_control, after_control, old_to_new_item).proved;
 }
 
 std::optional<AddressCodeOverlayApplication>
@@ -1646,7 +1524,8 @@ void restore_statement_proc_call_comment(IrMeta& meta) {
 }
 
 IrOp indirect_flow_op(const IrOp& op, const std::string& register_name,
-                      const std::string& selector_value, int target, bool super_dark) {
+                      const std::string& selector_value, int target, bool super_dark,
+                      AddressSpaceModel model) {
   const int offset = register_index(register_name);
   const std::string suffix = "preloaded R" + register_name + "=" + selector_value +
                              " indirect-target=" + std::to_string(target) +
@@ -1654,6 +1533,8 @@ IrOp indirect_flow_op(const IrOp& op, const std::string& register_name,
   IrOp result = op;
   result.meta.indirect_flow_targets = std::vector<IrTarget>{
       std::holds_alternative<std::string>(op.target) ? op.target : IrTarget{target}};
+  result.meta.indirect_flow_formal_targets = noncanonical_indirect_flow_entries(
+      evaluate_indirect_address(register_name, selector_value, IndirectOperationKind::Flow, model));
   result.register_name = register_name;
   result.target = 0;
   result.target_meta = {};
@@ -1677,8 +1558,9 @@ IrOp indirect_flow_op(const IrOp& op, const std::string& register_name,
 }
 
 IrOp borrowed_entry_phase_flow_op(const IrOp& op, const std::string& register_name,
-                                  const std::string& selector_value, int target) {
-  IrOp result = indirect_flow_op(op, register_name, selector_value, target, false);
+                                  const std::string& selector_value, int target,
+                                  AddressSpaceModel model) {
+  IrOp result = indirect_flow_op(op, register_name, selector_value, target, false, model);
   result.meta.borrowed_entry_phase_selector = true;
   return result;
 }
@@ -1773,6 +1655,7 @@ retarget_machine_selector_comments(std::vector<MachineItem> items,
         aliases != labels_by_address.end() && !aliases->second.empty()
             ? IrTarget{aliases->second.front()}
             : IrTarget{target}};
+    item.indirect_flow_formal_targets = noncanonical_indirect_flow_entries(decoded);
     item.comment = replace_indirect_target_comment(
         item.comment, *register_name, selector_it->second, target);
   }
@@ -2089,11 +1972,12 @@ apply_fractional_r0_flow_rewrite(const std::vector<MachineItem>& items,
 }
 
 MachineItem indirect_jump_machine_op(const std::string& register_name, const std::string& comment,
-                                     IrTarget target,
-                                     const std::optional<int>& source_line = std::nullopt) {
+                                     IrTarget target, const std::optional<int>& source_line,
+                                     const std::optional<std::vector<int>>& formal_targets) {
   MachineItem item = MachineItem::op(0x80 + register_index(register_name), "К БП " + register_name);
   item.comment = comment;
   item.indirect_flow_targets = std::vector<IrTarget>{std::move(target)};
+  item.indirect_flow_formal_targets = formal_targets;
   if (source_line.has_value())
     item.source_line = *source_line;
   return item;
@@ -2921,7 +2805,7 @@ std::optional<RewriteStep> apply_existing_selector_exact_backward_rewrite(
       const bool super_dark = decoded->super_dark.has_value() &&
                               decoded->super_dark->entry_address == *target_address;
       candidate.at(index) = indirect_flow_op(original, register_name, selector_value,
-                                             *target_address, super_dark);
+                                             *target_address, super_dark, model);
       if (target_labels.at(index).has_value()) {
         const std::map<std::string, int> final_labels =
             passes::calculate_label_addresses(candidate);
@@ -2987,7 +2871,7 @@ std::optional<RewriteStep> apply_existing_selector_fixed_point_rewrite(
       }
 
       std::vector<IrOp> candidate = ir;
-      candidate.at(index) = indirect_flow_op(original, register_name, selector_value, 0, false);
+      candidate.at(index) = indirect_flow_op(original, register_name, selector_value, 0, false, model);
       const std::map<std::string, int> final_labels = passes::calculate_label_addresses(candidate);
       const auto final_target = final_labels.find(target_label);
       if (final_target == final_labels.end() || final_target->second == original_target->second) {
@@ -3001,7 +2885,7 @@ std::optional<RewriteStep> apply_existing_selector_fixed_point_rewrite(
       const bool super_dark = decoded->super_dark.has_value() &&
                               decoded->super_dark->entry_address == final_target->second;
       candidate.at(index) = indirect_flow_op(original, register_name, selector_value,
-                                             final_target->second, super_dark);
+                                             final_target->second, super_dark, model);
       std::vector<MachineItem> candidate_items = lower_ir_to_machine(candidate);
       if (machine_cell_count(candidate_items) >= machine_cell_count(items))
         continue;
@@ -3054,7 +2938,7 @@ std::optional<RewriteStep> validate_generated_selector_rewrite_group(
   for (std::size_t index = 0; index < ir.size(); ++index) {
     const IrOp& op = ir.at(index);
     if (index_set.contains(static_cast<int>(index)) && is_direct_branch_op(op)) {
-      provisional.push_back(indirect_flow_op(op, register_name, "00", 0, false));
+      provisional.push_back(indirect_flow_op(op, register_name, "00", 0, false, model));
     } else {
       provisional.push_back(op);
     }
@@ -3096,8 +2980,8 @@ std::optional<RewriteStep> validate_generated_selector_rewrite_group(
     if (index_set.contains(static_cast<int>(index)) && is_direct_branch_op(op)) {
       candidate.push_back(
           borrowed_entry_phase
-              ? borrowed_entry_phase_flow_op(op, register_name, *selector_value, *final_target)
-              : indirect_flow_op(op, register_name, *selector_value, *final_target, false));
+              ? borrowed_entry_phase_flow_op(op, register_name, *selector_value, *final_target, model)
+              : indirect_flow_op(op, register_name, *selector_value, *final_target, false, model));
     } else {
       candidate.push_back(op);
     }
@@ -3423,7 +3307,17 @@ std::vector<StopTailReuseBase> stop_tail_reuse_bases(const std::vector<MachineIt
       continue;
     const int target = *decoded->actual_flow_target;
     const std::optional<MachineCell> stop = machine_cell_at(cells, target);
-    const std::optional<MachineCell> continuation = machine_cell_at(cells, target + 1);
+    if (!decoded->formal_address.has_value())
+      continue;
+    const auto formal_targets = noncanonical_indirect_flow_entries(decoded);
+    const bool logical = cells.size() >
+                             static_cast<std::size_t>(official_program_step_limit(model)) &&
+                         !formal_targets.has_value();
+    const int continuation_address = logical
+        ? target + 1
+        : formal_address_info(
+              formal_address_successor_opcode(decoded->formal_address->opcode), model).actual;
+    const std::optional<MachineCell> continuation = machine_cell_at(cells, continuation_address);
     if (!stop.has_value() || !continuation.has_value() || stop->item == nullptr ||
         continuation->item == nullptr) {
       continue;
@@ -3437,6 +3331,7 @@ std::vector<StopTailReuseBase> stop_tail_reuse_bases(const std::vector<MachineIt
         .register_name = preload.register_name,
         .target = target,
         .continuation_opcode = continuation->item->opcode,
+        .formal_targets = formal_targets,
     });
   }
   return bases;
@@ -3505,7 +3400,7 @@ std::vector<MachineItem> apply_stop_tail_reuse_rewrite(const std::vector<Machine
                                    std::string(rewrite.zero_prefixed ? "zero then " : "") +
                                        "reuse stop tail at " + std::to_string(rewrite.base.target),
                                    rewrite.base.target,
-                                   source.source_line));
+                                   source.source_line, rewrite.base.formal_targets));
       continue;
     }
     result.push_back(items.at(static_cast<std::size_t>(index)));
@@ -3558,6 +3453,7 @@ find_existing_selector_flow_rewrite(const std::vector<MachineItem>& items,
           .source_line = branch.item->source_line,
           .target = address.item->target,
           .roles = branch.item->roles,
+          .formal_targets = noncanonical_indirect_flow_entries(decoded),
       };
     }
   }
@@ -3630,6 +3526,7 @@ find_branch_to_stop_tail_selector_rewrite(const std::vector<MachineItem>& items,
                           !labels_by_address.at(*decoded->actual_flow_target).empty()
                       ? IrTarget{labels_by_address.at(*decoded->actual_flow_target).front()}
                       : IrTarget{*decoded->actual_flow_target},
+        .formal_targets = noncanonical_indirect_flow_entries(decoded),
     };
   }
   return std::nullopt;
@@ -4169,6 +4066,7 @@ find_charged_selector_flow_rewrite(const std::vector<MachineItem>& raw_items,
           .comment = comment,
           .source_line = branch.item->source_line,
           .target = address.item->target,
+          .formal_targets = noncanonical_indirect_flow_entries(decoded),
       };
     }
   }
@@ -4186,6 +4084,7 @@ std::vector<MachineItem> apply_branch_rewrite(const std::vector<MachineItem>& it
       MachineItem item = MachineItem::op(rewrite.opcode, rewrite.mnemonic);
       item.comment = rewrite.comment;
       item.indirect_flow_targets = std::vector<IrTarget>{rewrite.target};
+      item.indirect_flow_formal_targets = rewrite.formal_targets;
       item.roles = rewrite.roles;
       if (std::find(item.roles.begin(), item.roles.end(),
                     "runtime-charged-selector-consumer") == item.roles.end()) {

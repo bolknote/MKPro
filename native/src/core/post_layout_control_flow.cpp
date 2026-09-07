@@ -35,9 +35,15 @@ struct ArtifactIndex {
   int cells = 0;
 };
 
+struct ExecutionCursor {
+  int address = -1;
+  std::optional<int> formal_opcode;
+  auto operator<=>(const ExecutionCursor&) const = default;
+};
+
 struct ExecutionState {
-  int pc = -1;
-  std::vector<int> returns;
+  ExecutionCursor pc;
+  std::vector<ExecutionCursor> returns;
   auto operator<=>(const ExecutionState&) const = default;
 };
 
@@ -129,48 +135,64 @@ std::optional<PostLayoutCommandIdentity> identity_at_address(const std::vector<M
   };
 }
 
-std::optional<int> sequential_successor(const ArtifactIndex& index, int address,
-                                        AddressSpaceModel address_space_model) {
-  const int next = address + 1;
-  if (next < index.cells)
-    return next;
-  // MK-61 program memory is cyclic only at the real end of the selected
-  // address space.  A shorter artifact falling off its last emitted cell is
-  // still malformed and must not acquire an invented continuation.
-  if (index.cells == official_program_step_limit(address_space_model) &&
-      address == index.cells - 1) {
-    return 0;
-  }
-  return std::nullopt;
+ExecutionCursor canonical_cursor(const ArtifactIndex& index, int address,
+                                 AddressSpaceModel model) {
+  // Oversized analysis artifacts live in a parallel logical space. Their
+  // linear successors must never be reinterpreted as hardware dark aliases.
+  return ExecutionCursor{
+      .address = address,
+      .formal_opcode = index.cells <= official_program_step_limit(model) &&
+                               address >= 0 && address <= official_program_last_address(model)
+                           ? std::optional<int>(official_address_to_opcode(address, model))
+                           : std::nullopt,
+  };
 }
 
-std::optional<int> direct_target_address(const MachineItem& operand, const ArtifactIndex& index,
-                                         AddressSpaceModel address_space_model,
-                                         AuthoritativePostLayoutControlFlow& result) {
-  if (operand.kind != MachineItemKind::Address)
-    return std::nullopt;
-  if (operand.formal_opcode.has_value()) {
-    try {
-      const FormalAddressInfo formal =
-          formal_address_info(*operand.formal_opcode, address_space_model);
-      if (formal.kind == FormalAddressKind::SuperDark || formal.one_command ||
-          formal.extra.has_value()) {
-        add_reason(result, "super-dark direct operand lacks an exact CFG model");
-        return std::nullopt;
-      }
-      return formal.actual;
-    } catch (const std::exception&) {
-      add_reason(result, "formal direct operand is invalid for this address space");
+ExecutionCursor formal_cursor(int opcode, AddressSpaceModel model) {
+  return {.address = formal_address_info(opcode, model).actual, .formal_opcode = opcode};
+}
+
+std::optional<ExecutionCursor> sequential_successor(
+    const ArtifactIndex& index, const ExecutionCursor& cursor,
+    AddressSpaceModel model) {
+  ExecutionCursor next = cursor.formal_opcode.has_value()
+      ? formal_cursor(formal_address_successor_opcode(*cursor.formal_opcode), model)
+      : ExecutionCursor{.address = cursor.address + 1};
+  return index.cell_items.contains(next.address) ? std::optional(next) : std::nullopt;
+}
+
+std::optional<ExecutionCursor> direct_target_cursor(
+    const MachineItem& operand, const ArtifactIndex& index, AddressSpaceModel model,
+    AuthoritativePostLayoutControlFlow& result) {
+  try {
+    // At a discontinuity the word is read from an ordinary command cell,
+    // e.g. BP at B1 fetches its address byte from physical 00, not 07.
+    if (operand.kind == MachineItemKind::Op)
+      return formal_cursor(operand.opcode, model);
+    if (operand.kind != MachineItemKind::Address)
       return std::nullopt;
-    }
-  }
-  if (const auto* address = std::get_if<int>(&operand.target))
-    return *address;
-  const auto* label = std::get_if<std::string>(&operand.target);
-  if (label == nullptr)
+    if (operand.formal_opcode.has_value())
+      return formal_cursor(*operand.formal_opcode, model);
+    if (const auto* address = std::get_if<int>(&operand.target))
+      return canonical_cursor(index, *address, model);
+    const auto* label = std::get_if<std::string>(&operand.target);
+    if (label == nullptr)
+      return std::nullopt;
+    const auto found = index.label_addresses.find(*label);
+    return found == index.label_addresses.end()
+        ? std::nullopt
+        : std::optional(canonical_cursor(index, found->second, model));
+  } catch (const std::exception&) {
+    add_reason(result, "formal direct operand is invalid for this address space");
     return std::nullopt;
-  const auto found = index.label_addresses.find(*label);
-  return found == index.label_addresses.end() ? std::nullopt : std::optional<int>(found->second);
+  }
+}
+
+std::optional<int> direct_target_address(
+    const MachineItem& operand, const ArtifactIndex& index, AddressSpaceModel model,
+    AuthoritativePostLayoutControlFlow& result) {
+  const auto cursor = direct_target_cursor(operand, index, model, result);
+  return cursor.has_value() ? std::optional(cursor->address) : std::nullopt;
 }
 
 std::optional<PostLayoutCommandIdentity>
@@ -227,7 +249,12 @@ void validate_artifact_and_typed_targets(const std::vector<MachineItem>& items,
     if (takes_address(item)) {
       const std::optional<std::size_t> operand = next_cell_item(items, item_index);
       if (!operand.has_value() || items.at(*operand).kind != MachineItemKind::Address) {
-        add_reason(result, "address-taking command has no adjacent operand");
+        // The last physical cell of a complete image fetches its operand
+        // through the counter's side branch. Validate that actual word while
+        // exploring the reachable formal execution context.
+        if (index.cells != official_program_step_limit(options.address_space_model) ||
+            index.item_addresses.at(item_index) != index.cells - 1)
+          add_reason(result, "address-taking command has no adjacent operand");
       } else {
         consumed_operands.insert(*operand);
         const std::optional<int> target =
@@ -297,6 +324,29 @@ void validate_artifact_and_typed_targets(const std::vector<MachineItem>& items,
     } else if (item.indirect_memory_targets.has_value()) {
       add_reason(result, "indirect-memory fact is attached to a non-memory command");
     }
+  }
+
+  for (const auto& [source, encoded_targets] : options.proved_indirect_formal_targets) {
+    const auto typed = result.indirect_flow_targets.find(source);
+    if (typed == result.indirect_flow_targets.end() || encoded_targets.empty()) {
+      add_reason(result, "formal indirect entry facts have no typed flow consumer");
+      continue;
+    }
+    std::set<int> physical_targets;
+    std::set<int> encodings;
+    for (const int encoded : encoded_targets) {
+      try {
+        if (!encodings.insert(encoded).second)
+          add_reason(result, "formal indirect entry facts contain a duplicate encoding");
+        physical_targets.insert(formal_address_info(encoded, options.address_space_model).actual);
+      } catch (const std::exception&) {
+        add_reason(result, "formal indirect entry encoding is invalid");
+      }
+    }
+    std::set<int> expected;
+    for (const auto& target : typed->second) expected.insert(target.address);
+    if (physical_targets != expected)
+      add_reason(result, "formal indirect entries do not match their physical target facts");
   }
 
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
@@ -402,20 +452,34 @@ std::vector<int> stack_addresses(const std::vector<PostLayoutCommandIdentity>& r
   return result;
 }
 
+std::vector<int> cursor_addresses(const std::vector<ExecutionCursor>& cursors) {
+  std::vector<int> result;
+  for (const auto& cursor : cursors) result.push_back(cursor.address);
+  return result;
+}
+
+std::vector<std::optional<int>> cursor_formals(
+    const std::vector<ExecutionCursor>& cursors) {
+  std::vector<std::optional<int>> result;
+  for (const auto& cursor : cursors) result.push_back(cursor.formal_opcode);
+  return result;
+}
+
 bool add_external_entry(AuthoritativePostLayoutControlFlow& result,
-                        const std::vector<MachineItem>& items, const ArtifactIndex& index, int pc,
-                        const std::vector<int>& returns, ExternalEntryKind kind,
+                        const std::vector<MachineItem>& items, const ArtifactIndex& index,
+                        const ExecutionCursor& pc,
+                        const std::vector<ExecutionCursor>& returns, ExternalEntryKind kind,
                         std::optional<ManualInteractionAnchor> manual = std::nullopt) {
-  const std::optional<PostLayoutCommandIdentity> entry = identity_at_address(items, index, pc);
+  const std::optional<PostLayoutCommandIdentity> entry = identity_at_address(items, index, pc.address);
   if (!entry.has_value()) {
     add_reason(result, "external entry is not an executable command cell");
     return false;
   }
   std::vector<PostLayoutCommandIdentity> return_stack;
   return_stack.reserve(returns.size());
-  for (const int address : returns) {
+  for (const auto& address : returns) {
     const std::optional<PostLayoutCommandIdentity> identity =
-        identity_at_address(items, index, address);
+        identity_at_address(items, index, address.address);
     if (!identity.has_value()) {
       add_reason(result, "external return-stack slot is not an executable command cell");
       return false;
@@ -427,6 +491,8 @@ bool add_external_entry(AuthoritativePostLayoutControlFlow& result,
       .return_stack = std::move(return_stack),
       .kind = kind,
       .manual_interaction = std::move(manual),
+      .formal_opcode = pc.formal_opcode,
+      .formal_return_stack = cursor_formals(returns),
   };
   if (std::find(result.external_entries.begin(), result.external_entries.end(), candidate) ==
       result.external_entries.end()) {
@@ -446,7 +512,20 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
     add_reason(result, "typed main entry is unresolved or not an executable command cell");
     return;
   }
-  add_external_entry(result, items, index, main->address, {}, ExternalEntryKind::Main);
+  ExecutionCursor main_cursor = canonical_cursor(index, main->address, options.address_space_model);
+  if (options.main_formal_opcode.has_value()) {
+    try {
+      main_cursor = formal_cursor(*options.main_formal_opcode, options.address_space_model);
+    } catch (const std::exception&) {
+      add_reason(result, "invalid formal main entry");
+      return;
+    }
+    if (main_cursor.address != main->address) {
+      add_reason(result, "formal main entry does not match its command identity");
+      return;
+    }
+  }
+  add_external_entry(result, items, index, main_cursor, {}, ExternalEntryKind::Main);
 
   std::deque<std::size_t> pending;
   std::map<ExecutionState, std::size_t> state_ids;
@@ -459,7 +538,7 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
       return std::nullopt;
     }
     const std::optional<PostLayoutCommandIdentity> identity =
-        identity_at_address(items, index, state.pc);
+        identity_at_address(items, index, state.pc.address);
     if (!identity.has_value()) {
       add_reason(result, "control flow has a missing executable successor");
       return std::nullopt;
@@ -469,14 +548,17 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
     states.push_back(state);
     result.execution_states.push_back(PostLayoutExecutionState{
         .item_index = identity->item_index,
-        .address = state.pc,
-        .return_stack = state.returns,
+        .address = state.pc.address,
+        .return_stack = cursor_addresses(state.returns),
+        .formal_opcode = state.pc.formal_opcode,
+        .formal_return_stack = cursor_formals(state.returns),
     });
     result.execution_successors.emplace_back();
+    result.execution_edges.emplace_back();
     pending.push_back(id);
     return id;
   };
-  (void)record_state(ExecutionState{.pc = main->address});
+  (void)record_state(ExecutionState{.pc = main_cursor});
   std::size_t explored = 0;
   while (!pending.empty() && result.reasons.empty()) {
     const std::size_t state_id = pending.front();
@@ -486,7 +568,7 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
     result.maximum_observed_return_depth =
         std::max(result.maximum_observed_return_depth, static_cast<int>(state.returns.size()));
 
-    const auto cell = index.cell_items.find(state.pc);
+    const auto cell = index.cell_items.find(state.pc.address);
     if (cell == index.cell_items.end() || items.at(cell->second).kind != MachineItemKind::Op) {
       add_reason(result, "control flow reaches a non-executable cell");
       break;
@@ -495,7 +577,9 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
     const MachineItem& item = items.at(item_index);
     const int opcode = item.opcode;
 
-    const auto enqueue = [&](int pc, const std::vector<int>& returns) {
+    const auto enqueue = [&](ExecutionCursor pc, const std::vector<ExecutionCursor>& returns,
+                             PostLayoutExecutionEdgeKind kind =
+                                 PostLayoutExecutionEdgeKind::Fallthrough) {
       const std::optional<std::size_t> successor =
           record_state(ExecutionState{.pc = pc, .returns = returns});
       if (!successor.has_value())
@@ -503,6 +587,15 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
       std::vector<std::size_t>& edges = result.execution_successors.at(state_id);
       if (std::find(edges.begin(), edges.end(), *successor) == edges.end())
         edges.push_back(*successor);
+      const PostLayoutExecutionEdge labelled{
+          .target_state = *successor,
+          .kind = kind,
+          .indirect_formal_opcode = kind == PostLayoutExecutionEdgeKind::IndirectTarget
+                                        ? pc.formal_opcode : std::nullopt,
+      };
+      auto& alternatives = result.execution_edges.at(state_id);
+      if (std::find(alternatives.begin(), alternatives.end(), labelled) == alternatives.end())
+        alternatives.push_back(labelled);
     };
 
     if (opcode == kErrorStopOpcode) {
@@ -512,20 +605,20 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
         add_reason(result, "reachable error stop has unknown disposition");
         continue;
       }
-      const std::optional<int> padding_pc =
+      const std::optional<ExecutionCursor> padding_pc =
           sequential_successor(index, state.pc, options.address_space_model);
       if (!padding_pc.has_value() ||
-          !identity_at_address(items, index, *padding_pc).has_value()) {
+          !identity_at_address(items, index, padding_pc->address).has_value()) {
         add_reason(result, "resumable error stop has no physical padding cell");
         continue;
       }
-      const std::optional<int> resume_pc =
+      const std::optional<ExecutionCursor> resume_pc =
           sequential_successor(index, *padding_pc, options.address_space_model);
       if (!resume_pc.has_value()) {
         add_reason(result, "resumable error stop has no executable continuation");
       } else if (add_external_entry(result, items, index, *resume_pc, state.returns,
                                     ExternalEntryKind::ResumableStop)) {
-        enqueue(*resume_pc, state.returns);
+        enqueue(*resume_pc, state.returns, PostLayoutExecutionEdgeKind::Resume);
       }
       continue;
     }
@@ -539,32 +632,35 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
       }
       const auto protocol = protocols.find(item_index);
       if (protocol != protocols.end()) {
+        auto phase_cursor = sequential_successor(index, state.pc, options.address_space_model);
+        const auto first_cursor = phase_cursor;
         for (const auto& [phase, phase_item] : protocol->second.phase_items) {
+          (void)phase;
+          if (!phase_cursor.has_value() ||
+              phase_cursor->address != index.item_addresses.at(phase_item)) {
+            add_reason(result, "manual protocol crosses a non-linear formal continuation");
+            break;
+          }
           const ManualInteractionAnchor anchor = *items.at(phase_item).manual_interaction;
-          add_external_entry(result, items, index, index.item_addresses.at(phase_item),
-                             state.returns,
+          add_external_entry(result, items, index, *phase_cursor, state.returns,
                              anchor.kind == ManualInteractionAnchorKind::SingleStepCommand
                                  ? ExternalEntryKind::ManualSingleStep
                                  : ExternalEntryKind::ManualContinuous,
                              anchor);
+          phase_cursor = sequential_successor(index, *phase_cursor, options.address_space_model);
         }
-        const auto first_phase = protocol->second.phase_items.find(0);
-        if (first_phase == protocol->second.phase_items.end()) {
+        if (first_cursor.has_value() && result.reasons.empty())
+          enqueue(*first_cursor, state.returns, PostLayoutExecutionEdgeKind::Resume);
+        else if (!first_cursor.has_value())
           add_reason(result, "manual protocol has no first input phase");
-        } else {
-          // The operator's pauses do not mutate calculator registers. Follow
-          // every single-step input command in order so its defs participate
-          // in exact liveness, then continue naturally from the final phase.
-          enqueue(index.item_addresses.at(first_phase->second), state.returns);
-        }
       } else {
-        const std::optional<int> resume_pc =
+        const std::optional<ExecutionCursor> resume_pc =
             sequential_successor(index, state.pc, options.address_space_model);
         if (!resume_pc.has_value()) {
           add_reason(result, "resumable STOP has no executable continuation");
         } else if (add_external_entry(result, items, index, *resume_pc, state.returns,
                                ExternalEntryKind::ResumableStop)) {
-          enqueue(*resume_pc, state.returns);
+          enqueue(*resume_pc, state.returns, PostLayoutExecutionEdgeKind::Resume);
         }
       }
       continue;
@@ -577,50 +673,57 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
                                  ? "reachable В/О has an unresolved or non-executable typed empty-return target"
                                  : "reachable В/О has an empty return stack");
         } else {
-          enqueue(result.empty_return_target->address, state.returns);
+          enqueue(canonical_cursor(index, result.empty_return_target->address,
+                                   options.address_space_model), state.returns,
+                  PostLayoutExecutionEdgeKind::Return);
         }
         continue;
       }
-      std::vector<int> returns = state.returns;
-      const int return_pc = returns.back();
+      std::vector<ExecutionCursor> returns = state.returns;
+      const ExecutionCursor return_pc = returns.back();
       returns.pop_back();
-      enqueue(return_pc, returns);
+      enqueue(return_pc, returns, PostLayoutExecutionEdgeKind::Return);
       continue;
     }
 
     if (takes_address(item)) {
-      const std::optional<std::size_t> operand = next_cell_item(items, item_index);
-      if (!operand.has_value() || items.at(*operand).kind != MachineItemKind::Address) {
+      const auto operand_cursor = sequential_successor(index, state.pc, options.address_space_model);
+      if (!operand_cursor.has_value()) {
         add_reason(result, "reachable address-taking command has no operand");
         continue;
       }
-      const std::optional<int> target =
-          direct_target_address(items.at(*operand), index, options.address_space_model, result);
+      const auto operand = index.cell_items.find(operand_cursor->address);
+      if (operand == index.cell_items.end()) {
+        add_reason(result, "formal address operand has no physical cell");
+        continue;
+      }
+      result.execution_states.at(state_id).operand_item_index = operand->second;
+      const auto target = direct_target_cursor(
+          items.at(operand->second), index, options.address_space_model, result);
       if (!target.has_value())
         continue;
-      const std::optional<int> fallthrough = sequential_successor(
-          index, index.item_addresses.at(*operand), options.address_space_model);
+      const auto fallthrough = sequential_successor(index, *operand_cursor, options.address_space_model);
       if (opcode == kJumpOpcode) {
-        enqueue(*target, state.returns);
+        enqueue(*target, state.returns, PostLayoutExecutionEdgeKind::DirectTarget);
       } else if (opcode == kCallOpcode) {
         if (static_cast<int>(state.returns.size()) >= options.maximum_return_depth) {
           add_reason(result, "control flow exceeds the configured return-stack depth");
           continue;
         }
         if (!fallthrough.has_value() ||
-            !identity_at_address(items, index, *fallthrough).has_value()) {
+            !identity_at_address(items, index, fallthrough->address).has_value()) {
           add_reason(result, "direct call has no executable continuation");
           continue;
         }
-        std::vector<int> returns = state.returns;
+        std::vector<ExecutionCursor> returns = state.returns;
         returns.push_back(*fallthrough);
-        enqueue(*target, returns);
+        enqueue(*target, returns, PostLayoutExecutionEdgeKind::DirectTarget);
       } else if (is_direct_conditional_opcode(opcode)) {
         if (!fallthrough.has_value()) {
           add_reason(result, "direct conditional has no executable fallthrough");
           continue;
         }
-        enqueue(*target, state.returns);
+        enqueue(*target, state.returns, PostLayoutExecutionEdgeKind::DirectTarget);
         enqueue(*fallthrough, state.returns);
       } else {
         add_reason(result, "unsupported address-taking command in exact CFG");
@@ -634,25 +737,33 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
         add_reason(result, "reachable indirect flow lacks a complete typed target set");
         continue;
       }
-      std::vector<int> returns = state.returns;
+      std::vector<ExecutionCursor> returns = state.returns;
       if (is_indirect_call_opcode(opcode)) {
         if (static_cast<int>(returns.size()) >= options.maximum_return_depth) {
           add_reason(result, "control flow exceeds the configured return-stack depth");
           continue;
         }
-        const std::optional<int> continuation =
+        const std::optional<ExecutionCursor> continuation =
             sequential_successor(index, state.pc, options.address_space_model);
         if (!continuation.has_value() ||
-            !identity_at_address(items, index, *continuation).has_value()) {
+            !identity_at_address(items, index, continuation->address).has_value()) {
           add_reason(result, "indirect call has no executable continuation");
           continue;
         }
         returns.push_back(*continuation);
       }
-      for (const PostLayoutCommandIdentity& target : targets->second)
-        enqueue(target.address, returns);
+      const auto formal = options.proved_indirect_formal_targets.find(item_index);
+      if (formal != options.proved_indirect_formal_targets.end()) {
+        for (const int encoded : formal->second)
+          enqueue(formal_cursor(encoded, options.address_space_model), returns,
+                  PostLayoutExecutionEdgeKind::IndirectTarget);
+      } else {
+        for (const PostLayoutCommandIdentity& target : targets->second)
+          enqueue(canonical_cursor(index, target.address, options.address_space_model), returns,
+                  PostLayoutExecutionEdgeKind::IndirectTarget);
+      }
       if (is_indirect_conditional_opcode(opcode)) {
-        const std::optional<int> fallthrough =
+        const std::optional<ExecutionCursor> fallthrough =
             sequential_successor(index, state.pc, options.address_space_model);
         if (!fallthrough.has_value()) {
           add_reason(result, "indirect conditional has no executable fallthrough");
@@ -663,7 +774,7 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
       continue;
     }
 
-    const std::optional<int> successor =
+    const std::optional<ExecutionCursor> successor =
         sequential_successor(index, state.pc, options.address_space_model);
     if (!successor.has_value()) {
       add_reason(result, "control flow has a missing executable successor");
@@ -686,8 +797,10 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
             left.manual_interaction.has_value() ? left.manual_interaction->phase : -1;
         const int right_phase =
             right.manual_interaction.has_value() ? right.manual_interaction->phase : -1;
-        return std::tie(left.entry.address, left_stack, left.kind, left_protocol, left_phase) <
-               std::tie(right.entry.address, right_stack, right.kind, right_protocol, right_phase);
+        return std::tie(left.entry.address, left_stack, left.kind, left_protocol, left_phase,
+                        left.formal_opcode, left.formal_return_stack) <
+               std::tie(right.entry.address, right_stack, right.kind, right_protocol, right_phase,
+                        right.formal_opcode, right.formal_return_stack);
       });
 }
 
@@ -697,6 +810,7 @@ AuthoritativePostLayoutControlFlow
 build_post_layout_control_flow(const std::vector<MachineItem>& items,
                                const PostLayoutControlFlowOptions& options) {
   AuthoritativePostLayoutControlFlow result;
+  result.address_space_model = options.address_space_model;
   if (options.maximum_return_depth < 0 || options.maximum_return_depth > 5) {
     add_reason(result, "maximum return-stack depth must be between zero and five");
     return result;
@@ -706,8 +820,25 @@ build_post_layout_control_flow(const std::vector<MachineItem>& items,
     return result;
   }
 
+  PostLayoutControlFlowOptions execution_options = options;
+  for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
+    const auto& encoded = items.at(item_index).indirect_flow_formal_targets;
+    if (!encoded.has_value())
+      continue;
+    const auto [position, inserted] =
+        execution_options.proved_indirect_formal_targets.emplace(item_index, *encoded);
+    if (!inserted) {
+      std::vector<int> supplied = position->second;
+      std::vector<int> attached = *encoded;
+      std::sort(supplied.begin(), supplied.end());
+      std::sort(attached.begin(), attached.end());
+      if (supplied != attached)
+        add_reason(result, "typed and supplied formal indirect entry facts disagree");
+    }
+  }
+
   const ArtifactIndex index = index_artifact(items);
-  validate_artifact_and_typed_targets(items, index, options, result);
+  validate_artifact_and_typed_targets(items, index, execution_options, result);
   if (options.empty_return_target.has_value()) {
     const std::optional<PostLayoutCommandIdentity> target =
         resolve_indirect_target(items, index, *options.empty_return_target);
@@ -724,7 +855,7 @@ build_post_layout_control_flow(const std::vector<MachineItem>& items,
   if (!result.reasons.empty())
     return result;
 
-  explore_entries_and_return_stacks(items, index, protocols, options, result);
+  explore_entries_and_return_stacks(items, index, protocols, execution_options, result);
   result.proved = result.reasons.empty();
   return result;
 }
@@ -894,6 +1025,259 @@ void prove_one_borrowed_register(const std::vector<MachineItem>& items,
 }
 
 } // namespace
+
+PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
+    const std::vector<MachineItem>& before,
+    const std::vector<MachineItem>& after,
+    const AuthoritativePostLayoutControlFlow& before_control,
+    const AuthoritativePostLayoutControlFlow& after_control,
+    const std::vector<std::optional<std::size_t>>& old_to_new_item,
+    const PostLayoutExecutionRelocationOptions& options) {
+  PostLayoutExecutionRelocationProof proof;
+  const auto reject = [&](std::string reason) {
+    proof.reasons.push_back(std::move(reason));
+    return proof;
+  };
+  if (!before_control.proved || !after_control.proved ||
+      before_control.address_space_model != after_control.address_space_model ||
+      before_control.execution_states.empty() || after_control.execution_states.empty() ||
+      before_control.execution_states.size() != before_control.execution_successors.size() ||
+      after_control.execution_states.size() != after_control.execution_successors.size() ||
+      before_control.execution_states.size() != before_control.execution_edges.size() ||
+      after_control.execution_states.size() != after_control.execution_edges.size() ||
+      before_control.maximum_observed_return_depth != after_control.maximum_observed_return_depth)
+    return reject("exact labelled execution graphs are missing or incompatible");
+  if (old_to_new_item.size() != before.size() || options.maximum_state_pairs == 0U)
+    return reject("invalid command relocation or execution-pair budget");
+
+  const ArtifactIndex before_index = index_artifact(before);
+  const ArtifactIndex after_index = index_artifact(after);
+  const auto mapped_item = [&](std::size_t item) -> std::optional<std::size_t> {
+    if (item >= old_to_new_item.size() || !old_to_new_item.at(item).has_value() ||
+        *old_to_new_item.at(item) >= after.size())
+      return std::nullopt;
+    return old_to_new_item.at(item);
+  };
+  const auto mapped_address = [&](int address) -> std::optional<int> {
+    const auto old_cell = before_index.cell_items.find(address);
+    if (old_cell == before_index.cell_items.end())
+      return std::nullopt;
+    const auto next = mapped_item(old_cell->second);
+    return next.has_value() ? std::optional<int>(after_index.item_addresses.at(*next))
+                            : std::nullopt;
+  };
+  const auto frame_addresses = [&](const std::vector<int>& frames, bool remap)
+      -> std::optional<std::vector<int>> {
+    if (!remap)
+      return frames;
+    std::vector<int> mapped;
+    for (const int address : frames) {
+      const auto next = mapped_address(address);
+      if (!next.has_value())
+        return std::nullopt;
+      mapped.push_back(*next);
+    }
+    return mapped;
+  };
+
+  using ExactState = std::tuple<std::size_t, std::optional<int>, std::vector<int>,
+                                std::vector<std::optional<int>>>;
+  using EntryLabel = std::tuple<int, bool, int, int, int>;
+  struct Entries {
+    std::vector<std::set<EntryLabel>> labels;
+    std::vector<std::size_t> mains;
+  };
+  const auto entry_facts = [](const AuthoritativePostLayoutControlFlow& control)
+      -> std::optional<Entries> {
+    Entries result;
+    result.labels.resize(control.execution_states.size());
+    std::map<ExactState, std::size_t> states;
+    for (std::size_t i = 0; i < control.execution_states.size(); ++i) {
+      const auto& state = control.execution_states.at(i);
+      if (state.return_stack.size() != state.formal_return_stack.size() ||
+          !states.emplace(ExactState{state.item_index, state.formal_opcode,
+                                     state.return_stack, state.formal_return_stack}, i).second)
+        return std::nullopt;
+    }
+    for (const auto& entry : control.external_entries) {
+      std::vector<int> frames;
+      for (const auto& frame : entry.return_stack)
+        frames.push_back(frame.address);
+      const auto found = states.find(ExactState{entry.entry.item_index, entry.formal_opcode,
+                                               frames, entry.formal_return_stack});
+      if (found == states.end() ||
+          control.execution_states.at(found->second).address != entry.entry.address)
+        return std::nullopt;
+      const auto& manual = entry.manual_interaction;
+      result.labels.at(found->second).emplace(
+          static_cast<int>(entry.kind), manual.has_value(),
+          manual.has_value() ? manual->protocol_id : -1,
+          manual.has_value() ? manual->phase : -1,
+          manual.has_value() ? static_cast<int>(manual->kind) : -1);
+      if (entry.kind == ExternalEntryKind::Main)
+        result.mains.push_back(found->second);
+    }
+    if (result.mains.size() != 1U)
+      return std::nullopt;
+    return result;
+  };
+  const auto old_entries = entry_facts(before_control);
+  const auto new_entries = entry_facts(after_control);
+  if (!old_entries.has_value() || !new_entries.has_value())
+    return reject("external entries do not identify exact execution contexts");
+
+  for (const auto& [source, remap] : options.indirect_entry_remap) {
+    const auto target = mapped_item(source);
+    if (source >= before.size() || !target.has_value() ||
+        before.at(source).kind != MachineItemKind::Op ||
+        after.at(*target).kind != MachineItemKind::Op ||
+        !is_indirect_flow_opcode(before.at(source).opcode) ||
+        !is_indirect_flow_opcode(after.at(*target).opcode))
+      return reject("selector transport is attached to a non-indirect command");
+    for (const auto& [old_code, new_code] : remap)
+      if (old_code < 0 || old_code > 255 || new_code < 0 || new_code > 255)
+        return reject("selector transport contains an invalid encoded counter");
+  }
+
+  using EdgeKey = std::tuple<PostLayoutExecutionEdgeKind, std::size_t, std::vector<int>>;
+  using EdgeGroups = std::map<EdgeKey, std::vector<PostLayoutExecutionEdge>>;
+  const auto edge_groups = [&](const AuthoritativePostLayoutControlFlow& control,
+                               std::size_t state_index, bool remap)
+      -> std::optional<EdgeGroups> {
+    EdgeGroups groups;
+    std::set<std::size_t> targets;
+    for (const auto& edge : control.execution_edges.at(state_index)) {
+      if (edge.target_state >= control.execution_states.size() ||
+          (edge.kind != PostLayoutExecutionEdgeKind::IndirectTarget &&
+           edge.indirect_formal_opcode.has_value()))
+        return std::nullopt;
+      const auto& target = control.execution_states.at(edge.target_state);
+      if (edge.kind == PostLayoutExecutionEdgeKind::IndirectTarget &&
+          edge.indirect_formal_opcode != target.formal_opcode)
+        return std::nullopt;
+      const auto item = remap ? mapped_item(target.item_index)
+                              : std::optional<std::size_t>(target.item_index);
+      const auto frames = frame_addresses(target.return_stack, remap);
+      if (!item.has_value() || !frames.has_value())
+        return std::nullopt;
+      groups[EdgeKey{edge.kind, *item, *frames}].push_back(edge);
+      targets.insert(edge.target_state);
+    }
+    const auto& projected = control.execution_successors.at(state_index);
+    if (targets != std::set<std::size_t>(projected.begin(), projected.end()))
+      return std::nullopt;
+    return groups;
+  };
+
+  using StatePair = std::pair<std::size_t, std::size_t>;
+  std::set<StatePair> discovered;
+  std::deque<StatePair> pending;
+  std::set<std::size_t> old_seen, new_seen;
+  std::set<std::pair<std::size_t, int>> used_remaps;
+  const auto enqueue = [&](std::size_t old_state, std::size_t new_state) {
+    const StatePair pair{old_state, new_state};
+    if (discovered.contains(pair))
+      return true;
+    if (discovered.size() >= options.maximum_state_pairs)
+      return false;
+    discovered.insert(pair);
+    pending.push_back(pair);
+    return true;
+  };
+  (void)enqueue(old_entries->mains.front(), new_entries->mains.front());
+  while (!pending.empty()) {
+    const auto [old_state_index, new_state_index] = pending.front();
+    pending.pop_front();
+    ++proof.state_pairs;
+    const auto& old_state = before_control.execution_states.at(old_state_index);
+    const auto& new_state = after_control.execution_states.at(new_state_index);
+    const auto target = mapped_item(old_state.item_index);
+    const auto frames = frame_addresses(old_state.return_stack, true);
+    if (!target.has_value() || *target != new_state.item_index ||
+        !frames.has_value() || *frames != new_state.return_stack ||
+        old_entries->labels.at(old_state_index) != new_entries->labels.at(new_state_index))
+      return reject("execution context or external interaction does not follow command relocation");
+    const auto& old_item = before.at(old_state.item_index);
+    const auto& new_item = after.at(new_state.item_index);
+    if (old_item.kind != MachineItemKind::Op || new_item.kind != MachineItemKind::Op ||
+        old_item.opcode != new_item.opcode || old_item.raw != new_item.raw ||
+        old_item.stop_disposition != new_item.stop_disposition ||
+        old_item.manual_interaction != new_item.manual_interaction)
+      return reject("paired execution contexts perform different instructions or interactions");
+    if (old_state.operand_item_index.has_value() != new_state.operand_item_index.has_value())
+      return reject("paired commands disagree about their address operand");
+    if (old_state.operand_item_index.has_value()) {
+      const auto operand = mapped_item(*old_state.operand_item_index);
+      if (!operand.has_value() || operand != new_state.operand_item_index)
+        return reject("formal continuation fetches a different relocated address word");
+    }
+
+    old_seen.insert(old_state_index);
+    new_seen.insert(new_state_index);
+    const auto old_groups = edge_groups(before_control, old_state_index, true);
+    const auto new_groups = edge_groups(after_control, new_state_index, false);
+    if (!old_groups.has_value() || !new_groups.has_value() ||
+        old_groups->size() != new_groups->size())
+      return reject("labelled execution alternatives differ after relocation");
+    const auto declared = options.indirect_entry_remap.find(old_state.item_index);
+    for (const auto& [key, old_edges] : *old_groups) {
+      const auto matching = new_groups->find(key);
+      if (matching == new_groups->end())
+        return reject("branch, return, or resume reaches a different relocated context");
+      const auto& new_edges = matching->second;
+      const bool indirect = std::get<0>(key) == PostLayoutExecutionEdgeKind::IndirectTarget;
+      std::set<std::size_t> matched;
+      for (const auto& old_edge : old_edges) {
+        auto encoding = old_edge.indirect_formal_opcode;
+        bool transported = false;
+        if (indirect && encoding.has_value() &&
+            declared != options.indirect_entry_remap.end()) {
+          const auto value = declared->second.find(*encoding);
+          if (value != declared->second.end()) {
+            used_remaps.emplace(old_state.item_index, *encoding);
+            encoding = value->second;
+            transported = true;
+          }
+        }
+        std::optional<std::size_t> choice;
+        if (old_edges.size() == 1U && new_edges.size() == 1U) {
+          if (transported && new_edges.front().indirect_formal_opcode != encoding)
+            return reject("declared selector transport does not match its new entry counter");
+          choice = 0U;
+        } else if (indirect) {
+          // Distinct encoded selectors may reach the same physical instruction.
+          // Preserve their value correlation; graph-isomorphism permutations
+          // alone would accept a swap of B1 and 06 with different continuations.
+          for (std::size_t i = 0; i < new_edges.size(); ++i) {
+            if (new_edges.at(i).indirect_formal_opcode != encoding)
+              continue;
+            if (choice.has_value())
+              return reject("encoded selector transport has ambiguous continuations");
+            choice = i;
+          }
+        }
+        if (!choice.has_value())
+          return reject("an indirect entry alternative has no proved selector correspondence");
+        matched.insert(*choice);
+        if (!enqueue(old_edge.target_state, new_edges.at(*choice).target_state))
+          return reject("execution-context transport exceeds its bounded state-pair budget");
+      }
+      if (matched.size() != new_edges.size())
+        return reject("relocation introduces an unpaired execution alternative");
+    }
+  }
+  if (old_seen.size() != before_control.execution_states.size() ||
+      new_seen.size() != after_control.execution_states.size())
+    return reject("not every exact execution context has a rooted correspondence");
+  for (const auto& [source, remap] : options.indirect_entry_remap)
+    for (const auto& [old_code, new_code] : remap) {
+      (void)new_code;
+      if (!used_remaps.contains({source, old_code}))
+        return reject("declared selector transport has no reachable matching consumer");
+    }
+  proof.proved = true;
+  return proof;
+}
 
 PostLayoutBorrowedSelectorProof
 prove_post_layout_borrowed_entry_selectors(const std::vector<MachineItem>& items,

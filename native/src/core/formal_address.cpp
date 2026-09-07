@@ -51,6 +51,11 @@ int formal_address_ordinal(int opcode) {
   return high * 10 + low;
 }
 
+int formal_address_successor_opcode(int opcode) {
+  const int next = (formal_address_ordinal(opcode) + 1) % 160;
+  return (next / 10) * 16 + next % 10;
+}
+
 int official_address_to_opcode(int address, AddressSpaceModel model) {
   const int last = official_program_last_address(model);
   if (address < 0 || address > last) {

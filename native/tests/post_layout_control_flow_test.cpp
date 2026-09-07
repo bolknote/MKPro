@@ -1,5 +1,7 @@
 #include "mkpro/core/post_layout_control_flow.hpp"
 
+#include "mkpro/emulator/mk61.hpp"
+
 #include "test_support.hpp"
 
 #include <algorithm>
@@ -100,9 +102,193 @@ std::vector<MachineItem> typed_indirect_program(std::size_t& condition, std::siz
   return items;
 }
 
+
+void formal_program_counter_contract() {
+  using core::PostLayoutControlFlowOptions;
+  using core::PostLayoutExecutionState;
+  const auto contains = [](const core::AuthoritativePostLayoutControlFlow& facts,
+                           int physical, int formal) {
+    return std::any_of(facts.execution_states.begin(), facts.execution_states.end(),
+                      [&](const PostLayoutExecutionState& state) {
+                        return state.address == physical && state.formal_opcode == formal;
+                      });
+  };
+  const std::vector<std::pair<int, std::vector<std::string>>> counters = {
+      {0xa4, {"-4", "-5", "-6", "-7"}},
+      {0xb1, {"L1", "L2", "L3", "L4"}},
+      {0xf9, {" 9", "00", "01", "02"}},
+      {0xfa, {" -", "01", "02", "03"}},
+      {0xff, {"  ", "06", "07", "08"}},
+      {0x9f, {"9 ", "-6", "-7", "-8"}},
+      {0xac, {"-С", "L3", "L4", "L5"}},
+      {0x1a, {"1-", "21", "22", "23"}},
+  };
+  for (const auto& [target, expected] : counters) {
+    emulator::MK61 calc;
+    std::vector<int> codes(105, 0x54);
+    codes[90] = 0x51;
+    codes[91] = target;
+    require(calc.load_program(codes).diagnostics.empty(), "formal counter fact must load");
+    calc.press_sequence({"БП", "9", "0"});
+    for (const auto& pc : expected) {
+      calc.press("ПП");
+      require(calc.program_counter() == pc, "hardware formal counter sequence must match");
+    }
+  }
+  for (const auto [before, after] : std::vector<std::pair<int, int>>{
+           {0xa4, 0xa5}, {0xb1, 0xb2}, {0xf9, 0}, {0xfa, 1}, {0xff, 6},
+           {0x9f, 0xa6}, {0xac, 0xb3}, {0x1a, 0x21}})
+    require(formal_address_successor_opcode(before) == after,
+            "shared counter transfer must retain branch discontinuities and decimal carry");
+
+  {
+    std::vector<MachineItem> image(105, op(0x54));
+    image[7] = stop(StopDisposition::Terminal);
+    PostLayoutControlFlowOptions options;
+    options.main_entry = 104;
+    const auto facts = core::build_post_layout_control_flow(image, options);
+    require(facts.proved && facts.execution_states.size() == 16 &&
+                contains(facts, 0, 0xa5) && contains(facts, 0, 0xb2),
+            "A4 must enter both side branches without merging their physical-00 contexts");
+  }
+  {
+    std::vector<MachineItem> parallel(106, op(0x54));
+    parallel.back() = stop(StopDisposition::Terminal);
+    PostLayoutControlFlowOptions options;
+    options.main_entry = 104;
+    const auto logical = core::build_post_layout_control_flow(parallel, options);
+    require(logical.proved && logical.execution_states.size() == 2 &&
+                logical.execution_states.back().address == 105 &&
+                !logical.execution_states.front().formal_opcode.has_value() &&
+                !logical.execution_states.back().formal_opcode.has_value(),
+            "unplaced logical cell 105 must not alias physical 00");
+    parallel[0] = stop(StopDisposition::Terminal);
+    options.main_formal_opcode = 0xa4;
+    const auto physical = core::build_post_layout_control_flow(parallel, options);
+    require(physical.proved && contains(physical, 0, 0xa5),
+            "explicit hardware cursors remain distinct from the parallel layout space");
+    options.main_formal_opcode = 0xb1;
+    require(!core::build_post_layout_control_flow(parallel, options).proved,
+            "a formal main counter must match the typed physical entry");
+  }
+
+  for (const int entry : {0xb1, 0xf9, 0xfa, 0xa4}) {
+    const int position = formal_address_info(entry).actual;
+    for (const bool call : {false, true}) {
+      std::vector<MachineItem> image(105, op(0x54));
+      image[0] = op(0x08);
+      image[1] = stop(StopDisposition::Terminal);
+      image[2] = stop(StopDisposition::Terminal);
+      if (entry == 0xfa) image[1] = op(0x08);
+      image[8] = op(0x60);
+      image[9] = call ? op(0x52) : stop(StopDisposition::Terminal);
+      image[10] = op(0x61);
+      image[11] = stop(StopDisposition::Terminal);
+      image[90] = op(0x51);
+      image[91] = MachineItem::address(position);
+      image[91].formal_opcode = entry;
+      image[position] = op(call ? 0x53 : 0x51);
+      if (position + 1 < 105) image[position + 1] = MachineItem::address(10);
+      PostLayoutControlFlowOptions options;
+      options.main_entry = 90;
+      const auto facts = core::build_post_layout_control_flow(image, options);
+      const int operand_address = entry == 0xfa ? 1 : 0;
+      const int return_address = entry == 0xfa ? 2 : 1;
+      const int return_formal = entry == 0xb1 ? 0xb3 : entry == 0xa4 ? 0xa6 : return_address;
+      require(facts.proved && contains(facts, 8, 8) &&
+                  !contains(facts, 10, 0x10),
+              "a split command must fetch its actual operand, not the physical neighbour");
+      const auto branch = std::find_if(facts.execution_states.begin(), facts.execution_states.end(),
+                                      [&](const auto& state) { return state.formal_opcode == entry; });
+      require(branch != facts.execution_states.end() &&
+                  branch->operand_item_index == static_cast<std::size_t>(operand_address),
+              "the graph must publish the actual cross-boundary operand identity");
+      if (call) {
+        const auto leaf = std::find_if(facts.execution_states.begin(), facts.execution_states.end(),
+                                      [](const auto& state) { return state.address == 8; });
+        require(leaf != facts.execution_states.end() &&
+                    leaf->return_stack == std::vector<int>{return_address} &&
+                    leaf->formal_return_stack == std::vector<std::optional<int>>{return_formal} &&
+                    contains(facts, return_address, return_formal),
+                "a call must preserve the formal counter when it pushes and pops its return");
+
+        emulator::MK61 calc;
+        std::vector<int> codes;
+        for (const auto& item : image) {
+          if (item.kind == MachineItemKind::Op) codes.push_back(item.opcode);
+          else if (item.formal_opcode.has_value()) codes.push_back(*item.formal_opcode);
+          else codes.push_back(official_address_to_opcode(std::get<int>(item.target)));
+        }
+        require(calc.load_program(codes).diagnostics.empty(), "split-call fact must load");
+        calc.set_register("0", "11");
+        calc.set_register("1", "22");
+        calc.press_sequence({"БП", "9", "0", "ПП", "ПП", "ПП", "ПП"});
+        const std::string expected = entry == 0xb1 ? "L3" : entry == 0xa4 ? "-6"
+                                           : entry == 0xfa ? "02" : "01";
+        require(calc.program_counter() == expected &&
+                    std::stod(calc.read_register("x")) == 11,
+                "hardware must use the same split operand and exact saved return counter");
+      }
+    }
+  }
+
+  for (const int entry : {0xb1, 0xfa}) {
+    std::vector<MachineItem> image(105, stop(StopDisposition::Terminal));
+    const int position = formal_address_info(entry).actual;
+    const int continuation = entry == 0xb1 ? 0 : 1;
+    image[position] = op(0x54);
+    image[continuation] = op(0x52);
+    image[90] = op(0xa7);
+    image[90].indirect_flow_targets = std::vector<IrTarget>{position};
+    PostLayoutControlFlowOptions options;
+    options.main_entry = 90;
+    options.proved_indirect_formal_targets[90] = {entry};
+    const auto facts = core::build_post_layout_control_flow(image, options);
+    require(facts.proved && contains(facts, position, entry) && contains(facts, 91, 0x91),
+            "an indirect formal entry must use its real continuation and caller frame");
+
+    emulator::MK61 calc;
+    std::vector<int> codes;
+    for (const auto& item : image) codes.push_back(item.opcode);
+    require(calc.load_program(codes).diagnostics.empty(), "indirect formal fixture must load");
+    calc.set_register("7", format_formal_address_opcode(entry));
+    calc.press_sequence({"БП", "9", "0", "ПП", "ПП", "ПП"});
+    require(calc.program_counter() == "91", "indirect aliases must return to the actual caller");
+
+    image[position] = stop(StopDisposition::Resumable);
+    const auto resume = core::build_post_layout_control_flow(image, options);
+    require(resume.proved &&
+                std::any_of(resume.external_entries.begin(), resume.external_entries.end(),
+                            [&](const auto& external) {
+                              return external.kind == core::ExternalEntryKind::ResumableStop &&
+                                  external.entry.address == continuation &&
+                                  external.formal_opcode == (entry == 0xb1 ? 0xb2 : 1) &&
+                                  external.formal_return_stack ==
+                                      std::vector<std::optional<int>>{0x91};
+                            }),
+            "manual continuation must keep its formal PC and saved return context");
+
+    auto invalid = options;
+    invalid.proved_indirect_formal_targets[90] = {0x90};
+    require(!core::build_post_layout_control_flow(image, invalid).proved,
+            "formal indirect metadata must cover exactly its typed physical destinations");
+    invalid.proved_indirect_formal_targets[90] = {entry, entry};
+    require(!core::build_post_layout_control_flow(image, invalid).proved,
+            "duplicate encoded indirect facts must fail closed");
+    invalid.proved_indirect_formal_targets[90] = {256};
+    require(!core::build_post_layout_control_flow(image, invalid).proved,
+            "out-of-byte formal indirect metadata must fail closed");
+    invalid.proved_indirect_formal_targets.erase(90);
+    invalid.proved_indirect_formal_targets[89] = {entry};
+    require(!core::build_post_layout_control_flow(image, invalid).proved,
+            "formal metadata on a non-flow instruction must fail closed");
+  }
+}
+
 } // namespace
 
 void post_layout_control_flow_matches_typed_contract() {
+  formal_program_counter_contract();
   {
     MachineItem error = op(0x29, "К ÷");
     error.stop_disposition = StopDisposition::Resumable;
