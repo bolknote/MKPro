@@ -757,6 +757,12 @@ void example_sizes_match_typescript_baselines() {
           ((mark_details.at("valueAwareSchedulerPlanStatus") == "callee-abi-lower-bound-not-positive" &&
             mark_details.contains("valueAwareCalleeAbiNetAfterLowerBoundCells") &&
             std::stoi(mark_details.at("valueAwareCalleeAbiNetAfterLowerBoundCells")) <= 0) ||
+           (mark_details.at("valueAwareSchedulerPlanStatus") ==
+                "no-profitable-stack-input-materialization" &&
+            mark_details.contains("valueAwareProfitableStackInputCount") &&
+            mark_details.at("valueAwareProfitableStackInputCount") == "0" &&
+            mark_details.contains("valueAwareEstimatedNetSavingsAfterMaterialization") &&
+            std::stoi(mark_details.at("valueAwareEstimatedNetSavingsAfterMaterialization")) <= 0) ||
            (mark_details.at("valueAwareSchedulerPlanStatus") == "blocked-by-stack-mutating-callee" &&
             mark_details.contains("valueAwareEstimatedNetSavingsAfterMaterialization") &&
             std::stoi(mark_details.at("valueAwareEstimatedNetSavingsAfterMaterialization")) <= 0));
