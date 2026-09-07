@@ -4004,6 +4004,18 @@ The ordinary scheduler remains available through the separate
 completed program, not just the saved recalls: shorter expression code can
 otherwise lose a more valuable address-layout coincidence.
 
+### `register-web-joint-coloring`
+
+Copy coalescing can recolor the existing reaching-definition web graph when
+both original register choices conflict with other value lifetimes. It does
+not build another liveness analysis or merge all epochs of a source variable.
+The graph retains matched-call contexts, setup-time entry values, shared static
+operands, manual/hardware anchors and constant-pool immutability. A successful
+precolored DSATUR witness removes a copy store without inserting spills; failure
+keeps the original assignment. This speculative step uses deterministic greedy
+coloring only, with no exhaustive fallback. Symbolic regions may exceed 105
+cells during analysis, but allocation uses only R0..RE and never invents Rf.
+
 ### `stable-indirect-selector-operand-scheduling`
 
 For `AND`/`OR`/`XOR`, prepare a stable indirect selector before loading the

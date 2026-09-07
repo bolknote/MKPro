@@ -31,6 +31,10 @@ struct PrecoloredRegisterAllocationOptions {
   int color_count = 15;
   std::map<std::string, int> fixed_colors;
   std::map<std::string, int> preferred_colors;
+  // A speculative optimization needs only a valid witness, not a proof that
+  // no coloring exists. In this mode failure is inconclusive and never starts
+  // the exponential fallback search.
+  bool greedy_only = false;
 };
 
 // Exact DSATUR coloring for the source-level allocator. Fixed nodes model raw

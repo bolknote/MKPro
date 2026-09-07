@@ -137,8 +137,28 @@ void register_coalesce_matches_typescript_contract() {
     require(run(extended).applied == 0, "Rf must not become a standard allocation color");
     const std::vector<IrOp> diverging{
         recall("1"), store("d"), plain(9), store("1"), recall("d"), recall("1"), stop(true)};
+    const auto recolored = run(diverging);
+    require(recolored.applied == 1 && recolored.ops.size() + 1 == diverging.size() &&
+                std::any_of(recolored.optimizations.begin(), recolored.optimizations.end(),
+                            [](const auto& item) { return item.name == "register-web-joint-coloring"; }),
+            "a movable overwrite epoch must be recolored instead of blocking an equal-value copy");
+    require(recolored.ops[2].kind == IrKind::Store && recolored.ops[2].register_name != "1",
+            "joint coloring must actually move the conflicting overwrite, not lose its value");
+
+    IrOp loop = call("after-counter");
+    loop.kind = IrKind::Loop;
+    loop.opcode = 0x5b;
+    loop.counter = "L1";
+    const std::vector<IrOp> anchored_overwrite{
+        recall("1"), store("d"), plain(1), store("1"), loop,
+        label("after-counter"), recall("d"), recall("1"), stop(true)};
+    require(run(anchored_overwrite).applied == 0,
+            "a hardware counter epoch must not move to make a copy appear removable");
+    for (const char reg : std::string("023456789abcde"))
+      options.preloaded_constant_registers[std::string(1, reg)] = "5";
     require(run(diverging).applied == 0,
-            "a source overwrite while the destination remains live must keep the copy");
+            "joint coloring must not borrow a compiler-owned constant pool as mutable storage");
+    options.preloaded_constant_registers.clear();
 
     IrOp choose = call("otherwise");
     choose.kind = IrKind::CondJump;
@@ -196,10 +216,107 @@ void register_coalesce_matches_typescript_contract() {
       require(observe(epochs, input) == observe(optimized.ops, input),
               "web coalescing must preserve stack, displays, return continuations and selector use");
 
+    const std::vector<IrOp> nested_recoloring{
+        recall("1"), store("d"), call("overwrite"), call("combine"), stop(false),
+        plain(0x0c), plain(2), stop(true),
+        label("overwrite"), plain(9), store("1"), finish,
+        label("combine"), recall("d"), recall("1"), plain(0x10), finish};
+    const auto nested_optimized = run(nested_recoloring);
+    require(nested_optimized.applied == 1 &&
+                nested_optimized.ops.size() + 1 == nested_recoloring.size(),
+            "joint epoch allocation must cross matched nested calls without adding spills");
+    const auto observe_recoloring = [&](const std::vector<IrOp>& code,
+                                         const std::string& input) {
+      const auto labels = core::passes::calculate_label_addresses(code);
+      auto resolved = code;
+      for (auto& op : resolved)
+        if (op.kind != IrKind::Label && opcode_by_code(op.opcode).takes_address)
+          op.target_meta.formal_opcode = official_address_to_opcode(
+              labels.at(std::get<std::string>(op.target)));
+      std::vector<int> bytes;
+      for (const auto& cell : lower_ir_to_layout(resolved).cells)
+        bytes.push_back(cell.opcode);
+      require(bytes.size() <= 105, "recolored fixture must fit stock MK-61 memory");
+      emulator::MK61 calc;
+      require(calc.load_program(bytes).diagnostics.empty(), "recolored fixture must load");
+      calc.set_register("1", input);
+      calc.set_register("Y", "73");
+      calc.set_register("Z", "29");
+      calc.set_register("T", "17");
+      calc.press_sequence({"В/О", "С/П"});
+      std::vector<std::string> observations;
+      for (int phase = 0; phase < 2; ++phase) {
+        require(calc.run_until_stable(2000, 6).stopped,
+                "joint recoloring must preserve every return and stop");
+        observations.push_back(calc.display_text());
+        for (const char* reg : {"X", "Y", "Z", "T", "X1"})
+          observations.push_back(calc.read_register(reg));
+        if (phase == 0)
+          calc.press("С/П");
+      }
+      return observations;
+    };
+    for (const auto& input : {"0", "-7", "0.125", "12345"})
+      require(observe_recoloring(nested_recoloring, input) ==
+                  observe_recoloring(nested_optimized.ops, input),
+              "joint coloring must preserve stack, X1, VP-observed X2 and matched returns");
+    const auto repeated = run(nested_recoloring);
+    require(repeated.ops.size() == nested_optimized.ops.size(),
+            "joint coloring must have deterministic size");
+    for (std::size_t i = 0; i < repeated.ops.size(); ++i)
+      require(repeated.ops[i].opcode == nested_optimized.ops[i].opcode &&
+                  repeated.ops[i].register_name == nested_optimized.ops[i].register_name,
+              "joint coloring must have deterministic assignments");
+
     auto logical = epochs;
     logical.insert(logical.begin() + 8, 110, plain(0x54));
     require(run(logical).applied == 1,
             "logical helper addresses above 105 must not hide a relocatable copy opportunity");
+    auto large_recoloring = nested_recoloring;
+    large_recoloring.insert(large_recoloring.begin() + 8, 110, plain(0x54));
+    require(run(large_recoloring).applied == 1,
+            "joint coloring must also analyze symbolic helper addresses above 105");
+  }
+
+  {
+    const std::string source = R"mkpro(program ValueEpochs {
+      state {
+        input: packed = 2
+        remembered: packed
+      }
+      loop {
+        remembered = input
+        advance()
+        show(remembered)
+        show(input)
+        halt(0)
+      }
+      fn advance() {
+        input += 9
+      }
+    })mkpro";
+    for (const bool coalesce : {false, true}) {
+      CompileOptions options;
+      options.disable_candidate_search = true;
+      options.coalesce_copies = coalesce;
+      const auto result = compile_source(source, options);
+      require(result.implemented && result.diagnostics.empty() && result.steps.size() <= 105,
+              "the source-level value epoch fixture must compile for stock MK-61");
+      std::vector<int> codes;
+      for (const auto& step : result.steps)
+        codes.push_back(step.opcode);
+      emulator::MK61 calc;
+      require(calc.load_program(codes).diagnostics.empty(), "compiled value epochs must load");
+      for (const auto& preload : result.preloads)
+        calc.set_register(preload.register_name, preload.value);
+      calc.press_sequence({"В/О", "С/П"});
+      for (const int expected : {2, 11, 0}) {
+        require(calc.run_until_stable(2000, 6).stopped &&
+                    std::stod(calc.display_text()) == expected,
+                "compiler allocation must preserve values retained across the overwritten epoch");
+        calc.press("С/П");
+      }
+    }
   }
 
   {

@@ -333,6 +333,84 @@ PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
       }
 
   std::set<std::size_t> removed;
+  int joint_merges = 0;
+  int recolored_assignments = 0;
+  const auto joint_coloring = [&](Node a, Node b, std::size_t copy_store)
+      -> std::optional<std::vector<int>> {
+    if (webs.fixed[a] && webs.fixed[b] && webs.colors[a] != webs.colors[b])
+      return std::nullopt;
+    const auto name = [&](Node node) {
+      node = webs.root(node);
+      return "web:" + std::to_string(node == b ? a : node);
+    };
+    RegisterInterferenceGraph graph;
+    PrecoloredRegisterAllocationOptions allocation;
+    allocation.color_count = kRegisters;
+    allocation.greedy_only = true;
+    for (Node node = 0; node < webs.parents.size(); ++node) {
+      if (webs.root(node) != node)
+        continue;
+      const std::string key = name(node);
+      graph.neighbors.try_emplace(key);
+      allocation.preferred_colors.try_emplace(key, webs.colors[node]);
+      if (webs.fixed[node]) {
+        const auto [entry, inserted] = allocation.fixed_colors.emplace(key, webs.colors[node]);
+        if (!inserted && entry->second != webs.colors[node])
+          return std::nullopt;
+      }
+    }
+    allocation.preferred_colors[name(a)] = webs.fixed[b] ? webs.colors[b] : webs.colors[a];
+    const auto add_edge = [&](const std::string& left, const std::string& right) {
+      graph.neighbors[left].insert(right);
+      graph.neighbors[right].insert(left);
+    };
+    for (const auto& [left, right] : interference) {
+      const Node x = webs.root(left), y = webs.root(right);
+      if (x == y)
+        continue;
+      if (name(x) == name(y))
+        return std::nullopt;
+      add_edge(name(x), name(y));
+    }
+    // Pool immutability is a whole-program constraint: later passes may add
+    // reads which are absent from this execution graph. A removed copy does
+    // not write the pool, but every surviving retargeted definition does.
+    for (const auto& [reg, value] : context.options.preloaded_constant_registers) {
+      (void)value;
+      const auto color = physical(reg);
+      if (!color.has_value())
+        return std::nullopt;
+      const std::string anchor = "pool:" + reg;
+      graph.neighbors.try_emplace(anchor);
+      allocation.fixed_colors[anchor] = *color;
+      for (std::size_t site = 0; site < definitions.size(); ++site) {
+        if (site == copy_store || removed.contains(site))
+          continue;
+        for (const auto& [original, node] : definitions[site])
+          if (original != *color)
+            add_edge(anchor, name(node));
+      }
+    }
+    const auto colors = color_precolored_register_graph(graph, allocation);
+    if (!colors.has_value())
+      return std::nullopt;
+    auto result = webs.colors;
+    for (Node node = 0; node < webs.parents.size(); ++node) {
+      if (webs.root(node) != node)
+        continue;
+      const int color = colors->at(name(node));
+      if (color < 0 || color >= kRegisters ||
+          (webs.fixed[node] && color != webs.colors[node]))
+        return std::nullopt;
+      result[node] = color;
+    }
+    for (const auto& [left, right] : interference) {
+      const Node x = webs.root(left), y = webs.root(right);
+      if (x != y && result[x] == result[y])
+        return std::nullopt;
+    }
+    return result;
+  };
   const auto accepts = [&](Node a, Node b, int color, std::size_t copy_store) {
     if ((webs.fixed[a] && webs.colors[a] != color) ||
         (webs.fixed[b] && webs.colors[b] != color))
@@ -377,6 +455,20 @@ PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
       removed.insert(copy.store);
       break;
     }
+    if (removed.contains(copy.store))
+      continue;
+    // Local coalescing tries the two current colors. If a different epoch
+    // occupies both choices, recolor the existing web graph as a whole. This
+    // never splits a shared static operand or changes a hardware anchor.
+    if (auto colors = joint_coloring(source, destination, copy.store)) {
+      for (Node node = 0; node < webs.parents.size(); ++node)
+        if (webs.root(node) == node && webs.colors[node] != colors->at(node))
+          ++recolored_assignments;
+      webs.colors = std::move(*colors);
+      webs.join(source, destination, webs.colors[source]);
+      removed.insert(copy.store);
+      ++joint_merges;
+    }
   }
   if (removed.empty())
     return unchanged();
@@ -406,11 +498,19 @@ PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
     std::cerr << "[register-web-copy-coalesce] removed=" << removed.size()
               << " definitions=" << webs.parents.size()
               << " execution-states=" << sites.size() << '\n';
+  std::vector<AppliedOptimization> optimizations{{"register-web-copy-coalesce",
+      "Removed " + std::to_string(removed.size()) +
+      " copy store(s) by coalescing exact reaching-definition webs; preserved "
+      "entry values, hardware-sensitive epochs and matched caller lifetimes."}};
+  if (joint_merges > 0)
+    optimizations.push_back({"register-web-joint-coloring",
+        "Removed " + std::to_string(joint_merges) +
+        " additional copy store(s) using " + std::to_string(recolored_assignments) +
+        " web assignment change(s) from a joint, precolored interference graph. "
+        "Deterministic greedy witnesses preserve setup, hardware and constant-pool anchors; "
+        "failed coloring keeps the incumbent without exhaustive search."});
   return {.ops = std::move(result), .applied = static_cast<int>(removed.size()),
-          .optimizations = {{"register-web-copy-coalesce",
-              "Removed " + std::to_string(removed.size()) +
-              " copy store(s) by coalescing exact reaching-definition webs; preserved "
-              "entry values, hardware-sensitive epochs and matched caller lifetimes."}}};
+          .optimizations = std::move(optimizations)};
 }
 
 IrPass register_web_copy_coalesce_pass() {

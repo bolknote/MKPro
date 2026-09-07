@@ -330,6 +330,8 @@ public:
       nodes_.erase(node);
     }
     if (!greedy_seed()) {
+      if (options_.greedy_only)
+        return std::nullopt;
       assignments_.clear();
       nodes_.clear();
       for (const auto& [node, neighbors] : graph_.neighbors) {
