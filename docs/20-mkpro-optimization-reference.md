@@ -1106,7 +1106,7 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `stable-indirect-flow` — after register-liveness analysis, routes branches/calls through one indirect pointer.
 - `indirect-register-flow` — the same for regions where address is in a register and already safe for indirect jump.
 - `preloaded-indirect-flow` — preloads selector/address once so multiple indirect jumps become shorter. The post-layout pass is not started for already in-budget programs, but if a program needed indirect-flow rescue it keeps applying all further proved shrinking rewrites instead of stopping at the first result that fits the selected profile's official cell window.
-- `post-layout-empty-stack-tail-call` — after post-layout indirect flow has proven a one-cell loop-back selector, replaces a terminal main-loop `ПП proc; К БП r` with `БП proc` when the deleted jump targets cell 0. The final `В/О` then returns through the empty stack to the same loop head, and generated selector preloads are retargeted if the deletion shifts later entries.
+- Empty-stack tail-call/fallthrough rewrites of `ПП proc; БП 00` or `ПП proc; К БП r` targeting 00 are not valid and are not emitted. The real call frame and explicit continuation are retained; ROM regressions pin the difference between physical 00 and empty-return continuation 01.
 - `post-layout-stop-tail-reuse` — after preloaded indirect-flow has proved a reusable stop tail, replaces repeated `С/П; loop` tails and direct branches to those shims with one-cell indirect jumps/conditionals to the existing stop tail, retargeting generated selector preloads when deleted cells shift later targets.
 - `runtime-indirect-call-flow` — for repeated backward helper calls with legal numeric targets, initializes a dead stable register once at runtime and replaces direct `ПП addr` pairs with one-cell `К ПП r` calls.
 - `post-layout-empty-stack-loop-return` — converts a direct `БП` to physical 01 into a one-cell `В/О` when every execution state of the branch carries an empty return stack. The MK-61 sets the program counter to 00 after an empty-stack `В/О` and the next fetched command is the one at physical 01 (the cell at 00 is skipped; pinned by `emulator_vo_empty_continuation_facts`), so the converted command transfers to the same target with the same stack. The pass runs first in the post-layout pipeline, before any selector value or anchor address is solved, so all later layout machinery rebuilds the geometry of the shrunk artifact itself; a deletion is admitted only when every numeric direct operand and every non-symbolic indirect target lies before the erased operand cell (label-typed indirect targets follow the shifted layout through the late binder and the retunable-selector machinery). The converted `В/О` carries the ecosystem-wide `optimized БП 01` marker so later machine-to-IR raises keep modeling its physical-01 continuation. The `empty_stack_loop_return` lowering option manufactures the eligible shape by placing a one-cell `К НОП` entry pad at physical 00 so the main loop head lands on 01. Finalization also amortizes one inserted `В/О@00` across all direct `БП 00` edges proved either reachable only with an empty stack or unreachable in a freshly rebuilt complete CFG; fixed dual-use selector targets are retained by the generic component solver, and only a strictly smaller re-proved artifact is published.
@@ -1979,7 +1979,7 @@ ensures the first successful erasure precedes every address-sensitive pass,
 while later fixed-point iterations fail closed after targets are materialized.
 
 1. `redundant-prologue-elimination` — removes duplicate `display+HALT` prologues immediately before a jump target when an identical prologue is already at that jump target.
-2. `tail-call-lowering` — rewrites certain tail `call`s and trailing `return`s into direct `БП`/tail flow when the continuation is the same for all exits of that region. It can also replace a main-region `ПП proc; БП 00` shape with `БП proc` when the target has a normal `В/О` return, relying on the proved empty-return-stack path to resume at the loop head.
+2. `tail-call-lowering` rewrites framed tail calls and common explicit continuations into direct tail flow. It does not equate `ПП proc; БП 00` with an empty-stack return: ROM continues at physical 01, not 00. The separately proved final-layout `БП 01` optimization remains available.
 3. `tail-branch-inversion` — flips `cjump` condition when the then-path is only a single tail jump and the target label is uniquely referenced.
 4. `conditional-branch-trampoline` — when enabled by a layout candidate, retargets a conditional branch to a later identical conditional with the same final destination. The taken path reaches the same target after re-testing the unchanged X value, but layout now has a legal middle-entry address for fractional/preloaded selector packing.
 5. `shared-call-tail` — groups repeated `call` + `jump` tails (three or more occurrences), emits one shared helper tail, and replaces duplicates with `БП` to that helper.
@@ -3845,14 +3845,47 @@ checks include this proof metadata.
 
 Indirect selector proofs interpret delivered word spelling, not floating-point
 equality. Order-zero negative fractions (including signed zero) retain their
-sign when the integer part is extracted. Explicit negative-order mantissas
-preserve sign and order: R0-R3 decrement the eight-digit mantissa, R4-R6
-increment it, and R7-Re preserve it. Both flow and memory decoding use the
-resulting address digits. Scientific literals such as `1E3` take precedence
-over ambiguous hexadecimal spelling; use `0x1E3` for an explicitly raw BCD word.
-Unproved mantissa carry/borrow, excess precision and unsupported exponent forms
-fail closed rather than manufacturing an address. ROM tests cover selected
-targets, addressed memory banks and selector write-back for both signs.
+sign when the integer part is extracted. For an explicit negative order
+`-n`, ROM uses its BCD units digit: let `r = 1 + ((n - 1) % 10)` and
+`s = max(0, r - 3)`. It shifts the eight-digit mantissa right by `s`,
+fills vacated digits with zeroes or nines according to the sign, and changes
+the order to `-n + s`. R0-R3 then decrement the resulting mantissa,
+R4-R6 increment it, and R7-Re omit that counter update. Thus orders
+`-4..-10` land at `-3`, but `-14..-20` land at `-13`.
+Flow and memory decoding use the resulting address digits. Exact write-back
+includes leading-zero boundary words and can be evaluated again for repeated
+accesses. The selected target alone is not a data-preservation proof:
+`-2E-7` targets 00 but becomes `-9.9992000E-3`.
+
+Every immutable-constant reuse in the IR pass and post-layout backward/grouped/
+fixed-point passes requires the common literal-write-back preservation check.
+It admits equivalent ordinary nonnegative integer spellings such as `1E3`
+and `1000`, not numeric equality of fractional or sign-filled words.
+Scientific literals take precedence over ambiguous hexadecimal spelling; use
+`0x1E3` for an explicitly raw BCD word. Write-back retains the raw-word type
+so a subsequent evaluation cannot reinterpret its mantissa as an exponent;
+literal-preservation checks also retain this distinction. Mutating nondecimal
+BCD counters remain unproved and are rejected. Unsupported mantissa carry/borrow,
+excess precision and unsupported exponent forms fail closed. ROM tests cover
+both signs, counter classes, order decades, addressed memory, exact stored
+words, repeated accesses and destructive-constant counterexamples.
+
+Control-flow relocation is additionally checked against delivered selector words,
+not just instruction metadata. Immutable preloads and newly allocated selectors
+are both included. A fixed-point address coincidence must not redirect an
+existing consumer to a neighbouring command when an operand is removed.
+Invariant words use a no-write proof; runtime-charged values use execution-state
+value flow. Physical destinations and noncanonical entry counters must agree
+with the final typed CFG. Unknown affected bindings reject the transaction.
+Rebinding retains the complete preload provenance rather than rebuilding a
+partial preload record. Each subsequent layout pass receives the latest
+selector words together with their matching items; older preload snapshots
+must not win a register-keyed merge after stop-tail deletion. A compiler/ROM
+regression checks terminal defeat after the last missed shot in Wumpus.
+Marked decimal address charges may change their two digits only after both
+original and rebound runtime bindings prove. The control-flow comparison then
+normalizes those independently checked digits in a private image; unmarked
+literals, malformed charges and unknown stop/entry contracts remain rejected.
 
 For a newly allocated selector, a failed side-space candidate gets at most one
 additional trial with the canonical encoding of the same destination. Both
@@ -4770,3 +4803,43 @@ Contracts: native/tests/post_layout_control_flow_test.cpp and
 native/tests/finalization_selector_bounds_test.cpp cover complete alias sets,
 both branches, helper returns, successful cell erasure, and rejected visible,
 last-X, exponent-entry and Enter/digit observations.
+
+### Packed-BCD horizontal-fold constant independence
+
+The Horner threshold fold materializes its decimal scale as the constant `10`
+through ordinary literal/preload lowering. It must not recall the source
+popcount accumulator as an implicit constant: initialization and writeback by
+a separately matched one-hot/history kernel are not preconditions of a partial
+Horner rewrite. Constant reuse is subject to the normal immutable-preload and
+dataflow proofs, not to the presence of another optimization report.
+
+Every packed-loop header invalidates one-time entry X aliases before reloading
+its FL counter. `F L0` updates R0, not X: neither the next indexed-bank selector
+nor a rotated-loop zero selector may reuse the preceding packed result as a
+counter value. Loop rotation explicitly initializes its zero selector.
+
+The horizontal fold's backedge enters the addition before `K[x]`, including
+the digit retained in Y in each reduction step. Jumping directly to `K[x]`
+would silently discard all but the last digit instead of computing a sum.
+
+`emulator_packed_bcd_partial_horner_preserves_threshold` compiles an independent
+masked-Hamming recurrence without a companion update loop, checks all reachable
+popcounts `0..21` and mixed seven-digit inputs against an integer reference on
+the stock ROM, and rejects the unproved non-octal-mask case. The corrected game
+contract is also registered in CTest rather than only in the native test binary.
+
+### Independent post-layout deletion candidates
+
+Selector and stop-tail packing enumerates candidates in deterministic source
+and preload order. A failed relocation/value proof rejects only that candidate;
+other selectors, branches and stop tails remain eligible. After each accepted
+deletion the candidate set is rebuilt for the new geometry. The existing
+successful-rewrite bound remains unchanged, and duplicate zero/stop matches
+are considered only once per layout.
+
+Stop sharing requires matching stop disposition and roles, no raw/manual stop,
+a word-preserving stable selector, and a delivered-value proof at the added
+indirect consumer. It cannot turn a terminal or unknown stop into a resumable
+one, or trust a preload after an unproved overwrite. Synthetic compiler/ROM
+tests preserve a rejected shim branch while accepting a later independent
+one-cell merge, including repeated resumptions and stack/X1/X2 observations.
