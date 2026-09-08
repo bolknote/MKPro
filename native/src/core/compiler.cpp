@@ -22,6 +22,7 @@
 #include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/format.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
+#include "mkpro/core/indirect_read_observability.hpp"
 #include "mkpro/core/selector_writeback.hpp"
 #include "mkpro/core/search_frontier.hpp"
 #include "mkpro/core/interprocedural_dse.hpp"
@@ -45749,6 +45750,12 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
         .setup_expression = setup_expression,
         .setup_expression_text = std::move(setup_expression_text),
         .setup_source_line = setup_source_line,
+        .lowered_data_value =
+            std::any_of(context.indirect_helper_registers.begin(),
+                        context.indirect_helper_registers.end(),
+                        [&](const auto& helper) { return helper.second == logical_owner; })
+                ? std::nullopt
+                : std::optional<std::string>{value},
     };
     if (duplicate == preloads.end())
       preloads.push_back(std::move(report));
@@ -55212,6 +55219,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
         append_field(preload.setup_expression ? "1" : "0");
         append_optional_string(preload.setup_expression_text);
         append_optional_int(preload.setup_source_line);
+        append_optional_string(preload.lowered_data_value);
       }
     };
 
@@ -55295,7 +55303,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
              left.setup_target_name == right.setup_target_name &&
              left.setup_expression == right.setup_expression &&
              left.setup_expression_text == right.setup_expression_text &&
-             left.setup_source_line == right.setup_source_line;
+             left.setup_source_line == right.setup_source_line &&
+             left.lowered_data_value == right.lowered_data_value;
     };
     std::vector<PreloadReport> effective_preloads = build_effective_preloads(false);
     const std::vector<PreloadReport> setup_program_effective_preloads =
@@ -60141,6 +60150,21 @@ std::vector<std::pair<std::string, std::string>> selector_data_payload_layout_de
   return fields;
 }
 
+bool preload_preserves_lowered_data(const PreloadReport& preload) {
+  return preload.lowered_data_value.has_value() &&
+         preload.value == *preload.lowered_data_value;
+}
+
+bool register_preserves_lowered_data(const std::vector<PreloadReport>& preloads,
+                                     const std::string& register_name) {
+  const bool present = std::any_of(preloads.begin(), preloads.end(), [&](const auto& preload) {
+    return preload.register_name == register_name;
+  });
+  return present && std::all_of(preloads.begin(), preloads.end(), [&](const auto& preload) {
+    return preload.register_name != register_name || preload_preserves_lowered_data(preload);
+  });
+}
+
 std::set<std::string>
 free_stable_selector_registers(const std::map<std::string, std::string>& allocated_registers) {
   std::set<std::string> allocated;
@@ -60388,6 +60412,40 @@ std::optional<std::string> indirect_flow_targets_rejection_reason(
   }
 
   if (!saw_candidate_step) {
+    // Finalization may remove every consumer of an earlier selector plan.
+    // A vacuous target proof is valid only on a complete delivered CFG, with
+    // no remaining indirect flow and no fresh preload observable as data.
+    const bool has_indirect_flow = std::any_of(items.begin(), items.end(), [](const auto& item) {
+      return item.kind == MachineItemKind::Op &&
+             indirect_flow_register_for_opcode(item.opcode).has_value();
+    });
+    bool unused_preloads = true;
+    for (const auto& preload : preloads) {
+      if (preload_preserves_lowered_data(preload))
+        continue;
+      const int index = register_index(preload.register_name);
+      for (const auto& item : items) {
+        if (item.kind != MachineItemKind::Op)
+          continue;
+        const int family = item.opcode & 0xf0;
+        if (item.opcode == 0x60 + index || item.opcode == 0x40 + index ||
+            ((family == 0xb0 || family == 0xd0) &&
+             (!item.indirect_memory_targets.has_value() ||
+              (item.opcode & 0x0f) == index ||
+              std::find(item.indirect_memory_targets->begin(),
+                        item.indirect_memory_targets->end(), index) !=
+                  item.indirect_memory_targets->end()))) {
+          unused_preloads = false;
+          break;
+        }
+      }
+    }
+    if (!has_indirect_flow && unused_preloads && !items.empty() &&
+        std::none_of(items.begin(), items.end(), [](const auto& item) { return item.raw; }) &&
+        core::build_post_layout_control_flow(
+            items, {.address_space_model = model, .empty_return_target = 1}).proved) {
+      return std::nullopt;
+    }
     return "static proof gate rejected candidate; " +
            static_proof_gate_key_values({
                {"proofFamily", "indirect-flow-targets"},
@@ -60469,6 +60527,52 @@ std::optional<std::string> indirect_flow_targets_rejection_reason(
       std::string failure;
       if (!core::selector_writeback_is_unobserved(items, control, item, preload, model, &failure))
         return "static proof gate rejected candidate; selector-data-writeback: " + failure;
+    }
+  }
+
+  // Fresh flow-only preloads may change a word fetched by a counter-update
+  // recall. Reprove its nonobservation on the delivered artifact: allocation-time
+  // liveness is not permission for later layout passes to expose X or X2.
+  std::optional<core::AuthoritativePostLayoutControlFlow> discarded_read_flow;
+  for (const std::string& reg : selector_registers) {
+    if (borrowed_selector_registers.contains(reg))
+      continue;
+    if (register_preserves_lowered_data(preloads, reg))
+      continue;  // An unchanged source/constant preload has a separate data-use proof.
+    const int index = register_index(reg);
+    const bool may_access = std::any_of(items.begin(), items.end(), [&](const auto& item) {
+      if (item.kind != MachineItemKind::Op ||
+          ((item.opcode & 0xf0) != 0xb0 && (item.opcode & 0xf0) != 0xd0))
+        return false;
+      return !item.indirect_memory_targets.has_value() ||
+             std::find(item.indirect_memory_targets->begin(),
+                       item.indirect_memory_targets->end(), index) !=
+                 item.indirect_memory_targets->end();
+    });
+    if (!may_access)
+      continue;
+    bool has_preload = false;
+    for (const auto& preload : preloads) {
+      if (preload.register_name != reg)
+        continue;
+      has_preload = true;
+      if (preload.value.empty() || preload.value.size() > 2 ||
+          !std::all_of(preload.value.begin(), preload.value.end(),
+                       [](char digit) { return digit >= '0' && digit <= '9'; })) {
+        return "static proof gate rejected candidate; discarded-selector-read: "
+               "a potentially fetched flow selector must be ordinary decimal";
+      }
+    }
+    if (!has_preload)
+      return "static proof gate rejected candidate; discarded-selector-read: "
+             "missing delivered decimal preload";
+    if (!discarded_read_flow.has_value())
+      discarded_read_flow = core::build_post_layout_control_flow(
+          items, {.address_space_model = model, .empty_return_target = 1});
+    if (!core::prove_discarded_indirect_selector_reads_unobserved(
+            items, *discarded_read_flow, index)) {
+      return "static proof gate rejected candidate; discarded-selector-read: "
+             "final stack/X1/X2 nonobservation is not proved for R" + reg;
     }
   }
 

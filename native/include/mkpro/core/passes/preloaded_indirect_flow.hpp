@@ -1,8 +1,24 @@
 #pragma once
 
 #include "mkpro/core/passes/helpers.hpp"
+#include "mkpro/core/formal_address.hpp"
+
+#include <set>
+#include <string>
+#include <vector>
 
 namespace mkpro::core::passes {
+
+// Unconstrained registers come first; decimal-only registers may be read by
+// counter-mutation instructions, but only with proved dead machine results.
+struct StableFlowSelectorRegisters {
+  std::vector<std::string> registers;
+  std::set<std::string> decimal_only;
+};
+
+StableFlowSelectorRegisters available_stable_flow_selectors(
+    const std::vector<IrOp>& ops, const std::set<std::string>& reserved,
+    AddressSpaceModel model);
 
 struct IndirectFlowOptions {
   bool relax_max_target_guard = false;

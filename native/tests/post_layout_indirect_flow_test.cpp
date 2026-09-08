@@ -1,4 +1,5 @@
 #include "mkpro/core/compiler_static_proof_gate.hpp"
+#include "mkpro/core/compiler.hpp"
 #include "mkpro/core/emit/machine_emitter.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/late_bound_decimal_selector.hpp"
@@ -306,6 +307,199 @@ void post_layout_indirect_flow_matches_typescript_contract() {
     }
     require(observations.at(0) == observations.at(1),
             "sequential contractions must preserve stack, X1 and dot-observable X2");
+  }
+
+  {
+    CompileOptions preload_options;
+    preload_options.general_constant_preloads = true;
+    const auto compiled = compile_source(R"(
+program DataPreloadProvenance {
+  state {
+    value: counter 0..99 = 23
+  }
+  loop {
+    show(value * 99)
+    value = read()
+    show(value / 99)
+  }
+}
+)", preload_options);
+    require(compiled.implemented, "data-preload provenance fixture must compile");
+    const auto constant = std::find_if(compiled.preloads.begin(), compiled.preloads.end(),
+                                      [](const PreloadReport& preload) {
+      return preload.value == "99";
+    });
+    require(constant != compiled.preloads.end() &&
+                constant->lowered_data_value == std::optional<std::string>{"99"},
+            "lowering must retain the original value of a compiler-generated data constant");
+    require(std::none_of(compiled.registers.begin(), compiled.registers.end(),
+                         [&](const auto& allocation) {
+                           return allocation.second == constant->register_name;
+                         }),
+            "the provenance fixture must cover a constant absent from public source registers");
+  }
+
+  {
+    CompileOptions proof_options = options;
+    proof_options.preloaded_indirect_flow = true;
+    CompileResult vanished;
+    vanished.items = {MachineItem::op(0x07, "7"), terminal_stop()};
+    vanished.steps = resolve_machine_items(vanished.items, proof_options).steps;
+    vanished.optimizations.push_back(
+        OptimizationReport{.name = "preloaded-indirect-flow",
+                           .detail = "all consumers removed by subsequent finalization"});
+    require(optimizer_static_proof_gate_accepts_for_testing(proof_options, vanished),
+            "a complete final CFG with no remaining selectors has a vacuous target proof");
+
+    auto observed = vanished;
+    observed.items.front() = MachineItem::op(0x67, "recall fresh selector");
+    observed.steps = resolve_machine_items(observed.items, proof_options).steps;
+    observed.preloads.push_back(
+        PreloadReport{.register_name = "7", .value = "12", .counts_against_program = false});
+    require(!optimizer_static_proof_gate_accepts_for_testing(proof_options, observed),
+            "removed flow consumers must not hide a fresh preload observed as data");
+
+    auto unchanged_constant = observed;
+    unchanged_constant.preloads.front().lowered_data_value = "12";
+    require(optimizer_static_proof_gate_accepts_for_testing(proof_options, unchanged_constant),
+            "an unchanged compiler data constant needs no public source register name");
+    unchanged_constant.preloads.front().value = "13";
+    require(!optimizer_static_proof_gate_accepts_for_testing(proof_options, unchanged_constant),
+            "changing a data preload must invalidate its unchanged-value provenance");
+    unchanged_constant.preloads.front().value = "12";
+    unchanged_constant.preloads.front().lowered_data_value.reset();
+    require(!optimizer_static_proof_gate_accepts_for_testing(proof_options, unchanged_constant),
+            "lost preload provenance must fail closed rather than infer an original constant");
+
+    auto indexed = observed;
+    indexed.items.front() = MachineItem::op(0xdd, "indirectly recall fresh selector");
+    indexed.items.front().indirect_memory_targets = std::vector<int>{7};
+    indexed.steps = resolve_machine_items(indexed.items, proof_options).steps;
+    require(!optimizer_static_proof_gate_accepts_for_testing(proof_options, indexed),
+            "vacuous flow proofs must still reject indirectly observed fresh preloads");
+
+    auto remaining = vanished;
+    remaining.items.front() = MachineItem::op(0x87, "unannotated indirect flow");
+    remaining.items.front().indirect_flow_targets = std::vector<IrTarget>{1};
+    remaining.steps = resolve_machine_items(remaining.items, proof_options).steps;
+    require(!optimizer_static_proof_gate_accepts_for_testing(proof_options, remaining),
+            "an unannotated surviving indirect branch is not a removed consumer");
+
+    auto unresolved = vanished;
+    unresolved.items = {MachineItem::op(0x51, "jump"), MachineItem::address(99), terminal_stop()};
+    unresolved.steps = resolve_machine_items(unresolved.items, proof_options).steps;
+    require(!optimizer_static_proof_gate_accepts_for_testing(proof_options, unresolved),
+            "removed selectors do not excuse an incomplete delivered CFG");
+  }
+
+  {
+    auto increment = MachineItem::op(0xd4, "increment counter");
+    increment.discarded_indirect_recall_value = true;
+    const std::vector<MachineItem> original{
+        MachineItem::op(0x51, "jump"), MachineItem::address("counter_site"),
+        MachineItem::label("counter_head"), increment,
+        MachineItem::op(0x64, "recall counter"),
+        MachineItem::op(0x64, "recall counter"),
+        MachineItem::op(0x64, "recall counter"),
+        MachineItem::op(0x64, "recall counter"), terminal_stop(),
+        MachineItem::label("counter_site"),
+        MachineItem::op(0x51, "jump"), MachineItem::address("counter_head"),
+        MachineItem::op(0x51, "jump"), MachineItem::address("counter_head"),
+    };
+    const auto numeric_ir = [](const std::vector<MachineItem>& items) {
+      auto ir = raise_machine_to_ir(items);
+      const auto labels = core::passes::calculate_label_addresses(ir);
+      for (auto& instruction : ir) {
+        if (const auto* label = std::get_if<std::string>(&instruction.target);
+            label != nullptr && labels.contains(*label))
+          instruction.target = labels.at(*label);
+      }
+      return ir;
+    };
+    const auto decimal_preloads = [](const auto& result) {
+      return !result.preloads.empty() &&
+             std::all_of(result.preloads.begin(), result.preloads.end(), [](const auto& preload) {
+               return !preload.value.empty() && preload.value.size() <= 2 &&
+                      std::all_of(preload.value.begin(), preload.value.end(),
+                                  [](char digit) { return digit >= '0' && digit <= '9'; });
+             });
+    };
+    const auto early = core::passes::run_preloaded_indirect_flow(
+        numeric_ir(original), core::passes::PassContext{.options = options},
+        {.relax_max_target_guard = true, .allow_forward_targets = true});
+    const auto late = core::optimize_post_layout_indirect_flow(original, options, 0);
+    require(early.applied >= 2 && late.applied >= 2 &&
+                decimal_preloads(early) && decimal_preloads(late),
+            "dead counter reads should free decimal-only selectors in both allocators");
+
+    CompileOptions proof_options = options;
+    proof_options.preloaded_indirect_flow = true;
+    CompileResult verified;
+    verified.items = late.items;
+    verified.steps = resolve_machine_items(late.items, proof_options).steps;
+    verified.preloads = late.preloads;
+    verified.registers["counter"] = "4";
+    for (const auto& optimization : late.optimizations)
+      verified.optimizations.push_back(
+          OptimizationReport{.name = optimization.name, .detail = optimization.detail});
+    require(optimizer_static_proof_gate_accepts_for_testing(proof_options, verified),
+            "the final artifact must reprove discarded selector read nonobservation");
+    for (auto& item : verified.items) {
+      if (item.kind == MachineItemKind::Op && item.opcode == 0x64) {
+        item = terminal_stop();  // Same width and targets, but the read is now visible.
+        break;
+      }
+    }
+    verified.steps = resolve_machine_items(verified.items, proof_options).steps;
+    require(!optimizer_static_proof_gate_accepts_for_testing(proof_options, verified),
+            "a later layout must not retain stale discarded-read allocation permission");
+
+    auto unmarked = original;
+    unmarked.at(3).discarded_indirect_recall_value = false;
+    auto hidden_x2 = original;
+    hidden_x2.at(4) = MachineItem::op(0x0d, "clear X but retain the read in X2");
+    for (std::size_t i = 5; i <= 7; ++i)
+      hidden_x2.at(i) = MachineItem::op(0x54, "nop");
+    for (const auto* negative : {&unmarked, &hidden_x2}) {
+      require(core::passes::run_preloaded_indirect_flow(
+                  numeric_ir(*negative), core::passes::PassContext{.options = options},
+                  {.relax_max_target_guard = true, .allow_forward_targets = true}).applied == 0 &&
+                  core::optimize_post_layout_indirect_flow(*negative, options, 0).applied == 0,
+              "annotation alone or a visible X2 must not release indexed data registers");
+    }
+
+    for (const std::string counter : {"6", "7", "8"}) {
+      std::vector<std::vector<std::string>> observations;
+      for (const bool optimized : {false, true}) {
+        emulator::MK61 calc;
+        calc.set_register("4", counter);
+        calc.set_register("7", "123");
+        calc.set_register("8", "234");
+        calc.set_register("9", "345");
+        calc.set_register("x", "19");
+        calc.set_register("y", "23");
+        calc.set_register("z", "29");
+        calc.set_register("t", "31");
+        calc.set_register("x1", "37");
+        if (optimized)
+          for (const auto& preload : late.preloads)
+            calc.set_register(preload.register_name, preload.value);
+        require(calc.load_program(resolved_opcodes(optimized ? late.items : original))
+                    .diagnostics.empty(),
+                "discarded-read selector fixture must load into stock ROM");
+        calc.press_sequence({"В/О", "С/П"});
+        require(calc.run_until_stable(1000, 6).stopped,
+                "discarded-read selector fixture must stop");
+        std::vector<std::string> state{calc.display_text()};
+        for (const std::string reg : {"x", "y", "z", "t", "x1", "4"})
+          state.push_back(calc.read_register(reg));
+        calc.press(".");
+        state.push_back(calc.display_text());
+        observations.push_back(std::move(state));
+      }
+      require(observations.at(0) == observations.at(1),
+              "decimal selector allocation must preserve counter, stack, X1 and hidden X2");
+    }
   }
 
   {

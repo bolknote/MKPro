@@ -53,6 +53,122 @@ void indirect_addressing_matches_typescript_contract() {
   require(stable_memory->transformed == "14", "stable selector should preserve 14");
   require(stable_memory->memory_target == 0x0e, "stable transformed 14 should target Re");
 
+  // These are ROM word-format facts, not numeric equality assumptions.
+  // Expected targets and post-update words are independent of the evaluator.
+  struct SelectorWordCase {
+    std::string value;
+    int decrement_target;
+    int increment_target;
+    int stable_target;
+    int decrement_memory;
+    int increment_memory;
+    int stable_memory;
+    std::string decrement_word;
+    std::string increment_word;
+    std::string stable_word;
+  };
+  const std::vector<SelectorWordCase> word_cases{
+      {"-0", 89, 91, 90, 3, 11, 10,
+       "-99999989", "-99999991", "-99999990"},
+      {"-0.5", 89, 91, 90, 3, 11, 10,
+       "-99999989", "-99999991", "-99999990"},
+      {"-0.9", 89, 91, 90, 3, 11, 10,
+       "-99999989", "-99999991", "-99999990"},
+      {"-3.25", 92, 94, 93, 12, 14, 13,
+       "-99999992", "-99999994", "-99999993"},
+      {"5E-1", 99, 1, 0, 3, 1, 0,
+       "4.9999999E-1", "5.0000001E-1", "5E-1"},
+      {"-5E-1", 99, 1, 0, 3, 1, 0,
+       "-4.9999999E-1", "-5.0000001E-1", "-5E-1"},
+      {"4.1200076E-1", 75, 77, 76, 0, 1, 0,
+       "4.1200075E-1", "4.1200077E-1", "4.1200076E-1"},
+      {"-4.1200076E-1", 75, 77, 76, 0, 1, 0,
+       "-4.1200075E-1", "-4.1200077E-1", "-4.1200076E-1"},
+      {"-2.2600029E-1", 28, 30, 29, 2, 10, 3,
+       "-2.2600028E-1", "-2.2600030E-1", "-2.2600029E-1"},
+      {"1E3", 99, 1, 0, 3, 1, 0, "00000999", "00001001", "00001000"},
+      {"1.0E3", 99, 1, 0, 3, 1, 0, "00000999", "00001001", "00001000"},
+      {"1E-0", 0, 2, 1, 0, 2, 1, "00000000", "00000002", "00000001"},
+  };
+  for (const auto& word : word_cases) {
+    for (const int reg : {0, 3, 4, 6, 7, 14}) {
+      const std::string selector = reg == 14 ? "e" : std::to_string(reg);
+      const int target = reg <= 3 ? word.decrement_target
+                          : reg <= 6 ? word.increment_target : word.stable_target;
+      const int memory = reg <= 3 ? word.decrement_memory
+                          : reg <= 6 ? word.increment_memory : word.stable_memory;
+      const std::string& changed_word =
+          reg <= 3 ? word.decrement_word
+          : reg <= 6 ? word.increment_word : word.stable_word;
+      const auto decoded = core::evaluate_indirect_address(
+          selector, word.value, core::IndirectOperationKind::Flow);
+      require(decoded.has_value() && decoded->actual_flow_target == target,
+              "word spelling must select its ROM flow target: R" + selector + "=" + word.value);
+      const auto decoded_memory = core::evaluate_indirect_address(
+          selector, word.value, core::IndirectOperationKind::Memory);
+      require(decoded_memory.has_value() && decoded_memory->memory_target == memory &&
+                  decoded_memory->result_value == decoded->result_value,
+              "flow and memory addressing must share the same word mutation");
+
+      emulator::MK61 expected;
+      expected.set_register(selector, changed_word);
+      const std::string expected_word = expected.read_register(selector);
+      emulator::MK61 jump;
+      require(jump.load_program({0x80 + reg, 0x50}).diagnostics.empty(),
+              "selector-flow ROM fixture must load");
+      jump.set_register(selector, word.value);
+      jump.press_sequence({"В/О", "ПП"});
+      const std::string expected_pc =
+          (target < 10 ? "0" : "") + std::to_string(target);
+      require(jump.program_counter() == expected_pc &&
+                  jump.read_register(selector) == expected_word,
+              "single-step flow must confirm both target and write-back: R" +
+                  selector + "=" + word.value);
+
+      emulator::MK61 recall;
+      require(recall.load_program({0xd0 + reg, 0x50}).diagnostics.empty(),
+              "selector-memory ROM fixture must load");
+      for (int bank = 0; bank < 15; ++bank) {
+        const std::string name = bank < 10 ? std::to_string(bank)
+                                          : std::string(1, static_cast<char>('a' + bank - 10));
+        recall.set_register(name, std::to_string(200 + bank));
+      }
+      recall.set_register(selector, word.value);
+      const std::string memory_name = memory < 10 ? std::to_string(memory)
+                                                  : std::string(1, static_cast<char>('a' + memory - 10));
+      const std::string expected_x = memory == reg
+                                        ? expected_word : recall.read_register(memory_name);
+      recall.press_sequence({"В/О", "С/П"});
+      require(recall.run_until_stable(1000, 6).stopped &&
+                  recall.read_register("X") == expected_x &&
+                  recall.read_register(selector) == expected_word,
+              "indirect recall must confirm its selected bank and write-back: R" +
+                  selector + "=" + word.value);
+    }
+  }
+  for (const double value : {-0.0, -0.5}) {
+    const auto decoded = core::evaluate_indirect_address(
+        "7", value, core::IndirectOperationKind::Flow);
+    require(decoded.has_value() && decoded->actual_flow_target == 90 &&
+                decoded->result_value == "-99999990",
+            "the double overload must not erase the sign of fractional zero");
+  }
+  for (const std::string value : {"1E-100", "1E100", "1E+3",
+                                 "1.23456789E-1", "12E-1", "0.5E-1"}) {
+    require(!core::evaluate_indirect_address("7", value, core::IndirectOperationKind::Flow),
+            "unsupported scientific word formats must not fall back to a raw hex address");
+  }
+  require(!core::evaluate_indirect_address("0", "1E-1", core::IndirectOperationKind::Flow) &&
+              !core::evaluate_indirect_address("4", "9.9999999E-1",
+                                              core::IndirectOperationKind::Memory),
+          "unproved mantissa boundary carry/borrow must fail closed");
+  const auto raw_ambiguous = core::evaluate_indirect_address(
+      "7", "0x1E3", core::IndirectOperationKind::Flow);
+  require(raw_ambiguous.has_value() && raw_ambiguous->formal_address.has_value() &&
+              raw_ambiguous->formal_address->opcode == 0xe3 &&
+              raw_ambiguous->actual_flow_target == 31,
+          "an explicit raw BCD word must remain distinct from scientific 1E3");
+
   const auto fractional_r0 =
       core::evaluate_indirect_address("0", "0.5", core::IndirectOperationKind::Memory);
   require(fractional_r0.has_value(), "R0 fractional memory selector should evaluate");

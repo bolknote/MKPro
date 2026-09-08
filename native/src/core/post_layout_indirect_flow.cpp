@@ -1370,17 +1370,6 @@ std::set<std::string> used_registers(const std::vector<IrOp>& ops) {
   return used;
 }
 
-std::optional<std::string> first_spare_stable_register(const std::vector<IrOp>& ops,
-                                                       const std::set<std::string>& reserved = {}) {
-  const std::set<std::string> used = used_registers(ops);
-  for (const std::string_view candidate_view : kStableRegisters) {
-    const std::string candidate(candidate_view);
-    if (!used.contains(candidate) && !reserved.contains(candidate))
-      return candidate;
-  }
-  return std::nullopt;
-}
-
 std::string uppercase_hex_digit(int value) {
   if (value < 10)
     return std::to_string(value);
@@ -3044,7 +3033,8 @@ PostLayoutBorrowedSelectorProof borrowed_entry_phase_proof(const std::vector<Mac
 std::optional<RewriteStep> validate_generated_selector_rewrite_group(
     const std::vector<int>& indices, const std::vector<IrOp>& ir,
     const std::vector<std::optional<std::string>>& target_labels, const std::string& register_name,
-    const std::vector<MachineItem>& items, AddressSpaceModel model, bool borrowed_entry_phase) {
+    const std::vector<MachineItem>& items, AddressSpaceModel model, bool borrowed_entry_phase,
+    bool require_decimal_selector = false) {
   if (indices.empty())
     return std::nullopt;
 
@@ -3080,8 +3070,12 @@ std::optional<RewriteStep> validate_generated_selector_rewrite_group(
   if (!final_target.has_value())
     return std::nullopt;
 
+  if (require_decimal_selector && (*final_target < 0 || *final_target > 99))
+    return std::nullopt;
   const std::optional<std::string> selector_value =
-      selector_for_actual_target(*final_target, model);
+      require_decimal_selector
+          ? std::optional<std::string>(format_official_address(*final_target, model))
+          : selector_for_actual_target(*final_target, model);
   if (!selector_value.has_value())
     return std::nullopt;
   const std::optional<IndirectAddressEvaluation> decoded =
@@ -3150,7 +3144,11 @@ apply_forward_rewrite(const std::vector<IrOp>& ir,
                       const std::vector<MachineItem>& items, const std::set<std::string>& reserved,
                       AddressSpaceModel model) {
   const bool trace = trace_post_layout_enabled();
-  const std::optional<std::string> register_name = first_spare_stable_register(ir, reserved);
+  const auto available = passes::available_stable_flow_selectors(ir, reserved, model);
+  const std::optional<std::string> register_name =
+      available.registers.empty()
+          ? std::nullopt
+          : std::optional<std::string>(available.registers.front());
   if (!register_name.has_value()) {
     if (trace) {
       const std::set<std::string> used = used_registers(ir);
@@ -3203,7 +3201,8 @@ apply_forward_rewrite(const std::vector<IrOp>& ir,
     (void)label;
     std::optional<RewriteStep> candidate = validate_generated_selector_rewrite_group(
         indices, ir, target_labels, *register_name, items, model,
-        /*borrowed_entry_phase=*/false);
+        /*borrowed_entry_phase=*/false,
+        available.decimal_only.contains(*register_name));
     if (trace) {
       std::cerr << "[post-layout] forward candidate label=" << label
                 << " valid=" << (candidate.has_value() ? "yes" : "no");
@@ -3226,7 +3225,11 @@ apply_borrowed_entry_phase_rewrite(const std::vector<IrOp>& ir,
                                    const std::set<std::string>& reserved, AddressSpaceModel model) {
   // A globally spare register is both simpler and strictly stronger. Entry
   // phase borrowing is considered only when ordinary spare allocation failed.
-  if (first_spare_stable_register(ir, reserved).has_value())
+  const auto available = passes::available_stable_flow_selectors(ir, reserved, model);
+  if (std::any_of(available.registers.begin(), available.registers.end(),
+                  [&](const std::string& reg) {
+                    return !available.decimal_only.contains(reg);
+                  }))
     return std::nullopt;
 
   const std::set<std::string> used = used_registers(ir);

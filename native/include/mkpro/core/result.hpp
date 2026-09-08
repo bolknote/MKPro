@@ -50,6 +50,11 @@ struct PreloadReport {
   bool setup_expression = false;
   std::optional<std::string> setup_expression_text;
   std::optional<int> setup_source_line;
+  // Immutable data-preload provenance from semantic lowering. Flow-only
+  // addresses have no value here. Rebinding changes value, never this fact;
+  // only exact equality proves that the delivered data preload is unchanged.
+  // Missing provenance is unknown, not permission to treat a selector as data.
+  std::optional<std::string> lowered_data_value;
 };
 
 struct OptimizationReport {

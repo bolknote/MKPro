@@ -120,7 +120,7 @@ std::optional<std::string> transform_decimal_selector_value(
   }
   const long long integer = static_cast<long long>(truncated);
   const int delta = mutation_delta(mutation);
-  if (integer >= 0) {
+  if (!std::signbit(value)) {
     if (integer == 0 && delta < 0)
       return std::string("-99999999");
     return int128_to_string(static_cast<Int128>(integer) + static_cast<Int128>(delta));
@@ -135,23 +135,11 @@ std::optional<std::string> transform_decimal_selector_value(
   return "-" + pad_left_8(next);
 }
 
-std::optional<std::string> stable_exponent_mantissa_selector(
-    std::string_view normalized, IndirectSelectorMutation mutation) {
-  if (mutation != IndirectSelectorMutation::Stable)
-    return std::nullopt;
-  static const std::regex pattern(R"(^([1-9])(?:\.([0-9]*))?e-[0-9]{1,2}$)",
-                                  std::regex_constants::icase);
-  std::cmatch match;
-  const std::string text(normalized);
-  if (!std::regex_match(text.c_str(), match, pattern))
-    return std::nullopt;
-  std::string result = match[1].str() + (match[2].matched ? match[2].str() : "");
-  if (result.size() < 8)
-    result += std::string(8 - result.size(), '0');
-  if (result.size() > 8)
-    result.resize(8);
-  return result;
-}
+struct SelectorProjection {
+  std::string transformed;
+  std::string result_value;
+  bool negative_order_mantissa = false;
+};
 
 bool selector_value_text_is_valid(std::string_view normalized) {
   static const std::regex pattern(R"(^-?[0-9a-f]+(?:\.\d+)?$)",
@@ -166,23 +154,72 @@ bool contains_hex_alpha(std::string_view value) {
   });
 }
 
-std::optional<std::string> transform_selector_value(std::string_view value,
-                                                    IndirectSelectorMutation mutation) {
+std::optional<SelectorProjection> transform_selector_value(
+    std::string_view value, IndirectSelectorMutation mutation) {
+  const bool explicit_hex = lower_ascii(trim_ascii(std::string(value))).starts_with("0x");
   const std::string normalized = normalize_selector_value(value);
-  if (const std::optional<std::string> exponent =
-          stable_exponent_mantissa_selector(normalized, mutation)) {
-    return exponent;
+  // Scientific notation must be recognized before hexadecimal mantissa
+  // digits: an ordinary setup literal such as 1E3 means 1000, not raw 1/E/3.
+  // A 0x prefix keeps an ambiguous raw BCD word explicit.
+  static const std::regex scientific(
+      R"(^(-?)([0-9]+)(?:\.([0-9]*))?e([+-]?[0-9]+)$)");
+  std::smatch match;
+  if (!explicit_hex && std::regex_match(normalized, match, scientific)) {
+    const std::string exponent_text = match[4].str();
+    const std::size_t exponent_digits =
+        exponent_text.size() - (exponent_text.front() == '-' ? 1U : 0U);
+    if (exponent_text.front() == '+' || exponent_digits > 2U)
+      return std::nullopt;
+    const int exponent = std::stoi(exponent_text);
+    const std::string integral = match[2].str();
+    const std::string fractional = match[3].matched ? match[3].str() : "";
+    if (integral.size() + fractional.size() > 8U)
+      return std::nullopt;
+    if (exponent < 0) {
+      // This is a raw, normalized negative-order word, not a decimal
+      // fraction entered with order zero. Its sign/order are preserved;
+      // R0..R6 update the eight-digit mantissa, not the real number +/-1.
+      if (integral.size() != 1U || integral.front() == '0')
+        return std::nullopt;
+      std::string digits = integral + fractional;
+      digits.append(8U - digits.size(), '0');
+      const int next = std::stoi(digits) + mutation_delta(mutation);
+      // Mantissa carry/borrow into the leading digit changes representation.
+      // Until that separate ROM case is modeled, do not issue a certificate.
+      if (next < 10000000 || next > 99999999)
+        return std::nullopt;
+      const std::string transformed = std::to_string(next);
+      std::string result_value = normalized;
+      if (mutation != IndirectSelectorMutation::Stable) {
+        result_value = match[1].str() + transformed.substr(0, 1) + "." +
+                       transformed.substr(1) + "e" + std::to_string(exponent);
+      }
+      return SelectorProjection{transformed, result_value, true};
+    }
+    double decimal = 0.0;
+    if (!parses_finite_number(normalized, decimal) ||
+        std::fabs(decimal) > 99999999.0)
+      return std::nullopt;
+    const auto transformed = transform_decimal_selector_value(decimal, mutation);
+    return transformed.has_value()
+               ? std::optional<SelectorProjection>{{*transformed, *transformed, false}}
+               : std::nullopt;
   }
   if (!selector_value_text_is_valid(normalized))
     return std::nullopt;
   if (mutation == IndirectSelectorMutation::Stable && !normalized.starts_with("-") &&
       contains_hex_alpha(normalized)) {
-    return normalized;
+    return SelectorProjection{normalized, normalized, false};
   }
+  if (explicit_hex && contains_hex_alpha(normalized))
+    return std::nullopt; // Mutating nondecimal BCD words need their own proof.
   double decimal = 0.0;
   if (!parses_finite_number(normalized, decimal))
     return std::nullopt;
-  return transform_decimal_selector_value(decimal, mutation);
+  const auto transformed = transform_decimal_selector_value(decimal, mutation);
+  return transformed.has_value()
+             ? std::optional<SelectorProjection>{{*transformed, *transformed, false}}
+             : std::nullopt;
 }
 
 struct TailPair {
@@ -275,30 +312,25 @@ std::optional<IndirectAddressEvaluation> evaluate_indirect_address(
     std::string_view selector, std::string_view value, IndirectOperationKind operation,
     AddressSpaceModel model) {
   const IndirectSelectorMutation mutation = indirect_selector_mutation(selector);
-  if (selector == "0" && is_positive_fractional(value))
+  const auto projection = transform_selector_value(value, mutation);
+  if (!projection.has_value())
+    return std::nullopt;
+  if (selector == "0" && !projection->negative_order_mantissa &&
+      is_positive_fractional(value))
     return r0_fractional_result(std::string(selector), operation);
 
-  const std::optional<std::string> transformed = transform_selector_value(value, mutation);
-  if (!transformed.has_value())
-    return std::nullopt;
-
+  const std::string& transformed = projection->transformed;
   IndirectAddressEvaluation result;
   result.selector = std::string(selector);
   result.mutation = mutation;
   result.operation = operation;
-  result.transformed = *transformed;
-  result.result_value = *transformed;
-  // A negative-order, explicitly normalized mantissa supplies address digits
-  // without overwriting its data word. `transformed` is the decoder input,
-  // not the value written back to the selector register in this case.
-  const std::string normalized = normalize_selector_value(value);
-  if (stable_exponent_mantissa_selector(normalized, mutation).has_value())
-    result.result_value = normalized;
+  result.transformed = transformed;
+  result.result_value = projection->result_value;
 
   if (operation == IndirectOperationKind::Flow) {
-    const int flow_target = flow_target_from_transformed(*transformed);
+    const int flow_target = flow_target_from_transformed(transformed);
     const FormalAddressInfo info =
-        formal_address_info(formal_opcode_for_flow_target(*transformed, flow_target, model), model);
+        formal_address_info(formal_opcode_for_flow_target(transformed, flow_target, model), model);
     result.formal_address = info;
     result.flow_target = flow_target;
     result.actual_flow_target = info.actual;
@@ -306,7 +338,7 @@ std::optional<IndirectAddressEvaluation> evaluate_indirect_address(
     return result;
   }
 
-  const std::optional<int> memory_target = memory_target_from_transformed(*transformed);
+  const std::optional<int> memory_target = memory_target_from_transformed(transformed);
   if (!memory_target.has_value())
     return std::nullopt;
   result.memory_target = *memory_target;

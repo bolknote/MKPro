@@ -2,6 +2,7 @@
 
 #include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
+#include "mkpro/core/indirect_read_observability.hpp"
 #include "mkpro/core/opcodes.hpp"
 
 #include <algorithm>
@@ -85,7 +86,8 @@ void restore_statement_proc_call_comment(IrMeta& meta) {
   meta.comment = "proc call" + meta.comment->substr(kCallFunctionPrefix.size());
 }
 
-std::set<std::string> used_registers(const std::vector<IrOp>& ops) {
+std::set<std::string> used_registers(const std::vector<IrOp>& ops,
+                                     bool include_indirect_data = true) {
   std::set<std::string> used;
   for (const IrOp& op : ops) {
     if (op.kind == IrKind::Store || op.kind == IrKind::Recall ||
@@ -96,7 +98,8 @@ std::set<std::string> used_registers(const std::vector<IrOp>& ops) {
     }
     // An indexed access also observes or overwrites its possible data cells.
     // Missing target information means that no stable register is globally spare.
-    if (op.kind == IrKind::IndirectStore || op.kind == IrKind::IndirectRecall) {
+    if (include_indirect_data &&
+        (op.kind == IrKind::IndirectStore || op.kind == IrKind::IndirectRecall)) {
       const auto targets = known_indirect_memory_targets(op);
       if (targets.has_value())
         used.insert(targets->begin(), targets->end());
@@ -116,18 +119,6 @@ std::set<std::string> reserved_preloaded_registers(
     reserved.insert(register_name);
   }
   return reserved;
-}
-
-std::vector<std::string> spare_stable_registers(const std::vector<IrOp>& ops,
-                                                const std::set<std::string>& reserved = {}) {
-  const std::set<std::string> used = used_registers(ops);
-  std::vector<std::string> result;
-  for (const std::string_view register_name : kStableRegisters) {
-    const std::string candidate(register_name);
-    if (!used.contains(candidate) && !reserved.contains(candidate))
-      result.push_back(candidate);
-  }
-  return result;
 }
 
 bool register_is_overwritten(const std::vector<IrOp>& ops, const std::string& register_name) {
@@ -589,6 +580,51 @@ bool contains_formal_alias(const std::string& value) {
 
 } // namespace
 
+StableFlowSelectorRegisters available_stable_flow_selectors(
+    const std::vector<IrOp>& ops, const std::set<std::string>& reserved,
+    AddressSpaceModel model) {
+  const auto used = used_registers(ops);
+  const auto direct = used_registers(ops, false);
+  StableFlowSelectorRegisters result;
+  std::vector<std::string> blocked;
+  for (const std::string_view view : kStableRegisters) {
+    const std::string reg(view);
+    if (reserved.contains(reg) || direct.contains(reg))
+      continue;
+    if (used.contains(reg))
+      blocked.push_back(reg);
+    else
+      result.registers.push_back(reg);
+  }
+  if (blocked.empty() ||
+      std::any_of(ops.begin(), ops.end(), [](const IrOp& op) {
+        return op.meta.logical_register_analysis;
+      }) ||
+      std::none_of(ops.begin(), ops.end(), [](const IrOp& op) {
+        return op.kind == IrKind::IndirectRecall &&
+               op.meta.discarded_indirect_recall_value;
+      })) {
+    return result;
+  }
+
+  // Build the exact graph once per allocation, not once per candidate register.
+  // The annotation licenses a proof attempt; it is not a liveness proof itself.
+  const auto items = lower_ir_to_machine(ops);
+  const auto flow = build_post_layout_control_flow(
+      items, {.address_space_model = model, .empty_return_target = 1});
+  if (!flow.proved)
+    return result;
+  for (const std::string& reg : blocked) {
+    if (!prove_discarded_indirect_selector_reads_unobserved(
+            items, flow, register_index(reg))) {
+      continue;
+    }
+    result.registers.push_back(reg);
+    result.decimal_only.insert(reg);
+  }
+  return result;
+}
+
 PassResult runtime_indirect_call_flow(const std::vector<IrOp>& ops, const PassContext& context) {
   // Post-parity optimization (candidate #6): previously the runtime indirect-call
   // selector rewrite was suppressed for non-hoisted, non-explicit test-only lowering
@@ -675,8 +711,9 @@ PassResult run_preloaded_indirect_flow(const std::vector<IrOp>& ops,
                                        const IndirectFlowOptions& flow_options) {
   const std::set<std::string> reserved =
       reserved_preloaded_registers(context.options.preloaded_constant_registers);
-  std::vector<std::string> registers = spare_stable_registers(ops, reserved);
   const AddressSpaceModel address_model = address_space_model_for_context(context);
+  const auto available = available_stable_flow_selectors(ops, reserved, address_model);
+  const auto& registers = available.registers;
   const int official_last = official_program_last_address(address_model);
   const std::map<int, SelectorPlan> existing_selectors =
       context.options.dual_use_constant_indirect_flow
@@ -707,22 +744,6 @@ PassResult run_preloaded_indirect_flow(const std::vector<IrOp>& ops,
 
     const SelectorPlan selected_target =
         selector_for_target(ops, addresses, labels, *target, address_model);
-    const auto existing_selector = existing_selectors.find(*target);
-    std::optional<mkpro::core::IndirectAddressEvaluation> evaluated;
-    if (!registers.empty()) {
-      evaluated = mkpro::core::evaluate_indirect_address(
-          registers.front(), selected_target.selector_value,
-          mkpro::core::IndirectOperationKind::Flow, address_model);
-    }
-    const bool selected_super_dark =
-        evaluated.has_value() && evaluated->super_dark.has_value() &&
-        evaluated->super_dark->entry_address == *target;
-    if (existing_selector == existing_selectors.end() &&
-        (!evaluated.has_value() || evaluated->actual_flow_target != *target ||
-         selected_super_dark != selected_target.super_dark)) {
-      continue;
-    }
-
     EligibleTarget& entry = eligible_targets[*target];
     if (entry.indices.empty()) {
       entry.target = *target;
@@ -749,7 +770,7 @@ PassResult run_preloaded_indirect_flow(const std::vector<IrOp>& ops,
   std::vector<PreloadReport> preloads;
   int reused_existing_constants = 0;
   std::set<std::string> used_existing_registers;
-  std::size_t next_register = 0;
+  std::set<std::string> assigned_registers;
 
   for (const EligibleTarget& target : sorted_targets) {
     const auto existing_selector = existing_selectors.find(target.target);
@@ -760,20 +781,37 @@ PassResult run_preloaded_indirect_flow(const std::vector<IrOp>& ops,
       ++reused_existing_constants;
       continue;
     }
-    if (next_register >= registers.size())
+    std::optional<SelectorPlan> selected;
+    for (const std::string& reg : registers) {
+      if (assigned_registers.contains(reg))
+        continue;
+      const bool decimal_only = available.decimal_only.contains(reg);
+      if (decimal_only && (target.target < 0 || target.target > 99))
+        continue;
+      SelectorPlan candidate{
+          .register_name = reg,
+          .selector_value = decimal_only
+                                ? format_official_address(target.target, address_model)
+                                : target.selector_value,
+          .super_dark = !decimal_only && target.super_dark,
+      };
+      const auto evaluated = evaluate_indirect_address(
+          reg, candidate.selector_value, IndirectOperationKind::Flow, address_model);
+      if (!evaluated.has_value() || evaluated->actual_flow_target != target.target ||
+          (evaluated->super_dark.has_value() &&
+           evaluated->super_dark->entry_address == target.target) != candidate.super_dark) {
+        continue;
+      }
+      selected = std::move(candidate);
       break;
-    const std::string register_name = registers.at(next_register);
-    ++next_register;
-    if (!mkpro::core::is_stable_indirect_selector(register_name))
-      continue;
-    targets[target.target] = SelectorPlan{
-        .register_name = register_name,
-        .selector_value = target.selector_value,
-        .super_dark = target.super_dark,
-    };
+    }
+    if (!selected.has_value())
+      continue;  // A decimal-only register can still serve a later target below 100.
+    assigned_registers.insert(selected->register_name);
+    targets[target.target] = *selected;
     preloads.push_back(PreloadReport{
-        .register_name = register_name,
-        .value = target.selector_value,
+        .register_name = selected->register_name,
+        .value = selected->selector_value,
         .counts_against_program = false,
     });
   }

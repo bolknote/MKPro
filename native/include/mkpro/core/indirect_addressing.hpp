@@ -46,6 +46,10 @@ bool is_stable_indirect_selector(std::string_view register_name);
 std::optional<IndirectAddressEvaluation> evaluate_indirect_address(
     std::string_view selector, double value, IndirectOperationKind operation,
     AddressSpaceModel model = AddressSpaceModel::Standard);
+// Interpret delivered MK-61 word spelling, not just its mathematical value.
+// In particular 0.5 (order zero) and 5E-1 have distinct indirect write-back.
+// Scientific notation takes precedence over ambiguous raw BCD (use 0x for
+// the latter). Unsupported mantissa carry/borrow or precision fails closed.
 std::optional<IndirectAddressEvaluation> evaluate_indirect_address(
     std::string_view selector, std::string_view value, IndirectOperationKind operation,
     AddressSpaceModel model = AddressSpaceModel::Standard);
