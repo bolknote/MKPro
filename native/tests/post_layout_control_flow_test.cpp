@@ -1,4 +1,5 @@
 #include "mkpro/core/post_layout_control_flow.hpp"
+#include "mkpro/core/post_layout_indirect_flow.hpp"
 
 #include "mkpro/emulator/mk61.hpp"
 
@@ -6,6 +7,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -287,6 +289,25 @@ void formal_program_counter_contract() {
 
 void formal_address_operand_ownership_contract() {
   using core::PostLayoutControlFlowOptions;
+  {
+    const std::vector<MachineItem> bytes = {
+        op(0x53), op(0x04), stop(StopDisposition::Terminal), op(0x54), op(0x52),
+    };
+    require(!core::build_post_layout_control_flow(bytes).proved,
+            "ordinary typed IR must not silently treat an opcode as an address word");
+    PostLayoutControlFlowOptions image;
+    image.opcode_address_words = {1};
+    const auto facts = core::build_post_layout_control_flow(bytes, image);
+    require(facts.proved && facts.execution_states.front().operand_item_index == 1U &&
+                facts.execution_states.back().address == 2,
+            "an explicitly encoded operand must call and return through its real byte");
+    image.opcode_address_words = {1, 1};
+    require(!core::build_post_layout_control_flow(bytes, image).proved,
+            "duplicate encoded operand declarations must fail closed");
+    image.opcode_address_words = {0, 1};
+    require(!core::build_post_layout_control_flow(bytes, image).proved,
+            "an encoded word with no operand owner must fail closed");
+  }
   for (const auto model : {AddressSpaceModel::Standard, AddressSpaceModel::Mk61SMiniExpanded}) {
     const int limit = official_program_step_limit(model);
     const auto count = static_cast<std::size_t>(limit);
@@ -361,7 +382,123 @@ void formal_address_operand_ownership_contract() {
 
 } // namespace
 
+
+void indirect_conversion_counter_transport_contract() {
+  const auto fixture = [](bool explicit_return) {
+    std::vector<MachineItem> items;
+    for (int address = 0; address < 50; ++address) {
+      if (address == 39)
+        items.push_back(MachineItem::label("suffix"));
+      if (address == 0)
+        items.push_back(op(0x52));
+      else if (address == 1)
+        items.push_back(op(0x53));
+      else if (address == 2) {
+        auto operand = MachineItem::address(std::string("suffix"));
+        operand.formal_opcode = 0xf1;
+        items.push_back(std::move(operand));
+      } else if (address >= 39 && address <= 47)
+        items.push_back(op(address == 47 && explicit_return ? 0x52 : 0x54));
+      else
+        items.push_back(stop(StopDisposition::Terminal));
+    }
+    return items;
+  };
+  const auto opcodes = [](const std::vector<MachineItem>& items) {
+    std::map<std::string, int> labels;
+    int address = 0;
+    for (const auto& item : items) {
+      if (item.kind == MachineItemKind::Label)
+        labels.emplace(item.name, address);
+      else
+        ++address;
+    }
+    std::vector<int> codes;
+    for (const auto& item : items) {
+      if (item.kind == MachineItemKind::Op)
+        codes.push_back(item.opcode);
+      else if (item.kind == MachineItemKind::Address) {
+        if (item.formal_opcode.has_value())
+          codes.push_back(*item.formal_opcode);
+        else {
+          const auto* label = std::get_if<std::string>(&item.target);
+          codes.push_back(official_address_to_opcode(
+              label ? labels.at(*label) : std::get<int>(item.target)));
+        }
+      }
+    }
+    return codes;
+  };
+  const auto observe = [&](const std::vector<MachineItem>& items,
+                           const std::vector<PreloadReport>& preloads,
+                           const std::string& expected_pc) {
+    emulator::MK61 calc;
+    require(calc.load_program(opcodes(items)).diagnostics.empty(),
+            "counter-transport ROM fixture must load");
+    calc.set_register("x", "11").set_register("y", "13")
+        .set_register("z", "17").set_register("t", "19").set_register("x1", "23");
+    for (const auto& preload : preloads)
+      calc.set_register(preload.register_name, preload.value);
+    calc.press_sequence({"В/О", "С/П"});
+    require(calc.run_until_stable(1000, 6).stopped &&
+                calc.program_counter() == expected_pc,
+            "side-space helper must return to its own caller, not fall through");
+    std::vector<std::string> values;
+    for (const auto* name : {"x", "y", "z", "t", "x1"})
+      values.push_back(calc.read_register(name));
+    calc.press(".");
+    values.push_back(calc.read_register("x"));
+    return values;
+  };
+
+  for (const auto model : {AddressSpaceModel::Standard, AddressSpaceModel::Mk61SMiniExpanded}) {
+    for (const bool explicit_return : {false, true}) {
+      const auto before = fixture(explicit_return);
+      auto after = before;
+      after.at(1) = op(0xa7);
+      after.at(1).indirect_flow_targets = std::vector<IrTarget>{std::string("suffix")};
+      after.erase(after.begin() + 2);
+      std::vector<std::optional<std::size_t>> mapping(before.size());
+      for (std::size_t i = 0; i < before.size(); ++i)
+        if (i != 2U)
+          mapping.at(i) = i < 2U ? i : i - 1U;
+      core::PostLayoutControlFlowOptions control_options;
+      control_options.address_space_model = model;
+      control_options.empty_return_target = 1;
+      const auto old_flow = core::build_post_layout_control_flow(before, control_options);
+      const auto new_flow = core::build_post_layout_control_flow(after, control_options);
+      require(old_flow.proved && new_flow.proved,
+              "both counter variants must have complete CFGs, even when their behavior differs");
+      core::PostLayoutExecutionRelocationOptions transport;
+      transport.direct_to_indirect_flow_items = {1};
+      const auto proof = core::prove_post_layout_execution_relocation(
+          before, after, old_flow, new_flow, mapping, transport);
+      require(proof.proved == explicit_return,
+              "physical destination equality must not erase an implicit side-space return");
+      require(!core::prove_post_layout_execution_relocation(
+                  before, after, old_flow, new_flow, mapping).proved,
+              "an opcode-family change needs an explicit conversion contract");
+      transport.direct_to_indirect_flow_items.push_back(1);
+      require(!core::prove_post_layout_execution_relocation(
+                  before, after, old_flow, new_flow, mapping, transport).proved,
+              "duplicate conversion declarations must fail closed");
+
+      if (model != AddressSpaceModel::Standard)
+        continue; // The bundled ROM is stock MK-61, not the 112-cell MK61S.
+      const auto optimized = core::optimize_post_layout_indirect_flow(before, {}, 0);
+      require((optimized.applied > 0) == explicit_return,
+              "post-layout lowering must preserve boundary returns but still shorten safe calls");
+      const auto baseline = observe(before, {}, "04");
+      const auto actual = observe(optimized.items, optimized.preloads,
+                                 explicit_return ? "03" : "04");
+      require(baseline == actual,
+              "safe selector transport must preserve stack, X1 and dot-observable X2");
+    }
+  }
+}
+
 void post_layout_control_flow_matches_typed_contract() {
+  indirect_conversion_counter_transport_contract();
   formal_program_counter_contract();
   formal_address_operand_ownership_contract();
   {

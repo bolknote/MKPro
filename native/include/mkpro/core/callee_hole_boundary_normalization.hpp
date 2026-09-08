@@ -48,7 +48,8 @@ StackValueEqualityState xyz_preserving_selector_charge_state();
 // A literal/Enter/manual-input predecessor is deliberately not such a proof.
 bool selector_charge_entry_closer_opcode(int opcode);
 bool selector_charge_has_automatic_entry_lift(const std::vector<IrOp>& ops,
-                                             std::size_t entry);
+                                             std::size_t entry,
+                                             AddressSpaceModel model = AddressSpaceModel::Standard);
 
 struct CalleeHoleBoundaryNormalization {
   std::vector<IrOp> ops;

@@ -461,6 +461,63 @@ void callee_hole_boundary_fusion_preserves_stack_and_control() {
   require(!core::selector_charge_has_automatic_entry_lift(called_entry, 5),
           "one open fallthrough predecessor blocks a mixed-entry automatic lift");
 
+  // A compiler-owned terminal halt cannot resume into the physically next
+  // helper. Ordinary pauses and opaque/manual protocols still can: those
+  // predecessors must retain the explicit Enter even beside a valid call.
+  for (bool indirect : {false, true}) {
+    auto call = transfer(IrKind::Call, "separate_entry");
+    if (indirect) {
+      call.kind = IrKind::IndirectCall;
+      call.opcode = 0xa8;
+      call.register_name = "8";
+      call.meta.indirect_flow_targets = std::vector<IrTarget>{std::string("separate_entry")};
+    }
+    const std::vector<IrOp> terminal_entry{
+        call, stopping(true), named("separate_entry"), operation(2), returning()};
+    require(core::selector_charge_has_automatic_entry_lift(terminal_entry, 3),
+            "a terminal halt must not invent an open-entry predecessor to a called helper");
+    for (int barrier = 0; barrier < 3; ++barrier) {
+      auto resumable = terminal_entry;
+      if (barrier == 0) resumable[1] = stopping(false);
+      else if (barrier == 1) resumable[1].meta.raw = true;
+      else resumable[1].meta.manual_interaction.emplace();
+      require(!core::selector_charge_has_automatic_entry_lift(resumable, 3),
+              "resumable, raw and manual stops must keep their fallthrough entry constraint");
+    }
+    for (bool manual_caller : {false, true}) {
+      auto opaque_call = terminal_entry;
+      if (manual_caller) opaque_call[0].meta.manual_interaction.emplace();
+      else opaque_call[0].meta.raw = true;
+      require(!core::selector_charge_has_automatic_entry_lift(opaque_call, 3),
+              "an opaque caller cannot establish the entry mode even after terminal pruning");
+    }
+  }
+
+  for (const auto model : {AddressSpaceModel::Standard, AddressSpaceModel::Mk61SMiniExpanded}) {
+    auto numeric_call = transfer(IrKind::Call, "unused");
+    numeric_call.target = 3;
+    const std::vector<IrOp> orphan_labels{
+        numeric_call, stopping(true), named("orphan_one"), named("orphan_two"),
+        operation(2), returning()};
+    require(core::selector_charge_has_automatic_entry_lift(orphan_labels, 4, model),
+            "exact call contexts must ignore unreachable zero-width label predecessors");
+    for (bool anchored : {false, true}) {
+      auto observable = orphan_labels;
+      if (anchored) observable[2].meta.manual_interaction.emplace();
+      else observable[2].meta.raw = true;
+      require(!core::selector_charge_has_automatic_entry_lift(observable, 4, model),
+              "opaque or externally anchored labels cannot acquire a reachability proof");
+    }
+    auto paused = orphan_labels;
+    paused[1] = stopping(false);
+    require(!core::selector_charge_has_automatic_entry_lift(paused, 4, model),
+            "a real resume edge through the label chain must retain Enter");
+    auto opaque_entry = orphan_labels;
+    opaque_entry[4].meta.manual_interaction.emplace();
+    require(!core::selector_charge_has_automatic_entry_lift(opaque_entry, 4, model),
+            "an externally observed entry cannot be justified by its callers alone");
+  }
+
   const auto charge_stack = [](bool explicit_lift, int call, int closer) {
     std::vector<int> program{0x64, 0x63, 0x62, 0x61, 0x10};
     if (closer >= 0) program.push_back(closer);
@@ -481,9 +538,14 @@ void callee_hole_boundary_fusion_preserves_stack_and_control() {
     machine.set_register("8", std::to_string(target));
     machine.press("В/О"); machine.press("С/П");
     require(machine.run_until_stable(1000, 6).stopped, "selector fact must stop");
-    return std::array<std::string, 5>{machine.read_register("a"), machine.read_register("b"),
-                                    machine.read_register("c"), machine.read_register("d"),
-                                    machine.read_register("e")};
+    std::array<std::string, 8> observed{
+        machine.read_register("a"), machine.read_register("b"),
+        machine.read_register("c"), machine.read_register("d"),
+        machine.read_register("e"), machine.read_register("X1"), {}, {}};
+    machine.press(".");
+    observed[6] = machine.display_text();
+    observed[7] = machine.read_register("X");
+    return observed;
   };
   for (int closer : {0x43, 1, 0x0e}) {
     for (int call : {0, 1, 2}) {

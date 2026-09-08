@@ -1356,6 +1356,16 @@ std::set<std::string> used_registers(const std::vector<IrOp>& ops) {
         op.kind == IrKind::IndirectCall || op.kind == IrKind::IndirectCondJump) {
       used.insert(op.register_name);
     }
+    // An indexed access also observes or overwrites its possible data cells.
+    // Missing target information means that no stable register is globally spare.
+    if (op.kind == IrKind::IndirectStore || op.kind == IrKind::IndirectRecall) {
+      const auto targets = passes::known_indirect_memory_targets(op);
+      if (targets.has_value())
+        used.insert(targets->begin(), targets->end());
+      else
+        for (const std::string_view name : kStableRegisters)
+          used.insert(std::string(name));
+    }
   }
   return used;
 }
@@ -2298,6 +2308,20 @@ std::optional<std::string> retargeted_selector_value(const std::string& register
     if (decoded.has_value() && decoded->actual_flow_target == shifted_target)
       return candidate;
   }
+  // A previous canonical fallback is part of the continuation proof. Moving
+  // that target must not silently reintroduce a side-space counter and its wrap.
+  const auto previous = evaluate_indirect_address(
+      register_name, previous_value, IndirectOperationKind::Flow, model);
+  if (previous.has_value() && previous->actual_flow_target.has_value() &&
+      !noncanonical_indirect_flow_entries(previous).has_value() &&
+      shifted_target >= 0 && shifted_target <= official_program_last_address(model)) {
+    const std::string canonical = format_official_address(shifted_target, model);
+    const auto decoded = evaluate_indirect_address(
+        register_name, canonical, IndirectOperationKind::Flow, model);
+    if (decoded.has_value() && decoded->actual_flow_target == shifted_target &&
+        !noncanonical_indirect_flow_entries(decoded).has_value())
+      return canonical;
+  }
   return selector_for_actual_target(shifted_target, model);
 }
 
@@ -2309,6 +2333,88 @@ std::optional<int> first_executable_op_index_at_address(const std::vector<IrOp>&
       return static_cast<int>(index);
   }
   return std::nullopt;
+}
+
+// A physical destination alone is not a control-flow proof: aliased counters
+// can wrap to a shared return, fetch a non-adjacent operand, or resume elsewhere.
+// Compare the complete before/after graphs after every selector has been rebound.
+bool indirect_rewrite_preserves_execution(const std::vector<IrOp>& before_ops,
+                                          const std::vector<IrOp>& after_ops,
+                                          AddressSpaceModel model) {
+  if (before_ops.size() != after_ops.size())
+    return false;
+  auto before = lower_ir_to_machine(before_ops);
+  auto after = lower_ir_to_machine(after_ops);
+  std::vector<std::optional<std::size_t>> mapping(before.size());
+  PostLayoutExecutionRelocationOptions relocation;
+  relocation.allow_bypassed_direct_jumps = true;
+  std::size_t old_item = 0, new_item = 0;
+  for (std::size_t i = 0; i < before_ops.size(); ++i) {
+    const auto& old_op = before_ops.at(i);
+    const auto& new_op = after_ops.at(i);
+    const std::size_t old_width = old_op.kind == IrKind::Label
+        ? 1U : static_cast<std::size_t>(passes::cells_per_op(old_op));
+    const std::size_t new_width = new_op.kind == IrKind::Label
+        ? 1U : static_cast<std::size_t>(passes::cells_per_op(new_op));
+    if (old_item + old_width > before.size() || new_item + new_width > after.size())
+      return false;
+    if (is_direct_branch_op(old_op) && is_indirect_branch_op(new_op)) {
+      if (old_width != 2U || new_width != 1U)
+        return false;
+      mapping.at(old_item) = new_item;
+      relocation.direct_to_indirect_flow_items.push_back(old_item);
+    } else {
+      if (old_width != new_width)
+        return false;
+      for (std::size_t offset = 0; offset < old_width; ++offset)
+        mapping.at(old_item + offset) = new_item + offset;
+    }
+    old_item += old_width;
+    new_item += new_width;
+  }
+  if (old_item != before.size() || new_item != after.size())
+    return false;
+  PostLayoutControlFlowOptions control_options;
+  control_options.address_space_model = model;
+  // The ROM fact is shared by both existing empty-stack-return lowerings.
+  control_options.empty_return_target = 1;
+  const auto byte_image_options = [&](std::vector<MachineItem>& image)
+      -> std::optional<PostLayoutControlFlowOptions> {
+    auto result = control_options;
+    for (std::size_t index = 0; index < image.size(); ++index) {
+      auto& item = image.at(index);
+      if (item.kind != MachineItemKind::Address || !has_machine_role(item, "exec"))
+        continue;
+      const auto code = address_opcode_for_item(image, item, model);
+      if (!code.has_value() || *code < 0 || *code > 0xff)
+        return std::nullopt;
+      // Private proof image only: the published IR retains both roles of this
+      // cell. Both images independently use their actual, rebound operand byte.
+      item.kind = MachineItemKind::Op;
+      item.opcode = *code;
+      result.opcode_address_words.push_back(index);
+    }
+    return result;
+  };
+  const auto before_options = byte_image_options(before);
+  const auto after_options = byte_image_options(after);
+  if (!before_options.has_value() || !after_options.has_value())
+    return false;
+  const auto before_control = build_post_layout_control_flow(before, *before_options);
+  const auto after_control = build_post_layout_control_flow(after, *after_options);
+  const auto proof = prove_post_layout_execution_relocation(
+      before, after, before_control, after_control, mapping, relocation);
+  if (!proof.proved && trace_post_layout_enabled()) {
+    std::cerr << "[post-layout] execution transport rejected";
+    for (const auto& reason : proof.reasons)
+      std::cerr << "; " << reason;
+    for (const auto& reason : before_control.reasons)
+      std::cerr << "; before: " << reason;
+    for (const auto& reason : after_control.reasons)
+      std::cerr << "; after: " << reason;
+    std::cerr << "\n";
+  }
+  return proof.proved;
 }
 
 std::optional<RetargetedIr> retarget_existing_selectors_after_shift(
@@ -2357,6 +2463,7 @@ std::optional<RetargetedIr> retarget_existing_selectors_after_shift(
   }
 
   std::vector<IrOp> retargeted = after_ops;
+  const auto final_labels = passes::calculate_label_addresses(retargeted);
   for (IrOp& op : retargeted) {
     if (!is_indirect_branch_op(op))
       continue;
@@ -2367,6 +2474,15 @@ std::optional<RetargetedIr> retarget_existing_selectors_after_shift(
         op.register_name, selector_it->second, IndirectOperationKind::Flow, model);
     if (!decoded.has_value() || !decoded->actual_flow_target.has_value())
       continue;
+    IrTarget target = *decoded->actual_flow_target;
+    for (const auto& [label, address] : final_labels) {
+      if (address == *decoded->actual_flow_target) {
+        target = label;
+        break;
+      }
+    }
+    op.meta.indirect_flow_targets = std::vector<IrTarget>{target};
+    op.meta.indirect_flow_formal_targets = noncanonical_indirect_flow_entries(decoded);
     op.meta.comment = replace_indirect_target_comment(
         op.meta.comment, op.register_name, selector_it->second, *decoded->actual_flow_target);
   }
@@ -4139,7 +4255,7 @@ optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
   std::vector<int> immutable_targets;
   const AddressSpaceModel model = address_space_model_for_options(options);
   for (int round = 0; round < kMaxRewrites; ++round) {
-    const std::optional<RewriteStep> step = apply_one_rewrite(current, options, preloads);
+    std::optional<RewriteStep> step = apply_one_rewrite(current, options, preloads);
     if (!step.has_value()) {
       if (trace)
         std::cerr << "[post-layout] round=" << round << " no-step\n";
@@ -4164,12 +4280,53 @@ optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
 
     const std::vector<IrOp> before_ops =
         raise_machine_to_ir(current, effective_optimizer_feature_profile(options));
-    const std::optional<RetargetedIr> retargeted =
+    std::optional<RetargetedIr> retargeted =
         retarget_existing_selectors_after_shift(before_ops, step->ops, preloads, model);
     if (!retargeted.has_value()) {
       if (trace)
         std::cerr << "[post-layout] round=" << round << " retarget failed\n";
       break;
+    }
+
+    if (!indirect_rewrite_preserves_execution(before_ops, retargeted->ops, model)) {
+      // A side-space encoding can have a different continuation even when its
+      // first physical command is correct. Try one canonical encoding of the
+      // same newly allocated selector; never alter a user/data-owned preload.
+      const auto decoded = evaluate_indirect_address(
+          step->preload.register_name, step->preload.value, IndirectOperationKind::Flow, model);
+      if (step->existing_preload || !decoded.has_value() ||
+          !decoded->actual_flow_target.has_value())
+        break;
+      const int target = *decoded->actual_flow_target;
+      if (target < 0 || target > official_program_last_address(model))
+        break;
+      const std::string canonical = format_official_address(target, model);
+      if (canonical == step->preload.value)
+        break;
+      const auto canonical_decoded = evaluate_indirect_address(
+          step->preload.register_name, canonical, IndirectOperationKind::Flow, model);
+      if (!canonical_decoded.has_value() || canonical_decoded->actual_flow_target != target)
+        break;
+      for (std::size_t index = 0; index < before_ops.size(); ++index) {
+        IrOp& rewritten = retargeted->ops.at(index);
+        if (!is_direct_branch_op(before_ops.at(index)) ||
+            !is_indirect_branch_op(rewritten) ||
+            rewritten.register_name != step->preload.register_name)
+          continue;
+        rewritten.meta.indirect_flow_formal_targets =
+            noncanonical_indirect_flow_entries(canonical_decoded);
+        rewritten.meta.comment = replace_indirect_target_comment(
+            rewritten.meta.comment, rewritten.register_name, canonical, target);
+      }
+      if (!indirect_rewrite_preserves_execution(before_ops, retargeted->ops, model))
+        break;
+      retargeted->items = lower_ir_to_machine(retargeted->ops);
+      step->preload.value = canonical;
+      step->dark_entry = is_dark_entry_target(*canonical_decoded);
+      step->super_dark = canonical_decoded->super_dark.has_value();
+      if (trace)
+        std::cerr << "[post-layout] selected proved canonical selector R"
+                  << step->preload.register_name << "=" << canonical << "\n";
     }
 
     current = retargeted->items;

@@ -1,10 +1,14 @@
 #include "mkpro/core/emit/machine_emitter.hpp"
 #include "mkpro/core/resolved_address.hpp"
+#include "mkpro/compiler.hpp"
+#include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace mkpro::tests {
@@ -58,17 +62,130 @@ void emitter_matches_initial_typescript_contract() {
   {
     MachineEmitter emitter;
     emitter.emit_number("-12.3e-4");
-    const std::vector<int> expected = {1, 2, 0x0a, 3, 0x0c, 4, 0x0b, 0x0b};
+    const std::vector<int> expected = {1, 2, 0x0a, 3, 0x0b, 0x0c, 4, 0x0b};
     require(emitter.items.size() == expected.size(), "number emission item count mismatch");
     for (std::size_t index = 0; index < expected.size(); ++index) {
       require_item(emitter.items.at(index), MachineItemKind::Op, expected.at(index),
                    "number emission mismatch at " + std::to_string(index));
     }
-    require(emitter.items.at(4).comment == "exponent", "exponent comment should be preserved");
-    require(emitter.items.at(6).comment == "negative exponent",
+    require(emitter.items.at(5).comment == "exponent", "exponent comment should be preserved");
+    require(emitter.items.at(7).comment == "negative exponent",
             "negative exponent comment should be preserved");
-    require(emitter.items.at(7).comment == "negative number",
-            "negative number comment should be preserved");
+    require(emitter.items.at(4).comment == "negative number",
+            "negative mantissa sign must precede exponent entry");
+  }
+
+
+  {
+    struct LiteralCase {
+      std::string source;
+      std::string expected;
+    };
+    const std::vector<LiteralCase> cases{
+        {"-12.3e-4", "-0.00123"}, {"-2e-07", "-0.0000002"},
+        {"-2e+07", "-20000000"}, {"-2e0", "-2"},
+        {"2e-07", "0.0000002"}, {"2e+07", "20000000"},
+        {"-12.3", "-12.3"}, {"12.3", "12.3"}};
+    // Register text may preserve fixed or scientific input formatting.
+    // Canonicalize the decimal coefficient/exponent exactly, without doubles.
+    const auto canonical_number = [](std::string value) {
+      std::replace(value.begin(), value.end(), ',', '.');
+      std::istringstream input(value);
+      std::string coefficient;
+      std::string order;
+      input >> coefficient;
+      int exponent = (input >> order) ? std::stoi(order) : 0;
+      const auto dot = coefficient.find('.');
+      if (dot != std::string::npos) {
+        exponent -= static_cast<int>(coefficient.size() - dot - 1U);
+        coefficient.erase(dot, 1U);
+      }
+      const bool negative = !coefficient.empty() && coefficient.front() == '-';
+      if (negative || (!coefficient.empty() && coefficient.front() == '+'))
+        coefficient.erase(0, 1U);
+      require(!coefficient.empty() &&
+                  std::all_of(coefficient.begin(), coefficient.end(),
+                              [](char digit) { return digit >= '0' && digit <= '9'; }),
+              "ROM result must be a finite decimal number: " + value);
+      const auto first = coefficient.find_first_not_of('0');
+      if (first == std::string::npos)
+        return std::pair<std::string, int>{"0", 0};
+      coefficient.erase(0, first);
+      while (coefficient.back() == '0') {
+        coefficient.pop_back();
+        ++exponent;
+      }
+      if (negative)
+        coefficient.insert(coefficient.begin(), '-');
+      return std::pair<std::string, int>{coefficient, exponent};
+    };
+    const auto observe = [&](const std::vector<ResolvedStep>& steps,
+                            const std::vector<PreloadReport>& preloads,
+                            const std::string& input) {
+      std::vector<int> codes;
+      for (const auto& step : steps)
+        codes.push_back(step.opcode);
+      emulator::MK61 calculator;
+      require(calculator.load_program(codes).diagnostics.empty(),
+              "signed literal ROM program must load");
+      for (const auto& preload : preloads)
+        calculator.set_register(preload.register_name, preload.value);
+      calculator.set_register("X", input);
+      calculator.set_register("Y", "13");
+      calculator.set_register("Z", "23");
+      calculator.set_register("T", "37");
+      calculator.press_sequence({"В/О", "С/П"});
+      require(calculator.run_until_stable(2000, 6).stopped,
+              "signed literal ROM program must stop");
+      return canonical_number(calculator.read_register("X"));
+    };
+    const auto expected_value = [&](const std::string& value) {
+      return canonical_number(value);
+    };
+    for (const auto& item : cases) {
+      MachineEmitter emitter;
+      emitter.emit_number(item.source);
+      emitter.emit_stop(StopDisposition::Terminal);
+      const auto resolved = resolve_machine_items(emitter.items);
+      require(resolved.diagnostics.empty(), "signed literal must resolve: " + item.source);
+      const auto expected = expected_value(item.expected);
+      require(observe(resolved.steps, {}, "7") == expected,
+              "mantissa and exponent signs must be independent in ROM: " + item.source);
+      for (const bool disable_search : {true, false}) {
+        CompileOptions options;
+        options.disable_candidate_search = disable_search;
+        const auto result = compile_source(
+            "program SignedLiteral { loop { halt(" + item.source + ") } }", options);
+        require(result.implemented, "signed literal high-level fixture must compile: " + item.source);
+        require(observe(result.steps, result.preloads, "7") == expected,
+                "literal folding and layout must preserve signed scientific values: " + item.source);
+      }
+    }
+    // Residual dispatch may fold a sign inversion into a fractional coefficient.
+    // Assert source arithmetic, not equivalence to another generated listing.
+    const std::string dispatch = R"(program SignedResidual {
+      state { command: packed }
+      loop {
+        command = entered()
+        match command {
+          4 => halt(0.000001)
+          6 => halt(-0.000001)
+          otherwise => halt(sign(6 - command) * 0.0000002)
+        }
+      }
+    })";
+    for (const bool disable_search : {true, false}) {
+      CompileOptions options;
+      options.disable_candidate_search = disable_search;
+      const auto result = compile_source(dispatch, options);
+      require(result.implemented, "signed residual high-level fixture must compile");
+      for (const auto& item : std::vector<LiteralCase>{
+               {"1", "0.0000002"}, {"3", "0.0000002"}, {"-1", "0.0000002"},
+               {"7", "-0.0000002"}, {"9", "-0.0000002"},
+               {"4", "0.000001"}, {"6", "-0.000001"}})
+        require(observe(result.steps, result.preloads, item.source) == expected_value(item.expected),
+                "residual dispatch must retain the sign and magnitude for input " + item.source);
+    }
   }
 
   {

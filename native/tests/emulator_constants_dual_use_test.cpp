@@ -15,7 +15,11 @@ namespace mkpro::tests {
 namespace {
 
 MachineItem op(int opcode, std::string mnemonic) {
-  return MachineItem::op(opcode, std::move(mnemonic));
+  MachineItem item = MachineItem::op(opcode, std::move(mnemonic));
+  // These fixtures end at their first stop; no manual resume is part of the contract.
+  if (opcode == 0x50)
+    item.stop_disposition = StopDisposition::Terminal;
+  return item;
 }
 
 MachineItem address(const std::string& target) {
@@ -128,6 +132,14 @@ void emulator_constants_dual_use_matches_typescript_contract() {
   options.analysis = true;
 
   const std::vector<MachineItem> program = two_site_program();
+  auto unknown_stop = program;
+  for (auto& item : unknown_stop) {
+    if (item.kind == MachineItemKind::Op && item.opcode == 0x50)
+      item.stop_disposition = StopDisposition::Unknown;
+  }
+  require(core::optimize_post_layout_indirect_flow(unknown_stop, options, 0).applied == 0,
+          "unknown stop continuation must not receive a control-flow relocation proof");
+
   const core::PostLayoutIndirectFlowResult result =
       core::optimize_post_layout_indirect_flow(program, options, 0);
 

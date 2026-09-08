@@ -3,6 +3,7 @@
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
+#include "mkpro/core/passes/preloaded_indirect_flow.hpp"
 #include "mkpro/core/post_layout_indirect_flow.hpp"
 #include "mkpro/core/super_dark_layout.hpp"
 #include "mkpro/core/terminal_cyclic_layout.hpp"
@@ -25,6 +26,12 @@ namespace {
 
 MachineItem digit() {
   return MachineItem::op(0x00, "0");
+}
+
+MachineItem terminal_stop() {
+  MachineItem item = MachineItem::op(0x50, "С/П");
+  item.stop_disposition = StopDisposition::Terminal;
+  return item;
 }
 
 std::vector<MachineItem> jump(const std::string& target) {
@@ -88,7 +95,7 @@ std::vector<MachineItem> super_dark_address_overlay_program() {
   const std::vector<MachineItem> enter = jump("entry");
   items.insert(items.end(), enter.begin(), enter.end());
   items.push_back(MachineItem::label("done"));
-  items.push_back(MachineItem::op(0x50, "С/П"));
+  items.push_back(terminal_stop());
   return items;
 }
 
@@ -245,6 +252,157 @@ void post_layout_indirect_flow_matches_typescript_contract() {
   options.delivery = DeliveryMode::Manual;
   options.budget = 999999;
   options.analysis = true;
+
+  {
+    // First the two back edges need canonical selectors because the body
+    // crosses the F9 wrap. Shortening the initial jump must retain that choice.
+    std::vector<MachineItem> original = jump("long_body");
+    original.push_back(MachineItem::label("long_body"));
+    for (int index = 0; index < 49; ++index)
+      original.push_back(MachineItem::op(0x54, "К НОП"));
+    auto resume = MachineItem::op(0x50, "С/П");
+    resume.stop_disposition = StopDisposition::Resumable;
+    original.push_back(resume);
+    for (int index = 0; index < 2; ++index) {
+      const auto back = jump("long_body");
+      original.insert(original.end(), back.begin(), back.end());
+    }
+    const auto result = core::optimize_post_layout_indirect_flow(original, options, 0);
+    require(result.applied == 3 &&
+                core::machine_cell_count(result.items) == core::machine_cell_count(original) - 3,
+            "later contractions must retain earlier canonical selector fallbacks");
+    require(!result.preloads.empty() &&
+                std::all_of(result.preloads.begin(), result.preloads.end(),
+                            [](const auto& preload) { return preload.value == "01"; }),
+            "retargeted selectors must stay canonical rather than reacquiring B3 aliases");
+    std::vector<std::vector<std::string>> observations;
+    for (const bool optimized : {false, true}) {
+      emulator::MK61 calc;
+      calc.set_register("x", "19");
+      calc.set_register("y", "23");
+      calc.set_register("z", "29");
+      calc.set_register("t", "31");
+      calc.set_register("x1", "37");
+      if (optimized)
+        for (const auto& preload : result.preloads)
+          calc.set_register(preload.register_name, preload.value);
+      require(calc.load_program(resolved_opcodes(optimized ? result.items : original))
+                  .diagnostics.empty(),
+              "sequential canonical-fallback fixture must load into stock ROM");
+      calc.press_sequence({"В/О", "С/П"});
+      std::vector<std::string> state;
+      for (int stop = 0; stop < 3; ++stop) {
+        require(calc.run_until_stable(1000, 6).stopped,
+                "canonical retargeting must preserve every manual resume");
+        state.push_back(calc.display_text());
+        for (const std::string reg : {"x", "y", "z", "t", "x1"})
+          state.push_back(calc.read_register(reg));
+        calc.press(".");
+        state.push_back(calc.display_text());
+        if (stop < 2)
+          calc.press("С/П");
+      }
+      observations.push_back(std::move(state));
+    }
+    require(observations.at(0) == observations.at(1),
+            "sequential contractions must preserve stack, X1 and dot-observable X2");
+  }
+
+  {
+    const auto rom_literal = [](const std::string& value) {
+      std::string result;
+      for (const char digit : value) {
+        switch (digit) {
+        case 'A': result += "-"; break;
+        case 'B': result += "L"; break;
+        case 'C': result += "С"; break;
+        case 'D': result += "Г"; break;
+        case 'E': result += "Е"; break;
+        case 'F': result += "_"; break;
+        default: result += digit; break;
+        }
+      }
+      return result;
+    };
+    for (const int opcode : {0xdd, 0xbd}) {
+      auto memory = MachineItem::op(opcode, "indexed data through d");
+      memory.indirect_memory_targets = std::vector<int>{7, 8, 9};
+      const std::vector<MachineItem> original{
+          MachineItem::op(0x51, "jump"), MachineItem::address("site"),
+          MachineItem::label("head"), memory, terminal_stop(),
+          MachineItem::label("site"),
+          MachineItem::op(0x51, "jump"), MachineItem::address("head"),
+          MachineItem::op(0x51, "jump"), MachineItem::address("head"),
+      };
+      const auto numeric_ir = [&](const std::vector<MachineItem>& items) {
+        auto ir = raise_machine_to_ir(items);
+        const auto labels = core::passes::calculate_label_addresses(ir);
+        for (auto& op : ir) {
+          if (const auto* name = std::get_if<std::string>(&op.target);
+              name != nullptr && labels.contains(*name))
+            op.target = labels.at(*name);
+        }
+        return ir;
+      };
+      const auto no_data_selectors = [](const auto& result) {
+        return std::none_of(result.preloads.begin(), result.preloads.end(),
+                            [](const auto& preload) {
+                              return preload.register_name == "7" ||
+                                     preload.register_name == "8" ||
+                                     preload.register_name == "9" ||
+                                     preload.register_name == "d";
+                            });
+      };
+      const auto early = core::passes::run_preloaded_indirect_flow(
+          numeric_ir(original), core::passes::PassContext{.options = options},
+          {.relax_max_target_guard = true, .allow_forward_targets = true});
+      const auto late = core::optimize_post_layout_indirect_flow(original, options, 0);
+      require(early.applied >= 2 && late.applied >= 2 &&
+                  no_data_selectors(early) && no_data_selectors(late),
+              "both selector allocators must exclude indirectly accessed data registers");
+
+      auto unknown = original;
+      unknown.at(3).indirect_memory_targets.reset();
+      require(core::passes::run_preloaded_indirect_flow(
+                  numeric_ir(unknown), core::passes::PassContext{.options = options},
+                  {.relax_max_target_guard = true, .allow_forward_targets = true}).applied == 0 &&
+                  core::optimize_post_layout_indirect_flow(unknown, options, 0).applied == 0,
+              "unknown indexed data targets must reserve every stable selector register");
+
+      for (const std::string target : {"7", "8", "9"}) {
+        std::vector<std::vector<std::string>> observations;
+        for (const bool optimized : {false, true}) {
+          emulator::MK61 calc;
+          calc.set_register("7", "123");
+          calc.set_register("8", "234");
+          calc.set_register("9", "345");
+          calc.set_register("d", target);
+          calc.set_register("x", "19");
+          calc.set_register("y", "23");
+          calc.set_register("z", "29");
+          calc.set_register("t", "31");
+          calc.set_register("x1", "37");
+          if (optimized)
+            for (const auto& preload : late.preloads)
+              calc.set_register(preload.register_name, rom_literal(preload.value));
+          require(calc.load_program(resolved_opcodes(optimized ? late.items : original))
+                      .diagnostics.empty(),
+                  "indexed-data selector fixture must load into stock ROM");
+          calc.press_sequence({"В/О", "С/П"});
+          require(calc.run_until_stable(1000, 6).stopped,
+                  "indexed-data selector fixture must reach its terminal stop");
+          std::vector<std::string> state{calc.display_text()};
+          for (const std::string reg : {"x", "y", "z", "t", "x1", "7", "8", "9", "d"})
+            state.push_back(calc.read_register(reg));
+          calc.press(".");
+          state.push_back(calc.display_text());
+          observations.push_back(std::move(state));
+        }
+        require(observations.at(0) == observations.at(1),
+                "indexed data, stack and hidden X2 must survive selector allocation");
+      }
+    }
+  }
 
   {
     const std::vector<MachineItem> candidate =
@@ -458,11 +616,14 @@ void post_layout_indirect_flow_matches_typescript_contract() {
     require(decoded.has_value() && decoded->actual_flow_target.has_value() &&
                 *decoded->actual_flow_target == 0,
             "post-layout selector preload should decode back to the final target address");
-    require(std::any_of(result.optimizations.begin(), result.optimizations.end(),
-                        [](const core::passes::AppliedOptimization& optimization) {
-                          return optimization.name == "dark-entry-layout";
-                        }),
-            "post-layout indirect flow should report dark-entry layout for proven formal targets");
+    require(!decoded->formal_address.has_value() ||
+                decoded->formal_address->kind == FormalAddressKind::Official,
+            "a loop crossing F9 must use its canonical entry, not a premature B2 wrap");
+    require(std::none_of(result.optimizations.begin(), result.optimizations.end(),
+                         [](const core::passes::AppliedOptimization& optimization) {
+                           return optimization.name == "dark-entry-layout";
+                         }),
+            "a canonical fallback must not claim a dark-entry optimization");
   }
 
   {
@@ -568,6 +729,30 @@ void post_layout_indirect_flow_matches_typescript_contract() {
                           return pair.formal == 0xfa && pair.continuation_address == 1;
                         }),
             "final FA proof should identify the overlaid address byte as continuation 01");
+
+    std::vector<std::vector<std::string>> snapshots;
+    for (const auto* image : {&program, &result.items}) {
+      emulator::MK61 calc;
+      require(calc.load_program(resolved_opcodes(*image)).diagnostics.empty(),
+              "both address/code overlay ROM fixtures must load");
+      calc.set_register("x", "11").set_register("y", "13")
+          .set_register("z", "17").set_register("t", "19").set_register("x1", "23");
+      if (image == &result.items)
+        for (const auto& preload : result.preloads)
+          calc.set_register(preload.register_name, preload.value);
+      calc.press_sequence({"В/О", "С/П"});
+      require(calc.run_until_stable(1000, 6).stopped &&
+                  calc.program_counter() == (image == &program ? "55" : "53"),
+              "the FA overlay must reach the original terminal continuation");
+      std::vector<std::string> values;
+      for (const auto* reg : {"x", "y", "z", "t", "x1"})
+        values.push_back(calc.read_register(reg));
+      calc.press(".");
+      values.push_back(calc.read_register("x"));
+      snapshots.push_back(std::move(values));
+    }
+    require(snapshots.at(0) == snapshots.at(1),
+            "55-to-53 overlay must preserve stack, X1 and dot-observable X2 on the stock ROM");
   }
 
   {
@@ -587,9 +772,22 @@ void post_layout_indirect_flow_matches_typescript_contract() {
         core::optimize_post_layout_address_code_overlay(program, {}, options);
     const core::PostLayoutIndirectFlowResult unverified_trial =
         core::optimize_post_layout_indirect_flow(overlay.items, options, 0);
-    require(core::machine_cell_count(unverified_trial.items) <
-                core::machine_cell_count(baseline.items),
-            "shifted-opcode trial should be tempting on size before final verification");
+    const auto trial_codes = resolved_opcodes(unverified_trial.items);
+    std::size_t trial_address = 0;
+    std::size_t overlaid_words = 0;
+    for (const auto& item : unverified_trial.items) {
+      if (item.kind == MachineItemKind::Label)
+        continue;
+      if (item.kind == MachineItemKind::Address &&
+          std::find(item.roles.begin(), item.roles.end(), "exec") != item.roles.end()) {
+        ++overlaid_words;
+        require(trial_codes.at(trial_address) == 0x51,
+                "the early execution proof must preserve the overlaid BP byte, not shrink it to STOP");
+      }
+      ++trial_address;
+    }
+    require(overlaid_words == 1U,
+            "the rejected shifted-opcode trial must retain its one addressed/executable word");
 
     const core::PostLayoutIndirectFlowResult result =
         core::optimize_post_layout_super_dark_address_overlay(program, options, 0);
@@ -609,7 +807,7 @@ void post_layout_indirect_flow_matches_typescript_contract() {
     program.insert(program.end(), branch.begin(), branch.end());
     program.push_back(digit());
     program.push_back(MachineItem::label("skip"));
-    program.push_back(MachineItem::op(0x50, "С/П"));
+    program.push_back(terminal_stop());
 
     const core::PostLayoutIndirectFlowResult result =
         core::optimize_post_layout_indirect_flow(program, options, 0);
@@ -637,7 +835,7 @@ void post_layout_indirect_flow_matches_typescript_contract() {
     program.insert(program.end(), branch.begin(), branch.end());
     program.push_back(digit());
     program.push_back(MachineItem::label("target"));
-    program.push_back(MachineItem::op(0x50, "С/П"));
+    program.push_back(terminal_stop());
 
     const core::PostLayoutIndirectFlowResult result =
         core::optimize_post_layout_indirect_flow(program, options, 0);
@@ -657,8 +855,10 @@ void post_layout_indirect_flow_matches_typescript_contract() {
     std::vector<MachineItem> program;
     const std::vector<MachineItem> direct_call = call("fractional_target");
     program.insert(program.end(), direct_call.begin(), direct_call.end());
+    // Observe the first return instead of falling through the filler and
+    // executing an empty-stack return into the original call's address word.
     for (int index = 0; index < 75; ++index)
-      program.push_back(digit());
+      program.push_back(index == 0 ? terminal_stop() : digit());
     program.push_back(MachineItem::label("fractional_target"));
     program.push_back(MachineItem::op(0x52, "В/О"));
 
@@ -719,7 +919,7 @@ void post_layout_indirect_flow_matches_typescript_contract() {
     for (int index = 0; index < 104; ++index)
       program.push_back(digit());
     program.push_back(MachineItem::label("target"));
-    program.push_back(MachineItem::op(0x50, "С/П"));
+    program.push_back(terminal_stop());
 
     const core::PostLayoutIndirectFlowResult result =
         core::optimize_post_layout_indirect_flow(program, expanded_options, 0);
@@ -744,7 +944,7 @@ void post_layout_indirect_flow_matches_typescript_contract() {
     program.insert(program.end(), second.begin(), second.end());
     program.push_back(digit());
     program.push_back(MachineItem::label("end"));
-    program.push_back(MachineItem::op(0x50, "С/П"));
+    program.push_back(terminal_stop());
 
     const core::PostLayoutIndirectFlowResult result =
         core::optimize_post_layout_indirect_flow(program, options, 0);
@@ -838,10 +1038,10 @@ void post_layout_indirect_flow_matches_typescript_contract() {
             "zero-prefixed stop-tail reuse should replace the stop with K BP 8");
     require(std::any_of(result.preloads.begin(), result.preloads.end(),
                         [](const PreloadReport& preload) {
-                          return preload.register_name == "7" && preload.value == "C4" &&
+                          return preload.register_name == "7" && preload.value == "12" &&
                                  !preload.counts_against_program;
                         }),
-            "zero-prefixed stop-tail reuse should retarget shifted selector R7 to C4");
+            "zero-prefixed stop-tail reuse should keep shifted selector R7 canonical at 12");
   }
 
   {

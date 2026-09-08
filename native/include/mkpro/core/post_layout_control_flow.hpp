@@ -102,6 +102,10 @@ struct PostLayoutControlFlowOptions {
   // unused policy does not create an external entry or invalidate a layout
   // whose returns all have proved caller frames.
   std::optional<IrTarget> empty_return_target;
+  // Exact byte-image view used by overlay transport proofs: these Op cells
+  // also serve as address words. The caller must first encode the real final
+  // operand byte, not its numeric target. Default typed-IR validation is unchanged.
+  std::vector<std::size_t> opcode_address_words;
 };
 
 // One authoritative, fail-closed fact set for post-layout consumers. Indirect
@@ -129,6 +133,16 @@ struct PostLayoutExecutionRelocationOptions {
   // selector-value transport that its separate data/preload proof established.
   // Keys are original instruction indices and encoded before/after counters.
   std::map<std::size_t, std::map<int, int>> indirect_entry_remap;
+  // Separately proved stable-selector replacements of direct branches/calls.
+  // Only matching opcode families through R7..Re are admitted. The source
+  // operand must disappear, and every labelled continuation and return frame
+  // must still follow the command-identity mapping. Selector values and X2
+  // observability remain obligations of the caller's data proof.
+  std::vector<std::size_t> direct_to_indirect_flow_items;
+  // A hardware continuation may bypass an existing unconditional jump.
+  // Admit only a single-target BP with no external/manual observation; calls,
+  // returns, conditions and state-changing instructions are never transparent.
+  bool allow_bypassed_direct_jumps = false;
 };
 
 struct PostLayoutExecutionRelocationProof {

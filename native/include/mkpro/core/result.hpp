@@ -489,6 +489,10 @@ struct CompileOptions {
   // Ignore soft physical preferences and request a greedy witness only;
   // fixed hardware constraints and regenerated-assignment proofs still apply.
   bool compact_logical_register_allocation = false;
+  // Same-width hardware constant rematerialization; compare only final layouts.
+  bool zero_underflow_constant_rematerialization = false;
+  // Independent complete-search root, not an explicit lowering variant.
+  bool zero_underflow_optimizer_root = false;
   // Keep low-cost FL/indirect-selector classes while compacting logical
   // values. This is a separately finalized candidate, not a hard source hint.
   bool preserve_logical_register_instruction_classes = false;

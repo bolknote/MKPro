@@ -1,4 +1,8 @@
 #include "mkpro/core/indirect_addressing.hpp"
+#include "mkpro/compiler.hpp"
+#include "mkpro/core/emit/machine_emitter.hpp"
+#include "mkpro/core/passes/zero_underflow_constant.hpp"
+#include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
 
@@ -92,6 +96,280 @@ void indirect_addressing_matches_typescript_contract() {
       "7", "B2", core::IndirectOperationKind::Flow, AddressSpaceModel::Mk61SMiniExpanded);
   require(expanded_b2.has_value() && expanded_b2->actual_flow_target == 0,
           "expanded B2 indirect flow should be the first dark alias to 00");
+
+  // The numeric selector evaluator alone cannot certify rematerialization:
+  // delivered zero and a fractional seed have different ROM behavior.
+  const auto fixture = [](bool inverted) {
+    std::vector<MachineItem> items{
+        MachineItem::op(0x61, "recall"),
+        MachineItem::op(0x62, "recall"),
+        MachineItem::op(0x11, "subtract"),
+        MachineItem::op(inverted ? 0x57 : 0x5e, "test"),
+        MachineItem::address(inverted ? "zero" : "done")};
+    if (inverted) {
+      items.push_back(MachineItem::op(0x51, "jump"));
+      items.push_back(MachineItem::address("done"));
+    }
+    items.push_back(MachineItem::label("zero"));
+    items.push_back(MachineItem::op(0x68, "constant"));
+    items.push_back(MachineItem::op(0x43, "store"));
+    items.push_back(MachineItem::label("done"));
+    auto stop = MachineItem::op(0x50, "stop");
+    stop.stop_disposition = StopDisposition::Terminal;
+    items.push_back(stop);
+    return raise_machine_to_ir(items);
+  };
+  for (const bool inverted : {false, true}) {
+    const auto input = fixture(inverted);
+    const auto optimized = core::passes::rematerialize_zero_underflow_constant(
+        input, {{"8", "-99999999"}});
+    require(optimized.applied == 1 && optimized.ops.size() == input.size(),
+            "both zero-branch directions must permit a same-width rematerialization");
+    require(std::any_of(optimized.ops.begin(), optimized.ops.end(), [](const auto& op) {
+      return op.kind == IrKind::IndirectRecall && op.opcode == 0xd3 &&
+          op.meta.indirect_memory_targets == std::optional<std::vector<int>>{{3}};
+    }), "self-indexed recall must carry its exact memory target");
+    auto unknown = input;
+    unknown[2].opcode = 0x54;
+    require(core::passes::rematerialize_zero_underflow_constant(
+                unknown, {{"8", "-99999999"}}).applied == 0,
+            "zero comparison alone must not certify an unknown number representation");
+    auto raw = input;
+    raw[0].meta.raw = true;
+    require(core::passes::rematerialize_zero_underflow_constant(
+                raw, {{"8", "-99999999"}}).applied == 0,
+            "raw entry must fail closed");
+    auto wrong_register = input;
+    for (auto& op : wrong_register)
+      if (op.kind == IrKind::Store) op = make_store("2");
+    // R3 is live at the branch entry in this variant, so another destination
+    // cannot borrow it. Keep a read before any overwrite after the pair.
+    wrong_register.insert(wrong_register.end() - 1, make_recall("3"));
+    require(core::passes::rematerialize_zero_underflow_constant(
+                wrong_register, {{"8", "-99999999"}}).applied == 0,
+            "a different destination must not clobber an observed R3 value");
+    require(core::passes::rematerialize_zero_underflow_constant(
+                input, {{"8", "-99999998"}}).applied == 0,
+            "a different constant must not reuse the zero-underflow fact");
+  }
+
+
+  const auto helper_fixture = [](int destination, bool observe_scratch, bool mixed_calls) {
+    std::vector<MachineItem> items{MachineItem::op(0x0d, "clear"),
+        MachineItem::op(0x53, "call"), MachineItem::address("wrapper")};
+    if (mixed_calls) {
+      items.push_back(MachineItem::op(0x61, "unknown X"));
+      items.push_back(MachineItem::op(0x53, "call"));
+      items.push_back(MachineItem::address("wrapper"));
+    }
+    if (observe_scratch) {
+      items.push_back(MachineItem::op(0x63, "observe scratch"));
+    } else {
+      items.push_back(MachineItem::op(0x05, "overwrite value"));
+      items.push_back(MachineItem::op(0x43, "overwrite scratch"));
+    }
+    items.push_back(MachineItem::op(0x60 + destination, "result"));
+    auto stop = MachineItem::op(0x50, "stop");
+    stop.stop_disposition = StopDisposition::Terminal;
+    items.push_back(stop);
+    items.push_back(MachineItem::label("wrapper"));
+    items.push_back(MachineItem::op(0x45, "transparent store"));
+    items.push_back(MachineItem::op(0x53, "nested call"));
+    items.push_back(MachineItem::address("constructor"));
+    items.push_back(MachineItem::op(0x52, "return"));
+    items.push_back(MachineItem::label("constructor"));
+    items.push_back(MachineItem::op(0x68, "constant"));
+    auto output = MachineItem::op(0x40 + destination, "destination");
+    output.comment = "set display_state";
+    items.push_back(output);
+    items.push_back(MachineItem::op(0x52, "return"));
+    return raise_machine_to_ir(items);
+  };
+  const auto observe_helper = [](const std::vector<IrOp>& ops) {
+    const auto resolved = resolve_machine_items(lower_ir_to_machine(ops));
+    require(resolved.diagnostics.empty(), "helper ROM fixture must resolve");
+    std::vector<int> codes;
+    for (const auto& step : resolved.steps) codes.push_back(step.opcode);
+    emulator::MK61 calculator;
+    require(calculator.load_program(codes).diagnostics.empty(), "helper ROM fixture must load");
+    calculator.set_register("8", "-99999999");
+    calculator.set_register("3", "314");
+    calculator.set_register("X", "7");
+    calculator.set_register("Y", "13");
+    calculator.set_register("Z", "23");
+    calculator.set_register("T", "37");
+    calculator.press_sequence({"В/О", "С/П"});
+    require(calculator.run_until_stable(2000, 6).stopped, "nested helper calls must return");
+    std::vector<std::string> out{calculator.display_text(), calculator.program_counter()};
+    for (const std::string reg : {"X", "Y", "Z", "T", "X1", "3", "5", "8", "9"})
+      out.push_back(calculator.read_register(reg));
+    calculator.press_sequence({"ВП"});
+    out.push_back(calculator.display_text());
+    for (const std::string reg : {"X", "Y", "Z", "T", "X1"})
+      out.push_back(calculator.read_register(reg));
+    return out;
+  };
+  for (const auto model : {AddressSpaceModel::Standard, AddressSpaceModel::Mk61SMiniExpanded}) {
+    for (const int destination : {3, 9}) {
+      const auto input = helper_fixture(destination, false, false);
+      const auto optimized = core::passes::rematerialize_zero_underflow_constant(
+          input, {{"8", "-99999999"}}, model);
+      require(optimized.applied == 1 &&
+                  optimized.ops.size() == input.size() + (destination == 3 ? 0 : 1),
+              "exact zero must survive nested calls and stores in either address profile");
+      require(observe_helper(input) == observe_helper(optimized.ops),
+              "scratch rematerialization must preserve nested returns, stack, X1 and hidden X2");
+    }
+    for (const int destination : {3, 9}) {
+      for (const int barrier : {0, 1, 2}) {
+        auto anchored = helper_fixture(destination, false, false);
+        const auto recall = std::find_if(anchored.begin(), anchored.end(), [](const IrOp& op) {
+          return op.kind == IrKind::Recall && op.register_name == "8";
+        });
+        require(recall != anchored.end() && recall + 1 != anchored.end(),
+                "typed-barrier fixture must contain the constant/store pair");
+        auto& store = *(recall + 1);
+        if (barrier == 0) store.meta.roles.push_back("display-byte");
+        else if (barrier == 1) store.meta.raw = true;
+        else store.meta.manual_interaction.emplace();
+        require(core::passes::rematerialize_zero_underflow_constant(
+                    anchored, {{"8", "-99999999"}}, model).applied == 0,
+                "typed display, raw and manual anchors must still prohibit rematerialization");
+      }
+    }
+    require(core::passes::rematerialize_zero_underflow_constant(
+                helper_fixture(9, true, false), {{"8", "-99999999"}}, model).applied == 0,
+            "a scratch read after returning to the caller must reject rematerialization");
+    require(core::passes::rematerialize_zero_underflow_constant(
+                helper_fixture(9, false, true), {{"8", "-99999999"}}, model).applied == 0,
+            "one unknown caller must poison a shared constructor even when another passes zero");
+    require(core::passes::rematerialize_zero_underflow_constant(
+                helper_fixture(9, false, false), {{"8", "-99999999"}, {"3", "0"}}, model)
+                .applied == 0,
+            "a compiler-owned constant-pool register must never be borrowed as scratch");
+  }
+
+  const auto rom = [](const std::vector<int>& prefix, const std::string& seed,
+                      bool replacement, const std::vector<std::string>& suffix) {
+    std::vector<int> codes = prefix;
+    const std::vector<int> tail = replacement ? std::vector<int>{0x43, 0xd3, 0x50}
+                                              : std::vector<int>{0x6c, 0x43, 0x50};
+    codes.insert(codes.end(), tail.begin(), tail.end());
+    emulator::MK61 calculator;
+    require(calculator.load_program(codes).diagnostics.empty(), "ROM fact must load");
+    calculator.set_register("b", seed);
+    calculator.set_register("c", "-99999999");
+    calculator.set_register("3", "314");
+    calculator.set_register("X", "7");
+    calculator.set_register("Y", "13");
+    calculator.set_register("Z", "23");
+    calculator.set_register("T", "37");
+    calculator.press_sequence({"В/О", "С/П"});
+    require(calculator.run_until_stable(2000, 6).stopped, "ROM fact must stop");
+    std::vector<std::string> observation{calculator.display_text(), calculator.program_counter()};
+    for (const std::string reg : {"X", "Y", "Z", "T", "X1", "3"})
+      observation.push_back(calculator.read_register(reg));
+    if (!suffix.empty())
+      calculator.press_sequence(suffix);
+    observation.push_back(calculator.display_text());
+    for (const std::string reg : {"X", "Y", "Z", "T", "X1", "3"})
+      observation.push_back(calculator.read_register(reg));
+    return observation;
+  };
+  for (const std::vector<std::string>& suffix :
+       {std::vector<std::string>{}, {"ВП"}, {"."}, {"F", "В↑"}, {"1"}}) {
+    require(rom({0x0d}, "19", false, suffix) == rom({0x0d}, "19", true, suffix),
+            "cleared zero must preserve stack, X1, hidden X2 and keyboard entry");
+    for (const std::string seed : {"19", "44444.4", "-0.226", "1E-50", "0.41200076"})
+      require(rom({0x6b, 0x0e, 0x11}, seed, false, suffix) ==
+                  rom({0x6b, 0x0e, 0x11}, seed, true, suffix),
+              "arithmetic zero must preserve the complete observed ROM continuation");
+    require(rom({0x6b}, "0.5", false, suffix) != rom({0x6b}, "0.5", true, suffix),
+            "fractional input is a counterexample to numeric-only selector rematerialization");
+  }
+
+  {
+    const std::string source = R"(program ZeroRepresentationRoots {
+      state {
+        value: packed
+        output: packed = 0
+      }
+      loop {
+        show(output)
+        value = entered()
+        if value == 17 { output = -99999999 }
+        else { output = value }
+      }
+    })";
+    CompileOptions ordinary_options;
+    ordinary_options.disable_candidate_search = true;
+    const auto ordinary = compile_source(source, ordinary_options);
+    CompileOptions root_options;
+    root_options.zero_underflow_optimizer_root = true;
+    const auto alternate = compile_source(source, root_options);
+    const auto selected = compile_source(source);
+    require(ordinary.implemented && alternate.implemented && selected.implemented,
+            "independent representation roots must compile");
+    require(std::any_of(alternate.optimizations.begin(), alternate.optimizations.end(),
+                        [](const OptimizationReport& optimization) {
+                          return optimization.name == "zero-underflow-constant-rematerialization";
+                        }),
+            "the independent root fixture must actually exercise rematerialization");
+    require(selected.steps.size() <= ordinary.steps.size() &&
+                selected.steps.size() <= alternate.steps.size(),
+            "a complete representation search must retain its smaller incumbent");
+    const auto comparisons = [](const CompileResult& result) {
+      return std::count_if(result.optimizations.begin(), result.optimizations.end(),
+                          [](const OptimizationReport& optimization) {
+                            return optimization.name == "zero-underflow-optimizer-roots";
+                          });
+    };
+    require(comparisons(selected) == 1 && comparisons(alternate) == 0 &&
+                comparisons(ordinary) == 0,
+            "root expansion must be bounded and distinct from explicit lowering variants");
+    const auto comparison = std::find_if(
+        selected.optimizations.begin(), selected.optimizations.end(),
+        [](const OptimizationReport& optimization) {
+          return optimization.name == "zero-underflow-optimizer-roots";
+        });
+    require(comparison != selected.optimizations.end() &&
+                comparison->detail.find("proof gate rejected") == std::string::npos &&
+                comparison->detail.find("rematerialization did not apply") == std::string::npos,
+            "complete proved roots must compete by final cost, not by the root's unset lowering flags");
+    const auto observe = [](const CompileResult& result) {
+      std::vector<int> codes;
+      for (const auto& step : result.steps) codes.push_back(step.opcode);
+      emulator::MK61 calculator;
+      require(calculator.load_program(codes).diagnostics.empty(), "root fixture must load");
+      for (const auto& preload : result.preloads)
+        calculator.set_register(preload.register_name, preload.value);
+      calculator.press_sequence({"В/О", "С/П"});
+      require(calculator.run_until_stable(2000, 6).stopped, "root fixture must show its prompt");
+      std::vector<std::string> outputs{calculator.read_register("X")};
+      for (const std::vector<std::string>& keys :
+           std::vector<std::vector<std::string>>{{"1", "7", "С/П"}, {"2", "3", "С/П"},
+                                                {"1", "7", "С/П"}}) {
+        calculator.press_sequence(keys);
+        require(calculator.run_until_stable(2000, 6).stopped,
+                "either representation must resume the same input protocol");
+        outputs.push_back(calculator.read_register("X"));
+      }
+      return outputs;
+    };
+    const auto observed = observe(selected);
+    require(observed == observe(ordinary) && observed == observe(alternate),
+            "complete root selection must preserve the ROM input/output transcript");
+    emulator::MK61 expected;
+    expected.set_register("X", "-99999999");
+    require(observed.at(1) == expected.read_register("X") &&
+                observed.at(3) == expected.read_register("X"),
+            "both equality visits must report the requested sentinel");
+    expected.set_register("X", "23");
+    require(observed.at(2) == expected.read_register("X"),
+            "the nonzero branch must still report the entered value");
+  }
+
+
 }
 
 }  // namespace mkpro::tests

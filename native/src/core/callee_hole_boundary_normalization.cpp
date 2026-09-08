@@ -523,12 +523,13 @@ bool selector_charge_entry_closer_opcode(int opcode) {
 }
 
 bool selector_charge_has_automatic_entry_lift(const std::vector<IrOp>& ops,
-                                             std::size_t entry) {
-  if (entry == 0 || entry >= ops.size())
+                                             std::size_t entry, AddressSpaceModel model) {
+  if (entry == 0 || entry >= ops.size() || passes::has_rewrite_barrier(ops[entry]))
     return false;
   const auto graph = passes::build_control_flow_graph(
       ops, {.unknown_indirect_flow_to_all = false,
-            .unresolved_direct_flow_to_all = false});
+            .unresolved_direct_flow_to_all = false,
+            .terminal_stop_fallthrough = false});
   if (!graph.targets_are_exact())
     return false;
   std::vector<std::vector<std::size_t>> predecessors(ops.size());
@@ -541,16 +542,28 @@ bool selector_charge_has_automatic_entry_lift(const std::vector<IrOp>& ops,
   std::vector<std::size_t> pending{entry};
   std::set<std::size_t> visited;
   bool saw_closer = false;
+  bool orphan_labels = false;
   while (!pending.empty()) {
     const std::size_t index = pending.back();
     pending.pop_back();
     if (!visited.insert(index).second)
       continue;
-    if (index == 0 || predecessors[index].empty())
+    if (index == 0)
       return false;
+    if (predecessors[index].empty()) {
+      // Numeric targets may bypass zero-width labels left after a terminal
+      // halt. Do not turn those label-only edges into executable entries;
+      // the complete caller graph must certify this case below.
+      if (ops[index].kind != IrKind::Label || passes::has_rewrite_barrier(ops[index]))
+        return false;
+      orphan_labels = true;
+      continue;
+    }
     for (std::size_t predecessor : predecessors[index]) {
       const auto& op = ops[predecessor];
       if (op.kind == IrKind::Label) {
+        if (passes::has_rewrite_barrier(op))
+          return false;
         pending.push_back(predecessor);
         continue;
       }
@@ -562,7 +575,48 @@ bool selector_charge_has_automatic_entry_lift(const std::vector<IrOp>& ops,
       saw_closer = true;
     }
   }
-  return saw_closer;
+  if (!saw_closer || !orphan_labels)
+    return saw_closer;
+
+  int entry_address = 0;
+  for (std::size_t index = 0; index < entry; ++index)
+    entry_address += passes::cells_per_op(ops[index]);
+  const auto items = lower_ir_to_machine(ops);
+  const auto flow = build_post_layout_control_flow(items, {.address_space_model = model});
+  if (!flow.proved || flow.execution_states.empty() ||
+      flow.execution_states.size() != flow.execution_successors.size())
+    return false;
+  for (const auto& external : flow.external_entries)
+    if (external.entry.address == entry_address)
+      return false;
+
+  std::vector<bool> has_closer(flow.execution_states.size(), false);
+  for (std::size_t source = 0; source < flow.execution_states.size(); ++source) {
+    for (const auto target : flow.execution_successors[source]) {
+      if (target >= flow.execution_states.size())
+        return false;
+      if (flow.execution_states[target].address != entry_address)
+        continue;
+      const auto item_index = flow.execution_states[source].item_index;
+      if (item_index >= items.size())
+        return false;
+      const auto& predecessor = items[item_index];
+      if (predecessor.kind != MachineItemKind::Op || predecessor.raw ||
+          predecessor.manual_interaction.has_value() ||
+          !selector_charge_entry_closer_opcode(predecessor.opcode))
+        return false;
+      has_closer[target] = true;
+    }
+  }
+  bool saw_context = false;
+  for (std::size_t index = 0; index < flow.execution_states.size(); ++index) {
+    if (flow.execution_states[index].address != entry_address)
+      continue;
+    if (!has_closer[index])
+      return false;
+    saw_context = true;
+  }
+  return saw_context;
 }
 
 } // namespace mkpro::core

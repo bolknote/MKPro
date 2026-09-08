@@ -29,6 +29,7 @@
 #include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/machine_profile.hpp"
 #include "mkpro/core/natural_target_component_layout.hpp"
+#include "mkpro/core/passes/zero_underflow_constant.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/packed_bcd_popcount.hpp"
 #include "mkpro/core/parser.hpp"
@@ -53957,6 +53958,19 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   SingleUseProcedureInlineResult single_use_inline =
       inline_single_use_procedures(optimized.items);
   std::vector<MachineItem> post_layout_items = std::move(single_use_inline.items);
+  // Inlining exposes the complete zero/scratch lifetime while labels are still
+  // symbolic. The separately finalized incumbent guards against local growth.
+  if ((options.zero_underflow_constant_rematerialization ||
+       options.zero_underflow_optimizer_root) && !exact_decimal_series) {
+    const auto rematerialized = core::passes::rematerialize_zero_underflow_constant(
+        raise_machine_to_ir(post_layout_items, optimizer_feature_profile_for_options(options)),
+        pass_options.preloaded_constant_registers, address_space_model_for_options(options));
+    if (rematerialized.applied > 0) {
+      post_layout_items = lower_ir_to_machine(rematerialized.ops);
+      for (const auto& optimization : rematerialized.optimizations)
+        result.optimizations.push_back({optimization.name, optimization.detail});
+    }
+  }
   const int pre_literal_reload_cells =
       core::machine_cell_count(post_layout_items);
   const core::passes::RunPassesResult pre_layout_literal_reload =
@@ -56849,6 +56863,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.collect_coalesce_shares || options.collect_logical_register_allocation ||
          options.logical_register_dead_store_elimination ||
          options.preserve_logical_register_instruction_classes ||
+         options.zero_underflow_constant_rematerialization ||
          !options.forced_register_shares.empty() ||
          !options.forced_logical_register_assignments.empty();
 }
@@ -57681,6 +57696,9 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";callee_hole_boundary_normalization=" << options.callee_hole_boundary_normalization
       << ";selector_charge_literal_sinking=" << options.selector_charge_literal_sinking
       << ";compact_logical_register_allocation=" << options.compact_logical_register_allocation
+      << ";zero_underflow_constant_rematerialization="
+      << options.zero_underflow_constant_rematerialization
+      << ";zero_underflow_optimizer_root=" << options.zero_underflow_optimizer_root
       << ";preserve_logical_register_instruction_classes="
       << options.preserve_logical_register_instruction_classes
       << ";logical_register_dead_store_elimination=" << options.logical_register_dead_store_elimination
@@ -59039,6 +59057,7 @@ CalleeHoleResolvedFlow callee_hole_resolved_flow(const std::vector<ResolvedStep>
       continue;
     }
     if (step.opcode == 0x50 && index < items.size() && items.at(index) != nullptr &&
+        !items.at(index)->raw && !items.at(index)->manual_interaction.has_value() &&
         items.at(index)->stop_disposition == StopDisposition::Terminal) {
       continue;
     }
@@ -79628,6 +79647,74 @@ CompileResult compile_source_for_optimizer_profile(
     }
   }
 
+  // Retain the ordinary data/selector geometry. A same-width hardware
+  // rematerialization is useful only if complete downstream layout wins.
+  if (best.implemented && allow_aggressive_post_layout &&
+      !best_options.zero_underflow_constant_rematerialization &&
+      !best_options.zero_underflow_optimizer_root &&
+      std::any_of(best.preloads.begin(), best.preloads.end(),
+                  [](const PreloadReport& preload) { return preload.value == "-99999999"; })) {
+    const CompileOptions rematerialization_base = best_options;
+    for (const bool reset_assignment : {false, true}) {
+      CompileOptions candidate_options = rematerialization_base;
+      candidate_options.zero_underflow_constant_rematerialization = true;
+      if (reset_assignment) {
+        candidate_options.forced_register_shares.clear();
+        candidate_options.forced_logical_register_assignments.clear();
+      }
+      try {
+        CompileOptions compile_options = candidate_options;
+        CompileResult candidate = compile_source_once(
+            source, compile_options, source_has_entered,
+            /*apply_final_layout_size_rescue=*/true);
+        if (!candidate.implemented &&
+            can_retry_lowering_attempt_in_analysis(candidate, compile_options)) {
+          compile_options.analysis = true;
+          candidate = compile_source_once(source, compile_options, source_has_entered,
+                                          /*apply_final_layout_size_rescue=*/true);
+        }
+        if (trace_candidates)
+          std::cerr << "[candidate-trace] zero-underflow rematerialization compiled cells="
+                    << candidate.steps.size() << " incumbent=" << best.steps.size()
+                    << " implemented=" << candidate.implemented << " applied="
+                    << has_optimization_named(candidate.optimizations,
+                                              "zero-underflow-constant-rematerialization")
+                    << '\n';
+        if (!candidate.implemented || !has_optimization_named(
+                candidate.optimizations, "zero-underflow-constant-rematerialization"))
+          continue;
+        if (!optimizer_static_gate_rejection_reason(compile_options, candidate).has_value())
+          candidate = apply_finalization_fixed_point_to_selected_result(
+              source, std::move(candidate), compile_options, options);
+        const auto rejection =
+            optimizer_static_gate_rejection_reason(compile_options, candidate);
+        if (trace_candidates)
+          std::cerr << "[candidate-trace] zero-underflow rematerialization finalized cells="
+                    << candidate.steps.size() << " incumbent=" << best.steps.size()
+                    << " rejection=" << rejection.value_or("none") << '\n';
+        if (candidate.implemented && !rejection.has_value() &&
+            candidate_beats_best(candidate, best, options)) {
+          candidate.optimizations.push_back(OptimizationReport{
+              .name = "zero-underflow-rematerialization-final-selection",
+              .detail = "Compared the complete proof-valid rematerialized layout: " +
+                        std::to_string(best.steps.size()) + " -> " +
+                        std::to_string(candidate.steps.size()) + " cells.",
+          });
+          best_options = candidate_options;
+          best = std::move(candidate);
+        }
+      } catch (const std::exception& error) {
+        if (trace_candidates)
+          std::cerr << "[candidate-trace] zero-underflow rematerialization exception: "
+                    << error.what() << '\n';
+      }
+      if (rematerialization_base.forced_register_shares.empty() &&
+          rematerialization_base.forced_logical_register_assignments.empty())
+        break;
+    }
+  }
+
+
   // Compare complete logical recolorings, with/without logical DSE and
   // instruction-class domains. Preserve every previous unconstrained candidate:
   // fewer colors or cheaper provisional opcodes never override final cell cost.
@@ -79901,7 +79988,57 @@ void append_feature_profile_search_report(CompileResult& selected,
 
 CompileResult compile_source(std::string source, const CompileOptions& requested_options) {
   const CompileOptions options = apply_source_feature_profile_hint(source, requested_options);
-  CompileResult expanded = compile_source_for_optimizer_profile(source, options);
+  const auto search_representation_roots = [&](const CompileOptions& root_options) {
+    CompileResult selected = compile_source_for_optimizer_profile(source, root_options);
+    if (!selected.implemented || has_explicit_lowering_variant(root_options) ||
+        root_options.zero_underflow_optimizer_root ||
+        !std::any_of(selected.preloads.begin(), selected.preloads.end(),
+                     [](const PreloadReport& preload) {
+                       return preload.value == "-99999999";
+                     }))
+      return selected;
+
+    // A locally larger representation may change allocation, helper selection
+    // and layout together. Search it from the start, retaining the independently
+    // optimized ordinary root. The root flag is inherited by every candidate
+    // and is a cache-key component; it also prevents recursive root expansion.
+    const std::size_t ordinary_cells = selected.steps.size();
+    CompileOptions alternate_options = root_options;
+    alternate_options.zero_underflow_optimizer_root = true;
+    std::string detail;
+    try {
+      CompileResult alternate = compile_source_for_optimizer_profile(source, alternate_options);
+      const bool applied = has_optimization_named(
+          alternate.optimizations, "zero-underflow-constant-rematerialization");
+      // Each complete root has already checked its candidates using their
+      // actual lowering options. The root options are not the selected
+      // candidate's proof mode: rechecking with them spuriously rejects even
+      // valid alternatives. This is the same boundary as feature-profile
+      // root selection below; none of the per-candidate gates is bypassed.
+      const bool accepted = alternate.implemented && applied &&
+          candidate_beats_best(alternate, selected, root_options);
+      detail = "Compared complete ordinary (" + std::to_string(ordinary_cells) +
+          " cells) and zero-underflow (" + std::to_string(alternate.steps.size()) +
+          " cells) optimizer roots; ";
+      if (accepted) {
+        selected = std::move(alternate);
+        detail += "selected the proof-valid alternative.";
+      } else if (!alternate.implemented) {
+        detail += "retained the ordinary root: alternative compilation failed.";
+      } else if (!applied) {
+        detail += "retained the ordinary root: rematerialization did not apply.";
+      } else {
+        detail += "retained the ordinary root by final size/runtime cost.";
+      }
+    } catch (const std::exception& error) {
+      detail = "Retained the independently optimized ordinary root (" +
+          std::to_string(ordinary_cells) + " cells): alternative search failed: " + error.what();
+    }
+    selected.optimizations.push_back(
+        OptimizationReport{.name = "zero-underflow-optimizer-roots", .detail = std::move(detail)});
+    return selected;
+  };
+  CompileResult expanded = search_representation_roots(options);
   if (!feature_profile_has_rf_register(options.feature_profile) ||
       options.optimizer_feature_profile_override.has_value() ||
       has_explicit_lowering_variant(options)) {
@@ -79914,7 +80051,7 @@ CompileResult compile_source(std::string source, const CompileOptions& requested
   const int standard_limit = feature_profile_program_step_limit(FeatureProfile::Standard);
   if (standard_options.budget.has_value() && *standard_options.budget > 0)
     standard_options.budget = std::min(*standard_options.budget, standard_limit);
-  CompileResult standard = compile_source_for_optimizer_profile(source, standard_options);
+  CompileResult standard = search_representation_roots(standard_options);
   if (!candidate_beats_best(standard, expanded, options)) {
     const std::optional<std::string> runtime_cost_reason =
         core::runtime_cost_tie_break_reason(

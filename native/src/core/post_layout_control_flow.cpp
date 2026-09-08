@@ -248,7 +248,11 @@ void validate_artifact_and_typed_targets(const std::vector<MachineItem>& items,
 
     if (takes_address(item)) {
       const std::optional<std::size_t> operand = next_cell_item(items, item_index);
-      if (!operand.has_value() || items.at(*operand).kind != MachineItemKind::Address) {
+      const bool encoded_word = operand.has_value() &&
+          std::find(options.opcode_address_words.begin(), options.opcode_address_words.end(),
+                    *operand) != options.opcode_address_words.end();
+      if (!operand.has_value() ||
+          (items.at(*operand).kind != MachineItemKind::Address && !encoded_word)) {
         // The last physical cell of a complete image fetches its operand
         // through the counter's side branch. Validate that actual word while
         // exploring the reachable formal execution context.
@@ -844,8 +848,17 @@ build_post_layout_control_flow(const std::vector<MachineItem>& items,
   }
 
   const ArtifactIndex index = index_artifact(items);
+  std::set<std::size_t> encoded_words;
+  for (const std::size_t word : options.opcode_address_words) {
+    if (word >= items.size() || items.at(word).kind != MachineItemKind::Op ||
+        !encoded_words.insert(word).second)
+      add_reason(result, "encoded address-word declaration is invalid or duplicated");
+  }
   std::set<std::size_t> consumed_operands;
   validate_artifact_and_typed_targets(items, index, execution_options, consumed_operands, result);
+  for (const std::size_t word : encoded_words)
+    if (!consumed_operands.contains(word))
+      add_reason(result, "encoded address word has no typed operand owner");
   if (options.empty_return_target.has_value()) {
     const std::optional<PostLayoutCommandIdentity> target =
         resolve_indirect_target(items, index, *options.empty_return_target);
@@ -1128,11 +1141,15 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
           control.execution_states.at(found->second).address != entry.entry.address)
         return std::nullopt;
       const auto& manual = entry.manual_interaction;
-      result.labels.at(found->second).emplace(
-          static_cast<int>(entry.kind), manual.has_value(),
-          manual.has_value() ? manual->protocol_id : -1,
-          manual.has_value() ? manual->phase : -1,
-          manual.has_value() ? static_cast<int>(manual->kind) : -1);
+      // Main is an initial root, not a fresh user interaction whenever an
+      // internal loop revisits the same command under another formal counter.
+      // The unique main-to-main correspondence is pinned by the initial pair.
+      if (entry.kind != ExternalEntryKind::Main)
+        result.labels.at(found->second).emplace(
+            static_cast<int>(entry.kind), manual.has_value(),
+            manual.has_value() ? manual->protocol_id : -1,
+            manual.has_value() ? manual->phase : -1,
+            manual.has_value() ? static_cast<int>(manual->kind) : -1);
       if (entry.kind == ExternalEntryKind::Main)
         result.mains.push_back(found->second);
     }
@@ -1158,6 +1175,32 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
         return reject("selector transport contains an invalid encoded counter");
   }
 
+  std::set<std::size_t> converted_direct_flows;
+  for (const std::size_t source : options.direct_to_indirect_flow_items) {
+    const auto target = mapped_item(source);
+    if (source >= before.size() || !target.has_value() ||
+        !converted_direct_flows.insert(source).second ||
+        before.at(source).kind != MachineItemKind::Op ||
+        after.at(*target).kind != MachineItemKind::Op ||
+        before.at(source).raw || after.at(*target).raw ||
+        before.at(source).manual_interaction.has_value() ||
+        after.at(*target).manual_interaction.has_value())
+      return reject("invalid direct-to-indirect command transport");
+    int family = -1;
+    switch (before.at(source).opcode) {
+    case 0x51: family = 0x80; break;
+    case 0x53: family = 0xa0; break;
+    case 0x57: family = 0x70; break;
+    case 0x59: family = 0x90; break;
+    case 0x5c: family = 0xc0; break;
+    case 0x5e: family = 0xe0; break;
+    default: break;
+    }
+    const int selector = after.at(*target).opcode - family;
+    if (family < 0 || selector < 7 || selector > 14)
+      return reject("direct-to-indirect transport changes the branch family or mutates its selector");
+  }
+
   using EdgeKey = std::tuple<PostLayoutExecutionEdgeKind, std::size_t, std::vector<int>>;
   using EdgeGroups = std::map<EdgeKey, std::vector<PostLayoutExecutionEdge>>;
   const auto edge_groups = [&](const AuthoritativePostLayoutControlFlow& control,
@@ -1179,7 +1222,12 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
       const auto frames = frame_addresses(target.return_stack, remap);
       if (!item.has_value() || !frames.has_value())
         return std::nullopt;
-      groups[EdgeKey{edge.kind, *item, *frames}].push_back(edge);
+      auto kind = edge.kind;
+      if (remap && converted_direct_flows.contains(
+                       control.execution_states.at(state_index).item_index) &&
+          kind == PostLayoutExecutionEdgeKind::DirectTarget)
+        kind = PostLayoutExecutionEdgeKind::IndirectTarget;
+      groups[EdgeKey{kind, *item, *frames}].push_back(edge);
       targets.insert(edge.target_state);
     }
     const auto& projected = control.execution_successors.at(state_index);
@@ -1212,23 +1260,51 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
     const auto& new_state = after_control.execution_states.at(new_state_index);
     const auto target = mapped_item(old_state.item_index);
     const auto frames = frame_addresses(old_state.return_stack, true);
+    if ((!target.has_value() || *target != new_state.item_index) &&
+        options.allow_bypassed_direct_jumps && frames.has_value() &&
+        *frames == new_state.return_stack &&
+        old_entries->labels.at(old_state_index).empty()) {
+      const auto& jump = before.at(old_state.item_index);
+      const auto& edges = before_control.execution_edges.at(old_state_index);
+      if (jump.kind == MachineItemKind::Op && jump.opcode == kJumpOpcode &&
+          !jump.manual_interaction.has_value() && edges.size() == 1U &&
+          edges.front().kind == PostLayoutExecutionEdgeKind::DirectTarget) {
+        old_seen.insert(old_state_index);
+        if (!enqueue(edges.front().target_state, new_state_index))
+          return reject("transparent-jump transport exceeds its bounded state-pair budget");
+        continue;
+      }
+    }
     if (!target.has_value() || *target != new_state.item_index ||
         !frames.has_value() || *frames != new_state.return_stack ||
         old_entries->labels.at(old_state_index) != new_entries->labels.at(new_state_index))
       return reject("execution context or external interaction does not follow command relocation");
     const auto& old_item = before.at(old_state.item_index);
     const auto& new_item = after.at(new_state.item_index);
+    const bool converted_direct = converted_direct_flows.contains(old_state.item_index);
     if (old_item.kind != MachineItemKind::Op || new_item.kind != MachineItemKind::Op ||
-        old_item.opcode != new_item.opcode || old_item.raw != new_item.raw ||
+        (!converted_direct && old_item.opcode != new_item.opcode) ||
+        old_item.raw != new_item.raw ||
         old_item.stop_disposition != new_item.stop_disposition ||
         old_item.manual_interaction != new_item.manual_interaction)
       return reject("paired execution contexts perform different instructions or interactions");
-    if (old_state.operand_item_index.has_value() != new_state.operand_item_index.has_value())
-      return reject("paired commands disagree about their address operand");
-    if (old_state.operand_item_index.has_value()) {
-      const auto operand = mapped_item(*old_state.operand_item_index);
-      if (!operand.has_value() || operand != new_state.operand_item_index)
-        return reject("formal continuation fetches a different relocated address word");
+    if (converted_direct) {
+      if (!old_state.operand_item_index.has_value() ||
+          new_state.operand_item_index.has_value() ||
+          mapped_item(*old_state.operand_item_index).has_value())
+        return reject("converted flow must delete exactly its fetched address operand");
+      const auto& operand = before.at(*old_state.operand_item_index);
+      if (operand.kind != MachineItemKind::Address || operand.raw ||
+          operand.manual_interaction.has_value())
+        return reject("converted flow owns an opaque or externally observed operand");
+    } else {
+      if (old_state.operand_item_index.has_value() != new_state.operand_item_index.has_value())
+        return reject("paired commands disagree about their address operand");
+      if (old_state.operand_item_index.has_value()) {
+        const auto operand = mapped_item(*old_state.operand_item_index);
+        if (!operand.has_value() || operand != new_state.operand_item_index)
+          return reject("formal continuation fetches a different relocated address word");
+      }
     }
 
     old_seen.insert(old_state_index);
@@ -1240,7 +1316,14 @@ PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
       return reject("labelled execution alternatives differ after relocation");
     const auto declared = options.indirect_entry_remap.find(old_state.item_index);
     for (const auto& [key, old_edges] : *old_groups) {
-      const auto matching = new_groups->find(key);
+      auto matching = new_groups->find(key);
+      if (matching == new_groups->end() && options.allow_bypassed_direct_jumps &&
+          old_groups->size() == 1U && new_groups->size() == 1U) {
+        const auto sole = new_groups->begin();
+        if (std::get<0>(key) == std::get<0>(sole->first) &&
+            std::get<2>(key) == std::get<2>(sole->first))
+          matching = sole;
+      }
       if (matching == new_groups->end())
         return reject("branch, return, or resume reaches a different relocated context");
       const auto& new_edges = matching->second;

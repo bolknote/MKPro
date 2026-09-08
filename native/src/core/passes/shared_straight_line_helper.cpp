@@ -1738,7 +1738,10 @@ PassResult callee_hole_straight_line_helper_impl(const std::vector<IrOp>& ops, c
     const auto& op = result[index];
     if (op.kind == IrKind::Plain && op.opcode == 0x0e &&
         op.meta.roles == std::vector<CellRole>{"callee-hole-entry-lift"} &&
-        selector_charge_has_automatic_entry_lift(result, index)) {
+        selector_charge_has_automatic_entry_lift(
+            result, index,
+            address_space_model_for_feature_profile(
+                effective_optimizer_feature_profile(context.options)))) {
       result.erase(result.begin() + static_cast<std::ptrdiff_t>(index));
       ++automatic_lifts;
     }

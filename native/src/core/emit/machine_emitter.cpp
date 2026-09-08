@@ -112,6 +112,10 @@ void MachineEmitter::emit_number(std::string raw) {
     }
   }
 
+  // Before VP, +/- changes the mantissa; after VP it changes the exponent.
+  // Keep their signs independent, including negative scientific literals.
+  if (negative)
+    emit_op(0x0b, "/-/", "negative number");
   if (exponent.has_value()) {
     emit_op(0x0c, "ВП", "exponent");
     const bool exponent_negative = starts_with(*exponent, "-");
@@ -126,8 +130,6 @@ void MachineEmitter::emit_number(std::string raw) {
     if (exponent_negative)
       emit_op(0x0b, "/-/", "negative exponent");
   }
-  if (negative)
-    emit_op(0x0b, "/-/", "negative number");
   current_x_known_zero = represents_zero(normalized);
 }
 

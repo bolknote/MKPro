@@ -94,6 +94,16 @@ std::set<std::string> used_registers(const std::vector<IrOp>& ops) {
         op.kind == IrKind::IndirectCondJump) {
       used.insert(op.register_name);
     }
+    // An indexed access also observes or overwrites its possible data cells.
+    // Missing target information means that no stable register is globally spare.
+    if (op.kind == IrKind::IndirectStore || op.kind == IrKind::IndirectRecall) {
+      const auto targets = known_indirect_memory_targets(op);
+      if (targets.has_value())
+        used.insert(targets->begin(), targets->end());
+      else
+        for (const std::string_view name : kStableRegisters)
+          used.insert(std::string(name));
+    }
   }
   return used;
 }
