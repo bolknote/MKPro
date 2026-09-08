@@ -246,8 +246,9 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
   }
 
   // Root classification. The main entry starts from the preload values;
-  // resumable stops keep the registers of their stop states and forget X;
-  // any other entry kind is not modeled.
+  // resumable stops and validated input phases inherit their predecessor's
+  // registers while user number entry forgets X. Arbitrary manual roots remain
+  // unproved; they must not acquire the setup state by assumption.
   AbstractState main_entry_state;
   for (const PreloadReport& preload : preloads) {
     const int register_index_value = register_index(preload.register_name);
@@ -256,10 +257,12 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
           preload.value;
   }
 
+  std::vector<std::vector<std::size_t>> predecessors(flow.execution_states.size());
   for (std::size_t state = 0; state < flow.execution_successors.size(); ++state) {
     for (const std::size_t successor : flow.execution_successors.at(state)) {
       if (successor >= flow.execution_states.size())
         return fail("the execution graph references a missing state");
+      predecessors.at(successor).push_back(state);
     }
   }
 
@@ -270,6 +273,9 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
     for (std::size_t state = 0; state < flow.execution_states.size(); ++state) {
       const PostLayoutExecutionState& candidate = flow.execution_states.at(state);
       if (candidate.item_index != entry.entry.item_index ||
+          candidate.address != entry.entry.address ||
+          candidate.formal_opcode != entry.formal_opcode ||
+          candidate.formal_return_stack != entry.formal_return_stack ||
           candidate.return_stack.size() != entry.return_stack.size()) {
         continue;
       }
@@ -289,18 +295,67 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
   // Resume entries of ordinary stops keep the registers of their stop states,
   // so they are seeded lazily from the stop's out values inside the fixpoint.
   std::map<std::size_t, std::vector<std::size_t>> resume_states_by_stop_item;
-  std::vector<std::pair<const PostLayoutExternalEntryState*, std::vector<std::size_t>>>
-      seeded_entries;
+  std::vector<std::size_t> main_states;
+  std::vector<bool> manual_input_states(flow.execution_states.size(), false);
   for (const PostLayoutExternalEntryState& entry : flow.external_entries) {
     if (entry.entry.item_index >= items.size())
       return fail("an external entry references a missing item");
     std::vector<std::size_t> matched = matching_states(entry);
+    if (matched.empty())
+      return fail("an external entry has no exact execution context");
     switch (entry.kind) {
     case ExternalEntryKind::Main:
-    case ExternalEntryKind::ManualSingleStep:
-    case ExternalEntryKind::ManualContinuous:
-      seeded_entries.emplace_back(&entry, std::move(matched));
+      main_states.insert(main_states.end(), matched.begin(), matched.end());
       break;
+    case ExternalEntryKind::ManualSingleStep:
+    case ExternalEntryKind::ManualContinuous: {
+      const auto& command = items.at(entry.entry.item_index);
+      const auto& anchor = entry.manual_interaction;
+      const auto previous = previous_executable_item(items, entry.entry.item_index);
+      const auto expected_kind = entry.kind == ExternalEntryKind::ManualSingleStep
+          ? ManualInteractionAnchorKind::SingleStepCommand
+          : ManualInteractionAnchorKind::ContinuousResume;
+      if (!anchor || anchor->protocol_id < 0 || anchor->phase < 0 ||
+          anchor->kind != expected_kind || command.manual_interaction != anchor ||
+          command.raw || !previous)
+        return fail("manual input has no matching typed protocol anchor");
+      const auto& prior = items.at(*previous);
+      const auto& prior_anchor = prior.manual_interaction;
+      const bool first = anchor->phase == 0;
+      if (prior.raw || !prior_anchor || prior_anchor->protocol_id != anchor->protocol_id ||
+          (first
+               ? prior_anchor->kind != ManualInteractionAnchorKind::PromptStop ||
+                     prior_anchor->phase != -1 || prior.opcode != 0x50 ||
+                     prior.stop_disposition != StopDisposition::Resumable
+               : prior_anchor->kind != ManualInteractionAnchorKind::SingleStepCommand ||
+                     prior_anchor->phase != anchor->phase - 1 ||
+                     prior.opcode < 0x40 || prior.opcode > 0x4e))
+        return fail("manual input does not follow its prompt or preceding store phase");
+      if (flow.execution_edges.size() != flow.execution_states.size())
+        return fail("manual input requires labelled execution predecessors");
+      for (const auto state : matched) {
+        const auto& target = flow.execution_states.at(state);
+        const bool linked = std::any_of(
+            predecessors.at(state).begin(), predecessors.at(state).end(),
+            [&](std::size_t predecessor) {
+              const auto& origin = flow.execution_states.at(predecessor);
+              if (origin.item_index != *previous ||
+                  origin.return_stack != target.return_stack ||
+                  origin.formal_return_stack != target.formal_return_stack)
+                return false;
+              const auto& edges = flow.execution_edges.at(predecessor);
+              return std::any_of(edges.begin(), edges.end(), [&](const auto& edge) {
+                return edge.target_state == state &&
+                       edge.kind == (first ? PostLayoutExecutionEdgeKind::Resume
+                                           : PostLayoutExecutionEdgeKind::Fallthrough);
+              });
+            });
+        if (!linked)
+          return fail("manual input has no exact predecessor in its protocol");
+        manual_input_states.at(state) = true;
+      }
+      break;
+    }
     case ExternalEntryKind::ResumableStop: {
       const std::optional<std::size_t> stop_item =
           previous_executable_item(items, entry.entry.item_index);
@@ -326,30 +381,24 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
   };
   const auto merge_in = [&](std::size_t state, const AbstractState& incoming) {
     std::optional<AbstractState>& current = in_value.at(state);
+    AbstractState entered = incoming;
+    if (manual_input_states.at(state)) {
+      entered.x.reset();
+      entered.entry = EntryBuffer{.poisoned = true};
+    }
     const AbstractState next =
-        current.has_value() ? join_state(*current, incoming) : incoming;
+        current.has_value() ? join_state(*current, entered) : entered;
     if (!current.has_value() || !(*current == next)) {
       current = next;
       enqueue(state);
     }
   };
 
-  for (const auto& [entry, matched] : seeded_entries) {
-    if (entry->kind == ExternalEntryKind::Main) {
-      for (const std::size_t state : matched)
-        merge_in(state, main_entry_state);
-      continue;
-    }
-    // Manual protocol anchors: the operator interacts here, so nothing about
-    // X, the number entry, or even the registers is assumed. Seeding with the
-    // unknown state is strictly conservative; in-graph edges may still join
-    // known values into these states without ever making them more precise
-    // than the operator can produce.
-    AbstractState manual_state;
-    manual_state.entry.poisoned = true;
-    for (const std::size_t state : matched)
-      merge_in(state, manual_state);
-  }
+  for (const std::size_t state : main_states)
+    merge_in(state, main_entry_state);
+  // Manual phases are reached from the prompt and prior stores through the
+  // authoritative graph, never seeded as independent unknown-register roots.
+  // merge_in forgets X at each input boundary, including loop-carried entries.
 
   // Fixpoint. Resume roots are re-seeded whenever a stop state's out value
   // changes, closing the stop -> resume dependency inside the same loop.
@@ -398,6 +447,8 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
       }
     }
   }
+  if (result.valued_states != result.total_states)
+    return fail("execution context has no initialized or protocol-derived value state");
   result.proved = true;
   return result;
 }

@@ -268,7 +268,7 @@ bool formal_operand_survives_relocation(const std::vector<MachineItem>& items,
 
 bool validate_complete_indirect_relocation(const std::vector<MachineItem>& items,
                                            const ArtifactIndex& index,
-                                           const CyclicEndReturnProof& proof,
+                                           CyclicEndReturnProof& proof,
                                            const CyclicEndReturnOptions& options,
                                            std::vector<std::string>& reasons) {
   std::set<std::size_t> indirect_items;
@@ -307,9 +307,22 @@ bool validate_complete_indirect_relocation(const std::vector<MachineItem>& items
       }
       if (target >= proof.original_body_start_address &&
           target <= proof.original_explicit_return_address) {
-        reasons.push_back("indirect flow enters the helper block at physical " +
-                          std::to_string(target));
-        continue;
+        const auto entry = std::find_if(
+            proof.entries.begin(), proof.entries.end(),
+            [target](const CyclicEndReturnEntry& candidate) {
+              return candidate.original_address == target;
+            });
+        if (basic_kind_for_opcode(items.at(item_index).opcode) != IrKind::IndirectCall ||
+            target > proof.original_body_end_address || entry == proof.entries.end()) {
+          reasons.push_back("indirect helper entry must be a call to a labelled body command");
+          continue;
+        }
+        proof.indirect_calls.push_back(CyclicEndReturnIndirectCall{
+            .call_item_index = item_index,
+            .relocated_call_item_index = item_index,
+            .target_address = target,
+            .entry_label = entry->label,
+        });
       }
       const std::optional<int> relocated = relocated_identity_address(target, proof);
       if (!relocated.has_value() || *relocated != target) {
@@ -516,6 +529,34 @@ bool final_artifact_proved(const std::vector<MachineItem>& items,
     reasons.push_back("final artifact changed the proved direct helper call set");
     return false;
   }
+  std::set<std::pair<std::size_t, int>> indirect_calls;
+  for (const CyclicEndReturnIndirectCall& call : original.indirect_calls) {
+    const auto entry = index.label_addresses.find(call.entry_label);
+    const auto targets =
+        original.final_indirect_flow_targets.find(call.relocated_call_item_index);
+    if (call.relocated_call_item_index >= items.size() ||
+        items.at(call.relocated_call_item_index).kind != MachineItemKind::Op ||
+        basic_kind_for_opcode(items.at(call.relocated_call_item_index).opcode) !=
+            IrKind::IndirectCall ||
+        entry == index.label_addresses.end() || entry->second != call.target_address ||
+        targets == original.final_indirect_flow_targets.end() ||
+        std::find(targets->second.begin(), targets->second.end(), call.target_address) ==
+            targets->second.end() ||
+        !indirect_calls.emplace(call.relocated_call_item_index, call.target_address).second) {
+      reasons.push_back("final artifact changed a proved stationary indirect helper call");
+      return false;
+    }
+  }
+  for (const auto& [source, targets] : original.final_indirect_flow_targets) {
+    for (const int target : targets) {
+      if (target >= original.relocated_body_start_address &&
+          target <= original.relocated_body_end_address &&
+          !indirect_calls.contains({source, target})) {
+        reasons.push_back("final helper has an unproved indirect entry");
+        return false;
+      }
+    }
+  }
   return true;
 }
 
@@ -689,10 +730,9 @@ CyclicEndReturnProof verify_cyclic_end_return(const std::vector<MachineItem>& it
         .entry_label = label,
     });
   }
-  if (proof.calls.empty())
-    proof.reasons.push_back("helper has no proved direct ПП call sites");
-
   validate_complete_indirect_relocation(items, index, proof, options, proof.reasons);
+  if (proof.calls.empty() && proof.indirect_calls.empty())
+    proof.reasons.push_back("helper has no proved direct or stationary indirect call sites");
 
   if (found_return) {
     const std::vector<MachineItem> remaining = without_helper_block(items, proof);
@@ -769,6 +809,10 @@ CyclicEndReturnResult rewrite_cyclic_end_return(const std::vector<MachineItem>& 
       return result;
     }
     result.proof.final_indirect_flow_targets.emplace(*new_item_index, targets);
+    for (CyclicEndReturnIndirectCall& call : result.proof.indirect_calls) {
+      if (call.call_item_index == old_item_index)
+        call.relocated_call_item_index = *new_item_index;
+    }
   }
   result.proof.final_external_entry_addresses = *options.external_entry_addresses;
 
@@ -790,8 +834,9 @@ CyclicEndReturnResult rewrite_cyclic_end_return(const std::vector<MachineItem>& 
       .detail = "Relocated straight-line helper " + helper_label +
                 " to end at A4 and removed "
                 "its explicit В/О after proving wrap to В/О at physical 00 for " +
-                std::to_string(result.proof.calls.size()) + " direct call" +
-                (result.proof.calls.size() == 1U ? "." : "s."),
+                std::to_string(result.proof.calls.size()) + " direct and " +
+                std::to_string(result.proof.indirect_calls.size()) +
+                " stationary indirect call edge(s).",
   });
   return result;
 }

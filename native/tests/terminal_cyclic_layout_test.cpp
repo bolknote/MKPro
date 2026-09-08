@@ -206,6 +206,64 @@ OracleOutcome run_payload_oracle(const std::vector<MachineItem>& items, const st
   };
 }
 
+std::vector<MachineItem> stationary_loop_fixture(int helper_address) {
+  std::vector<MachineItem> items = {
+      MachineItem::label("loop_entry"),
+      MachineItem::op(0x09, "9"),
+      MachineItem::op(0xa7, "indirect call 7"),
+      MachineItem::op(0x40, "store 0"),
+      MachineItem::op(0x04, "4"),
+      MachineItem::op(0xa7, "indirect call 7"),
+      MachineItem::op(0x41, "store 1"),
+      stop(StopDisposition::Resumable),
+      MachineItem::op(0x51, "jump"),
+      MachineItem::address(std::string("loop_entry")),
+  };
+  items.at(2).indirect_flow_targets = std::vector<IrTarget>{helper_address};
+  items.at(5).indirect_flow_targets = std::vector<IrTarget>{helper_address};
+  while (cell_count(items) < helper_address)
+    items.push_back(stop(StopDisposition::Terminal));
+  items.push_back(MachineItem::label("stationary_leaf"));
+  items.push_back(MachineItem::op(0x22, "square"));
+  for (int count = 0; count < 5; ++count)
+    items.push_back(MachineItem::op(0x31, "abs"));
+  items.push_back(MachineItem::op(0x52, "return"));
+  return items;
+}
+
+std::vector<std::string> run_stationary_loop(const std::vector<MachineItem>& items,
+                                             int selector, int rounds) {
+  const auto image = resolve_machine_items(items, {});
+  require(image.diagnostics.empty(), "stationary loop ROM image must resolve");
+  std::vector<int> codes;
+  for (const auto& step : image.steps)
+    codes.push_back(step.opcode);
+  emulator::MK61 calc;
+  require(calc.load_program(codes).diagnostics.empty(), "stationary loop must fit physical memory");
+  calc.set_register("7", std::to_string(selector));
+  calc.set_register("X", "12");
+  calc.set_register("Y", "23");
+  calc.set_register("Z", "34");
+  calc.set_register("T", "45");
+  calc.set_register("X1", "56");
+  calc.press_sequence({"В/О", "С/П"});
+  for (int round = 0; round < rounds; ++round) {
+    if (round != 0)
+      calc.press("С/П");
+    require(calc.run_until_stable(2000, 8).stopped, "stationary loop must resume and stop");
+    require(std::stod(calc.read_register("0")) == 81 &&
+                std::stod(calc.read_register("1")) == 16 &&
+                std::stod(calc.read_register("7")) == selector,
+            "resume must run both calls without changing the selector");
+  }
+  std::vector<std::string> snapshot;
+  for (const std::string reg : {"0", "1", "X", "Y", "Z", "T", "X1"})
+    snapshot.push_back(calc.read_register(reg));
+  calc.press(".");
+  snapshot.push_back(calc.display_text());
+  return snapshot;
+}
+
 bool contains_reason(const core::TerminalCyclicLayoutPlan& plan, std::string_view needle) {
   return std::any_of(plan.reasons.begin(), plan.reasons.end(), [&](const std::string& reason) {
     return reason.find(needle) != std::string::npos;
@@ -215,6 +273,45 @@ bool contains_reason(const core::TerminalCyclicLayoutPlan& plan, std::string_vie
 } // namespace
 
 void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
+  {
+    const auto input = stationary_loop_fixture(99);
+    core::PostLayoutControlFlowOptions flow_options;
+    flow_options.empty_return_target = 1;
+    const auto flow = core::build_post_layout_control_flow(input, flow_options);
+    require(flow.proved, "stationary cyclic startup fixture must have a complete CFG");
+    const std::vector<PreloadReport> setup = {
+        PreloadReport{.register_name = "7", .value = "99"},
+    };
+    const auto output = core::optimize_terminal_cyclic_layout(input, setup, flow);
+    std::string reasons;
+    for (const auto& reason : output.plan.reasons)
+      reasons += "; " + reason;
+    require(output.applied > 0 && output.plan.final_artifact_proved &&
+                output.plan.final_control_flow.proved && output.plan.cyclic_proved &&
+                !output.plan.terminal_proved && output.plan.input_cells == 106 &&
+                output.plan.output_cells == 105 && output.removed_cells == 1 &&
+                cell_count(output.items) == 105 &&
+                output.plan.cyclic_verification.indirect_calls.size() == 2U &&
+                output.preloads.size() == 1U && output.preloads.front().value == "99",
+            "startup normalization and an indirect cyclic suffix must compose without a "
+            "terminal-report pattern: " + reasons);
+    for (const int rounds : {1, 2, 3})
+      require(run_stationary_loop(stationary_loop_fixture(10), 10, rounds) ==
+                  run_stationary_loop(output.items, 99, rounds),
+              "cyclic startup must preserve repeated resume, stack and decimal-entry X2");
+    auto wrong_setup = setup;
+    wrong_setup.front().value = "98";
+    require(core::optimize_terminal_cyclic_layout(input, wrong_setup, flow).applied == 0,
+            "typed call targets cannot replace a proof of their delivered runtime selector");
+    auto stale = input;
+    stale.at(2).indirect_flow_targets = std::vector<IrTarget>{98};
+    require(core::optimize_terminal_cyclic_layout(stale, setup, flow).applied == 0,
+            "stationary cyclic proof must reject stale authoritative target identities");
+    auto expanded = core::TerminalCyclicLayoutOptions{};
+    expanded.address_space_model = AddressSpaceModel::Mk61SMiniExpanded;
+    require(core::optimize_terminal_cyclic_layout(input, setup, flow, expanded).applied == 0,
+            "stationary cyclic return must not assume A4 wrap in the 112-cell profile");
+  }
   {
     const auto terminal_stop = [] {
       MachineItem item = MachineItem::op(0x50, "С/П");

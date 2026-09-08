@@ -8074,26 +8074,6 @@ bool is_tiny_game_shape(const V2Program& program) {
   return has_dial && has_charge && has_ignored && has_success && has_drain;
 }
 
-bool is_human_game_shape(const V2Program& program) {
-  if (program.name != "CounterGame" || explicit_state_field_count(program) != 2 ||
-      program.rules.size() != 3)
-    return false;
-  const bool has_score =
-      std::any_of(program.state.begin(), program.state.end(), [](const V2StateField& field) {
-        return field.name == "score" && field.type == "counter" && field.initial == "0";
-      });
-  const bool has_food =
-      std::any_of(program.state.begin(), program.state.end(), [](const V2StateField& field) {
-        return field.name == "food" && field.type == "counter" && field.initial == "5";
-      });
-  const bool has_ignored = std::any_of(program.rules.begin(), program.rules.end(),
-                                       [](const V2Rule& rule) { return rule.name == "ignored"; });
-  const bool has_gain = std::any_of(program.rules.begin(), program.rules.end(),
-                                    [](const V2Rule& rule) { return rule.name == "gain"; });
-  const bool has_spend = std::any_of(program.rules.begin(), program.rules.end(),
-                                     [](const V2Rule& rule) { return rule.name == "spend"; });
-  return has_score && has_food && has_ignored && has_gain && has_spend;
-}
 
 bool is_lunar_shape(const V2Program& program) {
   if (program.name != "LunarLander" || explicit_state_field_count(program) != 4)
@@ -8181,7 +8161,7 @@ bool dungeon_shape_specific_enabled(const LoweringContext& context) {
 }
 
 bool uses_shape_specific_lowering(const LoweringContext& context) {
-  return context.tiny_game_shape || context.human_game_shape || context.lunar_shape ||
+  return context.tiny_game_shape || context.lunar_shape ||
          context.clock_shape || context.cave_sketch_shape || context.ninety_nine_bottles_shape ||
          dungeon_shape_specific_enabled(context);
 }
@@ -11847,7 +11827,6 @@ void reserve_packed_digit_permutation_counter(LoweringContext& context,
 
 void collect_registers(LoweringContext& context, const V2Program& program) {
   context.tiny_game_shape = is_tiny_game_shape(program);
-  context.human_game_shape = is_human_game_shape(program);
   context.lunar_shape = is_lunar_shape(program) && context.aggressive_post_layout_indirect_flow;
   // Clock now goes through the generic lowering plus optimizer pipeline.  The
   // legacy branch emitted indirect-flow-shaped opcodes before the normal
@@ -11883,11 +11862,6 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   if (context.tiny_game_shape) {
     bind_register(context, "dial", 0);
     bind_register(context, "charge", 2);
-    bind_register(context, "__display_scale_10", 0xe);
-  }
-  if (context.human_game_shape) {
-    bind_register(context, "food", 2);
-    bind_register(context, "score", 4);
     bind_register(context, "__display_scale_10", 0xe);
   }
   if (context.lunar_shape) {
@@ -19125,22 +19099,6 @@ bool lower_tiny_terminal_call(LoweringContext& context, const std::string& name)
   return false;
 }
 
-bool lower_human_terminal_call(LoweringContext& context, const std::string& name) {
-  if (name == "gain")
-    return lower_increment_update(context, "score", 0);
-  if (name == "spend")
-    return lower_decrement_update(context, "food", "set ", 0);
-  if (name == "ignored") {
-    context.emitter.emit_number("0");
-    if (!context.emitter.items.empty())
-      context.emitter.items.back().comment = "halt";
-    context.emitter.emit_stop(StopDisposition::Terminal, "С/П", "halt");
-    return true;
-  }
-  context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
-                                           "Native human dispatch cannot call '" + name + "'"));
-  return false;
-}
 
 std::optional<std::string> invoked_rule_name(const V2Statement& statement) {
   if (statement.kind == "v2_invoke" && statement.name.has_value())
@@ -19194,59 +19152,6 @@ bool lower_tiny_match(LoweringContext& context, const V2Statement& statement) {
   return true;
 }
 
-bool lower_human_match(LoweringContext& context, const V2Statement& statement) {
-  if (!context.human_game_shape || statement.kind != "v2_match" || statement.cases.size() != 2 ||
-      statement.otherwise == nullptr) {
-    context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
-                                             "Native match lowering currently supports human"));
-    return false;
-  }
-  const std::optional<std::string> first_rule = invoked_rule_name(*statement.cases.at(0).action);
-  const std::optional<std::string> second_rule = invoked_rule_name(*statement.cases.at(1).action);
-  const std::optional<std::string> otherwise_rule = invoked_rule_name(*statement.otherwise);
-  if (!first_rule.has_value() || !second_rule.has_value() || !otherwise_rule.has_value()) {
-    context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
-                                             "Native match lowering expects invoked rule actions"));
-    return false;
-  }
-
-  const std::string residual_label = context.emitter.fresh_label("match_residual");
-  const std::string otherwise_label = context.emitter.fresh_label("match_otherwise");
-  const std::string end_label = context.emitter.fresh_label("match_end");
-
-  context.emitter.machine_entry_open = true;
-  context.emitter.emit_number(statement.cases.at(0).values.at(0));
-  context.emitter.emit_op(0x11, "-", "dispatch compare", statement.line);
-  context.emitter.emit_jump(0x5e, "F x=0", residual_label, "case mismatch", statement.line);
-  if (!lower_human_terminal_call(context, *first_rule))
-    return false;
-  context.emitter.emit_jump(0x51, "БП", end_label, "dispatch end", statement.line);
-
-  context.emitter.emit_label(residual_label, {.hidden = true});
-  const int residual_value =
-      std::stoi(statement.cases.at(1).values.at(0)) - std::stoi(statement.cases.at(0).values.at(0));
-  context.emitter.emit_number(std::to_string(residual_value));
-  context.emitter.emit_op(0x11, "-", "dispatch residual compare", statement.line);
-  context.emitter.emit_jump(0x5e, "F x=0", otherwise_label, "case mismatch", statement.line);
-  if (!lower_human_terminal_call(context, *second_rule))
-    return false;
-  const IrTarget loop_target =
-      context.current_loop_label.has_value() ? IrTarget{*context.current_loop_label} : IrTarget{0};
-  context.emitter.emit_jump(0x51, "БП", loop_target, "dispatch end", statement.line);
-  context.emitter.emit_label(otherwise_label, {.hidden = true});
-  if (!lower_human_terminal_call(context, *otherwise_rule))
-    return false;
-  context.emitter.emit_label(end_label, {.hidden = true});
-  // Report parity with the TS oracle: the human dispatch is lowered as a numeric
-  // residual compare chain (the bytes above emit `dispatch compare` /
-  // `dispatch residual compare`), so surface the same optimization label TS does.
-  // This is report-only metadata and does not change emitted code.
-  context.optimizations.push_back(OptimizationReport{
-      .name = "numeric-dispatch-residual-chain",
-      .detail = "Lowered numeric match cases as a residual comparison chain.",
-  });
-  return true;
-}
 
 bool lower_cave_sketch_match(LoweringContext& context, const V2Statement& statement) {
   if (!context.cave_sketch_shape || statement.kind != "v2_match" || statement.cases.size() != 6 ||
@@ -35285,8 +35190,6 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
       return lower_dungeon_match(context, statement);
     if (context.cave_sketch_shape)
       return lower_cave_sketch_match(context, statement);
-    if (context.human_game_shape)
-      return lower_human_match(context, statement);
     if (context.tiny_game_shape)
       return lower_tiny_match(context, statement);
     return lower_match_statement(context, statement);
@@ -36864,7 +36767,7 @@ std::vector<const V2Rule*> function_rule_emission_order(LoweringContext& context
 }
 
 bool lower_function_rules(LoweringContext& context, const V2Program& program) {
-  if (context.tiny_game_shape || context.human_game_shape || context.lunar_shape ||
+  if (context.tiny_game_shape || context.lunar_shape ||
       context.clock_shape || context.cave_sketch_shape || context.ninety_nine_bottles_shape ||
       dungeon_shape_specific_enabled(context))
     return true;
@@ -56986,6 +56889,11 @@ bool candidate_needs_static_proof_gate(const CompileOptions& options) {
 
 bool suppressed_constant_preloads_proved(const CompileOptions& options,
                                          const std::vector<PreloadReport>& preloads);
+bool suppressed_constant_preload_artifacts_proved(
+    const CompileOptions& options, const std::vector<PreloadReport>& preloads,
+    const std::vector<OptimizationReport>& optimizations,
+    const std::vector<MachineItem>& items, const std::vector<ResolvedStep>& steps,
+    const std::map<std::string, std::string>& allocated_registers);
 bool preloaded_constant_registers_proved(const CompileOptions& options,
                                          const std::vector<PreloadReport>& preloads);
 bool indirect_flow_targets_proved(const std::vector<OptimizationReport>& optimizations,
@@ -57261,7 +57169,9 @@ bool suppressed_preload_static_gate_accepts(const CompileOptions& candidate_opti
                                             const CompileResult& result) {
   if (candidate_options.suppress_constant_preloads.empty())
     return true;
-  return suppressed_constant_preloads_proved(candidate_options, result.preloads);
+  return suppressed_constant_preload_artifacts_proved(
+      candidate_options, result.preloads, result.optimizations, result.items,
+      result.steps, result.registers);
 }
 
 bool suppress_constant_preload_only_static_gate_accepts(const CompileOptions& candidate_options,
@@ -57281,7 +57191,9 @@ bool suppress_constant_preload_only_static_gate_accepts(const CompileOptions& ca
       !candidate_options.force_fractional_constant_selector_preloads.empty()) {
     return false;
   }
-  return suppressed_constant_preloads_proved(candidate_options, result.preloads);
+  return suppressed_constant_preload_artifacts_proved(
+      candidate_options, result.preloads, result.optimizations, result.items,
+      result.steps, result.registers);
 }
 
 bool preloaded_indirect_flow_static_gate_accepts(const CompileOptions& candidate_options,
@@ -57610,6 +57522,17 @@ std::optional<std::string> optimizer_static_gate_rejection_reason(
                                                    candidate_options, &reason)) {
       return "callee-hole proof rejected candidate: " + reason;
     }
+  }
+  if (!suppressed_preload_static_gate_accepts(candidate_options, result)) {
+    std::vector<std::string> remaining;
+    for (const PreloadReport& preload : result.preloads) {
+      if (!preload.setup_expression && !preload.setup_target_name.has_value() &&
+          !preload.setup_source_line.has_value()) {
+        remaining.push_back("R" + preload.register_name + "=" + preload.value);
+      }
+    }
+    return "suppressed-constant preload proof failed; delivered: " +
+           join_strings(remaining, ", ");
   }
   return std::string("static proof gate rejected candidate");
 }
@@ -58668,6 +58591,48 @@ bool suppressed_constant_preloads_proved(const CompileOptions& options,
     return false;
   }
   return true;
+}
+
+bool suppressed_constant_preload_artifacts_proved(
+    const CompileOptions& options, const std::vector<PreloadReport>& preloads,
+    const std::vector<OptimizationReport>& optimizations,
+    const std::vector<MachineItem>& items, const std::vector<ResolvedStep>& steps,
+    const std::map<std::string, std::string>& allocated_registers) {
+  if (suppressed_constant_preloads_proved(options, preloads))
+    return true;
+  if (options.suppress_constant_preloads.empty())
+    return false;
+
+  // A numeric control address is not a data-pool constant. Do not infer that
+  // distinction from spelling or missing provenance alone: retain a typed
+  // consumer and reprove the complete delivered artifact before omitting it.
+  std::set<std::string> flow_selectors;
+  for (const MachineItem& item : items) {
+    if (item.kind != MachineItemKind::Op || item.raw ||
+        item.manual_interaction.has_value() || !item.indirect_flow_targets.has_value() ||
+        item.indirect_flow_targets->empty())
+      continue;
+    const int base = item.opcode & 0xf0;
+    const int reg = item.opcode & 0x0f;
+    if (reg >= 7 && reg <= 14 &&
+        (base == 0x70 || base == 0x80 || base == 0x90 || base == 0xa0 ||
+         base == 0xc0 || base == 0xe0)) {
+      flow_selectors.insert(core::register_name_for_index(reg));
+    }
+  }
+  std::vector<PreloadReport> data_preloads;
+  for (const PreloadReport& preload : preloads) {
+    if (!preload.lowered_data_value.has_value() &&
+        flow_selectors.contains(preload.register_name))
+      continue;
+    data_preloads.push_back(preload);
+  }
+  if (data_preloads.size() == preloads.size() ||
+      !suppressed_constant_preloads_proved(options, data_preloads))
+    return false;
+  return indirect_flow_targets_proved(optimizations, preloads, items, steps,
+                                     allocated_registers,
+                                     address_space_model_for_options(options));
 }
 
 bool preloaded_constant_registers_proved(const CompileOptions& options,
@@ -61494,7 +61459,8 @@ std::vector<ProofReport> build_proof_report(const ProgramAst& ast,
             "erased or overwritten before data consumption.",
     });
   }
-  if (suppressed_constant_preloads_proved(options, preloads)) {
+  if (suppressed_constant_preload_artifacts_proved(
+          options, preloads, optimizations, items, steps, registers)) {
       proofs.push_back(ProofReport{
           .id = "suppressed-constant-preloads",
           .status = "proved",
@@ -70332,7 +70298,7 @@ std::optional<std::string> executable_setup_number_value(const std::string& valu
 }
 
 std::optional<std::string> demotable_indirect_flow_preload_value(const PreloadReport& preload) {
-  if (preload.counts_against_program)
+  if (preload.counts_against_program || !preload.lowered_data_value.has_value())
     return std::nullopt;
   const std::string value = normalize_constant_literal(preload.value);
   static const std::regex formal_hex_address(R"(^[A-F][0-9A-F]$)", std::regex_constants::icase);
@@ -70365,6 +70331,11 @@ demotable_indirect_flow_preload_values(const CompileResult& result,
   if (values.size() > kMaxDemotedIndirectFlowValues)
     values.resize(kMaxDemotedIndirectFlowValues);
   return values;
+}
+
+std::vector<std::string> demotable_indirect_flow_preload_values_for_testing(
+    const CompileResult& result, const std::set<std::string>& suppressed) {
+  return demotable_indirect_flow_preload_values(result, suppressed);
 }
 
 std::string indirect_flow_selector_digit(int value) {

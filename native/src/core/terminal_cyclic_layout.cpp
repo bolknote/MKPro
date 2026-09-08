@@ -1165,6 +1165,51 @@ fixed_protocol_addresses(const std::vector<PostLayoutExternalEntryState>& entrie
   return std::vector<int>(addresses.begin(), addresses.end());
 }
 
+bool cyclic_indirect_bindings_match(
+    const std::vector<MachineItem>& items, const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control,
+    const CyclicEndReturnProof& proof, bool final,
+    AddressSpaceModel model, std::vector<std::string>& reasons) {
+  if (proof.indirect_calls.empty())
+    return true;
+  const StableRegisterValueFlow values =
+      analyze_stable_register_value_flow(items, preloads, control, model);
+  if (!values.proved) {
+    add_reason(reasons, "cyclic indirect-call register value flow is incomplete");
+    return false;
+  }
+  for (const CyclicEndReturnIndirectCall& call : proof.indirect_calls) {
+    const std::size_t source =
+        final ? call.relocated_call_item_index : call.call_item_index;
+    if (source >= items.size() || items.at(source).kind != MachineItemKind::Op ||
+        !is_indirect_call_opcode(items.at(source).opcode)) {
+      add_reason(reasons, "cyclic indirect-call source identity changed");
+      return false;
+    }
+    const auto reg = encoded_register(items.at(source).opcode);
+    const auto known = values.before_item.find(source);
+    if (!reg.has_value() || *reg < 7 || *reg > 14 ||
+        known == values.before_item.end() ||
+        !known->second.at(static_cast<std::size_t>(*reg - 7)).has_value()) {
+      add_reason(reasons, "cyclic indirect-call selector is not proved at every call");
+      return false;
+    }
+    const std::string& value = *known->second.at(static_cast<std::size_t>(*reg - 7));
+    try {
+      const auto decoded = evaluate_indirect_address(
+          register_text(*reg), value, IndirectOperationKind::Flow, model);
+      if (decoded.has_value() && !decoded->super_dark.has_value() &&
+          decoded->actual_flow_target == call.target_address)
+        continue;
+    } catch (const std::exception&) {
+      // Invalid delivered selector words are not layout certificates.
+    }
+    add_reason(reasons, "cyclic indirect-call delivered selector disagrees with its target");
+    return false;
+  }
+  return true;
+}
+
 struct StackRelation {
   std::array<std::array<bool, 4>, 4> equal{};
 
@@ -4511,6 +4556,62 @@ optimize_terminal_cyclic_layout(const std::vector<MachineItem>& items,
   result.preloads = preloads;
   result.plan = verify_terminal_cyclic_layout(items, preloads, control_flow, options);
   if (!result.plan.terminal_proved) {
+    // A stationary suffix needs no terminal-report idiom. Derive the same
+    // complete-map proof independently, then reconstruct the delivered CFG.
+    const ArtifactIndex input_index = index_artifact(items);
+    std::vector<std::string> cyclic_reasons;
+    if (options.address_space_model == AddressSpaceModel::Standard &&
+        input_index.cells == official_program_step_limit(options.address_space_model) + 1 &&
+        options.maximum_return_depth > 0 && options.maximum_return_depth <= 5 &&
+        options.maximum_execution_states > 0 &&
+        validate_complete_control_flow(items, input_index, control_flow, options,
+                                       cyclic_reasons)) {
+      const CyclicEndReturnResult cyclic = optimize_cyclic_end_return(
+          items, CyclicEndReturnOptions{
+                     .address_space_model = options.address_space_model,
+                     .proved_indirect_flow_targets = address_flow_targets(control_flow),
+                     .external_entry_addresses = fixed_protocol_addresses(control_flow.external_entries),
+                 });
+      if (cyclic.applied == 1 && cyclic.proof.final_artifact_proved &&
+          cyclic_indirect_bindings_match(items, preloads, control_flow, cyclic.proof,
+                                         false, options.address_space_model, cyclic_reasons)) {
+        const ItemRelocation relocation =
+            [input_count = items.size(), proof = cyclic.proof](std::size_t old_item) {
+              return reindexed_item_after_cyclic(old_item, input_count, proof);
+            };
+        const auto changed_body =
+            previous_cell_item(items, cyclic.proof.original_explicit_return_item_index);
+        ReboundArtifact rebound = rebind_control_flow_after_relocation(
+            items, cyclic.items, control_flow, relocation,
+            {cyclic.proof.original_explicit_return_item_index},
+            changed_body.has_value() ? std::set<std::size_t>{*changed_body}
+                                     : std::set<std::size_t>{},
+            {}, options);
+        if (rebound.proved &&
+            cyclic_indirect_bindings_match(rebound.items, preloads, rebound.control_flow,
+                                           cyclic.proof, true, options.address_space_model,
+                                           cyclic_reasons)) {
+          result.items = std::move(rebound.items);
+          result.plan = TerminalCyclicLayoutPlan{};
+          result.plan.input_cells = input_index.cells;
+          result.plan.terminal_output_cells = input_index.cells;
+          result.plan.output_cells = index_artifact(result.items).cells;
+          result.plan.removed_cells = input_index.cells - result.plan.output_cells;
+          result.plan.cyclic_proved = true;
+          result.plan.cyclic_verification = cyclic.proof;
+          result.plan.final_control_flow = std::move(rebound.control_flow);
+          result.plan.final_artifact_proved = true;
+          result.optimizations = cyclic.optimizations;
+          result.applied = 1;
+          result.removed_cells = result.plan.removed_cells;
+          return result;
+        }
+        append_reasons(cyclic_reasons, rebound.reasons);
+      } else {
+        append_reasons(cyclic_reasons, cyclic.proof.reasons);
+      }
+    }
+    append_reasons(result.plan.reasons, cyclic_reasons);
     if (options.enable_return_alias) {
       if (const std::optional<TerminalCyclicLayoutResult> alias =
               rewrite_terminal_return_alias(items, preloads, control_flow, options,
@@ -4542,29 +4643,43 @@ optimize_terminal_cyclic_layout(const std::vector<MachineItem>& items,
     if (options.enable_transactional_startup_layout) {
       std::vector<std::string> startup_rejections;
       for (ReboundArtifact& startup : build_empty_return_startup_layouts(
-             items, preloads, control_flow, options, &startup_rejections)) {
-      const std::vector<PreloadReport>& startup_preloads =
-          startup.preloads.has_value() ? *startup.preloads : preloads;
-      TerminalCyclicLayoutResult candidate = optimize_terminal_cyclic_layout(
-          startup.items, startup_preloads, startup.control_flow, options);
-      if (candidate.applied > 0 && candidate.plan.final_artifact_proved)
-        return candidate;
-      for (auto reason = candidate.plan.reasons.rbegin();
-           reason != candidate.plan.reasons.rend(); ++reason) {
-        const std::string prefixed = "empty-return startup layout: " + *reason;
-        if (std::find(result.plan.reasons.begin(), result.plan.reasons.end(), prefixed) ==
-            result.plan.reasons.end()) {
-          result.plan.reasons.insert(result.plan.reasons.begin(), prefixed);
+               items, preloads, control_flow, options, &startup_rejections)) {
+        const std::vector<PreloadReport>& startup_preloads =
+            startup.preloads.has_value() ? *startup.preloads : preloads;
+        TerminalCyclicLayoutOptions downstream = options;
+        downstream.enable_transactional_startup_layout = false;
+        TerminalCyclicLayoutResult candidate = optimize_terminal_cyclic_layout(
+            startup.items, startup_preloads, startup.control_flow, downstream);
+        const int output_cells = index_artifact(candidate.items).cells;
+        if (candidate.applied > 0 && candidate.plan.final_artifact_proved &&
+            output_cells < input_index.cells) {
+          candidate.plan.input_cells = input_index.cells;
+          candidate.plan.output_cells = output_cells;
+          candidate.plan.removed_cells = input_index.cells - output_cells;
+          candidate.removed_cells = candidate.plan.removed_cells;
+          candidate.optimizations.insert(
+              candidate.optimizations.begin(), passes::AppliedOptimization{
+                  .name = "empty-return-startup-layout",
+                  .detail = "Composed proved empty-stack startup normalization with a "
+                            "size-positive final suffix layout; selectors and resume entries "
+                            "are part of the same transaction.",
+              });
+          return candidate;
+        }
+        for (auto reason = candidate.plan.reasons.rbegin();
+             reason != candidate.plan.reasons.rend(); ++reason) {
+          const std::string prefixed = "empty-return startup layout: " + *reason;
+          if (std::find(result.plan.reasons.begin(), result.plan.reasons.end(), prefixed) ==
+              result.plan.reasons.end())
+            result.plan.reasons.insert(result.plan.reasons.begin(), prefixed);
         }
       }
-    }
       for (auto reason = startup_rejections.rbegin();
            reason != startup_rejections.rend(); ++reason) {
         const std::string prefixed = "empty-return startup layout: " + *reason;
         if (std::find(result.plan.reasons.begin(), result.plan.reasons.end(), prefixed) ==
-            result.plan.reasons.end()) {
+            result.plan.reasons.end())
           result.plan.reasons.insert(result.plan.reasons.begin(), prefixed);
-        }
       }
     }
     return result;

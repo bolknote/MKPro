@@ -419,6 +419,23 @@ void emit_current_x_unary_steps(ExpressionEmitApi& api,
     api.emitter.emit_op(step.opcode, step.display, purpose);
 }
 
+// A binary call still needs the old X as its first operand when the
+// second operand is derived from that same value. Unary current-X reuse
+// alone does not perform the stack lift that an ordinary recall would.
+bool lower_binary_operand_above_x(ExpressionEmitApi& api, LoweringContext& context,
+                                  const Expression& expression) {
+  const auto chain = peel_current_x_unary_chain(expression);
+  if (!chain.has_value() || chain->terminal == nullptr ||
+      chain->terminal->kind != "identifier" ||
+      !current_x_holds_name(api, chain->terminal->name))
+    return api.lower_expression_to_x(expression);
+
+  api.emitter.emit_op(0x0e, "В↑", "preserve shared binary operand");
+  context.current_y_variable.reset();
+  emit_current_x_unary_steps(api, chain->steps, "shared binary operand transform");
+  return true;
+}
+
 std::optional<bool> lower_current_xy_leading_packed_digit_rmw_to_x_impl(
     ExpressionEmitApi& api, LoweringContext& context, const Expression& expression,
     const std::string& current_y_name) {
@@ -1853,7 +1870,7 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
     if (callee == "pow") {
       if (!api.lower_expression_to_x(expression.args.at(1)))
         return false;
-      if (!api.lower_expression_to_x(expression.args.at(0)))
+      if (!lower_binary_operand_above_x(api, context, expression.args.at(0)))
         return false;
       api.emitter.emit_op(binary_it->second.first, binary_it->second.second, callee + "()");
       api.emitter.current_x_variable.reset();
@@ -1862,7 +1879,7 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
     }
     if (!api.lower_expression_to_x(expression.args.at(0)))
       return false;
-    if (!api.lower_expression_to_x(expression.args.at(1)))
+    if (!lower_binary_operand_above_x(api, context, expression.args.at(1)))
       return false;
     api.emitter.emit_op(binary_it->second.first, binary_it->second.second, callee + "()");
     api.emitter.current_x_variable.reset();

@@ -27,14 +27,13 @@ namespace mkpro::core {
 // - an indirect access through a stable register replaces the tracked value
 //   with the machine's write-back (the transformed selector value).
 //
-// Everything else poisons the touched slot: fractional/exponent entry, any
-// arithmetic, indirect memory stores that may reach a tracked register, and
-// manual external entries. A resumable stop keeps the tracked registers of
-// its stop states but forgets X, matching the system-wide contract that user
-// interaction at a stop enters data through X without rewriting program
-// registers. If any external entry is not the main entry or a resumable stop
-// whose preceding executable command is `С/П`, the whole analysis is
-// unproved.
+// Everything else poisons the touched slot: fractional/exponent entry,
+// arithmetic, and indirect stores that may reach a tracked register. Ordinary
+// resumable stops and validated entered() phases preserve predecessor register
+// values while forgetting X and number-entry state. Each manual phase must
+// match the typed prompt/store chain and exact labelled CFG predecessor,
+// including formal return frames. Unlinked or untyped external entries fail
+// closed; manual input is never treated as a fresh setup-state assumption.
 struct StableRegisterValueFlow {
   bool proved = false;
   std::vector<std::string> reasons;

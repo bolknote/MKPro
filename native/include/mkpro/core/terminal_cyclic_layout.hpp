@@ -151,7 +151,9 @@ verify_terminal_cyclic_layout(const std::vector<MachineItem>& items,
 // then apply the one-cell cyclic return only when its independent complete-map
 // proof and final-artifact recheck both succeed.  A failed terminal proof
 // returns the input unchanged; a failed optional cyclic proof keeps the proved
-// terminal result.
+// terminal result. Without a terminal tail, a standalone cyclic suffix may
+// commit after the same complete CFG and delivered-selector checks. Empty-stack
+// startup normalization is composed transactionally and must repay its cost.
 TerminalCyclicLayoutResult
 optimize_terminal_cyclic_layout(const std::vector<MachineItem>& items,
                                 const std::vector<PreloadReport>& preloads,

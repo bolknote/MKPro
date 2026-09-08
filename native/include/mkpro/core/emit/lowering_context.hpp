@@ -338,7 +338,6 @@ struct LoweringContext {
   std::optional<std::string> current_loop_label;
   bool uses_formatted_coord_report = false;
   bool tiny_game_shape = false;
-  bool human_game_shape = false;
   bool lunar_shape = false;
   bool clock_shape = false;
   bool cave_sketch_shape = false;

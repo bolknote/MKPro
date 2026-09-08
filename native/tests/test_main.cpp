@@ -91,6 +91,7 @@ void emulator_int_frac_shared_tail_matches_typescript_contract();
 void emulator_interprocedural_equivalence_matches_typescript_contract();
 void emulator_zagaday_tsifru_corrected_revision_preserves_history_and_ui();
 void emulator_packed_bcd_partial_horner_preserves_threshold();
+void emulator_binary_call_shared_operand_matches_rom();
 void emulator_log_selector_premise_matches_typescript_contract();
 void emulator_mk61_execution_matches_typescript_contract();
 void emulator_nekromant_reference_and_source_contract();
@@ -171,6 +172,7 @@ void expression_parser_matches_initial_contract();
 void parser_accepts_all_example_sources();
 void pass_pipeline_matches_initial_typescript_contract();
 void post_layout_control_flow_matches_typed_contract();
+void stable_register_value_flow_preserves_manual_protocol_state();
 void post_layout_indirect_flow_matches_typescript_contract();
 void raw_bcd_unary_selector_matches_emulator_oracle();
 void r0_fractional_sentinel_matches_typescript_contract();
@@ -372,6 +374,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(emulator_interprocedural_equivalence_matches_typescript_contract),
       MKPRO_TEST(emulator_zagaday_tsifru_corrected_revision_preserves_history_and_ui),
       MKPRO_TEST(emulator_packed_bcd_partial_horner_preserves_threshold),
+      MKPRO_TEST(emulator_binary_call_shared_operand_matches_rom),
       MKPRO_TEST(emulator_log_selector_premise_matches_typescript_contract),
       MKPRO_TEST(emulator_mk61_execution_matches_typescript_contract),
       MKPRO_TEST(emulator_nekromant_reference_and_source_contract),
@@ -448,6 +451,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(parser_accepts_all_example_sources),
       MKPRO_TEST(pass_pipeline_matches_initial_typescript_contract),
       MKPRO_TEST(post_layout_control_flow_matches_typed_contract),
+      MKPRO_TEST(stable_register_value_flow_preserves_manual_protocol_state),
       MKPRO_TEST(post_layout_indirect_flow_matches_typescript_contract),
       MKPRO_TEST(raw_bcd_unary_selector_matches_emulator_oracle),
       MKPRO_TEST(r0_fractional_sentinel_matches_typescript_contract),

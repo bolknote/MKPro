@@ -8,12 +8,11 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
-#include <set>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace mkpro::tests {
-
 namespace {
 
 std::string read_text(const std::filesystem::path& path) {
@@ -30,60 +29,37 @@ std::string trim_ascii(std::string value) {
   return value;
 }
 
-std::string mk61_hex_literal(const std::string& text) {
-  std::string out;
+std::string selector_literal(const std::string& text) {
+  // Only generated two-digit formal addresses need display-glyph conversion.
+  // Ordinary numeric setup values must not be interpreted as hexadecimal.
+  if (text.size() != 2U || text.find_first_of("ABCDEF") == std::string::npos)
+    return text;
+  std::string result;
   for (char ch : text) {
-    switch (static_cast<char>(std::toupper(static_cast<unsigned char>(ch)))) {
-      case 'A':
-        out.push_back('-');
-        break;
-      case 'B':
-        out.push_back('L');
-        break;
-      case 'C':
-        out += "С";
-        break;
-      case 'D':
-        out += "Г";
-        break;
-      case 'E':
-        out += "Е";
-        break;
-      case 'F':
-        out.push_back('_');
-        break;
-      default:
-        out.push_back(ch);
-        break;
+    switch (ch) {
+      case 'A': result += "-"; break;
+      case 'B': result += "L"; break;
+      case 'C': result += "С"; break;
+      case 'D': result += "Г"; break;
+      case 'E': result += "Е"; break;
+      case 'F': result += "_"; break;
+      default: result += ch; break;
     }
   }
-  return out;
+  return result;
 }
 
 std::vector<int> step_opcodes(const std::vector<ResolvedStep>& steps) {
   std::vector<int> codes;
-  codes.reserve(steps.size());
   for (const ResolvedStep& step : steps)
     codes.push_back(step.opcode);
   return codes;
 }
 
-bool has_optimization(const CompileResult& result, const std::string& name) {
-  return std::any_of(result.optimizations.begin(), result.optimizations.end(),
-                     [&](const OptimizationReport& optimization) {
-                       return optimization.name == name;
-                     });
-}
-
 bool has_proof(const CompileResult& result, const std::string& id) {
   return std::any_of(result.proofs.begin(), result.proofs.end(),
-                     [&](const ProofReport& proof) { return proof.id == id; });
-}
-
-bool has_dark_selector_preload(const CompileResult& result) {
-  return std::any_of(result.preloads.begin(), result.preloads.end(),
-                     [](const PreloadReport& preload) {
-                       return preload.value.find_first_of("ABCDEFabcdef") != std::string::npos;
+                     [&](const ProofReport& proof) {
+                       return proof.id == id && proof.status == "proved";
                      });
 }
 
@@ -94,125 +70,136 @@ bool has_indirect_branch(const CompileResult& result) {
 }
 
 struct Scenario {
-  std::map<std::string, std::string> registers;
-  std::vector<std::string> keys;
+  int score = 0;
+  int food = 5;
+  std::optional<int> key;
 };
 
 struct Observation {
   std::string display;
-  bool stopped = false;
-  std::map<std::string, std::string> registers;
+  std::map<std::string, std::string> values;
 };
 
-const std::vector<std::string> kDataRegisters = {
-    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e",
-};
-
-Observation observe(const std::vector<int>& codes, const Scenario& scenario,
-                    const std::map<std::string, std::string>& preload_registers,
-                    const std::set<std::string>& excluded) {
-  emulator::MK61 calc;
-  const emulator::ProgramLoadResult loaded = calc.load_program(codes);
-  require(loaded.diagnostics.empty(), "indirect-flow equivalence program should load");
-
-  for (const auto& [reg, value] : scenario.registers)
-    calc.set_register(reg, value);
-  for (const auto& [reg, value] : preload_registers)
-    calc.set_register(reg, mk61_hex_literal(value));
-
-  calc.press_sequence(scenario.keys);
-  const emulator::RunResult run = calc.run_until_stable(600, 5);
-
-  std::map<std::string, std::string> registers;
-  for (const std::string& reg : kDataRegisters) {
-    if (!excluded.contains(reg))
-      registers[reg] = trim_ascii(calc.read_register(reg));
-  }
-  return Observation{
-      .display = trim_ascii(calc.display_text()),
-      .stopped = run.stopped,
-      .registers = std::move(registers),
-  };
+void require_scalar(emulator::MK61& calc, const std::string& reg, int expected,
+                    const std::string& context) {
+  const std::string value = trim_ascii(calc.read_register(reg));
+  require(std::stod(value) == expected,
+          context + ": expected " + std::to_string(expected) + ", got " + value);
 }
 
-std::string preload_key(const PreloadReport& preload) {
-  return preload.register_name + "=" + preload.value;
+Observation observe(const CompileResult& program, const Scenario& scenario, int gain,
+                    const std::string& context) {
+  emulator::MK61 calc({.angle_mode = "grad"});
+  require(calc.load_program(step_opcodes(program.steps)).diagnostics.empty(),
+          context + ": program should load");
+  // Apply the complete setup of each artifact, not just newly borrowed selectors.
+  for (const PreloadReport& preload : program.preloads) {
+    require(!preload.setup_expression, context + ": fixture setup must be literal");
+    calc.set_register(preload.register_name, selector_literal(preload.value));
+  }
+  calc.set_register(program.registers.at("score"), std::to_string(scenario.score));
+  calc.set_register(program.registers.at("food"), std::to_string(scenario.food));
+  for (const std::string seed : {"14", "13", "12", "11"})
+    calc.input_number(seed, true).press("В↑");
+  calc.input_number("0", true);
+  calc.press_sequence({"В/О", "С/П"});
+  require(calc.run_until_stable(600, 5).stopped, context + ": initial display should stop");
+  require_scalar(calc, "X", scenario.score * 10 + scenario.food, context + " initial display");
+
+  int score = scenario.score;
+  int food = scenario.food;
+  int display = score * 10 + food;
+  if (scenario.key.has_value()) {
+    calc.input_number(std::to_string(*scenario.key), true).press("С/П");
+    require(calc.run_until_stable(600, 5).stopped, context + ": turn should stop");
+    if (*scenario.key == 2)
+      score += gain;
+    else if (*scenario.key == 8)
+      --food;
+    display = (*scenario.key == 2 || *scenario.key == 8) ? score * 10 + food : 0;
+  }
+  require_scalar(calc, program.registers.at("score"), score, context + " score");
+  require_scalar(calc, program.registers.at("food"), food, context + " food");
+  require_scalar(calc, "X", display, context + " turn display");
+
+  Observation result{.display = trim_ascii(calc.display_text())};
+  result.values["score"] = trim_ascii(calc.read_register(program.registers.at("score")));
+  result.values["food"] = trim_ascii(calc.read_register(program.registers.at("food")));
+  for (const std::string reg : {"X", "Y", "Z", "T", "X1"})
+    result.values[reg] = trim_ascii(calc.read_register(reg));
+  calc.press(".");
+  result.values["X2 probe"] = trim_ascii(calc.display_text());
+  return result;
 }
 
 void require_same_observation(const Observation& actual, const Observation& expected,
                               const std::string& context) {
-  require(actual.stopped == expected.stopped, context + " stopped state should match");
   require(actual.display == expected.display,
           context + " display expected " + expected.display + ", got " + actual.display);
-  require(actual.registers == expected.registers, context + " data registers should match");
+  for (const auto& [name, value] : expected.values)
+    require(actual.values.at(name) == value,
+            context + " " + name + " expected " + value + ", got " + actual.values.at(name));
 }
 
 } // namespace
 
 void emulator_indirect_flow_equivalence_matches_typescript_contract() {
-  const std::filesystem::path root = std::filesystem::current_path();
-  const std::string source = read_text(root / "examples" / "human.mkpro");
+  const std::string original =
+      read_text(std::filesystem::current_path() / "examples" / "human.mkpro");
+  for (int gain : {1, 2}) {
+    std::string source = original;
+    if (gain == 2) {
+      const auto update = source.find("score++");
+      require(update != std::string::npos, "counter fixture must contain its update");
+      source.replace(update, 7, "score += 2");
+    }
+    CompileOptions baseline_options;
+    baseline_options.disable_candidate_search = true;
+    const CompileResult before = compile_source(source, baseline_options);
+    const CompileResult after = compile_source(source);
+    require(before.implemented && before.diagnostics.empty(),
+            "counter reference should compile without diagnostics");
+    require(after.implemented && after.diagnostics.empty(),
+            "counter candidate should compile without diagnostics");
+    require(after.steps.size() <= before.steps.size() && after.steps.size() <= 105U,
+            "candidate search must not increase counter program size");
 
-  // The aggressive post-layout indirect-flow rescue is now enabled by default
-  // and is selected automatically by candidate search (guarded by local static
-  // proof obligations in compile_source). To still exercise the
-  // shrink-and-preserve-behavior contract we compare the default compile (which
-  // now picks the aggressive form) against a non-aggressive reference produced
-  // by disabling candidate search entirely.
-  CompileOptions baseline_options;
-  baseline_options.disable_candidate_search = true;
-  const CompileResult before = compile_source(source, baseline_options);
-  const CompileResult after = compile_source(source);
+    // The former name-based CounterGame path ignored actual function bodies.
+    // A program rename must not change code or register allocation.
+    std::string renamed = source;
+    const auto name = renamed.find("CounterGame");
+    require(name != std::string::npos, "counter fixture must contain its program name");
+    renamed.replace(name, 11, "GenericCounter");
+    const CompileResult neutral = compile_source(renamed);
+    require(neutral.implemented && neutral.diagnostics.empty(),
+            "renamed counter should compile");
+    require(step_opcodes(neutral.steps) == step_opcodes(after.steps) &&
+                neutral.registers == after.registers,
+            "counter lowering must not depend on the program name");
 
-  require(before.implemented, "baseline human.mkpro should compile");
-  require(after.implemented, "aggressive indirect-flow human.mkpro should compile");
-  require(before.diagnostics.empty(), "baseline human.mkpro should not report diagnostics");
-  require(after.diagnostics.empty(), "aggressive indirect-flow human.mkpro should not report diagnostics");
-  require(after.steps.size() < before.steps.size(),
-          "aggressive indirect-flow should shrink human.mkpro");
-  require(has_dark_selector_preload(after),
-          "aggressive indirect-flow should add a dark-entry selector preload");
-  require(has_indirect_branch(after),
-          "aggressive indirect-flow should emit an indirect branch");
-  require(has_optimization(after, "dark-entry-layout"),
-          "aggressive indirect-flow should report dark-entry-layout");
-  require(has_proof(after, "indirect-flow-targets"),
-          "aggressive indirect-flow should report its static target proof");
+    if (gain == 2) {
+      // This fixture has no discarded increment read of a borrowed selector.
+      require(after.steps.size() < before.steps.size(),
+              "safe indirect-flow fixture must still shrink");
+      require(has_indirect_branch(after) && has_proof(after, "indirect-flow-targets"),
+              "safe indirect-flow fixture must prove its delivered targets");
+    }
 
-  const std::set<std::string> before_preloads = [&] {
-    std::set<std::string> keys;
-    for (const PreloadReport& preload : before.preloads)
-      keys.insert(preload_key(preload));
-    return keys;
-  }();
-
-  std::map<std::string, std::string> preload_registers;
-  for (const PreloadReport& preload : after.preloads) {
-    if (!before_preloads.contains(preload_key(preload)))
-      preload_registers[preload.register_name] = preload.value;
-  }
-  std::set<std::string> excluded;
-  for (const auto& [reg, _] : preload_registers)
-    excluded.insert(reg);
-
-  const std::vector<Scenario> scenarios = {
-      Scenario{.keys = {"В/О", "С/П"}},
-      Scenario{.registers = {{"1", "0"}, {"2", "5"}},
-               .keys = {"В/О", "С/П", "Сx", "2", "С/П", "С/П"}},
-      Scenario{.registers = {{"1", "3"}, {"2", "5"}},
-               .keys = {"В/О", "С/П", "Сx", "8", "С/П", "С/П"}},
-      Scenario{.registers = {{"1", "7"}, {"2", "9"}},
-               .keys = {"В/О", "С/П", "Сx", "6", "С/П"}},
-  };
-
-  const std::vector<int> before_codes = step_opcodes(before.steps);
-  const std::vector<int> after_codes = step_opcodes(after.steps);
-  for (std::size_t index = 0; index < scenarios.size(); ++index) {
-    const Observation original = observe(before_codes, scenarios.at(index), {}, excluded);
-    const Observation rewritten =
-        observe(after_codes, scenarios.at(index), preload_registers, excluded);
-    require_same_observation(rewritten, original,
-                             "indirect-flow scenario " + std::to_string(index));
+    const std::vector<Scenario> scenarios{
+        {},
+        {.score = 0, .food = 5, .key = 2},
+        {.score = 6, .food = 5, .key = 2},
+        {.score = 7, .food = 5, .key = 2},
+        {.score = 3, .food = 5, .key = 8},
+        {.score = 7, .food = 9, .key = 6},
+    };
+    for (std::size_t index = 0; index < scenarios.size(); ++index) {
+      const std::string context =
+          "counter gain=" + std::to_string(gain) + " scenario=" + std::to_string(index);
+      const Observation expected = observe(before, scenarios.at(index), gain, context + " baseline");
+      const Observation actual = observe(after, scenarios.at(index), gain, context + " optimized");
+      require_same_observation(actual, expected, context);
+    }
   }
 }
 

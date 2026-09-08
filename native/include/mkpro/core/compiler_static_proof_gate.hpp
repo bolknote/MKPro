@@ -3,7 +3,9 @@
 #include "mkpro/core/result.hpp"
 
 #include <optional>
+#include <set>
 #include <string>
+#include <vector>
 
 namespace mkpro {
 
@@ -14,6 +16,9 @@ namespace mkpro {
 //
 // Keep this out of the public compiler wrapper: it is a verifier test surface,
 // not a production optimizer input.
+std::vector<std::string> demotable_indirect_flow_preload_values_for_testing(
+    const CompileResult& result, const std::set<std::string>& suppressed);
+
 bool optimizer_static_proof_gate_accepts_for_testing(const CompileOptions& candidate_options,
                                                      const CompileResult& result);
 

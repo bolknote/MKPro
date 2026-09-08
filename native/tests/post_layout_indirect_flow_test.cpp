@@ -615,6 +615,34 @@ program DataPreloadProvenance {
   }
 
   {
+    CompileResult constants;
+    constants.preloads = {
+        {.register_name = "7", .value = "39"},
+        {.register_name = "8", .value = "94"},
+        {.register_name = "9", .value = "39", .lowered_data_value = "39"},
+        {.register_name = "a", .value = "94", .counts_against_program = true,
+         .lowered_data_value = "94"},
+        {.register_name = "b", .value = "B2", .lowered_data_value = "B2"},
+        {.register_name = "c", .value = "111", .lowered_data_value = "111"},
+    };
+    require(demotable_indirect_flow_preload_values_for_testing(constants, {}) ==
+                std::vector<std::string>({"39", "111"}),
+            "constant demotion must ignore numeric flow addresses and unknown origins");
+    require(demotable_indirect_flow_preload_values_for_testing(constants, {"39"}) ==
+                std::vector<std::string>({"111"}),
+            "suppression must still remove a genuine compiler data constant");
+
+    CompileOptions suppressed_options;
+    suppressed_options.suppress_constant_preloads.insert("39");
+    const auto rejected =
+        optimizer_static_proof_gate_rejection_reason_for_testing(suppressed_options, constants);
+    require(rejected.has_value() &&
+                rejected->starts_with("suppressed-constant preload proof failed") &&
+                rejected->find("R9=39") != std::string::npos,
+            "failed constant suppression must explain the remaining delivered preload");
+  }
+
+  {
     CompileOptions proof_options = options;
     proof_options.preloaded_indirect_flow = true;
     CompileResult vanished;
@@ -719,6 +747,25 @@ program DataPreloadProvenance {
           OptimizationReport{.name = optimization.name, .detail = optimization.detail});
     require(optimizer_static_proof_gate_accepts_for_testing(proof_options, verified),
             "the final artifact must reprove discarded selector read nonobservation");
+    CompileOptions suppression_options;
+    suppression_options.suppress_constant_preloads.insert(
+        std::to_string(std::stoi(verified.preloads.front().value)));
+    require(optimizer_static_proof_gate_accepts_for_testing(suppression_options, verified),
+            "a proved numeric selector is not a suppressed data-pool constant");
+
+    auto data_constant = verified;
+    data_constant.preloads.front().lowered_data_value = data_constant.preloads.front().value;
+    require(!optimizer_static_proof_gate_accepts_for_testing(suppression_options, data_constant),
+            "actual data-constant provenance must not be erased by a same-valued flow use");
+
+    auto untyped_selector = verified;
+    for (auto& item : untyped_selector.items)
+      item.indirect_flow_targets.reset();
+    untyped_selector.steps = resolve_machine_items(untyped_selector.items, proof_options).steps;
+    require(!optimizer_static_proof_gate_accepts_for_testing(suppression_options,
+                                                            untyped_selector),
+            "missing typed consumers cannot exempt an unknown preload from suppression");
+
     for (auto& item : verified.items) {
       if (item.kind == MachineItemKind::Op && item.opcode == 0x64) {
         item = terminal_stop();  // Same width and targets, but the read is now visible.
@@ -728,6 +775,8 @@ program DataPreloadProvenance {
     verified.steps = resolve_machine_items(verified.items, proof_options).steps;
     require(!optimizer_static_proof_gate_accepts_for_testing(proof_options, verified),
             "a later layout must not retain stale discarded-read allocation permission");
+    require(!optimizer_static_proof_gate_accepts_for_testing(suppression_options, verified),
+            "a matching numeric address needs a fresh nonobservation proof after layout");
 
     auto unmarked = original;
     unmarked.at(3).discarded_indirect_recall_value = false;

@@ -104,6 +104,57 @@ Outcome run(const std::vector<MachineItem>& items, std::string_view context) {
   };
 }
 
+std::vector<MachineItem> indirect_suffix_fixture(int helper_address) {
+  std::vector<MachineItem> items = {
+      MachineItem::op(0x52, "return"),
+      MachineItem::op(0x09, "9"),
+      MachineItem::op(0xa7, "indirect call 7"),
+      MachineItem::op(0x40, "store 0"),
+      MachineItem::op(0x04, "4"),
+      MachineItem::op(0xa7, "indirect call 7"),
+      MachineItem::op(0x41, "store 1"),
+      MachineItem::op(0x50, "stop"),
+  };
+  while (cell_count(items) < helper_address)
+    items.push_back(MachineItem::op(0x50, "stop"));
+  items.push_back(MachineItem::label("stationary_suffix"));
+  items.push_back(MachineItem::op(0x22, "square"));
+  for (int count = 0; count < 5; ++count)
+    items.push_back(MachineItem::op(0x31, "abs"));
+  items.push_back(MachineItem::op(0x52, "return"));
+  return items;
+}
+
+std::vector<std::string> run_indirect_suffix(const std::vector<MachineItem>& items,
+                                             int selector) {
+  const auto resolved = resolve_machine_items(items, {});
+  require(resolved.diagnostics.empty(), "indirect suffix ROM artifact should resolve");
+  std::vector<int> codes;
+  for (const auto& step : resolved.steps)
+    codes.push_back(step.opcode);
+  emulator::MK61 calc;
+  require(calc.load_program(codes).diagnostics.empty(), "indirect suffix must fit ROM memory");
+  calc.set_register("7", std::to_string(selector));
+  calc.set_register("X", "12");
+  calc.set_register("Y", "23");
+  calc.set_register("Z", "34");
+  calc.set_register("T", "45");
+  calc.set_register("X1", "56");
+  calc.press_sequence({"В/О", "С/П"});
+  require(calc.run_until_stable(2000, 8).stopped, "both indirect suffix calls must return");
+  require(std::stod(calc.read_register("0")) == 81 &&
+              std::stod(calc.read_register("1")) == 16,
+          "both indirect calls must execute the entire helper");
+  require(std::stod(calc.read_register("7")) == selector,
+          "repeated calls must preserve their delivered selector word");
+  std::vector<std::string> snapshot;
+  for (const std::string reg : {"0", "1", "X", "Y", "Z", "T", "X1"})
+    snapshot.push_back(calc.read_register(reg));
+  calc.press(".");
+  snapshot.push_back(calc.display_text());
+  return snapshot;
+}
+
 bool contains_reason(const core::CyclicEndReturnProof& proof, std::string_view needle) {
   return std::any_of(proof.reasons.begin(), proof.reasons.end(), [&](const std::string& reason) {
     return reason.find(needle) != std::string::npos;
@@ -303,6 +354,46 @@ void cyclic_end_return_relocates_only_proved_direct_call_helpers() {
         core::rewrite_cyclic_end_return(wrong_size, "square_abs", complete_options());
     require(rejected.applied == 0 && contains_reason(rejected.proof, "exactly one"),
             "artifact without exactly one removable over-limit cell must fail closed");
+  }
+  {
+    const auto stationary = indirect_suffix_fixture(99);
+    auto options = complete_options();
+    options.proved_indirect_flow_targets = {
+        {item_at_address(stationary, 2), {99}},
+        {item_at_address(stationary, 5), {99}},
+    };
+    const auto shortened =
+        core::rewrite_cyclic_end_return(stationary, "stationary_suffix", options);
+    require(shortened.applied == 1 && shortened.proof.final_artifact_proved &&
+                shortened.proof.calls.empty() && shortened.proof.indirect_calls.size() == 2U &&
+                cell_count(shortened.items) == 105,
+            "two stationary indirect calls must license a suffix without any direct call");
+    require(run_indirect_suffix(indirect_suffix_fixture(10), 10) ==
+                run_indirect_suffix(shortened.items, 99),
+            "indirect cyclic returns must preserve X/Y/Z/T/X1, X2 and both caller results");
+    for (const int opcode : {0x87, 0x77}) {
+      auto non_call = stationary;
+      non_call.at(item_at_address(non_call, 2)) = MachineItem::op(opcode, "non-call");
+      require(core::rewrite_cyclic_end_return(non_call, "stationary_suffix", options).applied == 0,
+              "indirect jumps and conditions must not license a cyclic call entry");
+    }
+    for (const std::vector<int>& targets :
+         {std::vector<int>{}, std::vector<int>{99, 99},
+          std::vector<int>{100}, std::vector<int>{105}}) {
+      auto invalid = options;
+      invalid.proved_indirect_flow_targets.at(item_at_address(stationary, 2)) = targets;
+      require(core::rewrite_cyclic_end_return(stationary, "stationary_suffix", invalid).applied == 0,
+              "empty, duplicated, unlabelled and removed-return targets must fail closed");
+    }
+    auto moving = indirect_suffix_fixture(40);
+    while (cell_count(moving) < 106)
+      moving.push_back(MachineItem::op(0x50, "stop"));
+    auto moved_options = complete_options();
+    moved_options.proved_indirect_flow_targets = {
+        {item_at_address(moving, 2), {40}}, {item_at_address(moving, 5), {40}},
+    };
+    require(core::rewrite_cyclic_end_return(moving, "stationary_suffix", moved_options).applied == 0,
+            "an indirect selector must not be silently rebound when its helper moves");
   }
 }
 

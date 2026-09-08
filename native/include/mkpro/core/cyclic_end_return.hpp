@@ -12,7 +12,7 @@
 
 namespace mkpro::core {
 
-// A direct-call entry into a straight-line helper that can be relocated to the
+// A call-only entry into a straight-line helper that can be relocated to the
 // end of the standard 105-cell MK-61 address space.  Once the helper's final
 // body command occupies A4, normal program-counter wrap reaches В/О at 00 and
 // makes the helper's explicit В/О redundant.
@@ -25,6 +25,15 @@ struct CyclicEndReturnEntry {
 struct CyclicEndReturnCall {
   std::size_t call_item_index = 0;
   std::size_t operand_item_index = 0;
+  std::string entry_label;
+};
+
+// A complete indirect call whose target command remains at the same physical
+// address. Both source identities are retained for the final-artifact check.
+struct CyclicEndReturnIndirectCall {
+  std::size_t call_item_index = 0;
+  std::size_t relocated_call_item_index = 0;
+  int target_address = -1;
   std::string entry_label;
 };
 
@@ -63,6 +72,7 @@ struct CyclicEndReturnProof {
   int relocated_explicit_return_address = -1;
   std::vector<CyclicEndReturnEntry> entries;
   std::vector<CyclicEndReturnCall> calls;
+  std::vector<CyclicEndReturnIndirectCall> indirect_calls;
   std::map<std::size_t, std::vector<int>> final_indirect_flow_targets;
   std::vector<int> final_external_entry_addresses;
   std::vector<std::string> reasons;
@@ -76,7 +86,8 @@ struct CyclicEndReturnResult {
 };
 
 // Verify that `helper_label` names an isolated straight-line helper with an
-// explicit В/О, that every entry is referenced only by direct ПП, and that
+// explicit В/О, that every helper entry is referenced only by a direct ПП or
+// a completely proved stationary indirect call to a labelled entry, and that
 // relocating the helper to the end of this one-cell-over-limit artifact is
 // safe. Fixed numeric operands fail closed. Official/side-space formal operands
 // are accepted only when their exact actual command identity remains fixed;
