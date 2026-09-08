@@ -71,6 +71,11 @@ std::optional<std::string> dead_store_target(const IrOp& op) {
     return op.register_name;
   if (op.kind != IrKind::IndirectStore)
     return std::nullopt;
+  // A provisional logical name is not a hardware selector class. Leave
+  // indirect writes to the existing physical pass after register allocation;
+  // in particular, a variable named "b" need not reside in stable Rb.
+  if (op.meta.logical_register_analysis)
+    return std::nullopt;
   if (!mkpro::core::is_stable_indirect_selector(op.register_name))
     return std::nullopt;
   return known_indirect_memory_target(op);

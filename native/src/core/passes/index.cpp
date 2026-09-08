@@ -1,5 +1,7 @@
 #include "mkpro/core/passes/index.hpp"
 
+#include "mkpro/core/formal_address.hpp"
+
 #include "mkpro/core/passes/redundant_literal_reload.hpp"
 
 #include "mkpro/core/passes/arithmetic_if.hpp"
@@ -44,6 +46,7 @@
 #include "mkpro/core/passes/x2_noop_restore.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <set>
 #include <string>
 #include <utility>
@@ -370,10 +373,35 @@ RunPassesResult run_ir_passes(const std::vector<MachineItem>& items,
   };
 }
 
+bool has_finalization_counter_contract(const std::vector<MachineItem>& items,
+                                       const CompileOptions& options) {
+  const AddressSpaceModel model = address_space_model_for_feature_profile(
+      effective_optimizer_feature_profile(options));
+  for (const MachineItem& item : items) {
+    // The IR liveness/reload analyses below have physical target identities,
+    // not encoded-counter contexts. Keeping the same first physical command
+    // does not prove the same continuation through a side branch.
+    if (item.indirect_flow_formal_targets.has_value())
+      return true;
+    if (item.kind != MachineItemKind::Address || !item.formal_opcode.has_value())
+      continue;
+    try {
+      if (formal_address_info(*item.formal_opcode, model).kind !=
+          FormalAddressKind::Official)
+        return true;
+    } catch (const std::exception&) {
+      return true;
+    }
+  }
+  return false;
+}
+
 template <typename Pass>
 RunPassesResult run_finalization_cell_erasure(
     const std::vector<MachineItem>& items, const CompileOptions& options,
     std::string_view pass_name, bool attach_identity_labels, Pass&& pass) {
+  if (has_finalization_counter_contract(items, options))
+    return RunPassesResult{.items = items};
   const std::vector<MachineItem> identity_items = attach_identity_labels
                                                        ? attach_finalization_flow_identity_labels(items)
                                                        : items;
@@ -391,6 +419,8 @@ RunPassesResult run_finalization_cell_erasure(
                                    result.optimizations.end());
     current = result.ops;
   }
+  if (aggregate.applied == 0)
+    return RunPassesResult{.items = items};
   aggregate.items = lower_ir_to_machine(current);
   if (attach_identity_labels) {
     std::set<int> retained_addresses;

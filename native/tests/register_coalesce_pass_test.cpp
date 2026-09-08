@@ -73,6 +73,86 @@ core::passes::PassResult run_register_coalesce(const std::vector<IrOp>& ops,
 
 void register_coalesce_matches_typescript_contract() {
   {
+    const auto logical_selector = [](IrKind kind, int opcode, std::string name) {
+      IrOp op;
+      op.kind = kind;
+      op.opcode = opcode;
+      op.register_name = std::move(name);
+      op.meta.logical_register_analysis = true;
+      return op;
+    };
+    IrOp counter;
+    counter.kind = IrKind::Loop;
+    counter.counter = "L1";
+    counter.opcode = 0x5b;
+    counter.meta.logical_register_analysis = true;
+    counter.meta.logical_register_name = "rounds";
+    const std::vector<IrOp> ops{
+        counter,
+        logical_selector(IrKind::IndirectRecall, 0xd1, "b"),
+        logical_selector(IrKind::IndirectStore, 0xb4, "up"),
+        logical_selector(IrKind::IndirectCall, 0xa7, "next")};
+    const auto domains = core::passes::logical_register_instruction_class_domains(ops);
+    require(domains.has_value() && domains->size() == 4 &&
+                domains->at("rounds") == std::set<int>({0, 1, 2, 3}) &&
+                domains->at("b") == std::set<int>({0, 1, 2, 3}) &&
+                domains->at("up") == std::set<int>({4, 5, 6}) &&
+                domains->at("next") == std::set<int>({7, 8, 9, 10, 11, 12, 13, 14}),
+            "instruction classes must derive from opcodes, not logical names or old colors");
+    auto compatible = ops;
+    compatible.push_back(logical_selector(IrKind::IndirectStore, 0xb3, "rounds"));
+    require(core::passes::logical_register_instruction_class_domains(compatible) == domains,
+            "multiple compatible roles must intersect to the same domain");
+    auto conflicting = ops;
+    conflicting.push_back(logical_selector(IrKind::IndirectRecall, 0xd4, "rounds"));
+    require(!core::passes::logical_register_instruction_class_domains(conflicting).has_value(),
+            "contradictory counter/selector classes must fail closed");
+    auto malformed = ops;
+    malformed[0].counter = "L0";
+    require(!core::passes::logical_register_instruction_class_domains(malformed).has_value(),
+            "an inconsistent loop opcode/name must not establish an allocation domain");
+    malformed = ops;
+    malformed[0].meta.logical_register_name.reset();
+    require(!core::passes::logical_register_instruction_class_domains(malformed).has_value(),
+            "a loop without its logical identity must not constrain an unrelated value");
+    malformed = ops;
+    malformed[1].opcode = 0xb1;
+    require(!core::passes::logical_register_instruction_class_domains(malformed).has_value(),
+            "a mismatched indirect kind/opcode must fail closed");
+    malformed = ops;
+    malformed[1].meta.logical_register_analysis = false;
+    require(!core::passes::logical_register_instruction_class_domains(malformed).has_value(),
+            "physical identities must not be guessed in a logical-domain analysis");
+    malformed = ops;
+    malformed[1].opcode = 0xdf;
+    require(!core::passes::logical_register_instruction_class_domains(malformed).has_value(),
+            "opcode-F aliases must not be guessed to mean an ordinary stable RF selector");
+    const auto empty = core::passes::logical_register_instruction_class_domains({halt()});
+    require(empty.has_value() && empty->empty(),
+            "code without class-sensitive operations needs no speculative constrained variant");
+
+    core::passes::RegisterInterferenceGraph graph;
+    std::vector<std::string> values{"rounds"};
+    for (int index = 0; index < 15; ++index)
+      values.push_back("value_" + std::to_string(index));
+    for (const auto& left : values)
+      for (const auto& right : values)
+        if (left != right)
+          graph.neighbors[left].insert(right);
+    core::passes::PrecoloredRegisterAllocationOptions allocation;
+    allocation.greedy_only = true;
+    allocation.prioritize_constrained_domains = true;
+    allocation.allowed_colors["rounds"] = {0, 1, 2, 3};
+    require(!core::passes::color_precolored_register_graph(graph, allocation).has_value(),
+            "class-aware coloring must not invent a sixteenth stock register");
+    allocation.color_count = 16;
+    const auto expanded = core::passes::color_precolored_register_graph(graph, allocation);
+    require(expanded.has_value() && expanded->at("rounds") <= 3 &&
+                std::any_of(expanded->begin(), expanded->end(),
+                            [](const auto& entry) { return entry.second == 15; }),
+            "an expanded palette may place ordinary data in RF while retaining the FL class");
+  }
+  {
     core::passes::RegisterInterferenceGraph graph;
     graph.neighbors["a"].insert("b");
     graph.neighbors["b"].insert("a");
@@ -85,6 +165,12 @@ void register_coalesce_matches_typescript_contract() {
     options.greedy_only = true;
     require(!core::passes::color_precolored_register_graph(graph, options).has_value(),
             "a speculative domain coloring failure must not start exhaustive search");
+    options.prioritize_constrained_domains = true;
+    const auto constrained = core::passes::color_precolored_register_graph(graph, options);
+    require(constrained.has_value() && constrained->at("a") == 1 && constrained->at("b") == 0,
+            "bounded MRV coloring must reserve the only admissible color before a broad domain");
+    require(core::passes::color_precolored_register_graph(graph, options) == constrained,
+            "constrained greedy coloring must be deterministic");
     options.fixed_colors["b"] = 1;
     require(!core::passes::color_precolored_register_graph(graph, options).has_value(),
             "fixed assignments must obey hardware register domains");

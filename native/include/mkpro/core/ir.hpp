@@ -109,8 +109,9 @@ struct MachineItem {
   // names before choosing the final R0..Re assignment.
   std::optional<std::string> logical_register_name;
   std::optional<std::vector<std::string>> logical_indirect_memory_targets;
-  // The instruction is used only for its selector mutation. Its recalled
-  // memory value is proved dead even though the hardware still loads X.
+  // The instruction is used only for its selector mutation. The source-level
+  // recalled value is dead, but hardware still loads X: consumers must prove
+  // hidden/stack-state nonobservation independently before changing that read.
   bool discarded_indirect_recall_value = false;
   // This indirect-flow command consumes a setup-time selector borrowed from
   // an allocated register before that register's first ordinary definition.

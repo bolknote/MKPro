@@ -365,6 +365,9 @@ struct CompileOptions {
   // tails and proving an X/Y/Z-preserving selector-charge ABI. The complete
   // candidate, not an expanded intermediate, competes on final size.
   bool callee_hole_boundary_normalization = false;
+  // Move a proved dead/common literal across a selector charge only in an
+  // independently finalized candidate. Local savings can disturb anchors.
+  bool selector_charge_literal_sinking = false;
   bool disable_interprocedural_opts = false;
   bool coalesce_copies = false;
   // Run a dedicated first IR phase that uses a bounded exact-return-stack
@@ -482,6 +485,17 @@ struct CompileOptions {
   // aliases solely to emit a complete logical access trace; a normal compile
   // then re-lowers from source using the proved final assignment below.
   bool collect_logical_register_allocation = false;
+  // Speculative compact coloring of the same logical interference graph.
+  // Ignore soft physical preferences and request a greedy witness only;
+  // fixed hardware constraints and regenerated-assignment proofs still apply.
+  bool compact_logical_register_allocation = false;
+  // Keep low-cost FL/indirect-selector classes while compacting logical
+  // values. This is a separately finalized candidate, not a hard source hint.
+  bool preserve_logical_register_instruction_classes = false;
+  // Remove stores in the logical namespace before coloring, and replay that
+  // cleanup before verifying/emitting a forced assignment. This is separate
+  // from compact coloring so the original finalized candidate remains available.
+  bool logical_register_dead_store_elimination = false;
   // Requested setup-time constant preloads. This is optimizer intent, not a
   // proof artifact: indirect-flow gates must still prove branch selectors from
   // final PreloadReport entries rather than trusting this map.

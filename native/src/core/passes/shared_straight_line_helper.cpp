@@ -1,4 +1,5 @@
 #include "mkpro/core/passes/shared_straight_line_helper.hpp"
+#include "mkpro/core/passes/selector_charge_literal_sinking.hpp"
 
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
 
@@ -1725,6 +1726,13 @@ PassResult callee_hole_straight_line_helper_impl(const std::vector<IrOp>& ops, c
     }
   }
 
+  const auto sunk_literal = context.options.selector_charge_literal_sinking
+                                ? selector_charge_literal_sinking(result, context)
+                                : PassResult{.ops = result};
+  if (sunk_literal.applied > 0) {
+    result = sunk_literal.ops;
+    saved_cells += 2 * sunk_literal.applied;
+  }
   int automatic_lifts = 0;
   for (std::size_t index = result.size(); index-- > 0;) {
     const auto& op = result[index];
@@ -1745,6 +1753,8 @@ PassResult callee_hole_straight_line_helper_impl(const std::vector<IrOp>& ops, c
                     std::to_string(saved_cells) + " cell(s) saved).",
       },
   };
+  optimizations.insert(optimizations.end(), sunk_literal.optimizations.begin(),
+                       sunk_literal.optimizations.end());
   if (automatic_lifts > 0)
     optimizations.push_back(AppliedOptimization{
         .name = "callee-hole-automatic-entry-lift",

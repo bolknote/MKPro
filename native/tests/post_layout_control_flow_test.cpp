@@ -187,8 +187,8 @@ void formal_program_counter_contract() {
       image[90] = op(0x51);
       image[91] = MachineItem::address(position);
       image[91].formal_opcode = entry;
-      image[position] = op(call ? 0x53 : 0x51);
-      if (position + 1 < 105) image[position + 1] = MachineItem::address(10);
+      image.at(static_cast<std::size_t>(position)) = op(call ? 0x53 : 0x51);
+      if (position + 1 < 105) image.at(static_cast<std::size_t>(position + 1)) = MachineItem::address(10);
       PostLayoutControlFlowOptions options;
       options.main_entry = 90;
       const auto facts = core::build_post_layout_control_flow(image, options);
@@ -236,8 +236,8 @@ void formal_program_counter_contract() {
     std::vector<MachineItem> image(105, stop(StopDisposition::Terminal));
     const int position = formal_address_info(entry).actual;
     const int continuation = entry == 0xb1 ? 0 : 1;
-    image[position] = op(0x54);
-    image[continuation] = op(0x52);
+    image.at(static_cast<std::size_t>(position)) = op(0x54);
+    image.at(static_cast<std::size_t>(continuation)) = op(0x52);
     image[90] = op(0xa7);
     image[90].indirect_flow_targets = std::vector<IrTarget>{position};
     PostLayoutControlFlowOptions options;
@@ -255,7 +255,7 @@ void formal_program_counter_contract() {
     calc.press_sequence({"БП", "9", "0", "ПП", "ПП", "ПП"});
     require(calc.program_counter() == "91", "indirect aliases must return to the actual caller");
 
-    image[position] = stop(StopDisposition::Resumable);
+    image.at(static_cast<std::size_t>(position)) = stop(StopDisposition::Resumable);
     const auto resume = core::build_post_layout_control_flow(image, options);
     require(resume.proved &&
                 std::any_of(resume.external_entries.begin(), resume.external_entries.end(),
@@ -285,10 +285,85 @@ void formal_program_counter_contract() {
   }
 }
 
+void formal_address_operand_ownership_contract() {
+  using core::PostLayoutControlFlowOptions;
+  for (const auto model : {AddressSpaceModel::Standard, AddressSpaceModel::Mk61SMiniExpanded}) {
+    const int limit = official_program_step_limit(model);
+    const auto count = static_cast<std::size_t>(limit);
+    const int caller = official_address_to_opcode(limit - 1, model);
+    const int returned = formal_address_successor_opcode(formal_address_successor_opcode(caller));
+    std::vector<MachineItem> image(count, op(0x54));
+    image.at(0) = MachineItem::address(std::string("leaf"));
+    image.at(1) = stop(StopDisposition::Terminal);
+    image.at(20) = op(0x52);
+    image.back() = op(0x53);
+    // Zero-width labels must not change the physical operand or return address.
+    image.insert(image.begin() + 20, MachineItem::label("leaf"));
+    PostLayoutControlFlowOptions options;
+    options.address_space_model = model;
+    options.main_entry = limit - 1;
+    const auto facts = core::build_post_layout_control_flow(image, options);
+    require(facts.proved && facts.execution_states.size() == 3U &&
+                facts.execution_states.front().operand_item_index == 0U &&
+                facts.execution_states.at(1).address == 20 &&
+                facts.execution_states.at(1).return_stack == std::vector<int>{1} &&
+                facts.execution_states.at(1).formal_return_stack ==
+                    std::vector<std::optional<int>>{returned} &&
+                facts.execution_states.back().formal_opcode == returned,
+            "a boundary call must own its wrapped address operand in either memory profile");
+
+    auto unknown = image;
+    unknown.at(0).target = std::string("absent");
+    const auto unresolved = core::build_post_layout_control_flow(unknown, options);
+    require(!unresolved.proved && reason_contains(unresolved, "no resolved execution target"),
+            "a fetched non-adjacent address word must still resolve to a real command");
+
+    auto invalid = image;
+    invalid.at(0).formal_opcode = 256;
+    require(!core::build_post_layout_control_flow(invalid, options).proved,
+            "a wrapped operand must retain encoded-address validation");
+
+    auto orphaned = image;
+    orphaned.at(5) = MachineItem::address(std::string("leaf"));
+    const auto orphan = core::build_post_layout_control_flow(orphaned, options);
+    require(!orphan.proved && reason_contains(orphan, "orphan address operand"),
+            "a real wrapped operand must not excuse another unconsumed address word");
+
+    auto opcode_word = image;
+    opcode_word.at(0) = op(0x20);
+    const auto encoded = core::build_post_layout_control_flow(opcode_word, options);
+    require(encoded.proved && encoded.execution_states == facts.execution_states &&
+                encoded.execution_edges == facts.execution_edges,
+            "typed and opcode-encoded forms of the same fetched byte must have the same CFG");
+  }
+
+  std::vector<MachineItem> side(105, op(0x54));
+  side.at(0) = MachineItem::address(20);
+  side.at(1) = stop(StopDisposition::Terminal);
+  side.at(6) = op(0x53);
+  side.at(7) = MachineItem::address(30);
+  side.at(20) = op(0x52);
+  side.at(30) = stop(StopDisposition::Terminal);
+  PostLayoutControlFlowOptions options;
+  options.main_entry = 6;
+  options.main_formal_opcode = 0xb1;
+  const auto facts = core::build_post_layout_control_flow(side, options);
+  require(facts.proved && facts.execution_states.front().operand_item_index == 0U &&
+              facts.execution_states.at(1).address == 20 &&
+              facts.execution_states.back().formal_opcode == 0xb3,
+          "a side entry must account for its fetched typed operand away from the physical boundary");
+
+  auto missing = side;
+  missing.at(0).target = std::string("absent");
+  require(!core::build_post_layout_control_flow(missing, options).proved,
+          "side-entry operand ownership must not accept an unresolved target");
+}
+
 } // namespace
 
 void post_layout_control_flow_matches_typed_contract() {
   formal_program_counter_contract();
+  formal_address_operand_ownership_contract();
   {
     MachineItem error = op(0x29, "К ÷");
     error.stop_disposition = StopDisposition::Resumable;
@@ -533,6 +608,31 @@ void post_layout_control_flow_matches_typed_contract() {
     const auto facts = core::build_post_layout_control_flow(missing);
     require(!facts.proved && reason_contains(facts, "indirect-memory fact is missing"),
             "missing indirect-memory metadata must fail closed");
+  }
+
+  {
+    std::vector<MachineItem> discarded = indirect;
+    discarded.at(memory_recall).discarded_indirect_recall_value = true;
+    discarded.at(memory_recall).indirect_memory_targets.reset();
+    const auto facts = core::build_post_layout_control_flow(discarded);
+    std::vector<int> all_registers;
+    for (int reg = 0; reg <= 0x0e; ++reg)
+      all_registers.push_back(reg);
+    require(facts.proved &&
+                facts.indirect_memory_targets.at(memory_recall) == all_registers,
+            "discarded recall must retain all possible memory aliases");
+    discarded.at(memory_recall).raw = true;
+    require(!core::build_post_layout_control_flow(discarded).proved,
+            "raw code must not acquire an implicit discarded-read contract");
+    discarded.at(memory_recall).raw = false;
+    discarded.at(memory_recall).indirect_memory_targets = std::vector<int>{};
+    require(!core::build_post_layout_control_flow(discarded).proved,
+            "an explicitly empty target claim remains invalid");
+    discarded = indirect;
+    discarded.at(memory_store).discarded_indirect_recall_value = true;
+    discarded.at(memory_store).indirect_memory_targets.reset();
+    require(!core::build_post_layout_control_flow(discarded).proved,
+            "a memory write cannot masquerade as a discarded read");
   }
 
   {

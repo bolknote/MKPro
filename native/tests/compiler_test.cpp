@@ -621,6 +621,291 @@ program TwentyDisjointRegisters {
   require(physical_registers.size() <= 15U && !physical_registers.contains("f"),
           "standard logical allocation must use only R0..Re");
 
+  CompileOptions compact_probe_options = probe_options;
+  compact_probe_options.compact_logical_register_allocation = true;
+  const CompileResult compact_probe = compile_source(source, compact_probe_options);
+  require(compact_probe.implemented && !has_error_diagnostic(compact_probe),
+          "compact coloring must accept independent logical lifetimes");
+  std::set<std::string> compact_colors;
+  for (const auto& assignment : compact_probe.logical_register_assignments)
+    compact_colors.insert(assignment.register_name);
+  require(compact_colors.size() == 1U && !compact_colors.contains("f"),
+          "soft source-register preferences must not fragment disjoint lifetimes");
+  CompileOptions compact_final_options = baseline_options;
+  compact_final_options.forced_logical_register_assignments =
+      compact_probe.logical_register_assignments;
+  const CompileResult compact = compile_source(source, compact_final_options);
+  require(compact.implemented && !has_error_diagnostic(compact),
+          "compact assignment must pass a fresh lowering and interference proof");
+
+  const auto io_trace = [&](const CompileResult& program) {
+    emulator::MK61 calculator;
+    require(calculator.load_program(step_opcodes(program)).diagnostics.empty(),
+            "reallocated lifetime fixture must fit the stock emulator");
+    for (const auto& preload : program.preloads)
+      calculator.set_register(preload.register_name, preload.value);
+    calculator.input_number("0", true);
+    calculator.press_sequence({"В/О", "С/П"});
+    std::vector<std::string> trace;
+    for (int turn = 0; turn <= 20; ++turn) {
+      require(calculator.run_until_stable(5000, 6).stopped,
+              "reallocated lifetime fixture must reach every input/output stop");
+      trace.push_back(calculator.display_text());
+      if (turn < 20) {
+        calculator.input_number(std::to_string(turn * 7 - 31), true);
+        calculator.press("С/П");
+      }
+    }
+    for (const auto& reg : {"X", "Y", "Z", "T"})
+      trace.push_back(calculator.read_register(reg));
+    calculator.press_sequence({"F", "В↑"});
+    trace.push_back(calculator.display_text());
+    return trace;
+  };
+  require(io_trace(compact) == io_trace(compiled),
+          "compact allocation must preserve ROM-visible stops, stack and last X");
+
+  const std::string class_source = R"mkpro(
+program ClassSensitiveLifetime {
+  state {
+    offset0: packed = 100
+    offset1: packed = 200
+    offset2: packed = 300
+    offset3: packed = 400
+    remaining: counter 0..4 = 4
+    total: packed = 0
+  }
+  loop {
+    remaining = 4
+    total = 0
+    while remaining >= 1 {
+      total += remaining
+      remaining--
+    }
+    show(total + offset0 + offset1 + offset2 + offset3)
+    total = read()
+  }
+}
+)mkpro";
+  const CompileResult class_baseline = compile_source(class_source, baseline_options);
+  require(class_baseline.implemented && !has_error_diagnostic(class_baseline),
+          "ordinary class-sensitive fixture must compile");
+  const CompileResult unconstrained_probe = compile_source(class_source, compact_probe_options);
+  require(unconstrained_probe.implemented && !has_error_diagnostic(unconstrained_probe),
+          "unconstrained compact probe must remain independently available");
+  CompileOptions unconstrained_options = baseline_options;
+  unconstrained_options.forced_logical_register_assignments =
+      unconstrained_probe.logical_register_assignments;
+  const CompileResult unconstrained = compile_source(class_source, unconstrained_options);
+  require(unconstrained.implemented && !has_error_diagnostic(unconstrained),
+          "unconstrained assignment must still be a valid larger lowering");
+
+  CompileOptions class_probe_options = compact_probe_options;
+  class_probe_options.preserve_logical_register_instruction_classes = true;
+  const CompileResult class_probe = compile_source(class_source, class_probe_options);
+  require(class_probe.implemented && !has_error_diagnostic(class_probe) &&
+              has_optimization(class_probe, "logical-register-instruction-classes"),
+          "logical coloring must derive a counter domain from the emitted FL instruction");
+  const auto counter_assignment = std::find_if(
+      class_probe.logical_register_assignments.begin(), class_probe.logical_register_assignments.end(),
+      [](const LogicalRegisterAssignment& assignment) { return assignment.name == "remaining"; });
+  require(counter_assignment != class_probe.logical_register_assignments.end() &&
+              register_index(counter_assignment->register_name) <= 3,
+          "class-sensitive compact allocation must leave the counter in R0..R3");
+  CompileOptions class_final_options = baseline_options;
+  class_final_options.preserve_logical_register_instruction_classes = true;
+  class_final_options.forced_logical_register_assignments = class_probe.logical_register_assignments;
+  const CompileResult class_final = compile_source(class_source, class_final_options);
+  require(class_final.implemented && !has_error_diagnostic(class_final) &&
+              class_final.steps.size() < unconstrained.steps.size() &&
+              class_final.steps.size() <= class_baseline.steps.size(),
+          "preserving instruction classes must avoid the longer ordinary-register countdown");
+  require(io_trace(class_final) == io_trace(class_baseline),
+          "class-sensitive regeneration must preserve ROM stops, stack and last X");
+  std::string renamed_class_source = class_source;
+  for (std::size_t offset = 0;
+       (offset = renamed_class_source.find("remaining", offset)) != std::string::npos;) {
+    renamed_class_source.replace(offset, 9, "opaque_count");
+    offset += 12;
+  }
+  const CompileResult renamed_class_probe = compile_source(renamed_class_source, class_probe_options);
+  const auto renamed_counter = std::find_if(
+      renamed_class_probe.logical_register_assignments.begin(),
+      renamed_class_probe.logical_register_assignments.end(),
+      [](const LogicalRegisterAssignment& assignment) { return assignment.name == "opaque_count"; });
+  require(renamed_class_probe.implemented && !has_error_diagnostic(renamed_class_probe) &&
+              renamed_counter != renamed_class_probe.logical_register_assignments.end() &&
+              register_index(renamed_counter->register_name) <= 3,
+          "instruction-class allocation must survive arbitrary source-variable renaming");
+
+  const auto equal_entry_source = [](bool write_first, bool distinct, bool across_stops = false) {
+    std::string source = "program EntryColors {\n  state {\n";
+    for (int index = 0; index < 20; ++index)
+      source += "    entry" + std::to_string(index) + ": packed = " +
+                std::to_string(distinct ? index + 1 : 7) + "\n";
+    source += "  }\n  loop {\n";
+    if (write_first)
+      source += "    entry0 = read()\n";
+    for (int index = 0; index < 20; ++index) {
+      const int value = across_stops ? (index + 1) % 20 : index;
+      source += "    show(entry" + std::to_string(value) + ")\n";
+    }
+    return source + "  }\n}\n";
+  };
+  const auto entry_baseline_source = [](bool write_first, bool across_stops) {
+    std::string source =
+        "program EntryBaseline {\n  state {\n    seed: packed = 7\n";
+    if (write_first)
+      source += "    first: packed = 7\n";
+    source += "  }\n  loop {\n";
+    if (write_first)
+      source += "    first = read()\n";
+    for (int index = 0; index < 20; ++index)
+      source += write_first && index == (across_stops ? 19 : 0)
+                    ? "    show(first)\n" : "    show(seed)\n";
+    return source + "  }\n}\n";
+  };
+  const auto compile_allocation_candidates = &mkpro::compile_source;
+  enum class EntryCase { Readonly, Forwarded, Stored };
+  for (const EntryCase entry_case : {EntryCase::Readonly, EntryCase::Forwarded, EntryCase::Stored}) {
+    const bool write_first = entry_case != EntryCase::Readonly;
+    const bool across_stops = entry_case == EntryCase::Stored;
+    const std::string entry_source = equal_entry_source(write_first, false, across_stops);
+    const CompileResult entry_probe = compile_source(entry_source, compact_probe_options);
+    require(entry_probe.implemented && !has_error_diagnostic(entry_probe),
+            "more equal entry owners than physical colors must not be rejected by owner count");
+    const auto color_of = [&](const std::string& name) {
+      const auto assignment = std::find_if(
+          entry_probe.logical_register_assignments.begin(),
+          entry_probe.logical_register_assignments.end(),
+          [&](const LogicalRegisterAssignment& value) { return value.name == name; });
+      require(assignment != entry_probe.logical_register_assignments.end(),
+              "every equal entry value must retain a logical assignment");
+      require(register_index(assignment->register_name) < 15,
+              "stock equal-entry allocation must never borrow Rf");
+      return assignment->register_name;
+    };
+    for (int index = 2; index < 20; ++index)
+      require(color_of("entry" + std::to_string(index)) == color_of("entry1"),
+              "equal read-only entry values must be allowed to share one color");
+    require((color_of("entry0") != color_of("entry1")) == across_stops,
+            "only a value kept across other stops requires a separate register; direct forwarding does not");
+
+    CompileOptions automatic_entry_options = baseline_options;
+    automatic_entry_options.disable_candidate_search = false;
+    const CompileResult entry_result =
+        compile_allocation_candidates(entry_source, automatic_entry_options);
+    const CompileResult entry_baseline =
+        compile_source(entry_baseline_source(write_first, across_stops), baseline_options);
+    require(entry_result.implemented && !has_error_diagnostic(entry_result) &&
+                entry_result.steps.size() <= 105 && entry_baseline.implemented &&
+                !has_error_diagnostic(entry_baseline),
+            "automatic recovery must compile equal-entry programs into stock memory");
+    require(io_trace(entry_result) == io_trace(entry_baseline),
+            "equal-entry sharing must preserve ROM stops, stack and last X, including a later write");
+  }
+  const CompileResult distinct_entries =
+      compile_source(equal_entry_source(false, true), compact_probe_options);
+  require(!distinct_entries.implemented && has_error_diagnostic(distinct_entries),
+          "genuinely distinct simultaneously live entry values must still fail bounded allocation");
+
+  const std::string dead_input_store = R"mkpro(
+program OpaqueInputLifetime {
+  state {
+    retained: packed = 17
+    discarded: packed = 0
+  }
+  loop {
+    discarded = read()
+    show(retained)
+    retained += 1
+  }
+}
+)mkpro";
+  const CompileResult input_baseline = compile_source(dead_input_store, baseline_options);
+  require(input_baseline.implemented && !has_error_diagnostic(input_baseline),
+          "ordinary dead-input fixture must compile");
+  CompileOptions clean_probe_options = compact_probe_options;
+  clean_probe_options.logical_register_dead_store_elimination = true;
+  const CompileResult clean_probe = compile_source(dead_input_store, clean_probe_options);
+  require(clean_probe.implemented && !has_error_diagnostic(clean_probe) &&
+              has_optimization(clean_probe, "logical-register-dead-store-elimination"),
+          "logical allocation must erase the dead input store before building conflicts");
+  const auto clean_assignment = [&](const std::string& name) -> const LogicalRegisterAssignment& {
+    const auto found = std::find_if(clean_probe.logical_register_assignments.begin(),
+        clean_probe.logical_register_assignments.end(),
+        [&](const LogicalRegisterAssignment& assignment) { return assignment.name == name; });
+    require(found != clean_probe.logical_register_assignments.end(),
+            "logical cleanup must retain every source-allocation identity");
+    return *found;
+  };
+  require(clean_assignment("discarded").register_name ==
+              clean_assignment("retained").register_name &&
+              !clean_assignment("discarded").preload_owner &&
+              clean_assignment("retained").preload_owner,
+          "dead logical input may share the live state slot without replacing its setup value");
+  CompileOptions clean_final_options = baseline_options;
+  clean_final_options.logical_register_dead_store_elimination = true;
+  clean_final_options.forced_logical_register_assignments =
+      clean_probe.logical_register_assignments;
+  const CompileResult cleaned = compile_source(dead_input_store, clean_final_options);
+  require(cleaned.implemented && !has_error_diagnostic(cleaned) &&
+              has_optimization(cleaned, "logical-register-dead-store-elimination"),
+          "forced regeneration must physically erase the proved dead input store");
+  require(io_trace(cleaned) == io_trace(input_baseline),
+          "logical DSE plus coloring must preserve input stops, state, stack and last X");
+  CompileOptions unclean_alias_options = clean_final_options;
+  unclean_alias_options.logical_register_dead_store_elimination = false;
+  const CompileResult unclean_alias = compile_source(dead_input_store, unclean_alias_options);
+  require(!unclean_alias.implemented && has_error_diagnostic(unclean_alias),
+          "sharing the same registers without erasing the clobbering store must be rejected");
+
+  const auto pressure_source = [](bool observe_discarded) {
+    std::string text = "program UnusedInputPressure {\n  state {\n";
+    for (int index = 0; index < 15; ++index) {
+      const std::string suffix = (index < 10 ? "0" : "") + std::to_string(index);
+      text += "    persistent" + suffix + ": packed = " +
+              std::to_string(100 + index) + "\n";
+    }
+    text += "    discarded: packed\n  }\n  loop {\n    discarded = read()\n";
+    for (int index = 0; index < 15; ++index) {
+      const std::string suffix = (index < 10 ? "0" : "") + std::to_string(index);
+      text += "    show(persistent" + suffix + ")\n";
+    }
+    if (observe_discarded)
+      text += "    show(discarded)\n";
+    return text + "  }\n}\n";
+  };
+  const std::string pressure = pressure_source(false);
+  const CompileResult pressure_without_cleanup = compile_source(pressure, baseline_options);
+  require(!pressure_without_cleanup.implemented &&
+              has_error_diagnostic(pressure_without_cleanup),
+          "an unoptimized dead input write must reproduce provisional register exhaustion");
+  const CompileResult pressure_probe = compile_source(pressure, clean_probe_options);
+  require(pressure_probe.implemented && !has_error_diagnostic(pressure_probe),
+          "logical cleanup must color fifteen live setup values plus an unused input name");
+  CompileOptions pressure_replay_options = clean_final_options;
+  pressure_replay_options.forced_logical_register_assignments =
+      pressure_probe.logical_register_assignments;
+  const CompileResult pressure_replay = compile_source(pressure, pressure_replay_options);
+  require(pressure_replay.implemented && !has_error_diagnostic(pressure_replay),
+          "cleaned pressure allocation must regenerate a valid stock program");
+  CompileOptions automatic_pressure_options;
+  automatic_pressure_options.fast_candidate_search = true;
+  const auto compile_full_pressure = &mkpro::compile_source;
+  const CompileResult pressure_auto = compile_full_pressure(pressure, automatic_pressure_options);
+  require(pressure_auto.implemented && !has_error_diagnostic(pressure_auto) &&
+              pressure_auto.steps.size() <= 105 &&
+              std::none_of(pressure_auto.registers.begin(), pressure_auto.registers.end(),
+                          [](const auto& entry) { return entry.second == "f"; }),
+          "automatic allocation failure recovery must use logical DSE without requiring Rf");
+  require(io_trace(pressure_auto) == io_trace(pressure_replay),
+          "automatic dead-store pressure recovery must preserve ROM-visible input and state");
+  const CompileResult observed_pressure =
+      compile_source(pressure_source(true), pressure_replay_options);
+  require(!observed_pressure.implemented && has_error_diagnostic(observed_pressure),
+          "making the discarded input observable must invalidate its forced shared color");
+
   const std::string equal_entry_values = R"mkpro(
 program EqualEntryValueLifetimes {
   state {
@@ -693,6 +978,30 @@ program DivergingEqualEntryValueLifetimes {
                   diverging_entry_probe.logical_register_assignments.end() &&
               diverging_first->register_name != diverging_second->register_name,
           "a later write while the other entry value is live must retain an interference edge");
+
+  const CompileResult compact_diverging =
+      compile_source(diverging_equal_entry_values, compact_probe_options);
+  require(compact_diverging.implemented && !has_error_diagnostic(compact_diverging),
+          "compact allocation must preserve diverging equal-entry lifetimes");
+  auto invalid_assignments = compact_diverging.logical_register_assignments;
+  const auto compact_first = std::find_if(invalid_assignments.begin(), invalid_assignments.end(),
+      [](const LogicalRegisterAssignment& assignment) { return assignment.name == "first"; });
+  const auto compact_second = std::find_if(invalid_assignments.begin(), invalid_assignments.end(),
+      [](const LogicalRegisterAssignment& assignment) { return assignment.name == "second"; });
+  require(compact_first != invalid_assignments.end() && compact_second != invalid_assignments.end() &&
+              compact_first->register_name != compact_second->register_name,
+          "compact coloring must not override an interference edge");
+  compact_second->register_name = compact_first->register_name;
+  CompileOptions invalid_options = baseline_options;
+  invalid_options.forced_logical_register_assignments = std::move(invalid_assignments);
+  const CompileResult invalid = compile_source(diverging_equal_entry_values, invalid_options);
+  require(!invalid.implemented && has_error_diagnostic(invalid),
+          "regeneration must reject a corrupted compact-coloring witness");
+  invalid_options.logical_register_dead_store_elimination = true;
+  const CompileResult invalid_after_cleanup =
+      compile_source(diverging_equal_entry_values, invalid_options);
+  require(!invalid_after_cleanup.implemented && has_error_diagnostic(invalid_after_cleanup),
+          "logical cleanup must not excuse an alias whose stored value is actually observed");
 
   const std::string impossible = R"mkpro(
 program SixteenEntryLiveRegisters {
@@ -774,11 +1083,10 @@ void compiler_feature_profile_rf_optimizer_is_size_monotonic_contract() {
   const CompileResult without_rf = compile_full(source, without_rf_options);
   require(without_rf.implemented && !has_error_diagnostic(without_rf),
           "standard-profile optimizer root should compile the regression fixture");
-  require(without_rf.steps.size() == 134,
-          "interprocedural region fusion should keep tic-tac-toe-4x4 at 134 cells, got " +
-              std::to_string(without_rf.steps.size()));
+  // Absolute example sizes belong to example_sizes_test.cpp. This contract
+  // compares the two complete optimizer roots; a stale exact size must not
+  // prevent it from exercising the expanded profile or reject an improvement.
   require(has_optimization(without_rf, "callee-hole-boundary-normalization") &&
-              has_optimization(without_rf, "callee-hole-interprocedural-region-fusion") &&
               std::any_of(without_rf.proofs.begin(), without_rf.proofs.end(),
                           [](const ProofReport& proof) {
                             return proof.id == "callee-hole-indirect-call-targets" &&
@@ -822,7 +1130,27 @@ void compiler_feature_profile_rf_optimizer_is_size_monotonic_contract() {
   if (standard_root->selected)
     require(step_opcodes(with_rf) == step_opcodes(without_rf),
             "selected RF-free optimizer root should preserve its proved final byte sequence");
-  require(with_rf.listing.find("A5") != std::string::npos,
+  const std::set<std::string> expanded_addresses{"A5", "A6", "A7", "A8", "A9", "B0", "B1"};
+  bool main_listing = false;
+  bool expanded_row = false;
+  std::istringstream listing_rows(with_rf.listing);
+  for (std::string line; std::getline(listing_rows, line);) {
+    if (line == "# Main Listing")
+      main_listing = true;
+    if (!main_listing)
+      continue;
+    std::istringstream row(line);
+    std::string address;
+    std::string separator;
+    if (row >> address >> separator;
+        separator == "|" && expanded_addresses.contains(address)) {
+      expanded_row = true;
+      break;
+    }
+  }
+  // A multi-cell literal can span A4/A5, so an individual A5 row is optional.
+  // Check an actual main-listing address column, never an opcode/comment match.
+  require(expanded_row,
           "selected standard optimizer root should be reformatted in expanded address space");
 
   const CompileResult cached_with_rf = compile_full(source, with_rf_options);

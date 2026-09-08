@@ -2183,9 +2183,20 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
         item.formal_opcode = 0x85;
       }
     }
+    const core::AuthoritativePostLayoutControlFlow hardware_flow = flow(input);
+    require(!hardware_flow.proved &&
+                std::any_of(hardware_flow.reasons.begin(), hardware_flow.reasons.end(),
+                            [](const std::string& reason) {
+                              return reason.find("return-stack depth") != std::string::npos;
+                            }),
+            "an explicit hardware 85 entry must wrap before the logical helper at 108");
+    const auto normalized = core::normalize_natural_target_overflow_formals(input.items);
+    require(normalized.has_value(),
+            "resolver-wrapped operands must recover their logical target identities");
+    input.items = *normalized;
     const core::AuthoritativePostLayoutControlFlow input_flow = flow(input);
     require(input_flow.proved,
-            "wrapped over-window fixture should still have a physical input CFG");
+            "normalized over-window fixture must have a logical input CFG");
     const auto rewritten = core::optimize_natural_target_component_layout(
         input.items, input.preloads, input_flow);
     require(rewritten.plan.proved && rewritten.applied == 2 &&

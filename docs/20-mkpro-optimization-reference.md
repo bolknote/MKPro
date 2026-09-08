@@ -882,6 +882,55 @@ candidate set, its deterministic ordering, size costs, or any proof gate.
   `aggressive-post-layout-shared-call-body`, and
   `aggressive-post-layout-dual-use-constant` — bounded combinations of the
   aggressive post-layout pass with existing layout/value candidates.
+- `logical-dse-register-allocation` composes ordinary/exact-stack DSE with
+  compact logical coloring as a separate final-size candidate. DSE runs in the
+  logical namespace, never on provisional physical aliases. The deletion-only
+  result retains surviving opcodes and manual-resume anchors; forced source
+  regeneration repeats this cleanup before checking the actual interference
+  graph. A dead store therefore cannot create an artificial conflict, and a
+  removed conflict cannot leave a clobbering command in the delivered program.
+  The current logical phase erases direct stores only. Numeric-entry closing
+  stores, VP restoration contexts, external PP commands, raw operations and
+  unresolved memory/control effects retain the existing conservative guards.
+  The original compact candidate remains independently available. Selection
+  also retries logical DSE when ordinary allocation and its initial logical
+  coloring fail: an unused input store must not require a sixteenth physical
+  register. The cleanup flag travels with the cached candidate and its forced
+  regeneration, so an erased conflict never leaves a physical clobber behind.
+  Final selection
+  still uses full proof-valid final size, then runtime cost, under the same
+  105/112-cell target profile.
+- `logical-register-lifetime-allocation` counts proved interference rather than
+  setup owners. More entry values than physical registers are legal when equal
+  numeric setup literals can share colors; a later write while another value
+  remains live still separates them. This formerly rejected case uses only a
+  bounded greedy witness, never an added exponential search, and retains the
+  source-regeneration proof and the target profile's physical register limit.
+- `instruction-class-register-allocation` and
+  `instruction-class-logical-dse-register-allocation` add an independent
+  compact coloring candidate with opcode-derived register domains. Lowered
+  `F L0..L3` values stay in R0..R3; indirect operands retain their predecrement,
+  preincrement, or stable selector class. Intersecting incompatible roles,
+  inconsistent IR metadata, and opcode-F selector aliases reject this candidate,
+  not the original program. No source name or game is recognized. A bounded
+  greedy list-coloring witness selects the fewest currently admissible colors
+  first, with deterministic DSATUR/name ties; it never starts exponential
+  speculative search. Raw/fixed hardware colors and the final regenerated
+  interference proof remain authoritative. Ordinary data may use Rf only in
+  the expanded profile, while the indirect opcode-F class is not inferred.
+  Previous compact/DSE candidates remain available; all variants undergo full
+  finalization and proof gates, then compete by final cells before runtime.
+- `compact-logical-register-allocation` uses the existing logical interference
+  graph with its fixed hardware colors and setup ownership, but omits soft
+  physical preferences in one deterministic greedy coloring. Unlike pairwise
+  merging, this can fill low-register holes and release stable indirect-flow
+  selectors. The compiler regenerates setup and code, repeats the interference
+  proof and final-layout gates, then compares complete artifacts by size first
+  and runtime cost on a tie. The incumbent is retained on failure or growth;
+  a failed greedy witness never starts an exponential search. The probe runs
+  after incumbent refinement, including programs already within the hardware
+  limit. Stock MK-61 retains 105 cells and R0..Re; only the explicit expanded
+  mk61s profile has 112 cells and Rf. No source names or game shapes are matched.
 - `reclaim-coalesced-preloads` — compiles with forced coalesce-induced register
   sharing to free constants for preload allocation. Its probe bases include
   source-relevant compact bit-mask and dead-source residual variants, so the
@@ -1026,6 +1075,30 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `post-layout-empty-stack-loop-return` — converts a direct `БП` to physical 01 into a one-cell `В/О` when every execution state of the branch carries an empty return stack. The MK-61 sets the program counter to 00 after an empty-stack `В/О` and the next fetched command is the one at physical 01 (the cell at 00 is skipped; pinned by `emulator_vo_empty_continuation_facts`), so the converted command transfers to the same target with the same stack. The pass runs first in the post-layout pipeline, before any selector value or anchor address is solved, so all later layout machinery rebuilds the geometry of the shrunk artifact itself; a deletion is admitted only when every numeric direct operand and every non-symbolic indirect target lies before the erased operand cell (label-typed indirect targets follow the shifted layout through the late binder and the retunable-selector machinery). The converted `В/О` carries the ecosystem-wide `optimized БП 01` marker so later machine-to-IR raises keep modeling its physical-01 continuation. The `empty_stack_loop_return` lowering option manufactures the eligible shape by placing a one-cell `К НОП` entry pad at physical 00 so the main loop head lands on 01. Finalization also amortizes one inserted `В/О@00` across all direct `БП 00` edges proved either reachable only with an empty stack or unreachable in a freshly rebuilt complete CFG; fixed dual-use selector targets are retained by the generic component solver, and only a strictly smaller re-proved artifact is published.
 - `post-layout-charged-selector-flow` — runs after every selector charge (including late-bound decimal charges) has been materialized. A flow-sensitive value analysis over the authoritative execution-state graph proves that a stable register holds one exact literal on every path reaching a direct `ПП addr`, `БП addr`, or ordinary X conditional; when that literal decodes to the same backward target and is a fixed point of the selector write-back, the two-cell direct flow becomes its one-cell `К ... r` form. Conditional conversion additionally accounts for the hardware X2 difference: direct conditionals update hidden X2 on fallthrough while indirect conditionals preserve it. A greatest-fixed-point CFG proof requires every changed fallthrough to overwrite X2 before a restore, unknown effect, or external observation; closed preserving SCCs are accepted because the difference cannot escape. `FL0..FL3` remain excluded. Value sources are deliberately narrow (literal preloads, uninterrupted integer digit entry stored via `X->П r`, recalls of tracked registers, `/-/` of a known X, and the machine's own write-back); everything else — arithmetic, fractional entry, indirect stores, manual external entries — poisons the tracked slot. The operand-erasure transaction follows every numeric direct target by executable-item identity and clears stale formal encodings, while symbolic operands continue to follow labels; an address/code overlay whose operand byte is also executable remains immovable. A successful rewrite carries `runtime-charged-selector-consumer` proof metadata into later layouts. A subsequent absolute relayout may keep such a consumer only by preserving its typed target identity at the original physical address and independently re-proving the runtime value flow; ordinary preload rebinding is never assumed for the dynamically written register. Late-bound decimal targets may instead use the common binder to rewrite their charge digits. Unmarked, malformed, out-of-range, arithmetic-dependent, ambiguously joined, or X2-observable charges remain immovable. The callee-hole static gate re-validates each such reuse against its independently derived charge inventory.
 - `single-digit-late-bound-selector` — after final layout, contracts a compiler-marked `0N` decimal selector charge to one digit when its target is in physical `00..09`. The fixed-width pair is not shortened speculatively: the exact execution-state graph first proves that the raw `X2` spelling difference (`0N` versus `N`) converges before any restore, display, stop, or other observation. The surviving digit becomes a one-cell late-bound marker, all affected selector charges are rebound after the deletion, and the ordinary absolute component transaction re-proves direct and indirect targets, external entries, data stack, `X2`, indirect memory, setup preloads, and return stack. Arbitrary decimal literals, raw cells, independently entered low digits, and targets outside `00..09` are rejected.
+- `stack-entry-decimal-phase` tracks a common open/closed/unknown numeric-entry
+  mode alongside stack/X1/X2 equality through exact caller/return contexts.
+  A proved direct recall, store or supported call closes entry; the first
+  digit then lifts once, and later digits extend the same mantissa. Joins
+  retain only a mode common to every incoming path. Enter and unproved
+  boundaries remain conservative. ROM tests distinguish a fresh literal from
+  Enter-suppressed lift and retain physical X1 as an independent obligation.
+- `selector-charge-literal-sinking` moves an ordinary literal input behind a
+  shared, compiler-owned decimal selector store instead of restoring that
+  input with a stack rotation. The same proved fresh-number entry lets the
+  first selector digit replace its explicit stack lift, saving two cells.
+  Other callers must prove the displaced input
+  dead. Each incoming charge supplies an exact symbolic selector identity;
+  the shared stack-equality engine checks all caller/return contexts with
+  X1 and X2, and stops using that identity at any possible selector write.
+  Independent entries, raw code, physical address contracts, live alternative
+  inputs and incomplete indirect facts fail closed. The literal's arithmetic
+  and rounding are unchanged. The original selector ABI remains an independent
+  incumbent: one regenerated candidate must pass complete finalization and
+  re-derive the literal digits, unique producer and every incoming selector's
+  stack/X1/X2 convergence from the delivered code. Bypassed literal entries,
+  modified digits and missing/duplicated provenance reject the candidate.
+  It must beat the incumbent on final size (then runtime cost on a tie), in the same selected
+  105/112-cell memory model. A smaller IR alone never authorizes replacement.
 - `formal-program-counter-context` keeps the encoded hardware counter separate
   from its physical command identity. Sequential execution follows decimal
   counter carry, including A4 -> A5, B1 -> B2, F9 -> 00 and FA..FF -> 01..06.
@@ -1033,6 +1106,9 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
   can consume its operand from a different physical neighbour at a branch
   boundary. The execution graph records that operand identity and retains
   formal return frames across calls, returns, resumable stops and manual phases.
+  Operand ownership includes actual cross-boundary fetches before rejecting
+  orphan address words; every fetched target must still resolve. Compiler
+  contracts cover typed and opcode-encoded words in both memory profiles.
   The same physical command reached through different formal counters is not
   merged into one execution context. Oversized, not-yet-placed artifacts keep
   their separate linear logical address space. Stock MK-61 has 105 command
@@ -1049,6 +1125,13 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
   before placement. Empty, duplicate, conflicting or stale facts fail closed.
   Stop-tail reuse follows the encoded counter after its prompt rather than
   assuming that the continuation is the next physical cell.
+  Finalization and post-inline IR cell erasure reject explicit noncanonical
+  direct counters and typed indirect aliases until their physical-only
+  analyses can prove encoded-context transport. Identity labels must not erase
+  these contracts. Canonical A5..B1 remain eligible in the 112-cell profile;
+  an optimizer restricted to stock features cannot borrow that memory.
+  An emulator regression pins an FA entry whose physical-only rewrite changes
+  a running program into a terminal stop.
   Emulator contracts cover short/long/super-dark entries, hexadecimal low
   digits, split jump/call words, saved return counters and manual continuation.
 
@@ -4539,3 +4622,30 @@ on any continuation, including return paths and cycles. A normalized
 negative-order encoding such as `1.4375014E-1` instead retains the whole word
 while supplying mantissa digits for address 14. The decoder's `transformed`
 address bits and its `result_value` data word are distinct in that case.
+
+### Discarded indirect reads and selector relocation
+
+A compiler-generated indirect recall used only for its counter mutation still
+reads a physical data register. If its target is unknown, authoritative
+post-layout analysis retains the complete R0..Re alias set. An empty target
+claim, raw code, or a memory write cannot acquire this implicit contract.
+
+Retargeting an unwritten canonical decimal address preload may ignore such a
+data use only after a separate, bounded execution-graph proof. The proof follows
+both branch directions and exact call/return contexts, tracking equality of
+X/Y/Z/T, physical last-X (X1), and the hidden entry copy X2. A store of unequal X,
+an authored stop, a manual interaction, a raw/unknown operation, or an entry-mode
+barrier before convergence rejects the rewrite. An observation-free cycle is a
+finite equality-state fixed point, not an unbounded path simulation.
+
+The source-level discarded-value annotation alone is never sufficient.
+Fresh digit entry requires an established lift context; in particular, Enter
+and call/return boundaries must not invent another stack lift. Numeric-only
+address rebinding remains restricted to 00..99 and does not change either
+profile's physical limit: 105 cells for stock MK-61, 112 for expanded MK61S.
+
+Contracts: native/tests/post_layout_control_flow_test.cpp and
+native/tests/finalization_selector_bounds_test.cpp cover complete alias sets,
+both branches, helper returns, successful cell erasure, and rejected visible,
+last-X, exponent-entry and Enter/digit observations.
+

@@ -1,9 +1,11 @@
 #include "mkpro/core/passes/register_coalesce.hpp"
 
+#include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/passes/liveness_analysis.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <set>
@@ -382,6 +384,7 @@ private:
 
   std::string select_node() const {
     std::string selected;
+    std::size_t selected_remaining = 0;
     std::size_t selected_saturation = 0;
     std::size_t selected_degree = 0;
     bool found = false;
@@ -398,10 +401,22 @@ private:
       const std::size_t saturation = adjacent_colors.size();
       const std::size_t degree =
           neighbors == graph_.neighbors.end() ? 0U : neighbors->second.size();
-      if (!found || saturation > selected_saturation ||
-          (saturation == selected_saturation && degree > selected_degree) ||
-          (saturation == selected_saturation && degree == selected_degree && node < selected)) {
+      std::size_t remaining = 0;
+      if (options_.prioritize_constrained_domains) {
+        for (int color = 0; color < options_.color_count; ++color)
+          if (accepts(node, color))
+            ++remaining;
+      }
+      const bool same_remaining =
+          !options_.prioritize_constrained_domains || remaining == selected_remaining;
+      if (!found ||
+          (options_.prioritize_constrained_domains && remaining < selected_remaining) ||
+          (same_remaining &&
+           (saturation > selected_saturation ||
+            (saturation == selected_saturation && degree > selected_degree) ||
+            (saturation == selected_saturation && degree == selected_degree && node < selected)))) {
         selected = node;
+        selected_remaining = remaining;
         selected_saturation = saturation;
         selected_degree = degree;
         found = true;
@@ -634,6 +649,63 @@ CoalesceResult coalesce_copies(const std::vector<IrOp>& ops) {
 }
 
 } // namespace
+
+std::optional<std::map<std::string, std::set<int>>>
+logical_register_instruction_class_domains(const std::vector<IrOp>& ops) {
+  std::map<std::string, std::set<int>> domains;
+  const auto restrict_domain = [&](const std::string& name, const std::set<int>& allowed) {
+    if (name.empty())
+      return false;
+    const auto [entry, inserted] = domains.try_emplace(name, allowed);
+    if (!inserted) {
+      std::set<int> intersection;
+      std::set_intersection(entry->second.begin(), entry->second.end(),
+                            allowed.begin(), allowed.end(),
+                            std::inserter(intersection, intersection.end()));
+      entry->second = std::move(intersection);
+    }
+    return !entry->second.empty();
+  };
+
+  for (const IrOp& op : ops) {
+    if (op.kind == IrKind::Loop) {
+      const OpcodeInfo* instruction = find_opcode_name("F " + op.counter);
+      if (!op.meta.logical_register_analysis ||
+          !op.meta.logical_register_name.has_value() ||
+          !loop_counter_register(op.counter).has_value() ||
+          instruction == nullptr || instruction->code != op.opcode ||
+          !restrict_domain(*op.meta.logical_register_name, {0, 1, 2, 3})) {
+        return std::nullopt;
+      }
+      continue;
+    }
+    if (!is_indirect_access(op))
+      continue;
+    if (!op.meta.logical_register_analysis || op.opcode < 0 || op.opcode > 0xff)
+      return std::nullopt;
+    const int family = op.opcode & 0xf0;
+    const bool matching_kind =
+        (op.kind == IrKind::IndirectRecall && family == 0xd0) ||
+        (op.kind == IrKind::IndirectStore && family == 0xb0) ||
+        (op.kind == IrKind::IndirectJump && family == 0x80) ||
+        (op.kind == IrKind::IndirectCall && family == 0xa0) ||
+        (op.kind == IrKind::IndirectCondJump &&
+         (family == 0x70 || family == 0x90 || family == 0xc0 || family == 0xe0));
+    const int selector = op.opcode & 0x0f;
+    // Opcode-F selector aliases are not a portable RF class. Keep the
+    // independent incumbent rather than infer a profile-specific identity.
+    if (!matching_kind || selector == 0x0f)
+      return std::nullopt;
+    const auto mutation = core::indirect_selector_mutation(selector);
+    std::set<int> allowed;
+    for (int color = 0; color <= 0x0e; ++color)
+      if (core::indirect_selector_mutation(color) == mutation)
+        allowed.insert(color);
+    if (!restrict_domain(op.register_name, allowed))
+      return std::nullopt;
+  }
+  return domains;
+}
 
 std::optional<std::map<std::string, int>>
 color_precolored_register_graph(const RegisterInterferenceGraph& graph,

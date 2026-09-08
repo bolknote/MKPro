@@ -244,7 +244,10 @@ std::optional<std::string> rebind_proved_natural_fractional_selector_preload(
 
 // Retarget one stable, unwritten indirect-flow selector. Address-only
 // selectors may use the new address directly; selectors with ordinary data
-// reads must belong to a proved retunable fractional family.
+// reads must belong to a proved retunable fractional family. Indirect memory
+// target aliases also count as data uses: checking only the encoded selector
+// would let a pointer expose a changed address word. Unknown aliases fail
+// closed, including in fractional/numeric projection alternatives.
 std::optional<std::string> rebind_stable_preloaded_indirect_flow_selector(
     const std::vector<MachineItem>& items, const PreloadReport& preload,
     const AuthoritativePostLayoutControlFlow& control_flow, int old_target,

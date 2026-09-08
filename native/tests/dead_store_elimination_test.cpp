@@ -149,6 +149,61 @@ int store_count(const std::vector<IrOp>& ops) {
 } // namespace
 
 void dead_store_elimination_matches_typescript_contract() {
+  const auto logical = [](std::vector<IrOp> ops) {
+    for (IrOp& op : ops)
+      op.meta.logical_register_analysis = true;
+    return ops;
+  };
+  {
+    const auto result = run_dead_store_elimination(
+        logical({store("unused-value"), recall("persistent-value"), halt()}));
+    require(result.applied == 1 && result.ops.front().kind == IrKind::Recall,
+            "logical stores must be tested by identity, not their provisional opcode register");
+    const auto live = run_dead_store_elimination(
+        logical({store("persistent-value"), recall("persistent-value"), halt()}));
+    require(live.applied == 0, "logical cleanup must preserve an observed stored value");
+  }
+  {
+    IrOp input = halt();
+    input.semantic = "input";
+    const auto result = run_dead_store_elimination(
+        logical({input, store("unused-value"), plain(5, "5"), halt()}));
+    require(result.applied == 0,
+            "dead logical storage may still be needed to close interactive number entry");
+    const auto vp = run_dead_store_elimination(
+        logical({store("unused-value"), plain(0x0c, "VP"), halt()}));
+    require(vp.applied == 0, "logical cleanup must retain a VP restoration-context store");
+  }
+  {
+    const auto single_step = run_dead_store_elimination(logical({
+        entered_store("unused-value", ManualInteractionAnchorKind::SingleStepCommand), halt()}));
+    require(single_step.applied == 0, "logical cleanup must retain an external PP command");
+    const auto resume = run_dead_store_elimination(logical({
+        entered_store("unused-value", ManualInteractionAnchorKind::ContinuousResume),
+        recall("persistent-value"), halt()}));
+    require(resume.applied == 1 && resume.ops.front().meta.manual_interaction.has_value(),
+            "logical cleanup must transfer, not discard, a continuous-resume anchor");
+  }
+  {
+    for (const std::string selector : {"b", "opaque-selector"}) {
+      auto indirect = known_target_indirect_store(selector, "2");
+      indirect.meta.logical_indirect_memory_targets = std::vector<std::string>{"payload"};
+      const auto result = run_dead_store_elimination(logical({indirect, halt()}));
+      require(result.applied == 0,
+              "a logical selector name must never authorize dropping a physical indirect write");
+    }
+    IrOp indirect;
+    indirect.kind = IrKind::IndirectRecall;
+    indirect.register_name = "opaque-selector";
+    indirect.opcode = 0xd7;
+    const auto unknown = run_dead_store_elimination(
+        logical({store("payload"), indirect, halt()}));
+    require(unknown.applied == 0, "unknown indirect reads must observe the logical namespace");
+    indirect.meta.logical_indirect_memory_targets = std::vector<std::string>{"other-payload"};
+    const auto disjoint = run_dead_store_elimination(
+        logical({store("payload"), indirect, halt()}));
+    require(disjoint.applied == 1, "typed logical targets may prove an unrelated store dead");
+  }
   {
     const core::passes::PassResult result = run_dead_store_elimination(
         {store("1"), plain(0x0d, "Cx"), store("1"), recall("1"), halt()});

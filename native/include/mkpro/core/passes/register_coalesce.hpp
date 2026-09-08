@@ -38,7 +38,16 @@ struct PrecoloredRegisterAllocationOptions {
   // Omission means every target register is admissible. An explicitly empty
   // domain is unsatisfiable, including for an otherwise valid fixed color.
   std::map<std::string, std::set<int>> allowed_colors;
+  // Optional MRV ordering for bounded speculative list coloring. The default
+  // exact/legacy DSATUR ordering is unchanged.
+  bool prioritize_constrained_domains = false;
 };
+
+// Cost-preserving domains for already lowered logical FL/indirect operations.
+// Unknown/inconsistent identities and opcode-F selector aliases fail closed.
+// Domains do not replace source regeneration or the final interference proof.
+std::optional<std::map<std::string, std::set<int>>>
+logical_register_instruction_class_domains(const std::vector<IrOp>& ops);
 
 // Exact DSATUR coloring for the source-level allocator. Fixed nodes model raw
 // hardware-register uses and layout contracts; preferred colors only stabilize

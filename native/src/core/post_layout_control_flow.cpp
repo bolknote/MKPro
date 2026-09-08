@@ -219,13 +219,13 @@ bool takes_address(const MachineItem& item) {
 void validate_artifact_and_typed_targets(const std::vector<MachineItem>& items,
                                          const ArtifactIndex& index,
                                          const PostLayoutControlFlowOptions& options,
+                                         std::set<std::size_t>& consumed_operands,
                                          AuthoritativePostLayoutControlFlow& result) {
   if (items.empty() || index.cells == 0)
     add_reason(result, "artifact contains no command cells");
   if (!index.duplicate_labels.empty())
     add_reason(result, "artifact contains duplicate labels");
 
-  std::set<std::size_t> consumed_operands;
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
     const MachineItem& item = items.at(item_index);
     if (item.kind != MachineItemKind::Op) {
@@ -304,7 +304,17 @@ void validate_artifact_and_typed_targets(const std::vector<MachineItem>& items,
     }
 
     if (indirect_memory) {
-      if (!item.indirect_memory_targets.has_value() || item.indirect_memory_targets->empty()) {
+      if (!item.indirect_memory_targets.has_value() &&
+          item.opcode >= 0xd0 && item.opcode <= 0xde && !item.raw &&
+          item.discarded_indirect_recall_value) {
+        // A selector-only recall still reads memory. Its complete conservative
+        // alias set is every stock data register, not the empty set. This says
+        // nothing about whether X, X1 or X2 may expose the discarded value.
+        std::vector<int> targets;
+        for (int reg = 0; reg <= 0x0e; ++reg)
+          targets.push_back(reg);
+        result.indirect_memory_targets.emplace(item_index, std::move(targets));
+      } else if (!item.indirect_memory_targets.has_value() || item.indirect_memory_targets->empty()) {
         add_reason(result,
                    "complete indirect-memory fact is missing item " + std::to_string(item_index));
       } else {
@@ -349,12 +359,6 @@ void validate_artifact_and_typed_targets(const std::vector<MachineItem>& items,
       add_reason(result, "formal indirect entries do not match their physical target facts");
   }
 
-  for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
-    if (items.at(item_index).kind == MachineItemKind::Address &&
-        !consumed_operands.contains(item_index)) {
-      add_reason(result, "artifact contains an orphan address operand");
-    }
-  }
 }
 
 std::map<std::size_t, ManualProtocol>
@@ -700,8 +704,10 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
       result.execution_states.at(state_id).operand_item_index = operand->second;
       const auto target = direct_target_cursor(
           items.at(operand->second), index, options.address_space_model, result);
-      if (!target.has_value())
+      if (!target.has_value()) {
+        add_reason(result, "reachable address word has no resolved execution target");
         continue;
+      }
       const auto fallthrough = sequential_successor(index, *operand_cursor, options.address_space_model);
       if (opcode == kJumpOpcode) {
         enqueue(*target, state.returns, PostLayoutExecutionEdgeKind::DirectTarget);
@@ -838,7 +844,8 @@ build_post_layout_control_flow(const std::vector<MachineItem>& items,
   }
 
   const ArtifactIndex index = index_artifact(items);
-  validate_artifact_and_typed_targets(items, index, execution_options, result);
+  std::set<std::size_t> consumed_operands;
+  validate_artifact_and_typed_targets(items, index, execution_options, consumed_operands, result);
   if (options.empty_return_target.has_value()) {
     const std::optional<PostLayoutCommandIdentity> target =
         resolve_indirect_target(items, index, *options.empty_return_target);
@@ -856,6 +863,18 @@ build_post_layout_control_flow(const std::vector<MachineItem>& items,
     return result;
 
   explore_entries_and_return_stacks(items, index, protocols, execution_options, result);
+  // A real operand may be fetched through a non-linear counter continuation,
+  // not from the command's physical neighbour. Do not classify it as orphaned
+  // before the exact execution graph has accounted for all such reads.
+  if (result.reasons.empty()) {
+    for (const auto& state : result.execution_states)
+      if (state.operand_item_index.has_value())
+        consumed_operands.insert(*state.operand_item_index);
+    for (std::size_t item_index = 0; item_index < items.size(); ++item_index)
+      if (items.at(item_index).kind == MachineItemKind::Address &&
+          !consumed_operands.contains(item_index))
+        add_reason(result, "artifact contains an orphan address operand");
+  }
   result.proved = result.reasons.empty();
   return result;
 }

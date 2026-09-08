@@ -148,6 +148,11 @@ bool prove_post_layout_stack_entry_equality(
     into.x2_equal = into.x2_equal && from.x2_equal;
     return before != stack_value_equality_key(into);
   };
+  // This is the common entry mode of both executions, not an equality bit.
+  // Unknown is the join of equal-open and equal-closed states. Never infer
+  // a fresh-number lift after Enter or an unproved control boundary.
+  enum class DecimalEntry { Unknown, Closed, Open };
+  std::vector<DecimalEntry> entry_modes(flow.execution_states.size(), DecimalEntry::Unknown);
   std::vector<std::optional<StackValueEqualityState>> incoming(flow.execution_states.size());
   std::deque<std::size_t> pending;
   for (std::size_t index = 0; index < flow.execution_states.size(); ++index) {
@@ -164,6 +169,7 @@ bool prove_post_layout_stack_entry_equality(
     const std::size_t index = pending.front();
     pending.pop_front();
     StackValueEqualityState state = *incoming[index];
+    DecimalEntry entry_mode = entry_modes[index];
     if (stack_values_fully_equal(state))
       continue;
     ++explored;
@@ -205,15 +211,19 @@ bool prove_post_layout_stack_entry_equality(
       if (opcode_by_code(item.opcode).x2_effect == X2Effect::Affects)
         state.x2_equal = state.stack_equal[0];
     } else if (kind == IrKind::Plain && item.opcode >= 0 && item.opcode <= 9) {
-      // The two entry modes agree, but may be either open or closed. Keep
-      // only equality facts that survive both possible decimal-entry effects.
-      auto open = state;
-      auto closed = state;
-      if (transfer_decimal_digit_equality(open, true) == StackValueEqualityTransfer::Rejected ||
-          transfer_decimal_digit_equality(closed, false) == StackValueEqualityTransfer::Rejected)
+      if (entry_mode == DecimalEntry::Unknown) {
+        auto open = state;
+        auto closed = state;
+        if (transfer_decimal_digit_equality(open, true) == StackValueEqualityTransfer::Rejected ||
+            transfer_decimal_digit_equality(closed, false) == StackValueEqualityTransfer::Rejected)
+          return reject("decimal entry observes a differing value");
+        merge(open, closed);
+        state = open;
+      } else if (transfer_decimal_digit_equality(
+                     state, entry_mode == DecimalEntry::Open) ==
+                 StackValueEqualityTransfer::Rejected) {
         return reject("decimal entry observes a differing value");
-      merge(open, closed);
-      state = open;
+      }
     } else {
       StackValueEqualityStepKind effect = StackValueEqualityStepKind::Plain;
       if (kind == IrKind::Recall || kind == IrKind::IndirectRecall)
@@ -226,6 +236,13 @@ bool prove_post_layout_stack_entry_equality(
           StackValueEqualityTransfer::Rejected)
         return reject("instruction consumes a differing stack component");
     }
+    if (kind == IrKind::Plain && item.opcode >= 0 && item.opcode <= 9)
+      entry_mode = DecimalEntry::Open;
+    else if ((kind == IrKind::Recall && item.opcode >= 0x60 && item.opcode <= 0x6e) ||
+             selector_charge_entry_closer_opcode(item.opcode))
+      entry_mode = DecimalEntry::Closed;
+    else
+      entry_mode = DecimalEntry::Unknown;
     if (stack_values_fully_equal(state))
       continue;
     const auto& successors = flow.execution_successors[index];
@@ -236,9 +253,16 @@ bool prove_post_layout_stack_entry_equality(
         return reject("successor is outside the execution graph");
       if (!incoming[successor].has_value()) {
         incoming[successor] = state;
+        entry_modes[successor] = entry_mode;
         pending.push_back(successor);
-      } else if (merge(*incoming[successor], state)) {
-        pending.push_back(successor);
+      } else {
+        const bool values_changed = merge(*incoming[successor], state);
+        const auto joined = entry_modes[successor] == entry_mode
+                                ? entry_mode : DecimalEntry::Unknown;
+        const bool mode_changed = joined != entry_modes[successor];
+        entry_modes[successor] = joined;
+        if (values_changed || mode_changed)
+          pending.push_back(successor);
       }
     }
   }

@@ -1,6 +1,7 @@
 #include "mkpro/core/natural_target_component_layout.hpp"
 
 #include "mkpro/core/indirect_addressing.hpp"
+#include "mkpro/core/indirect_read_observability.hpp"
 #include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/passes/helpers.hpp"
@@ -1064,6 +1065,21 @@ std::optional<std::string> canonical_plain_fraction(std::string_view value) {
   return result;
 }
 
+// A register can participate in an indirect memory operation both as the
+// encoded selector and as a possible data target through another selector.
+// Missing/empty target facts are not evidence that a data word is unobserved.
+bool indirect_memory_uses_register(const MachineItem& item, int reg) {
+  if (item.kind != MachineItemKind::Op || !is_indirect_memory(item.opcode))
+    return false;
+  if (encoded_register(item.opcode) == reg)
+    return true;
+  return !item.indirect_memory_targets.has_value() ||
+         item.indirect_memory_targets->empty() ||
+         std::find(item.indirect_memory_targets->begin(),
+                   item.indirect_memory_targets->end(), reg) !=
+             item.indirect_memory_targets->end();
+}
+
 std::optional<std::string> proved_natural_fractional_selector_family(
     const std::vector<MachineItem>& items, int register_index_value,
     std::string_view preload_value, std::string_view family_prefix) {
@@ -1071,8 +1087,7 @@ std::optional<std::string> proved_natural_fractional_selector_family(
   for (const MachineItem& item : items) {
     if (item.kind != MachineItemKind::Op)
       continue;
-    if (is_indirect_memory(item.opcode) &&
-        encoded_register(item.opcode) == register_index_value) {
+    if (indirect_memory_uses_register(item, register_index_value)) {
       return std::nullopt;
     }
     if (item.opcode != 0x60 + register_index_value)
@@ -1338,8 +1353,7 @@ bool register_has_nonflow_use(const std::vector<MachineItem>& items,
         item.opcode - 0x60 == register_index_value) {
       return true;
     }
-    return is_indirect_memory(item.opcode) &&
-           encoded_register(item.opcode) == register_index_value;
+    return indirect_memory_uses_register(item, register_index_value);
   });
 }
 
@@ -1378,8 +1392,7 @@ std::optional<SelectorCandidate> late_bound_selector_candidate(
       return std::nullopt;
     }
 
-    if (is_indirect_memory(item.opcode) &&
-        encoded_register(item.opcode) == register_index_value) {
+    if (indirect_memory_uses_register(item, register_index_value)) {
       return std::nullopt;
     }
     if (is_indirect_flow(item.opcode) &&
@@ -2841,7 +2854,7 @@ NonFlowUseProjection prove_fractional_nonflow_projection(
       continue;
     if (is_indirect_flow(item.opcode) && encoded_register(item.opcode) == register_index_value)
       continue;
-    if (is_indirect_memory(item.opcode) && encoded_register(item.opcode) == register_index_value) {
+    if (indirect_memory_uses_register(item, register_index_value)) {
       result.proved = false;
       return result;
     }
@@ -2877,7 +2890,7 @@ bool prove_numeric_nonflow_projection(const std::vector<MachineItem>& items,
       continue;
     if (is_indirect_flow(item.opcode) && encoded_register(item.opcode) == register_index_value)
       continue;
-    if (is_indirect_memory(item.opcode) && encoded_register(item.opcode) == register_index_value)
+    if (indirect_memory_uses_register(item, register_index_value))
       return false;
     if (!direct_recall_of(item, register_index_value))
       continue;
@@ -5440,6 +5453,8 @@ std::optional<std::string> rebind_stable_preloaded_indirect_flow_selector(
     const std::vector<MachineItem>& items, const PreloadReport& preload,
     const AuthoritativePostLayoutControlFlow& control_flow, int old_target,
     int new_target, AddressSpaceModel model) {
+  if (!control_flow.proved || control_flow.address_space_model != model)
+    return std::nullopt;
   int reg = -1;
   try {
     reg = register_index(register_from_text(preload.register_name));
@@ -5457,7 +5472,11 @@ std::optional<std::string> rebind_stable_preloaded_indirect_flow_selector(
   }
   if (old_target == new_target)
     return preload.value;
-  if (!register_has_nonflow_use(items, reg)) {
+  const bool discarded_data_only =
+      old_target >= 0 && old_target <= 99 && new_target >= 0 && new_target <= 99 &&
+      preload.value == std::to_string(old_target) &&
+      prove_discarded_indirect_selector_reads_unobserved(items, control_flow, reg);
+  if (!register_has_nonflow_use(items, reg) || discarded_data_only) {
     const std::string address_value = std::to_string(new_target);
     if (preload_value_targets(preload.register_name, address_value, new_target,
                               model)) {

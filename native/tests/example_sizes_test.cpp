@@ -157,7 +157,7 @@ void example_sizes_match_typescript_baselines() {
       {"river-battle", 90},
       {"sea-battle", 65},
       {"teleport", 96},
-      {"tic-tac-toe", 99},
+      {"tic-tac-toe", 97},
       {"tiny-game", 23},
       {"treasure-hunter-2", 98},
       {"wumpus", 105},
@@ -165,7 +165,7 @@ void example_sizes_match_typescript_baselines() {
   };
   const std::map<std::string, std::size_t> PENDING_BASELINE{
       {"nekromant", 135},
-      {"tic-tac-toe-4x4", 164},
+      {"tic-tac-toe-4x4", 141},
   };
 
   const std::filesystem::path root = std::filesystem::current_path();

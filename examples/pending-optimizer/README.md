@@ -15,8 +15,8 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 164 | 105 | +59 | pending optimizer |
-| `nekromant.mkpro` | 135 | 105 | +30 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 141 | 105 | +36 | pending optimizer |
+| `nekromant.mkpro` | 137 | 105 | +32 | pending optimizer; regression against 135-cell baseline |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
@@ -37,6 +37,18 @@ an artificial unit multiplication. Historical measurements below do not
 supersede the current table and do not establish that either program fits yet.
 
 ## Live Optimization Notes
+
+- Selector-charge literal sinking reduces the unchanged, behavior-correct 4x4
+  port from 143 to 141 cells. The general pass moves a literal through a
+  compiler-owned selector store only after proving every incoming continuation;
+  it removes an explicit stack lift and rotation. Its independently finalized
+  candidate must beat the existing layout, and the final gate rechecks the
+  literal, producer identity, CFG, stack, X1 and X2. Numeric-entry phase analysis
+  distinguishes a fresh digit after a recall from an Enter-suppressed lift.
+- The target remains 105 cells for a standard MK-61. The MK61S expanded model
+  has 112 cells, a separate capacity rather than extra standard storage; 141
+  fits neither profile. Nekromant's 137-cell result is a known regression, not
+  a raised test baseline: its size test still requires 135 cells.
 
 - Atomic finalization now bounds rebindable companion targets during component
   placement instead of rejecting an unencodable chosen order afterward.

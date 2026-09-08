@@ -1,4 +1,5 @@
 #include "mkpro/compiler.hpp"
+#include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
 
@@ -27,6 +28,37 @@ std::string rstrip_newlines(std::string value) {
   while (!value.empty() && (value.back() == '\n' || value.back() == '\r'))
     value.pop_back();
   return value;
+}
+
+void require_alaram_movement_contract(const CompileResult& result) {
+  require(result.setup_program.has_value(), "alaram must provide its generated setup");
+  emulator::MK61 calc({.angle_mode = "grad"});
+  const auto load = [&](const std::vector<ResolvedStep>& steps) {
+    std::vector<int> codes;
+    for (const ResolvedStep& step : steps)
+      codes.push_back(step.opcode);
+    require(calc.load_program(codes).diagnostics.empty(),
+            "alaram contract programs must fit calculator memory");
+  };
+  load(result.setup_program->steps);
+  calc.press_sequence({"В/О", "С/П"});
+  require(calc.run_until_stable(5000, 6).stopped, "alaram setup must complete");
+  load(result.steps);
+  calc.press_sequence({"В/О", "С/П"});
+  require(calc.run_until_stable(5000, 6).stopped, "alaram must show its first prompt");
+  const std::string prompt = calc.display_text();
+  const std::vector<std::string> commands{"8", "8", "2"};
+  const std::vector<std::string> altitudes{"100,", "200,", "100,"};
+  const std::vector<std::string> ranges{"-299,", "-298,", "-297,"};
+  for (std::size_t index = 0; index < commands.size(); ++index) {
+    calc.press_sequence({commands.at(index), "С/П"});
+    require(calc.run_until_stable(5000, 6).stopped && calc.display_text() == prompt,
+            "alaram must continue after two climbs and one safe descent");
+    require(calc.read_register(result.registers.at("altitude")) == altitudes.at(index),
+            "alaram altitude must survive the random intruder-mark update");
+    require(calc.read_register(result.registers.at("range")) == ranges.at(index),
+            "alaram must advance range on every successful movement");
+  }
 }
 
 } // namespace
@@ -60,6 +92,8 @@ void supported_examples_match_native_oracles() {
     const CompileResult result = compile_source(source);
     require(result.implemented, "native compiler should implement example: " + name);
     require(result.diagnostics.empty(), "native example diagnostics should be empty: " + name);
+    if (name == "alaram")
+      require_alaram_movement_contract(result);
     require(result.hex == oracle_hex, "native example hex mismatch: " + name);
   }
 }

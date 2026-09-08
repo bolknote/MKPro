@@ -616,10 +616,18 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
   {
     std::vector<MachineItem> super_dark = input;
     super_dark.at(item_at_address(super_dark, 2)).formal_opcode = 0xfa;
+    const auto super_dark_flow = complete_flow(super_dark);
+    require(!super_dark_flow.proved &&
+                std::any_of(super_dark_flow.reasons.begin(), super_dark_flow.reasons.end(),
+                            [](const std::string& reason) {
+                              return reason.find("return-stack depth") != std::string::npos;
+                            }),
+            "FA resumes through 01 and repeatedly pushes a return before reaching the leaf");
     const auto rejected =
-        core::optimize_terminal_cyclic_layout(super_dark, preloads(), complete_flow(super_dark));
-    require(rejected.applied == 0 && contains_reason(rejected.plan, "super-dark"),
-            "one-command super-dark operands need a dedicated hardware CFG model");
+        core::optimize_terminal_cyclic_layout(super_dark, preloads(), super_dark_flow);
+    require(rejected.applied == 0 && cell_count(rejected.items) == cell_count(super_dark) &&
+                contains_reason(rejected.plan, "authoritative"),
+            "super-dark recursive continuation must reject layout without changing the artifact");
   }
   {
     std::vector<MachineItem> entered_removed_stop = input;

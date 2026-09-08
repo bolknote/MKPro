@@ -1,4 +1,5 @@
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
+#include "mkpro/core/passes/selector_charge_literal_sinking.hpp"
 #include "mkpro/core/compiler.hpp"
 
 #include "mkpro/core/address_formula_solver.hpp"
@@ -33,6 +34,7 @@
 #include "mkpro/core/parser.hpp"
 #include "mkpro/core/passes/index.hpp"
 #include "mkpro/core/passes/cfg.hpp"
+#include "mkpro/core/passes/dead_store_elimination.hpp"
 #include "mkpro/core/passes/entry_stack_input_reuse.hpp"
 #include "mkpro/core/passes/register_coalesce.hpp"
 #include "mkpro/core/passes/redundant_literal_reload.hpp"
@@ -46690,18 +46692,40 @@ build_logical_register_graph_model(const LoweringContext& context, const V2Progr
 
 std::optional<std::vector<LogicalRegisterAssignment>>
 solve_logical_register_allocation(const LoweringContext& context, const V2Program& program,
-                                  const std::vector<MachineItem>& items) {
+                                  const std::vector<MachineItem>& items,
+                                  bool compact = false,
+                                  bool preserve_instruction_classes = false,
+                                  std::size_t* constrained_values = nullptr) {
+  if (constrained_values != nullptr)
+    *constrained_values = 0;
   const LogicalRegisterGraphModel model =
       build_logical_register_graph_model(context, program, items);
   const int color_count = feature_profile_max_register_index(context.feature_profile) + 1;
-  if (model.preload_owners.size() > static_cast<std::size_t>(color_count))
-    return std::nullopt;
+  // Entry owners need not form a clique: proved equal setup literals may
+  // share a color until a write creates an actual interference edge. Avoid
+  // rejecting by owner count, but keep this formerly rejected case bounded.
+  const bool many_entry_owners =
+      model.preload_owners.size() > static_cast<std::size_t>(color_count);
+  std::map<std::string, std::set<int>> allowed_colors;
+  if (preserve_instruction_classes) {
+    const auto domains = core::passes::logical_register_instruction_class_domains(
+        logical_register_ir(context, items));
+    if (!domains.has_value())
+      return std::nullopt;
+    allowed_colors = *domains;
+    if (constrained_values != nullptr)
+      *constrained_values = allowed_colors.size();
+  }
   const std::optional<std::map<std::string, int>> colors =
       core::passes::color_precolored_register_graph(
           model.graph, core::passes::PrecoloredRegisterAllocationOptions{
                            .color_count = color_count,
                            .fixed_colors = model.fixed_colors,
-                           .preferred_colors = model.preferred_colors,
+                           .preferred_colors = compact ? std::map<std::string, int>{}
+                                                       : model.preferred_colors,
+                           .greedy_only = compact || preserve_instruction_classes || many_entry_owners,
+                           .allowed_colors = std::move(allowed_colors),
+                           .prioritize_constrained_domains = preserve_instruction_classes,
                        });
   if (!colors.has_value())
     return std::nullopt;
@@ -53729,9 +53753,48 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
   }
 
   if (!has_errors(context.diagnostics) && ast.v2.has_value() &&
+      options.logical_register_dead_store_elimination &&
+      (options.collect_logical_register_allocation ||
+       !options.forced_logical_register_assignments.empty())) {
+    // Never run physical DSE on provisional aliases: two distinct logical
+    // values may temporarily have the same opcode register. The logical trace
+    // preserves their identities and all existing raw/manual/entry guards.
+    // Lowering this deletion-only result keeps each surviving physical opcode
+    // and transferred manual anchor; it does not rename executable operands.
+    std::vector<IrOp> logical_ops = logical_register_ir(context, context.emitter.items);
+    const core::passes::PassContext logical_context{.options = options};
+    int removed = 0;
+    for (;;) {
+      const int previous_removed = removed;
+      auto exact = core::passes::early_exact_stack_dead_store_elimination(
+          logical_ops, logical_context);
+      removed += exact.applied;
+      logical_ops = std::move(exact.ops);
+      auto ordinary = core::passes::dead_store_elimination(logical_ops, logical_context);
+      removed += ordinary.applied;
+      logical_ops = std::move(ordinary.ops);
+      if (removed == previous_removed)
+        break;
+    }
+    if (removed > 0) {
+      context.emitter.items = lower_ir_to_machine(logical_ops);
+      context.optimizations.push_back(OptimizationReport{
+          .name = "logical-register-dead-store-elimination",
+          .detail = "Removed " + std::to_string(removed) +
+                    " dead logical store(s) before allocation/assignment verification, "
+                    "preserving physical opcodes, numeric-entry and manual-resume contracts.",
+      });
+    }
+  }
+
+  if (!has_errors(context.diagnostics) && ast.v2.has_value() &&
       options.collect_logical_register_allocation) {
+    std::size_t instruction_class_values = 0;
     const std::optional<std::vector<LogicalRegisterAssignment>> assignment =
-        solve_logical_register_allocation(context, *ast.v2, context.emitter.items);
+        solve_logical_register_allocation(context, *ast.v2, context.emitter.items,
+                                          options.compact_logical_register_allocation,
+                                          options.preserve_logical_register_instruction_classes,
+                                          &instruction_class_values);
     result.registers = context.registers;
     hide_internal_constant_report_registers(result.registers);
     hide_inline_x_param_report_registers(result.registers, context, *ast.v2);
@@ -53744,6 +53807,14 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
           "Logical register interference graph requires more registers than the target profile."));
       result.implemented = false;
       return result;
+    }
+    if (instruction_class_values > 0) {
+      result.optimizations.push_back(OptimizationReport{
+          .name = "logical-register-instruction-classes",
+          .detail = "Restricted " + std::to_string(instruction_class_values) +
+                    " logical value(s) by lowered FL/indirect-selector instruction classes; "
+                    "used bounded minimum-remaining-domain coloring.",
+      });
     }
     result.logical_register_assignments = *assignment;
     result.implemented = true;
@@ -56756,6 +56827,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.alternating_sign_toggle_args ||
          options.x_param_value_functions ||
          options.preloaded_indexed_update_prefix ||
+         options.selector_charge_literal_sinking ||
          options.cached_expression_operand_forwarding ||
          options.sign_normalized_x_param ||
          options.x_param_y_stack_stored_entry ||
@@ -56775,6 +56847,8 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          !options.suppress_constant_preloads.empty() ||
          !options.force_fractional_constant_selector_preloads.empty() ||
          options.collect_coalesce_shares || options.collect_logical_register_allocation ||
+         options.logical_register_dead_store_elimination ||
+         options.preserve_logical_register_instruction_classes ||
          !options.forced_register_shares.empty() ||
          !options.forced_logical_register_assignments.empty();
 }
@@ -57605,6 +57679,11 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";empty_stack_loop_return=" << options.empty_stack_loop_return
       << ";callee_hole_straight_line_helper=" << options.callee_hole_straight_line_helper
       << ";callee_hole_boundary_normalization=" << options.callee_hole_boundary_normalization
+      << ";selector_charge_literal_sinking=" << options.selector_charge_literal_sinking
+      << ";compact_logical_register_allocation=" << options.compact_logical_register_allocation
+      << ";preserve_logical_register_instruction_classes="
+      << options.preserve_logical_register_instruction_classes
+      << ";logical_register_dead_store_elimination=" << options.logical_register_dead_store_elimination
       << ";x_param_value_functions=" << options.x_param_value_functions
       << ";preloaded_indexed_update_prefix=" << options.preloaded_indexed_update_prefix
       << ";cached_expression_operand_forwarding=" << options.cached_expression_operand_forwarding
@@ -59132,6 +59211,7 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
         core::xyz_preserving_selector_charge_state());
   };
   std::map<std::string, std::map<int, std::set<int>>> charged_values;
+  std::set<std::string> proved_sunk_literal_entries;
   std::map<std::string, std::vector<std::size_t>> scoped_charge_calls;
   std::set<std::string> scoped_registers;
   std::map<std::string, std::pair<std::size_t, std::string>> charge_entries;
@@ -59247,9 +59327,11 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
                       std::to_string(step.address) + "; preceding=" + context);
       }
       const auto& entry_step = steps.at(entry->second.first);
-      const bool repairs_entry = entry_step.comment.has_value() &&
-          entry_step.comment->find("entry-repair=preserve-xyz") != std::string::npos;
-      if (repairs_entry) {
+      const bool sunk_entry = entry_step.comment.has_value() &&
+          entry_step.comment->find("entry-repair=sunk-literal") != std::string::npos;
+      const bool repairs_entry = sunk_entry || (entry_step.comment.has_value() &&
+          entry_step.comment->find("entry-repair=preserve-xyz") != std::string::npos);
+      if (repairs_entry && !sunk_entry) {
         const std::size_t rotation = entry->second.first + 1;
         if (rotation + 1 >= steps.size() || steps.at(rotation).opcode != 0x25 ||
             !repaired_entry_converges(rotation + 1)) {
@@ -59265,6 +59347,23 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
         if (digit == index || digit == 0)
           return reject("callee-hole repaired charge has no guarded decimal entry");
         const bool explicit_lift = steps.at(digit - 1).opcode == 0x0e;
+        if (sunk_entry) {
+          if (!has_optimization_named(optimizations, "selector-charge-literal-sinking") ||
+              items_by_step.at(entry->second.first) == nullptr ||
+              items_by_step.at(digit) == nullptr)
+            return reject("sunk selector literal has no final proof artifact");
+          if (!repaired_entry_flow.has_value()) {
+            core::PostLayoutControlFlowOptions flow_options;
+            flow_options.address_space_model = address_space_model_for_options(options);
+            repaired_entry_flow = core::build_post_layout_control_flow(items, flow_options);
+          }
+          if (!core::passes::prove_selector_charge_sunk_literal_entry(
+                  items, *repaired_entry_flow,
+                  static_cast<std::size_t>(items_by_step.at(entry->second.first) - items.data()),
+                  static_cast<std::size_t>(items_by_step.at(digit) - items.data()), charge->target))
+            return reject("sunk selector literal does not preserve its final continuation");
+          proved_sunk_literal_entries.insert(call->proof);
+        }
         if (charge_entry_fallthrough) {
           for (std::size_t part = digit - (explicit_lift ? 1U : 0U); part <= index; ++part) {
             const MachineItem* item = items_by_step.at(part);
@@ -59568,7 +59667,12 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
         steps.at(charged_entry->second.first).comment.has_value() &&
         steps.at(charged_entry->second.first).comment->find("entry-repair=preserve-xyz") !=
             std::string::npos;
-    if (!repaired_stack) {
+    // The sunk-literal ABI proves convergence separately for every delivered
+    // charge above, including the continuation inside its selected leaf. Do
+    // not substitute a marker for that proof or demand the superseded entry
+    // rotation/prefix-only proof again here.
+    const bool sunk_stack = proof.has_value() && proved_sunk_literal_entries.contains(*proof);
+    if (!repaired_stack && !sunk_stack) {
       if (!proof.has_value() || duplicate_equality_entries.contains(*proof))
         return reject("selector R" + register_name +
                       " has no unique entry equality proof");
@@ -77299,9 +77403,21 @@ CompileResult compile_source_for_optimizer_profile(
         logical_probe_options.analysis = true;
         logical_probe_options.collect_logical_register_allocation = true;
         logical_probe_options.collect_coalesce_shares = false;
-        const CompileResult logical_probe = cached_compile_source_once(logical_probe_options);
+        CompileResult logical_probe = cached_compile_source_once(logical_probe_options);
+        if (!logical_probe.implemented &&
+            !logical_probe_options.logical_register_dead_store_elimination) {
+          // A dead write can make the provisional interference graph need one
+          // extra color. Retry cleanup before concluding that allocation is
+          // impossible, not only after an implemented incumbent exists.
+          logical_probe_options.logical_register_dead_store_elimination = true;
+          logical_probe = cached_compile_source_once(logical_probe_options);
+        }
         if (logical_probe.implemented && !logical_probe.logical_register_assignments.empty()) {
-          std::string key = reclaim_base_key(base_options) + "|logical-register-allocation";
+          const bool logical_cleanup =
+              logical_probe_options.logical_register_dead_store_elimination;
+          std::string key = reclaim_base_key(base_options) +
+              (logical_cleanup ? "|logical-dse-register-allocation" :
+                                 "|logical-register-allocation");
           for (const LogicalRegisterAssignment& assignment :
                logical_probe.logical_register_assignments) {
             key += "|" + assignment.name + ">" + assignment.register_name +
@@ -77309,11 +77425,13 @@ CompileResult compile_source_for_optimizer_profile(
           }
           if (tried_reclaims.insert(key).second) {
             CompileOptions candidate_options = base_options;
+            candidate_options.logical_register_dead_store_elimination = logical_cleanup;
             candidate_options.forced_logical_register_assignments =
                 logical_probe.logical_register_assignments;
             candidates.push_back(CandidateSpec{
                 .options = std::move(candidate_options),
-                .name = "logical-register-lifetime-allocation",
+                .name = logical_cleanup ? "logical-dse-register-lifetime-allocation" :
+                                          "logical-register-lifetime-allocation",
                 .detail = "Colored an arbitrary number of logical live ranges into the target's "
                           "physical register set, then regenerated and re-verified the program",
                 .gate = CandidateGate::Always,
@@ -79460,6 +79578,146 @@ CompileResult compile_source_for_optimizer_profile(
           std::cerr << "[candidate-trace] final-helper-abi exception: " << error.what() << '\n';
         // An ABI alternative cannot displace the previously proved artifact
         // merely because lowering, relocation or a proof was unavailable.
+      }
+    }
+  }
+
+  // Moving a literal through a selector charge can save cells locally while
+  // losing a better physical anchor. Preserve the finalized incumbent and
+  // regenerate only this one ABI alternative, with the same target profile.
+  if (best.implemented && !best_options.selector_charge_literal_sinking &&
+      has_optimization_named(best.optimizations, "callee-hole-straight-line-helper")) {
+    try {
+      CompileOptions sink_options = best_options;
+      sink_options.selector_charge_literal_sinking = true;
+      CompileOptions compile_options = sink_options;
+      compile_options.disable_candidate_search = true;
+      compile_options.analysis = true;
+      compile_options.budget = 999999;
+      CompileResult candidate = compile_source_once(
+          source, compile_options, source_has_entered,
+          /*apply_final_layout_size_rescue=*/true);
+      const bool applied = has_optimization_named(
+          candidate.optimizations, "selector-charge-literal-sinking");
+      if (candidate.implemented && applied &&
+          !optimizer_static_gate_rejection_reason(compile_options, candidate).has_value()) {
+        candidate = apply_finalization_fixed_point_to_selected_result(
+            source, std::move(candidate), compile_options, options);
+      }
+      const auto rejection = optimizer_static_gate_rejection_reason(compile_options, candidate);
+      const bool proved = candidate.implemented && applied && !rejection.has_value();
+      if (trace_candidates)
+        std::cerr << "[candidate-trace] selector-literal-sinking steps="
+                  << candidate.steps.size() << " incumbent=" << best.steps.size()
+                  << " applied=" << applied << " proved=" << proved
+                  << " rejection=" << rejection.value_or("none") << '\n';
+      if (proved && candidate_beats_best(candidate, best, options)) {
+        candidate.optimizations.push_back(OptimizationReport{
+            .name = "selector-literal-sinking-final-selection",
+            .detail = "Compared an independent proof-valid selector/literal ABI after "
+                      "complete layout: " + std::to_string(best.steps.size()) + " -> " +
+                      std::to_string(candidate.steps.size()) + " cells.",
+        });
+        best_options = std::move(sink_options);
+        best = std::move(candidate);
+      }
+    } catch (const std::exception& error) {
+      if (trace_candidates)
+        std::cerr << "[candidate-trace] selector-literal-sinking exception: "
+                  << error.what() << '\n';
+    }
+  }
+
+  // Compare complete logical recolorings, with/without logical DSE and
+  // instruction-class domains. Preserve every previous unconstrained candidate:
+  // fewer colors or cheaper provisional opcodes never override final cell cost.
+  if (best.implemented && allow_aggressive_post_layout && best.registers.size() > 1U) {
+    const CompileOptions allocation_base_options = best_options;
+    for (const bool instruction_classes : {false, true}) {
+      for (const bool logical_dse : {false, true}) {
+        if (logical_dse && allocation_base_options.logical_register_dead_store_elimination)
+          continue;
+        try {
+          CompileOptions probe_options = allocation_base_options;
+          probe_options.analysis = true;
+          probe_options.collect_coalesce_shares = false;
+          probe_options.collect_logical_register_allocation = true;
+          probe_options.compact_logical_register_allocation = true;
+          probe_options.preserve_logical_register_instruction_classes = instruction_classes;
+          probe_options.logical_register_dead_store_elimination =
+              allocation_base_options.logical_register_dead_store_elimination || logical_dse;
+          probe_options.forced_register_shares.clear();
+          probe_options.forced_logical_register_assignments.clear();
+          const CompileResult probe = compile_source_once(
+              source, probe_options, source_has_entered,
+              /*apply_final_layout_size_rescue=*/false,
+              /*apply_atomic_absolute_dark_rescue=*/false);
+          if (!probe.implemented || probe.logical_register_assignments.empty() ||
+              (logical_dse && !has_optimization_named(
+                  probe.optimizations, "logical-register-dead-store-elimination")) ||
+              (instruction_classes && !has_optimization_named(
+                  probe.optimizations, "logical-register-instruction-classes"))) {
+            continue;
+          }
+
+          CompileOptions candidate_options = allocation_base_options;
+          candidate_options.collect_coalesce_shares = false;
+          candidate_options.collect_logical_register_allocation = false;
+          candidate_options.compact_logical_register_allocation = false;
+          candidate_options.preserve_logical_register_instruction_classes = instruction_classes;
+          candidate_options.logical_register_dead_store_elimination =
+              probe_options.logical_register_dead_store_elimination;
+          candidate_options.forced_register_shares.clear();
+          candidate_options.forced_logical_register_assignments =
+              probe.logical_register_assignments;
+          CompileOptions compile_options = candidate_options;
+          CompileResult candidate = compile_source_once(
+              source, compile_options, source_has_entered,
+              /*apply_final_layout_size_rescue=*/true);
+          if (!candidate.implemented &&
+              can_retry_lowering_attempt_in_analysis(candidate, compile_options)) {
+            compile_options.analysis = true;
+            candidate = compile_source_once(source, compile_options, source_has_entered,
+                                            /*apply_final_layout_size_rescue=*/true);
+          }
+          if (candidate.implemented &&
+              !optimizer_static_gate_rejection_reason(compile_options, candidate).has_value()) {
+            candidate = apply_finalization_fixed_point_to_selected_result(
+                source, std::move(candidate), compile_options, options);
+          }
+          const auto rejection =
+              optimizer_static_gate_rejection_reason(compile_options, candidate);
+          const bool proved = candidate.implemented && !rejection.has_value();
+          const std::string selection_name = instruction_classes
+              ? (logical_dse ? "instruction-class-logical-dse-register-allocation"
+                             : "instruction-class-register-allocation")
+              : (logical_dse ? "logical-dse-register-allocation"
+                             : "compact-logical-register-allocation");
+          if (trace_candidates)
+            std::cerr << "[candidate-trace] " << selection_name << " steps="
+                      << candidate.steps.size() << " incumbent=" << best.steps.size()
+                      << " proved=" << proved
+                      << " rejection=" << rejection.value_or("none") << '\n';
+          if (proved && candidate_beats_best(candidate, best, options)) {
+            candidate.optimizations.push_back(OptimizationReport{
+                .name = selection_name,
+                .detail = std::string(logical_dse
+                              ? "Erased dead logical stores before coloring. " : "") +
+                          (instruction_classes
+                              ? "Used FL/indirect-selector instruction-class domains. " : "") +
+                          "Recolored the logical interference graph without soft physical "
+                          "preferences, regenerated setup and code, and selected the "
+                          "proof-valid final artifact: " + std::to_string(best.steps.size()) +
+                          " -> " + std::to_string(candidate.steps.size()) + " cells.",
+            });
+            best_options = std::move(candidate_options);
+            best = std::move(candidate);
+          }
+        } catch (const std::exception& error) {
+          if (trace_candidates)
+            std::cerr << "[candidate-trace] logical allocation exception: "
+                      << error.what() << '\n';
+        }
       }
     }
   }

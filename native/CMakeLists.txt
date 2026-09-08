@@ -28,6 +28,7 @@ add_library(mkpro_core STATIC
   src/core/address_formula_solver.cpp
   src/core/ast_json.cpp
   src/core/callee_hole_boundary_normalization.cpp
+  src/core/passes/selector_charge_literal_sinking.cpp
   src/core/compiler.cpp
   src/core/constant_folder.cpp
   src/core/cyclic_end_return.cpp
@@ -216,6 +217,7 @@ add_executable(mkpro_tests
   tests/emulator_indexed_packed_pow10_test.cpp
   tests/sign_toggle_arg_test.cpp
   tests/callee_hole_helper_test.cpp
+  tests/selector_charge_literal_sinking_test.cpp
   tests/callee_hole_boundary_normalization_test.cpp
   tests/emulator_packed_position_test.cpp
   tests/emulator_recall_side_effects_test.cpp
@@ -355,6 +357,12 @@ set(MKPRO_NATIVE_TEST_NAMES
   compiler_coord_list_lowering_matches_typescript_contract
   compiler_display_lowering_matches_typescript_contract
   compiler_lowers_initial_v2_subset
+  compiler_feature_profile_expanded_program_space_contract
+  compiler_feature_profile_raw_rf_contract
+  compiler_feature_profile_rf_extends_optimizer_preloads_contract
+  compiler_feature_profile_rf_extends_state_allocator_contract
+  compiler_logical_register_allocator_handles_arbitrary_live_range_count_contract
+  compiler_feature_profile_rf_optimizer_is_size_monotonic_contract
   counted_loop_unroll_matches_typescript_contract
   constant_folding_matches_typescript_contract
   cse_display_block_matches_typescript_contract
@@ -487,6 +495,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   safe_minmax_matches_typescript_contract
   alternating_sign_toggle_arg_matches_literal_semantics
   callee_hole_helper_matches_direct_call_semantics
+  selector_charge_literal_sinking_is_generic_and_proof_gated
     callee_hole_boundary_fusion_preserves_stack_and_control
     callee_hole_boundary_fusion_final_artifact_contract
   segmented_bitplanes_match_typescript_contract
