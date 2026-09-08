@@ -70,3 +70,45 @@ numeric words, and all 105 program bytes. The exact programs are stored in
 `probe-pustyshka-program.cpp` runs broader cases on the unchanged native emulator
 using the same fixtures and its public API. Commands, placement constraints,
 and build instructions are in [the program protocol](../../docs/24-pustyshka-program-protocol.md).
+
+Hidden-memory capacity observations:
+
+```sh
+node tests/emulator/probe-pustyshka-capacity.cjs
+```
+
+This checks four independently written full words, their separation from all
+105 program bytes, a limited four-value recovery example, and counterexamples
+to its general use. A separate, explicitly host-injected eight-word experiment
+tests retention only; it does not establish an eight-value calculator protocol.
+See [the capacity analysis](../../docs/25-pustyshka-capacity.md).
+
+Stock-ROM use of the M2 lane and Ms reserve:
+
+```sh
+node tests/emulator/probe-ms-usage.cjs
+```
+
+This traces all three processors, checks 126 opcode/input combinations against
+a control machine, and observes the communication-channel handshake. Explicit
+host injections distinguish the emulator's zero-filled reset from ROM startup
+and verify retention of all 56 Ms bytes. It also checks repeated reads without
+a calculator write and the footprint of the existing hidden-memory writer.
+See [the purpose and startup analysis](../../docs/26-ms-memory-purpose.md).
+
+Reserved K1/K2 commands and surviving M2 transfer primitives:
+
+```sh
+node tests/emulator/probe-ms-rom.cjs
+```
+
+This checks keyboard encoding as 55/56, compares direct and programmed
+execution with NOP, and traces the shared completion path without Ms writes.
+It also matches internal ROM fields with the book and exercises the stock
+C7, C8, and BB → BC transfers using explicitly host-selected internal
+instruction addresses and scratch data. These isolated executions are not
+keyboard access protocols. Compositions with D6, DD → D4, and C9 additionally
+check bidirectional numeric-word and full-page exchanges, preservation of the
+two extra tetras in numeric mode, and restoration by a second exchange. Page
+selection is supplied by the host; the outer loop is not recovered or tested.
+Details are in [the Ms analysis](../../docs/26-ms-memory-purpose.md).

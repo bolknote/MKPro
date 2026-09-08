@@ -882,6 +882,43 @@ candidate set, its deterministic ordering, size costs, or any proof gate.
   `aggressive-post-layout-shared-call-body`, and
   `aggressive-post-layout-dual-use-constant` — bounded combinations of the
   aggressive post-layout pass with existing layout/value candidates.
+- `zero-underflow-constant-rematerialization` is a separately ranked, bounded-growth
+  hardware representation choice. After a proved canonical zero, an immutable
+  `-99999999` recall followed by a store to R3 can use `X->P3; K P->X3`.
+  The selector underflow writes and recalls R3 itself. All execution entries
+  must pass the zero proof; raw/manual boundaries, alternate entry into the
+  pair, mutable preloads and other destination registers are rejected.
+  Clear-X produces canonical zero; the zero edge of a direct equality test
+  refines a normalized subtraction result. A finite must-dataflow carries
+  these representation facts through X-preserving stores, calls, returns,
+  jumps and joins on the authoritative execution-context graph. Unknown
+  callers, input/resume entries and X-changing commands poison the fact.
+  A fractional seed or a zero test on an unknown representation is insufficient.
+  A different destination may borrow R3 only when every continuation proves
+  its old value unobserved before overwrite; immutable pool slots are excluded.
+  This adds at most one store per site and requires wholly symbolic flow
+  ownership. The ordinary layout remains an independent incumbent: local
+  growth is admitted only when the complete final artifact wins.
+  ROM tests pin visible stack, X1, exponent/dot restoration of X2 and subsequent
+  digit entry. The ordinary candidate remains available; freeing a data use
+  never by itself authorizes changing the constant's indirect-flow meaning.
+  The existing final-layout/preload proofs must rebind every surviving use,
+  and final cell count remains the primary selection criterion.
+  The default optimizer also compares two complete search roots when this
+  hardware representation is available, so allocation, helper selection and
+  layout may adapt together instead of extending only the current winner.
+  The alternative root is a separate cache identity and cannot expand itself;
+  explicit lowering variants do not start another search. Final proof and
+  size-first/runtime-tie ranking retain the ordinary incumbent on any failure
+  or non-improvement. The comparison and rejection reason are reported as
+  `zero-underflow-optimizer-roots`.
+  Candidate proof gates run inside each complete search with the candidate's
+  actual lowering options. Comparing complete roots does not reapply a
+  variant-specific gate with the root's unset flags; this follows the same
+  proof boundary as the ordinary/expanded memory-profile root comparison.
+  Eligibility uses typed raw/manual/display barriers, not variable names or
+  words such as "display" in comments. A scratch variant retains the original
+  destination store and its metadata; explicitly anchored stores stay rejected.
 - `logical-dse-register-allocation` composes ordinary/exact-stack DSE with
   compact logical coloring as a separate final-size candidate. DSE runs in the
   logical namespace, never on provisional physical aliases. The deletion-only
@@ -3755,6 +3792,62 @@ flow cannot establish this premise. The delivered CFG rechecks the premise;
 the original stack/X1/X2 convergence and selector-address proofs still apply.
 The compiler reports this saving as `callee-hole-automatic-entry-lift`.
 
+Entry-mode analysis and the delivered selector proof share the terminal-stop
+policy: only a compiler-owned, unanchored terminal halt cuts fallthrough.
+A resumable pause, raw stop, or manual protocol retains its continuation,
+even when marked terminal. This avoids a fictitious open-entry predecessor
+when a called helper is physically placed after a terminal halt, without
+assuming that an ordinary pause cannot resume. ROM contracts compare the
+stack, previous X1, and keyboard restoration of hidden X2.
+
+Numeric targets may bypass zero-width labels following a terminal halt. A
+label-only predecessor with no incoming edge is not itself a runtime entry:
+the optimizer consults the authoritative, model-specific execution graph and
+requires a closing instruction on every incoming call context. External roots,
+raw/manual labels, resumable stops, and incomplete graphs reject this proof.
+
+
+### Encoded counter preservation in post-layout indirect flow
+
+A matching physical destination does not prove an equivalent branch. Post-layout
+direct-to-indirect conversions compare complete labelled execution contexts:
+instruction identity, encoded program counter, branch direction, continuations,
+manual/resume entries and mapped return frames. Only matching direct/indirect
+opcode families through stable R7..Re are admitted. A side-space helper whose
+implicit return depends on crossing F9 cannot be shifted or canonicalized merely
+because its entry still names the same logical label.
+
+Selector rebinding updates both physical and encoded target metadata together.
+A compiler-owned canonical selector remains canonical during subsequent address
+shifts; later contractions must not reintroduce an alias whose continuation was
+already rejected. Both selector allocators reserve the possible data registers
+of indirect reads and writes. An unknown indexed target set reserves every stable
+selector register rather than relying on a later proof gate to discard a corrupt
+candidate.
+
+For a newly allocated selector, a failed side-space candidate gets at most one
+additional trial with the canonical encoding of the same destination. Both
+trials need the complete transport proof and have the same cell cost. Existing
+user/data-owned selector values are not changed by this fallback.
+
+Compiler-marked address/code overlays are compared using private byte images.
+The executable value is independently encoded from each final address operand;
+the published IR keeps both roles of the cell. The proof can match a continuation
+that bypasses an unobserved single-target BP, but not a call, return, condition,
+state-changing operation or externally observed command. A changed executable
+operand byte is rejected before the candidate is published. These control-flow
+checks complement, rather than replace, selector mutation, data, X2 and raw
+return-address observability obligations.
+
+The CFG uses the selected memory profile: 105 cells for stock MK-61, 112 for
+expanded MK61S. Oversized analysis layouts stay in a separate unplaced logical
+space; they are not implicitly aliased onto physical calculator memory.
+Regression coverage includes successful canonical fallback, preserved F9
+returns, rejected broken returns, encoded operand ownership and an executable
+address-byte overlay. Hardware comparisons of stack, X1, dot-observable X2 and
+terminal continuation use the stock MK-61 ROM; expanded-profile graph tests do
+not claim 112-cell ROM coverage.
+
 This family does not change accumulator origins or numeric representations.
 Sharing a numeric value with a continuation address needs a separate proof of
 all arithmetic and observable uses. In particular, translating a floating-point
@@ -4648,4 +4741,3 @@ Contracts: native/tests/post_layout_control_flow_test.cpp and
 native/tests/finalization_selector_bounds_test.cpp cover complete alias sets,
 both branches, helper returns, successful cell erasure, and rejected visible,
 last-X, exponent-entry and Enter/digit observations.
-

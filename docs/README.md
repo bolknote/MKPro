@@ -58,6 +58,8 @@ Hardware internals and chip-level detail live separately in
 | [22-game-catalog-organization.md](./22-game-catalog-organization.md) | Game catalog taxonomy, manifest metadata, and migration plan |
 | [23-pustyshka-hidden-memory-experiment.md](./23-pustyshka-hidden-memory-experiment.md) | Pustyshka false memory markers, hidden words, and ROM timing limits (Russian) |
 | [24-pustyshka-program-protocol.md](./24-pustyshka-program-protocol.md) | Executable hidden-memory write/read routines, register contracts, and tested layouts (Russian) |
+| [25-pustyshka-capacity.md](./25-pustyshka-capacity.md) | Four stored words, physical separation from program memory, and limits of further capacity claims (Russian) |
+| [26-ms-memory-purpose.md](./26-ms-memory-purpose.md) | Ms expansion reserve, M2 communication channel, ROM write traces, and reads before initialization (Russian) |
 
 ## Primary Sources
 
