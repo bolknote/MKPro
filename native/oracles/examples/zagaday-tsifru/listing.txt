@@ -102,10 +102,10 @@
    50 | 44    | X→П 4                   | set ones
    51 | 03    | 3                       |
    52 | 40    | X→П 0                   | set neuron_index
-   53 | 65    | П→X 5                   | recall history
-   54 | 60    | П→X 0                   | indexed selector neuron_index
-   55 | 48    | X→П 8                   | indexed selector weights
-   56 | D8    | К П→X 8                 | indexed recall weights; indirect-memory-targets=1,2,3
+   53 | 60    | П→X 0                   | indexed selector neuron_index
+   54 | 48    | X→П 8                   | indexed selector weights
+   55 | D8    | К П→X 8                 | indexed recall weights; indirect-memory-targets=1,2,3
+   56 | 65    | П→X 5                   | recall history
    57 | 39    | К ⊕                     | bit_xor()
    58 | 6D    | П→X d                   | preload const 7.7777777
    59 | 69    | П→X 9                   | recall player
