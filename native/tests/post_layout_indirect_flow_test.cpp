@@ -35,6 +35,18 @@ MachineItem terminal_stop() {
   return item;
 }
 
+MachineItem resumable_stop() {
+  MachineItem item = MachineItem::op(0x50, "С/П");
+  item.stop_disposition = StopDisposition::Resumable;
+  return item;
+}
+
+MachineItem stop_tail_loop_back() {
+  MachineItem item = MachineItem::op(0x8b, "К БП b");
+  item.indirect_flow_targets = std::vector<IrTarget>{std::string("base")};
+  return item;
+}
+
 std::vector<MachineItem> jump(const std::string& target) {
   return {
       MachineItem::op(0x51, "БП"),
@@ -129,6 +141,81 @@ std::vector<int> resolved_opcodes(const std::vector<MachineItem>& items) {
 } // namespace
 
 void post_layout_indirect_flow_matches_typescript_contract() {
+
+  {
+    const auto indirect = [](int opcode, const std::string& target) {
+      MachineItem item = MachineItem::op(opcode, "indirect jump");
+      item.indirect_flow_targets = std::vector<IrTarget>{target};
+      return item;
+    };
+    const std::vector<MachineItem> program{
+        MachineItem::label("entry"), MachineItem::op(0x60, "recall 0"),
+        MachineItem::op(0x5e, "F x=0"), MachineItem::address("shim"),
+        MachineItem::op(0x5c, "F x<0"), MachineItem::address("tail"),
+        MachineItem::label("base"), resumable_stop(), indirect(0x87, "entry"),
+        MachineItem::label("shim"), indirect(0x88, "base"),
+        MachineItem::label("tail"), digit(), resumable_stop(), indirect(0x87, "entry"),
+    };
+    const std::vector<PreloadReport> preloads{
+        {.register_name = "7", .value = "0"},
+        {.register_name = "8", .value = "5"},
+    };
+    const auto result = core::optimize_post_layout_stop_tail_reuse(program, preloads);
+    require(result.applied == 1 &&
+                core::machine_cell_count(result.items) == core::machine_cell_count(program) - 1,
+            "a rejected shim candidate must not starve an independent proved stop-tail merge");
+    require(result.items.at(2).opcode == 0x5e &&
+                result.items.at(3).kind == MachineItemKind::Address &&
+                std::get<std::string>(result.items.at(3).target) == "shim",
+            "continuing the search must not relax the rejected branch's proof");
+    const auto tail = std::find_if(result.items.begin(), result.items.end(),
+                                  [](const MachineItem& item) {
+      return item.kind == MachineItemKind::Label && item.name == "tail";
+    });
+    require(tail != result.items.end() && std::distance(tail, result.items.end()) >= 3 &&
+                (tail + 2)->opcode == 0x88,
+            "the independent zero tail should reuse the existing stop selector");
+
+    const auto observe = [](const std::vector<MachineItem>& items) {
+      const auto image = resolve_machine_items(items);
+      require(image.diagnostics.empty(), "stop-tail starvation fixture must resolve");
+      std::vector<int> bytes;
+      for (const auto& step : image.steps)
+        bytes.push_back(step.opcode);
+      emulator::MK61 calculator;
+      require(calculator.load_program(bytes).diagnostics.empty(), "stop-tail fixture must load");
+      calculator.set_register("7", "0");
+      calculator.set_register("8", "5");
+      calculator.press("В/О");
+      std::vector<std::string> observations;
+      for (const std::string input : {"0", "3", "-7", "0"}) {
+        calculator.set_register("0", input);
+        calculator.press("С/П");
+        require(calculator.run_until_stable(1000, 8).stopped,
+                "each reused stop must remain resumable");
+        for (const std::string reg : {"X", "Y", "Z", "T", "X1"})
+          observations.push_back(calculator.read_register(reg));
+        calculator.press(".");
+        observations.push_back(calculator.display_text());
+      }
+      return observations;
+    };
+    require(observe(program) == observe(result.items),
+            "skipping an unproved candidate must preserve resumptions, data stack, X1 and X2");
+
+    auto terminal = program;
+    terminal.at(13).stop_disposition = StopDisposition::Terminal;
+    require(core::optimize_post_layout_stop_tail_reuse(terminal, preloads).applied == 0,
+            "a terminal stop must not borrow a resumable stop's continuation");
+    auto unknown = program;
+    unknown.at(7).stop_disposition = StopDisposition::Unknown;
+    require(core::optimize_post_layout_stop_tail_reuse(unknown, preloads).applied == 0,
+            "a stop with an unknown continuation cannot become a reuse base");
+    auto clobbered = program;
+    clobbered.at(1) = MachineItem::op(0x48, "overwrite selector");
+    require(core::optimize_post_layout_stop_tail_reuse(clobbered, preloads).applied == 0,
+            "a stale preload must not prove the added stop-tail selector consumer");
+  }
 
   {
     const auto settings = [](int target) {
@@ -1352,15 +1439,16 @@ program DataPreloadProvenance {
 
   {
     std::vector<MachineItem> program = {
-        MachineItem::label("base"),      MachineItem::op(0x50, "С/П"),
-        MachineItem::op(0x8b, "К БП b"), digit(),
-        MachineItem::label("duplicate"), MachineItem::op(0x50, "С/П"),
-        MachineItem::op(0x8b, "К БП b"), digit(),
+        MachineItem::label("base"),      resumable_stop(),
+        stop_tail_loop_back(), digit(),
+        MachineItem::label("duplicate"), resumable_stop(),
+        stop_tail_loop_back(), digit(),
     };
 
     const core::PostLayoutIndirectFlowResult result = core::optimize_post_layout_stop_tail_reuse(
         program,
-        {PreloadReport{.register_name = "8", .value = "B2", .counts_against_program = false}});
+        {PreloadReport{.register_name = "8", .value = "B2", .counts_against_program = false},
+         PreloadReport{.register_name = "b", .value = "0"}});
 
     require(result.applied == 1,
             "post-layout stop-tail reuse should reuse an existing preloaded stop tail");
@@ -1384,22 +1472,23 @@ program DataPreloadProvenance {
   {
     std::vector<MachineItem> program = {
         MachineItem::label("base"),
-        MachineItem::op(0x50, "С/П"),
-        MachineItem::op(0x8b, "К БП b"),
+        resumable_stop(),
+        stop_tail_loop_back(),
     };
     for (int index = 0; index < 8; ++index)
       program.push_back(digit());
     program.push_back(MachineItem::label("zero_tail"));
     program.push_back(digit());
-    program.push_back(MachineItem::op(0x50, "С/П"));
-    program.push_back(MachineItem::op(0x8b, "К БП b"));
+    program.push_back(resumable_stop());
+    program.push_back(stop_tail_loop_back());
     program.push_back(MachineItem::label("late_target"));
-    program.push_back(MachineItem::op(0x50, "С/П"));
+    program.push_back(resumable_stop());
 
     const core::PostLayoutIndirectFlowResult result = core::optimize_post_layout_stop_tail_reuse(
         program,
         {PreloadReport{.register_name = "8", .value = "B2", .counts_against_program = false},
-         PreloadReport{.register_name = "7", .value = "13", .counts_against_program = false}});
+         PreloadReport{.register_name = "7", .value = "13", .counts_against_program = false},
+         PreloadReport{.register_name = "b", .value = "0"}});
 
     require(result.applied == 1,
             "post-layout stop-tail reuse should handle zero-prefixed stop tails");

@@ -82,6 +82,8 @@ struct StopTailReuseBase {
   std::string register_name;
   int target = 0;
   int continuation_opcode = 0;
+  StopDisposition stop_disposition = StopDisposition::Unknown;
+  std::vector<CellRole> stop_roles;
   std::optional<std::vector<int>> formal_targets;
 };
 
@@ -2618,6 +2620,21 @@ std::optional<RetargetedMachine> retarget_selector_preloads_after_machine_deleti
                                             immediately_rebound_late_bound_target_labels)) {
     return reject("direct-to-indirect deletion changed execution or delivered selector binding");
   }
+  if (before_items.at(static_cast<std::size_t>(replaced_item_index)).kind ==
+          MachineItemKind::Op &&
+      before_items.at(static_cast<std::size_t>(replaced_item_index)).opcode == 0x50) {
+    const auto replacement = after_item_index_for(replaced_item_index);
+    if (!replacement.has_value())
+      return reject("reused stop has no replacement identity");
+    PostLayoutControlFlowOptions flow_options;
+    flow_options.address_space_model = model;
+    flow_options.empty_return_target = 1;
+    const auto flow = build_post_layout_control_flow(after_items, flow_options);
+    if (!delivered_selector_bindings_match(
+            after_items, flow, next_preloads,
+            {static_cast<std::size_t>(*replacement)}, model))
+      return reject("reused stop selector is not proved at its new consumer");
+  }
 
   return RetargetedMachine{
       .items = std::move(after_items),
@@ -3342,7 +3359,9 @@ std::vector<StopTailReuseBase> stop_tail_reuse_bases(const std::vector<MachineIt
   for (const PreloadReport& preload : preloads) {
     const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
         preload.register_name, preload.value, IndirectOperationKind::Flow, model);
-    if (!decoded.has_value() || !decoded->actual_flow_target.has_value())
+    if (register_index(preload.register_name) < 7 || !decoded.has_value() ||
+        !decoded->actual_flow_target.has_value() ||
+        !indirect_writeback_preserves_literal_value(*decoded, preload.value))
       continue;
     const int target = *decoded->actual_flow_target;
     const std::optional<MachineCell> stop = machine_cell_at(cells, target);
@@ -3366,63 +3385,75 @@ std::vector<StopTailReuseBase> stop_tail_reuse_bases(const std::vector<MachineIt
         continuation->item->opcode > 0x8e) {
       continue;
     }
+    if (stop->item->raw || stop->item->manual_interaction.has_value() ||
+        stop->item->stop_disposition == StopDisposition::Unknown)
+      continue;
     bases.push_back(StopTailReuseBase{
         .register_name = preload.register_name,
         .target = target,
         .continuation_opcode = continuation->item->opcode,
+        .stop_disposition = stop->item->stop_disposition,
+        .stop_roles = stop->item->roles,
         .formal_targets = formal_targets,
     });
   }
   return bases;
 }
 
-std::optional<StopTailReuseRewrite>
-find_stop_tail_reuse_rewrite(const std::vector<MachineItem>& items,
+std::vector<StopTailReuseRewrite>
+find_stop_tail_reuse_rewrites(const std::vector<MachineItem>& items,
                              const std::vector<PreloadReport>& preloads, AddressSpaceModel model) {
+  std::vector<StopTailReuseRewrite> rewrites;
   const std::vector<StopTailReuseBase> bases = stop_tail_reuse_bases(items, preloads, model);
   if (bases.empty())
-    return std::nullopt;
+    return rewrites;
   const std::vector<MachineCell> cells = machine_cells(items);
   const std::map<int, std::vector<std::string>> labels = machine_labels_by_address(items);
   const std::set<std::string> referenced = referenced_machine_labels(items);
 
   for (const StopTailReuseBase& base : bases) {
+    const auto same_stop_contract = [&](const MachineItem& stop) {
+      return !stop.raw && !stop.manual_interaction.has_value() &&
+             stop.stop_disposition == base.stop_disposition && stop.roles == base.stop_roles;
+    };
     for (const MachineCell& cell : cells) {
       if (cell.address <= base.target || cell.item == nullptr)
         continue;
       const std::optional<MachineCell> next = machine_cell_at(cells, cell.address + 1);
       const std::optional<MachineCell> after_next = machine_cell_at(cells, cell.address + 2);
 
-      if (cell.item->kind == MachineItemKind::Op && cell.item->opcode == 0x50 && next.has_value() &&
+      if (cell.item->kind == MachineItemKind::Op && cell.item->opcode == 0x50 &&
+          same_stop_contract(*cell.item) && next.has_value() &&
           next->item != nullptr && next->item->kind == MachineItemKind::Op &&
           next->item->opcode == base.continuation_opcode &&
           !address_has_referenced_label(labels, referenced, next->address)) {
-        return StopTailReuseRewrite{
+        rewrites.push_back(StopTailReuseRewrite{
             .base = base,
             .replace_index = cell.item_index,
             .remove_index = next->item_index,
             .zero_prefixed = false,
-        };
+        });
       }
 
       if (cell.item->kind == MachineItemKind::Op &&
           (cell.item->opcode == 0x00 || cell.item->opcode == 0x0d) && next.has_value() &&
           next->item != nullptr && next->item->kind == MachineItemKind::Op &&
-          next->item->opcode == 0x50 && after_next.has_value() && after_next->item != nullptr &&
+          next->item->opcode == 0x50 && same_stop_contract(*next->item) &&
+          after_next.has_value() && after_next->item != nullptr &&
           after_next->item->kind == MachineItemKind::Op &&
           after_next->item->opcode == base.continuation_opcode &&
           !address_has_referenced_label(labels, referenced, next->address) &&
           !address_has_referenced_label(labels, referenced, after_next->address)) {
-        return StopTailReuseRewrite{
+        rewrites.push_back(StopTailReuseRewrite{
             .base = base,
             .replace_index = next->item_index,
             .remove_index = after_next->item_index,
             .zero_prefixed = true,
-        };
+        });
       }
     }
   }
-  return std::nullopt;
+  return rewrites;
 }
 
 std::vector<MachineItem> apply_stop_tail_reuse_rewrite(const std::vector<MachineItem>& items,
@@ -3447,10 +3478,11 @@ std::vector<MachineItem> apply_stop_tail_reuse_rewrite(const std::vector<Machine
   return result;
 }
 
-std::optional<BranchRewrite>
-find_existing_selector_flow_rewrite(const std::vector<MachineItem>& items,
+std::vector<BranchRewrite>
+find_existing_selector_flow_rewrites(const std::vector<MachineItem>& items,
                                     const std::vector<PreloadReport>& preloads,
                                     AddressSpaceModel model) {
+  std::vector<BranchRewrite> rewrites;
   const std::vector<MachineCell> cells = machine_cells(items);
   const std::map<std::string, int> labels = machine_label_addresses(items);
   const std::map<int, std::vector<std::string>> labels_by_address =
@@ -3483,7 +3515,7 @@ find_existing_selector_flow_rewrite(const std::vector<MachineItem>& items,
                             " indirect-target=" + std::to_string(*target) + " direct flow";
       if (branch.item->comment.has_value() && !branch.item->comment->empty())
         comment = *branch.item->comment + "; " + comment;
-      return BranchRewrite{
+      rewrites.push_back(BranchRewrite{
           .branch_index = branch.item_index,
           .address_index = address.item_index,
           .opcode = *opcode,
@@ -3493,16 +3525,17 @@ find_existing_selector_flow_rewrite(const std::vector<MachineItem>& items,
           .target = address.item->target,
           .roles = branch.item->roles,
           .formal_targets = noncanonical_indirect_flow_entries(decoded),
-      };
+      });
     }
   }
-  return std::nullopt;
+  return rewrites;
 }
 
-std::optional<BranchRewrite>
-find_branch_to_stop_tail_selector_rewrite(const std::vector<MachineItem>& items,
+std::vector<BranchRewrite>
+find_branch_to_stop_tail_selector_rewrites(const std::vector<MachineItem>& items,
                                           const std::vector<PreloadReport>& preloads,
                                           AddressSpaceModel model) {
+  std::vector<BranchRewrite> rewrites;
   const std::vector<MachineCell> cells = machine_cells(items);
   const std::map<std::string, int> labels = machine_label_addresses(items);
   const std::map<int, std::vector<std::string>> labels_by_address =
@@ -3554,7 +3587,7 @@ find_branch_to_stop_tail_selector_rewrite(const std::vector<MachineItem>& items,
         "branch to reused stop tail at " + std::to_string(*decoded->actual_flow_target);
     if (branch.item->comment.has_value() && !branch.item->comment->empty())
       comment = *branch.item->comment + "; " + comment;
-    return BranchRewrite{
+    rewrites.push_back(BranchRewrite{
         .branch_index = branch.item_index,
         .address_index = address.item_index,
         .opcode = *opcode,
@@ -3566,9 +3599,9 @@ find_branch_to_stop_tail_selector_rewrite(const std::vector<MachineItem>& items,
                       ? IrTarget{labels_by_address.at(*decoded->actual_flow_target).front()}
                       : IrTarget{*decoded->actual_flow_target},
         .formal_targets = noncanonical_indirect_flow_entries(decoded),
-    };
+    });
   }
-  return std::nullopt;
+  return rewrites;
 }
 
 // Replace a direct `БП` to physical 01 with a one-cell `В/О` when every
@@ -3929,10 +3962,11 @@ bool charged_selector_conditional_x2_reconverges(
 // (target before the erased operand), every numeric direct operand and every
 // typed indirect target whose register has no retargetable preload must also
 // lie before the erased operand.
-std::optional<BranchRewrite>
-find_charged_selector_flow_rewrite(const std::vector<MachineItem>& raw_items,
+std::vector<BranchRewrite>
+find_charged_selector_flow_rewrites(const std::vector<MachineItem>& raw_items,
                                    const std::vector<PreloadReport>& preloads,
                                    AddressSpaceModel model) {
+  std::vector<BranchRewrite> rewrites;
   // Beyond-window artifacts carry resolver-generated wrapped formal operands;
   // recover their authoritative identities before building the execution
   // graph, exactly like the natural-target layout pass does. The candidate
@@ -3941,7 +3975,7 @@ find_charged_selector_flow_rewrite(const std::vector<MachineItem>& raw_items,
   const std::optional<std::vector<MachineItem>> normalized =
       normalize_natural_target_overflow_formals(raw_items, model);
   if (!normalized.has_value() || normalized->size() != raw_items.size())
-    return std::nullopt;
+    return rewrites;
   const std::vector<MachineItem>& items = *normalized;
   const std::vector<MachineCell> cells = machine_cells(items);
   const std::map<std::string, int> labels = machine_label_addresses(items);
@@ -3951,7 +3985,7 @@ find_charged_selector_flow_rewrite(const std::vector<MachineItem>& raw_items,
   const std::optional<std::vector<std::string>> late_bound_labels =
       late_bound_decimal_selector_target_labels(items);
   if (!late_bound_labels.has_value())
-    return std::nullopt;
+    return rewrites;
   const std::set<std::string> late_bound_target_labels(late_bound_labels->begin(),
                                                        late_bound_labels->end());
   std::set<std::string> preloaded_registers;
@@ -3994,7 +4028,7 @@ find_charged_selector_flow_rewrite(const std::vector<MachineItem>& raw_items,
       if (!flow->proved) {
         if (trace_post_layout_enabled())
           std::cerr << "[charged-selector] control flow not proved\n";
-        return std::nullopt;
+        return rewrites;
       }
       values = analyze_stable_register_value_flow(items, preloads, *flow, model);
       if (!values->proved) {
@@ -4004,7 +4038,7 @@ find_charged_selector_flow_rewrite(const std::vector<MachineItem>& raw_items,
             std::cerr << " " << reason;
           std::cerr << "\n";
         }
-        return std::nullopt;
+        return rewrites;
       }
     }
     if (is_direct_x_conditional_opcode(branch.item->opcode) &&
@@ -4097,7 +4131,7 @@ find_charged_selector_flow_rewrite(const std::vector<MachineItem>& raw_items,
                             " indirect-target=" + std::to_string(*target) + " direct flow";
       if (branch.item->comment.has_value() && !branch.item->comment->empty())
         comment = *branch.item->comment + "; " + comment;
-      return BranchRewrite{
+      rewrites.push_back(BranchRewrite{
           .branch_index = branch.item_index,
           .address_index = address.item_index,
           .opcode = *opcode,
@@ -4106,10 +4140,10 @@ find_charged_selector_flow_rewrite(const std::vector<MachineItem>& raw_items,
           .source_line = branch.item->source_line,
           .target = address.item->target,
           .formal_targets = noncanonical_indirect_flow_entries(decoded),
-      };
+      });
     }
   }
-  return std::nullopt;
+  return rewrites;
 }
 
 std::vector<MachineItem> apply_branch_rewrite(const std::vector<MachineItem>& items,
@@ -4716,22 +4750,25 @@ optimize_post_layout_charged_selector_flow(const std::vector<MachineItem>& items
   int applied = 0;
 
   for (int round = 0; round < kMaxRewrites; ++round) {
-    const std::optional<BranchRewrite> rewrite =
-        find_charged_selector_flow_rewrite(current, current_preloads, model);
-    if (!rewrite.has_value())
+    bool changed = false;
+    for (const BranchRewrite& rewrite :
+         find_charged_selector_flow_rewrites(current, current_preloads, model)) {
+      std::vector<MachineItem> candidate = apply_branch_rewrite(current, rewrite);
+      if (machine_cell_count(candidate) >= machine_cell_count(current))
+        continue;
+      const auto retargeted = retarget_selector_preloads_after_machine_deletion(
+          current, std::move(candidate), current_preloads, {rewrite.address_index},
+          rewrite.branch_index, model);
+      if (!retargeted.has_value())
+        continue;
+      current = retargeted->items;
+      current_preloads = retargeted->preloads;
+      ++applied;
+      changed = true;
       break;
-    std::vector<MachineItem> candidate = apply_branch_rewrite(current, *rewrite);
-    if (machine_cell_count(candidate) >= machine_cell_count(current))
+    }
+    if (!changed)
       break;
-    const std::optional<RetargetedMachine> retargeted =
-        retarget_selector_preloads_after_machine_deletion(
-            current, std::move(candidate), current_preloads, {rewrite->address_index},
-            rewrite->branch_index, model);
-    if (!retargeted.has_value())
-      break;
-    current = retargeted->items;
-    current_preloads = retargeted->preloads;
-    ++applied;
   }
 
   if (applied == 0) {
@@ -4770,81 +4807,58 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
   int charged_selector_applied = 0;
 
   for (int round = 0; round < kMaxRewrites; ++round) {
-    const std::map<int, int> address_by_item = machine_address_by_item_index(current);
-
-    // Do not replace a call followed by BP 00 with an empty-stack return.
-    // ROM continues that return at 01, not at the requested loop head.
-    // The separate final-layout loop-return pass proves legitimate BP 01
-    // replacements without deleting a live caller continuation.
-
-    if (const std::optional<BranchRewrite> rewrite =
-            find_existing_selector_flow_rewrite(current, current_preloads, model)) {
-      std::vector<MachineItem> candidate = apply_branch_rewrite(current, *rewrite);
-      if (machine_cell_count(candidate) >= machine_cell_count(current))
-        break;
-      const std::optional<RetargetedMachine> retargeted =
-          retarget_selector_preloads_after_machine_deletion(
-              current, std::move(candidate), current_preloads, {rewrite->address_index},
-              rewrite->branch_index, model);
+    const int current_cells = machine_cell_count(current);
+    const auto commit = [&](std::vector<MachineItem> candidate, int removed, int replaced) {
+      if (machine_cell_count(candidate) >= current_cells)
+        return false;
+      const auto retargeted = retarget_selector_preloads_after_machine_deletion(
+          current, std::move(candidate), current_preloads, {removed}, replaced, model);
       if (!retargeted.has_value())
-        break;
+        return false;
       current = retargeted->items;
       current_preloads = retargeted->preloads;
-      ++existing_selector_applied;
-      continue;
-    }
+      return true;
+    };
+    const auto try_branches = [&](const std::vector<BranchRewrite>& rewrites, int& count) {
+      for (const BranchRewrite& rewrite : rewrites) {
+        if (commit(apply_branch_rewrite(current, rewrite),
+                   rewrite.address_index, rewrite.branch_index)) {
+          ++count;
+          return true;
+        }
+      }
+      return false;
+    };
 
-    if (const std::optional<BranchRewrite> rewrite =
-            find_branch_to_stop_tail_selector_rewrite(current, current_preloads, model)) {
-      std::vector<MachineItem> candidate = apply_branch_rewrite(current, *rewrite);
-      if (machine_cell_count(candidate) >= machine_cell_count(current))
-        break;
-      const std::optional<RetargetedMachine> retargeted =
-          retarget_selector_preloads_after_machine_deletion(
-              current, std::move(candidate), current_preloads, {rewrite->address_index},
-              rewrite->branch_index, model);
-      if (!retargeted.has_value())
-        break;
-      current = retargeted->items;
-      current_preloads = retargeted->preloads;
-      ++stop_tail_applied;
+    // A rejected transaction says nothing about independent candidates.
+    // Keep source/preload order deterministic, and rebuild the candidate set
+    // only after a successful deletion changes the address geometry.
+    if (try_branches(find_existing_selector_flow_rewrites(current, current_preloads, model),
+                     existing_selector_applied))
       continue;
-    }
-
-    if (const std::optional<StopTailReuseRewrite> rewrite =
-            find_stop_tail_reuse_rewrite(current, current_preloads, model)) {
-      std::vector<MachineItem> candidate = apply_stop_tail_reuse_rewrite(current, *rewrite);
-      if (machine_cell_count(candidate) >= machine_cell_count(current))
-        break;
-      const std::optional<RetargetedMachine> retargeted =
-          retarget_selector_preloads_after_machine_deletion(
-              current, std::move(candidate), current_preloads, {rewrite->remove_index},
-              rewrite->replace_index, model);
-      if (!retargeted.has_value())
-        break;
-      current = retargeted->items;
-      current_preloads = retargeted->preloads;
-      ++stop_tail_applied;
+    if (try_branches(find_branch_to_stop_tail_selector_rewrites(
+                         current, current_preloads, model), stop_tail_applied))
       continue;
-    }
 
-    if (const std::optional<BranchRewrite> rewrite =
-            find_charged_selector_flow_rewrite(current, current_preloads, model)) {
-      std::vector<MachineItem> candidate = apply_branch_rewrite(current, *rewrite);
-      if (machine_cell_count(candidate) >= machine_cell_count(current))
+    bool changed = false;
+    std::set<std::tuple<int, int, std::string>> attempted_tails;
+    for (const StopTailReuseRewrite& rewrite :
+         find_stop_tail_reuse_rewrites(current, current_preloads, model)) {
+      if (!attempted_tails.emplace(rewrite.replace_index, rewrite.remove_index,
+                                   rewrite.base.register_name).second)
+        continue;
+      if (commit(apply_stop_tail_reuse_rewrite(current, rewrite),
+                 rewrite.remove_index, rewrite.replace_index)) {
+        ++stop_tail_applied;
+        changed = true;
         break;
-      const std::optional<RetargetedMachine> retargeted =
-          retarget_selector_preloads_after_machine_deletion(
-              current, std::move(candidate), current_preloads, {rewrite->address_index},
-              rewrite->branch_index, model);
-      if (!retargeted.has_value())
-        break;
-      current = retargeted->items;
-      current_preloads = retargeted->preloads;
-      ++charged_selector_applied;
+      }
+    }
+    if (changed)
       continue;
-    }
-
+    if (try_branches(find_charged_selector_flow_rewrites(current, current_preloads, model),
+                     charged_selector_applied))
+      continue;
     break;
   }
 
