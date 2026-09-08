@@ -3821,9 +3821,38 @@ Selector rebinding updates both physical and encoded target metadata together.
 A compiler-owned canonical selector remains canonical during subsequent address
 shifts; later contractions must not reintroduce an alias whose continuation was
 already rejected. Both selector allocators reserve the possible data registers
-of indirect reads and writes. An unknown indexed target set reserves every stable
-selector register rather than relying on a later proof gate to discard a corrupt
-candidate.
+of indirect reads and writes. An unknown indexed target set normally reserves
+every stable selector register. A counter-mutation recall whose source result is
+discarded permits reuse only after bounded, exact-CFG propagation proves that
+the fetched word disappears from X/Y/Z/T, X1 and X2 before any observation on all
+paths. Both allocation stages share this proof and prefer wholly unused registers.
+Such reused registers admit only ordinary decimal selectors 00..99, never dark
+or super-dark words that could affect machine state when fetched. Unknown writes,
+live reads, raw instructions and incomplete control-flow proofs remain barriers.
+The final acceptance gate repeats the nonobservation proof after all relocation
+and stack transformations; the discarded-value annotation alone is insufficient.
+If later finalization removes every indirect-flow consumer, the target obligation
+is vacuous only when the delivered CFG is complete and fresh selector preloads
+are also unused as direct or indirect data. An unannotated surviving indirect
+command is not evidence of consumer removal.
+Data preload identity comes from explicit `lowered_data_value` provenance, not
+the public source-register map (which omits compiler constants). Semantic
+lowering records the original data value; flow-only helper addresses carry no
+such fact. Rebinding preserves the recorded value, and only exact equality with
+the delivered value establishes an unchanged data preload. Missing or changed
+provenance fails closed. Finalization fingerprints and preload compatibility
+checks include this proof metadata.
+
+Indirect selector proofs interpret delivered word spelling, not floating-point
+equality. Order-zero negative fractions (including signed zero) retain their
+sign when the integer part is extracted. Explicit negative-order mantissas
+preserve sign and order: R0-R3 decrement the eight-digit mantissa, R4-R6
+increment it, and R7-Re preserve it. Both flow and memory decoding use the
+resulting address digits. Scientific literals such as `1E3` take precedence
+over ambiguous hexadecimal spelling; use `0x1E3` for an explicitly raw BCD word.
+Unproved mantissa carry/borrow, excess precision and unsupported exponent forms
+fail closed rather than manufacturing an address. ROM tests cover selected
+targets, addressed memory banks and selector write-back for both signs.
 
 For a newly allocated selector, a failed side-space candidate gets at most one
 additional trial with the canonical encoding of the same destination. Both
