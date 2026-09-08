@@ -4843,3 +4843,48 @@ indirect consumer. It cannot turn a terminal or unknown stop into a resumable
 one, or trust a preload after an unproved overwrite. Synthetic compiler/ROM
 tests preserve a rejected shim branch while accepting a later independent
 one-cell merge, including repeated resumptions and stack/X1/X2 observations.
+
+### Shared current-X operands of binary calls
+
+The fallback lowering for native binary calls must keep two operands even
+when the second is a unary chain rooted in the current X. It reuses the
+existing unary-chain analysis and emits one Enter before the chain, rather
+than destructively reusing the first operand or materializing a store/recall
+pair. This also covers aliases and the reversed operand order of exponentiation.
+Independent operands keep the ordinary lowering path.
+
+The compiler/ROM regression matrix covers AND, OR, XOR and native max, unary
+chains, aliases, a computed left operand, identical operands and independent
+operands. It compares the result, Y/Z/T, X1 and a decimal-entry X2 observation
+with literal ROM sequences.
+
+### Constant-demotion candidate provenance
+
+Constant-demotion discovery requires the original lowered data value of each
+preload. A numeric address added by control-flow packing is not a data constant:
+trying to suppress it cannot free a data-pool register and can poison later
+preload-suppression proofs. Unknown origins and nonnumeric/formal address words
+are not eligible; ordinary compiler data constants retain the existing cost
+ordering and suppression rules. Failed suppression reports the delivered
+preloads rather than an opaque static-proof rejection.
+
+A suppressed numeric literal may coincide with a generated flow address, most
+notably `0` and `00`. Such a preload is exempted only when it has no original
+data-constant provenance, has a nonraw typed indirect consumer, and the complete
+final-artifact target/data-value verifier succeeds. Unknown, stale, or
+data-observable selectors still fail closed. The same verifier feeds candidate
+acceptance and the emitted suppression proof report.
+
+### Source-derived counter dispatch
+
+Counter programs use the ordinary register allocator, match lowering and function bodies. Program and function names do not license a replacement listing: `+= 2` must not become a unit increment, and show/halt behavior comes from source statements. Indirect-flow regressions apply every artifact's complete setup, resolve logical state names through its allocation, and compare game state, display, X/Y/Z/T, X1 and a decimal-entry X2 probe. A discarded counter read is not automatically permission to borrow every possible source register.
+
+### Register values across typed manual input
+
+Stable-register value flow follows validated `entered()` phases from their exact prompt/store predecessors, including encoded return frames. At each phase, X and number-entry state become unknown while data registers keep predecessor values; the phase's store then invalidates its destination. These are in-graph dependencies, not independent roots initialized from setup. Untyped, detached, or mismatched manual entries fail closed. Consequently proof-valid indirect call packing can reuse spare selectors across manual input without assuming that entered data leaves a written selector unchanged. Unit and ROM regressions cover multi-phase input, repeated called protocols, source-register overwrites, malformed roots, formal-frame mismatches, and X/Y/Z/T/X1/X2 preservation.
+
+### Stationary indirect cyclic suffixes
+
+A one-cell-over-limit standard-profile artifact may remove a straight-line helper's explicit return when its final command lands at A4 and physical 00 contains a shared return. Besides symbolic direct calls, the proof admits complete indirect call target sets whose labelled command identities remain at exactly the same physical addresses. Indirect jumps, unlabelled interiors, removed-return entries, moved targets and incomplete maps are rejected. Final call-site witnesses are reindexed and checked independently.
+
+The terminal/cyclic pipeline also evaluates this rule without requiring a terminal-report idiom. It can compose a transparent startup return and proved empty-stack main-loop returns with the suffix rewrite, but publishes only a net reduction. It rebuilds the authoritative CFG and resume/return-stack identities and independently derives the delivered stable selector at each indirect call before and after rewriting. ROM tests cover repeated calls and resumptions, X/Y/Z/T/X1 and a decimal-entry X2 probe. The 112-cell MK61S profile never inherits the stock A4-to-00 wrap assumption.
