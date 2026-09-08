@@ -11,6 +11,8 @@
 
 #include "ir_pass_test_support.hpp"
 #include "mkpro/core/ir.hpp"
+#include "mkpro/core/emit/machine_emitter.hpp"
+#include "mkpro/emulator/mk61.hpp"
 #include "test_support.hpp"
 
 #include <string>
@@ -233,35 +235,65 @@ void flow_structure_passes_match_typescript_contract() {
     require_applied(result.applied, 0, "tail-call-lowering refuses mixed continuations");
   }
   {
-    const std::vector<IrOp> program = {label("main"),       call("finish_turn"), plain(0x01, "1"),
-                                       call("finish_turn"), jump("main"),        proc_start("finish_turn"),
-                                       plain(0x02, "2"),    ret()};
-    const auto result = core::passes::tail_call_lowering_pass().run(program, ctx);
-    require_applied(result.applied, 1, "tail-call-lowering empty-stack return terminal loop");
-    require(!result.optimizations.empty() &&
-                result.optimizations.at(0).detail.find("empty-return-stack") != std::string::npos,
-            "tail-call-lowering: empty-return-stack detail");
-    require(count_kind(result.ops, IrKind::Call) == 1, "tail-call-lowering: one call remains");
-    require(count_kind(result.ops, IrKind::Jump) == 1, "tail-call-lowering: one jump remains");
-    bool jump_ok = false;
-    for (const IrOp& op : result.ops)
-      if (op.kind == IrKind::Jump && target_str(op) == "finish_turn")
-        jump_ok = true;
-    require(jump_ok, "tail-call-lowering: jump targets finish_turn");
-  }
-  {
-    const std::vector<IrOp> program = {label("main"),    call("finish_turn"),
-                                       known_target_indirect_jump("b", 0), proc_start("finish_turn"),
-                                       plain(0x02, "2"), ret()};
-    const auto result = core::passes::tail_call_lowering_pass().run(program, ctx);
-    require_applied(result.applied, 1, "tail-call-lowering proved indirect loop back");
-    require(count_kind(result.ops, IrKind::IndirectJump) == 0,
-            "tail-call-lowering: indirect jump removed");
-    bool jump_ok = false;
-    for (const IrOp& op : result.ops)
-      if (op.kind == IrKind::Jump && target_str(op) == "finish_turn")
-        jump_ok = true;
-    require(jump_ok, "tail-call-lowering: jump targets finish_turn (indirect)");
+    const auto observe = [](const std::vector<IrOp>& ops) {
+      const auto resolved = resolve_machine_items(lower_ir_to_machine(ops));
+      require(resolved.diagnostics.empty(), "tail-return ROM fixture must resolve");
+      std::vector<int> codes;
+      for (const auto& step : resolved.steps)
+        codes.push_back(step.opcode);
+      emulator::MK61 calc;
+      require(calc.load_program(codes).diagnostics.empty(),
+              "tail-return ROM fixture must load");
+      calc.set_register("b", "0");
+      calc.press_sequence({"В/О", "С/П"});
+      std::vector<std::string> observations;
+      for (int phase = 0; phase < 3; ++phase) {
+        require(calc.run_until_stable(200, 6).stopped,
+                "tail-return fixture must reach every resumable stop");
+        for (const std::string reg : {"X", "Y", "Z", "T", "X1", "0", "2"})
+          observations.push_back(calc.read_register(reg));
+        if (phase < 2)
+          calc.press_sequence({"С/П"});
+      }
+      calc.press_sequence({"ВП"});
+      observations.push_back(calc.display_text());
+      return observations;
+    };
+
+    for (const bool indirect : {false, true}) {
+      const std::vector<IrOp> program = {
+          label("main"), plain(0x07, "7"), store("2"), pause(),
+          call("worker"), pause(), call("worker"),
+          indirect ? known_target_indirect_jump("b", 0) : jump("main"),
+          proc_start("worker"), plain(0x01, "1"), store("0"), ret()};
+      const auto result = core::passes::tail_call_lowering_pass().run(program, ctx);
+      require_applied(result.applied, 0,
+                      "tail-call-lowering must not replace continuation 00 with empty return 01");
+      require_ops_equal(result.ops, program,
+                        "mixed main-loop continuations must retain their call frames");
+      require(observe(result.ops) == observe(program),
+              "retained calls must preserve resumptions, stack, X1 and X2");
+
+      // Reproduce the old, incorrect rewrite independently. The last return
+      // skips cell 00, storing 1 in R2 instead of executing the initial 7.
+      auto broken = program;
+      broken[6] = jump("worker");
+      broken.erase(broken.begin() + 7);
+      require(observe(broken) != observe(program),
+              "ROM must distinguish an empty return from the explicit loop continuation");
+    }
+
+    // A genuine tail call keeps the existing caller frame. It remains valid
+    // even though manufacturing an empty main-loop return above is not.
+    const std::vector<IrOp> framed = {
+        label("main"), plain(0x07, "7"), store("2"), call("outer"), pause(), jump("main"),
+        proc_start("outer"), call("leaf"), ret(),
+        proc_start("leaf"), plain(0x01, "1"), store("0"), ret()};
+    const auto framed_result = core::passes::tail_call_lowering_pass().run(framed, ctx);
+    require_applied(framed_result.applied, 1,
+                    "a genuine call-and-return must still become a tail jump");
+    require(observe(framed_result.ops) == observe(framed),
+            "tail calls with a real caller frame must preserve complete ROM observations");
   }
   {
     const std::vector<IrOp> program = {label("main"),        call("finish_turn"),  plain(0x01, "1"),
@@ -269,15 +301,9 @@ void flow_structure_passes_match_typescript_contract() {
                                        plain(0x02, "2"),     jump("shared_return"), proc_start("shared_return"),
                                        plain(0x03, "3"),     ret()};
     const auto result = core::passes::tail_call_lowering_pass().run(program, ctx);
-    require(result.applied >= 1, "tail-call-lowering proves through terminal tail jumps");
-    require(!result.optimizations.empty() &&
-                result.optimizations.at(0).detail.find("empty-return-stack") != std::string::npos,
-            "tail-call-lowering: empty-return-stack detail (tail jump)");
-    bool jump_ok = false;
-    for (const IrOp& op : result.ops)
-      if (op.kind == IrKind::Jump && target_str(op) == "finish_turn")
-        jump_ok = true;
-    require(jump_ok, "tail-call-lowering: jump targets finish_turn (tail jump)");
+    require_applied(result.applied, 0,
+                    "a shared return tail must not manufacture an empty-stack loop return");
+    require_ops_equal(result.ops, program, "shared return tails preserve mixed continuations");
   }
   {
     const std::vector<IrOp> program = {label("main"),  call("finish_turn"), jump("return_here"),

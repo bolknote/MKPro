@@ -5,6 +5,7 @@
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <filesystem>
@@ -223,6 +224,132 @@ std::vector<int> step_opcodes(const CompileResult& result) {
 }
 
 } // namespace
+
+void emulator_packed_bcd_partial_horner_preserves_threshold() {
+  const std::string source = R"mkpro(
+program IndependentPackedThreshold {
+  const OCTAL_DIGITS = 7.7777777
+  state {
+    masks: packed[1..3] = [0, 8.1111111, 8.7777777]
+    sample: packed = 8
+    answer: counter 0..7 = 0
+    total: counter 0..21 = 0
+    remaining: counter 0..7 = 0
+    index: counter 1..3 = 1
+    digit: counter 0..7 = 0
+    half: counter 0..3 = 0
+  }
+  fn classify(word) {
+    word = frac(bit_and(bit_xor(sample, word), OCTAL_DIGITS))
+    total = 0
+    remaining = 7
+    while remaining >= 1 {
+      word *= 10
+      digit = int(word)
+      half = int(digit / 2)
+      total += digit - half - int(half / 2)
+      word = frac(word)
+      remaining--
+    }
+    return int((total + 8) / 19)
+  }
+  loop {
+    sample = read()
+    answer = 0
+    index = 3
+    while index >= 1 {
+      answer = answer * 2 + classify(masks[index])
+      index--
+    }
+    show(answer)
+  }
+}
+)mkpro";
+  CompileOptions options;
+  options.analysis = true;
+  options.budget = 999;
+  const CompileResult compiled = compile_source(source, options);
+  const auto reports = [](const CompileResult& result, std::string_view name) {
+    return std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                       [&](const OptimizationReport& report) { return report.name == name; });
+  };
+  require(compiled.implemented && compiled.diagnostics.empty() &&
+              compiled.steps.size() <= 105U,
+          "standalone packed threshold must compile within the stock MK-61 window");
+  require(reports(compiled, "packed-bcd-horner-threshold-loop") &&
+              !reports(compiled, "packed-bcd-one-hot-bitplane-loop"),
+          "the test must exercise partial Horner folding without a companion update kernel");
+  emulator::MK61 calculator;
+  if (compiled.setup_program.has_value()) {
+    require(calculator.load_program(step_opcodes(compiled.setup_program->steps))
+                .diagnostics.empty(),
+            "standalone packed threshold setup must load");
+    calculator.press_sequence({"В/О", "С/П"});
+    require_stop(calculator, "standalone packed threshold setup");
+  } else {
+    // Small artifacts can publish manual preloads instead of a setup program.
+    for (const PreloadReport& preload : compiled.preloads) {
+      const bool raw_word =
+          preload.value.find_first_of("ABCDEF") != std::string::npos &&
+          preload.value.find_first_not_of("0123456789ABCDEF") == std::string::npos;
+      std::string value;
+      const std::vector<std::string> glyphs{"-", "L", "С", "Г", "Е", "_"};
+      for (const char ch : preload.value) {
+        const std::size_t nibble = std::string_view("ABCDEF").find(ch);
+        if (raw_word && nibble != std::string_view::npos)
+          value += glyphs.at(nibble);
+        else
+          value.push_back(ch);
+      }
+      calculator.set_register(preload.register_name, value);
+    }
+  }
+  require(calculator.load_program(step_opcodes(compiled)).diagnostics.empty(),
+          "standalone packed threshold must load without truncation");
+  calculator.press_sequence({"В/О", "С/П"});
+  require_stop(calculator, "standalone packed threshold input");
+
+  std::vector<std::string> histories;
+  for (int ones = 0; ones <= 21; ++ones) {
+    int remaining_bits = ones;
+    std::string digits(7U, '0');
+    for (char& digit : digits) {
+      const int bits = std::min(remaining_bits, 3);
+      digit = static_cast<char>('0' + (1 << bits) - 1);
+      remaining_bits -= bits;
+    }
+    histories.push_back("8." + digits);
+  }
+  histories.push_back("8.7654321");
+  histories.push_back("8.1234567");
+  for (const std::string& history : histories) {
+    int expected = 0;
+    for (const unsigned mask : {7U, 1U, 0U}) {
+      int ones = 0;
+      for (std::size_t index = 2U; index < history.size(); ++index)
+        ones += std::popcount(static_cast<unsigned>(history.at(index) - '0') ^ mask);
+      expected = expected * 2 + (ones + 8) / 19;
+    }
+    calculator.input_number(history, true);
+    calculator.press("С/П");
+    require_stop(calculator, "standalone packed threshold result for " + history);
+    require(trim_ascii(calculator.display_text()) == std::to_string(expected) + ",",
+            "partial packed fold must use scale ten on every iteration: history=" +
+                history + ", expected=" + std::to_string(expected) +
+                ", actual=" + trim_ascii(calculator.display_text()));
+    calculator.press("С/П");
+    require_stop(calculator, "standalone packed threshold next input");
+  }
+
+  std::string unproved = source;
+  const std::size_t mask = unproved.find("7.7777777");
+  require(mask != std::string::npos, "negative fixture must contain its octal mask");
+  unproved.replace(mask, std::string("7.7777777").size(), "9.9999999");
+  const CompileResult rejected = compile_source(unproved, options);
+  require(!reports(rejected, "packed-bcd-horner-threshold-loop"),
+          "non-octal input digits must not acquire the packed threshold proof");
+}
+
 
 void emulator_zagaday_tsifru_corrected_revision_preserves_history_and_ui() {
   const std::filesystem::path root = fixture_root();

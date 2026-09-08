@@ -92,19 +92,6 @@ struct StopTailReuseRewrite {
   bool zero_prefixed = false;
 };
 
-struct EmptyStackTailCallRewrite {
-  int call_index = 0;
-  int call_address_index = 0;
-  int loop_back_index = 0;
-  std::optional<int> loop_back_address_index;
-  // The call, its operand, and the loop-back can all disappear when the
-  // selected callee is already the next physical component.
-  bool natural_fallthrough = false;
-  std::string mnemonic;
-  std::string comment;
-  std::optional<int> source_line;
-};
-
 struct BranchRewrite {
   int branch_index = 0;
   int address_index = 0;
@@ -1285,11 +1272,9 @@ std::optional<std::vector<PreloadReport>> retarget_selector_preloads_after_overl
         preload.register_name, *selector_value, IndirectOperationKind::Flow, model);
     if (!shifted.has_value() || shifted->actual_flow_target != new_target)
       return std::nullopt;
-    next.push_back(PreloadReport{
-        .register_name = preload.register_name,
-        .value = *selector_value,
-        .counts_against_program = preload.counts_against_program,
-    });
+    PreloadReport rebound = preload;
+    rebound.value = *selector_value;
+    next.push_back(std::move(rebound));
   }
   return next;
 }
@@ -2024,268 +2009,6 @@ std::optional<int> known_indirect_flow_target_comment(const std::optional<std::s
   return target;
 }
 
-std::optional<int> first_procedure_start_address(const std::vector<MachineItem>& items) {
-  int address = 0;
-  for (const MachineItem& item : items) {
-    if (item.kind == MachineItemKind::Label) {
-      if (item.procedure_boundary == "start")
-        return address;
-      continue;
-    }
-    ++address;
-  }
-  return std::nullopt;
-}
-
-std::optional<int> known_machine_indirect_jump_target(const MachineItem& item,
-                                                      const std::vector<PreloadReport>& preloads,
-                                                      AddressSpaceModel model) {
-  if (item.kind != MachineItemKind::Op)
-    return std::nullopt;
-  const std::optional<std::string> register_name = register_from_indirect_opcode(item.opcode);
-  if (!register_name.has_value() || item.opcode - register_index(*register_name) != 0x80)
-    return std::nullopt;
-
-  if (const std::optional<int> comment_target =
-          known_indirect_flow_target_comment(item.comment, model))
-    return comment_target;
-
-  const std::optional<std::string> selector_value =
-      preload_value_for_register(preloads, *register_name);
-  if (selector_value.has_value()) {
-    const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
-        *register_name, *selector_value, IndirectOperationKind::Flow, model);
-    if (decoded.has_value())
-      return decoded->actual_flow_target;
-  }
-
-  return std::nullopt;
-}
-
-bool is_indirect_flow_machine_opcode(int opcode) {
-  const int family = opcode & 0xf0;
-  return family == 0x70 || family == 0x80 || family == 0x90 || family == 0xa0 || family == 0xc0 ||
-         family == 0xe0;
-}
-
-struct KnownMachineIndirectFlowTarget {
-  int address = 0;
-  bool retargetable_preload = false;
-};
-
-std::optional<KnownMachineIndirectFlowTarget> known_machine_indirect_flow_target(
-    const MachineItem& item, const std::vector<PreloadReport>& preloads, AddressSpaceModel model) {
-  if (item.kind != MachineItemKind::Op || !is_indirect_flow_machine_opcode(item.opcode))
-    return std::nullopt;
-  const std::optional<int> comment_target = known_indirect_flow_target_comment(item.comment, model);
-  const std::optional<std::string> register_name = register_from_indirect_opcode(item.opcode);
-  if (!register_name.has_value())
-    return std::nullopt;
-  const std::optional<std::string> selector_value =
-      preload_value_for_register(preloads, *register_name);
-  const std::optional<IndirectAddressEvaluation> decoded =
-      selector_value.has_value() ? evaluate_indirect_address(*register_name, *selector_value,
-                                                             IndirectOperationKind::Flow, model)
-                                 : std::nullopt;
-  const std::optional<int> preload_target =
-      decoded.has_value() ? decoded->actual_flow_target : std::nullopt;
-  if (comment_target.has_value() && preload_target.has_value() &&
-      *comment_target != *preload_target) {
-    return std::nullopt;
-  }
-  if (preload_target.has_value()) {
-    return KnownMachineIndirectFlowTarget{
-        .address = *preload_target,
-        .retargetable_preload = true,
-    };
-  }
-  if (comment_target.has_value()) {
-    return KnownMachineIndirectFlowTarget{
-        .address = *comment_target,
-        .retargetable_preload = false,
-    };
-  }
-  return std::nullopt;
-}
-
-bool tail_removal_has_no_external_entries(const std::vector<MachineItem>& items,
-                                          const std::vector<PreloadReport>& preloads,
-                                          const std::set<int>& removed_item_indices,
-                                          const std::set<int>& removed_addresses,
-                                          int first_removed_address, AddressSpaceModel model) {
-  const std::map<std::string, int> labels = machine_label_addresses(items);
-  std::set<std::string> referenced_labels;
-  for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
-    if (removed_item_indices.contains(static_cast<int>(item_index)))
-      continue;
-    const MachineItem& item = items.at(item_index);
-    if (item.kind != MachineItemKind::Address)
-      continue;
-    if (const auto* label = std::get_if<std::string>(&item.target)) {
-      referenced_labels.insert(*label);
-      continue;
-    }
-    try {
-      const std::optional<int> fixed_target = fixed_address_actual_target(item, model);
-      if (!fixed_target.has_value() || *fixed_target >= first_removed_address)
-        return false;
-    } catch (const std::exception&) {
-      return false;
-    }
-  }
-
-  const std::map<int, std::vector<std::string>> labels_by_address =
-      machine_labels_by_address(items);
-  for (const int removed_address : removed_addresses) {
-    if (address_has_referenced_label(labels_by_address, referenced_labels, removed_address))
-      return false;
-  }
-
-  for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
-    if (removed_item_indices.contains(static_cast<int>(item_index)))
-      continue;
-    const MachineItem& item = items.at(item_index);
-    if (item.kind != MachineItemKind::Op || !is_indirect_flow_machine_opcode(item.opcode))
-      continue;
-
-    const std::vector<IrOp> raised = raise_machine_to_ir({item});
-    if (raised.size() != 1U)
-      return false;
-    const std::vector<std::string> target_labels =
-        passes::computed_dispatch_target_labels(raised.front());
-    if (!target_labels.empty()) {
-      for (const std::string& label : target_labels) {
-        const auto target = labels.find(label);
-        if (target == labels.end() || removed_addresses.contains(target->second))
-          return false;
-      }
-      continue;
-    }
-
-    const std::optional<KnownMachineIndirectFlowTarget> target =
-        known_machine_indirect_flow_target(item, preloads, model);
-    if (!target.has_value() || removed_addresses.contains(target->address) ||
-        (!target->retargetable_preload && target->address >= first_removed_address)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-std::string empty_stack_tail_call_comment(const MachineItem& call) {
-  std::string comment = "empty-stack tail call";
-  if (call.comment.has_value()) {
-    constexpr std::string_view kProcCallPrefix = "proc call";
-    constexpr std::string_view kCallFunctionPrefix = "call function";
-    if (call.comment->starts_with(kProcCallPrefix)) {
-      comment = "empty-stack tail call" +
-                call.comment->substr(static_cast<std::size_t>(kProcCallPrefix.size()));
-    } else if (call.comment->starts_with(kCallFunctionPrefix)) {
-      comment = "empty-stack tail call" +
-                call.comment->substr(static_cast<std::size_t>(kCallFunctionPrefix.size()));
-    } else {
-      comment = *call.comment;
-    }
-  }
-  if (!comment.empty())
-    comment += "; ";
-  comment += "empty-return-stack loop head";
-  return comment;
-}
-
-std::optional<EmptyStackTailCallRewrite>
-find_empty_stack_tail_call_rewrite(const std::vector<MachineItem>& items,
-                                   const std::vector<PreloadReport>& preloads,
-                                   AddressSpaceModel model) {
-  const std::vector<MachineCell> cells = machine_cells(items);
-  const std::map<std::string, int> labels = machine_label_addresses(items);
-  const std::optional<int> first_proc = first_procedure_start_address(items);
-  if (!first_proc.has_value())
-    return std::nullopt;
-
-  for (std::size_t index = 0; index + 2 < cells.size(); ++index) {
-    const MachineCell& call = cells.at(index);
-    const MachineCell& address = cells.at(index + 1);
-    const MachineCell& loop_back = cells.at(index + 2);
-    if (call.address >= *first_proc)
-      break;
-    if (call.item == nullptr || address.item == nullptr || loop_back.item == nullptr ||
-        call.item->kind != MachineItemKind::Op || call.item->opcode != 0x53 ||
-        address.item->kind != MachineItemKind::Address) {
-      continue;
-    }
-    std::optional<int> loop_back_address_index;
-    if (known_machine_indirect_jump_target(*loop_back.item, preloads, model) != 0) {
-      if (loop_back.item->kind != MachineItemKind::Op || loop_back.item->opcode != 0x51 ||
-          index + 3 >= cells.size()) {
-        continue;
-      }
-      const MachineCell& loop_back_address = cells.at(index + 3);
-      if (loop_back_address.item == nullptr ||
-          loop_back_address.item->kind != MachineItemKind::Address ||
-          resolved_machine_target(loop_back_address.item->target, labels) != 0) {
-        continue;
-      }
-      loop_back_address_index = loop_back_address.item_index;
-    }
-
-    EmptyStackTailCallRewrite rewrite{
-        .call_index = call.item_index,
-        .call_address_index = address.item_index,
-        .loop_back_index = loop_back.item_index,
-        .loop_back_address_index = loop_back_address_index,
-        .natural_fallthrough =
-            resolved_machine_target(address.item->target, labels) == *first_proc &&
-            call.address + (loop_back_address_index.has_value() ? 4 : 3) == *first_proc,
-        .mnemonic = "БП",
-        .comment = empty_stack_tail_call_comment(*call.item),
-        .source_line = call.item->source_line,
-    };
-    std::set<int> removed_item_indices{rewrite.loop_back_index};
-    std::set<int> removed_addresses{loop_back.address};
-    int first_removed_address = loop_back.address;
-    if (rewrite.loop_back_address_index.has_value()) {
-      removed_item_indices.insert(*rewrite.loop_back_address_index);
-      removed_addresses.insert(loop_back.address + 1);
-    }
-    if (rewrite.natural_fallthrough) {
-      removed_item_indices.insert(rewrite.call_index);
-      removed_item_indices.insert(rewrite.call_address_index);
-      removed_addresses.insert(call.address);
-      removed_addresses.insert(address.address);
-      first_removed_address = call.address;
-    }
-    if (!tail_removal_has_no_external_entries(items, preloads, removed_item_indices,
-                                              removed_addresses, first_removed_address, model)) {
-      continue;
-    }
-    return rewrite;
-  }
-  return std::nullopt;
-}
-
-std::vector<MachineItem>
-apply_empty_stack_tail_call_rewrite(const std::vector<MachineItem>& items,
-                                    const EmptyStackTailCallRewrite& rewrite) {
-  std::vector<MachineItem> result;
-  result.reserve(items.size() - (rewrite.loop_back_address_index.has_value() ? 2 : 1));
-  for (int index = 0; index < static_cast<int>(items.size()); ++index) {
-    if (index == rewrite.loop_back_index || index == rewrite.loop_back_address_index ||
-        (rewrite.natural_fallthrough &&
-         (index == rewrite.call_index || index == rewrite.call_address_index)))
-      continue;
-    if (index == rewrite.call_index) {
-      MachineItem item = MachineItem::op(0x51, rewrite.mnemonic);
-      item.comment = rewrite.comment;
-      if (rewrite.source_line.has_value())
-        item.source_line = *rewrite.source_line;
-      result.push_back(std::move(item));
-      continue;
-    }
-    result.push_back(items.at(static_cast<std::size_t>(index)));
-  }
-  return result;
-}
 
 std::optional<std::string> retargeted_selector_value(const std::string& register_name,
                                                      const std::string& previous_value,
@@ -2327,9 +2050,120 @@ std::optional<int> first_executable_op_index_at_address(const std::vector<IrOp>&
 // A physical destination alone is not a control-flow proof: aliased counters
 // can wrap to a shared return, fetch a non-adjacent operand, or resume elsewhere.
 // Compare the complete before/after graphs after every selector has been rebound.
+std::vector<PreloadReport> selector_preloads_for_proof(
+    const CompileOptions& options, const std::vector<PreloadReport>& owned) {
+  std::map<std::string, PreloadReport> by_register;
+  for (const auto& [reg, value] : options.preloaded_constant_registers)
+    by_register.emplace(reg, PreloadReport{.register_name = reg, .value = value});
+  for (const auto& preload : owned)
+    by_register[preload.register_name] = preload;
+  std::vector<PreloadReport> result;
+  for (const auto& [reg, preload] : by_register) {
+    (void)reg;
+    result.push_back(preload);
+  }
+  return result;
+}
+
+// A metadata-only CFG can preserve every edge while the delivered selector
+// still names the old physical cell. Bind exact runtime words independently
+// before accepting the command-identity transport.
+bool delivered_selector_bindings_match(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<PreloadReport>& preloads,
+    const std::set<std::size_t>& required_items, AddressSpaceModel model) {
+  if (!flow.proved)
+    return false;
+  std::map<std::string, std::string> entry_values;
+  for (const auto& preload : preloads)
+    entry_values[preload.register_name] = preload.value;
+  std::set<std::size_t> reachable;
+  for (const auto& state : flow.execution_states)
+    reachable.insert(state.item_index);
+  const bool manual_entry = std::any_of(
+      flow.external_entries.begin(), flow.external_entries.end(), [](const auto& entry) {
+        return entry.kind == ExternalEntryKind::ManualSingleStep ||
+               entry.kind == ExternalEntryKind::ManualContinuous;
+      });
+  std::map<std::string, std::string> invariant_values;
+  for (const auto& [reg, value] : entry_values) {
+    const int index = register_index(reg);
+    if (index < 7 || index > 14 || manual_entry)
+      continue;
+    const auto decoded = evaluate_indirect_address(reg, value, IndirectOperationKind::Flow, model);
+    if (!decoded || !indirect_writeback_preserves_literal_value(*decoded, value))
+      continue;
+    bool written = std::any_of(items.begin(), items.end(), [&](const auto& item) {
+      return item.kind == MachineItemKind::Op && item.opcode == 0x40 + index;
+    });
+    for (const auto& [item_index, targets] : flow.indirect_memory_targets) {
+      if ((items.at(item_index).opcode & 0xf0) == 0xb0 &&
+          std::find(targets.begin(), targets.end(), index) != targets.end())
+        written = true;
+    }
+    if (!written)
+      invariant_values.emplace(reg, value);
+  }
+  std::optional<StableRegisterValueFlow> values;
+  for (const auto index : required_items)
+    if (!flow.indirect_flow_targets.contains(index))
+      return false;
+  for (const auto& [item_index, targets] : flow.indirect_flow_targets) {
+    if (!reachable.contains(item_index))
+      continue;
+    const auto reg = register_from_indirect_opcode(items.at(item_index).opcode);
+    if (!reg)
+      return false;
+    const bool required = required_items.contains(item_index);
+    if (!required && !entry_values.contains(*reg))
+      continue;
+    const int slot = register_index(*reg) - 7;
+    if (slot < 0 || slot >= 8) {
+      if (required)
+        return false;
+      continue;
+    }
+    std::optional<std::string> value;
+    if (const auto invariant = invariant_values.find(*reg);
+        invariant != invariant_values.end()) {
+      value = invariant->second;
+    } else {
+      if (!values)
+        values = analyze_stable_register_value_flow(items, preloads, flow, model);
+      if (!values->proved)
+        return false;
+      const auto before = values->before_item.find(item_index);
+      if (before == values->before_item.end())
+        return false;
+      value = before->second.at(static_cast<std::size_t>(slot));
+    }
+    if (!value)
+      return false;
+    const auto decoded = evaluate_indirect_address(*reg, *value, IndirectOperationKind::Flow, model);
+    if (!decoded || !decoded->actual_flow_target || !decoded->formal_address ||
+        std::none_of(targets.begin(), targets.end(), [&](const auto& target) {
+          return target.address == *decoded->actual_flow_target;
+        }))
+      return false;
+    const auto& formals = items.at(item_index).indirect_flow_formal_targets;
+    if (formals) {
+      if (std::find(formals->begin(), formals->end(), decoded->formal_address->opcode) ==
+          formals->end())
+        return false;
+    } else if (decoded->formal_address->kind != FormalAddressKind::Official) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool indirect_rewrite_preserves_execution(const std::vector<IrOp>& before_ops,
                                           const std::vector<IrOp>& after_ops,
-                                          AddressSpaceModel model) {
+                                          AddressSpaceModel model,
+                                          const std::vector<PreloadReport>& before_preloads,
+                                          const std::vector<PreloadReport>& after_preloads,
+                                          const std::set<std::string>& rebound_decimal_targets = {}) {
   if (before_ops.size() != after_ops.size())
     return false;
   auto before = lower_ir_to_machine(before_ops);
@@ -2391,6 +2225,78 @@ bool indirect_rewrite_preserves_execution(const std::vector<IrOp>& before_ops,
     return false;
   const auto before_control = build_post_layout_control_flow(before, *before_options);
   const auto after_control = build_post_layout_control_flow(after, *after_options);
+
+  std::set<std::size_t> required_before, required_after;
+  for (const auto old_index : relocation.direct_to_indirect_flow_items) {
+    if (!mapping.at(old_index))
+      return false;
+    required_after.insert(*mapping.at(old_index));
+  }
+  const auto after_addresses = machine_address_by_item_index(after);
+  for (const auto& [old_index, targets] : before_control.indirect_flow_targets) {
+    if (!mapping.at(old_index))
+      return false;
+    for (const auto& target : targets) {
+      if (target.item_index >= mapping.size() || !mapping.at(target.item_index))
+        return false;
+      const auto address = after_addresses.find(
+          static_cast<int>(*mapping.at(target.item_index)));
+      if (address == after_addresses.end())
+        return false;
+      if (address->second != target.address) {
+        required_before.insert(old_index);
+        required_after.insert(*mapping.at(old_index));
+      }
+    }
+  }
+  if (!delivered_selector_bindings_match(before, before_control, before_preloads,
+                                         required_before, model) ||
+      !delivered_selector_bindings_match(after, after_control, after_preloads,
+                                         required_after, model)) {
+    if (trace_post_layout_enabled())
+      std::cerr << "[post-layout] delivered selector binding rejected\n";
+    return false;
+  }
+  // The caller separately validates marked address charges against the new
+  // runtime value flow. Compare their command identities, not the relocated
+  // decimal payload. Both binding proofs above use the real, unmodified words;
+  // only this private control-flow image normalizes the proved address digits.
+  const auto old_labels = machine_label_addresses(before);
+  const auto new_labels = machine_label_addresses(after);
+  for (std::size_t index = 0; index < before.size(); ++index) {
+    if (!mapping.at(index))
+      continue;
+    auto& old_digit = before.at(index);
+    const auto& new_digit = after.at(*mapping.at(index));
+    if (old_digit.kind != MachineItemKind::Op || new_digit.kind != MachineItemKind::Op ||
+        old_digit.opcode == new_digit.opcode || old_digit.opcode < 0 || old_digit.opcode > 9 ||
+        new_digit.opcode < 0 || new_digit.opcode > 9 || old_digit.raw || new_digit.raw ||
+        old_digit.manual_interaction || new_digit.manual_interaction ||
+        old_digit.roles != new_digit.roles)
+      continue;
+    std::optional<std::pair<std::string, bool>> part;
+    for (const auto& role : old_digit.roles) {
+      constexpr std::string_view high = "late-decimal-selector-high:";
+      constexpr std::string_view low = "late-decimal-selector-low:";
+      if (!role.starts_with(high) && !role.starts_with(low))
+        continue;
+      if (part)
+        return false;
+      const bool is_high = role.starts_with(high);
+      part = std::pair{role.substr(is_high ? high.size() : low.size()), is_high};
+    }
+    if (!part || !rebound_decimal_targets.contains(part->first))
+      continue;
+    const auto old_target = old_labels.find(part->first);
+    const auto new_target = new_labels.find(part->first);
+    if (old_target == old_labels.end() || new_target == new_labels.end() ||
+        old_target->second < 0 || old_target->second > 99 ||
+        new_target->second < 0 || new_target->second > 99 ||
+        old_digit.opcode != (part->second ? old_target->second / 10 : old_target->second % 10) ||
+        new_digit.opcode != (part->second ? new_target->second / 10 : new_target->second % 10))
+      return false;
+    old_digit.opcode = new_digit.opcode;
+  }
   const auto proof = prove_post_layout_execution_relocation(
       before, after, before_control, after_control, mapping, relocation);
   if (!proof.proved && trace_post_layout_enabled()) {
@@ -2443,11 +2349,9 @@ std::optional<RetargetedIr> retarget_existing_selectors_after_shift(
         preload.register_name, *selector_value, IndirectOperationKind::Flow, model);
     if (!shifted.has_value() || shifted->actual_flow_target != shifted_target)
       return std::nullopt;
-    next_preloads.push_back(PreloadReport{
-        .register_name = preload.register_name,
-        .value = *selector_value,
-        .counts_against_program = preload.counts_against_program,
-    });
+    PreloadReport rebound = preload;
+    rebound.value = *selector_value;
+    next_preloads.push_back(std::move(rebound));
     next_by_register[preload.register_name] = *selector_value;
   }
 
@@ -2687,11 +2591,9 @@ std::optional<RetargetedMachine> retarget_selector_preloads_after_machine_deleti
         preload.register_name, *selector_value, IndirectOperationKind::Flow, model);
     if (!shifted.has_value() || shifted->actual_flow_target != shifted_target)
       return reject("retargeted preload does not decode to shifted identity");
-    next_preloads.push_back(PreloadReport{
-        .register_name = preload.register_name,
-        .value = *selector_value,
-        .counts_against_program = preload.counts_against_program,
-    });
+    PreloadReport rebound = preload;
+    rebound.value = *selector_value;
+    next_preloads.push_back(std::move(rebound));
     next_by_register[preload.register_name] = *selector_value;
   }
 
@@ -2703,6 +2605,18 @@ std::optional<RetargetedMachine> retarget_selector_preloads_after_machine_deleti
           after_items, next_preloads,
           immediately_rebound_late_bound_target_labels, model)) {
     return reject("final CFG or runtime selector value proof failed");
+  }
+
+  const auto before_ir = raise_machine_to_ir(before_items);
+  const auto after_ir = raise_machine_to_ir(after_items);
+  if (before_items.at(static_cast<std::size_t>(replaced_item_index)).kind ==
+          MachineItemKind::Op &&
+      is_address_taking_opcode(
+          before_items.at(static_cast<std::size_t>(replaced_item_index)).opcode) &&
+      !indirect_rewrite_preserves_execution(before_ir, after_ir, model,
+                                            preloads, next_preloads,
+                                            immediately_rebound_late_bound_target_labels)) {
+    return reject("direct-to-indirect deletion changed execution or delivered selector binding");
   }
 
   return RetargetedMachine{
@@ -2738,7 +2652,9 @@ validate_rewrite_at(int index, const std::vector<IrOp>& ir, const std::vector<Ir
   const AddressSpaceModel model = address_space_model_for_options(options);
   const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
       rewritten.register_name, selector->value, IndirectOperationKind::Flow, model);
-  if (!decoded.has_value() || decoded->actual_flow_target != target_it->second)
+  if (!decoded.has_value() || decoded->actual_flow_target != target_it->second ||
+      (selector->existing &&
+       !indirect_writeback_preserves_literal_value(*decoded, selector->value)))
     return std::nullopt;
 
   std::vector<MachineItem> candidate_items = lower_ir_to_machine(candidate);
@@ -2788,7 +2704,9 @@ std::optional<RewriteStep> validate_rewrite_group(
   const AddressSpaceModel model = address_space_model_for_options(options);
   const std::optional<IndirectAddressEvaluation> decoded =
       evaluate_indirect_address(register_name, selector->value, IndirectOperationKind::Flow, model);
-  if (!decoded.has_value())
+  if (!decoded.has_value() ||
+      (selector->existing &&
+       !indirect_writeback_preserves_literal_value(*decoded, selector->value)))
     return std::nullopt;
 
   bool super_dark = false;
@@ -2903,7 +2821,8 @@ std::optional<RewriteStep> apply_existing_selector_exact_backward_rewrite(
         continue;
       const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
           register_name, selector_value, IndirectOperationKind::Flow, model);
-      if (!decoded.has_value() || decoded->actual_flow_target != *target_address)
+      if (!decoded.has_value() || decoded->actual_flow_target != *target_address ||
+          !indirect_writeback_preserves_literal_value(*decoded, selector_value))
         continue;
 
       std::vector<IrOp> candidate = ir;
@@ -2985,7 +2904,8 @@ std::optional<RewriteStep> apply_existing_selector_fixed_point_rewrite(
 
       const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
           register_name, selector_value, IndirectOperationKind::Flow, model);
-      if (!decoded.has_value() || decoded->actual_flow_target != final_target->second)
+      if (!decoded.has_value() || decoded->actual_flow_target != final_target->second ||
+          !indirect_writeback_preserves_literal_value(*decoded, selector_value))
         continue;
       const bool super_dark = decoded->super_dark.has_value() &&
                               decoded->super_dark->entry_address == final_target->second;
@@ -4291,7 +4211,15 @@ optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
       break;
     }
 
-    if (!indirect_rewrite_preserves_execution(before_ops, retargeted->ops, model)) {
+    const auto before_bindings = selector_preloads_for_proof(options, preloads);
+    const auto after_bindings = [&] {
+      auto bindings = selector_preloads_for_proof(options, retargeted->preloads);
+      if (!step->existing_preload)
+        bindings.push_back(step->preload);
+      return bindings;
+    };
+    if (!indirect_rewrite_preserves_execution(before_ops, retargeted->ops, model,
+                                              before_bindings, after_bindings())) {
       // A side-space encoding can have a different continuation even when its
       // first physical command is correct. Try one canonical encoding of the
       // same newly allocated selector; never alter a user/data-owned preload.
@@ -4321,10 +4249,11 @@ optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
         rewritten.meta.comment = replace_indirect_target_comment(
             rewritten.meta.comment, rewritten.register_name, canonical, target);
       }
-      if (!indirect_rewrite_preserves_execution(before_ops, retargeted->ops, model))
+      step->preload.value = canonical;
+      if (!indirect_rewrite_preserves_execution(before_ops, retargeted->ops, model,
+                                                before_bindings, after_bindings()))
         break;
       retargeted->items = lower_ir_to_machine(retargeted->ops);
-      step->preload.value = canonical;
       step->dark_entry = is_dark_entry_target(*canonical_decoded);
       step->super_dark = canonical_decoded->super_dark.has_value();
       if (trace)
@@ -4839,37 +4768,14 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
   int stop_tail_applied = 0;
   int existing_selector_applied = 0;
   int charged_selector_applied = 0;
-  int empty_stack_tail_call_applied = 0;
-  int empty_stack_tail_fallthrough_applied = 0;
 
   for (int round = 0; round < kMaxRewrites; ++round) {
     const std::map<int, int> address_by_item = machine_address_by_item_index(current);
 
-    if (const std::optional<EmptyStackTailCallRewrite> rewrite =
-            find_empty_stack_tail_call_rewrite(current, current_preloads, model)) {
-      std::vector<MachineItem> candidate = apply_empty_stack_tail_call_rewrite(current, *rewrite);
-      if (machine_cell_count(candidate) >= machine_cell_count(current))
-        break;
-      std::vector<int> removed_indices = {rewrite->loop_back_index};
-      if (rewrite->loop_back_address_index.has_value())
-        removed_indices.push_back(*rewrite->loop_back_address_index);
-      if (rewrite->natural_fallthrough) {
-        removed_indices.push_back(rewrite->call_index);
-        removed_indices.push_back(rewrite->call_address_index);
-      }
-      const std::optional<RetargetedMachine> retargeted =
-          retarget_selector_preloads_after_machine_deletion(
-              current, std::move(candidate), current_preloads, std::move(removed_indices),
-              rewrite->natural_fallthrough ? -1 : rewrite->call_index, model);
-      if (!retargeted.has_value())
-        break;
-      current = retargeted->items;
-      current_preloads = retargeted->preloads;
-      ++empty_stack_tail_call_applied;
-      if (rewrite->natural_fallthrough)
-        ++empty_stack_tail_fallthrough_applied;
-      continue;
-    }
+    // Do not replace a call followed by BP 00 with an empty-stack return.
+    // ROM continues that return at 01, not at the requested loop head.
+    // The separate final-layout loop-return pass proves legitimate BP 01
+    // replacements without deleting a live caller continuation.
 
     if (const std::optional<BranchRewrite> rewrite =
             find_existing_selector_flow_rewrite(current, current_preloads, model)) {
@@ -4943,7 +4849,7 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
   }
 
   const int applied = stop_tail_applied + existing_selector_applied +
-                      charged_selector_applied + empty_stack_tail_call_applied;
+                      charged_selector_applied;
   if (applied == 0) {
     return PostLayoutIndirectFlowResult{
         .items = items,
@@ -4952,24 +4858,6 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
   }
 
   std::vector<passes::AppliedOptimization> optimizations;
-  if (empty_stack_tail_call_applied > 0) {
-    optimizations.push_back(passes::AppliedOptimization{
-        .name = "post-layout-empty-stack-tail-call",
-        .detail = "Replaced " + std::to_string(empty_stack_tail_call_applied) +
-                  " terminal main-loop call" + (empty_stack_tail_call_applied == 1 ? "" : "s") +
-                  " with direct jump(s) whose final В/О returns through the empty stack to the "
-                  "loop head.",
-    });
-  }
-  if (empty_stack_tail_fallthrough_applied > 0) {
-    optimizations.push_back(passes::AppliedOptimization{
-        .name = "post-layout-empty-stack-tail-fallthrough",
-        .detail = "Removed " + std::to_string(empty_stack_tail_fallthrough_applied) +
-                  " empty-stack tail transfer" +
-                  (empty_stack_tail_fallthrough_applied == 1 ? "" : "s") +
-                  " whose callee was the next physical component.",
-    });
-  }
   if (stop_tail_applied > 0) {
     optimizations.push_back(passes::AppliedOptimization{
         .name = "post-layout-stop-tail-reuse",

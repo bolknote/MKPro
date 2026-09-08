@@ -151,7 +151,8 @@ std::map<int, SelectorPlan> existing_constant_selector_plans(
     const std::optional<mkpro::core::IndirectAddressEvaluation> evaluated =
         mkpro::core::evaluate_indirect_address(register_name, value->second,
                                                mkpro::core::IndirectOperationKind::Flow, model);
-    if (!evaluated.has_value() || !evaluated->actual_flow_target.has_value())
+    if (!evaluated.has_value() || !evaluated->actual_flow_target.has_value() ||
+        !indirect_writeback_preserves_literal_value(*evaluated, value->second))
       continue;
     const int target = *evaluated->actual_flow_target;
     if (target < 0 || target > official_program_last_address(model) || plans.contains(target))

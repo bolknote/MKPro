@@ -434,23 +434,39 @@ void emulator_regression_wumpus_arrow_exhaustion_matches_typescript_contract() {
 
   auto shoot_miss = [&]() {
     calc.press("С/П");
-    (void)calc.run_until_stable(800, 6);
+    require(calc.run_until_stable(800, 6).stopped,
+            "wumpus should stop on its clue before accepting a shot");
+    require(display_is_number(calc.display_text(),
+                              std::to_string(read_integer_register(calc, clue_register))),
+            "wumpus clue stop must display the current clue");
     calc.input_number("5", true);
     calc.press("/-/");
     calc.press("С/П");
-    (void)calc.run_until_stable(1500, 6);
+    require(calc.run_until_stable(1500, 6).stopped,
+            "wumpus should finish each shot at a prompt or terminal result");
     return compact(calc.display_text());
   };
 
   calc.press_sequence({"В/О", "С/П"});
-  (void)calc.run_until_stable(800, 6);
-  require(calc.program_counter() == "32",
-          "wumpus should start on the room/arrows stop before clue, got pc=" +
-              calc.program_counter() + " display=" + compact(calc.display_text()));
+  require(calc.run_until_stable(800, 6).stopped,
+          "wumpus should reach its initial room/arrows stop");
+  require(display_is_number(calc.display_text(), "1,5") &&
+              read_integer_register(calc, room_register) == 1 &&
+              read_integer_register(calc, arrows_register) == 5,
+          "wumpus should initially show room 1 and five arrows, got " +
+              compact(calc.display_text()));
 
   bool died = false;
   for (int shot = 1; shot <= 6 && !died; ++shot) {
     const std::string display = shoot_miss();
+    require(read_integer_register(calc, arrows_register) == 5 - shot,
+            "each missed shot must consume exactly one arrow");
+    if (shot < 5)
+      require(display_is_number(display, "1," + std::to_string(5 - shot)),
+              "a missed shot must return to the room/arrows prompt");
+    else
+      require(display.find("Г") != std::string::npos,
+              "zero arrows must reach the terminal error, not an adjacent procedure");
     if (display.find("Г") != std::string::npos) {
       require(shot == 5, "wumpus should die on the fifth missed arrow, got shot " +
                              std::to_string(shot) + " with display " + display +

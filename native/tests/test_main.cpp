@@ -90,6 +90,7 @@ void emulator_indirect_incdec_facts_match_typescript_contract();
 void emulator_int_frac_shared_tail_matches_typescript_contract();
 void emulator_interprocedural_equivalence_matches_typescript_contract();
 void emulator_zagaday_tsifru_corrected_revision_preserves_history_and_ui();
+void emulator_packed_bcd_partial_horner_preserves_threshold();
 void emulator_log_selector_premise_matches_typescript_contract();
 void emulator_mk61_execution_matches_typescript_contract();
 void emulator_nekromant_reference_and_source_contract();
@@ -370,6 +371,7 @@ int main(int argc, char** argv) {
       MKPRO_TEST(emulator_int_frac_shared_tail_matches_typescript_contract),
       MKPRO_TEST(emulator_interprocedural_equivalence_matches_typescript_contract),
       MKPRO_TEST(emulator_zagaday_tsifru_corrected_revision_preserves_history_and_ui),
+      MKPRO_TEST(emulator_packed_bcd_partial_horner_preserves_threshold),
       MKPRO_TEST(emulator_log_selector_premise_matches_typescript_contract),
       MKPRO_TEST(emulator_mk61_execution_matches_typescript_contract),
       MKPRO_TEST(emulator_nekromant_reference_and_source_contract),

@@ -171,28 +171,44 @@ std::optional<SelectorProjection> transform_selector_value(
     if (exponent_text.front() == '+' || exponent_digits > 2U)
       return std::nullopt;
     const int exponent = std::stoi(exponent_text);
+    // The ROM word loader encodes a negative order as 100 - magnitude.
+    // A negative zero order would require 100 and is not representable.
+    if (exponent == 0 && exponent_text.front() == '-')
+      return std::nullopt;
     const std::string integral = match[2].str();
     const std::string fractional = match[3].matched ? match[3].str() : "";
     if (integral.size() + fractional.size() > 8U)
       return std::nullopt;
     if (exponent < 0) {
-      // This is a raw, normalized negative-order word, not a decimal
-      // fraction entered with order zero. Its sign/order are preserved;
-      // R0..R6 update the eight-digit mantissa, not the real number +/-1.
-      if (integral.size() != 1U || integral.front() == '0')
+      // ROM uses the units digit of the negative BCD order. In each decade,
+      // orders 1..3 retain the mantissa; 4..10 shift it right to order 3.
+      // Vacated digits are sign-extended with 0 or 9 before counter mutation.
+      const int order_units = ((-exponent - 1) % 10) + 1;
+      const int shift = std::max(0, order_units - 3);
+      const bool denormalized_boundary =
+          integral.size() == 1U && integral.front() == '0' && order_units == 3;
+      if (integral.size() != 1U ||
+          (integral.front() == '0' && !denormalized_boundary))
         return std::nullopt;
       std::string digits = integral + fractional;
       digits.append(8U - digits.size(), '0');
+      if (shift != 0) {
+        const auto count = static_cast<std::size_t>(shift);
+        digits = std::string(count, match[1].str().empty() ? '0' : '9') +
+                 digits.substr(0, 8U - count);
+      }
       const int next = std::stoi(digits) + mutation_delta(mutation);
-      // Mantissa carry/borrow into the leading digit changes representation.
-      // Until that separate ROM case is modeled, do not issue a certificate.
-      if (next < 10000000 || next > 99999999)
+      // Carry/wrap and a normalized leading-digit borrow remain unproved.
+      // Leading zeroes produced by the order shift are exact ROM words and
+      // must survive a subsequent evaluation of result_value.
+      if (next < 0 || next > 99999999 ||
+          (shift == 0 && !denormalized_boundary && next < 10000000))
         return std::nullopt;
-      const std::string transformed = std::to_string(next);
+      const std::string transformed = pad_left_8(next);
       std::string result_value = normalized;
-      if (mutation != IndirectSelectorMutation::Stable) {
+      if (mutation != IndirectSelectorMutation::Stable || shift != 0) {
         result_value = match[1].str() + transformed.substr(0, 1) + "." +
-                       transformed.substr(1) + "e" + std::to_string(exponent);
+                       transformed.substr(1) + "e" + std::to_string(exponent + shift);
       }
       return SelectorProjection{transformed, result_value, true};
     }
@@ -209,7 +225,9 @@ std::optional<SelectorProjection> transform_selector_value(
     return std::nullopt;
   if (mutation == IndirectSelectorMutation::Stable && !normalized.starts_with("-") &&
       contains_hex_alpha(normalized)) {
-    return SelectorProjection{normalized, normalized, false};
+    // result_value is replayed by value-flow analysis. Retain the raw-word
+    // type even when its mantissa also spells a decimal exponent (1E3).
+    return SelectorProjection{normalized, "0x" + normalized, false};
   }
   if (explicit_hex && contains_hex_alpha(normalized))
     return std::nullopt; // Mutating nondecimal BCD words need their own proof.
@@ -343,6 +361,33 @@ std::optional<IndirectAddressEvaluation> evaluate_indirect_address(
     return std::nullopt;
   result.memory_target = *memory_target;
   return result;
+}
+
+bool indirect_writeback_preserves_literal_value(
+    const IndirectAddressEvaluation& evaluation, std::string_view original_value) {
+  if (evaluation.mutation != IndirectSelectorMutation::Stable ||
+      !evaluation.result_value.has_value())
+    return false;
+  const std::string before = normalize_selector_value(original_value);
+  const std::string after = normalize_selector_value(*evaluation.result_value);
+  const auto raw_word = [](std::string_view spelling, const std::string& normalized) {
+    double parsed = 0.0;
+    return contains_hex_alpha(normalized) &&
+           (lower_ascii(trim_ascii(std::string(spelling))).starts_with("0x") ||
+            !parses_finite_number(normalized, parsed));
+  };
+  if (raw_word(original_value, before) != raw_word(*evaluation.result_value, after))
+    return false;
+  if (before == after)
+    return true;
+  // Ordinary nonnegative integer spellings may differ (1E3 versus 1000).
+  // Do not extend this numeric equivalence to fractional or signed words:
+  // their order and sign-fill can change addressing and observable data.
+  double original = 0.0;
+  double result = 0.0;
+  return parses_finite_number(before, original) &&
+         parses_finite_number(after, result) && original >= 0.0 &&
+         std::trunc(original) == original && original == result;
 }
 
 std::optional<std::vector<int>> noncanonical_indirect_flow_entries(

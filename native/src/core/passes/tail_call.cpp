@@ -125,17 +125,7 @@ bool block_has_return(const std::vector<IrOp>& ops, int start, int end) {
   return false;
 }
 
-std::optional<std::string> terminal_tail_target(const std::vector<IrOp>& ops, int start, int end) {
-  for (int index = end - 1; index >= start; --index) {
-    const IrOp& op = ops.at(static_cast<std::size_t>(index));
-    if (op.kind == IrKind::Label)
-      continue;
-    if (op.kind == IrKind::Jump)
-      return string_target(op.target);
-    return std::nullopt;
-  }
-  return std::nullopt;
-}
+
 
 std::map<std::string, TailJumpTarget> find_tail_jump_targets(const std::vector<IrOp>& ops) {
   const std::map<std::string, int> label_indexes = build_label_indexes(ops);
@@ -221,59 +211,22 @@ std::set<std::string> collect_return_labels(const std::vector<IrOp>& ops) {
   return result;
 }
 
-std::set<std::string> collect_return_targets(const std::vector<IrOp>& ops) {
-  std::set<std::string> call_targets;
-  for (const IrOp& op : ops) {
-    if (op.kind == IrKind::Call) {
-      const std::optional<std::string> target = string_target(op.target);
-      if (target.has_value())
-        call_targets.insert(*target);
-    }
-    if (op.kind == IrKind::Label && op.procedure_boundary == "start")
-      call_targets.insert(op.name);
-  }
 
-  const std::map<std::string, Region> regions = collect_callable_regions(ops, call_targets);
-  std::set<std::string> result;
-  for (const auto& [target, region] : regions) {
-    if (block_has_return(ops, region.start, region.end))
-      result.insert(target);
-  }
-
-  bool changed = true;
-  while (changed) {
-    changed = false;
-    for (const auto& [target, region] : regions) {
-      if (result.contains(target))
-        continue;
-      const std::optional<std::string> tail = terminal_tail_target(ops, region.start, region.end);
-      if (tail.has_value() && result.contains(*tail)) {
-        result.insert(target);
-        changed = true;
-      }
-    }
-  }
-  return result;
-}
 
 bool is_return_label(const IrTarget& target, const std::set<std::string>& return_labels) {
   const std::optional<std::string> label = string_target(target);
   return label.has_value() && return_labels.contains(*label);
 }
 
-std::string tail_call_detail(int applied, int tail_jump_count, int empty_stack_applied) {
-  const std::string base =
+std::string tail_call_detail(int applied, int tail_jump_count) {
+  return
       tail_jump_count == 0
           ? "Replaced " + std::to_string(applied) + " subroutine tail call" +
                 (applied == 1 ? "" : "s") + " with direct jump(s)."
           : "Replaced " + std::to_string(applied) + " subroutine tail operation" +
                 (applied == 1 ? "" : "s") + " with direct jump continuation" +
                 (tail_jump_count == 1 ? "" : "s") + ".";
-  if (empty_stack_applied == 0)
-    return base;
-  return base + " " + std::to_string(empty_stack_applied) + " site" +
-         (empty_stack_applied == 1 ? "" : "s") +
-         " use empty-return-stack В/О as the loop-head continuation.";
+
 }
 
 IrOp jump_from_return(const IrOp& op, IrTarget continuation) {
@@ -316,17 +269,7 @@ IrOp jump_from_call(const IrOp& op, std::string_view replacement, std::string fa
   return out;
 }
 
-bool loop_back_targets_head(const std::vector<IrOp>& ops,
-                            const std::map<std::string, int>& label_indexes,
-                            const std::map<std::string, int>& label_addresses, const IrOp& op) {
-  if (op.kind == IrKind::Jump) {
-    const IrTarget normalized = normalize_continuation(ops, label_indexes, op.target);
-    const std::optional<int> address = target_address(normalized, label_addresses);
-    return address.has_value() && *address == 0;
-  }
-  const std::optional<int> indirect_target = known_indirect_flow_target(op);
-  return indirect_target.has_value() && *indirect_target == 0 && op.kind == IrKind::IndirectJump;
-}
+
 
 } // namespace
 
@@ -338,20 +281,17 @@ PassResult tail_call_lowering(const std::vector<IrOp>& ops, const PassContext& c
       collect_return_continuations(ops, tail_jump_targets);
   const std::set<std::string> return_labels = collect_return_labels(ops);
   const std::map<std::string, int> label_indexes = build_label_indexes(ops);
-  const std::map<std::string, int> label_addresses = calculate_label_addresses(ops);
-  const std::set<std::string> return_targets = collect_return_targets(ops);
+
 
   std::vector<IrOp> result;
   result.reserve(ops.size());
   int applied = 0;
-  int empty_stack_applied = 0;
-  bool seen_procedure_start = false;
+
 
   for (int index = 0; index < static_cast<int>(ops.size()); ++index) {
     const IrOp& op = ops.at(static_cast<std::size_t>(index));
     if (op.kind == IrKind::Label) {
-      if (op.procedure_boundary == "start")
-        seen_procedure_start = true;
+
       result.push_back(op);
       continue;
     }
@@ -414,15 +354,10 @@ PassResult tail_call_lowering(const std::vector<IrOp>& ops, const PassContext& c
         continue;
       }
 
-      if (!seen_procedure_start && call_target.has_value() && return_targets.contains(*call_target) &&
-          next != nullptr && loop_back_targets_head(ops, label_indexes, label_addresses, *next) &&
-          !has_rewrite_barrier(op) && !has_rewrite_barrier(*next)) {
-        result.push_back(jump_from_call(op, "empty-stack tail call", "empty-stack tail call"));
-        ++index;
-        ++applied;
-        ++empty_stack_applied;
-        continue;
-      }
+      // A main-loop continuation at 00 is not an empty-stack return:
+      // ROM resumes an empty-stack return at 01. Preserve the call frame
+      // and explicit continuation here. Only final-layout proofs may use
+      // the separately verified one-cell empty-return continuation.
 
       if (tail_target != tail_jump_targets.end() && next != nullptr && next->kind == IrKind::Label &&
           same_target(normalize_continuation(ops, label_indexes, next->name),
@@ -447,7 +382,7 @@ PassResult tail_call_lowering(const std::vector<IrOp>& ops, const PassContext& c
           {
               AppliedOptimization{
                   .name = "tail-call-lowering",
-                  .detail = tail_call_detail(applied, tail_jump_count, empty_stack_applied),
+                  .detail = tail_call_detail(applied, tail_jump_count),
               },
           },
   };

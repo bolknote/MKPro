@@ -129,6 +129,194 @@ std::vector<int> resolved_opcodes(const std::vector<MachineItem>& items) {
 } // namespace
 
 void post_layout_indirect_flow_matches_typescript_contract() {
+
+  {
+    const auto settings = [](int target) {
+      CompileOptions options;
+      options.preloaded_indirect_flow = true;
+      options.dual_use_constant_indirect_flow = true;
+      options.forward_indirect_flow = true;
+      options.aggressive_post_layout_indirect_flow = true;
+      for (const std::string reg : {"7", "8", "9", "a", "b", "c", "d", "e"})
+        options.preloaded_constant_registers[reg] = "23";
+      options.preloaded_constant_registers["e"] = std::to_string(target);
+      return options;
+    };
+    const auto indirect = [](const std::string& label) {
+      auto op = MachineItem::op(0x8e, "indirect jump");
+      op.indirect_flow_targets = std::vector<IrTarget>{label};
+      return op;
+    };
+    const auto observe = [](const std::vector<MachineItem>& items,
+                            const CompileOptions& options,
+                            const std::vector<PreloadReport>& preloads,
+                            const std::string& input, int phases) {
+      emulator::MK61 calc;
+      require(calc.load_program(resolved_opcodes(items)).diagnostics.empty(),
+              "selector identity fixture must load");
+      for (const auto& [reg, value] : options.preloaded_constant_registers)
+        calc.set_register(reg, value);
+      for (const auto& preload : preloads)
+        calc.set_register(preload.register_name, preload.value);
+      calc.set_register("1", "314");
+      calc.set_register("X", input);
+      calc.set_register("Y", "17");
+      calc.set_register("Z", "19");
+      calc.set_register("T", "23");
+      std::vector<std::string> observations;
+      for (int phase = 0; phase < phases; ++phase) {
+        if (phase == 0)
+          calc.press_sequence({"\u0412/\u041e", "\u0421/\u041f"});
+        else {
+          calc.input_number(input, true);
+          calc.press("\u0421/\u041f");
+        }
+        require(calc.run_until_stable(500, 6).stopped,
+                "selector identity fixture must reach its next stop");
+        observations.push_back(calc.display_text());
+        for (const std::string reg : {"X", "Y", "Z", "T", "X1"})
+          observations.push_back(calc.read_register(reg));
+      }
+      calc.press("\u0412\u041f");
+      observations.push_back(calc.display_text());
+      return observations;
+    };
+    for (const int padding : {2, 5}) {
+      auto error = MachineItem::op(0x29, "error");
+      error.stop_disposition = StopDisposition::Terminal;
+      std::vector<MachineItem> original{
+          MachineItem::op(0x5e, "conditional"), MachineItem::address("second"),
+          indirect("first")};
+      for (int i = 0; i < padding; ++i)
+        original.push_back(MachineItem::op(0x54, "nop"));
+      original.push_back(MachineItem::label("first"));
+      original.push_back(error);
+      original.push_back(MachineItem::label("second"));
+      original.push_back(MachineItem::op(0x61, "recall 1"));
+      original.push_back(terminal_stop());
+      const auto options = settings(padding + 3);
+      const auto result = core::optimize_post_layout_indirect_flow(original, options, 0);
+      require(result.applied == 0,
+              "a fixed-point alias must not steal an immutable selector from another identity");
+      for (const std::string input : {"0", "1", "-1"})
+        require(observe(original, options, {}, input, 1) ==
+                    observe(result.items, options, result.preloads, input, 1),
+                "immutable target identity must preserve both branches, stack and hidden X2");
+      auto incorrect = original;
+      incorrect.front() = MachineItem::op(0xee, "unproved shared selector");
+      incorrect.erase(incorrect.begin() + 1);
+      require(observe(original, options, {}, "0", 1) !=
+                  observe(incorrect, options, {}, "0", 1),
+              "the ROM counterexample must distinguish error from the neighbouring payload");
+    }
+    auto pause = MachineItem::op(0x50, "stop");
+    pause.stop_disposition = StopDisposition::Resumable;
+    const std::vector<MachineItem> original{
+        MachineItem::label("head"), MachineItem::op(0x61, "recall 1"), pause,
+        MachineItem::op(0x5e, "conditional"), MachineItem::address("head"),
+        indirect("head")};
+    const auto options = settings(0);
+    const auto result = core::optimize_post_layout_indirect_flow(original, options, 0);
+    require(result.applied == 1 &&
+                core::machine_cell_count(result.items) + 1 == core::machine_cell_count(original),
+            "sharing a selector whose existing target does not move must remain profitable");
+    for (const std::string input : {"0", "1"})
+      require(observe(original, options, {}, input, 2) ==
+                  observe(result.items, options, result.preloads, input, 2),
+              "safe selector sharing must preserve both resumable continuations");
+  }
+
+  {
+    const auto constant_options = [](const std::string& value) {
+      CompileOptions result;
+      result.preloaded_indirect_flow = true;
+      result.dual_use_constant_indirect_flow = true;
+      result.forward_indirect_flow = true;
+      result.aggressive_post_layout_indirect_flow = true;
+      for (const std::string reg : {"7", "8", "9", "a", "b", "c", "d", "e"})
+        result.preloaded_constant_registers[reg] = "23";
+      result.preloaded_constant_registers["a"] = value;
+      return result;
+    };
+    const auto observe = [](const std::vector<MachineItem>& program,
+                            const CompileOptions& options, int phases) {
+      emulator::MK61 calc;
+      require(calc.load_program(resolved_opcodes(program)).diagnostics.empty(),
+              "constant-selector ROM program must load");
+      for (const auto& [reg, value] : options.preloaded_constant_registers)
+        calc.set_register(reg, value);
+      calc.set_register("X", "17");
+      calc.set_register("Y", "29");
+      calc.set_register("Z", "31");
+      calc.set_register("T", "43");
+      calc.press("В/О");
+      std::vector<std::string> observations;
+      for (int phase = 0; phase < phases; ++phase) {
+        calc.press("С/П");
+        require(calc.run_until_stable(2000, 6).stopped,
+                "constant-selector ROM continuation must stop");
+        // Every stop follows recall a, so X observes the literal value.
+        // Integer indirect write-back may pad its raw mantissa without
+        // changing that value; indirect_addressing_test.cpp separately
+        // checks exact stored words against the ROM.
+        for (const std::string reg : {"X", "Y", "Z", "T", "X1"})
+          observations.push_back(calc.read_register(reg));
+        calc.press("ВП");
+        observations.push_back(calc.display_text());
+      }
+      return observations;
+    };
+    auto pause = MachineItem::op(0x50, "stop");
+    pause.stop_disposition = StopDisposition::Resumable;
+    const std::vector<MachineItem> backward{
+        MachineItem::label("head"), MachineItem::op(0x6a, "recall a"), pause,
+        MachineItem::op(0x51, "jump"), MachineItem::address(0)};
+    for (const std::string value : {"-5E-1", "1E3", "-2E-7", "2E-7", "0.25"}) {
+      const bool preserves = value == "-5E-1" || value == "1E3";
+      const CompileOptions settings = constant_options(value);
+      const auto early = core::passes::run_preloaded_indirect_flow(
+          raise_machine_to_ir(backward), {.options = settings});
+      require(early.applied == (preserves ? 1 : 0),
+              "IR constant dual use must require value-preserving write-back: " + value);
+      const auto late = core::optimize_post_layout_indirect_flow(backward, settings, 0);
+      const bool through_a = std::any_of(late.items.begin(), late.items.end(),
+          [](const auto& item) {
+            return item.kind == MachineItemKind::Op && item.opcode == 0x8a;
+          });
+      require(through_a == preserves,
+              "post-layout backward dual use must reject destructive constants: " + value);
+      require(observe(backward, settings, 3) == observe(late.items, settings, 3),
+              "repeated dual-use loops must preserve data, stack and hidden X2: " + value);
+    }
+
+    std::vector<MachineItem> forward{
+        MachineItem::label("main"), MachineItem::op(0x51, "jump"),
+        MachineItem::address("target")};
+    for (int filler = 0; filler < 6; ++filler)
+      forward.push_back(MachineItem::op(0x0d, "clear"));
+    forward.push_back(MachineItem::label("target"));
+    forward.push_back(MachineItem::op(0x6a, "recall a"));
+    forward.push_back(terminal_stop());
+    for (const std::string value : {"7", "4.1200076E-4", "-4.1200076E-4"}) {
+      const CompileOptions settings = constant_options(value);
+      const auto result = core::optimize_post_layout_indirect_flow(forward, settings, 0);
+      const bool through_a = std::any_of(result.items.begin(), result.items.end(),
+          [](const auto& item) {
+            return item.kind == MachineItemKind::Op && item.opcode == 0x8a;
+          });
+      require(through_a == (value == "7"),
+              "fixed-point forward dual use must prove the final data word: " + value);
+      require(observe(forward, settings, 1) == observe(result.items, settings, 1),
+              "forward fixed-point flow must preserve the observed constant: " + value);
+      if (value != "7") {
+        auto destructive = forward;
+        destructive.at(1) = MachineItem::op(0x8a, "unproved indirect jump");
+        destructive.erase(destructive.begin() + 2);
+        require(observe(forward, settings, 1) != observe(destructive, settings, 1),
+                "ROM must independently reject address-only constant reuse: " + value);
+      }
+    }
+  }
   {
     const auto loop_jump = [](int reg, const std::string& target) {
       auto item = MachineItem::op(0x80 + reg, "indirect loop jump");
@@ -1250,21 +1438,13 @@ program DataPreloadProvenance {
         program,
         {PreloadReport{.register_name = "8", .value = "B2", .counts_against_program = false}});
 
-    require(result.applied == 1,
-            "post-layout stop-tail reuse should rewrite branches to selector shims");
-    require(core::machine_cell_count(result.items) == core::machine_cell_count(program) - 1,
-            "branch-to-selector stop-tail reuse should remove the direct address cell");
-    require(std::none_of(result.items.begin(), result.items.end(),
-                         [](const MachineItem& item) {
-                           return item.kind == MachineItemKind::Address &&
-                                  std::get<std::string>(item.target) == "shim";
-                         }),
-            "branch-to-selector stop-tail reuse should remove the shim address target");
-    require(std::any_of(result.items.begin(), result.items.end(),
-                        [](const MachineItem& item) {
-                          return item.kind == MachineItemKind::Op && item.opcode == 0x78;
-                        }),
-            "branch-to-selector stop-tail reuse should emit K x!=0 8");
+    require(result.applied == 0 &&
+                result.items.size() == program.size() &&
+                std::equal(result.items.begin(), result.items.end(), program.begin(),
+                           machine_items_equal),
+            "an unbound indirect entry must not authorize deletion of a shim operand");
+    require(result.preloads.size() == 1 && result.preloads.front().value == "B2",
+            "an unproved shim transaction must retain its original selector word");
   }
 
   {
@@ -1276,7 +1456,13 @@ program DataPreloadProvenance {
     program.insert(program.end(), branch.begin(), branch.end());
     program.push_back(digit());
     program.push_back(MachineItem::label("target"));
-    program.push_back(MachineItem::op(0x50, "С/П"));
+    program.push_back(terminal_stop());
+
+    auto unknown_stop = program;
+    unknown_stop.back().stop_disposition = StopDisposition::Unknown;
+    require(core::optimize_post_layout_stop_tail_reuse(
+                unknown_stop, {PreloadReport{.register_name = "8", .value = "B6"}}).applied == 0,
+            "an unknown stop continuation must not authorize address-cell deletion");
 
     const core::PostLayoutIndirectFlowResult result = core::optimize_post_layout_stop_tail_reuse(
         program,
@@ -1308,6 +1494,87 @@ program DataPreloadProvenance {
                           return optimization.name == "post-layout-existing-selector-flow";
                         }),
             "existing selector flow should report the TS optimization name");
+
+    const auto observe = [](const std::vector<MachineItem>& items, const std::string& word) {
+      emulator::MK61 calc;
+      require(calc.load_program(resolved_opcodes(items)).diagnostics.empty(),
+              "selector relocation ROM fixture must load");
+      calc.set_register("8", word);
+      calc.input_number("19", true);
+      calc.press_sequence({"В/О", "С/П"});
+      require(calc.run_until_stable(200, 6).stopped,
+              "selector relocation ROM fixture must stop");
+      std::vector<std::string> state;
+      for (const std::string reg : {"X", "Y", "Z", "T", "X1"})
+        state.push_back(calc.read_register(reg));
+      calc.press("ВП");
+      state.push_back(calc.display_text());
+      return state;
+    };
+    require(observe(program, "L6") == observe(result.items, "L5"),
+            "retargeting a raw selector must preserve stack, X1 and exponent-entry state");
+  }
+
+  {
+    const auto pause = [] {
+      auto stop = MachineItem::op(0x50, "stop");
+      stop.stop_disposition = StopDisposition::Resumable;
+      return stop;
+    };
+    const auto observe = [](const std::vector<MachineItem>& program) {
+      emulator::MK61 calc;
+      require(calc.load_program(resolved_opcodes(program)).diagnostics.empty(),
+              "late tail-call ROM fixture must load");
+      calc.set_register("8", "0");
+      calc.press_sequence({"В/О", "С/П"});
+      std::vector<std::string> observations;
+      for (int phase = 0; phase < 3; ++phase) {
+        require(calc.run_until_stable(200, 6).stopped,
+                "late tail-call fixture must reach each prompt");
+        for (const std::string reg : {"X", "Y", "Z", "T", "X1", "0", "2"})
+          observations.push_back(calc.read_register(reg));
+        if (phase < 2)
+          calc.press_sequence({"С/П"});
+      }
+      calc.press_sequence({"ВП"});
+      observations.push_back(calc.display_text());
+      return observations;
+    };
+    for (const bool indirect : {false, true}) {
+      auto proc = MachineItem::label("worker");
+      proc.procedure_boundary = "start";
+      std::vector<MachineItem> program = {
+          MachineItem::label("main"), MachineItem::op(0x07, "7"),
+          MachineItem::op(0x42, "store 2"), pause(),
+          MachineItem::op(0x53, "call"), MachineItem::address("worker"), pause(),
+          MachineItem::op(0x53, "call"), MachineItem::address("worker")};
+      std::vector<PreloadReport> preloads;
+      if (indirect) {
+        auto loop = MachineItem::op(0x88, "indirect jump");
+        loop.indirect_flow_targets = std::vector<IrTarget>{std::string("main")};
+        program.push_back(loop);
+        preloads.push_back(PreloadReport{.register_name = "8", .value = "0"});
+      } else {
+        program.push_back(MachineItem::op(0x51, "jump"));
+        program.push_back(MachineItem::address("main"));
+      }
+      program.push_back(proc);
+      program.push_back(MachineItem::op(0x01, "1"));
+      program.push_back(MachineItem::op(0x40, "store 0"));
+      program.push_back(MachineItem::op(0x52, "return"));
+      const auto result = core::optimize_post_layout_stop_tail_reuse(program, preloads);
+      require(result.applied == 0,
+              "neither a direct nor an indirect loop continuation may become empty return 01");
+      require(observe(result.items) == observe(program),
+              "late packing must preserve resumptions, data stack, X1 and X2");
+
+      // Reproduce the old natural-fallthrough rewrite independently: deleting
+      // both transfers reaches the callee without a frame and skips cell 00.
+      auto broken = program;
+      broken.erase(broken.begin() + 7, broken.begin() + (indirect ? 10 : 11));
+      require(observe(broken) != observe(program),
+              "ROM must reject the old call-and-loop-back deletion");
+    }
   }
 
   {
@@ -1329,30 +1596,8 @@ program DataPreloadProvenance {
         program,
         {PreloadReport{.register_name = "8", .value = "B2", .counts_against_program = false}});
 
-    require(result.applied == 1,
-            "post-layout stop-tail reuse should apply empty-stack tail-call rewrite");
-    require(core::machine_cell_count(result.items) == core::machine_cell_count(program) - 3,
-            "adjacent empty-stack tail-call rewrite should remove the call, operand, and proved "
-            "loop-back cell");
-    require(!result.optimizations.empty() &&
-                result.optimizations.at(0).name == "post-layout-empty-stack-tail-call",
-            "empty-stack post-layout rewrite should report the TS optimization name");
-    require(std::none_of(result.items.begin(), result.items.end(),
-                         [](const MachineItem& item) {
-                           return item.kind == MachineItemKind::Op &&
-                                  (item.opcode == 0x51 || item.opcode == 0x53);
-                         }),
-            "adjacent empty-stack tail call should become natural fallthrough");
-    require(std::any_of(result.optimizations.begin(), result.optimizations.end(),
-                        [](const auto& optimization) {
-                          return optimization.name == "post-layout-empty-stack-tail-fallthrough";
-                        }),
-            "natural component entry should carry its own proof report");
-    require(std::none_of(result.items.begin(), result.items.end(),
-                         [](const MachineItem& item) {
-                           return item.kind == MachineItemKind::Op && item.opcode == 0x88;
-                         }),
-            "empty-stack post-layout rewrite should remove the proved loop-back jump");
+    require(result.applied == 0 && result.items.size() == program.size(),
+            "post-layout packing must preserve the call frame for continuation 00");
   }
 
   {
@@ -1373,9 +1618,8 @@ program DataPreloadProvenance {
     const auto result = core::optimize_post_layout_stop_tail_reuse(
         program,
         {PreloadReport{.register_name = "8", .value = "B2", .counts_against_program = false}});
-    require(result.applied == 1 &&
-                core::machine_cell_count(result.items) == core::machine_cell_count(program) - 3,
-            "an unreferenced metadata label must not look like an external removed-cell entry");
+    require(result.applied == 0 && result.items.size() == program.size(),
+            "an unreferenced label must not authorize an incorrect empty-stack return");
   }
 
   {
@@ -1422,21 +1666,18 @@ program DataPreloadProvenance {
         program,
         {PreloadReport{.register_name = "8", .value = "B8", .counts_against_program = false}});
 
-    require(result.applied == 1,
-            "empty-stack tail-call rewrite should recognize a direct jump to address zero; got " +
-                std::to_string(result.applied));
-    require(core::machine_cell_count(result.items) == core::machine_cell_count(program) - 4,
-            "adjacent direct empty-stack tail-call rewrite should remove both transfers");
-    require(std::none_of(result.items.begin(), result.items.end(),
-                         [](const MachineItem& item) {
-                           return item.kind == MachineItemKind::Op &&
-                                  (item.opcode == 0x51 || item.opcode == 0x53);
-                         }),
-            "adjacent direct tail call should fall through into its procedure");
-    require(result.preloads.size() == 1 && result.preloads.at(0).register_name == "8" &&
-                result.preloads.at(0).value == "B4",
-            "direct empty-stack tail-call fallthrough should retarget selectors across four "
-            "deletions");
+    const auto calls = std::count_if(result.items.begin(), result.items.end(),
+                                    [](const MachineItem& item) {
+      return item.kind == MachineItemKind::Op &&
+             (item.opcode == 0x53 || (item.opcode >= 0xa0 && item.opcode <= 0xae));
+    });
+    require(calls == 1,
+            "packing may shorten a call but must retain its real return frame");
+    require(std::any_of(result.items.begin(), result.items.end(),
+                        [](const MachineItem& item) {
+                          return item.kind == MachineItemKind::Op && item.opcode == 0x51;
+                        }),
+            "the explicit continuation to 00 must remain after a returning call");
   }
 
   {
@@ -2435,6 +2676,18 @@ program DataPreloadProvenance {
     require(observed.at(0) == observed.at(1),
             "late-bound selector relocation should preserve observable execution: baseline=" +
                 observed.at(0) + " candidate=" + observed.at(1));
+
+    auto wrong_initial_digit = program;
+    const auto wrong_low = std::find_if(
+        wrong_initial_digit.begin(), wrong_initial_digit.end(), [](const MachineItem& item) {
+          return std::ranges::find(item.roles, "late-decimal-selector-low:late_helper") !=
+                 item.roles.end();
+        });
+    require(wrong_low != wrong_initial_digit.end(), "the initial charge must have a low digit");
+    wrong_low->opcode = 0;
+    wrong_low->mnemonic = "0";
+    require(core::optimize_post_layout_charged_selector_flow(wrong_initial_digit, {}).applied == 0,
+            "address markers must not repair an input whose real selector word was already wrong");
 
     const std::vector<MachineItem> poisoned = late_bound_program(true);
     const core::PostLayoutIndirectFlowResult rejected =

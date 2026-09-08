@@ -35,6 +35,7 @@ struct IndirectAddressEvaluation {
   std::optional<int> flow_target;
   std::optional<int> actual_flow_target;
   std::optional<int> memory_target;
+  // Replayable selector spelling; nondecimal BCD words retain a 0x type tag.
   std::optional<std::string> result_value;
   std::optional<SuperDarkIndirectTarget> super_dark;
 };
@@ -49,10 +50,18 @@ std::optional<IndirectAddressEvaluation> evaluate_indirect_address(
 // Interpret delivered MK-61 word spelling, not just its mathematical value.
 // In particular 0.5 (order zero) and 5E-1 have distinct indirect write-back.
 // Scientific notation takes precedence over ambiguous raw BCD (use 0x for
-// the latter). Unsupported mantissa carry/borrow or precision fails closed.
+// the latter). Negative orders are shifted by their BCD units digit, with
+// sign-filled mantissas and exact write-back, including denormalized boundary
+// words produced by a prior access. Unsupported carry/borrow fails closed.
 std::optional<IndirectAddressEvaluation> evaluate_indirect_address(
     std::string_view selector, std::string_view value, IndirectOperationKind operation,
     AddressSpaceModel model = AddressSpaceModel::Standard);
+
+// Required before an immutable data literal can also supply a flow address.
+// Stable excludes counter updates, but does not establish this property.
+// Fractional/sign-filled write-back is never justified by floating equality.
+bool indirect_writeback_preserves_literal_value(
+    const IndirectAddressEvaluation& evaluation, std::string_view original_value);
 
 // Preserve noncanonical runtime entry counters in typed flow metadata.
 // nullopt retains the ordinary relocatable physical/logical target contract.

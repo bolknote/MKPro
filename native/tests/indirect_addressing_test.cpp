@@ -6,6 +6,11 @@
 
 #include "test_support.hpp"
 
+#include <algorithm>
+#include <array>
+#include <string>
+#include <vector>
+
 namespace mkpro::tests {
 
 namespace {
@@ -88,7 +93,7 @@ void indirect_addressing_matches_typescript_contract() {
        "-2.2600028E-1", "-2.2600030E-1", "-2.2600029E-1"},
       {"1E3", 99, 1, 0, 3, 1, 0, "00000999", "00001001", "00001000"},
       {"1.0E3", 99, 1, 0, 3, 1, 0, "00000999", "00001001", "00001000"},
-      {"1E-0", 0, 2, 1, 0, 2, 1, "00000000", "00000002", "00000001"},
+      {"1E0", 0, 2, 1, 0, 2, 1, "00000000", "00000002", "00000001"},
   };
   for (const auto& word : word_cases) {
     for (const int reg : {0, 3, 4, 6, 7, 14}) {
@@ -136,16 +141,149 @@ void indirect_addressing_matches_typescript_contract() {
       recall.set_register(selector, word.value);
       const std::string memory_name = memory < 10 ? std::to_string(memory)
                                                   : std::string(1, static_cast<char>('a' + memory - 10));
-      const std::string expected_x = memory == reg
-                                        ? expected_word : recall.read_register(memory_name);
+      // A recall normalizes the copy in X without rewriting the source word:
+      // for example, R3 can retain 00000999 while X contains 999.
+      // Use an independent direct recall, not string equality with memory.
+      require(expected.load_program({0x60 + memory, 0x50}).diagnostics.empty(),
+              "direct-recall ROM reference must load");
+      if (memory != reg)
+        expected.set_register(memory_name, std::to_string(200 + memory));
+      expected.press_sequence({"В/О", "С/П"});
+      require(expected.run_until_stable(1000, 6).stopped,
+              "direct-recall ROM reference must stop");
+      const std::string expected_x = expected.read_register("X");
+      require(expected.read_register(selector) == expected_word,
+              "direct recall must preserve the independent selector word");
+
       recall.press_sequence({"В/О", "С/П"});
-      require(recall.run_until_stable(1000, 6).stopped &&
-                  recall.read_register("X") == expected_x &&
-                  recall.read_register(selector) == expected_word,
-              "indirect recall must confirm its selected bank and write-back: R" +
+      require(recall.run_until_stable(1000, 6).stopped,
+              "indirect recall must stop: R" + selector + "=" + word.value);
+      require(recall.read_register("X") == expected_x,
+              "indirect recall must match direct recall of its selected bank: R" +
+                  selector + "=" + word.value);
+      require(recall.read_register(selector) == expected_word,
+              "indirect recall must preserve the exact selector write-back: R" +
                   selector + "=" + word.value);
     }
   }
+
+  // Independent ROM words cover every order-units class and several decades.
+  // Expected mantissas are pinned values, not the decoder's shift algorithm.
+  struct ShiftedOrderWord {
+    int order;
+    int write_back_order;
+    std::string positive;
+    std::string negative;
+  };
+  const std::vector<ShiftedOrderWord> shifted_orders{
+      {1, 1, "41200076", "41200076"},
+      {2, 2, "41200076", "41200076"},
+      {3, 3, "41200076", "41200076"},
+      {4, 3, "04120007", "94120007"},
+      {5, 3, "00412000", "99412000"},
+      {6, 3, "00041200", "99941200"},
+      {7, 3, "00004120", "99994120"},
+      {8, 3, "00000412", "99999412"},
+      {9, 3, "00000041", "99999941"},
+      {10, 3, "00000004", "99999994"},
+      {11, 11, "41200076", "41200076"},
+      {14, 13, "04120007", "94120007"},
+      {20, 13, "00000004", "99999994"},
+      {93, 93, "41200076", "41200076"},
+      {94, 93, "04120007", "94120007"},
+      {99, 93, "00000041", "99999941"},
+  };
+  constexpr std::array<int, 10> nonzero_tens_memory{
+      10, 11, 12, 13, 14, 0, 0, 1, 2, 3};
+  for (const auto& word : shifted_orders) {
+    for (const bool negative : {false, true}) {
+      for (const int reg : {0, 3, 4, 6, 7, 14}) {
+        const std::string selector = reg == 14 ? "e" : std::to_string(reg);
+        const int delta = reg < 4 ? -1 : reg < 7 ? 1 : 0;
+        std::string value = (negative ? "-" : "") +
+                            std::string("4.1200076E-") + std::to_string(word.order);
+        const std::string context = "R" + selector + "=" + value;
+        emulator::MK61 jump_calc, memory_calc;
+        require(jump_calc.load_program({0x80 + reg, 0x50}).diagnostics.empty() &&
+                    memory_calc.load_program({0xd0 + reg, 0x50}).diagnostics.empty(),
+                "repeated selector fixtures must load");
+        jump_calc.set_register(selector, value);
+        for (int bank = 0; bank < 15; ++bank) {
+          const std::string name = bank < 10 ? std::to_string(bank)
+              : std::string(1, static_cast<char>('a' + bank - 10));
+          memory_calc.set_register(name, std::to_string(200 + bank));
+        }
+        memory_calc.set_register(selector, value);
+        for (int repeat = 0; repeat < 3; ++repeat) {
+          const int mantissa = std::stoi(negative ? word.negative : word.positive) +
+                               delta * (repeat + 1);
+          std::string digits = std::to_string(mantissa);
+          digits.insert(0, 8U - digits.size(), '0');
+          const std::string write_back = (negative ? "-" : "") +
+              digits.substr(0, 1) + "." + digits.substr(1) + "E-" +
+              std::to_string(word.write_back_order);
+          const int target = mantissa % 100;
+          const int memory_target = target < 10 ? target
+              : nonzero_tens_memory.at(static_cast<std::size_t>(target % 10));
+          const auto flow = core::evaluate_indirect_address(
+              selector, value, core::IndirectOperationKind::Flow);
+          const auto memory = core::evaluate_indirect_address(
+              selector, value, core::IndirectOperationKind::Memory);
+          require(flow.has_value() && flow->actual_flow_target == target &&
+                      flow->result_value.has_value() && memory.has_value() &&
+                      memory->memory_target == memory_target &&
+                      memory->result_value == flow->result_value,
+                  "repeated flow/memory projections must match ROM words: " + context);
+
+          emulator::MK61 expected, replay_word;
+          for (int bank = 0; bank < 15; ++bank) {
+            const std::string name = bank < 10 ? std::to_string(bank)
+                : std::string(1, static_cast<char>('a' + bank - 10));
+            expected.set_register(name, std::to_string(200 + bank));
+          }
+          expected.set_register(selector, write_back);
+          const std::string expected_word = expected.read_register(selector);
+          replay_word.set_register(selector, *flow->result_value);
+          require(replay_word.read_register(selector) == expected_word,
+                  "model write-back must recreate the exact stored word: " + context);
+
+          jump_calc.press_sequence({"В/О", "ПП"});
+          const std::string expected_pc = (target < 10 ? "0" : "") + std::to_string(target);
+          require(jump_calc.program_counter() == expected_pc &&
+                      jump_calc.read_register(selector) == expected_word,
+                  "repeated indirect flow must preserve target and exact word: " + context);
+          require(expected.load_program({0x60 + memory_target, 0x50}).diagnostics.empty(),
+                  "independent direct memory oracle must load");
+          expected.press_sequence({"В/О", "С/П"});
+          memory_calc.press_sequence({"В/О", "С/П"});
+          require(expected.run_until_stable(1000, 6).stopped &&
+                      memory_calc.run_until_stable(1000, 6).stopped,
+                  "both memory probes must stop: " + context);
+          require(memory_calc.read_register("X") == expected.read_register("X") &&
+                      memory_calc.read_register(selector) == expected_word,
+                  "repeated indirect memory must match direct recall and write-back: " + context);
+          value = *flow->result_value;
+        }
+      }
+    }
+  }
+  for (const std::string value :
+       {"14", "1E3", "4.1200076E-1", "-5E-1", "-99999999", "B2"}) {
+    const auto decoded = core::evaluate_indirect_address(
+        "a", value, core::IndirectOperationKind::Flow);
+    require(decoded.has_value() &&
+                core::indirect_writeback_preserves_literal_value(*decoded, value),
+            "proved immutable literals must remain available as selectors: " + value);
+  }
+  for (const std::string value :
+       {"14.375", "0.25", "-7", "-2E-7", "2E-7", "-4.1200076E-14"}) {
+    const auto decoded = core::evaluate_indirect_address(
+        "a", value, core::IndirectOperationKind::Flow);
+    require(decoded.has_value() &&
+                !core::indirect_writeback_preserves_literal_value(*decoded, value),
+            "stable selector classes must not certify destructive data write-back: " + value);
+  }
+
   for (const double value : {-0.0, -0.5}) {
     const auto decoded = core::evaluate_indirect_address(
         "7", value, core::IndirectOperationKind::Flow);
@@ -153,7 +291,7 @@ void indirect_addressing_matches_typescript_contract() {
                 decoded->result_value == "-99999990",
             "the double overload must not erase the sign of fractional zero");
   }
-  for (const std::string value : {"1E-100", "1E100", "1E+3",
+  for (const std::string value : {"1E-100", "1E100", "1E+3", "1E-0", "1E-00",
                                  "1.23456789E-1", "12E-1", "0.5E-1"}) {
     require(!core::evaluate_indirect_address("7", value, core::IndirectOperationKind::Flow),
             "unsupported scientific word formats must not fall back to a raw hex address");
@@ -168,6 +306,77 @@ void indirect_addressing_matches_typescript_contract() {
               raw_ambiguous->formal_address->opcode == 0xe3 &&
               raw_ambiguous->actual_flow_target == 31,
           "an explicit raw BCD word must remain distinct from scientific 1E3");
+
+  struct RawSelectorCase {
+    std::string value;
+    std::string rom_word;
+    std::string stored_word;
+    std::string pc;
+    int formal;
+    int physical;
+    int memory;
+  };
+  const std::array<RawSelectorCase, 5> raw_cases{{
+      {"0x1E3", "1\u04153", "000001\u04153", "\u04153", 0xe3, 31, 13},
+      {"0X2e3", "2\u04153", "000002\u04153", "\u04153", 0xe3, 31, 13},
+      {"0x1E0", "1\u04150", "000001\u04150", "\u04150", 0xe0, 28, 10},
+      {"0xB2", "L2", "000000L2", "L2", 0xb2, 0, 12},
+      {"B2", "L2", "000000L2", "L2", 0xb2, 0, 12},
+  }};
+  for (const auto& word : raw_cases) {
+    for (const int reg : {7, 10, 14}) {
+      const std::string selector = reg == 10 ? "a" : reg == 14 ? "e" : "7";
+      std::vector<int> codes(105, 0x54);
+      codes[0] = 0x61;
+      codes[2] = 0x80 + reg;
+      codes.at(static_cast<std::size_t>(word.physical)) = 0x61;
+      emulator::MK61 jump;
+      require(jump.load_program(codes).diagnostics.empty(), "raw selector fixture must load");
+      jump.set_register("1", "314");
+      jump.set_register(selector, word.rom_word);
+      emulator::MK61 expected;
+      expected.set_register(selector, word.stored_word);
+      expected.set_register("X", "314");
+      std::string value = word.value;
+      for (int repeat = 0; repeat < 3; ++repeat) {
+        const auto flow = core::evaluate_indirect_address(
+            selector, value, core::IndirectOperationKind::Flow);
+        const auto memory = core::evaluate_indirect_address(
+            selector, value, core::IndirectOperationKind::Memory);
+        require(flow && flow->formal_address && flow->result_value &&
+                    flow->formal_address->opcode == word.formal &&
+                    flow->actual_flow_target == word.physical &&
+                    memory && memory->memory_target == word.memory &&
+                    memory->result_value == flow->result_value,
+                "raw BCD type and both addresses must survive repeated write-back: " + value);
+        require(flow->result_value->starts_with("0x") &&
+                    core::indirect_writeback_preserves_literal_value(*flow, word.value),
+                "raw write-back must remain explicitly typed and preserve its literal");
+        jump.press_sequence({"\u0412/\u041e", "\u041f\u041f", "\u041f\u041f", "\u041f\u041f"});
+        require(jump.program_counter() == word.pc &&
+                    jump.read_register(selector) == expected.read_register(selector),
+                "ROM must retain the raw counter and exact padded BCD word");
+        jump.set_register("X", "17");
+        jump.press_sequence({"\u041f\u041f"});
+        require(jump.read_register("X") == expected.read_register("X"),
+                "the raw ROM counter must actually fetch from its physical alias");
+        value = *flow->result_value;
+      }
+    }
+    for (const std::string reg : {"0", "3", "4", "6"}) {
+      require(!core::evaluate_indirect_address(reg, word.value,
+                                              core::IndirectOperationKind::Flow) &&
+                  !core::evaluate_indirect_address(reg, word.value,
+                                                   core::IndirectOperationKind::Memory),
+              "unproved arithmetic on nondecimal BCD counters must remain rejected");
+    }
+  }
+  const auto ordinary_scientific = core::evaluate_indirect_address(
+      "7", "1E3", core::IndirectOperationKind::Flow);
+  require(ordinary_scientific && ordinary_scientific->actual_flow_target == 0 &&
+              !core::indirect_writeback_preserves_literal_value(*raw_ambiguous, "1E3") &&
+              !core::indirect_writeback_preserves_literal_value(*ordinary_scientific, "0x1E3"),
+          "literal preservation must not erase the distinction between scientific and raw BCD");
 
   const auto fractional_r0 =
       core::evaluate_indirect_address("0", "0.5", core::IndirectOperationKind::Memory);

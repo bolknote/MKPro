@@ -34828,18 +34828,22 @@ void emit_packed_bcd_indirect_store(LoweringContext& context, const std::string&
 
 void emit_packed_bcd_horizontal_threshold(LoweringContext& context,
                                           const std::string& divisor,
-                                          const std::string& decade_register, int bias,
-                                          int line) {
+                                          int bias, int line) {
   context.emitter.emit_op(0x35, "К {x}", "packed BCD high bit plane", line);
   context.emitter.emit_op(0x10, "+", "packed BCD add middle bit plane", line);
   context.emitter.emit_op(0x35, "К {x}", "packed BCD merged high planes", line);
-  context.emitter.emit_op(0x10, "+", "packed BCD add low bit plane", line);
   const std::string fold = context.emitter.fresh_label("packed_bcd_horizontal_fold");
   context.emitter.emit_label(fold, {.hidden = true});
+  // Every backedge must add the digit retained in Y before extracting the
+  // next one. Entering at K[x] instead discards the accumulated sum.
+  context.emitter.emit_op(0x10, "+", "packed BCD add low bit plane", line);
   context.emitter.emit_op(0x34, "К [x]", "packed BCD horizontal pair", line);
   context.emitter.emit_op(0x0f, "F Вx", "packed BCD expose remaining pairs", line);
   context.emitter.emit_op(0x35, "К {x}", "packed BCD remaining pairs", line);
-  emit_recall(context, decade_register);
+  // The fold is valid independently of companion kernel rewrites. Its scratch
+  // accumulator is not a constant: only a separate one-hot/history rewrite
+  // used to initialize it to ten, and ordinary code may overwrite it later.
+  emit_number_or_preload(context, "10", "packed BCD decimal scale", line);
   context.emitter.emit_op(0x12, "*", "packed BCD shift next pair", line);
   context.emitter.emit_jump(0x5e, "F x=0", fold, "packed BCD horizontal fold", line);
   context.emitter.emit_op(0x10, "+", "packed BCD finish horizontal sum", line);
@@ -34897,6 +34901,9 @@ bool lower_packed_bcd_horner_threshold(LoweringContext& context,
   emit_store(context, counter, "packed BCD Horner counter");
   const std::string loop = context.emitter.fresh_label("packed_bcd_horner_loop");
   context.emitter.emit_label(loop, {.hidden = true});
+  // The backedge carries the computed output in X, not the FL counter.
+  // Facts from the one-time initialization do not hold at this join.
+  clear_current_x_facts(context);
   emit_recall(context, counter);
   emit_store(context, bank_selector, "packed BCD bank selector");
   std::vector<int> bank_targets;
@@ -34911,8 +34918,7 @@ bool lower_packed_bcd_horner_threshold(LoweringContext& context,
                             "packed BCD first split", statement.line);
   context.emitter.emit_jump(0x53, "ПП", *context.packed_bcd_split_helper_label,
                             "packed BCD second split", statement.line);
-  emit_packed_bcd_horizontal_threshold(context, statement.args.at(5), statement.args.at(9),
-                                       *bias, statement.line);
+  emit_packed_bcd_horizontal_threshold(context, statement.args.at(5), *bias, statement.line);
   context.emitter.emit_number("2");
   emit_recall(context, target);
   context.emitter.emit_op(0x12, "*", "packed BCD Horner shift", statement.line);
@@ -35039,6 +35045,8 @@ bool lower_packed_bcd_one_hot_update(LoweringContext& context,
   emit_store(context, counter, "packed one-hot counter");
   const std::string loop = context.emitter.fresh_label("packed_bcd_one_hot_loop");
   context.emitter.emit_label(loop, {.hidden = true});
+  clear_current_x_facts(context);
+  emit_recall(context, counter);
   emit_store(context, bank_selector, "packed BCD indexed bank selector");
   context.emitter.emit_number("8");
   emit_store(context, helper_selector, "packed BCD advancing work selector");
@@ -35097,11 +35105,15 @@ bool lower_packed_bcd_loop_reset(LoweringContext& context, const V2Statement& st
   if (!packed_bcd_internal_arity(context, statement, 2U) ||
       register_index_for(context, statement.args.at(1)) != 0x0)
     return false;
+  // FL0 mutates R0 but preserves X, which still contains the last updated
+  // packed word. Rotation must establish its zero-address selector explicitly.
+  clear_current_x_facts(context);
+  context.emitter.emit_number("0");
   emit_store(context, statement.args.at(0), "rotate packed loop zero initialization");
   context.packed_bcd_loop_back_selector = statement.args.at(0);
   context.optimizations.push_back(OptimizationReport{
-      .name = "packed-bcd-fl0-zero-reuse",
-      .detail = "Reused the proven zero left in X when the packed FL0 loop terminated.",
+      .name = "packed-bcd-loop-zero-reset",
+      .detail = "Established the rotated-loop zero selector independently of FL0's unchanged X.",
   });
   return true;
 }
@@ -55065,6 +55077,18 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                                                    pass_options);
     post_layout_items = post_layout_stop_tail.items;
     stop_tail_preloads = post_layout_stop_tail.preloads;
+    // Items and selector words are one layout artifact. The stop-tail pass
+    // may move a target even when the following overlay does not apply.
+    // Never merge the new items with a selector from the preceding layout.
+    for (PreloadReport& preload : post_layout_flow_preloads) {
+      const auto rebound = std::find_if(
+          stop_tail_preloads.begin(), stop_tail_preloads.end(),
+          [&](const PreloadReport& candidate) {
+            return candidate.register_name == preload.register_name;
+          });
+      if (rebound != stop_tail_preloads.end())
+        preload = *rebound;
+    }
     post_layout_optimizations.insert(post_layout_optimizations.end(),
                                      post_layout_stop_tail.optimizations.begin(),
                                      post_layout_stop_tail.optimizations.end());

@@ -824,88 +824,26 @@ void pass_pipeline_matches_initial_typescript_contract() {
   }
 
   {
-    const core::passes::PassResult result = run_tail_call({
-        label("main"),
-        call_to("finish_turn"),
-        plain(0x01),
-        call_to("finish_turn"),
-        jump_to("main"),
-        proc_start("finish_turn"),
-        plain(0x02),
-        ret(),
-    });
-    require(result.applied == 1, "tail-call did not apply empty-stack loop-head rewrite");
-    require(result.optimizations.size() == 1,
-            "empty-stack tail-call did not report an optimization");
-    require(result.optimizations.at(0).detail.find("empty-return-stack") != std::string::npos,
-            "empty-stack tail-call detail should mention empty-return-stack");
-    const auto calls = std::count_if(result.ops.begin(), result.ops.end(), [](const IrOp& op) {
-      return op.kind == IrKind::Call;
-    });
-    const auto jumps = std::count_if(result.ops.begin(), result.ops.end(), [](const IrOp& op) {
-      return op.kind == IrKind::Jump;
-    });
-    require(calls == 1, "empty-stack tail-call should leave only the non-terminal call");
-    require(jumps == 1, "empty-stack tail-call should replace call+loop-back with one jump");
-    const auto jump_it = std::find_if(result.ops.begin(), result.ops.end(), [](const IrOp& op) {
-      return op.kind == IrKind::Jump;
-    });
-    require(jump_it != result.ops.end(), "empty-stack tail-call produced no jump");
-    require(std::get<std::string>(jump_it->target) == "finish_turn",
-            "empty-stack tail-call jump target mismatch");
-  }
-
-  {
-    const core::passes::PassResult result = run_tail_call({
-        label("main"),
-        call_to("finish_turn"),
-        known_target_indirect_jump("b", 0),
-        proc_start("finish_turn"),
-        plain(0x02),
-        ret(),
-    });
-    require(result.applied == 1,
-            "tail-call did not accept a proved indirect loop-back for empty-stack return");
-    const bool has_indirect_jump =
-        std::any_of(result.ops.begin(), result.ops.end(), [](const IrOp& op) {
-          return op.kind == IrKind::IndirectJump;
-        });
-    require(!has_indirect_jump,
-            "empty-stack tail-call should remove the proved indirect loop-back");
-    const auto jump_it = std::find_if(result.ops.begin(), result.ops.end(), [](const IrOp& op) {
-      return op.kind == IrKind::Jump;
-    });
-    require(jump_it != result.ops.end(), "indirect empty-stack tail-call produced no jump");
-    require(std::get<std::string>(jump_it->target) == "finish_turn",
-            "indirect empty-stack tail-call jump target mismatch");
-  }
-
-  {
-    const core::passes::PassResult result = run_tail_call({
-        label("main"),
-        call_to("finish_turn"),
-        plain(0x01),
-        call_to("finish_turn"),
-        jump_to("main"),
-        proc_start("finish_turn"),
-        plain(0x02),
-        jump_to("shared_return"),
-        proc_start("shared_return"),
-        plain(0x03),
-        ret(),
-    });
-    require(result.applied >= 1,
-            "tail-call did not prove empty-stack return through a terminal tail jump");
-    require(!result.optimizations.empty(),
-            "terminal-tail empty-stack rewrite did not report optimization");
-    require(result.optimizations.at(0).detail.find("empty-return-stack") != std::string::npos,
-            "terminal-tail empty-stack detail should mention empty-return-stack");
-    const auto jump_it = std::find_if(result.ops.begin(), result.ops.end(), [](const IrOp& op) {
-      return op.kind == IrKind::Jump;
-    });
-    require(jump_it != result.ops.end(), "terminal-tail empty-stack produced no jump");
-    require(std::get<std::string>(jump_it->target) == "finish_turn",
-            "terminal-tail empty-stack jump target mismatch");
+    // Empty-stack V/O resumes at physical 01, not at the main-loop head 00.
+    // Direct, indirect and shared-return forms must retain their call frames.
+    const std::vector<std::vector<IrOp>> fixtures = {
+        {label("main"), call_to("finish_turn"), plain(0x01), call_to("finish_turn"),
+         jump_to("main"), proc_start("finish_turn"), plain(0x02), ret()},
+        {label("main"), call_to("finish_turn"), known_target_indirect_jump("b", 0),
+         proc_start("finish_turn"), plain(0x02), ret()},
+        {label("main"), call_to("finish_turn"), plain(0x01), call_to("finish_turn"),
+         jump_to("main"), proc_start("finish_turn"), plain(0x02),
+         jump_to("shared_return"), proc_start("shared_return"), plain(0x03), ret()},
+    };
+    for (const auto& input : fixtures) {
+      const core::passes::PassResult result = run_tail_call(input);
+      require(result.applied == 0,
+              "tail-call must not equate the 00 continuation with empty-stack return");
+      require(result.optimizations.empty(),
+              "rejected empty-stack rewrite must not report an optimization");
+      require(ir_ops_to_json(result.ops) == ir_ops_to_json(input),
+              "rejected empty-stack rewrite must preserve calls and explicit continuations");
+    }
   }
 
   {

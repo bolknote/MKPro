@@ -446,24 +446,40 @@ void emulator_rom_tables_match_typescript_contract() {
   }
 
   {
-    const auto model =
-        core::evaluate_indirect_address("a", "-0.0000002", core::IndirectOperationKind::Flow);
-    require(model.has_value() && model->actual_flow_target == 0,
-            "negative fractional stable selector model should target actual cell 0");
-    std::vector<int> program(105, 0x50);
-    program[0] = 0x5e;
-    program[1] = 0x08;
-    program[2] = 0x0d;
-    program[3] = 0x8a;
-    program[4] = 0x09;
-    program[8] = 0x07;
-    program[9] = 0x50;
-    const ProgramRun result =
-        run_program_with_registers(program, {{"x", "1"}, {"a", "-0.0000002"}});
-    require(result.stopped && result.display.find("7") != std::string::npos,
-            "negative fractional stable selector should execute target cell 0");
-    require(result.display.find("9") == std::string::npos,
-            "negative fractional stable selector should skip fallthrough marker");
+    struct FractionalSelectorCase {
+      std::string value;
+      int target;
+      std::string write_back;
+    };
+    const std::vector<FractionalSelectorCase> cases{
+        {"-0.0000002", 90, "-99999990"},
+        {"-0.5", 90, "-99999990"},
+        {"-5E-1", 0, "-5E-1"},
+        {"-2E-3", 0, "-2E-3"},
+    };
+    for (const auto& fixture : cases) {
+      const auto model = core::evaluate_indirect_address(
+          "a", fixture.value, core::IndirectOperationKind::Flow);
+      require(model.has_value() && model->actual_flow_target == fixture.target,
+              "fractional selector word must match its ROM target: " + fixture.value);
+
+      emulator::MK61 calc;
+      require(calc.load_program({0x8a, 0x50}).diagnostics.empty(),
+              "fractional selector fixture should load");
+      calc.set_register("a", fixture.value);
+      // Execute the indirect command itself, not a guard that can skip it.
+      calc.press_sequence({"В/О", "ПП"});
+      const std::string expected_pc =
+          (fixture.target < 10 ? "0" : "") + std::to_string(fixture.target);
+      require(calc.program_counter() == expected_pc,
+              "fractional selector must enter its independently expected cell: " +
+                  fixture.value);
+      emulator::MK61 expected;
+      expected.set_register("a", fixture.write_back);
+      require(calc.read_register("a") == expected.read_register("a"),
+              "fractional selector must preserve the independent ROM write-back: " +
+                  fixture.value);
+    }
   }
 
   for (int offset = 0; offset <= 5; ++offset) {
