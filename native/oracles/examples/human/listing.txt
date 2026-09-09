@@ -5,21 +5,14 @@
    01 |  01  | 1                       |
    02 |  1D  | F cos                   | expected_mode("grd") cosine
    03 |  18  | F ln                    | expected_mode("grd") domain guard
-   04 |  05  | 5                       |
-   05 |  42  | X→П 2                   | setup R2
-   06 |  01  | 1                       |
-   07 |  00  | 0                       |
-   08 |  4E  | X→П e                   | setup Re
+   04 |  00  | 0                       |
+   05 |  44  | X→П 4                   | setup R4
+   06 |  05  | 5                       |
+   07 |  42  | X→П 2                   | setup R2
+   08 |  01  | 1                       |
    09 |  00  | 0                       |
-   10 |  44  | X→П 4                   | setup R4
-   11 |  47  | X→П 7                   | setup R7
-   12 |  01  | 1                       |
-   13 |  02  | 2                       |
-   14 |  48  | X→П 8                   | setup R8
-   15 |  02  | 2                       |
-   16 |  00  | 0                       |
-   17 |  49  | X→П 9                   | setup R9
-   18 |  50  | С/П                     | setup complete
+   10 |  4E  | X→П e                   | setup Re
+   11 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
@@ -33,17 +26,21 @@
    06 |  0E  | В↑                      | separate adjacent number entry
    07 |  02  | 2                       |
    08 |  11  | −                       | dispatch compare
-   09 |  E8  | К x=0 8                 | case mismatch; preloaded R8=C4 indirect-target=12 shifted-forward indirect flow
-   10 |  D4  | К П→X 4                 | increment score
-   11 |  87  | К БП 7                  | dispatch end; preloaded R7=B2 indirect-target=0 indirect flow
-   12 |  06  | 6                       |
-   13 |  11  | −                       | dispatch residual compare
-   14 |  E9  | К x=0 9                 | case mismatch; preloaded R9=D2 indirect-target=20 shifted-forward indirect flow
-   15 |  62  | П→X 2                   | recall food
-   16 |  01  | 1                       |
-   17 |  11  | −                       | expr -
-   18 |  42  | X→П 2                   | set food
-   19 |  87  | К БП 7                  | dispatch end; preloaded R7=B2 indirect-target=0 indirect flow
-   20 |  00  | 0                       | halt
-   21 |  50  | С/П                     | halt
-   22 |  87  | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow
+   09 |  5E  | F x=0                   | case mismatch
+   10 |  14  | 14                      | case mismatch
+   11 |  D4  | К П→X 4                 | increment score
+   12 |  51  | БП                      | dispatch end
+   13 |  00  | 00                      | dispatch end
+   14 |  06  | 6                       |
+   15 |  11  | −                       | dispatch residual compare
+   16 |  5E  | F x=0                   | case mismatch
+   17 |  23  | 23                      | case mismatch
+   18 |  62  | П→X 2                   | recall food
+   19 |  01  | 1                       |
+   20 |  11  | −                       | expr -
+   21 |  42  | X→П 2                   | set food
+   22 |  51  | БП                      | dispatch end
+   23 |  00  | 00                      | dispatch end; address/code overlay for 0
+   24 |  50  | С/П                     | halt
+   25 |  51  | БП                      | loop back
+   26 |  00  | 00                      | loop back

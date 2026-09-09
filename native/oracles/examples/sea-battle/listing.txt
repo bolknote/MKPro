@@ -44,7 +44,7 @@
    38 |  05  | 5                       |
    39 |  4B  | X→П b                   | setup Rb
    40 |  05  | 5                       |
-   41 |  07  | 7                       |
+   41 |  09  | 9                       |
    42 |  4E  | X→П e                   | setup Re
    43 |  3B  | К СЧ                    | random()
    44 |  09  | 9                       |
@@ -60,68 +60,70 @@
 # Main Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  AE  | К ПП e                  | proc call calculator_turn; preloaded Re=57 indirect-target=57 shifted-forward indirect flow
+   00 |  AE  | К ПП e                  | proc call calculator_turn; preloaded Re=59 indirect-target=59 shifted-forward indirect flow
    01 |  50  | С/П                     | read response
    02 |  5C  | F x<0                   | false branch for <
-   03 |  12  | 12                      | false branch for <
+   03 |  14  | 14                      | false branch for <
    04 |  62  | П→X 2                   | recall own_ships
    05 |  01  | 1                       |
    06 |  11  | −                       | expr -
    07 |  0B  | /-/                     | negate own_ships for zero test
-   08 |  9E  | К x≥0 e                 | false branch for <=; preloaded Re=57 indirect-target=57 shifted-forward indirect flow
-   09 |  6C  | П→X c                   | preload const 33333331
-   10 |  50  | С/П                     | halt
-   11 |  8E  | К БП e                  | empty-stack tail call calculator_turn; preloaded Re=57 indirect-target=57 shifted-forward indirect flow
-   12 |  45  | X→П 5                   | set player_shot
-   13 |  61  | П→X 1                   | recall enemy_fleet
-   14 |  08  | 8                       |
-   15 |  65  | П→X 5                   | recall player_shot
-   16 |  04  | 4                       |
-   17 |  13  | ÷                       | remainder quotient
-   18 |  35  | К {x}                   | remainder fractional part
-   19 |  04  | 4                       |
-   20 |  12  | ×                       | remainder scale
-   21 |  02  | 2                       |
-   22 |  24  | F xʸ                    | pow()
-   23 |  6B  | П→X b                   | preload const 0.5
-   24 |  10  | +                       | expr +
-   25 |  34  | К [x]                   | int()
-   26 |  65  | П→X 5                   | recall player_shot
-   27 |  04  | 4                       |
-   28 |  13  | ÷                       | expr /
-   29 |  34  | К [x]                   | int()
-   30 |  01  | 1                       |
-   31 |  10  | +                       | expr +
-   32 |  15  | F 10ˣ                   | pow10()
-   33 |  13  | ÷                       | expr /
-   34 |  10  | +                       | expr +
-   35 |  37  | К ∧                     | bit_and()
-   36 |  35  | К {x}                   | frac()
-   37 |  32  | К ЗН                    | sign()
-   38 |  7A  | К x≠0 a                 | false branch for !=; preloaded Ra=100 indirect-target=0 indirect flow
-   39 |  3A  | К ИНВ                   | reuse membership mask for clear
-   40 |  61  | П→X 1                   | recall enemy_fleet
-   41 |  37  | К ∧                     | clear matched cell with reused mask
-   42 |  41  | X→П 1                   | set enemy_fleet
-   43 |  63  | П→X 3                   | recall enemy_ships
-   44 |  01  | 1                       |
-   45 |  11  | −                       | expr -
-   46 |  43  | X→П 3                   | set enemy_ships
-   47 |  0B  | /-/                     | negate enemy_ships for zero test
-   48 |  59  | F x≥0                   | false branch for <=
-   49 |  55  | 55                      | false branch for <=
-   50 |  6D  | П→X d                   | preload const 13139545
-   51 |  3A  | К ИНВ                   | display literal video bytes
-   52 |  0B  | /-/                     | display literal sign
-   53 |  50  | С/П                     | show __inline_show_32_0
-   54 |  8A  | К БП a                  | if end; preloaded Ra=100 indirect-target=0 indirect flow
-   55 |  50  | С/П                     | show __inline_show_79_2
-   56 |  8A  | К БП a                  | loop back; preloaded Ra=100 indirect-target=0 indirect flow
-   57 |  3B  | К СЧ                    | random()
-   58 |  6A  | П→X a                   | preload const 100
-   59 |  12  | ×                       | expr *
-   60 |  0E  | В↑                      | random int keep scaled draw
-   61 |  35  | К {x}                   | random int fractional part
-   62 |  11  | −                       | random int floor
-   63 |  50  | С/П                     | show __inline_show_51_1
-   64 |  52  | В/О                     | implicit return from proc
+   08 |  59  | F x≥0                   | false branch for <=
+   09 |  12  | 12                      | false branch for <=
+   10 |  6C  | П→X c                   | preload const 33333331
+   11 |  50  | С/П                     | halt
+   12 |  AE  | К ПП e                  | proc call calculator_turn; preloaded Re=59 indirect-target=59 shifted-forward indirect flow
+   13 |  8A  | К БП a                  | if end; preloaded Ra=100 indirect-target=0 indirect flow
+   14 |  45  | X→П 5                   | set player_shot
+   15 |  61  | П→X 1                   | recall enemy_fleet
+   16 |  08  | 8                       |
+   17 |  65  | П→X 5                   | recall player_shot
+   18 |  04  | 4                       |
+   19 |  13  | ÷                       | remainder quotient
+   20 |  35  | К {x}                   | remainder fractional part
+   21 |  04  | 4                       |
+   22 |  12  | ×                       | remainder scale
+   23 |  02  | 2                       |
+   24 |  24  | F xʸ                    | pow()
+   25 |  6B  | П→X b                   | preload const 0.5
+   26 |  10  | +                       | expr +
+   27 |  34  | К [x]                   | int()
+   28 |  65  | П→X 5                   | recall player_shot
+   29 |  04  | 4                       |
+   30 |  13  | ÷                       | expr /
+   31 |  34  | К [x]                   | int()
+   32 |  01  | 1                       |
+   33 |  10  | +                       | expr +
+   34 |  15  | F 10ˣ                   | pow10()
+   35 |  13  | ÷                       | expr /
+   36 |  10  | +                       | expr +
+   37 |  37  | К ∧                     | bit_and()
+   38 |  35  | К {x}                   | frac()
+   39 |  32  | К ЗН                    | sign()
+   40 |  7A  | К x≠0 a                 | false branch for !=; preloaded Ra=100 indirect-target=0 indirect flow
+   41 |  3A  | К ИНВ                   | reuse membership mask for clear
+   42 |  61  | П→X 1                   | recall enemy_fleet
+   43 |  37  | К ∧                     | clear matched cell with reused mask
+   44 |  41  | X→П 1                   | set enemy_fleet
+   45 |  63  | П→X 3                   | recall enemy_ships
+   46 |  01  | 1                       |
+   47 |  11  | −                       | expr -
+   48 |  43  | X→П 3                   | set enemy_ships
+   49 |  0B  | /-/                     | negate enemy_ships for zero test
+   50 |  59  | F x≥0                   | false branch for <=
+   51 |  57  | 57                      | false branch for <=
+   52 |  6D  | П→X d                   | preload const 13139545
+   53 |  3A  | К ИНВ                   | display literal video bytes
+   54 |  0B  | /-/                     | display literal sign
+   55 |  50  | С/П                     | show __inline_show_32_0
+   56 |  8A  | К БП a                  | if end; preloaded Ra=100 indirect-target=0 indirect flow
+   57 |  50  | С/П                     | show __inline_show_79_2
+   58 |  8A  | К БП a                  | loop back; preloaded Ra=100 indirect-target=0 indirect flow
+   59 |  3B  | К СЧ                    | random()
+   60 |  6A  | П→X a                   | preload const 100
+   61 |  12  | ×                       | expr *
+   62 |  0E  | В↑                      | random int keep scaled draw
+   63 |  35  | К {x}                   | random int fractional part
+   64 |  11  | −                       | random int floor
+   65 |  50  | С/П                     | show __inline_show_51_1
+   66 |  52  | В/О                     | implicit return from proc

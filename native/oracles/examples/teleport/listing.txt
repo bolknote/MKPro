@@ -94,7 +94,7 @@
    20 |  50  | С/П                     | show __inline_show_38_0
    21 |  46  | X→П 6                   | read command
    22 |  35  | К {x}                   | current-X frac
-   23 |  EA  | К x=0 a                 | false branch for ==; preloaded Ra=B2 indirect-target=0 indirect flow
+   23 |  EA  | К x=0 a                 | false branch for ==; preloaded Ra=00 indirect-target=0 indirect flow
    24 |  66  | П→X 6                   | recall command
    25 |  5E  | F x=0                   | false branch for ==
    26 |  35  | 35                      | false branch for ==
@@ -105,7 +105,7 @@
    31 |  21  | F √                     | domain-error guard trap
    32 |  00  | 0                       | set room
    33 |  48  | X→П 8                   | set room
-   34 |  8A  | К БП a                  | if end; preloaded Ra=B2 indirect-target=0 indirect flow
+   34 |  8A  | К БП a                  | if end; preloaded Ra=00 indirect-target=0 indirect flow
    35 |  05  | 5                       |
    36 |  11  | −                       | expr -
    37 |  46  | X→П 6                   | set command
@@ -124,7 +124,7 @@
    50 |  01  | 1                       |
    51 |  36  | К max                   | max()
    52 |  4D  | X→П d                   | arithmetic-if-max floor
-   53 |  8A  | К БП a                  | if end; preloaded Ra=B2 indirect-target=0 indirect flow
+   53 |  8A  | К БП a                  | if end; preloaded Ra=00 indirect-target=0 indirect flow
    54 |  DD  | К П→X d                 | indexed recall floors; indirect-memory-targets=1,2,3,4
    55 |  68  | П→X 8                   | recall room
    56 |  15  | F 10ˣ                   | pow10()
@@ -136,7 +136,7 @@
    62 |  6D  | П→X d                   | recall floor
    63 |  10  | +                       | expr +
    64 |  4D  | X→П d                   | set floor
-   65 |  8A  | К БП a                  | if end; preloaded Ra=B2 indirect-target=0 indirect flow
+   65 |  8A  | К БП a                  | if end; preloaded Ra=00 indirect-target=0 indirect flow
    66 |  68  | П→X 8                   | recall room
    67 |  10  | +                       | expr +
    68 |  48  | X→П 8                   | set room
@@ -163,7 +163,7 @@
    89 |  07  | 7                       |
    90 |  68  | П→X 8                   | recall room
    91 |  11  | −                       | condition compare
-   92 |  CA  | К x<0 a                 | false branch for >; preloaded Ra=B2 indirect-target=0 indirect flow
+   92 |  CA  | К x<0 a                 | false branch for >; preloaded Ra=00 indirect-target=0 indirect flow
    93 |  65  | П→X 5                   | recall charges
    94 |  50  | С/П                     | halt
-   95 |  8A  | К БП a                  | tail continuation; preloaded Ra=B2 indirect-target=0 indirect flow
+   95 |  8A  | К БП a                  | tail continuation; preloaded Ra=00 indirect-target=0 indirect flow

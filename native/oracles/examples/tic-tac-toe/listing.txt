@@ -30,11 +30,11 @@
    26 |  01  | 1                       |
    27 |  04  | 4                       |
    28 |  48  | X→П 8                   | setup R8
-   29 |  03  | 3                       |
-   30 |  06  | 6                       |
+   29 |  07  | 7                       |
+   30 |  03  | 3                       |
    31 |  49  | X→П 9                   | setup R9
-   32 |  07  | 7                       |
-   33 |  00  | 0                       |
+   32 |  03  | 3                       |
+   33 |  06  | 6                       |
    34 |  4A  | X→П a                   | setup Ra
    35 |  02  | 2                       |
    36 |  01  | 1                       |
@@ -68,7 +68,7 @@
    12 |  7C  | К x≠0 c                 | false branch for !=; preloaded Rc=C8 indirect-target=16 shifted-forward indirect flow
    13 |  02  | 2                       |
    14 |  41  | X→П 1                   | set move
-   15 |  8A  | К БП a                  | terminal rule win; preloaded Ra=70 indirect-target=70 shifted-forward indirect flow
+   15 |  89  | К БП 9                  | terminal rule win; preloaded R9=73 indirect-target=73 shifted-forward indirect flow
    16 |  65  | П→X 5                   | display __inline_show_48_2 source
    17 |  50  | С/П                     | show __inline_show_48_2
    18 |  07  | 7                       |
@@ -78,7 +78,7 @@
    22 |  88  | К БП 8                  | shared terminal tail; preloaded R8=C6 indirect-target=14 indirect flow
    23 |  07  | 7                       |
    24 |  41  | X→П 1                   | set move
-   25 |  8A  | К БП a                  | terminal rule win; preloaded Ra=70 indirect-target=70 shifted-forward indirect flow
+   25 |  89  | К БП 9                  | terminal rule win; preloaded R9=73 indirect-target=73 shifted-forward indirect flow
    26 |  03  | 3                       |
    27 |  10  | +                       | dispatch residual compare
    28 |  5E  | F x=0                   | case mismatch
@@ -104,18 +104,18 @@
    48 |  08  | 8                       |
    49 |  11  | −                       | condition compare
    50 |  57  | F x≠0                   | false branch for !=
-   51 |  74  | 74                      | false branch for !=
+   51 |  77  | 77                      | false branch for !=
    52 |  08  | 8                       |
    53 |  88  | К БП 8                  | shared terminal tail; preloaded R8=C6 indirect-target=14 indirect flow
    54 |  01  | 1                       |
    55 |  11  | −                       | dispatch residual compare
    56 |  5E  | F x=0                   | case mismatch
-   57 |  76  | 76                      | case mismatch
+   57 |  71  | 71                      | case mismatch
    58 |  66  | П→X 6                   | display __inline_show_59_3 source
    59 |  50  | С/П                     | show __inline_show_59_3
    60 |  04  | 4                       |
    61 |  11  | −                       | condition compare
-   62 |  E9  | К x=0 9                 | direct tail branch for !=; preloaded R9=36 indirect-target=36 indirect flow
+   62 |  EA  | К x=0 a                 | direct tail branch for !=; preloaded Ra=36 indirect-target=36 indirect flow
    63 |  65  | П→X 5                   | display __inline_show_48_2 source
    64 |  50  | С/П                     | show __inline_show_48_2
    65 |  03  | 3                       |
@@ -123,30 +123,33 @@
    67 |  7B  | К x≠0 b                 | direct tail branch for ==; preloaded Rb=D3 indirect-target=21 indirect flow
    68 |  03  | 3                       |
    69 |  41  | X→П 1                   | set move
-   70 |  60  | П→X 0                   | preload const 1000000
-   71 |  61  | П→X 1                   | recall move
-   72 |  12  | ×                       | expr *
-   73 |  50  | С/П                     | halt
-   74 |  00  | 0                       | halt
-   75 |  50  | С/П                     | halt
-   76 |  66  | П→X 6                   | display __inline_show_59_3 source
-   77 |  50  | С/П                     | show __inline_show_59_3
-   78 |  04  | 4                       |
-   79 |  11  | −                       | condition compare
-   80 |  E9  | К x=0 9                 | direct tail branch for !=; preloaded R9=36 indirect-target=36 indirect flow
-   81 |  61  | П→X 1                   | display __inline_show_65_4 source
-   82 |  50  | С/П                     | show __inline_show_65_4
-   83 |  09  | 9                       |
-   84 |  11  | −                       | condition compare
-   85 |  57  | F x≠0                   | false branch for !=
-   86 |  89  | 89                      | false branch for !=
-   87 |  09  | 9                       |
-   88 |  88  | К БП 8                  | shared terminal tail; preloaded R8=C6 indirect-target=14 indirect flow
-   89 |  64  | П→X 4                   | display __inline_show_42_1 source
-   90 |  50  | С/П                     | show __inline_show_42_1
-   91 |  02  | 2                       |
-   92 |  11  | −                       | condition compare
-   93 |  57  | F x≠0                   | false branch for !=
-   94 |  74  | 74                      | false branch for !=
-   95 |  02  | 2                       |
-   96 |  88  | К БП 8                  | shared terminal tail; preloaded R8=C6 indirect-target=14 indirect flow
+   70 |  89  | К БП 9                  | terminal rule win; preloaded R9=73 indirect-target=73 shifted-forward indirect flow
+   71 |  53  | ПП                      | proc call side_line
+   72 |  79  | 79                      | proc call side_line
+   73 |  60  | П→X 0                   | preload const 1000000
+   74 |  61  | П→X 1                   | recall move
+   75 |  12  | ×                       | expr *
+   76 |  50  | С/П                     | halt
+   77 |  00  | 0                       | halt
+   78 |  50  | С/П                     | halt
+   79 |  66  | П→X 6                   | display __inline_show_59_3 source
+   80 |  50  | С/П                     | show __inline_show_59_3
+   81 |  04  | 4                       |
+   82 |  11  | −                       | condition compare
+   83 |  EA  | К x=0 a                 | direct tail branch for !=; preloaded Ra=36 indirect-target=36 indirect flow
+   84 |  61  | П→X 1                   | display __inline_show_65_4 source
+   85 |  50  | С/П                     | show __inline_show_65_4
+   86 |  09  | 9                       |
+   87 |  11  | −                       | condition compare
+   88 |  57  | F x≠0                   | false branch for !=
+   89 |  92  | 92                      | false branch for !=
+   90 |  09  | 9                       |
+   91 |  88  | К БП 8                  | shared terminal tail; preloaded R8=C6 indirect-target=14 indirect flow
+   92 |  64  | П→X 4                   | display __inline_show_42_1 source
+   93 |  50  | С/П                     | show __inline_show_42_1
+   94 |  02  | 2                       |
+   95 |  11  | −                       | condition compare
+   96 |  57  | F x≠0                   | false branch for !=
+   97 |  77  | 77                      | false branch for !=
+   98 |  02  | 2                       |
+   99 |  88  | К БП 8                  | shared terminal tail; preloaded R8=C6 indirect-target=14 indirect flow

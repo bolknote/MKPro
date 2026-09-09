@@ -36,14 +36,14 @@
    32 |  00  | 0                       |
    33 |  03  | 3                       |
    34 |  4E  | X→П e                   | setup Re
-   35 |  09  | 9                       |
-   36 |  06  | 6                       |
+   35 |  05  | 5                       |
+   36 |  00  | 0                       |
    37 |  48  | X→П 8                   | setup R8
-   38 |  05  | 5                       |
-   39 |  00  | 0                       |
+   38 |  08  | 8                       |
+   39 |  07  | 7                       |
    40 |  49  | X→П 9                   | setup R9
-   41 |  08  | 8                       |
-   42 |  07  | 7                       |
+   41 |  09  | 9                       |
+   42 |  06  | 6                       |
    43 |  4A  | X→П a                   | setup Ra
    44 |  07  | 7                       |
    45 |  06  | 6                       |
@@ -113,12 +113,12 @@
    37 |  04  | 4                       |
    38 |  62  | П→X 2                   | recall strength
    39 |  10  | +                       | expr +
-   40 |  A8  | К ПП 8                  | shared straight-line helper; preloaded R8=96 indirect-target=96 shifted-forward indirect flow
-   41 |  E9  | К x=0 9                 | false branch for ==; preloaded R9=50 indirect-target=50 shifted-forward indirect flow
+   40 |  AA  | К ПП a                  | shared straight-line helper; preloaded Ra=96 indirect-target=96 shifted-forward indirect flow
+   41 |  E8  | К x=0 8                 | false branch for ==; preloaded R8=50 indirect-target=50 shifted-forward indirect flow
    42 |  D2  | К П→X 2                 | decrement strength
    43 |  D6  | К П→X 6                 | increment score
-   44 |  89  | К БП 9                  | if end; preloaded R9=50 indirect-target=50 shifted-forward indirect flow
-   45 |  AA  | К ПП a                  | proc call next_floor; preloaded Ra=87 indirect-target=87 shifted-forward indirect flow
+   44 |  88  | К БП 8                  | if end; preloaded R8=50 indirect-target=50 shifted-forward indirect flow
+   45 |  A9  | К ПП 9                  | proc call next_floor; preloaded R9=87 indirect-target=87 shifted-forward indirect flow
    46 |  62  | П→X 2                   | recall strength
    47 |  65  | П→X 5                   | recall floor
    48 |  10  | +                       | expr +
@@ -135,7 +135,7 @@
    59 |  51  | БП                      | if end
    60 |  66  | 66                      | if end
    61 |  62  | П→X 2                   | recall strength
-   62 |  A8  | К ПП 8                  | shared straight-line helper; preloaded R8=96 indirect-target=96 shifted-forward indirect flow
+   62 |  AA  | К ПП a                  | shared straight-line helper; preloaded Ra=96 indirect-target=96 shifted-forward indirect flow
    63 |  5E  | F x=0                   | false branch for ==
    64 |  66  | 66                      | false branch for ==
    65 |  D2  | К П→X 2                 | decrement strength
@@ -149,17 +149,17 @@
    73 |  D2  | К П→X 2                 | delayed predecrement strength
    74 |  51  | БП                      | if end
    75 |  81  | 81                      | if end
-   76 |  AA  | К ПП a                  | proc call next_floor; preloaded Ra=87 indirect-target=87 shifted-forward indirect flow
+   76 |  A9  | К ПП 9                  | proc call next_floor; preloaded R9=87 indirect-target=87 shifted-forward indirect flow
    77 |  62  | П→X 2                   | recall strength
    78 |  65  | П→X 5                   | recall floor
    79 |  11  | −                       | expr -
    80 |  42  | X→П 2                   | set strength
    81 |  62  | П→X 2                   | recall strength
    82 |  0B  | /-/                     | negate strength for zero test
-   83 |  97  | К x≥0 7                 | false branch for <=; preloaded R7=B2 indirect-target=0 indirect flow
+   83 |  97  | К x≥0 7                 | false branch for <=; preloaded R7=00 indirect-target=0 indirect flow
    84 |  66  | П→X 6                   | recall score
    85 |  29  | К ÷                     | halt literal ЕГГ0Г
-   86 |  87  | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow
+   86 |  87  | К БП 7                  | loop back; preloaded R7=00 indirect-target=0 indirect flow
    87 |  D5  | К П→X 5                 | increment floor
    88 |  65  | П→X 5                   | recall floor
    89 |  04  | 4                       |
