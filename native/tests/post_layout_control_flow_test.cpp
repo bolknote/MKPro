@@ -1,4 +1,8 @@
 #include "mkpro/core/post_layout_control_flow.hpp"
+#include "mkpro/core/indirect_read_observability.hpp"
+#include "mkpro/core/emit/machine_emitter.hpp"
+#include "mkpro/core/passes/tail_call.hpp"
+#include "mkpro/core/stable_register_value_flow.hpp"
 #include "mkpro/core/post_layout_indirect_flow.hpp"
 
 #include "mkpro/emulator/mk61.hpp"
@@ -497,7 +501,300 @@ void indirect_conversion_counter_transport_contract() {
   }
 }
 
+void executable_operand_image_contract() {
+  std::vector<MachineItem> items(53, op(0x54));
+  items.at(0) = op(0xa7);
+  items.at(0).indirect_flow_targets = std::vector<IrTarget>{3};
+  items.at(1) = stop(StopDisposition::Terminal);
+  items.at(2) = op(0x51);
+  items.at(3) = MachineItem::address(52);
+  items.at(3).roles = {"exec"};
+  items.at(3).opcode = 0x29; // irrelevant: the actual encoded operand is 0x52
+  items.at(52) = stop(StopDisposition::Terminal);
+  const auto flow = core::build_post_layout_control_flow(items);
+  require(flow.proved && flow.maximum_observed_return_depth == 1 &&
+              flow.indirect_flow_targets.at(0).front().item_index == 3U,
+          "an overlaid address-52 word must execute BO and retain the caller frame");
+  const auto image = core::materialize_post_layout_byte_image(items);
+  require(image.has_value() && image->items.at(3).opcode == 0x52 &&
+              image->options.opcode_address_words == std::vector<std::size_t>{3} &&
+              items.at(3).kind == MachineItemKind::Address,
+          "byte decoding must preserve the published typed operand and item identities");
+  const auto values = core::analyze_stable_register_value_flow(
+      items, {{.register_name = "7", .value = "3"}}, flow);
+  require(values.proved && values.before_item.at(1).at(0) == "3",
+          "selector proof must follow the same executed operand bytes as the CFG");
+
+  const auto resolved = resolve_machine_items(items);
+  require(resolved.diagnostics.empty(), "overlaid operand ROM fixture must resolve");
+  std::vector<int> codes;
+  for (const auto& step : resolved.steps)
+    codes.push_back(step.opcode);
+  emulator::MK61 calc;
+  require(calc.load_program(codes).diagnostics.empty(), "overlaid operand ROM fixture must load");
+  calc.set_register("7", "3").set_register("x", "47.25");
+  calc.press_sequence({"В/О", "С/П"});
+  const auto stopped = calc.run_until_stable(600, 5);
+  std::string actual_x = calc.read_register("x");
+  std::replace(actual_x.begin(), actual_x.end(), ',', '.');
+  require(stopped.stopped && std::stod(actual_x) == 47.25 &&
+              calc.program_counter() == "02",
+          "hardware must return from operand 0x52 without truncating X or executing an error");
+
+  auto bad = items;
+  bad.at(3).roles.clear();
+  require(!core::build_post_layout_control_flow(bad).proved,
+          "an unmarked address word is not an admitted executable entry");
+  bad = items;
+  bad.at(3).formal_opcode = 0x53;
+  require(!core::build_post_layout_control_flow(bad).proved,
+          "an overlaid formal byte must still name the operand's actual target");
+  bad = items;
+  bad.at(3).target = std::string("absent");
+  require(!core::build_post_layout_control_flow(bad).proved,
+          "an unresolved overlay label must fail closed");
+  bad = items;
+  bad.resize(106, op(0x54));
+  require(!core::build_post_layout_control_flow(bad).proved &&
+              core::build_post_layout_control_flow(
+                  bad, {.address_space_model = AddressSpaceModel::Mk61SMiniExpanded}).proved,
+          "physical overlay decoding must not alias a stock over-window logical image");
+
+  std::vector<MachineItem> clobber(48, op(0x54));
+  clobber.at(0) = op(0x60);
+  clobber.at(1) = op(0x88);
+  clobber.at(1).indirect_flow_targets = std::vector<IrTarget>{4};
+  clobber.at(2) = stop(StopDisposition::Terminal);
+  clobber.at(3) = op(0x51);
+  clobber.at(4) = MachineItem::address(47);
+  clobber.at(4).roles = {"exec"}; // actual opcode 0x47 stores unknown X into R7
+  clobber.at(5) = op(0x87);
+  clobber.at(5).indirect_flow_targets = std::vector<IrTarget>{47};
+  clobber.at(47) = stop(StopDisposition::Terminal);
+  const auto clobber_flow = core::build_post_layout_control_flow(clobber);
+  const auto clobber_values = core::analyze_stable_register_value_flow(
+      clobber, {{.register_name = "7", .value = "47"},
+                {.register_name = "8", .value = "4"}}, clobber_flow);
+  require(clobber_flow.proved && clobber_values.proved &&
+              !clobber_values.before_item.at(5).at(0),
+          "an executed operand store must invalidate its real selector destination");
+}
+
+void tail_return_ownership_contract() {
+  const auto run = [](const std::vector<MachineItem>& items, const std::string& input) {
+    const auto resolved = resolve_machine_items(items);
+    require(resolved.diagnostics.empty(), "return ownership ROM fixture must resolve");
+    std::vector<int> codes;
+    for (const auto& step : resolved.steps)
+      codes.push_back(step.opcode);
+    emulator::MK61 calc;
+    require(calc.load_program(codes).diagnostics.empty(), "return ownership fixture must load");
+    calc.set_register("0", "47.25").set_register("x", input).set_register("y", "13")
+        .set_register("z", "17").set_register("t", "19").set_register("x1", "23");
+    calc.press_sequence({"В/О", "С/П"});
+    const auto stopped = calc.run_until_stable(600, 5);
+    std::string actual_x = calc.read_register("x");
+    std::replace(actual_x.begin(), actual_x.end(), ',', '.');
+    require(stopped.stopped && std::stod(actual_x) == 47.25,
+            "every caller must reach its own continuation rather than enter a call loop");
+    std::vector<std::string> values;
+    for (const auto* reg : {"x", "y", "z", "t", "x1"})
+      values.push_back(calc.read_register(reg));
+    calc.press(".");
+    values.push_back(calc.display_text());
+    return values;
+  };
+  const CompileOptions options;
+  const std::vector<MachineItem> mixed = {
+      op(0x53), MachineItem::address("second"),
+      op(0x51), MachineItem::address("again"),
+      MachineItem::label("first_caller"),
+      op(0x53), MachineItem::address("first"),
+      op(0x60), stop(StopDisposition::Terminal),
+      MachineItem::label("first"),
+      op(0x51), MachineItem::address("shared"),
+      MachineItem::label("second"), op(0x54),
+      MachineItem::label("shared"), op(0x52),
+      MachineItem::label("again"),
+      op(0x51), MachineItem::address("first_caller"),
+  };
+  const auto untouched = core::passes::tail_call_lowering(
+      raise_machine_to_ir(mixed), {.options = options});
+  require(untouched.applied == 0,
+          "linear placement must not hide another caller of a shared return");
+  const auto unchanged = lower_ir_to_machine(untouched.ops);
+  require(core::build_post_layout_control_flow(unchanged).proved &&
+              run(mixed, "11") == run(unchanged, "11"),
+          "mixed return owners must retain stack, X1, X2 and their separate continuations");
+
+  const std::vector<MachineItem> shared = {
+      op(0x5e), MachineItem::address("first_caller"),
+      op(0x53), MachineItem::address("second"),
+      op(0x51), MachineItem::address("done"),
+      MachineItem::label("first_caller"),
+      op(0x53), MachineItem::address("first"),
+      op(0x51), MachineItem::address("done"),
+      MachineItem::label("first"),
+      op(0x51), MachineItem::address("shared"),
+      MachineItem::label("second"), op(0x54),
+      MachineItem::label("shared"), op(0x52),
+      MachineItem::label("done"), op(0x60), stop(StopDisposition::Terminal),
+  };
+  const auto optimized = core::passes::tail_call_lowering(
+      raise_machine_to_ir(shared), {.options = options});
+  const auto shorter = lower_ir_to_machine(optimized.ops);
+  require(optimized.applied == 3 &&
+              core::machine_cell_count(shorter) < core::machine_cell_count(shared) &&
+              core::build_post_layout_control_flow(shorter).proved,
+          "all owners with one continuation may share a transactional return rewrite");
+  for (const auto* input : {"0", "11"})
+    require(run(shared, input) == run(shorter, input),
+            "both shared-tail entries must preserve stack, X1 and dot-observable X2");
+
+  // The outer return is claimed by continuation specialization. The nested
+  // call must not simultaneously consume that return as an ordinary tail call.
+  const std::vector<MachineItem> nested = {
+      op(0x54), stop(StopDisposition::Resumable),
+      op(0x62), op(0x5e), MachineItem::address("other"),
+      op(0x53), MachineItem::address("outer"),
+      op(0x51), MachineItem::address("done"),
+      MachineItem::label("other"),
+      op(0x53), MachineItem::address("inner"), op(0x60),
+      stop(StopDisposition::Terminal),
+      MachineItem::label("outer"), op(0x53), MachineItem::address("inner"), op(0x52),
+      MachineItem::label("inner"), op(0x61), op(0x52),
+      MachineItem::label("done"), op(0x60), stop(StopDisposition::Terminal),
+  };
+  const auto observe_nested = [&](const std::vector<MachineItem>& image,
+                                   const std::string& branch) {
+    const auto resolved = resolve_machine_items(image);
+    require(resolved.diagnostics.empty(), "nested continuation fixture must resolve");
+    std::vector<int> codes;
+    for (const auto& step : resolved.steps)
+      codes.push_back(step.opcode);
+    emulator::MK61 calc;
+    require(calc.load_program(codes).diagnostics.empty(),
+            "nested continuation fixture must load");
+    calc.set_register("0", "47.25").set_register("1", "13").set_register("2", branch)
+        .set_register("x", "17").set_register("y", "19")
+        .set_register("z", "23").set_register("t", "29").set_register("x1", "31");
+    calc.press_sequence({"В/О", "С/П"});
+    require(calc.run_until_stable(600, 5).stopped,
+            "nested continuation fixture must reach its initial prompt");
+    calc.press("С/П");
+    require(calc.run_until_stable(600, 5).stopped,
+            "nested continuation fixture must reach the caller's report");
+    std::string x = calc.read_register("x");
+    std::replace(x.begin(), x.end(), ',', '.');
+    require(std::stod(x) == 47.25,
+            "a nested return must not escape to the physical-01 startup prompt");
+    std::vector<std::string> values;
+    for (const auto* reg : {"x", "y", "z", "t", "x1"})
+      values.push_back(calc.read_register(reg));
+    calc.press(".");
+    values.push_back(calc.display_text());
+    return values;
+  };
+  for (const bool labelled_return : {false, true}) {
+    auto input = nested;
+    if (labelled_return) {
+      const auto outer = std::find_if(input.begin(), input.end(), [](const MachineItem& item) {
+        return item.kind == MachineItemKind::Label && item.name == "outer";
+      });
+      const auto returned = outer + 3;
+      input.insert(returned, {op(0x51), MachineItem::address("outer_return"),
+                              MachineItem::label("outer_return")});
+    }
+    const auto transaction = core::passes::tail_call_lowering(
+        raise_machine_to_ir(input), {.options = options});
+    const auto output = lower_ir_to_machine(transaction.ops);
+    require(transaction.applied > 0 &&
+                core::machine_cell_count(output) <= core::machine_cell_count(input) &&
+                core::build_post_layout_control_flow(output, {.empty_return_target = 1}).proved,
+            "continuation specialization must keep a coherent smaller call-frame graph");
+    for (const auto* branch : {"0", "1"})
+      require(observe_nested(input, branch) == observe_nested(output, branch),
+              "direct and labelled planned returns must preserve both caller continuations");
+  }
+
+  auto raw = raise_machine_to_ir({op(0x53), MachineItem::address("leaf"), op(0x52),
+                                  MachineItem::label("leaf"), op(0x52)});
+  raw.at(0).meta.raw = true;
+  require(core::passes::tail_call_lowering(raw, {.options = options}).applied == 0,
+          "a raw call must not lose its return frame");
+}
+
+namespace {
+
+void discarded_indirect_read_chain_contract() {
+  const auto fixture = [](std::vector<int> suffix) {
+    std::vector<MachineItem> items{
+        MachineItem::op(8, "8"), MachineItem::op(0x40, "store"),
+        MachineItem::op(0x41, "store")};
+    for (int selector : {0, 1}) {
+      MachineItem read = MachineItem::op(0xd0 + selector, "discarded read");
+      read.discarded_indirect_recall_value = true;
+      read.indirect_memory_targets = std::vector<int>{7};
+      items.push_back(read);
+    }
+    for (int code : suffix) items.push_back(MachineItem::op(code, "suffix"));
+    MachineItem stop = MachineItem::op(0x50, "stop");
+    stop.stop_disposition = StopDisposition::Terminal;
+    items.push_back(stop);
+    return items;
+  };
+  const auto proved = [](const std::vector<MachineItem>& items) {
+    const auto flow = core::build_post_layout_control_flow(items);
+    return core::prove_discarded_indirect_selector_reads_unobserved(items, flow, 7);
+  };
+  const auto observe = [](const std::vector<MachineItem>& items, const std::string& value) {
+    const auto resolved = resolve_machine_items(items);
+    require(resolved.diagnostics.empty(), "discarded-read fixture must resolve");
+    std::vector<int> codes;
+    for (const auto& step : resolved.steps) codes.push_back(step.opcode);
+    emulator::MK61 calc;
+    require(calc.load_program(codes).diagnostics.empty(), "discarded-read fixture must load");
+    calc.set_register("7", value);
+    for (int reg = 2; reg <= 5; ++reg)
+      calc.set_register(std::to_string(reg), std::to_string(reg));
+    calc.press_sequence({"В/О", "С/П"});
+    require(calc.run_until_stable(500, 5).stopped, "discarded-read fixture must stop");
+    std::vector<std::string> result{calc.display_text()};
+    for (const char* reg : {"x", "y", "z", "t", "x1", "0", "1"})
+      result.push_back(calc.read_register(reg));
+    calc.press(".");
+    result.push_back(calc.display_text());
+    return result;
+  };
+  const auto erased = fixture({0x62, 0x63, 0x64, 0x65});
+  require(core::build_post_layout_control_flow(erased).proved,
+          "positive discarded-read fixture needs exact control flow");
+  require(proved(erased), "successive discarded reads may converge after full stack erasure");
+  require(observe(erased, "17") == observe(erased, "53"),
+          "accepted read chains must preserve all stack, X2 and counter observations");
+
+  const auto partial = fixture({0x62, 0x63, 0x64});
+  require(!proved(partial) && observe(partial, "17") != observe(partial, "53"),
+          "three recalls must not hide an unequal T at the stop");
+  const auto last_only = fixture({0x0d, 0x62});
+  require(!proved(last_only) && observe(last_only, "17") != observe(last_only, "53"),
+          "a later discarded read must retain taint from the earlier read in Y/Z/T");
+  const auto stored = fixture({0x42, 0x62, 0x63, 0x64, 0x65});
+  require(!proved(stored), "a discarded value stored to memory cannot be erased by stack cleanup");
+  for (bool manual : {false, true}) {
+    auto opaque = erased;
+    if (manual) opaque.at(4).manual_interaction.emplace();
+    else opaque.at(4).raw = true;
+    require(!proved(opaque), "raw or operator-visible reads must remain proof barriers");
+  }
+}
+
+} // namespace
+
 void post_layout_control_flow_matches_typed_contract() {
+  discarded_indirect_read_chain_contract();
+  executable_operand_image_contract();
+  tail_return_ownership_contract();
   indirect_conversion_counter_transport_contract();
   formal_program_counter_contract();
   formal_address_operand_ownership_contract();

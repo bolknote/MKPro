@@ -206,7 +206,7 @@ OracleOutcome run_payload_oracle(const std::vector<MachineItem>& items, const st
   };
 }
 
-std::vector<MachineItem> stationary_loop_fixture(int helper_address) {
+std::vector<MachineItem> stationary_loop_fixture(int helper_address, bool entry_boundary = true) {
   std::vector<MachineItem> items = {
       MachineItem::label("loop_entry"),
       MachineItem::op(0x09, "9"),
@@ -219,8 +219,12 @@ std::vector<MachineItem> stationary_loop_fixture(int helper_address) {
       MachineItem::op(0x51, "jump"),
       MachineItem::address(std::string("loop_entry")),
   };
-  items.at(2).indirect_flow_targets = std::vector<IrTarget>{helper_address};
-  items.at(5).indirect_flow_targets = std::vector<IrTarget>{helper_address};
+  if (entry_boundary)
+    items.insert(items.begin() + 1, MachineItem::op(0x54, "entry boundary"));
+  for (MachineItem& item : items) {
+    if (item.kind == MachineItemKind::Op && item.opcode == 0xa7)
+      item.indirect_flow_targets = std::vector<IrTarget>{helper_address};
+  }
   while (cell_count(items) < helper_address)
     items.push_back(stop(StopDisposition::Terminal));
   items.push_back(MachineItem::label("stationary_leaf"));
@@ -295,16 +299,43 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
                 output.preloads.size() == 1U && output.preloads.front().value == "99",
             "startup normalization and an indirect cyclic suffix must compose without a "
             "terminal-report pattern: " + reasons);
-    for (const int rounds : {1, 2, 3})
-      require(run_stationary_loop(stationary_loop_fixture(10), 10, rounds) ==
-                  run_stationary_loop(output.items, 99, rounds),
-              "cyclic startup must preserve repeated resume, stack and decimal-entry X2");
+    for (const int rounds : {1, 2, 3}) {
+      const auto ordinary = run_stationary_loop(stationary_loop_fixture(20), 20, rounds);
+      const auto cyclic = run_stationary_loop(output.items, 99, rounds);
+      std::string difference = " rounds=" + std::to_string(rounds);
+      for (std::size_t index = 0; index < ordinary.size(); ++index)
+        if (ordinary.at(index) != cyclic.at(index))
+          difference += " slot=" + std::to_string(index) + " expected=" +
+                        ordinary.at(index) + " actual=" + cyclic.at(index);
+      require(ordinary == cyclic,
+              "cyclic startup must preserve repeated resume, stack and decimal-entry X2:" +
+                  difference);
+    }
+    const std::vector<MachineItem> interrupted_literal = {
+        MachineItem::op(0x01, "1"), MachineItem::op(0x51, "jump"),
+        MachineItem::address(0),
+    };
+    const auto interrupted_flow =
+        core::build_post_layout_control_flow(interrupted_literal, flow_options);
+    require(interrupted_flow.proved &&
+                core::normalize_empty_return_startup_layouts(
+                    interrupted_literal, {}, interrupted_flow).empty(),
+            "an open literal across rewritten flow must not establish fresh digit/lift facts");
+    const auto unsafe = stationary_loop_fixture(99, false);
+    const auto unsafe_flow = core::build_post_layout_control_flow(unsafe, flow_options);
+    require(unsafe_flow.proved &&
+                core::normalize_empty_return_startup_layouts(unsafe, setup, unsafe_flow).empty() &&
+                core::optimize_terminal_cyclic_layout(unsafe, setup, unsafe_flow).applied == 0,
+            "a leading digit must not expose the extra startup stack lift at a resumable stop");
+    require(run_stationary_loop(stationary_loop_fixture(20, false), 20, 1) !=
+                run_stationary_loop(stationary_loop_fixture(20, true), 20, 1),
+            "ROM witness must distinguish entry/lift contexts despite equal displayed results");
     auto wrong_setup = setup;
     wrong_setup.front().value = "98";
     require(core::optimize_terminal_cyclic_layout(input, wrong_setup, flow).applied == 0,
             "typed call targets cannot replace a proof of their delivered runtime selector");
     auto stale = input;
-    stale.at(2).indirect_flow_targets = std::vector<IrTarget>{98};
+    stale.at(item_at_address(stale, 2)).indirect_flow_targets = std::vector<IrTarget>{98};
     require(core::optimize_terminal_cyclic_layout(stale, setup, flow).applied == 0,
             "stationary cyclic proof must reject stale authoritative target identities");
     auto expanded = core::TerminalCyclicLayoutOptions{};
@@ -776,7 +807,7 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
   }
   {
     const std::vector<MachineItem> startup_loop = {
-        MachineItem::op(0x01, "1"),
+        MachineItem::op(0x54, "entry boundary"),
         MachineItem::op(0x51, "БП"),
         MachineItem::address(0),
     };
@@ -1026,7 +1057,7 @@ void terminal_cyclic_layout_derives_complete_proofs_transactionally() {
   }
   {
     std::vector<MachineItem> startup_with_fixed_target = {
-        MachineItem::op(0x01, "1"),
+        MachineItem::op(0x54, "entry boundary"),
         MachineItem::op(0xac, "К ПП c"),
         MachineItem::op(0x51, "БП"),
         MachineItem::address(7),

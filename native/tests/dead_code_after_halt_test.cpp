@@ -119,12 +119,19 @@ void dead_code_after_halt_matches_typescript_contract() {
   }
 
   {
-    const core::passes::PassResult result =
-        run_dead_code_after_halt({known_target_indirect_jump("7", 4), plain(0x09, "9"),
-                                  plain(0x08, "8"), plain(0x07, "7"), halt()});
-    require(has_stop(result.ops), "dead-code-after-halt dropped known indirect jump target");
-    require(!has_plain_opcode(result.ops, 0x09),
-            "dead-code-after-halt kept indirect-jump fallthrough");
+    // R7 still selects physical 04. Erasing cells 01..03 would silently move
+    // that target to 01; this IR pass has no preload-retarget transaction.
+    // Only symbolic target identities can follow ordinary IR erasure.
+    for (const IrOp& transfer : {
+             known_target_indirect_jump("7", 4),
+             typed_target_indirect_jump("7", IrTarget{4})}) {
+      const std::vector<IrOp> program{
+          transfer, plain(0x09, "9"), plain(0x08, "8"), plain(0x07, "7"), halt()};
+      const auto result = run_dead_code_after_halt(program);
+      require(result.applied == 0 && ir_ops_to_json(result.ops) == ir_ops_to_json(program),
+              "numeric indirect targets require unchanged physical geometry");
+      require(has_stop(result.ops), "dead-code-after-halt dropped a fixed numeric target");
+    }
   }
 
   {

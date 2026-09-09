@@ -53744,8 +53744,13 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
     return result;
   }
 
+  // A physical share proposed after cleanup is not a proof for regenerated
+  // source. Re-lowering may resurrect stores that were dead in that probe.
+  // Verify both allocation APIs in the logical namespace before any IR pass
+  // can hide an overlapping lifetime by observing already aliased registers.
   if (!has_errors(context.diagnostics) && ast.v2.has_value() &&
-      !options.forced_logical_register_assignments.empty()) {
+      (!options.forced_logical_register_assignments.empty() ||
+       !options.forced_register_shares.empty())) {
     if (!verify_logical_register_allocation(context, *ast.v2, context.emitter.items)) {
       context.diagnostics.push_back(diagnostic(
           DiagnosticSeverity::Error, "native-unsupported",
@@ -56756,6 +56761,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.disable_return_suffix_gadget ||
          options.defer_return_suffix_until_callee_hole ||
          options.allow_size_neutral_selector_seed_reuse ||
+         options.exact_terminal_dead_code_elimination ||
          options.aggressive_indirect_call_threshold || options.aggressive_indirect_call ||
          options.dual_use_constant_indirect_flow || options.aggressive_post_layout_indirect_flow ||
          options.preloaded_indirect_flow || options.forward_indirect_flow ||
@@ -56794,7 +56800,9 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          !options.trig_fractional_pack_names.empty() ||
          !options.sign_packed_state_plans.empty() ||
          !options.preloaded_constant_registers.empty() ||
-         !options.suppress_constant_preloads.empty() ||
+         // Pool exclusions/reservations constrain every candidate but do not
+         // request a fixed lowering. Explicit variants or disable_candidate_search
+         // still select the independently finalized single-lowering path.
          !options.force_fractional_constant_selector_preloads.empty() ||
          options.collect_coalesce_shares || options.collect_logical_register_allocation ||
          options.logical_register_dead_store_elimination ||
@@ -56875,7 +56883,8 @@ bool candidate_needs_static_proof_gate(const CompileOptions& options) {
   // control flow, selector meaning, delivered preloads, or data/control dual
   // use.  A new risky option belongs here at the same time as its local verifier
   // or it must remain unselectable by automatic candidate search.
-  return options.aggressive_post_layout_indirect_flow || options.dual_use_constant_indirect_flow ||
+  return options.exact_terminal_dead_code_elimination ||
+         options.aggressive_post_layout_indirect_flow || options.dual_use_constant_indirect_flow ||
          options.runtime_indirect_call_flow || options.preloaded_indirect_flow ||
          options.forward_indirect_flow || options.aggressive_indirect_call ||
          options.aggressive_indirect_call_threshold ||
@@ -57478,6 +57487,27 @@ bool preloaded_indirect_flow_callee_hole_static_gate_accepts(
 
 bool optimizer_static_gate_accepts(const CompileOptions& candidate_options,
                                    const CompileResult& result) {
+  if (candidate_options.exact_terminal_dead_code_elimination) {
+    const bool erased = std::any_of(
+        result.optimizations.begin(), result.optimizations.end(),
+        [](const OptimizationReport& optimization) {
+          return optimization.name == "exact-terminal-unreachable-code";
+        });
+    if (erased) {
+      core::PostLayoutControlFlowOptions flow_options{
+          .address_space_model = address_space_model_for_options(candidate_options),
+          .empty_return_target = 1};
+      const auto image = core::materialize_post_layout_byte_image(result.items, flow_options);
+      if (!image.has_value() ||
+          !core::build_post_layout_control_flow(image->items, image->options).proved)
+        return false;
+    }
+    // Conjoin erasure with every inherited selector/preload/layout obligation.
+    CompileOptions remainder = candidate_options;
+    remainder.exact_terminal_dead_code_elimination = false;
+    return !candidate_needs_static_proof_gate(remainder) ||
+           optimizer_static_gate_accepts(remainder, result);
+  }
   return computed_dispatch_static_gate_accepts(candidate_options, result) ||
          suppress_constant_preload_only_static_gate_accepts(candidate_options, result) ||
          preloaded_indirect_flow_callee_hole_static_gate_accepts(candidate_options, result) ||
@@ -57602,6 +57632,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";disable_interprocedural_opts=" << options.disable_interprocedural_opts
       << ";coalesce_copies=" << options.coalesce_copies
       << ";exact_stack_dead_store_elimination=" << options.exact_stack_dead_store_elimination
+      << ";exact_terminal_dead_code_elimination=" << options.exact_terminal_dead_code_elimination
       << ";allow_size_neutral_selector_seed_reuse="
       << options.allow_size_neutral_selector_seed_reuse
       << ";aggressive_indirect_call_threshold=" << options.aggressive_indirect_call_threshold
@@ -73800,8 +73831,18 @@ apply_finalization_empty_return_startup_to_selected_result(
     std::vector<MachineItem> items;
     std::vector<PreloadReport> preloads;
     bool component_transaction = false;
+    bool standalone_cyclic = false;
+    std::vector<core::passes::AppliedOptimization> suffix_optimizations;
   };
   std::vector<StartupLayout> layouts;
+  if (model == AddressSpaceModel::Standard &&
+      core::machine_cell_count(*normalized) == official_program_step_limit(model) + 1) {
+    layouts.push_back(StartupLayout{
+        .items = *normalized,
+        .preloads = selected.preloads,
+        .standalone_cyclic = true,
+    });
+  }
   for (core::EmptyReturnStartupLayoutResult& startup :
        core::normalize_empty_return_startup_layouts(
            *normalized, selected.preloads, control, terminal_options)) {
@@ -73848,6 +73889,25 @@ apply_finalization_empty_return_startup_to_selected_result(
 
   std::optional<CompileResult> best;
   for (StartupLayout& layout : layouts) {
+    // Call packing can expose the last removable return after the ordinary
+    // terminal pass has already run. Re-evaluate the same proof on the actual
+    // selected artifact, before rejecting a size-neutral startup candidate.
+    if (model == AddressSpaceModel::Standard &&
+        core::machine_cell_count(layout.items) == official_program_step_limit(model) + 1) {
+      const auto suffix_control =
+          core::build_post_layout_control_flow(layout.items, control_options);
+      auto suffix_options = terminal_options;
+      suffix_options.enable_transactional_startup_layout = false;
+      auto suffix = core::optimize_terminal_cyclic_layout(
+          layout.items, layout.preloads, suffix_control, suffix_options);
+      if (suffix.applied > 0 && suffix.plan.final_artifact_proved &&
+          suffix.plan.final_control_flow.proved &&
+          core::machine_cell_count(suffix.items) < core::machine_cell_count(layout.items)) {
+        layout.items = std::move(suffix.items);
+        layout.preloads = std::move(suffix.preloads);
+        layout.suffix_optimizations = std::move(suffix.optimizations);
+      }
+    }
     const core::LateBoundDecimalSelectorResult rebound =
         core::rebind_late_bound_decimal_selectors(
             layout.items,
@@ -73906,7 +73966,11 @@ apply_finalization_empty_return_startup_to_selected_result(
                            "empty-return-tail-helper-fallthrough") !=
                      item.roles.end();
         }));
-    if (!reused_startup_return) {
+    for (const auto& optimization : layout.suffix_optimizations)
+      candidate.optimizations.push_back(OptimizationReport{
+          .name = optimization.name, .detail = optimization.detail,
+      });
+    if (!reused_startup_return && !layout.standalone_cyclic) {
       candidate.optimizations.push_back(OptimizationReport{
           .name = layout.component_transaction
                       ? "empty-return-startup-component-transaction"
@@ -80014,6 +80078,61 @@ CompileResult compile_source_for_optimizer_profile(
       } catch (const std::exception&) {
         // An unsupported proof/layout leaves the proved incumbent unchanged.
       }
+    }
+  }
+
+  // Regenerate source-terminal erasure on the finalized winning lowering.
+  // Retain the ordinary geometry even when this variant removes local cells:
+  // deletion can destroy a more profitable address/code coincidence.
+  if (best.implemented && best.steps.size() > official_program_limit &&
+      !best_options.exact_terminal_dead_code_elimination &&
+      std::none_of(best.items.begin(), best.items.end(), [](const MachineItem& item) {
+        return item.raw || item.manual_interaction.has_value();
+      }) &&
+      std::any_of(best.items.begin(), best.items.end(), [](const MachineItem& item) {
+        return item.kind == MachineItemKind::Op &&
+               (item.opcode == 0x50 || item.opcode == 0x29) &&
+               item.stop_disposition == StopDisposition::Terminal;
+      })) {
+    try {
+      CompileOptions erasure_options = best_options;
+      erasure_options.exact_terminal_dead_code_elimination = true;
+      CompileOptions compile_options = erasure_options;
+      compile_options.disable_candidate_search = true;
+      compile_options.analysis = true;
+      compile_options.budget = 999999;
+      CompileResult candidate = compile_source_once(
+          source, compile_options, source_has_entered,
+          /*apply_final_layout_size_rescue=*/true);
+      const bool applied = has_optimization_named(
+          candidate.optimizations, "exact-terminal-unreachable-code");
+      if (candidate.implemented && applied &&
+          !optimizer_static_gate_rejection_reason(compile_options, candidate).has_value()) {
+        candidate = apply_finalization_fixed_point_to_selected_result(
+            source, std::move(candidate), compile_options, options);
+      }
+      const auto rejection =
+          optimizer_static_gate_rejection_reason(compile_options, candidate);
+      const bool proved = candidate.implemented && applied && !rejection.has_value();
+      if (trace_candidates)
+        std::cerr << "[candidate-trace] exact-terminal-erasure steps="
+                  << candidate.steps.size() << " incumbent=" << best.steps.size()
+                  << " applied=" << applied << " proved=" << proved
+                  << " rejection=" << rejection.value_or("none") << '\n';
+      if (proved && candidate_beats_best(candidate, best, options)) {
+        candidate.optimizations.push_back(OptimizationReport{
+            .name = "exact-terminal-erasure-final-selection",
+            .detail = "Selected independently finalized terminal reachability: " +
+                      std::to_string(best.steps.size()) + " -> " +
+                      std::to_string(candidate.steps.size()) + " cells.",
+        });
+        best_options = std::move(erasure_options);
+        best = std::move(candidate);
+      }
+    } catch (const std::exception& error) {
+      if (trace_candidates)
+        std::cerr << "[candidate-trace] exact-terminal-erasure exception: "
+                  << error.what() << '\n';
     }
   }
 

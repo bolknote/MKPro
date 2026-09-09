@@ -494,8 +494,11 @@ void compiler_explicit_variant_repeats_finalization_after_layout() {
   options.reserve_suppressed_constant_preload_slots.insert("-1");
   options.sign_normalized_x_param = true;
   const auto result = compile_source(source, options);
-  require(result.implemented && result.steps.size() <= 129,
-          "explicit lowering must revisit DSE after selector release and late layout");
+  // Include the corrected signed grid remainder and proved return-state
+  // lowering rather than retaining the old shorter, incorrect artifact.
+  require(result.implemented && result.steps.size() <= 134,
+          "explicit lowering must revisit DSE after selector release and late layout: cells=" +
+              std::to_string(result.steps.size()));
   require(std::none_of(result.diagnostics.begin(), result.diagnostics.end(),
                        [](const Diagnostic& d) { return d.severity == DiagnosticSeverity::Error; }),
           "repeated finalization must retain a valid published artifact");

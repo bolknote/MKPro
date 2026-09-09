@@ -27,6 +27,15 @@ std::string trim_ascii(std::string value) {
   return value;
 }
 
+// The first VP in a first-cell splice already opens exponent entry. Issuing
+// another VP reinitializes an all-zero restored mantissa to one. Keep entry
+// and exponent digits separate; this is not a general VP/VP peephole rule.
+void emit_open_display_exponent_digits(MachineEmitter& emitter, int exponent,
+                                       int source_line, const std::string& comment) {
+  for (char ch : std::to_string(exponent))
+    emitter.emit_op(ch - '0', std::string(1, ch), comment, source_line);
+}
+
 int decimal_power10(int exponent) {
   int value = 1;
   for (int index = 0; index < exponent; ++index)
@@ -438,7 +447,7 @@ void emit_mantissa_mask_leader_splice(DisplayEmitApi& api, const std::string& sc
   api.emitter.emit_op(0x14, "<->", comment_prefix + " leader merge", source_line);
   api.emitter.emit_op(0x54, "К НОП", comment_prefix + " leader preserve", source_line, true);
   api.emitter.emit_op(0x0c, "ВП", comment_prefix + " leader restore", source_line);
-  emit_display_exponent(api.emitter, width - 1, source_line, comment_prefix + " exponent");
+  emit_open_display_exponent_digits(api.emitter, width - 1, source_line, comment_prefix + " exponent");
   api.emitter.emit_stop(api.stop_disposition, "С/П", "show " + display_name, source_line);
 }
 
@@ -899,9 +908,7 @@ bool emit_display_first_digit(LoweringContext& context, int cell, int source_lin
 void emit_display_exponent(MachineEmitter& emitter, int exponent, int source_line,
                            std::string comment) {
   emitter.emit_op(0x0c, "ВП", comment, source_line);
-  for (char ch : std::to_string(exponent)) {
-    emitter.emit_op(ch - '0', std::string(1, ch), comment, source_line);
-  }
+  emit_open_display_exponent_digits(emitter, exponent, source_line, comment);
 }
 
 void emit_first_digit_splice(MachineEmitter& emitter, int source_line) {
@@ -925,7 +932,7 @@ bool emit_first_splice_display_literal_program(DisplayEmitApi& api, LoweringCont
       api.emitter.emit_op(0x0b, "/-/", "display literal sign", source_line);
     api.emitter.emit_op(0x54, "К НОП", "display literal first digit reuse", source_line, true);
     api.emitter.emit_op(0x0c, "ВП", "display literal first digit reuse", source_line);
-    emit_display_exponent(api.emitter, program.exponent, source_line, "display literal exponent");
+    emit_open_display_exponent_digits(api.emitter, program.exponent, source_line, "display literal exponent");
     context.optimizations.push_back(OptimizationReport{
         .name = "display-literal-first-digit-reuse",
         .detail = "Reused the literal body's leading 8 while restoring X2.",
@@ -940,7 +947,7 @@ bool emit_first_splice_display_literal_program(DisplayEmitApi& api, LoweringCont
     if (program.negative)
       api.emitter.emit_op(0x0b, "/-/", "display literal sign", source_line);
     emit_first_digit_splice(api.emitter, source_line);
-    emit_display_exponent(api.emitter, program.exponent, source_line, "display literal exponent");
+    emit_open_display_exponent_digits(api.emitter, program.exponent, source_line, "display literal exponent");
     context.optimizations.push_back(OptimizationReport{
         .name = "display-literal-minus-source-reuse",
         .detail = "Derived a leading '-' from the literal body's fractional tail.",
@@ -955,7 +962,7 @@ bool emit_first_splice_display_literal_program(DisplayEmitApi& api, LoweringCont
   if (program.negative)
     api.emitter.emit_op(0x0b, "/-/", "display literal sign", source_line);
   emit_first_digit_splice(api.emitter, source_line);
-  emit_display_exponent(api.emitter, program.exponent, source_line, "display literal exponent");
+  emit_open_display_exponent_digits(api.emitter, program.exponent, source_line, "display literal exponent");
   return true;
 }
 
@@ -1304,7 +1311,7 @@ bool lower_fixed_display_mask_statement(DisplayEmitApi& api, LoweringContext& co
   api.emitter.emit_op(0x14, "<->", "display mask leader merge", source_line);
   api.emitter.emit_op(0x54, "К НОП", "display mask leader preserve", source_line, true);
   api.emitter.emit_op(0x0c, "ВП", "display mask leader restore", source_line);
-  emit_display_exponent(api.emitter, template_plan->width - 1, source_line,
+  emit_open_display_exponent_digits(api.emitter, template_plan->width - 1, source_line,
                         "display mask exponent");
   api.emitter.emit_stop(api.stop_disposition, "С/П", "show " + display_name, source_line);
   context.optimizations.push_back(OptimizationReport{

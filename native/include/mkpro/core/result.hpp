@@ -381,6 +381,8 @@ struct CompileOptions {
   // those forms. Removing the store can surrender more profitable layout
   // coincidences, so candidate search decides per program.
   bool exact_stack_dead_store_elimination = false;
+  // Exact terminal erasure competes on final layout, not local deletion count.
+  bool exact_terminal_dead_code_elimination = false;
   // Admit a two-producer selector-seed rewrite with no immediate cell saving.
   // Automatic search enables it only on a separate regenerated candidate and
   // requires a strictly smaller proof-valid final artifact before selection.
@@ -509,6 +511,8 @@ struct CompileOptions {
   // proof artifact: indirect-flow gates must still prove branch selectors from
   // final PreloadReport entries rather than trusting this map.
   std::map<std::string, std::string> preloaded_constant_registers;
+  // Candidate-wide resource constraint, not a fixed lowering request.
+  // Suppressing a pool value alone must leave automatic search enabled.
   std::set<std::string> suppress_constant_preloads;
   // Suppressed values whose former preload slots must remain free for later
   // layout-owned uses instead of being backfilled by lower-ranked constants.

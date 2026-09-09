@@ -234,8 +234,16 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
     result.reasons.push_back(std::move(reason));
     return result;
   };
+  if (has_executable_address_words(items)) {
+    const auto image = materialize_post_layout_byte_image(
+        items, {.address_space_model = model});
+    if (!image.has_value())
+      return fail("stable-register value flow requires a valid final operand byte image");
+    return analyze_stable_register_value_flow(image->items, preloads, flow, model);
+  }
   if (!flow.proved || flow.execution_states.empty() ||
-      flow.execution_successors.size() != flow.execution_states.size()) {
+      flow.execution_successors.size() != flow.execution_states.size() ||
+      flow.execution_edges.size() != flow.execution_states.size()) {
     return fail("stable-register value flow requires an authoritative execution graph");
   }
   for (const PostLayoutExecutionState& state : flow.execution_states) {
@@ -292,11 +300,10 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
     return matched;
   };
 
-  // Resume entries of ordinary stops keep the registers of their stop states,
-  // so they are seeded lazily from the stop's out values inside the fixpoint.
-  std::map<std::size_t, std::vector<std::size_t>> resume_states_by_stop_item;
+  // Resume values travel only along their exact execution edges. Grouping
+  // roots by stop item would mix distinct caller return contexts.
   std::vector<std::size_t> main_states;
-  std::vector<bool> manual_input_states(flow.execution_states.size(), false);
+  std::vector<bool> input_boundary_states(flow.execution_states.size(), false);
   for (const PostLayoutExternalEntryState& entry : flow.external_entries) {
     if (entry.entry.item_index >= items.size())
       return fail("an external entry references a missing item");
@@ -331,8 +338,6 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
                      prior_anchor->phase != anchor->phase - 1 ||
                      prior.opcode < 0x40 || prior.opcode > 0x4e))
         return fail("manual input does not follow its prompt or preceding store phase");
-      if (flow.execution_edges.size() != flow.execution_states.size())
-        return fail("manual input requires labelled execution predecessors");
       for (const auto state : matched) {
         const auto& target = flow.execution_states.at(state);
         const bool linked = std::any_of(
@@ -352,21 +357,44 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
             });
         if (!linked)
           return fail("manual input has no exact predecessor in its protocol");
-        manual_input_states.at(state) = true;
+        input_boundary_states.at(state) = true;
       }
       break;
     }
     case ExternalEntryKind::ResumableStop: {
-      const std::optional<std::size_t> stop_item =
-          previous_executable_item(items, entry.entry.item_index);
-      if (!stop_item.has_value() || items.at(*stop_item).opcode != 0x50)
-        return fail("a resumable entry does not continue an ordinary stop");
-      std::vector<std::size_t>& targets = resume_states_by_stop_item[*stop_item];
-      targets.insert(targets.end(), matched.begin(), matched.end());
+      for (const auto state : matched) {
+        const auto& target = flow.execution_states.at(state);
+        const bool linked = std::any_of(
+            predecessors.at(state).begin(), predecessors.at(state).end(),
+            [&](std::size_t predecessor) {
+              const auto& origin = flow.execution_states.at(predecessor);
+              const auto& stop = items.at(origin.item_index);
+              if (stop.raw || (stop.opcode != 0x50 && stop.opcode != 0x29) ||
+                  stop.stop_disposition != StopDisposition::Resumable ||
+                  origin.return_stack != target.return_stack ||
+                  origin.formal_return_stack != target.formal_return_stack)
+                return false;
+              const auto& edges = flow.execution_edges.at(predecessor);
+              return std::any_of(edges.begin(), edges.end(), [&](const auto& edge) {
+                return edge.target_state == state &&
+                       edge.kind == PostLayoutExecutionEdgeKind::Resume;
+              });
+            });
+        if (!linked)
+          return fail("a resumable entry has no exact typed stop predecessor");
+        input_boundary_states.at(state) = true;
+      }
       break;
     }
     }
   }
+
+  for (const auto& edges : flow.execution_edges)
+    for (const auto& edge : edges)
+      if (edge.kind == PostLayoutExecutionEdgeKind::Resume &&
+          (edge.target_state >= input_boundary_states.size() ||
+           !input_boundary_states.at(edge.target_state)))
+        return fail("a resume edge has no validated external input boundary");
 
   std::vector<std::optional<AbstractState>> in_value(flow.execution_states.size());
   std::vector<std::optional<AbstractState>> out_value(flow.execution_states.size());
@@ -382,7 +410,7 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
   const auto merge_in = [&](std::size_t state, const AbstractState& incoming) {
     std::optional<AbstractState>& current = in_value.at(state);
     AbstractState entered = incoming;
-    if (manual_input_states.at(state)) {
+    if (input_boundary_states.at(state)) {
       entered.x.reset();
       entered.entry = EntryBuffer{.poisoned = true};
     }
@@ -396,12 +424,12 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
 
   for (const std::size_t state : main_states)
     merge_in(state, main_entry_state);
-  // Manual phases are reached from the prompt and prior stores through the
-  // authoritative graph, never seeded as independent unknown-register roots.
-  // merge_in forgets X at each input boundary, including loop-carried entries.
+  // Ordinary/error resumes and manual phases inherit registers only through
+  // the authoritative graph, including skipped error padding and exact caller
+  // frames. merge_in forgets X at every input boundary, also on loop re-entry.
 
-  // Fixpoint. Resume roots are re-seeded whenever a stop state's out value
-  // changes, closing the stop -> resume dependency inside the same loop.
+  // One fixpoint over exact predecessor edges, with no extra cross-context
+  // dependencies between executions of the same physical stop instruction.
   std::size_t iterations = 0;
   const std::size_t iteration_limit = flow.execution_states.size() * 64U + 1024U;
   while (!worklist.empty()) {
@@ -420,16 +448,6 @@ StableRegisterValueFlow analyze_stable_register_value_flow(
     out_value.at(state) = next_out;
     for (const std::size_t successor : flow.execution_successors.at(state))
       merge_in(successor, next_out);
-    if (items.at(item_index).opcode == 0x50) {
-      const auto resume_states = resume_states_by_stop_item.find(item_index);
-      if (resume_states != resume_states_by_stop_item.end()) {
-        AbstractState resume_state = next_out;
-        resume_state.x.reset();
-        resume_state.entry = EntryBuffer{.poisoned = true};
-        for (const std::size_t resume : resume_states->second)
-          merge_in(resume, resume_state);
-      }
-    }
   }
 
   result.total_states = flow.execution_states.size();

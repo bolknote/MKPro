@@ -357,6 +357,80 @@ program SharedPreloadOwner {
           }),
           "shared setup did not preserve the live-at-entry owner's preload");
 
+  // A dead register in a post-pass artifact can become live again when its
+  // source assignments are regenerated. Sharing nested counters then changes
+  // the number of outer iterations from three to one.
+  const std::string nested_counter_source = R"mkpro(
+program ReclaimNestedCounters {
+  state {
+    outer: counter 0..3 = 3
+    inner: counter 0..4 = 4
+    turns: counter 0..9 = 0
+  }
+  loop {
+    outer = 3
+    turns = 0
+    while outer {
+      outer--
+      turns++
+      inner = 4
+      while inner {
+        inner--
+      }
+    }
+    halt(turns)
+  }
+}
+)mkpro";
+  const CompileResult nested_baseline = compile_source(nested_counter_source, baseline_options);
+  require(nested_baseline.implemented && nested_baseline.diagnostics.empty(),
+          "nested counter fixture must compile before lifetime sharing");
+  CompileOptions overlapping_options = baseline_options;
+  overlapping_options.forced_register_shares.push_back(RegisterShare{
+      .free_register = nested_baseline.registers.at("inner"),
+      .keep_register = nested_baseline.registers.at("outer"),
+  });
+  const CompileResult overlapping = compile_source(nested_counter_source, overlapping_options);
+  require(!overlapping.implemented && has_error_diagnostic(overlapping),
+          "regenerated physical shares must reject overlapping logical counter lifetimes");
+  require(std::any_of(overlapping.diagnostics.begin(), overlapping.diagnostics.end(),
+                       [](const Diagnostic& diagnostic) {
+                         return diagnostic.message.find("regenerated interference proof") !=
+                                std::string::npos;
+                       }),
+          "unsafe physical share must fail the logical interference proof");
+
+  for (const CompileOptions& run_options : {baseline_options, CompileOptions{}}) {
+    const CompileResult nested = compile_source(nested_counter_source, run_options);
+    require(nested.implemented && nested.diagnostics.empty(),
+            "nested loop must retain a proof-valid candidate");
+    emulator::MK61 calc;
+    require(calc.load_program(step_opcodes(nested)).diagnostics.empty(),
+            "nested counter candidate must load on the ROM");
+    for (const PreloadReport& preload : nested.preloads)
+      calc.set_register(preload.register_name, preload.value);
+    calc.press_sequence({"В/О", "С/П"});
+    for (int restart = 0; restart < 2; ++restart) {
+      if (restart != 0)
+        calc.press("С/П");
+      require(calc.run_until_stable(400, 5).stopped,
+              "nested loops must complete all iterations");
+      require(calc.display_text() == "3,",
+              "nested counters must execute three outer iterations, got " +
+                  calc.display_text());
+    }
+  }
+
+  CompileOptions constrained_search_options;
+  constrained_search_options.suppress_constant_preloads.insert("999");
+  constrained_search_options.reserve_suppressed_constant_preload_slots.insert("999");
+  const CompileResult constrained_search =
+      compile_source(shared_preload_source, constrained_search_options);
+  require(constrained_search.implemented && constrained_search.diagnostics.empty(),
+          "preload pool restrictions must retain a valid automatic compile");
+  require(has_optimization(constrained_search, "fast-candidate-search"),
+          "pool exclusions must not silently select the fixed-lowering compiler path");
+
   const std::string external_owner_source = R"mkpro(
 program SharedExternalPreloadOwner {
   state {

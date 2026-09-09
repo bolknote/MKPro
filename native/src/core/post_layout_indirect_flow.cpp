@@ -359,74 +359,39 @@ struct MachineReturnAnalyzer {
   const std::vector<MachineItem>& items;
   MachineLayout layout;
   AddressSpaceModel model = AddressSpaceModel::Standard;
-  std::set<int> visiting;
-  std::map<int, bool> memo;
+  std::map<std::pair<int, std::optional<int>>, bool> memo;
 
-  bool may_return_from(int address) {
-    const auto memo_it = memo.find(address);
-    if (memo_it != memo.end())
-      return memo_it->second;
-    if (visiting.contains(address))
-      return false;
-    const auto index_it = layout.item_index_by_address.find(address);
-    if (index_it == layout.item_index_by_address.end())
-      return false;
-
-    const int item_index = index_it->second;
-    const MachineItem& item = items.at(static_cast<std::size_t>(item_index));
-    std::optional<int> opcode;
-    if (item.kind == MachineItemKind::Op) {
-      opcode = item.opcode;
-    } else if (item.kind == MachineItemKind::Address) {
-      opcode = address_opcode_for_item(items, item, model);
-    }
-    if (!opcode.has_value())
+  bool operator()(const MachineItem& operand) {
+    const auto address = resolved_machine_target(operand.target, layout.labels);
+    if (!address.has_value())
       return true;
+    const auto key = std::pair{*address, operand.formal_opcode};
+    if (const auto found = memo.find(key); found != memo.end())
+      return found->second;
 
-    visiting.insert(address);
-    bool result = true;
-    if (*opcode == 0x52) {
-      result = true;
-    } else if (*opcode == 0x29 &&
-               item.stop_disposition == StopDisposition::Terminal) {
-      result = false;
-    } else if (*opcode == 0x29 &&
-               item.stop_disposition == StopDisposition::Resumable) {
-      result = may_return_from(address + 2);
-    } else if (*opcode == 0x50) {
-      result = false;
-    } else if (*opcode == 0x51) {
-      const std::optional<IrTarget> target = direct_address_target(items, item_index);
-      const std::optional<int> target_address =
-          target.has_value() ? resolved_machine_target(*target, layout.labels) : std::nullopt;
-      result = target_address.has_value() ? may_return_from(*target_address) : true;
-    } else if (*opcode == 0x53) {
-      const std::optional<IrTarget> target = direct_address_target(items, item_index);
-      const std::optional<int> target_address =
-          target.has_value() ? resolved_machine_target(*target, layout.labels) : std::nullopt;
-      result = target_address.has_value()
-                   ? (may_return_from(*target_address) ? may_return_from(address + 2) : false)
-                   : true;
-    } else if (is_address_taking_opcode(*opcode)) {
-      const std::optional<IrTarget> target = direct_address_target(items, item_index);
-      const std::optional<int> target_address =
-          target.has_value() ? resolved_machine_target(*target, layout.labels) : std::nullopt;
-      result = target_address.has_value()
-                   ? (may_return_from(*target_address) || may_return_from(address + 2))
-                   : true;
-    } else if (*opcode >= 0x80 && *opcode <= 0xee) {
-      result = true;
-    } else {
-      result = may_return_from(address + 1);
+    // Use the same exact counters, nested return frames and resumptions as
+    // every other layout proof. A DFS back edge is not proof of no return:
+    // another edge in that SCC can still lead to BO.
+    PostLayoutControlFlowOptions options;
+    options.address_space_model = model;
+    options.main_entry = *address;
+    options.main_formal_opcode = operand.formal_opcode;
+    options.empty_return_target = 1;
+    const auto flow = build_post_layout_control_flow(items, options);
+    bool may_return = !flow.proved;
+    for (const auto& state : flow.execution_states) {
+      if (!state.return_stack.empty())
+        continue;
+      const auto& item = items.at(state.item_index);
+      const auto code = item.kind == MachineItemKind::Op
+          ? std::optional(item.opcode) : address_opcode_for_item(items, item, model);
+      if (!code.has_value() || *code == 0x52) {
+        may_return = true;
+        break;
+      }
     }
-    visiting.erase(address);
-    memo[address] = result;
-    return result;
-  }
-
-  bool operator()(const IrTarget& target) {
-    const std::optional<int> target_address = resolved_machine_target(target, layout.labels);
-    return target_address.has_value() ? may_return_from(*target_address) : true;
+    memo.emplace(key, may_return);
+    return may_return;
   }
 };
 
@@ -435,7 +400,7 @@ bool can_overlay_address_continuation(MachineReturnAnalyzer& target_may_return,
   if (branch.opcode == 0x51)
     return true;
   if (branch.opcode == 0x53)
-    return !target_may_return(address.target);
+    return !target_may_return(address);
   return false;
 }
 
@@ -454,7 +419,9 @@ bool labels_have_no_linear_fallthrough(const std::vector<MachineItem>& items, in
     return false;
   const MachineItem& previous = items.at(static_cast<std::size_t>(*previous_index));
   if (previous.kind == MachineItemKind::Op)
-    return previous.opcode == 0x50 || previous.opcode == 0x52;
+    return previous.opcode == 0x52 ||
+           ((previous.opcode == 0x50 || previous.opcode == 0x29) &&
+            previous.stop_disposition == StopDisposition::Terminal);
   if (previous.kind != MachineItemKind::Address)
     return false;
 
@@ -467,7 +434,7 @@ bool labels_have_no_linear_fallthrough(const std::vector<MachineItem>& items, in
   if (branch.opcode == 0x51)
     return true;
   if (branch.opcode == 0x53)
-    return !target_may_return(previous.target);
+    return !target_may_return(previous);
   return false;
 }
 
@@ -1614,13 +1581,19 @@ std::vector<MachineItem>
 retarget_machine_selector_comments(std::vector<MachineItem> items,
                                    const std::map<std::string, std::string>& selector_by_register,
                                    AddressSpaceModel model) {
-  const std::vector<MachineCell> cells = machine_cells(items);
+  const auto image = materialize_post_layout_byte_image(items, {.address_space_model = model});
+  if (!image.has_value())
+    return items;
+  const std::vector<MachineCell> cells = machine_cells(image->items);
   const std::map<int, std::vector<std::string>> labels_by_address =
       machine_labels_by_address(items);
-  for (MachineItem& item : items) {
-    if (item.kind != MachineItemKind::Op)
+  for (std::size_t index = 0; index < items.size(); ++index) {
+    MachineItem& item = items.at(index);
+    const MachineItem& executable = image->items.at(index);
+    if (executable.kind != MachineItemKind::Op)
       continue;
-    const std::optional<std::string> register_name = register_from_indirect_opcode(item.opcode);
+    const std::optional<std::string> register_name =
+        register_from_indirect_opcode(executable.opcode);
     if (!register_name.has_value())
       continue;
     const auto selector_it = selector_by_register.find(*register_name);
@@ -2205,21 +2178,11 @@ bool indirect_rewrite_preserves_execution(const std::vector<IrOp>& before_ops,
   control_options.empty_return_target = 1;
   const auto byte_image_options = [&](std::vector<MachineItem>& image)
       -> std::optional<PostLayoutControlFlowOptions> {
-    auto result = control_options;
-    for (std::size_t index = 0; index < image.size(); ++index) {
-      auto& item = image.at(index);
-      if (item.kind != MachineItemKind::Address || !has_machine_role(item, "exec"))
-        continue;
-      const auto code = address_opcode_for_item(image, item, model);
-      if (!code.has_value() || *code < 0 || *code > 0xff)
-        return std::nullopt;
-      // Private proof image only: the published IR retains both roles of this
-      // cell. Both images independently use their actual, rebound operand byte.
-      item.kind = MachineItemKind::Op;
-      item.opcode = *code;
-      result.opcode_address_words.push_back(index);
-    }
-    return result;
+    auto encoded = materialize_post_layout_byte_image(image, control_options);
+    if (!encoded.has_value())
+      return std::nullopt;
+    image = std::move(encoded->items);
+    return std::move(encoded->options);
   };
   const auto before_options = byte_image_options(before);
   const auto after_options = byte_image_options(after);
@@ -3646,7 +3609,11 @@ find_empty_stack_loop_return_rewrite(const std::vector<MachineItem>& raw_items,
     const MachineCell& address = cells.at(index + 1);
     if (branch.item == nullptr || address.item == nullptr ||
         branch.item->kind != MachineItemKind::Op ||
-        address.item->kind != MachineItemKind::Address || branch.item->opcode != 0x51) {
+        address.item->kind != MachineItemKind::Address || branch.item->opcode != 0x51 ||
+        branch.item->raw || address.item->raw ||
+        branch.item->manual_interaction.has_value() ||
+        address.item->manual_interaction.has_value() ||
+        (address.item->formal_opcode.has_value() && *address.item->formal_opcode != 0x01)) {
       continue;
     }
     const std::optional<int> target = resolved_machine_target(address.item->target, labels);
@@ -4619,10 +4586,10 @@ optimize_post_layout_empty_stack_loop_return(const std::vector<MachineItem>& ite
       if (index == rewrite->address_index)
         continue;
       if (index == rewrite->branch_index) {
-        MachineItem item = MachineItem::op(rewrite->opcode, rewrite->mnemonic);
+        MachineItem item = current.at(static_cast<std::size_t>(index));
+        item.opcode = rewrite->opcode;
+        item.mnemonic = rewrite->mnemonic;
         item.comment = rewrite->comment;
-        if (rewrite->source_line.has_value())
-          item.source_line = *rewrite->source_line;
         candidate.push_back(std::move(item));
         continue;
       }
@@ -4699,12 +4666,18 @@ PostLayoutIndirectFlowResult optimize_post_layout_empty_return_selector_release(
   for (const auto& [index, targets] : before.indirect_flow_targets) {
     const MachineItem& source = items.at(index);
     if (source.kind != MachineItemKind::Op || source.raw ||
+        source.manual_interaction.has_value() ||
         source.opcode != 0x80 + selector_register || targets.size() != 1U ||
         targets.front().address != 1 ||
         !reachable_only_with_empty_return_stack(before, index))
       continue;
-    MachineItem replacement = MachineItem::op(0x52, "В/О");
-    replacement.source_line = source.source_line;
+    MachineItem replacement = source;
+    replacement.opcode = 0x52;
+    replacement.mnemonic = "В/О";
+    replacement.indirect_flow_targets.reset();
+    replacement.indirect_flow_formal_targets.reset();
+    replacement.logical_register_name.reset();
+    replacement.borrowed_entry_phase_selector = false;
     // Keep the same compiler-owned marker as the direct loop-return lowering.
     replacement.comment = "optimized БП 01";
     candidate.at(index) = std::move(replacement);

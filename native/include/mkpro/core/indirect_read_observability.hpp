@@ -116,8 +116,7 @@ inline bool prove_discarded_indirect_selector_reads_unobserved(
     const MachineItem& item = items.at(execution.item_index);
     if (item.kind != MachineItemKind::Op || item.raw ||
         item.manual_interaction.has_value() ||
-        item.stop_disposition != StopDisposition::Unknown ||
-        affected_reads.contains(execution.item_index)) {
+        item.stop_disposition != StopDisposition::Unknown) {
       return false;
     }
     const int opcode = item.opcode;
@@ -126,6 +125,22 @@ inline bool prove_discarded_indirect_selector_reads_unobserved(
     const auto& edges = flow.execution_edges.at(current.state);
     if (edges.empty())
       return false;
+    if (affected_reads.contains(execution.item_index)) {
+      if (edges.size() != 1U ||
+          edges.front().kind != PostLayoutExecutionEdgeKind::Fallthrough)
+        return false;
+      // A later discarded read introduces another unequal X. It does not
+      // invalidate earlier stack taint, nor may it reset that taint to the
+      // single-read seed. Registers still evolve identically on both paths.
+      const auto old = current.equality.stack_equal;
+      current.equality.stack_equal = {false, old.at(0), old.at(1), old.at(2)};
+      current.equality.x2_equal = old.at(0);
+      current.number_entry_active = false;
+      current.digit_lift_proved = true;
+      current.state = edges.front().target_state;
+      pending.push_back(current);
+      continue;
+    }
     const bool indirect_flow =
         family == 0x70 || family == 0x80 || family == 0x90 ||
         family == 0xa0 || family == 0xc0 || family == 0xe0;
@@ -206,4 +221,3 @@ inline bool prove_discarded_indirect_selector_reads_unobserved(
 }
 
 }  // namespace mkpro::core
-

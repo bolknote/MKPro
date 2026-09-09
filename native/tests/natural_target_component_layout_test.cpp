@@ -5,6 +5,7 @@
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/opcodes.hpp"
+#include "mkpro/core/selector_writeback.hpp"
 #include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
@@ -859,6 +860,441 @@ bool reason_contains(const core::NaturalTargetComponentLayoutPlan& plan,
 } // namespace
 
 void natural_target_component_layout_is_generic_and_proof_gated() {
+  {
+    // Literal setup enters a number; leading zeroes are not a raw BCD-word
+    // injection. The retained bank word is observable even if an ordinary
+    // recall normalizes X before an arithmetic consumer.
+    const auto selector_items = [](int follow) {
+      return std::vector<MachineItem>{
+          op(0x53), MachineItem::address(10), op(0x68), op(follow), stop(),
+          op(0x54), op(0x54), op(0x54), op(0x54), op(0x54), op(0x52)};
+    };
+    const auto run_selector = [](const std::string& literal, int follow, bool indirect) {
+      emulator::MK61 calc;
+      std::vector<int> setup;
+      for (char digit : literal) setup.push_back(digit - '0');
+      setup.push_back(0x48);
+      setup.push_back(0x50);
+      require(calc.load_program(setup).diagnostics.empty(), "numeric selector setup must load");
+      calc.press_sequence({"В/О", "С/П"});
+      require(calc.run_until_stable(1000, 6).stopped, "numeric selector setup must stop");
+      // Keep the callee at physical 10 in both images. The NOP replaces the
+      // removed operand, isolating writeback from address relocation.
+      const bool zero = std::all_of(literal.begin(), literal.end(),
+                                    [](char digit) { return digit == '0'; });
+      const std::vector<int> codes = zero
+          ? std::vector<int>{0x52, indirect ? 0xa8 : 0x53,
+                             indirect ? 0x54 : 0x00, 0x68, follow, 0x02, 0x50}
+          : std::vector<int>{indirect ? 0xa8 : 0x53, indirect ? 0x54 : 0x10,
+                             0x68, follow, 0x50, 0x54, 0x54, 0x54, 0x54, 0x54, 0x52};
+      require(calc.load_program(codes).diagnostics.empty(),
+              "selector writeback image must load");
+      calc.press_sequence({"В/О", "С/П"});
+      require(calc.run_until_stable(1000, 6).stopped, "selector writeback image must stop");
+      std::map<std::string, std::string> observation;
+      for (const std::string& reg : {"x", "y", "z", "t", "x1", "8"})
+        observation.emplace(reg, calc.read_register(reg));
+      return observation;
+    };
+    const auto items = selector_items(0x3a);
+    const auto graph = core::build_post_layout_control_flow(items);
+    require(graph.proved, "numeric selector fixture requires exact call/return flow");
+    for (const std::string& literal : {"10", "00000010", "10000010"}) {
+      const bool full_word = literal == "10000010";
+      const PreloadReport preload{.register_name = "8", .value = literal};
+      require(core::selector_writeback_is_unobserved(
+                  items, graph, 0, preload, AddressSpaceModel::Standard),
+              "positive integer recall must normalize X without a full bank-word claim");
+      const auto before = run_selector(literal, 0x3a, false);
+      const auto after = run_selector(literal, 0x3a, true);
+      require((before.at("8") == after.at("8")) == full_word,
+              "ROM must distinguish normalized numeric setup from a fixed-point bank word");
+      if (full_word)
+        require(before == after, "the admitted eight-significant-digit word must remain exact");
+      auto before_stack = before;
+      auto after_stack = after;
+      before_stack.erase("8");
+      after_stack.erase("8");
+      require(before_stack == after_stack,
+              "positive integer recall must preserve raw X/Y/Z/T/X1 even before K-INV");
+    }
+    // Address 00 is a returning leaf; an initial empty return enters main at
+    // 01. This makes a zero-valued call selector real, rather than a fixture
+    // whose preload and bound target disagree.
+    const std::vector<MachineItem> zero_items{
+        op(0x52), op(0x53), MachineItem::address(0), op(0x68), op(0x0c), op(0x02), stop()};
+    const auto zero_flow = core::build_post_layout_control_flow(
+        zero_items, {.empty_return_target = 1});
+    require(zero_flow.proved, "zero-selector call/empty-return contexts must be exact");
+    for (const std::string& literal : {"0", "00000000"}) {
+      require(!core::selector_writeback_is_unobserved(
+                  zero_items, zero_flow, 1, {.register_name = "8", .value = literal},
+                  AddressSpaceModel::Standard),
+              "a denormalized zero must not inherit a full-word or VP-preserving proof");
+      const auto normal_zero = run_selector(literal, 0x0c, false);
+      const auto rewritten_zero = run_selector(literal, 0x0c, true);
+      require(normal_zero.at("x") != rewritten_zero.at("x"),
+              "ROM must expose zero-selector writeback through the following VP command");
+    }
+    PreloadReport computed{.register_name = "8", .value = "10000010"};
+    computed.setup_source_line = 1;
+    require(!core::selector_writeback_is_unobserved(
+                items, graph, 0, computed, AddressSpaceModel::Standard),
+            "setup provenance alone excludes a purported stable literal");
+    for (int follow : {0x10, 0x12, 0x35}) {
+      const auto projected = selector_items(follow);
+      const auto projected_flow = core::build_post_layout_control_flow(projected);
+      require(core::selector_writeback_is_unobserved(
+                  projected, projected_flow, 0, {.register_name = "8", .value = "10"},
+                  AddressSpaceModel::Standard),
+              "exact numeric projections remain eligible without a full-word claim");
+      auto before = run_selector("10", follow, false);
+      auto after = run_selector("10", follow, true);
+      before.erase("8");
+      after.erase("8");
+      require(before == after, "numeric projections must retain the full arithmetic stack and X1");
+    }
+  }
+
+  {
+    // Independent ROM fact: typed recalls normalize every positive integer
+    // mantissa width, including indirect reads through all counter classes.
+    const std::vector<std::vector<int>> suffixes{
+        {}, {0x0c, 0x02}, {0x0a, 0x02}, {0x0b}, {0x01}, {0x0e, 0x01},
+        {0x3a}, {0x34}, {0x35}, {0x0f}, {0x10}, {0x12}};
+    for (const std::string& literal :
+         {"1", "10", "99", "100", "1000", "10000", "100000", "1000000",
+          "1234567", "9999999", "99999999"}) {
+      for (int consumer : {0x6d, 0xd0, 0xd4, 0xd7}) {
+        for (const auto& suffix : suffixes) {
+          std::map<std::string, std::string> normal;
+          for (bool denormalized : {false, true}) {
+            emulator::MK61 calc;
+            std::vector<int> codes{consumer};
+            codes.insert(codes.end(), suffix.begin(), suffix.end());
+            codes.push_back(0x50);
+            require(calc.load_program(codes).diagnostics.empty(),
+                    "integer recall ROM image must load");
+            calc.set_register("x", "17");
+            calc.set_register("y", "23");
+            calc.set_register("z", "31");
+            calc.set_register("t", "43");
+            calc.set_register("x1", "59");
+            calc.set_register("0", "14");
+            calc.set_register("4", "12");
+            calc.set_register("7", "13");
+            calc.set_register("d", denormalized
+                                       ? std::string(8U - literal.size(), '0') + literal
+                                       : literal);
+            calc.press_sequence({"В/О", "С/П"});
+            require(calc.run_until_stable(1000, 6).stopped,
+                    "integer recall ROM image must stop");
+            std::map<std::string, std::string> actual;
+            for (const std::string& reg : {"x", "y", "z", "t", "x1", "0", "4", "7"})
+              actual.emplace(reg, calc.read_register(reg));
+            if (!denormalized)
+              normal = std::move(actual);
+            else
+              require(actual == normal,
+                      "typed positive recall must preserve stack, X1, entry probes and counters");
+          }
+        }
+      }
+    }
+    for (int opcode : {0xd0, 0xd4, 0xd7, 0xb0}) {
+      MachineItem memory = op(opcode);
+      memory.indirect_memory_targets = std::vector<int>{8};
+      const std::vector<MachineItem> items{
+          op(0x53), MachineItem::address("read_leaf"), memory, op(0x3a), stop(),
+          MachineItem::label("read_leaf"), op(0x52)};
+      const auto graph = core::build_post_layout_control_flow(items);
+      require(graph.proved, "indirect recall projection needs a complete typed CFG");
+      require(core::selector_writeback_is_unobserved(
+                  items, graph, 0, {.register_name = "8", .value = "10"},
+                  AddressSpaceModel::Standard) == (opcode != 0xb0),
+              "normalizing indirect reads are safe; indirect stores do not inherit their proof");
+    }
+  }
+
+  {
+    const auto prefix_fixture = [](bool empty_return, bool digits) {
+      Fixture input;
+      for (int i = 0; i < 10; ++i)
+        input.items.push_back(op(digits ? 0x01 : 0x54));
+      if (empty_return)
+        input.items.front() = op(0x52);
+      for (int i = 0; i < 3; ++i) {
+        input.items.push_back(op(0x53));
+        input.items.push_back(MachineItem::address("early_natural_leaf"));
+      }
+      input.items.push_back(stop());
+      input.items.push_back(MachineItem::label("early_natural_leaf"));
+      input.items.push_back(op(0x22));
+      input.items.push_back(op(0x52));
+      input.preloads.push_back({.register_name = "8", .value = "3"});
+      return input;
+    };
+    const Fixture input = prefix_fixture(false, false);
+    const auto graph = core::build_post_layout_control_flow(
+        input.items, {.empty_return_target = 1});
+    require(graph.proved, "main-prefix fixture must have exact caller frames");
+    const auto moved = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, graph);
+    require(moved.applied == 3 && moved.plan.proved &&
+                moved.plan.final_artifact_proved && moved.plan.stack_and_x2_equivalent &&
+                moved.plan.call_return_equivalent &&
+                moved.plan.transparent_split_bridges == 1 &&
+                cell_count(input.items) == 19 && cell_count(moved.items) == 18,
+            "a safe main prefix must free an early natural target and pay for its bridge");
+    require(moved.items.at(item_at_address(moved.items, 1)).opcode == 0x51,
+            "an unused empty-return policy must not reserve physical 01");
+    const auto before = observe(input.items, input.preloads, true);
+    const auto after = observe(moved.items, moved.preloads, true);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "main-prefix relocation must preserve ROM stack/X1 and exact call returns");
+
+    for (const auto& blocked_input :
+         {prefix_fixture(true, false), prefix_fixture(false, true)}) {
+      const auto blocked_graph = core::build_post_layout_control_flow(
+          blocked_input.items, {.empty_return_target = 1});
+      require(blocked_graph.proved, "negative main-prefix fixture must be well-formed");
+      const auto blocked = core::optimize_natural_target_component_layout(
+          blocked_input.items, blocked_input.preloads, blocked_graph);
+      require(blocked.applied == 0 &&
+                  cell_count(blocked.items) == cell_count(blocked_input.items),
+              "observed empty returns and active digit entry must prevent this prefix split");
+    }
+    auto incomplete = graph;
+    incomplete.execution_edges.clear();
+    const auto rejected = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, incomplete);
+    require(rejected.applied == 0,
+            "missing labelled execution contexts cannot prove an empty return unobserved");
+  }
+
+  {
+    // The old split proof certified the digits 11111111 as 111111 after a
+    // newly inserted jump broke the active mantissa. Enter inhibition and
+    // exponent restore have distinct boundary hazards, so cover them too.
+    const std::vector<std::vector<int>> bodies = {
+        {0x22, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x52},
+        {0x22, 0x01, 0x0e, 0x02, 0x41, 0x54, 0x54, 0x54, 0x54, 0x52},
+        {0x22, 0x54, 0x20, 0x0c, 0x02, 0x41, 0x54, 0x54, 0x54, 0x52},
+    };
+    for (const auto& body : bodies) {
+      Fixture input = split_overlapping_fixed_targets_fixture();
+      bool in_helper = false;
+      std::size_t position = 0;
+      for (auto& item : input.items) {
+        if (item.kind == MachineItemKind::Label) {
+          in_helper = item.name == "unrelated_split_helper_a";
+        } else if (in_helper) {
+          item = op(body.at(position++));
+        }
+      }
+      require(position == body.size(), "entry-boundary fixture must replace the complete helper");
+      const auto moved = core::optimize_natural_target_component_layout(
+          input.items, input.preloads, flow(input));
+      const Observation before = observe(input.items, input.preloads);
+      const Observation after = observe(moved.items, moved.preloads);
+      require(before.stopped && after.stopped && before.state == after.state,
+              "a proved layout must not split active digits, Enter inhibition or exponent restore");
+      require(moved.applied == 0 || moved.plan.proved,
+              "a retained alternative still needs the complete final layout proof");
+    }
+  }
+
+  {
+    // A digit followed by an ordinary store is different from a split inside
+    // the mantissa: that common store closes entry before it can be observed.
+    Fixture input = split_overlapping_fixed_targets_fixture();
+    const std::vector<int> body{
+        0x22, 0x01, 0x01, 0x41, 0x54, 0x54, 0x54, 0x54, 0x54, 0x52};
+    bool in_helper = false;
+    std::size_t position = 0;
+    std::size_t store_item = 0;
+    for (std::size_t index = 0; index < input.items.size(); ++index) {
+      auto& item = input.items.at(index);
+      if (item.kind == MachineItemKind::Label) {
+        in_helper = item.name == "unrelated_split_helper_a";
+      } else if (in_helper) {
+        item = op(body.at(position++));
+        if (item.opcode == 0x41) store_item = index;
+      }
+    }
+    require(position == body.size() && store_item != 0,
+            "digit/store fixture must replace the complete helper");
+    const auto moved = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    const auto before = observe(input.items, input.preloads);
+    const auto after = observe(moved.items, moved.preloads);
+    require(moved.plan.proved && moved.plan.final_artifact_proved &&
+                moved.plan.transparent_split_bridges == 1 &&
+                cell_count(moved.items) == cell_count(input.items) - 5,
+            "a postdominating direct store must allow the proved split and its five-cell saving");
+    require(before.stopped && after.stopped && before.state == after.state,
+            "digit/store splitting must preserve the complete observed ROM stack and X1");
+
+    input.items.at(store_item).raw = true;
+    const auto opaque = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, flow(input));
+    const auto raw_store = std::find_if(
+        opaque.items.begin(), opaque.items.end(), [](const MachineItem& item) {
+          return item.kind == MachineItemKind::Op && item.opcode == 0x41 && item.raw;
+        });
+    require(raw_store != opaque.items.end() && raw_store != opaque.items.begin(),
+            "the opaque store must survive with its original predecessor");
+    auto predecessor = raw_store;
+    do {
+      --predecessor;
+    } while (predecessor != opaque.items.begin() &&
+             predecessor->kind == MachineItemKind::Label);
+    require(predecessor->kind == MachineItemKind::Op && predecessor->opcode == 0x01,
+            "an opaque store cannot justify a new flow boundary after the digit");
+    const auto opaque_after = observe(opaque.items, opaque.preloads);
+    require((opaque.applied == 0 || opaque.plan.proved) &&
+                opaque_after.stopped && before.state == opaque_after.state,
+            "other proof-valid layouts remain eligible around the protected raw boundary");
+  }
+
+  {
+    // Removing a jump changes the same entry state as inserting one. Keep
+    // the jump even when visible X alone happens to match: B-up exposes the
+    // difference in deeper stack slots.
+    for (const int predecessor : {0x0e, 0x20, 0x35, 0x41}) {
+      Fixture input;
+      const int next = predecessor == 0x0e ? 0x02 : 0x0c;
+      input.items = {
+          op(0x01), op(predecessor), op(0x51), MachineItem::address("entry_sensitive_sink"),
+          MachineItem::label("entry_sensitive_sink"), op(next), op(0x02), op(0x42), stop(),
+      };
+      core::NaturalTargetComponentLayoutOptions options;
+      options.allow_standalone_fallthrough_jump_fold = true;
+      const auto moved = core::optimize_natural_target_component_layout(
+          input.items, input.preloads, flow(input), options);
+      require(moved.applied == 0 && moved.plan.fallthrough_jump_folds == 0 &&
+                  cell_count(moved.items) == cell_count(input.items),
+              "jump folding must retain Enter-inhibit and restore-command boundaries");
+
+      auto unsafe = input.items;
+      unsafe.erase(unsafe.begin() + 2, unsafe.begin() + 4);
+      const auto before = observe(input.items, input.preloads);
+      const auto after = observe(unsafe, input.preloads);
+      require(before.stopped && after.stopped && before.state != after.state,
+              "ROM counterexample must witness the entry-state difference rejected by the proof");
+    }
+  }
+
+  {
+    Fixture input = fixture(3, 2, true);
+    input.items.at(input.visible_stop) = op(0x29);
+    input.items.at(input.visible_stop).stop_disposition = StopDisposition::Terminal;
+    const auto input_flow = flow(input);
+    require(input_flow.proved, "terminal error fixture needs authoritative flow");
+    const auto moved = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, input_flow);
+    require(moved.applied > 0 && moved.plan.final_artifact_proved &&
+                moved.plan.control_flow_equivalent && moved.plan.call_return_equivalent &&
+                moved.plan.stack_and_x2_equivalent &&
+                cell_count(moved.items) < cell_count(input.items),
+            "a terminal error must close the main component instead of entering the next helper");
+    const Observation before = observe(input.items, input.preloads);
+    const Observation after = observe(moved.items, moved.preloads);
+    require(before.stopped && after.stopped && before.state == after.state,
+            "terminal-error component relocation must preserve the complete ROM observation");
+
+    for (const bool opaque : {false, true}) {
+      Fixture invalid = input;
+      invalid.items.at(invalid.visible_stop).raw = opaque;
+      if (!opaque)
+        invalid.items.at(invalid.visible_stop).stop_disposition = StopDisposition::Unknown;
+      const auto blocked = core::optimize_natural_target_component_layout(
+          invalid.items, invalid.preloads, flow(invalid));
+      require(blocked.applied == 0 && !blocked.plan.proved &&
+                  cell_count(blocked.items) == cell_count(invalid.items),
+              "raw or untyped error stops must not authorize a component relocation");
+    }
+  }
+
+  {
+    Fixture input;
+    input.items = {
+        MachineItem::label("error_caller"), op(0x53),
+        MachineItem::address("error_leaf"), op(0x53),
+        MachineItem::address("error_leaf"), stop(),
+        MachineItem::label("error_leaf"), op(0x29), op(0x49),
+        MachineItem::label("error_resume"), op(0x44), op(0x52),
+        MachineItem::label("error_alignment"),
+    };
+    input.items.at(7).stop_disposition = StopDisposition::Resumable;
+    input.items.at(8).roles.push_back(kResumableErrorPaddingRole);
+    for (int cell = 1; cell < 29; ++cell)
+      input.items.push_back(op(0x54));
+    input.items.push_back(stop());
+    input.preloads.push_back(PreloadReport{.register_name = "8", .value = "32"});
+    const auto input_flow = flow(input);
+    require(input_flow.proved &&
+                std::count_if(input_flow.external_entries.begin(),
+                              input_flow.external_entries.end(), [](const auto& entry) {
+                  return entry.kind == core::ExternalEntryKind::ResumableStop &&
+                         entry.return_stack.size() == 1U;
+                }) == 2,
+            "two error calls must retain their distinct suspended return contexts");
+    const auto moved = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, input_flow);
+    std::string reasons;
+    for (const auto& reason : moved.plan.reasons)
+      reasons += reason + " | ";
+    require(moved.applied > 0 && moved.plan.final_artifact_proved &&
+                moved.plan.control_flow_equivalent && moved.plan.call_return_equivalent &&
+                moved.plan.stack_and_x2_equivalent && moved.removed_cells == 2,
+            "resumable errors must retain padding and both caller continuations: " + reasons);
+
+    const auto observation = [](const std::vector<MachineItem>& items,
+                                const std::vector<PreloadReport>& preloads,
+                                int resume_count) {
+      const auto resolved = resolve_machine_items(items, {});
+      require(resolved.diagnostics.empty(), "error-resume fixture must resolve");
+      std::vector<int> codes;
+      for (const auto& step : resolved.steps)
+        codes.push_back(step.opcode);
+      emulator::MK61 calculator;
+      require(calculator.load_program(codes).diagnostics.empty(),
+              "error-resume fixture must fit physical memory");
+      for (const auto& preload : preloads)
+        calculator.set_register(preload.register_name, preload.value);
+      calculator.set_register("x", "2");
+      calculator.set_register("y", "11");
+      calculator.set_register("z", "12");
+      calculator.set_register("t", "13");
+      calculator.set_register("x1", "14");
+      calculator.set_register("4", "41");
+      calculator.set_register("9", "91");
+      calculator.press_sequence({"В/О", "С/П"});
+      require(calculator.run_until_stable(1000, 6).stopped,
+              "first call must stop at the resumable error");
+      for (int resume = 0; resume < resume_count; ++resume) {
+        calculator.input_number(resume == 0 ? "5" : "7", true).press("С/П");
+        require(calculator.run_until_stable(1000, 6).stopped,
+                "error resume must reach the next caller stop");
+      }
+      std::map<std::string, std::string> state;
+      for (const std::string name : {"x", "y", "z", "t", "x1", "4", "9"})
+        state.emplace(name, canonical_register(calculator.read_register(name)));
+      require(std::stoi(state.at("9")) == 91,
+              "the store in the error padding cell must never execute");
+      require(std::stoi(state.at("4")) ==
+                  (resume_count == 0 ? 41 : resume_count == 1 ? 5 : 7),
+              "each resumed call must consume only its own entered number");
+      calculator.press(".");
+      state.emplace("hidden_x2_probe", calculator.display_text());
+      return state;
+    };
+    for (int resume_count = 0; resume_count <= 2; ++resume_count)
+      require(observation(input.items, input.preloads, resume_count) ==
+                  observation(moved.items, moved.preloads, resume_count),
+              "error layout must preserve stack, X1, X2, skipped cell and both returns");
+  }
   {
     // The unused hardware continuation happens to point at this main body.
     // It is not a second external entry and must not freeze that body at 01.
@@ -2450,6 +2886,25 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
             "standalone final-layout jump folding should not require a selector rewrite");
     require(before.stopped && after.stopped && before.state == after.state,
             "standalone fallthrough jump folding must preserve emulator-visible state");
+
+    const auto unused_return_flow = core::build_post_layout_control_flow(
+        input.items, {.empty_return_target = 1});
+    require(unused_return_flow.proved,
+            "standalone fold must have exact declared empty-return context");
+    const auto unused_return_fold = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, unused_return_flow, options);
+    require(unused_return_fold.plan.proved &&
+                unused_return_fold.plan.fallthrough_jump_folds == 1 &&
+                unused_return_fold.removed_cells == 2 &&
+                observe(unused_return_fold.items, unused_return_fold.preloads).state ==
+                    before.state,
+            "an unused empty-return policy must not pin a removable BP at physical 01");
+    auto incomplete_return_flow = unused_return_flow;
+    incomplete_return_flow.execution_edges.clear();
+    const auto incomplete_return_fold = core::optimize_natural_target_component_layout(
+        input.items, input.preloads, incomplete_return_flow, options);
+    require(incomplete_return_fold.applied == 0,
+            "missing return-edge evidence must not authorize jump deletion");
 
     const Fixture raw = standalone_jump_fixture(true);
     const auto blocked = core::optimize_natural_target_component_layout(

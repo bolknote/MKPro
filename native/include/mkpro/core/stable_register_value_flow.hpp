@@ -29,11 +29,13 @@ namespace mkpro::core {
 //
 // Everything else poisons the touched slot: fractional/exponent entry,
 // arithmetic, and indirect stores that may reach a tracked register. Ordinary
-// resumable stops and validated entered() phases preserve predecessor register
-// values while forgetting X and number-entry state. Each manual phase must
-// match the typed prompt/store chain and exact labelled CFG predecessor,
-// including formal return frames. Unlinked or untyped external entries fail
-// closed; manual input is never treated as a fresh setup-state assumption.
+// and error resumes and validated entered() phases preserve exact predecessor
+// register values while forgetting X and number-entry state. Resume edges,
+// not physical adjacency, identify the source stop (an error skips one cell).
+// Each manual phase must also match its typed prompt/store chain. Distinct
+// caller contexts stay separate until their real CFG join, including formal
+// return frames. Unlinked or untyped external entries fail closed; user input
+// is never treated as a fresh setup-state assumption.
 struct StableRegisterValueFlow {
   bool proved = false;
   std::vector<std::string> reasons;

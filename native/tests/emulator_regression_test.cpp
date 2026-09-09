@@ -12,6 +12,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace mkpro::tests {
@@ -135,6 +136,46 @@ void emulator_regression_opcode_and_stop_flow_matches_typescript_contract() {
             "second consecutive stop should leave PC at the next command, got " +
                 calc.program_counter());
   }
+
+  // A first-cell splice has already opened exponent entry. A second VP
+  // changes an all-zero mantissa into one, even though the nonzero cases
+  // happen to look equivalent.
+  {
+    const auto observe = [](const std::string& body, const std::string& leader,
+                            bool repeat_exponent_entry) {
+      std::vector<int> codes{0x64, 0x62, 0x14, 0x54, 0x0c};
+      if (repeat_exponent_entry) codes.push_back(0x0c);
+      codes.push_back(static_cast<int>(body.size()) - 2);
+      codes.push_back(0x50);
+      emulator::MK61 calc;
+      require(calc.load_program(codes).diagnostics.empty(), "zero-leader splice must load");
+      calc.set_register("2", body).set_register("4", leader);
+      calc.press_sequence({"В/О", "С/П"});
+      require(calc.run_until_stable(500, 5).stopped, "zero-leader splice must stop");
+      std::vector<std::string> result{calc.display_text()};
+      for (const char* reg : {"x", "y", "z", "t", "x1"})
+        result.push_back(calc.read_register(reg));
+      calc.press(".");
+      result.push_back(calc.display_text());
+      return result;
+    };
+    for (const std::string body : {"9.0", "9.12", "9.2345678", "9.-3"}) {
+      for (const std::string leader : {"0", "1", "9", "-", "L", "С", "Г", "Е"}) {
+        const auto single = observe(body, leader, false);
+        const auto repeated = observe(body, leader, true);
+        if (body == "9.0" && leader == "0") {
+          require(single.front() == "0," && repeated.front() == "10,",
+                  "reentering VP must expose the zero-to-one mantissa hazard");
+          require(std::equal(single.begin() + 2, single.end() - 1, repeated.begin() + 2),
+                  "correcting the zero leader must preserve Y/Z/T and physical X1");
+          require(single.back() == "0,", "decimal entry after a zero screen must remain zero");
+        } else {
+          require(single == repeated,
+                  "single exponent entry must preserve digits, video cells and hidden state");
+        }
+      }
+    }
+  }
 }
 
 void emulator_regression_example_loads(const std::string& example_file) {
@@ -149,6 +190,43 @@ void emulator_regression_example_loads(const std::string& example_file) {
           "example should load into emulator without diagnostics: " + file.string());
   require(calc.read_program_codes(static_cast<int>(codes.size())) == codes,
           "example program memory should round-trip after load: " + file.string());
+
+  if (file.filename() == "dangerous-loading.mkpro") {
+    // Boot-only checks missed an empty-stack return reached only by wait().
+    // Validate UI against source state after both explicit and default commands.
+    emulator::MK61 play({.angle_mode = "grad"});
+    require(play.load_program(codes).diagnostics.empty(),
+            "dangerous-loading turn contract must load");
+    for (const auto& preload : result.preloads)
+      play.set_register(preload.register_name, preload.value);
+    const auto numeric = [](std::string value) {
+      std::replace(value.begin(), value.end(), ',', '.');
+      return std::stod(value);
+    };
+    const auto value = [&](const std::string& name) {
+      return numeric(play.read_register(result.registers.at(name)));
+    };
+    play.press_sequence({"В/О", "С/П"});
+    for (const auto& [command, boat] :
+         std::vector<std::pair<std::string, int>>{
+             {"", 8}, {"5", 8}, {"4", 7}, {"6", 8}, {"0", 8}, {"5", 8}}) {
+      if (!command.empty()) {
+        // Keep this a return/UI test, independent of the next random attack.
+        play.set_register(result.registers.at("threat"), "1");
+        play.input_number(command, true).press("С/П");
+      }
+      require(play.run_until_stable(2000, 5).stopped,
+              "dangerous-loading must complete command " + command);
+      require(value("boat") == boat && value("cargo_left") == 9 &&
+                  value("boats_left") == 3 && value("threat") >= 1 &&
+                  value("threat") <= 8,
+              "dangerous-loading must preserve state across move and wait continuations");
+      const double expected = 9000 + 100 * boat + 10 * value("threat") + 3;
+      require(numeric(play.display_text()) == expected,
+              "dangerous-loading wait must restart the whole display: expected " +
+                  std::to_string(expected) + ", got " + play.display_text());
+    }
+  }
 }
 
 void emulator_regression_pending_optimizer_source_stays_before_loading(

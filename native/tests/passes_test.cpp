@@ -1,4 +1,5 @@
 #include "mkpro/core/opcodes.hpp"
+#include "mkpro/core/emit/machine_emitter.hpp"
 #include "mkpro/core/register_allocator.hpp"
 #include "mkpro/core/passes/branch_target_x_reuse.hpp"
 #include "mkpro/core/passes/conditional_branch_trampoline.hpp"
@@ -366,6 +367,113 @@ void indirect_flow_target_marker_requires_strict_boundary() {
 }
 
 void pass_pipeline_matches_initial_typescript_contract() {
+  {
+    IrOp terminal = stop("halt");
+    terminal.meta.stop_disposition = StopDisposition::Terminal;
+    const auto observe = [](const std::vector<IrOp>& program, const std::string& input = "23") {
+      const auto resolved = resolve_machine_items(lower_ir_to_machine(program));
+      require(resolved.diagnostics.empty(), "stable-selector fixture must resolve");
+      std::vector<int> codes;
+      for (const auto& step : resolved.steps)
+        codes.push_back(step.opcode);
+      // Read selectors through ROM instructions, not the debugger's padded
+      // raw-register spelling after an indirect write-back.
+      for (const int code : {0x67, 0x50, 0x68, 0x50})
+        codes.push_back(code);
+      emulator::MK61 calc;
+      require(calc.load_program(codes).diagnostics.empty(), "stable-selector fixture must load");
+      calc.set_register("0", "47.25").set_register("1", "11").set_register("2", input)
+          .set_register("c", "61").set_register("x", "19").set_register("y", "29")
+          .set_register("z", "31").set_register("t", "37").set_register("x1", "41");
+      calc.press_sequence({"В/О", "С/П"});
+      require(calc.run_until_stable(600, 5).stopped, "stable-selector fixture must stop");
+      std::vector<std::string> state;
+      for (const auto* reg : {"x", "y", "z", "t", "x1"})
+        state.push_back(calc.read_register(reg));
+      calc.press(".");
+      state.push_back(calc.display_text());
+      for (int reg = 7; reg <= 8; ++reg) {
+        calc.press("С/П");
+        require(calc.run_until_stable(600, 5).stopped,
+                "selector readback must stop through the real ROM recall");
+        state.push_back(calc.display_text());
+      }
+      calc.press("ВП");
+      state.push_back(calc.display_text());
+      return state;
+    };
+
+    // A store or recall terminates the entry of 1. The following 2 is not 12.
+    for (const bool through_recall : {false, true}) {
+      std::vector<IrOp> program = {plain(1), store("7")};
+      if (through_recall)
+        program.push_back(recall("7"));
+      const std::vector<IrOp> suffix = {plain(2), store("8"), recall("c"), terminal};
+      program.insert(program.end(), suffix.begin(), suffix.end());
+      const auto kept = run_indirect_memory_table(program);
+      require(kept.applied == 0 && observe(program) == observe(kept.ops),
+              "separate literals must not invent a selector for Rc");
+      program.at(program.size() - 2U) = recall("2");
+      const auto shorter = run_indirect_memory_table(program);
+      require(shorter.applied == 1 && observe(program) == observe(shorter.ops),
+              "the actual selector value 2 must retain a proved equivalent memory rewrite");
+      const auto& access = shorter.ops.at(shorter.ops.size() - 2U);
+      require(access.meta.indirect_memory_targets == std::optional(std::vector<int>{2}),
+              "memory rewrite must publish its complete physical target set");
+    }
+
+    const std::vector<IrOp> split_literal = {
+        plain(1), label("middle"), plain(2), store("7"), recall("2"), terminal};
+    const auto no_split = run_indirect_memory_table(split_literal);
+    require(no_split.applied == 0 && observe(split_literal) == observe(no_split.ops),
+            "a label is not a hardware number-entry delimiter");
+
+    IrOp selector_store = store("7");
+    selector_store.meta.logical_register_name = "selector";
+    IrOp data_recall = recall("2");
+    data_recall.meta.logical_register_name = "data";
+    const std::vector<IrOp> logical = {plain(2), selector_store, data_recall, terminal};
+    const auto identities = run_indirect_memory_table(logical);
+    require(identities.applied == 1 &&
+                identities.ops.at(2).meta.logical_register_name == "selector" &&
+                identities.ops.at(2).meta.logical_indirect_memory_targets ==
+                    std::optional(std::vector<std::string>{"data"}) &&
+                observe(logical) == observe(identities.ops),
+            "selector and accessed logical value must remain distinct after indirect lowering");
+    auto incomplete = logical;
+    incomplete.at(1).meta.logical_register_name.reset();
+    require(run_indirect_memory_table(incomplete).applied == 0,
+            "incomplete logical identities must not be guessed from a physical register");
+
+    const std::vector<IrOp> forward = {
+        plain(7), store("7"), numeric_jump(7), plain(1), terminal,
+        plain(9), recall("0"), terminal};
+    const auto pinned = run_stable_indirect_flow(forward);
+    require(pinned.applied == 0 && observe(forward) == observe(pinned.ops),
+            "a forward literal selector cannot outlive deletion of the preceding address cell");
+
+    const std::vector<IrOp> backward = {
+        jump_to("entry"), label("target"), recall("0"), terminal,
+        label("entry"), plain(2), store("7"), numeric_jump(2)};
+    const auto folded = run_stable_indirect_flow(backward);
+    require(folded.applied == 1 &&
+                machine_cell_count(folded.ops) == machine_cell_count(backward) - 1 &&
+                observe(backward) == observe(folded.ops),
+            "a proved stationary selector must retain its one-cell backward jump saving");
+    IrOp conditional = cjump_to("==0", 0x5e, "target");
+    conditional.target = 2;
+    const std::vector<IrOp> conditional_program = {
+        jump_to("entry"), label("target"), recall("0"), recall("1"), terminal,
+        label("entry"), plain(2), store("7"), recall("2"), conditional,
+        recall("0"), recall("1"), terminal};
+    const auto conditional_fold = run_stable_indirect_flow(conditional_program);
+    require(conditional_fold.applied == 1,
+            "a proved conditional must reuse the stable selector after X2 convergence");
+    for (const auto* input : {"0", "23"})
+      require(observe(conditional_program, input) == observe(conditional_fold.ops, input),
+              "both conditional outcomes must preserve full stack and hidden entry state");
+  }
+
   {
     CompileOptions options;
     options.late_literal_preloads = true;
@@ -740,15 +848,17 @@ void pass_pipeline_matches_initial_typescript_contract() {
   }
 
   {
+    IrOp shown = stop("halt");
+    shown.meta.stop_disposition = StopDisposition::Terminal;
     const core::passes::PassResult result = run_redundant_prologue({
         label("head"),
         recall("1"),
         plain(0x10),
-        stop("show"),
+        shown,
         plain(0x31),
         recall("1"),
         plain(0x10),
-        stop("show"),
+        shown,
         jump_to("head"),
     });
     require(result.applied == 1, "redundant-prologue did not remove duplicate loop prologue");
@@ -782,16 +892,15 @@ void pass_pipeline_matches_initial_typescript_contract() {
   {
     const core::passes::PassResult result =
         run_tail_call({call_to("proc"), jump_to("ret"), label("ret"), ret(), label("proc"), ret()});
-    require(result.applied == 2,
-            "tail-call did not replace call and proc return continuation: applied=" +
+    require(result.applied == 1,
+            "tail-call must not specialize an already handled return continuation: applied=" +
                 std::to_string(result.applied) + " ops=" + ir_ops_to_json(result.ops));
     require(result.ops.size() == 5, "tail-call return-label case produced wrong op count");
     require(result.ops.at(0).kind == IrKind::Jump, "tail-call did not lower call to jump");
     require(std::get<std::string>(result.ops.at(0).target) == "proc",
             "tail-call produced wrong jump target");
-    require(result.ops.at(4).kind == IrKind::Jump, "tail-call did not lower proc return");
-    require(std::get<std::string>(result.ops.at(4).target) == "ret",
-            "tail-call return-label continuation target mismatch");
+    require(result.ops.at(4).kind == IrKind::Return,
+            "ordinary tail call must keep the shorter callee return");
     require(result.optimizations.size() == 1, "tail-call did not report optimization");
     require(result.optimizations.at(0).name == "tail-call-lowering",
             "tail-call reported wrong optimization name");
@@ -813,13 +922,23 @@ void pass_pipeline_matches_initial_typescript_contract() {
   }
 
   {
+    // Main falls through the same return after the call has already popped it.
+    // Replacing that return with a caller jump would change the empty-stack path.
+    const std::vector<IrOp> shared_with_main = {
+        call_to("proc"), jump_to("cont"), label("cont"), plain(0x31), label("proc"), ret()};
+    const auto rejected = run_tail_call(shared_with_main);
+    require(rejected.applied == 0 &&
+                ir_ops_to_json(rejected.ops) == ir_ops_to_json(shared_with_main),
+            "tail-call must preserve a return also reachable from the main frame");
+
     const core::passes::PassResult result = run_tail_call(
-        {call_to("proc"), jump_to("cont"), label("cont"), plain(0x31), label("proc"), ret()});
+        {call_to("proc"), jump_to("cont"), label("cont"), plain(0x31),
+         jump_to("cont"), label("proc"), ret()});
     require(result.applied == 2, "tail-call did not rewrite call and proc return continuation");
-    require(result.ops.size() == 5, "tail-call continuation case produced wrong op count");
+    require(result.ops.size() == 6, "tail-call continuation case produced wrong op count");
     require(result.ops.at(0).kind == IrKind::Jump, "tail-call did not lower continuation call");
-    require(result.ops.at(4).kind == IrKind::Jump, "tail-call did not lower proc return");
-    require(std::get<std::string>(result.ops.at(4).target) == "cont",
+    require(result.ops.at(5).kind == IrKind::Jump, "tail-call did not lower proc return");
+    require(std::get<std::string>(result.ops.at(5).target) == "cont",
             "tail-call return continuation target mismatch");
   }
 
@@ -1175,13 +1294,47 @@ void pass_pipeline_matches_initial_typescript_contract() {
   }
 
   {
-    const core::passes::PassResult result =
-        run_return_zero_jump({plain(0x01), label("start"), plain(0x02), jump_to("start")});
+    IrOp branch = jump_to("start");
+    branch.meta.source_line = 73;
+    branch.meta.roles = {"loop-edge-origin"};
+    branch.meta.semantic_call_origins = {123};
+    const std::vector<IrOp> program = {plain(0x01), label("start"), plain(0x02), branch};
+    const core::passes::PassResult result = run_return_zero_jump(program);
+    require(result.ops.at(3).meta.source_line == 73 &&
+                result.ops.at(3).meta.roles == branch.meta.roles &&
+                result.ops.at(3).meta.semantic_call_origins == branch.meta.semantic_call_origins,
+            "empty-return lowering must retain compiler-owned command provenance");
     require(result.applied == 1, "return-zero-jump did not replace backward jump to 01");
     require(result.ops.at(3).kind == IrKind::Return, "return-zero-jump did not emit return opcode");
     require(result.optimizations.size() == 1, "return-zero-jump did not report optimization");
     require(result.optimizations.at(0).name == "return-zero-jump",
             "return-zero-jump reported wrong optimization name");
+  }
+
+  {
+    IrOp terminal = stop("halt");
+    terminal.meta.stop_disposition = StopDisposition::Terminal;
+    IrOp exit = numeric_cjump(8);
+    const std::vector<IrOp> pinned = {
+        recall("0"), label("again"), recall("1"), exit, jump_to("again"),
+        plain(0x54), plain(0x54), recall("2"), terminal};
+    const auto result = run_return_zero_jump(pinned);
+    require(result.applied == 0 && ir_ops_to_json(result.ops) == ir_ops_to_json(pinned),
+            "deleting BP 01's operand must not shift a different numeric destination");
+
+    for (int barrier = 0; barrier < 3; ++barrier) {
+      std::vector<IrOp> guarded = {
+          plain(0x01), label("start"), plain(0x02), jump_to("start")};
+      if (barrier == 0)
+        guarded.back().meta.raw = true;
+      else if (barrier == 1)
+        guarded.back().meta.manual_interaction = ManualInteractionAnchor{
+            .protocol_id = 1, .phase = 0, .kind = ManualInteractionAnchorKind::SingleStepCommand};
+      else
+        guarded.back().target_meta.formal_opcode = 0xb3;
+      require(run_return_zero_jump(guarded).applied == 0,
+              "raw, manual and noncanonical formal jumps must not become empty returns");
+    }
   }
 
   {
@@ -1572,26 +1725,16 @@ void pass_pipeline_matches_initial_typescript_contract() {
   }
 
   {
-    const core::passes::PassResult result = run_stable_indirect_flow(
-        {plain(0x01), plain(0x02), store("7"), numeric_jump(12), stop("halt")});
-    require(result.applied == 1,
-            "stable-indirect-flow did not rewrite numeric branch through stable selector");
-    require(result.ops.at(3).kind == IrKind::IndirectJump,
-            "stable-indirect-flow emitted wrong op kind for numeric branch");
-    require(result.ops.at(3).register_name == "7",
-            "stable-indirect-flow used wrong selector register");
-    require(result.ops.at(3).opcode == 0x87,
-            "stable-indirect-flow emitted wrong indirect branch opcode");
-  }
-
-  {
-    const core::passes::PassResult result = run_stable_indirect_flow(
-        {plain(0x01), plain(0x02), store("7"), numeric_cjump(12), stop("halt")});
-    require(result.applied == 1, "stable-indirect-flow did not rewrite numeric conditional branch");
-    require(result.ops.at(3).kind == IrKind::IndirectCondJump,
-            "stable-indirect-flow emitted wrong op kind for numeric conditional");
-    require(result.ops.at(3).opcode == 0xe7,
-            "stable-indirect-flow emitted wrong indirect conditional opcode");
+    // There is no command 12 in either old fixture. A numeric spelling alone
+    // is not a target identity and cannot justify a shrinking branch rewrite.
+    for (const IrOp& branch : {numeric_jump(12), numeric_cjump(12)}) {
+      const std::vector<IrOp> incomplete = {
+          plain(0x01), plain(0x02), store("7"), branch, stop("halt")};
+      const auto result = run_stable_indirect_flow(incomplete);
+      require(result.applied == 0 &&
+                  ir_ops_to_json(result.ops) == ir_ops_to_json(incomplete),
+              "stable-indirect-flow must reject nonexistent numeric destinations");
+    }
   }
 
   {
@@ -1607,8 +1750,10 @@ void pass_pipeline_matches_initial_typescript_contract() {
   }
 
   {
+    IrOp terminal = stop("halt");
+    terminal.meta.stop_disposition = StopDisposition::Terminal;
     const core::passes::PassResult result =
-        run_indirect_memory_table({plain(0x02), store("7"), recall("2"), stop("halt")});
+        run_indirect_memory_table({plain(0x02), store("7"), recall("2"), terminal});
     require(result.applied == 1,
             "indirect-memory-table did not rewrite direct recall through stable selector");
     require(result.optimizations.size() == 1, "indirect-memory-table did not report optimization");
@@ -1621,8 +1766,10 @@ void pass_pipeline_matches_initial_typescript_contract() {
   }
 
   {
+    IrOp terminal = stop("halt");
+    terminal.meta.stop_disposition = StopDisposition::Terminal;
     const core::passes::PassResult result =
-        run_indirect_memory_table({plain(0x02), store("8"), plain(0x09), store("2"), stop("halt")});
+        run_indirect_memory_table({plain(0x02), store("8"), plain(0x09), store("2"), terminal});
     require(result.applied == 1,
             "indirect-memory-table did not rewrite direct store through stable selector");
     require(result.ops.at(3).kind == IrKind::IndirectStore,

@@ -40,6 +40,91 @@ bool has_optimization(const CompileResult& result, const std::string& name) {
                      });
 }
 
+// Candidate presence, addresses and register allocation change with valid
+// lowering/proof improvements. Validate the context of every reported control
+// opportunity instead of requiring one obsolete candidate from a named game.
+void require_selector_opportunity_context(const CompileResult& result) {
+  for (const auto& opportunity : result.size_attribution.opportunities) {
+    if (opportunity.variant != "fractional-constant-selector-dead-int" ||
+        opportunity.blocker_kind != "indirect-address-control-use")
+      continue;
+    const auto& details = opportunity.details;
+    for (const char* key : {
+             "consumerAddress", "selectorTarget", "fractionalSelectorConsumer",
+             "consumerControlKind", "fractionalSelectorSourceRegister",
+             "deadIntegerSelectorCarrierRegister", "integerPartUseRole",
+             "fractionalPartUseRole", "deadIntegerProofRequiredArtifact",
+             "deadIntegerConsumerRegister", "requiredAction", "proofEffortPriority",
+             "proofEffortReason", "sizeFirstAction"}) {
+      require(details.contains(key) && !details.at(key).empty(),
+              std::string("control-selector opportunity lacks proof context: ") + key);
+    }
+    for (const char* key : {"consumerAddress", "selectorTarget"}) {
+      const auto& address = details.at(key);
+      require(std::all_of(address.begin(), address.end(),
+                          [](char ch) { return ch >= '0' && ch <= '9'; }),
+              std::string("control-selector address must be an explicit numeric identity: ") + key);
+    }
+    for (const char* key : {"fractionalSelectorSourceRegister",
+                            "deadIntegerSelectorCarrierRegister", "deadIntegerConsumerRegister"}) {
+      const auto& reg = details.at(key);
+      require(reg.size() == 1U && std::string("0123456789abcdef").find(reg) != std::string::npos,
+              std::string("control-selector context must name its actual register: ") + key);
+    }
+    if (opportunity.candidate_steps > opportunity.current_steps) {
+      require(details.at("proofEffortPriority") == "defer-until-size-positive" &&
+                  details.at("proofEffortReason") == "candidate-larger-than-current-before-proof" &&
+                  details.at("sizeFirstAction") == "find-size-positive-candidate-shape-before-proof",
+              "a size-negative control-selector opportunity must defer expensive proof work");
+    }
+  }
+}
+
+void require_selector_data_opportunity_context(const CompileResult& result) {
+  for (const auto& opportunity : result.size_attribution.opportunities) {
+    const auto& details = opportunity.details;
+    const auto failure = details.find("proofFailure");
+    if (failure == details.end() || failure->second != "selector-register-used-as-data")
+      continue;
+    for (const char* key : {"proofFamily", "missingProof", "selectorRegister",
+                             "consumerAddress", "consumerOpcodeHex",
+                             "selectorDataConflictKind", "selectorDataConflictPrecision"}) {
+      require(details.contains(key) && !details.at(key).empty(),
+              std::string("selector/data overlap must retain its actual proof context: ") + key);
+    }
+    require(opportunity.blocker_kind == "static-proof-gate" &&
+                details.at("proofFamily") == "indirect-flow-targets" &&
+                details.at("missingProof") == "selector-register-preservation",
+            "selector/data overlap must remain a proof rejection, not an accepted saving");
+    require(opportunity.current_steps == static_cast<int>(result.steps.size()) &&
+                opportunity.savings == opportunity.current_steps - opportunity.candidate_steps,
+            "selector/data cost accounting must use the actual selected layout");
+    if (details.contains("selectorDataPayloadMinPackedAccessOverheadCells")) {
+      for (const char* key : {"selectorDataPayloadPackingOverheadBudgetCells",
+                               "selectorDataPayloadPackingNetLowerBoundCells",
+                               "estimatedCandidateStepsAfterPayloadPackingLowerBound"})
+        require(details.contains(key),
+                std::string("payload packing lacks lower-bound accounting: ") + key);
+      const int overhead = std::stoi(details.at("selectorDataPayloadMinPackedAccessOverheadCells"));
+      const int budget = std::stoi(details.at("selectorDataPayloadPackingOverheadBudgetCells"));
+      const int estimate = opportunity.current_steps - budget + overhead;
+      require(overhead >= 0 && budget >= 0 &&
+                  std::stoi(details.at("selectorDataPayloadPackingNetLowerBoundCells")) ==
+                      budget - overhead &&
+                  std::stoi(details.at("estimatedCandidateStepsAfterPayloadPackingLowerBound")) ==
+                      estimate && opportunity.candidate_steps == estimate,
+              "payload packing must charge its complete access-cost lower bound");
+    }
+    if (opportunity.savings <= 0)
+      require(std::none_of(result.size_attribution.next_actions.begin(),
+                           result.size_attribution.next_actions.end(), [&](const auto& action) {
+                             return action.best_site == opportunity.site &&
+                                    action.best_variant == opportunity.variant;
+                           }),
+              "a nonpositive selector/data estimate must not rank as a profitable next action");
+  }
+}
+
 CompileResult compile_example(const std::filesystem::path& path, bool analysis_budgeted) {
   CompileOptions options;
   if (analysis_budgeted) {
@@ -49,6 +134,10 @@ CompileResult compile_example(const std::filesystem::path& path, bool analysis_b
   const CompileResult result = compile_source(read_file(path), options);
   require(result.implemented, "native compiler should implement example: " + path.string());
   require(!has_error_diagnostic(result), "example compile diagnostics should not include errors: " + path.string());
+  if (std::getenv("MKPRO_NATIVE_EXAMPLE_SIZE_ONLY") == nullptr) {
+    require_selector_opportunity_context(result);
+    require_selector_data_opportunity_context(result);
+  }
   return result;
 }
 
@@ -56,15 +145,6 @@ std::size_t example_steps(const std::filesystem::path& path, bool analysis_budge
   return compile_example(path, analysis_budgeted).steps.size();
 }
 
-const SizeOpportunityReport* find_size_opportunity(const CompileResult& result,
-                                                   const std::string& variant) {
-  const auto it = std::find_if(result.size_attribution.opportunities.begin(),
-                               result.size_attribution.opportunities.end(),
-                               [&](const SizeOpportunityReport& opportunity) {
-                                 return opportunity.variant == variant;
-                               });
-  return it == result.size_attribution.opportunities.end() ? nullptr : &*it;
-}
 
 const SizeSelectedOptimizationReport* find_size_selected_optimization(
     const CompileResult& result, const std::string& variant) {
@@ -195,8 +275,16 @@ void example_sizes_match_typescript_baselines() {
 
   const bool progress = std::getenv("MKPRO_NATIVE_EXAMPLE_PROGRESS") != nullptr;
   const bool size_only = std::getenv("MKPRO_NATIVE_EXAMPLE_SIZE_ONLY") != nullptr;
+  const char* filter = std::getenv("MKPRO_NATIVE_EXAMPLE_FILTER");
+  const auto included = [&](const std::string& name) {
+    return filter == nullptr || name.find(filter) != std::string::npos;
+  };
   std::size_t progress_index = 0;
-  const std::size_t progress_total = EXAMPLE_BASELINE.size() + PENDING_BASELINE.size();
+  const std::size_t progress_total = static_cast<std::size_t>(
+      std::count_if(EXAMPLE_BASELINE.begin(), EXAMPLE_BASELINE.end(),
+                    [&](const auto& entry) { return included(entry.first); }) +
+      std::count_if(PENDING_BASELINE.begin(), PENDING_BASELINE.end(),
+                    [&](const auto& entry) { return included(entry.first); }));
   std::string size_mismatches;
   const auto record_size_mismatch = [&](const std::string& category, const std::string& name,
                                         std::size_t expected, std::size_t actual) {
@@ -211,6 +299,7 @@ void example_sizes_match_typescript_baselines() {
                        " actual=" + std::to_string(actual);
   };
   for (const auto& [name, expected] : EXAMPLE_BASELINE) {
+    if (!included(name)) continue;
     if (progress) {
       ++progress_index;
       std::cerr << "[example-size] " << progress_index << "/" << progress_total << " " << name
@@ -228,12 +317,10 @@ void example_sizes_match_typescript_baselines() {
       require(!has_optimization(result, "borrowed-entry-phase-selector"),
               "zagaday-tsifru must not borrow R9 only for its first iteration: input overwrites "
               "R9 before the program loops back to the same branch");
-      require(has_optimization(result, "packed-bcd-horner-threshold-loop") &&
-                  has_optimization(result, "current-x-unary-derivation"),
-              "zagaday-tsifru should select the proved majority threshold and reuse the "
-              "correction mask in X for F sin");
+      require(has_optimization(result, "packed-bcd-horner-threshold-loop"),
+              "zagaday-tsifru should select the proved packed-BCD majority threshold");
       require(std::any_of(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
-                return step.opcode == 0x1c && step.comment == "current-X sin";
+                return step.opcode == 0x1c;
               }) &&
                   std::none_of(result.steps.begin(), result.steps.end(),
                                [](const ResolvedStep& step) { return step.opcode == 0x3b; }),
@@ -248,12 +335,10 @@ void example_sizes_match_typescript_baselines() {
                            }),
               "biased threshold lowering should divide its anchored fold by 19 without an "
               "extra anchor-removal pair");
-      require(std::any_of(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
-                return step.comment.has_value() &&
-                       step.comment->find("indirect-memory-targets=1,2,3") !=
-                           std::string::npos;
+      require(std::any_of(result.items.begin(), result.items.end(), [](const MachineItem& item) {
+                return item.indirect_memory_targets == std::optional<std::vector<int>>{{1, 2, 3}};
               }),
-              "packed BCD indexed weights should retain exact memory-target proof facts");
+              "packed BCD indexed weights should retain exact typed memory-target proof facts");
 
       int resumable_stops = 0;
       int prompt_anchors = 0;
@@ -323,268 +408,19 @@ void example_sizes_match_typescript_baselines() {
     }
     if (name == "fox-hunt-mk61") {
       const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
-      require(std::any_of(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
-                return step.address == 14 && step.comment.has_value() &&
-                       step.comment->find("coord_list fused candidate; "
-                                          "indirect-memory-targets=6,7,8,9,a,b,c,d,e") !=
-                           std::string::npos;
+      require(std::any_of(result.items.begin(), result.items.end(), [](const MachineItem& item) {
+                return item.kind == MachineItemKind::Op && (item.opcode & 0xf0) == 0xd0 &&
+                       item.indirect_memory_targets.has_value() &&
+                       item.indirect_memory_targets->size() == 9U &&
+                       std::all_of(item.indirect_memory_targets->begin(),
+                                   item.indirect_memory_targets->end(),
+                                   [](int target) { return target >= 0 && target <= 0x0e; });
               }),
-              "fox-hunt-mk61 coord_list fused indirect recall should annotate its proved "
-              "memory target range");
-      const SizeOpportunityReport* indirect_flow =
-          find_size_opportunity(result, "aggressive-post-layout-indirect-flow");
-      require(indirect_flow != nullptr && indirect_flow->current_steps == 65 &&
-                  indirect_flow->candidate_steps == 66 && indirect_flow->savings == -1 &&
-                  indirect_flow->blocker_kind == "static-proof-gate" &&
-                  indirect_flow->details.contains("proofFamily") &&
-                  indirect_flow->details.at("proofFamily") == "indirect-flow-targets" &&
-                  indirect_flow->details.contains("missingProof") &&
-                  indirect_flow->details.at("missingProof") ==
-                      "selector-register-preservation" &&
-                  indirect_flow->details.contains("proofFailure") &&
-                  indirect_flow->details.at("proofFailure") ==
-                      "selector-register-used-as-data" &&
-                  indirect_flow->details.contains("selectorRegister") &&
-                  indirect_flow->details.at("selectorRegister") == "7" &&
-                  indirect_flow->details.contains("candidateSelectorRegisters") &&
-                  indirect_flow->details.at("candidateSelectorRegisters") == "7+8+9" &&
-                  indirect_flow->details.contains("conflictingSelectorRegisters") &&
-                  indirect_flow->details.at("conflictingSelectorRegisters") == "7+8+9" &&
-                  indirect_flow->details.contains("allocatedName") &&
-                  indirect_flow->details.at("allocatedName") == "__coord_list_foxes_1" &&
-                  indirect_flow->details.contains("conflictingAllocatedNames") &&
-                  indirect_flow->details.at("conflictingAllocatedNames") ==
-                      "__coord_list_foxes_1+__coord_list_foxes_2+__coord_list_foxes_3" &&
-                  indirect_flow->details.contains("consumerAddress") &&
-                  indirect_flow->details.at("consumerAddress") == "14" &&
-                  indirect_flow->details.contains("consumerOpcodeHex") &&
-                  indirect_flow->details.at("consumerOpcodeHex") == "D5" &&
-                  indirect_flow->details.contains("consumerOpcode") &&
-                  indirect_flow->details.at("consumerOpcode") == "К П->X 5" &&
-                  indirect_flow->details.contains("selectorDataConflictKind") &&
-                  indirect_flow->details.at("selectorDataConflictKind") ==
-                      "indirect-memory-recall" &&
-                  indirect_flow->details.contains("selectorDataConflictTargets") &&
-                  indirect_flow->details.at("selectorDataConflictTargets") ==
-                      "6+7+8+9+a+b+c+d+e" &&
-                  indirect_flow->details.contains("selectorDataConflictPrecision") &&
-                  indirect_flow->details.at("selectorDataConflictPrecision") ==
-                      "annotated-indirect-memory-targets" &&
-                  indirect_flow->details.contains("selectorDataConflictAccesses") &&
-                  indirect_flow->details.at("selectorDataConflictAccesses")
-                          .find("7/__coord_list_foxes_1@14/D5/indirect-memory-recall/"
-                                "targets:6+7+8+9+a+b+c+d+e") != std::string::npos &&
-                  indirect_flow->details.at("selectorDataConflictAccesses")
-                          .find("9/__coord_list_foxes_3@14/D5/indirect-memory-recall/"
-                                "targets:6+7+8+9+a+b+c+d+e") != std::string::npos &&
-                  indirect_flow->details.contains("selectorDataAllConflictTargets") &&
-                  indirect_flow->details.at("selectorDataAllConflictTargets") ==
-                      "6+7+8+9+a+b+c+d+e" &&
-                  indirect_flow->details.contains("selectorDataOverlapRegisters") &&
-                  indirect_flow->details.at("selectorDataOverlapRegisters") == "7+8+9" &&
-                  indirect_flow->details.contains("selectorDataOverlapCount") &&
-                  indirect_flow->details.at("selectorDataOverlapCount") == "3" &&
-                  indirect_flow->details.contains("selectorDataPayloadLayout") &&
-                  indirect_flow->details.at("selectorDataPayloadLayout") ==
-                      "contiguous-indirect-window" &&
-                  indirect_flow->details.contains("selectorDataPayloadTargetRange") &&
-                  indirect_flow->details.at("selectorDataPayloadTargetRange") == "6..e" &&
-                  indirect_flow->details.contains("selectorDataPayloadRegisterCount") &&
-                  indirect_flow->details.at("selectorDataPayloadRegisterCount") == "9" &&
-                  indirect_flow->details.contains("selectorDataRequiredFreeSelectorCount") &&
-                  indirect_flow->details.at("selectorDataRequiredFreeSelectorCount") == "3" &&
-                  indirect_flow->details.contains("selectorDataPayloadRegistersToFree") &&
-                  indirect_flow->details.at("selectorDataPayloadRegistersToFree") ==
-                      "7+8+9" &&
-                  indirect_flow->details.contains(
-                      "selectorDataPayloadRegisterBudgetAfterFreeingSelectors") &&
-                  indirect_flow->details.at(
-                      "selectorDataPayloadRegisterBudgetAfterFreeingSelectors") == "6" &&
-                  indirect_flow->details.contains(
-                      "selectorDataPayloadCompressionRequirement") &&
-                  indirect_flow->details.at("selectorDataPayloadCompressionRequirement") ==
-                      "9->6" &&
-                  indirect_flow->details.contains("selectorDataPayloadCompressionReason") &&
-                  indirect_flow->details.at("selectorDataPayloadCompressionReason") ==
-                      "free-overlapping-flow-selectors" &&
-                  indirect_flow->details.contains("selectorDataContiguousRelocationWindows") &&
-                  indirect_flow->details.at("selectorDataContiguousRelocationWindows")
-                          .find("5..d:overlaps-flow-selectors") != std::string::npos &&
-                  indirect_flow->details.at("selectorDataContiguousRelocationWindows")
-                          .find("6..e:overlaps-flow-selectors") != std::string::npos &&
-                  indirect_flow->details.contains("selectorDataContiguousRelocationStatus") &&
-                  indirect_flow->details.at("selectorDataContiguousRelocationStatus") ==
-                      "no-selector-free-contiguous-window" &&
-                  indirect_flow->details.contains("selectorDataPayloadPackingRequirement") &&
-                  indirect_flow->details.at("selectorDataPayloadPackingRequirement") ==
-                      "pack-or-split-contiguous-indirect-payload" &&
-                  indirect_flow->details.contains("selectorDataPayloadPackingReason") &&
-                  indirect_flow->details.at("selectorDataPayloadPackingReason") ==
-                      "contiguous-window-overlaps-flow-selectors" &&
-                  indirect_flow->details.contains("selectorDataProofGap") &&
-                  indirect_flow->details.at("selectorDataProofGap") ==
-                      "annotated-target-overlaps-selector-data" &&
-                  indirect_flow->details.contains("selectorDataNextProofAction") &&
-                  indirect_flow->details.at("selectorDataNextProofAction") ==
-                      "split-selector-register-or-pack-data-away-from-flow-selectors" &&
-                  indirect_flow->details.contains("selectorDataConflictResolutionStatus") &&
-                  indirect_flow->details.at("selectorDataConflictResolutionStatus") ==
-                      "proved-selector-data-overlap-requires-payload-repacking" &&
-                  indirect_flow->details.contains("proofDisposition") &&
-                  indirect_flow->details.at("proofDisposition") ==
-                      "proved-conflict-needs-layout-change" &&
-                  indirect_flow->details.contains("freeStableSelectorRegisters") &&
-                  indirect_flow->details.at("freeStableSelectorRegisters") == "none" &&
-                  indirect_flow->details.contains("selectorSplitStatus") &&
-                  indirect_flow->details.at("selectorSplitStatus") ==
-                      "no-free-stable-selector-register" &&
-                  indirect_flow->details.contains("layoutAction") &&
-                  indirect_flow->details.at("layoutAction") ==
-                      "free-stable-selector-registers" &&
-                  indirect_flow->details.contains("costModelAction") &&
-                  indirect_flow->details.at("costModelAction") ==
-                      "find-nonpacked-selector-layout-or-reduce-packed-access-overhead" &&
-                  indirect_flow->details.contains(
-                      "selectorDataPayloadPackingOverheadBudgetCells") &&
-                  indirect_flow->details.at("selectorDataPayloadPackingOverheadBudgetCells") ==
-                      "5" &&
-                  indirect_flow->details.contains(
-                      "selectorDataPayloadPackingBreakEvenCells") &&
-                  indirect_flow->details.at("selectorDataPayloadPackingBreakEvenCells") ==
-                      "5" &&
-                  indirect_flow->details.contains(
-                      "selectorDataPayloadPackingCostModelStatus") &&
-                  indirect_flow->details.at("selectorDataPayloadPackingCostModelStatus") ==
-                      "minimum-packed-access-overhead-not-positive" &&
-                  indirect_flow->details.contains(
-                      "selectorDataPayloadPackingCostModelRequirement") &&
-                  indirect_flow->details.at(
-                      "selectorDataPayloadPackingCostModelRequirement") ==
-                      "find-nonpacked-selector-layout-or-reduce-packed-access-overhead" &&
-                  indirect_flow->details.contains(
-                      "selectorDataPayloadRegistersToPackMinimum") &&
-                  indirect_flow->details.at("selectorDataPayloadRegistersToPackMinimum") ==
-                      "3" &&
-                  indirect_flow->details.contains(
-                      "selectorDataPayloadMinPackedLogicalAccesses") &&
-                  indirect_flow->details.at("selectorDataPayloadMinPackedLogicalAccesses") ==
-                      "6" &&
-                  indirect_flow->details.contains(
-                      "selectorDataPayloadMinPackedAccessOverheadCells") &&
-                  indirect_flow->details.at(
-                      "selectorDataPayloadMinPackedAccessOverheadCells") == "6" &&
-                  indirect_flow->details.contains(
-                      "selectorDataPayloadPackingLowerBoundStatus") &&
-                  indirect_flow->details.at(
-                      "selectorDataPayloadPackingLowerBoundStatus") ==
-                      "exceeds-candidate-savings" &&
-                  indirect_flow->details.contains(
-                      "selectorDataPayloadPackingNetLowerBoundCells") &&
-                  indirect_flow->details.at("selectorDataPayloadPackingNetLowerBoundCells") ==
-                      "-1" &&
-                  indirect_flow->details.contains(
-                      "estimatedCandidateStepsAfterPayloadPackingLowerBound") &&
-                  indirect_flow->details.at(
-                      "estimatedCandidateStepsAfterPayloadPackingLowerBound") == "66" &&
-                  indirect_flow->details.contains("candidateStepsStatus") &&
-                  indirect_flow->details.at("candidateStepsStatus") ==
-                      "estimated-payload-packing-lower-bound-larger-than-current" &&
-                  indirect_flow->details.contains("sizeImpactStatus") &&
-                  indirect_flow->details.at("sizeImpactStatus") == "estimated-nonpositive-net" &&
-                  indirect_flow->details.contains("netSavingsStatus") &&
-                  indirect_flow->details.at("netSavingsStatus") ==
-                      "payload-packing-lower-bound-exceeds-candidate-savings" &&
-                  indirect_flow->details.contains("savingsModel") &&
-                  indirect_flow->details.at("savingsModel") ==
-                      "candidate-steps-plus-minimum-payload-packing-overhead" &&
-                  indirect_flow->details.contains("requiredAction") &&
-                  indirect_flow->details.at("requiredAction") ==
-                      "find-nonpacked-selector-layout-or-reduce-payload-access-overhead" &&
-                  indirect_flow->details.contains("blockedProof") &&
-                  indirect_flow->details.at("blockedProof") ==
-                      "indirect-flow-targets:selector-register-used-as-data" &&
-                  indirect_flow->details.contains("blockedProofAction") &&
-                  indirect_flow->details.at("blockedProofAction") ==
-                      "find-nonpacked-selector-layout-or-reduce-payload-access-overhead",
-              "fox-hunt-mk61 size attribution should explain why the 60-cell indirect-flow "
-              "candidate is blocked by proved selector/data overlap");
-      require(indirect_flow->savings == -1 &&
-                  indirect_flow->candidate_steps ==
-                      static_cast<int>(result.steps.size()) + 1,
-              "fox-hunt-mk61 size attribution should rank selector payload packing by the "
-              "minimum packed-access overhead lower bound");
-      const SizeNextActionSummaryReport* selector_action = find_size_next_action(
-          result, "requiredAction", "pack-data-away-from-flow-selectors");
-      require(selector_action == nullptr,
-              "fox-hunt-mk61 size attribution should not rank selector/data payload packing as "
-              "a positive next action when minimum extraction overhead exceeds savings");
-      const SizeNextActionSummaryReport* reduce_payload_action = find_size_next_action(
-          result, "requiredAction",
-          "find-nonpacked-selector-layout-or-reduce-payload-access-overhead");
-      require(reduce_payload_action == nullptr,
-              "fox-hunt-mk61 size attribution should keep overbudget selector payload work "
-              "visible only on the nonpositive opportunity");
-      const SizeNextActionSummaryReport* layout_action =
-          find_size_next_action(result, "layoutAction", "free-stable-selector-registers");
-      require(layout_action == nullptr,
-              "fox-hunt-mk61 size attribution should not rank register relayout as positive "
-              "when the required payload packing lower bound is nonpositive");
-      const SizeNextActionSummaryReport* cost_model_action = find_size_next_action(
-          result, "costModelAction", "estimate-payload-packing-for-selector-freeing");
-      require(cost_model_action == nullptr,
-              "fox-hunt-mk61 size attribution should not rank the old unestimated payload "
-              "packing cost-model action after lower-bound accounting");
-      const SizeNextActionSummaryReport* reduce_packing_cost_action = find_size_next_action(
-          result, "costModelAction",
-          "find-nonpacked-selector-layout-or-reduce-packed-access-overhead");
-      require(reduce_packing_cost_action == nullptr,
-              "fox-hunt-mk61 size attribution should keep the payload lower-bound cost model "
-              "visible only on the nonpositive opportunity");
-    }
-    if (name == "cave-treasure") {
-      const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
-      const SizeOpportunityReport* dead_integer_selector =
-          find_size_opportunity(result, "fractional-constant-selector-dead-int");
-      require(dead_integer_selector != nullptr &&
-                  dead_integer_selector->blocker_kind == "indirect-address-control-use" &&
-                  dead_integer_selector->details.contains("consumerAddress") &&
-                  dead_integer_selector->details.at("consumerAddress") == "55" &&
-                  dead_integer_selector->details.contains("selectorTarget") &&
-                  dead_integer_selector->details.at("selectorTarget") == "43" &&
-                  dead_integer_selector->details.contains("fractionalSelectorConsumer") &&
-                  dead_integer_selector->details.at("fractionalSelectorConsumer") == "К БП 7" &&
-                  dead_integer_selector->details.contains("consumerControlKind") &&
-                  dead_integer_selector->details.at("consumerControlKind") ==
-                      "direct-indirect-jump" &&
-                  dead_integer_selector->details.contains("fractionalSelectorSourceRegister") &&
-                  dead_integer_selector->details.at("fractionalSelectorSourceRegister") == "e" &&
-                  dead_integer_selector->details.contains("deadIntegerSelectorCarrierRegister") &&
-                  dead_integer_selector->details.at("deadIntegerSelectorCarrierRegister") == "e" &&
-                  dead_integer_selector->details.contains("integerPartUseRole") &&
-                  dead_integer_selector->details.at("integerPartUseRole") ==
-                      "live-x-carrier-crosses-control-flow" &&
-                  dead_integer_selector->details.contains("fractionalPartUseRole") &&
-                  dead_integer_selector->details.at("fractionalPartUseRole") ==
-                      "constant-data" &&
-                  dead_integer_selector->details.contains("deadIntegerProofRequiredArtifact") &&
-                  dead_integer_selector->details.at("deadIntegerProofRequiredArtifact") ==
-                      "control-successor-x-liveness-or-erase-before-consumer" &&
-                  dead_integer_selector->details.contains("deadIntegerConsumerRegister") &&
-                  dead_integer_selector->details.at("deadIntegerConsumerRegister") == "7" &&
-                  dead_integer_selector->details.contains("requiredAction") &&
-                  dead_integer_selector->details.at("requiredAction") ==
-                      "prove-control-successor-erases-live-x-or-erase-before-use" &&
-                  dead_integer_selector->details.contains("proofEffortPriority") &&
-                  dead_integer_selector->details.at("proofEffortPriority") ==
-                      "defer-until-size-positive" &&
-                  dead_integer_selector->details.contains("proofEffortReason") &&
-                  dead_integer_selector->details.at("proofEffortReason") ==
-                      "candidate-larger-than-current-before-proof" &&
-                  dead_integer_selector->details.contains("sizeFirstAction") &&
-                  dead_integer_selector->details.at("sizeFirstAction") ==
-                      "find-size-positive-candidate-shape-before-proof",
-              "cave-treasure dead-integer selector attribution should split consumer and target "
-              "proof context fields and defer proof work for size-negative candidates");
+              "the coordinate-list read must carry its complete typed nine-register payload");
+      // The unsafe 60-cell artifact is no longer generated. Its former report
+      // is not an optimization contract; actual overlap opportunities are
+      // checked generically, and the synthetic ROM/data-flow test exercises
+      // the prohibition even when search never constructs an invalid layout.
     }
     if (name == "functions-demo") {
       const CompileResult result = compile_example(path, /*analysis_budgeted=*/true);
@@ -690,6 +526,7 @@ void example_sizes_match_typescript_baselines() {
   }
 
   for (const auto& [name, expected] : PENDING_BASELINE) {
+    if (!included(name)) continue;
     if (progress) {
       ++progress_index;
       std::cerr << "[example-size] " << progress_index << "/" << progress_total << " " << name

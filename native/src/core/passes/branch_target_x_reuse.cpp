@@ -127,12 +127,12 @@ std::optional<std::string> branch_preserved_register(const std::optional<std::st
     return std::nullopt;
   if (branch.kind == IrKind::Loop && loop_counter_register(branch.counter) == *held)
     return std::nullopt;
-  if (branch.kind == IrKind::IndirectCondJump && branch.register_name == *held &&
-      !mkpro::core::is_stable_indirect_selector(branch.register_name)) {
+  // No +/-1 is not a whole-word preservation proof: even a stable
+  // conditional selector can turn 4.375 into 4 on its taken edge.
+  if (branch.kind == IrKind::IndirectCondJump && branch.register_name == *held) {
     return std::nullopt;
   }
-  if (branch.kind == IrKind::IndirectCondJump && branch.register_name == target_register &&
-      !mkpro::core::is_stable_indirect_selector(branch.register_name)) {
+  if (branch.kind == IrKind::IndirectCondJump && branch.register_name == target_register) {
     return std::nullopt;
   }
   return held;
@@ -202,13 +202,15 @@ struct BranchTargetRecall {
   int index = 0;
   std::optional<RegisterValueSet> x2_register_state;
   std::optional<X2ValueDataflowState> value_state;
+  std::optional<std::string> held_register;
 };
 
 std::optional<BranchTargetRecall> branch_target_recall_after_transparent_prefix(
     const std::vector<IrOp>& ops, int target_index, const std::map<int, int>& references,
     std::optional<RegisterValueSet> x2_register_state,
     std::optional<X2ValueDataflowState> target_value_state,
-    const DirectReturnAnalysisContext& direct_return_context) {
+    const DirectReturnAnalysisContext& direct_return_context,
+    std::optional<std::string> held_register) {
   std::optional<X2ValueDataflowState> value_state = std::move(target_value_state);
   std::optional<RegisterValueSet> register_state = std::move(x2_register_state);
   X2TransferStateOptions transfer_options;
@@ -224,10 +226,17 @@ std::optional<BranchTargetRecall> branch_target_recall_after_transparent_prefix(
     if (removable_recall_value_register(op).has_value())
       return BranchTargetRecall{.index = index,
                                 .x2_register_state = register_state,
-                                .value_state = value_state};
+                                .value_state = value_state,
+                                .held_register = held_register};
     if (!is_transparent_branch_target_prefix_op(ops, op, direct_return_context))
       return std::nullopt;
 
+    // The short syntactic alias must not bypass the value proof after a
+    // helper or selector write. Exact stores can re-establish the alias in
+    // value_state, which remains eligible as an independent proof below.
+    if (is_known_return_call_op(op) ||
+        (op.kind == IrKind::IndirectStore && held_register == op.register_name))
+      held_register.reset();
     const std::optional<std::string> stored_register = transparent_prefix_stored_register(op);
     if (stored_register.has_value()) {
       register_state =
@@ -300,7 +309,7 @@ PassResult branch_target_x_reuse(const std::vector<IrOp>& ops, const PassContext
           const std::optional<BranchTargetRecall> target_recall =
               branch_target_recall_after_transparent_prefix(
                   ops, *target_index, references, target_register_state, target_value_state,
-                  engine.direct_return_context());
+                  engine.direct_return_context(), held);
           if (!target_recall.has_value() ||
               engine.removed().contains(target_recall->index)) {
             continue;
@@ -316,7 +325,7 @@ PassResult branch_target_x_reuse(const std::vector<IrOp>& ops, const PassContext
             continue;
 
           const std::optional<std::string> preserved =
-              branch_preserved_register(held, op, *target_register);
+              branch_preserved_register(target_recall->held_register, op, *target_register);
 
           RecallRemovalPlanOverrides overrides;
           overrides.has_x2_register_state_override = true;

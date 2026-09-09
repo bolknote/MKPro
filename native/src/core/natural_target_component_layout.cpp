@@ -33,6 +33,7 @@ namespace mkpro::core {
 namespace {
 
 constexpr int kStopOpcode = 0x50;
+constexpr int kErrorStopOpcode = 0x29;
 constexpr int kJumpOpcode = 0x51;
 constexpr int kReturnOpcode = 0x52;
 constexpr int kCallOpcode = 0x53;
@@ -566,7 +567,7 @@ bool safe_cut_after(const std::vector<Cell>& cells, std::size_t cell_index) {
     return false;
   if (item.opcode == kReturnOpcode)
     return true;
-  if (item.opcode == kStopOpcode)
+  if (item.opcode == kStopOpcode || item.opcode == kErrorStopOpcode)
     return item.stop_disposition == StopDisposition::Terminal;
   return (item.opcode & 0xf0) == 0x80;
 }
@@ -593,12 +594,24 @@ bool splits_late_decimal_selector_pair(const std::vector<Cell>& cells,
   return false;
 }
 
-bool split_segment_with_bridge(
-    std::vector<Segment>& segments, std::size_t segment_index,
-    std::size_t prefix_cells, std::size_t command_origin,
-    std::size_t operand_origin, TransparentSplitBridge& bridge,
-    int selector_register = -1,
-    std::optional<Cell> donated_command = std::nullopt) {
+bool direct_store_closes_digit_entry(const MachineItem& predecessor,
+                                     const MachineItem& target_entry) {
+  // The common direct store consumes identical X and closes digit entry
+  // before any subsequent observer. The same fact permits both insertion
+  // and removal of a stack/X2-preserving flow boundary.
+  return predecessor.kind == MachineItemKind::Op && predecessor.opcode >= 0x00 &&
+      predecessor.opcode <= 0x09 && !predecessor.raw &&
+      !predecessor.manual_interaction.has_value() &&
+      target_entry.kind == MachineItemKind::Op && target_entry.opcode >= 0x40 &&
+      target_entry.opcode <= 0x4e && !target_entry.raw &&
+      !target_entry.manual_interaction.has_value() &&
+      opcode_by_code(target_entry.opcode).stack_effect == StackEffect::Preserves &&
+      opcode_by_code(target_entry.opcode).x2_effect == X2Effect::Preserves;
+}
+
+bool split_segment_boundary_is_safe(
+    const std::vector<Segment>& segments, std::size_t segment_index,
+    std::size_t prefix_cells, int selector_register = -1) {
   if (segment_index >= segments.size() || prefix_cells == 0U ||
       prefix_cells >= segments.at(segment_index).cells.size() ||
       segments.at(segment_index).cells.at(prefix_cells).value.item->kind ==
@@ -609,6 +622,33 @@ bool split_segment_with_bridge(
       selector_register > 14) {
     return false;
   }
+  const MachineItem& before =
+      segments.at(segment_index).cells.at(prefix_cells - 1U).value.item;
+  const MachineItem& after =
+      segments.at(segment_index).cells.at(prefix_cells).value.item;
+  // A jump preserves numeric X/X2 but closes the entry/inhibit state. That
+  // is not transparent inside a mantissa/exponent or after B-up. An adjacent
+  // decimal/sign/exponent restore also depends on the preceding command's
+  // entry state, not just on its nominal stack and X2 effects.
+  if ((before.kind == MachineItemKind::Op &&
+       ((is_number_entry_opcode(before.opcode) &&
+         !direct_store_closes_digit_entry(before, after)) ||
+        before.opcode == 0x0e)) ||
+      (after.opcode >= 0x0a && after.opcode <= 0x0c)) {
+    return false;
+  }
+  return true;
+}
+
+bool split_segment_with_bridge(
+    std::vector<Segment>& segments, std::size_t segment_index,
+    std::size_t prefix_cells, std::size_t command_origin,
+    std::size_t operand_origin, TransparentSplitBridge& bridge,
+    int selector_register = -1,
+    std::optional<Cell> donated_command = std::nullopt) {
+  if (!split_segment_boundary_is_safe(
+          segments, segment_index, prefix_cells, selector_register))
+    return false;
   const int bridge_opcode =
       selector_register >= 0 ? 0x80 + selector_register : kJumpOpcode;
   if (donated_command.has_value() &&
@@ -780,7 +820,12 @@ std::optional<std::size_t> main_origin(
   return result;
 }
 
+bool empty_return_may_be_observed(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow);
+
 bool apply_transparent_fallthrough_jump_fold(
+    const std::vector<MachineItem>& original_items,
     std::vector<Segment>& segments,
     const TransparentFallthroughJumpFold& requested,
     const std::vector<DirectReference>& references,
@@ -840,15 +885,10 @@ bool apply_transparent_fallthrough_jump_fold(
   const MachineItem& target_entry =
       segments.at(target->first).cells.at(static_cast<std::size_t>(target->second)).value.item;
   const bool target_store_closes_digit_entry =
-      predecessor.kind == MachineItemKind::Op && predecessor.opcode >= 0x00 &&
-      predecessor.opcode <= 0x09 && !predecessor.raw &&
-      !predecessor.manual_interaction.has_value() &&
-      target_entry.kind == MachineItemKind::Op && target_entry.opcode >= 0x40 &&
-      target_entry.opcode <= 0x4e && !target_entry.raw &&
-      !target_entry.manual_interaction.has_value() &&
-      opcode_by_code(target_entry.opcode).stack_effect == StackEffect::Preserves &&
-      opcode_by_code(target_entry.opcode).x2_effect == X2Effect::Preserves;
+      direct_store_closes_digit_entry(predecessor, target_entry);
   if (predecessor.kind != MachineItemKind::Op ||
+      predecessor.opcode == 0x0e ||
+      (target_entry.opcode >= 0x0a && target_entry.opcode <= 0x0c) ||
       (is_number_entry_opcode(predecessor.opcode) && !target_store_closes_digit_entry)) {
     return fail("jump-fold would remove an observable number-entry boundary");
   }
@@ -913,7 +953,8 @@ bool apply_transparent_fallthrough_jump_fold(
     }
   }
   if (control_flow.empty_return_target.has_value() &&
-      removed_identity(control_flow.empty_return_target->item_index)) {
+      removed_identity(control_flow.empty_return_target->item_index) &&
+      empty_return_may_be_observed(original_items, control_flow)) {
     return fail("jump-fold pair is the empty-return target");
   }
 
@@ -2133,7 +2174,8 @@ layout_order_with_optional_split(
     const std::vector<NaturalTargetPlacement>& bounded_placements = {},
     int maximum_bounded_target = std::numeric_limits<int>::max(),
     const std::vector<SplitBridgeDonor>& bridge_donors = {},
-    bool allow_transactional_trailing_split = false) {
+    bool allow_transactional_trailing_split = false,
+    bool allow_main_prefix_split = true) {
   std::optional<NaturalTargetLayoutVariant> best;
   auto consider = [&](std::vector<Segment> trial_segments,
                       NaturalTargetLayoutOrder trial_order,
@@ -2151,6 +2193,61 @@ layout_order_with_optional_split(
         .bridges = std::move(bridges),
         .layout_cost = cost,
     };
+  };
+
+  // A fixed helper may lie inside main's original fallthrough component.
+  // Keep its externally rooted prefix at 00 and move only a safe suffix.
+  // Charge the ordinary BP pair before composing the existing helper-split
+  // search, and disable this fallback recursively: at most one main split.
+  const auto finish_with_main_prefix = [&]() {
+    if (best.has_value() || !allow_main_prefix_split || maximum_padding < 2 ||
+        main_segment >= segments.size())
+      return best;
+    int first_base = std::numeric_limits<int>::max();
+    for (const NaturalTargetPlacement& placement : placements) {
+      if (placement.target_segment >= segments.size() ||
+          placement.target_offset < 0 ||
+          placement.natural_target < placement.target_offset)
+        return best;
+      if (placement.target_segment != main_segment)
+        first_base = std::min(first_base,
+                             placement.natural_target - placement.target_offset);
+    }
+    if (first_base < 3 ||
+        first_base >= segment_cells(segments.at(main_segment)))
+      return best;
+    const int prefix_cells = first_base - 2;
+    if (!split_segment_boundary_is_safe(
+            segments, main_segment, static_cast<std::size_t>(prefix_cells)))
+      return best;
+    std::vector<Segment> trial_segments = segments;
+    TransparentSplitBridge bridge;
+    if (!split_segment_with_bridge(
+            trial_segments, main_segment, static_cast<std::size_t>(prefix_cells),
+            bridge_command_origin, bridge_command_origin + 1U, bridge))
+      return best;
+    const std::size_t suffix_segment = trial_segments.size() - 1U;
+    const auto remap = [&](std::vector<NaturalTargetPlacement> values) {
+      for (NaturalTargetPlacement& placement : values) {
+        if (placement.target_segment == main_segment &&
+            placement.target_offset >= prefix_cells) {
+          placement.target_segment = suffix_segment;
+          placement.target_offset -= prefix_cells;
+        }
+      }
+      return values;
+    };
+    auto trial = layout_order_with_optional_split(
+        trial_segments, main_segment, remap(placements), maximum_states,
+        maximum_padding - 2, bridge_command_origin + 2U, maximum_layout_cells,
+        remap(bounded_placements), maximum_bounded_target, bridge_donors,
+        allow_transactional_trailing_split, false);
+    if (trial.has_value()) {
+      trial->bridges.insert(trial->bridges.begin(), bridge);
+      consider(std::move(trial->segments), std::move(trial->order),
+               std::move(trial->bridges));
+    }
+    return best;
   };
 
   auto try_direct_gap_splits =
@@ -2294,8 +2391,12 @@ layout_order_with_optional_split(
           std::sort(cut_candidates.begin(), cut_candidates.end());
           for (const auto& [slack, cut] : cut_candidates) {
             (void)slack;
-            if (cut <= 0 || cut >= length)
+            if (cut <= 0 || cut >= length ||
+                !split_segment_boundary_is_safe(
+                    base_segments, segment, static_cast<std::size_t>(cut)))
               continue;
+            // Reject the exact same inadmissible boundary before cloning all
+            // components. This preserves the complete candidate frontier.
             std::vector<Segment> trial_segments = base_segments;
             TransparentSplitBridge bridge;
             const std::size_t bridge_origin =
@@ -2364,8 +2465,9 @@ layout_order_with_optional_split(
     }
     const std::size_t prefix_cells =
         static_cast<std::size_t>(bridge_target.target_offset);
-    if (prefix_cells >=
-        segments.at(bridge_target.target_segment).cells.size()) {
+    if (!split_segment_boundary_is_safe(
+            segments, bridge_target.target_segment, prefix_cells,
+            bridge_target.selector_register)) {
       continue;
     }
     const std::size_t suffix_origin =
@@ -2474,6 +2576,10 @@ layout_order_with_optional_split(
       }
       const std::size_t prefix_cells =
           static_cast<std::size_t>(bridge_target.target_offset);
+      if (!split_segment_boundary_is_safe(
+              segments, bridge_target.target_segment, prefix_cells,
+              bridge_target.selector_register))
+        continue;
       std::vector<Segment> trial_segments = segments;
       TransparentSplitBridge bridge;
       const bool split = split_segment_with_bridge(
@@ -2515,11 +2621,11 @@ layout_order_with_optional_split(
   }
 
   if (!bounded_placements.empty())
-    return best;
+    return finish_with_main_prefix();
 
   if (maximum_padding < 2 || placements.size() < 2U ||
       main_segment >= segments.size()) {
-    return best;
+    return finish_with_main_prefix();
   }
 
   std::map<std::size_t, int> base_by_segment;
@@ -2527,13 +2633,13 @@ layout_order_with_optional_split(
     if (placement.target_segment >= segments.size() ||
         placement.target_segment == main_segment || placement.target_offset < 0 ||
         placement.natural_target < placement.target_offset) {
-      return best;
+      return finish_with_main_prefix();
     }
     const int base = placement.natural_target - placement.target_offset;
     const auto [found, inserted] =
         base_by_segment.emplace(placement.target_segment, base);
     if (!inserted && found->second != base)
-      return best;
+      return finish_with_main_prefix();
   }
 
   std::vector<std::pair<int, std::size_t>> fixed_segments;
@@ -2556,6 +2662,8 @@ layout_order_with_optional_split(
   }
 
   for (const auto& [segment, prefix_cells] : split_candidates) {
+    if (!split_segment_boundary_is_safe(segments, segment, prefix_cells))
+      continue;
     std::vector<Segment> trial_segments = segments;
     TransparentSplitBridge bridge;
     if (!split_segment_with_bridge(
@@ -2580,7 +2688,7 @@ layout_order_with_optional_split(
     if (trial_order.has_value())
       consider(std::move(trial_segments), *trial_order, {bridge});
   }
-  return best;
+  return finish_with_main_prefix();
 }
 
 std::vector<MachineItem> flatten_segments(
@@ -3333,9 +3441,12 @@ std::optional<TraceGraph> build_trace_graph(
       return next.has_value() ? origin_at_address(*next) : std::nullopt;
     };
 
-    if (item.opcode == kStopOpcode) {
-      // Every hardware resume is represented as a separately typed external
-      // entry, including manual multi-phase protocols.
+    if (item.opcode == kStopOpcode || item.opcode == kErrorStopOpcode) {
+      // The authoritative CFG owns both kinds of stop and their external
+      // resumes. In particular, an error resumes after one skipped cell,
+      // never by falling through into that cell or the next helper body.
+      if (item.stop_disposition == StopDisposition::Unknown)
+        return std::nullopt;
     } else if (item.opcode == kReturnOpcode) {
       if (state.returns.empty()) {
         if (!flow.empty_return_target.has_value())
@@ -4426,6 +4537,30 @@ bool unchanged_command_effects_preserved(
   return true;
 }
 
+// A configured empty-return policy is not an external root. Consult the
+// reachable, labelled execution contexts, including executable address words,
+// rather than reserving its physical address when every return has a caller.
+bool empty_return_may_be_observed(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow) {
+  if (!flow.proved || flow.execution_states.empty() ||
+      flow.execution_states.size() != flow.execution_successors.size() ||
+      flow.execution_states.size() != flow.execution_edges.size())
+    return true;
+  for (std::size_t index = 0; index < flow.execution_states.size(); ++index) {
+    const auto& state = flow.execution_states.at(index);
+    if (state.item_index >= items.size())
+      return true;
+    if (state.return_stack.empty() &&
+        std::any_of(flow.execution_edges.at(index).begin(),
+                    flow.execution_edges.at(index).end(), [](const auto& edge) {
+          return edge.kind == PostLayoutExecutionEdgeKind::Return;
+        }))
+      return true;
+  }
+  return false;
+}
+
 bool transparent_trampolines_proved(
     const std::vector<MachineItem>& items,
     const std::map<std::size_t, std::size_t>& new_item_by_origin,
@@ -4469,7 +4604,8 @@ bool transparent_trampolines_proved(
     }
   }
   return !flow.empty_return_target.has_value() ||
-         !trampoline_commands.contains(flow.empty_return_target->item_index);
+         !trampoline_commands.contains(flow.empty_return_target->item_index) ||
+         !empty_return_may_be_observed(items, flow);
 }
 
 bool transparent_split_bridges_proved(
@@ -4537,7 +4673,8 @@ bool transparent_split_bridges_proved(
     }
   }
   return !flow.empty_return_target.has_value() ||
-         !bridge_commands.contains(flow.empty_return_target->item_index);
+         !bridge_commands.contains(flow.empty_return_target->item_index) ||
+         !empty_return_may_be_observed(items, flow);
 }
 
 std::optional<CandidateArtifact> try_candidate(
@@ -4555,7 +4692,8 @@ std::optional<CandidateArtifact> try_candidate(
     const std::vector<ExternalIdentity>& original_external,
     bool attempt_jump_folds,
     std::optional<std::size_t> preserved_jump_command,
-    std::vector<std::string>* rejection_reasons) {
+    std::vector<std::string>* rejection_reasons,
+    bool prefer_existing_flexible_target = true) {
   const auto reject = [&](std::string reason) -> std::optional<CandidateArtifact> {
     if (rejection_reasons != nullptr &&
         rejection_reasons->size() < options.maximum_rejection_reasons) {
@@ -4726,7 +4864,7 @@ std::optional<CandidateArtifact> try_candidate(
     for (const TransparentFallthroughJumpFold& fold : fold_candidates) {
       std::string fold_failure;
       if (apply_transparent_fallthrough_jump_fold(
-              segments, fold, references, control_flow, *main,
+              items, segments, fold, references, control_flow, *main,
               &fold_failure)) {
         jump_folds.push_back(fold);
       } else {
@@ -4814,13 +4952,8 @@ std::optional<CandidateArtifact> try_candidate(
   // A configured hardware policy is not an execution edge. Only a reachable
   // empty-stack return pins its continuation; closed calls may otherwise move
   // the command that happened to occupy the unused policy address.
-  const bool observes_empty_return = std::any_of(
-      control_flow.execution_states.begin(), control_flow.execution_states.end(),
-      [&](const PostLayoutExecutionState& state) {
-        return state.return_stack.empty() && state.item_index < items.size() &&
-               items.at(state.item_index).kind == MachineItemKind::Op &&
-               items.at(state.item_index).opcode == kReturnOpcode;
-      });
+  const bool observes_empty_return =
+      empty_return_may_be_observed(items, control_flow);
   if (observes_empty_return && control_flow.empty_return_target.has_value()) {
     const auto& continuation = *control_flow.empty_return_target;
     const bool already_pinned = std::any_of(
@@ -4905,9 +5038,9 @@ std::optional<CandidateArtifact> try_candidate(
     // A retunable selector does not require relocation.  Keeping its already
     // proved target is both the safest semantic choice and a much smaller
     // search than rebuilding the complete component DP once for every address
-    // in the official window.  If that exact geometry is impossible, fall
-    // back to the bounded formulation below and let the preload proof accept
-    // a genuinely necessary relocation.
+    // in the official window. If it is impossible, use the bounded fallback.
+    // If it needs padding or a split bridge, compare a fully proved bounded
+    // alternative below rather than mistaking first-feasible for cheapest.
     NaturalTargetPlacement preferred_flexible = flexible_placements.front();
     const int official_last =
         std::min(99, official_program_last_address(options.address_space_model));
@@ -4916,7 +5049,7 @@ std::optional<CandidateArtifact> try_candidate(
       preferred_flexible.natural_target =
           segment_cells(segments.at(main_location->first));
     }
-    if (preferred_flexible.natural_target > 0 &&
+    if (prefer_existing_flexible_target && preferred_flexible.natural_target > 0 &&
         preferred_flexible.natural_target <= official_last) {
       std::vector<NaturalTargetPlacement> preferred = placements;
       preferred.push_back(preferred_flexible);
@@ -4964,6 +5097,32 @@ std::optional<CandidateArtifact> try_candidate(
         options.maximum_subset_states, maximum_padding, next_synthetic_origin,
         official_program_step_limit(options.address_space_model), bounded_placements,
         options.maximum_bounded_target_address, split_bridge_donors);
+  }
+  // A newly feasible preferred address is not necessarily cheapest: its
+  // split bridge or padding can cost more than rebinding the same selector.
+  // Run the bounded alternative through this entire proof transaction, once.
+  // A failed alternative leaves the preferred candidate untouched; geometry
+  // alone is never enough to displace it.
+  if (prefer_existing_flexible_target && flexible_placements.size() == 1U &&
+      selected_layout.has_value() && selected_layout->layout_cost > 0) {
+    auto alternative = try_candidate(
+        items, preloads, control_flow, options, references, flows, selectors,
+        anchors, bounded_target_origins, original_trace, flow_effect_proof_context,
+        original_external, attempt_jump_folds, preserved_jump_command,
+        rejection_reasons, false);
+    const int preferred_cells = selected_layout->order.padding_cells +
+        std::accumulate(selected_layout->segments.begin(),
+                        selected_layout->segments.end(), 0,
+                        [](int cells, const Segment& segment) {
+          return cells + segment_cells(segment);
+        });
+    if (alternative.has_value() &&
+        static_cast<int>(std::count_if(
+            alternative->items.begin(), alternative->items.end(),
+            [](const MachineItem& item) {
+              return item.kind != MachineItemKind::Label;
+            })) < preferred_cells)
+      return alternative;
   }
   if (!selected_layout.has_value()) {
     std::string geometry =

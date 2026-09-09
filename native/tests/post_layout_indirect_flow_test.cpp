@@ -140,7 +140,123 @@ std::vector<int> resolved_opcodes(const std::vector<MachineItem>& items) {
 
 } // namespace
 
+void resumable_overlay_return_contract() {
+  const auto observe = [](const std::vector<MachineItem>& items, bool resume) {
+    emulator::MK61 calc;
+    require(calc.load_program(resolved_opcodes(items)).diagnostics.empty(),
+            "resumable overlay fixture must load");
+    calc.set_register("5", "99").set_register("8", "99").set_register("x", "0")
+        .set_register("y", "13").set_register("z", "17").set_register("t", "19");
+    calc.press_sequence({"В/О", "С/П"});
+    require(calc.run_until_stable(600, 5).stopped, "overlay fixture must reach its first stop");
+    if (resume) {
+      calc.input_number("7", true).press("С/П");
+      require(calc.run_until_stable(600, 5).stopped, "called prompt must resume and return");
+    }
+    require(std::stod(calc.read_register("x")) == 99,
+            "caller continuation recall must remain executable after the callee returns");
+    std::vector<std::string> values;
+    for (const auto* name : {"x", "y", "z", "t", "x1"})
+      values.push_back(calc.read_register(name));
+    calc.press(".");
+    values.push_back(calc.display_text());
+    return values;
+  };
+
+  auto items = call("helper");
+  items.push_back(MachineItem::label("continuation"));
+  items.push_back(MachineItem::op(0x65, "recall 5"));
+  items.push_back(terminal_stop());
+  while (core::machine_cell_count(items) < 66)
+    items.push_back(MachineItem::op(0x54, "nop"));
+  items.push_back(MachineItem::label("helper"));
+  const auto prompt = items.size();
+  items.push_back(resumable_stop());
+  items.push_back(MachineItem::op(0x52, "return"));
+  const auto unchanged = core::optimize_post_layout_address_code_overlay(items);
+  require(unchanged.applied == 0 &&
+              observe(items, true) == observe(unchanged.items, true),
+          "a resumable callee must not make its caller continuation disposable");
+
+  auto terminal = items;
+  terminal.at(prompt) = terminal_stop();
+  require(core::optimize_post_layout_address_code_overlay(terminal).applied == 1,
+          "a genuinely terminal callee may still admit its proved address/code overlay");
+  auto unknown = items;
+  unknown.at(prompt).stop_disposition = StopDisposition::Unknown;
+  require(core::optimize_post_layout_address_code_overlay(unknown).applied == 0,
+          "an unknown stop must not acquire a no-return proof");
+
+  auto cycle = call("branch");
+  cycle.push_back(MachineItem::label("first_continuation"));
+  cycle.push_back(MachineItem::op(0x54, "nop"));
+  const auto second = call("back_edge");
+  cycle.insert(cycle.end(), second.begin(), second.end());
+  cycle.push_back(MachineItem::label("second_continuation"));
+  cycle.push_back(MachineItem::op(0x68, "recall 8"));
+  cycle.push_back(terminal_stop());
+  while (core::machine_cell_count(cycle) < 66)
+    cycle.push_back(MachineItem::op(0x54, "nop"));
+  cycle.push_back(MachineItem::label("branch"));
+  const auto branch = cjump("back_edge");
+  cycle.insert(cycle.end(), branch.begin(), branch.end());
+  cycle.push_back(MachineItem::op(0x52, "return"));
+  cycle.push_back(MachineItem::label("back_edge"));
+  const auto back = jump("branch");
+  cycle.insert(cycle.end(), back.begin(), back.end());
+  const auto cyclic = core::optimize_post_layout_address_code_overlay(cycle);
+  require(cyclic.applied == 0 && observe(cycle, false) == observe(cyclic.items, false),
+          "a visited back edge must not cache a false no-return result for a later caller");
+}
+
+void overlaid_selector_annotation_contract() {
+  auto consumer = MachineItem::op(0xa7, "indirect call");
+  consumer.indirect_flow_targets = std::vector<IrTarget>{std::string("helper")};
+  consumer.comment = "call; preloaded R7=40 indirect-target=40 shifted-forward indirect flow";
+  std::vector<MachineItem> items{consumer, terminal_stop()};
+  while (core::machine_cell_count(items) < 38)
+    items.push_back(MachineItem::op(0x54, "nop"));
+  const auto owner = jump("target");
+  items.insert(items.end(), owner.begin(), owner.end());
+  items.push_back(MachineItem::label("helper"));
+  items.push_back(MachineItem::op(0x54, "nop"));
+  items.push_back(MachineItem::op(0x52, "return"));
+  while (core::machine_cell_count(items) < 55)
+    items.push_back(MachineItem::op(0x54, "nop"));
+  items.push_back(MachineItem::label("target"));
+  items.push_back(terminal_stop());
+  const std::vector<PreloadReport> preloads{{.register_name = "7", .value = "40"}};
+  const auto result = core::optimize_post_layout_address_code_overlay(items, preloads);
+  require(result.applied == 1 && result.preloads.front().value == "39" &&
+              result.items.front().comment.has_value() &&
+              result.items.front().comment->find("preloaded R7=39 indirect-target=39") !=
+                  std::string::npos &&
+              core::build_post_layout_control_flow(result.items).proved,
+          "overlay retargeting must refresh delivered selectors and operand-entry annotations");
+  std::vector<std::vector<std::string>> observed;
+  for (const bool after : {false, true}) {
+    emulator::MK61 calc;
+    const auto& image = after ? result.items : items;
+    require(calc.load_program(resolved_opcodes(image)).diagnostics.empty(),
+            "selector overlay image must load");
+    calc.set_register("7", after ? "39" : "40").set_register("x", "11")
+        .set_register("y", "13").set_register("z", "17").set_register("t", "19");
+    calc.press_sequence({"В/О", "С/П"});
+    require(calc.run_until_stable(600, 5).stopped, "operand-entry call must return to its caller");
+    std::vector<std::string> values;
+    for (const auto* name : {"x", "y", "z", "t", "x1"})
+      values.push_back(calc.read_register(name));
+    calc.press(".");
+    values.push_back(calc.display_text());
+    observed.push_back(std::move(values));
+  }
+  require(observed.at(0) == observed.at(1),
+          "selector retargeting must preserve stack, X1, X2 and the helper return");
+}
+
 void post_layout_indirect_flow_matches_typescript_contract() {
+  resumable_overlay_return_contract();
+  overlaid_selector_annotation_contract();
 
   {
     const auto indirect = [](int opcode, const std::string& target) {

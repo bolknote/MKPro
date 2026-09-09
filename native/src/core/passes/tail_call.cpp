@@ -16,13 +16,7 @@ namespace {
 
 struct TailJumpTarget {
   IrTarget continuation;
-  int start = 0;
-  int end = 0;
-};
-
-struct Region {
-  int start = 0;
-  int end = 0;
+  std::set<int> returns;
 };
 
 std::optional<std::string> string_target(const IrTarget& target) {
@@ -95,117 +89,179 @@ std::optional<IrTarget> call_continuation(const std::vector<IrOp>& ops, int inde
   return std::nullopt;
 }
 
-std::map<std::string, Region> collect_callable_regions(const std::vector<IrOp>& ops,
-                                                       const std::set<std::string>& call_targets) {
-  std::map<std::string, Region> result;
-  std::optional<std::string> current_name;
-  int current_start = 0;
-
-  for (int index = 0; index < static_cast<int>(ops.size()); ++index) {
+// A return belongs to the current frame, not to the nearest preceding
+// procedure label. Follow jumps into shared tails, but skip nested callees:
+// their returns consume a different frame. Assuming a nested call can return
+// is conservative, including for recursion and non-returning calls.
+std::optional<std::set<int>> frame_returns(
+    const std::vector<IrOp>& ops, int entry, const std::map<std::string, int>& labels) {
+  std::set<int> visited;
+  std::set<int> returns;
+  std::vector<int> pending{entry};
+  const auto target_index = [&](const IrTarget& target) -> std::optional<int> {
+    const auto* name = std::get_if<std::string>(&target);
+    if (name == nullptr)
+      return std::nullopt;
+    const auto found = labels.find(*name);
+    return found == labels.end() ? std::nullopt : std::optional(found->second);
+  };
+  while (!pending.empty()) {
+    const int index = pending.back();
+    pending.pop_back();
+    if (index < 0 || index >= static_cast<int>(ops.size()))
+      return std::nullopt;
+    if (!visited.insert(index).second)
+      continue;
     const IrOp& op = ops.at(static_cast<std::size_t>(index));
-    if (op.kind != IrKind::Label)
+    if (has_rewrite_barrier(op))
+      return std::nullopt;
+    if (op.kind == IrKind::Return) {
+      returns.insert(index);
       continue;
-    if (!call_targets.contains(op.name))
+    }
+    if (op.meta.stop_disposition == StopDisposition::Terminal)
       continue;
-    if (current_name.has_value())
-      result[*current_name] = Region{.start = current_start, .end = index};
-    current_name = op.name;
-    current_start = index + 1;
+    if (op.kind == IrKind::Stop &&
+        op.meta.stop_disposition != StopDisposition::Resumable)
+      return std::nullopt;
+    if (op.kind == IrKind::Plain && op.opcode == 0x29)
+      return std::nullopt; // resumable errors need a separate padding/PC proof
+    if (op.kind == IrKind::Jump || op.kind == IrKind::CondJump ||
+        op.kind == IrKind::Loop) {
+      const auto target = target_index(op.target);
+      if (!target.has_value())
+        return std::nullopt;
+      pending.push_back(*target);
+      if (op.kind == IrKind::Jump)
+        continue;
+    }
+    pending.push_back(index + 1);
   }
-  if (current_name.has_value())
-    result[*current_name] = Region{.start = current_start, .end = static_cast<int>(ops.size())};
-  return result;
+  return returns;
 }
-
-bool block_has_return(const std::vector<IrOp>& ops, int start, int end) {
-  for (int index = start; index < end; ++index) {
-    if (ops.at(static_cast<std::size_t>(index)).kind == IrKind::Return)
-      return true;
-  }
-  return false;
-}
-
-
 
 std::map<std::string, TailJumpTarget> find_tail_jump_targets(const std::vector<IrOp>& ops) {
-  const std::map<std::string, int> label_indexes = build_label_indexes(ops);
+  if (ops.empty())
+    return {};
+  const std::map<std::string, int> labels = build_label_indexes(ops);
+  std::set<std::string> unique_labels;
   std::map<std::string, std::vector<std::optional<IrTarget>>> calls;
-  std::set<std::string> non_call_flow_targets;
-
   for (int index = 0; index < static_cast<int>(ops.size()); ++index) {
     const IrOp& op = ops.at(static_cast<std::size_t>(index));
-    const std::optional<std::string> target = string_target(op.target);
-    if (op.kind == IrKind::Call && target.has_value()) {
-      const std::optional<IrTarget> continuation = call_continuation(ops, index);
-      if (continuation.has_value()) {
-        calls[*target].push_back(normalize_continuation(ops, label_indexes, *continuation));
-      } else {
-        calls[*target].push_back(std::nullopt);
+    // Materialized addresses and unknown entries need final-layout transport,
+    // not a symbolic interprocedural rewrite.
+    if (has_rewrite_barrier(op) || op.target_meta.formal_opcode.has_value() ||
+        op.kind == IrKind::OrphanAddress || op.kind == IrKind::IndirectCall ||
+        op.kind == IrKind::IndirectJump || op.kind == IrKind::IndirectCondJump)
+      return {};
+    if (op.kind == IrKind::Label && !unique_labels.insert(op.name).second)
+      return {};
+    if (op.kind == IrKind::Jump || op.kind == IrKind::CondJump ||
+        op.kind == IrKind::Loop || op.kind == IrKind::Call) {
+      const auto target = string_target(op.target);
+      if (!target.has_value() || !labels.contains(*target))
+        return {};
+      if (op.kind == IrKind::Call) {
+        const auto continuation = call_continuation(ops, index);
+        calls[*target].push_back(continuation.has_value()
+            ? std::optional(normalize_continuation(ops, labels, *continuation))
+            : std::nullopt);
       }
-      continue;
-    }
-    if ((op.kind == IrKind::Jump || op.kind == IrKind::CondJump || op.kind == IrKind::Loop) &&
-        target.has_value()) {
-      non_call_flow_targets.insert(*target);
     }
   }
 
-  std::set<std::string> call_targets;
-  for (const auto& [target, unused] : calls) {
-    (void)unused;
-    call_targets.insert(target);
-  }
-
-  const std::map<std::string, Region> regions = collect_callable_regions(ops, call_targets);
-  std::map<std::string, TailJumpTarget> result;
+  const auto main_returns = frame_returns(ops, 0, labels);
+  if (!main_returns.has_value())
+    return {};
+  std::map<int, std::set<std::string>> owners;
+  std::map<std::string, TailJumpTarget> candidates;
   for (const auto& [target, continuations] : calls) {
-    if (non_call_flow_targets.contains(target))
-      continue;
-    const auto region = regions.find(target);
-    if (region == regions.end() || !block_has_return(ops, region->second.start, region->second.end))
-      continue;
-    if (continuations.empty() || !continuations.front().has_value())
+    const auto returns = frame_returns(ops, labels.at(target), labels);
+    if (!returns.has_value())
+      return {};
+    for (const int returned : *returns)
+      owners[returned].insert(target);
+    if (returns->empty() || continuations.empty() || !continuations.front().has_value())
       continue;
     const IrTarget first = *continuations.front();
-    bool all_same = true;
-    for (const std::optional<IrTarget>& continuation : continuations) {
-      if (!continuation.has_value() || !same_target(*continuation, first)) {
-        all_same = false;
-        break;
+    bool same = true;
+    for (const auto& continuation : continuations)
+      if (!continuation.has_value() || *continuation != first)
+        same = false;
+    if (same) {
+      // An immediate return is already handled by ordinary tail-call lowering.
+      // Specializing the callee to jump to that return would add a cell and
+      // compose two alternative rewrites of the same caller frame.
+      const auto continuation_label = string_target(first);
+      if (continuation_label.has_value()) {
+        const auto continuation_entry =
+            next_executable_index(ops, labels.at(*continuation_label) + 1);
+        if (continuation_entry.has_value() &&
+            ops.at(static_cast<std::size_t>(*continuation_entry)).kind == IrKind::Return)
+          continue;
       }
-    }
-    if (all_same) {
-      result[target] = TailJumpTarget{
-          .continuation = first,
-          .start = region->second.start,
-          .end = region->second.end,
-      };
+      candidates.emplace(target, TailJumpTarget{.continuation = first, .returns = *returns});
     }
   }
-  return result;
+
+  // A shared return may be rewritten only as one transaction over every
+  // owning callee. Prune to a fixed point: removing one owner can invalidate
+  // another. An empty-stack/main entry never acquires a fabricated caller.
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (auto candidate = candidates.begin(); candidate != candidates.end();) {
+      bool safe = true;
+      for (const int returned : candidate->second.returns) {
+        if (main_returns->contains(returned)) {
+          safe = false;
+          break;
+        }
+        for (const auto& owner : owners.at(returned)) {
+          const auto other = candidates.find(owner);
+          if (other == candidates.end() ||
+              other->second.continuation != candidate->second.continuation) {
+            safe = false;
+            break;
+          }
+        }
+        if (!safe)
+          break;
+      }
+      if (!safe) {
+        candidate = candidates.erase(candidate);
+        changed = true;
+      } else {
+        ++candidate;
+      }
+    }
+  }
+  return candidates;
 }
 
 std::map<int, IrTarget> collect_return_continuations(
     const std::vector<IrOp>& ops, const std::map<std::string, TailJumpTarget>& targets) {
+  (void)ops;
   std::map<int, IrTarget> result;
-  for (const auto& [unused_name, target] : targets) {
-    (void)unused_name;
-    for (int index = target.start; index < target.end; ++index) {
-      if (ops.at(static_cast<std::size_t>(index)).kind == IrKind::Return)
-        result[index] = target.continuation;
-    }
+  for (const auto& [name, target] : targets) {
+    (void)name;
+    for (const int returned : target.returns)
+      result.emplace(returned, target.continuation);
   }
   return result;
 }
 
-std::set<std::string> collect_return_labels(const std::vector<IrOp>& ops) {
+std::set<std::string> collect_return_labels(
+    const std::vector<IrOp>& ops, const std::map<int, IrTarget>& return_continuations) {
   std::set<std::string> result;
   for (int index = 0; index < static_cast<int>(ops.size()); ++index) {
     const IrOp& op = ops.at(static_cast<std::size_t>(index));
-    if (op.kind != IrKind::Label)
+    if (op.kind != IrKind::Label || has_rewrite_barrier(op))
       continue;
     const std::optional<int> next = next_executable_index(ops, index + 1);
-    if (next.has_value() && ops.at(static_cast<std::size_t>(*next)).kind == IrKind::Return)
+    if (next.has_value() && !return_continuations.contains(*next) &&
+        !has_rewrite_barrier(ops.at(static_cast<std::size_t>(*next))) &&
+        ops.at(static_cast<std::size_t>(*next)).kind == IrKind::Return)
       result.insert(op.name);
   }
   return result;
@@ -234,6 +290,7 @@ IrOp jump_from_return(const IrOp& op, IrTarget continuation) {
   out.kind = IrKind::Jump;
   out.target = std::move(continuation);
   out.opcode = 0x51;
+  out.meta = op.meta;
   out.meta.mnemonic = "БП";
   out.meta.comment =
       replace_comment_prefix(op.meta.comment, "implicit return from proc", "tail continuation",
@@ -279,7 +336,7 @@ PassResult tail_call_lowering(const std::vector<IrOp>& ops, const PassContext& c
   const std::map<std::string, TailJumpTarget> tail_jump_targets = find_tail_jump_targets(ops);
   const std::map<int, IrTarget> return_continuations =
       collect_return_continuations(ops, tail_jump_targets);
-  const std::set<std::string> return_labels = collect_return_labels(ops);
+  const std::set<std::string> return_labels = collect_return_labels(ops, return_continuations);
   const std::map<std::string, int> label_indexes = build_label_indexes(ops);
 
 
@@ -290,7 +347,7 @@ PassResult tail_call_lowering(const std::vector<IrOp>& ops, const PassContext& c
 
   for (int index = 0; index < static_cast<int>(ops.size()); ++index) {
     const IrOp& op = ops.at(static_cast<std::size_t>(index));
-    if (op.kind == IrKind::Label) {
+    if (op.kind == IrKind::Label || has_rewrite_barrier(op)) {
 
       result.push_back(op);
       continue;
@@ -317,7 +374,8 @@ PassResult tail_call_lowering(const std::vector<IrOp>& ops, const PassContext& c
       const bool continuation_is_immediate =
           continuation_index.has_value() && *continuation_index == index + 1;
 
-      if (continuation != nullptr && continuation->kind == IrKind::Jump &&
+      if (continuation != nullptr && !has_rewrite_barrier(*continuation) &&
+          continuation->kind == IrKind::Jump &&
           is_return_label(continuation->target, return_labels)) {
         result.push_back(jump_from_call(op, "tail call", "tail call"));
         if (continuation_is_immediate)
@@ -326,7 +384,12 @@ PassResult tail_call_lowering(const std::vector<IrOp>& ops, const PassContext& c
         continue;
       }
 
-      if (continuation != nullptr && continuation->kind == IrKind::Return) {
+      // A shared-continuation transaction has already claimed this return.
+      // Its caller still needs a frame: deleting call+return here would erase
+      // the planned continuation and turn the nested return into an empty one.
+      if (continuation != nullptr && !has_rewrite_barrier(*continuation) &&
+          continuation->kind == IrKind::Return &&
+          !return_continuations.contains(*continuation_index)) {
         result.push_back(jump_from_call(op, "tail call", "tail call"));
         if (continuation_is_immediate)
           ++index;

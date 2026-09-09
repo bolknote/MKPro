@@ -108,6 +108,19 @@ struct PostLayoutControlFlowOptions {
   std::vector<std::size_t> opcode_address_words;
 };
 
+// A private executable view of compiler-owned address/code overlays. Item
+// indices and labels stay unchanged; an executable operand is encoded from
+// its actual final target, never from its numeric target interpreted as code.
+struct PostLayoutByteImage {
+  std::vector<MachineItem> items;
+  PostLayoutControlFlowOptions options;
+};
+
+bool has_executable_address_words(const std::vector<MachineItem>& items);
+std::optional<PostLayoutByteImage> materialize_post_layout_byte_image(
+    const std::vector<MachineItem>& items,
+    const PostLayoutControlFlowOptions& options = {});
+
 // One authoritative, fail-closed fact set for post-layout consumers. Indirect
 // maps are total over their respective opcode families when `proved` is true.
 struct AuthoritativePostLayoutControlFlow {
@@ -174,8 +187,9 @@ struct PostLayoutBorrowedSelectorProof {
 };
 
 // Build exact indirect target and externally admitted entry facts solely from
-// opcodes plus compiler-owned MachineItem metadata. Comments, roles, semantic
-// source names, preloads, and optimizer switches are not consulted.
+// opcodes plus compiler-owned MachineItem metadata. The "exec" operand role
+// requests exact final-byte decoding, not permission to invent an instruction.
+// Comments, semantic names, preloads, and optimizer switches are not consulted.
 AuthoritativePostLayoutControlFlow
 build_post_layout_control_flow(const std::vector<MachineItem>& items,
                                const PostLayoutControlFlowOptions& options = {});

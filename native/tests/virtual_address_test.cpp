@@ -250,7 +250,11 @@ void deferred_fractional_selectors_bind_after_logical_layout() {
                 rewritten.plan.stack_and_x2_equivalent &&
                 rewritten.plan.call_return_equivalent &&
                 rewritten.plan.data_projection_equivalent,
-            "a projected constant must bind a logical tail without first fixing its address");
+            "a projected constant must bind a logical tail without first fixing its address: " +
+                std::to_string(target) + " removed=" +
+                std::to_string(rewritten.removed_cells));
+    require(rewritten.plan.transparent_split_bridges == 0,
+            "a proof-valid rebound target must beat a preferred target needing a paid bridge");
     require(rewritten.preloads.size() == 1U &&
                 rewritten.preloads[0].value != "10.375" &&
                 rewritten.preloads[0].value.ends_with(".375") &&

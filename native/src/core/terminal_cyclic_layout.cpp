@@ -2202,6 +2202,120 @@ std::optional<TailHelperFallthroughPlan> find_tail_helper_fallthrough_plan(
   return std::nullopt;
 }
 
+// Manual program start and an executed return do not establish the same
+// digit-entry/lift context. A leading digit may lift the old X only after the
+// inserted return. Follow this possible difference until the shared equality
+// domain proves that every stack component and X1/X2 agree again.
+bool startup_entry_context_converges(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& control,
+    const PostLayoutExternalEntryState& main,
+    std::size_t maximum_states) {
+  struct Pending {
+    std::size_t state = 0;
+    StackValueEqualityState equality{
+        .stack_equal = {true, true, true, true}, .x2_equal = true, .x1_equal = true};
+    bool number_entry_active = false;
+    bool entry_context_distinct = true;
+  };
+  std::deque<Pending> pending;
+  for (std::size_t index = 0; index < control.execution_states.size(); ++index) {
+    const auto& state = control.execution_states.at(index);
+    if (state.item_index == main.entry.item_index &&
+        state.formal_opcode == main.formal_opcode && state.return_stack.empty() &&
+        state.formal_return_stack.empty())
+      pending.push_back(Pending{.state = index});
+  }
+  if (pending.empty())
+    return false;
+  std::set<std::pair<std::size_t, int>> visited;
+  while (!pending.empty()) {
+    Pending current = pending.front();
+    pending.pop_front();
+    const int key = stack_value_equality_key(current.equality) +
+                    (current.number_entry_active ? 64 : 0) +
+                    (current.entry_context_distinct ? 128 : 0);
+    if (!visited.emplace(current.state, key).second)
+      continue;
+    if (visited.size() > maximum_states ||
+        current.state >= control.execution_states.size() ||
+        current.state >= control.execution_successors.size())
+      return false;
+    const std::size_t item_index = control.execution_states.at(current.state).item_index;
+    if (item_index >= items.size())
+      return false;
+    const MachineItem& item = items.at(item_index);
+    if (item.kind != MachineItemKind::Op || item.raw || item.manual_interaction.has_value())
+      return false;
+    const int opcode = item.opcode;
+    if (opcode == kStopOpcode)
+      return false; // An unequal continuation must not reach any exposed stop.
+
+    StackValueEqualityTransfer transfer = StackValueEqualityTransfer::Continue;
+    if (opcode >= 0 && opcode <= 9) {
+      if (current.entry_context_distinct) {
+        current.equality.stack_equal = {true, false, false, false};
+        current.equality.x2_equal = true;
+        current.entry_context_distinct = false;
+      } else {
+        transfer = transfer_decimal_digit_equality(
+            current.equality, current.number_entry_active);
+      }
+      current.number_entry_active = true;
+    } else if (current.entry_context_distinct && (opcode == 0x0a || opcode == 0x0c)) {
+      // Dot and exponent entry can change X itself before any ordinary opcode.
+      return false;
+    } else if (is_direct_flow_opcode(opcode) || is_indirect_flow_opcode(opcode) ||
+               opcode == kReturnOpcode) {
+      // The CFG already retains every call frame and labelled branch. Tests
+      // may inspect X; memory/selectors remain equal because unequal stores
+      // below are forbidden. Flow itself does not consume Y/Z/T.
+      // Do not invent a fresh mantissa/lift state across a call, return or
+      // branch interrupting an open literal. Such continuations need a
+      // separate entry-context proof, not just equal visible X.
+      if (!stack_values_fully_equal(current.equality) || current.number_entry_active)
+        return false;
+      current.number_entry_active = false;
+    } else {
+      StackValueEqualityStepKind kind = StackValueEqualityStepKind::Plain;
+      if ((opcode >= kDirectRecallFirst && opcode <= 0x6f) ||
+          (opcode & 0xf0) == 0xd0)
+        kind = StackValueEqualityStepKind::Recall;
+      else if ((opcode >= kDirectStoreFirst && opcode <= 0x4f) ||
+               is_indirect_store_opcode(opcode))
+        kind = StackValueEqualityStepKind::Store;
+      if (opcode == 0x0b && current.number_entry_active)
+        transfer = transfer_decimal_sign_equality(current.equality, true);
+      else {
+        const OpcodeInfo& info = opcode_by_code(opcode);
+        if (info.risk == OpcodeRisk::Dangerous || info.risk == OpcodeRisk::Undocumented ||
+            opcode == 0x3b)
+          return false;
+        transfer = transfer_stack_value_equality(current.equality, opcode, kind);
+      }
+      // Sign and Cx preserve the initial distinction; ordinary opcodes,
+      // including stores/recalls and NOP, establish a common entry boundary.
+      if (opcode != 0x0b && opcode != 0x0d)
+        current.entry_context_distinct = false;
+      if (opcode != 0x0b)
+        current.number_entry_active = false;
+    }
+    if (transfer == StackValueEqualityTransfer::Rejected)
+      return false;
+    if (!current.entry_context_distinct && stack_values_fully_equal(current.equality))
+      continue;
+    const auto& successors = control.execution_successors.at(current.state);
+    if (successors.empty())
+      return false;
+    for (const std::size_t successor : successors) {
+      Pending next = current;
+      next.state = successor;
+      pending.push_back(std::move(next));
+    }
+  }
+  return true;
+}
+
 std::vector<ReboundArtifact> build_empty_return_startup_layouts_attempt(
     const std::vector<MachineItem>& items,
     const std::vector<PreloadReport>& preloads,
@@ -2246,6 +2360,14 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts_attempt(
   if (input_main == control_flow.external_entries.end() ||
       input_main->entry.item_index != zero->second || !input_main->return_stack.empty()) {
     reject("main entry is not the physical-00 command with an empty return stack");
+    return candidates;
+  }
+
+  if (!reuse_existing_startup_return &&
+      !startup_entry_context_converges(
+          items, control_flow, *input_main,
+          static_cast<std::size_t>(options.maximum_execution_states))) {
+    reject("startup digit-entry/lift context does not converge before observation or use");
     return candidates;
   }
 

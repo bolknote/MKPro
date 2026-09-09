@@ -1,5 +1,7 @@
+#include "mkpro/compiler.hpp"
 #include "mkpro/core/passes/conditional_branch_trampoline.hpp"
 #include "mkpro/core/passes/call_continuation_composition.hpp"
+#include "mkpro/core/passes/dead_code_after_halt.hpp"
 #include "mkpro/core/passes/jump_thread.hpp"
 #include "mkpro/core/passes/jump_to_next.hpp"
 #include "mkpro/core/passes/redundant_prologue.hpp"
@@ -11,10 +13,12 @@
 
 #include "ir_pass_test_support.hpp"
 #include "mkpro/core/ir.hpp"
+#include "mkpro/core/post_layout_control_flow.hpp"
 #include "mkpro/core/emit/machine_emitter.hpp"
 #include "mkpro/emulator/mk61.hpp"
 #include "test_support.hpp"
 
+#include <algorithm>
 #include <string>
 #include <variant>
 #include <vector>
@@ -80,6 +84,167 @@ void flow_structure_passes_match_typescript_contract() {
   using namespace mkpro::tests::irbuild;
   const mkpro::CompileOptions noop = noop_options();
   const core::passes::PassContext ctx{.options = noop};
+
+
+  // --- exact terminal reachability ----------------------------------------
+  {
+    CompileOptions terminal_options = noop;
+    terminal_options.exact_terminal_dead_code_elimination = true;
+    const core::passes::PassContext terminal_context{.options = terminal_options};
+    const auto terminal = [](bool error) {
+      IrOp op = error ? plain(0x29, "K /") : halt();
+      op.meta.stop_disposition = StopDisposition::Terminal;
+      return op;
+    };
+    for (const bool error : {false, true}) {
+      const std::vector<IrOp> program{
+          call("worker"), recall("1"), terminal(error),
+          plain(7, "7"), store("2"),
+          label("worker"), recall("3"), plain(2, "2"),
+          plain(0x12, "*"), store("1"), ret()};
+      const auto ordinary = core::passes::dead_code_after_halt(program, ctx);
+      require(ordinary.applied == 0, "ordinary terminal geometry remains a competitor");
+      const auto optimized = core::passes::dead_code_after_halt(program, terminal_context);
+      require(optimized.applied == 2 &&
+                  machine_cell_count(optimized.ops) == machine_cell_count(program) - 2,
+              "terminal reachability removes dead instructions but retains the called helper");
+      const auto observe = [&](const std::vector<IrOp>& ops) {
+        const auto resolved = mkpro::resolve_machine_items(lower_ir_to_machine(ops));
+        require(resolved.diagnostics.empty(), "terminal reachability listing resolves");
+        std::vector<int> codes;
+        for (const auto& step : resolved.steps) codes.push_back(step.opcode);
+        emulator::MK61 calc;
+        require(calc.load_program(codes).diagnostics.empty(), "terminal reachability ROM load");
+        calc.set_register("1", "0").set_register("2", "17").set_register("3", "6")
+            .set_register("x", "23").set_register("y", "29")
+            .set_register("z", "31").set_register("t", "37").set_register("x1", "41");
+        calc.press_sequence({"В/О", "С/П"});
+        require(calc.run_until_stable(600, 5).stopped, "terminal reachability reaches its halt");
+        require(std::stoi(calc.read_register("1")) == 12 &&
+                    std::stoi(calc.read_register("2")) == 17,
+                "the live helper returns; the dead write is never executed");
+        std::vector<std::string> values{calc.display_text()};
+        for (const auto* reg : {"x", "y", "z", "t", "x1", "1", "2", "3"})
+          values.push_back(calc.read_register(reg));
+        calc.press(".");
+        values.push_back(calc.display_text());
+        return values;
+      };
+      require(observe(program) == observe(optimized.ops),
+              "terminal erasure preserves full stack, last-X, X2 and the helper return");
+    }
+
+    const auto unchanged = [&](const std::vector<IrOp>& program) {
+      const auto result = core::passes::dead_code_after_halt(program, terminal_context);
+      require(result.applied == 0, "unsafe terminal geometry is not erased");
+      require_ops_equal(result.ops, program, "unsafe terminal geometry stays byte-identical");
+    };
+    IrOp resumable_error = terminal(true);
+    resumable_error.meta.stop_disposition = StopDisposition::Resumable;
+    unchanged({resumable_error, plain(0x54, "K NOP"), recall("1"), halt()});
+    IrOp raw_error = terminal(true);
+    raw_error.meta.raw = true;
+    unchanged({raw_error, plain(7, "7"), halt()});
+    IrOp anchored_error = terminal(true);
+    anchored_error.meta.manual_interaction =
+        ManualInteractionAnchor{.protocol_id = 0, .phase = 0,
+                                .kind = ManualInteractionAnchorKind::PromptStop};
+    unchanged({anchored_error, plain(7, "7"), halt()});
+    unchanged({numeric_jump(4), halt(), plain(9, "9"), label("target"), recall("1"), halt()});
+    unchanged({indirect_jump("7"), halt(), plain(9, "9"), halt()});
+    IrOp unknown_stop = halt();
+    unknown_stop.meta.stop_disposition = StopDisposition::Unknown;
+    unchanged({unknown_stop, plain(7, "7"), halt()});
+
+    // Ordinary prompts retain both their continuation and its side effects.
+    IrOp prompt = halt();
+    prompt.semantic = "show";
+    prompt.meta.stop_disposition = StopDisposition::Resumable;
+    unchanged({recall("1"), prompt, plain(7, "7"), store("2"), halt()});
+
+    const std::string source =
+        "program TerminalError {\n  halt(\"ЕГГОГ\")\n  show(7)\n}\n";
+    const auto ordinary = compile_source(source, noop);
+    const auto compiled = compile_source(source, terminal_options);
+    const auto ordinary_again = compile_source(source, noop);
+    require(compiled.implemented && compiled.diagnostics.empty() &&
+                compiled.steps.size() == 1U && compiled.steps.front().opcode == 0x29,
+            "source terminal error erasure must not retain an unreachable show");
+    require(ordinary.implemented && ordinary.steps.size() > compiled.steps.size() &&
+                ordinary.hex == ordinary_again.hex,
+            "ordinary/erased lowering variants need distinct reproducible cache keys");
+  }
+
+  // Conservative erasure preserves local rewrite/input anchors without
+  // freezing all unrelated unreachable blocks in the compilation unit.
+  {
+    IrOp raw_nop = plain(0x54, "K NOP");
+    raw_nop.meta.raw = true;
+    IrOp prompt = halt();
+    prompt.meta.stop_disposition = StopDisposition::Resumable;
+    prompt.meta.manual_interaction = ManualInteractionAnchor{
+        .protocol_id = 4, .phase = -1, .kind = ManualInteractionAnchorKind::PromptStop};
+    IrOp input = store("7");
+    input.meta.manual_interaction = ManualInteractionAnchor{
+        .protocol_id = 4, .phase = 0, .kind = ManualInteractionAnchorKind::ContinuousResume};
+    for (bool manual : {false, true}) {
+      std::vector<IrOp> program{
+          jump("live"), plain(9, "9"), store("2"), label("live")};
+      if (manual) {
+        program.push_back(prompt);
+        program.push_back(input);
+      } else {
+        program.push_back(raw_nop);
+      }
+      program.push_back(recall("7"));
+      IrOp finish = halt();
+      finish.meta.stop_disposition = StopDisposition::Terminal;
+      program.push_back(finish);
+      const auto result = core::passes::dead_code_after_halt(program, ctx);
+      require(result.applied == 2 &&
+                  machine_cell_count(result.ops) == machine_cell_count(program) - 2,
+              "a local NOP or input anchor must not freeze unrelated dead blocks");
+      require(std::count_if(result.ops.begin(), result.ops.end(),
+                            [](const IrOp& op) {
+                              return op.meta.raw || op.meta.manual_interaction.has_value();
+                            }) == (manual ? 2 : 1),
+              "every protected instruction and manual phase remains intact");
+      const auto flow = core::build_post_layout_control_flow(lower_ir_to_machine(result.ops));
+      require(flow.proved, "erasure retains valid manual/ordinary control flow: " +
+                               (flow.reasons.empty() ? std::string{} : flow.reasons.front()));
+    }
+    const std::vector<IrOp> detached{
+        jump("live"), raw_nop, plain(7, "7"), label("live"), halt()};
+    const auto kept = core::passes::dead_code_after_halt(detached, ctx);
+    require_ops_equal(kept.ops, detached, "a detached protected NOP and its continuation survive");
+    IrOp raw_digit = plain(9, "9");
+    raw_digit.meta.raw = true;
+    const std::vector<IrOp> opaque{
+        jump("live"), plain(7, "7"), label("live"), raw_digit, halt()};
+    require_ops_equal(core::passes::dead_code_after_halt(opaque, ctx).ops, opaque,
+                      "arbitrary raw commands retain the conservative erasure barrier");
+    IrOp symbolic = indirect_jump("7");
+    symbolic.meta.indirect_flow_targets = std::vector<IrTarget>{std::string("live")};
+    const std::vector<IrOp> symbolic_program{
+        symbolic, plain(9, "9"), store("2"), label("live"), halt()};
+    const auto symbolic_result = core::passes::dead_code_after_halt(symbolic_program, ctx);
+    require(symbolic_result.applied == 2 &&
+                symbolic_result.ops.front().meta.indirect_flow_targets ==
+                    symbolic.meta.indirect_flow_targets,
+            "typed symbolic indirect destinations survive pre-layout dead-code erasure");
+    for (bool formal : {false, true}) {
+      auto encoded = symbolic_program;
+      if (formal)
+        encoded.front().meta.indirect_flow_formal_targets = std::vector<int>{0x03};
+      else
+        encoded.front().meta.indirect_flow_targets = std::vector<IrTarget>{3};
+      require_ops_equal(core::passes::dead_code_after_halt(encoded, ctx).ops, encoded,
+                        "encoded indirect geometry is not moved by symbolic IR erasure");
+    }
+    const std::vector<IrOp> empty_return{ret(), recall("7"), halt()};
+    require_ops_equal(core::passes::dead_code_after_halt(empty_return, ctx).ops, empty_return,
+                      "an empty return stack must retain physical-01 execution");
+  }
 
   // --- jump-thread --------------------------------------------------------
   {
@@ -213,10 +378,15 @@ void flow_structure_passes_match_typescript_contract() {
                       "call-continuation-composition preserves externally entered helper");
   }
   {
-    const std::vector<IrOp> program = {label("main"),    call("finish_turn"), jump("loop"),
-                                       label("loop"),     halt(),              label("finish_turn"),
-                                       cjump("done"),     halt(),              label("done"),
-                                       ret()};
+    std::vector<IrOp> program = {label("main"),    call("finish_turn"), jump("loop"),
+                                  label("loop"),     halt(),              label("finish_turn"),
+                                  cjump("done"),     halt(),              label("done"),
+                                  ret()};
+    require_applied(core::passes::tail_call_lowering_pass().run(program, ctx).applied, 0,
+                    "tail-call-lowering rejects stops with unknown continuation semantics");
+    for (IrOp& op : program)
+      if (op.kind == IrKind::Stop)
+        op.meta.stop_disposition = StopDisposition::Terminal;
     const auto result = core::passes::tail_call_lowering_pass().run(program, ctx);
     require_applied(result.applied, 2, "tail-call-lowering specializes single-continuation proc");
     require(result.ops.size() > 1 && result.ops.at(1).kind == IrKind::Jump &&
@@ -624,11 +794,22 @@ void flow_structure_passes_match_typescript_contract() {
   }
 
   // --- redundant-prologue-elimination -------------------------------------
+  const auto terminal_display_stop = [] {
+    IrOp op = halt();
+    op.meta.stop_disposition = StopDisposition::Terminal;
+    op.semantic = "halt";
+    return op;
+  };
+  const auto show_stop = [] {
+    IrOp op = halt();
+    op.meta.stop_disposition = StopDisposition::Resumable;
+    return op;
+  };
   {
     const std::vector<IrOp> program = {label("main"),    recall("1"),     recall("2"),
-                                       plain(0x10, "+"),  halt(),          recall("3"),
+                                       plain(0x10, "+"),  terminal_display_stop(),          recall("3"),
                                        store("3"),        recall("1"),     recall("2"),
-                                       plain(0x10, "+"),  halt(),          jump("main")};
+                                       plain(0x10, "+"),  terminal_display_stop(),          jump("main")};
     const auto result = core::passes::redundant_prologue_elimination_pass().run(program, ctx);
     require_applied(result.applied, 1, "redundant-prologue-elimination drops duplicated prologue");
     require(result.ops.size() == program.size() - 4,
@@ -637,27 +818,206 @@ void flow_structure_passes_match_typescript_contract() {
             "redundant-prologue-elimination: ends with jump");
   }
   {
-    const std::vector<IrOp> program = {label("main"),     recall("1"),       halt(),
+    const std::vector<IrOp> program = {label("main"),     recall("1"),       terminal_display_stop(),
                                        recall("3"),        store("3"),        recall("1"),
-                                       label("dispatch_end"), halt(),         jump("main")};
+                                       label("dispatch_end"), terminal_display_stop(),         jump("main")};
     const auto result = core::passes::redundant_prologue_elimination_pass().run(program, ctx);
     require_applied(result.applied, 1, "redundant-prologue-elimination preserves inner labels");
     require(contains_label(result.ops, "dispatch_end"),
             "redundant-prologue-elimination: dispatch_end preserved");
   }
   {
-    const std::vector<IrOp> program = {label("main"), plain(0x00, "0"), halt(), jump("main")};
+    const std::vector<IrOp> program = {label("main"), plain(0x00, "0"), terminal_display_stop(), jump("main")};
     const auto result = core::passes::redundant_prologue_elimination_pass().run(program, ctx);
     require_applied(result.applied, 0, "redundant-prologue-elimination refuses single-body loop");
     require(result.ops.size() == program.size(),
             "redundant-prologue-elimination: ops length unchanged");
   }
   {
-    const std::vector<IrOp> program = {label("main"), recall("1"), halt(),  recall("3"),
-                                       store("3"),    recall("2"), halt(),  jump("main")};
+    const std::vector<IrOp> program = {label("main"), recall("1"), terminal_display_stop(),  recall("3"),
+                                       store("3"),    recall("2"), terminal_display_stop(),  jump("main")};
     const auto result = core::passes::redundant_prologue_elimination_pass().run(program, ctx);
     require_applied(result.applied, 0, "redundant-prologue-elimination refuses differing prologues");
   }
+  {
+    const auto observe = [&](const std::vector<IrOp>& program) {
+      const auto resolved = resolve_machine_items(lower_ir_to_machine(program));
+      require(resolved.diagnostics.empty(), "display prologue fixture must resolve");
+      std::vector<int> codes;
+      for (const auto& step : resolved.steps)
+        codes.push_back(step.opcode);
+      emulator::MK61 calc;
+      require(calc.load_program(codes).diagnostics.empty(), "display prologue must load");
+      calc.set_register("1", "2").set_register("2", "3");
+      calc.input_number("7", true).press_sequence({"В/О", "С/П"});
+      require(calc.run_until_stable(400, 5).stopped, "display prologue must stop");
+      std::vector<std::string> result{calc.display_text()};
+      for (const char* name : {"x", "y", "z", "t", "x1"})
+        result.push_back(calc.read_register(name));
+      calc.press(".");
+      result.push_back(calc.display_text());
+      return result;
+    };
+    const std::vector<IrOp> middle_entry = {
+        jump("middle"), label("head"), recall("1"), recall("2"),
+        plain(0x12, "*"), terminal_display_stop(), store("3"), recall("1"),
+        label("middle"), recall("2"), plain(0x12, "*"), terminal_display_stop(), jump("head")};
+    const auto middle = core::passes::redundant_prologue_elimination(middle_entry, ctx);
+    require_applied(middle.applied, 0, "display suffix reached from outside must stay intact");
+    require(observe(middle_entry).front() == "21," &&
+                observe(middle_entry) == observe(middle.ops),
+            "an inner entry must multiply the incoming X, not reload the head's first operand");
+
+    const std::vector<IrOp> full_entry = {
+        jump("tail"), label("head"), recall("1"), recall("2"),
+        plain(0x12, "*"), terminal_display_stop(), store("3"), label("tail"), recall("1"),
+        label("unreferenced"), recall("2"), plain(0x12, "*"), terminal_display_stop(), jump("head")};
+    const auto full = core::passes::redundant_prologue_elimination(full_entry, ctx);
+    require_applied(full.applied, 1, "whole display entry and unreferenced labels remain foldable");
+    require(observe(full_entry) == observe(full.ops),
+            "complete display folding must preserve stack, X1 and decimal-entry observations");
+
+    const std::vector<IrOp> virtual_entry = {
+        jump("tail"), label("head"), recall("1"), recall("2"),
+        plain(0x10, "+"), terminal_display_stop(), label("tail"), store("1"),
+        recall("2"), plain(0x10, "+"), terminal_display_stop(), jump("head")};
+    const auto virtual_result =
+        core::passes::redundant_prologue_elimination(virtual_entry, ctx);
+    require_applied(virtual_result.applied, 0,
+                    "store-carried display must not gain an observable recall stack lift");
+    require(observe(virtual_entry) == observe(virtual_result.ops),
+            "virtual head recall must preserve Y/Z/T and hidden decimal-entry state");
+
+    const std::vector<IrOp> washed_virtual_entry = {
+        jump("tail"), label("head"), recall("1"), recall("2"), recall("2"),
+        recall("2"), recall("2"), terminal_display_stop(), label("tail"), store("1"),
+        recall("2"), recall("2"), recall("2"), recall("2"), terminal_display_stop(), jump("head")};
+    const auto washed = core::passes::redundant_prologue_elimination(washed_virtual_entry, ctx);
+    require_applied(washed.applied, 1,
+                    "store-carried display remains foldable after full stack resynchronization");
+    require(observe(washed_virtual_entry) == observe(washed.ops),
+            "proved virtual head must preserve the complete ROM-visible observation");
+
+    auto numeric = full_entry;
+    numeric.push_back(label("fixed"));
+    numeric.push_back(plain(0x09, "9"));
+    numeric.push_back(terminal_display_stop());
+    numeric.front() = numeric_jump(core::passes::calculate_label_addresses(numeric).at("fixed"));
+    require_applied(core::passes::redundant_prologue_elimination(numeric, ctx).applied, 0,
+                    "display folding must not move an unrelated numeric destination");
+
+    auto unknown_flow = full_entry;
+    unknown_flow.front() = indirect_jump("7");
+    require_applied(core::passes::redundant_prologue_elimination(unknown_flow, ctx).applied, 0,
+                    "unknown indirect entries must block display deletion");
+    for (const StopDisposition disposition :
+         {StopDisposition::Unknown, StopDisposition::Resumable}) {
+      auto stops = full_entry;
+      for (IrOp& op : stops)
+        if (op.kind == IrKind::Stop)
+          op.meta.stop_disposition = disposition;
+      require_applied(core::passes::redundant_prologue_elimination(stops, ctx).applied, 0,
+                      "resumable or unknown stops must never lose an interaction");
+    }
+    for (const bool manual : {false, true}) {
+      auto anchored = full_entry;
+      if (manual) {
+        anchored.at(12).meta.manual_interaction = ManualInteractionAnchor{
+            .protocol_id = 0, .phase = 0, .kind = ManualInteractionAnchorKind::PromptStop};
+      } else {
+        anchored.at(8).meta.roles.push_back("fixed-display-cell");
+      }
+      require_applied(core::passes::redundant_prologue_elimination(anchored, ctx).applied, 0,
+                      "manual and role-bound display cells must remain in place");
+    }
+  }
+  // Repeated resumable displays still require separate user resumes.
+  {
+    const std::vector<IrOp> program = {
+        label("head"), recall("1"), recall("2"), plain(0x12, "*"), show_stop(),
+        recall("3"), plain(1, "1"), plain(0x10, "+"), store("3"),
+        recall("1"), recall("2"), plain(0x12, "*"), show_stop(), jump("head")};
+    const auto optimized = core::passes::redundant_prologue_elimination(program, ctx);
+    require_applied(optimized.applied, 0, "identical prompts must retain both stop events");
+    const auto observe_turns = [&](const std::vector<IrOp>& ops) {
+      const auto resolved = resolve_machine_items(lower_ir_to_machine(ops));
+      require(resolved.diagnostics.empty(), "repeated prompts must resolve");
+      std::vector<int> codes;
+      for (const auto& step : resolved.steps) codes.push_back(step.opcode);
+      emulator::MK61 calc;
+      require(calc.load_program(codes).diagnostics.empty(), "repeated prompts must load");
+      calc.set_register("1", "2").set_register("2", "3").set_register("3", "0");
+      calc.press_sequence({"В/О", "С/П"});
+      std::vector<int> turns;
+      for (int resume = 0; resume < 5; ++resume) {
+        require(calc.run_until_stable(500, 5).stopped, "each prompt must stop separately");
+        require(calc.display_text() == "6,", "repeated prompt contents remain equal");
+        turns.push_back(std::stoi(calc.read_register("3")));
+        if (resume != 4) calc.press("С/П");
+      }
+      return turns;
+    };
+    const std::vector<int> expected{0, 1, 1, 2, 2};
+    require(observe_turns(program) == expected && observe_turns(optimized.ops) == expected,
+            "display sharing must preserve state changes between every pair of user resumes");
+
+    const std::string source = R"mkpro(
+program RepeatedPrompts {
+  state {
+    turns: counter 0..9 = 0
+  }
+  loop {
+    show(turns, 0)
+    turns++
+    show(turns, 0)
+  }
+}
+)mkpro";
+    for (const bool search : {false, true}) {
+      CompileOptions options;
+      options.disable_candidate_search = !search;
+      const auto compiled = compile_source(source, options);
+      require(compiled.implemented && compiled.diagnostics.empty() &&
+                  compiled.steps.size() <= 105 && compiled.registers.contains("turns"),
+              "source-level repeated prompts must retain their displayed state");
+      emulator::MK61 calc;
+      for (const auto& preload : compiled.preloads) {
+        require(!preload.setup_expression, "prompt fixture needs only literal setup values");
+        std::string value = preload.value;
+        if (value.size() == 2U && value.find_first_of("ABCDEF") != std::string::npos) {
+          const std::vector<std::string> glyphs{"-", "L", "С", "Г", "Е", "_"};
+          std::string converted;
+          for (char ch : value)
+            converted += ch >= 'A' && ch <= 'F'
+                             ? glyphs.at(static_cast<std::size_t>(ch - 'A'))
+                             : std::string(1, ch);
+          value = std::move(converted);
+        }
+        calc.set_register(preload.register_name, value);
+      }
+      const auto load = [&](const std::vector<ResolvedStep>& steps) {
+        std::vector<int> codes;
+        for (const auto& step : steps) codes.push_back(step.opcode);
+        require(calc.load_program(codes).diagnostics.empty(), "prompt artifact must load");
+        calc.press_sequence({"В/О", "С/П"});
+        require(calc.run_until_stable(500, 5).stopped, "prompt artifact must reach its stop");
+      };
+      load(compiled.steps);
+      std::vector<int> turns;
+      for (int resume = 0; resume < 5; ++resume) {
+        require(std::stoi(calc.display_text()) == expected.at(static_cast<std::size_t>(resume)) * 10,
+                "source-level prompt must show the state for this exact resume");
+        turns.push_back(std::stoi(calc.read_register(compiled.registers.at("turns"))));
+        if (resume != 4) {
+          calc.press("С/П");
+          require(calc.run_until_stable(500, 5).stopped, "next source prompt must stop");
+        }
+      }
+      require(turns == expected,
+              "compiler and optimizer must preserve every source-level show interaction");
+    }
+  }
+
 }
 
 } // namespace mkpro::tests

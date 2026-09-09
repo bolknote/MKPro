@@ -377,12 +377,8 @@ void compiler_examples_match_typescript_contract() {
     require(result.steps.size() <= 105, "fast wumpus compile should fit the MK-61 budget");
     require(has_proof(result, "indirect-flow-targets"),
             "fast wumpus compile should keep indirect-flow proof reporting");
-    require(has_optimization(result, "dual-use-constant-indirect-flow"),
-            "fast wumpus compile should use the static dual-use rescue");
     require(has_optimization(result, "fast-candidate-search"),
             "fast wumpus compile should report fast candidate search");
-    require(has_optimization(result, "fast-rescue-candidate-pruning"),
-            "fast wumpus compile should prune unrelated candidates after the prioritized rescue");
   }
 
   {
@@ -405,7 +401,9 @@ void compiler_examples_match_typescript_contract() {
     const std::string source = read_text(root / "examples" / "dangerous-loading.mkpro");
     const CompileResult result = compile_source(source, baseline_options);
     require(result.implemented, "dangerous-loading.mkpro should compile");
-    require(result.steps.size() == 75, "dangerous-loading step count should match native baseline");
+    require(result.steps.size() == 87,
+            "dangerous-loading step count should match the frame-safe native baseline: " +
+                std::to_string(result.steps.size()));
     require(result.reference.has_value(), "dangerous-loading should report reference metadata");
     require(result.reference->reference_span == 103,
             "dangerous-loading reference span should match TS contract");

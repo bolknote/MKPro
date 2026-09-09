@@ -65,6 +65,139 @@ std::vector<MachineItem> manual_calls(int first_register) {
   };
 }
 
+std::vector<MachineItem> resume_contexts(bool error) {
+  auto pause = MachineItem::op(error ? 0x29 : 0x50, "pause");
+  pause.stop_disposition = StopDisposition::Resumable;
+  std::vector<MachineItem> items{
+      MachineItem::op(0x05, "5"), MachineItem::op(0x47, "store 7"),
+      MachineItem::op(0x53, "call"), MachineItem::address("pause"),
+      MachineItem::op(0x67, "recall 7"), MachineItem::op(0x48, "store 8"),
+      MachineItem::op(0x06, "6"), MachineItem::op(0x47, "store 7"),
+      MachineItem::op(0x53, "call"), MachineItem::address("pause"),
+      MachineItem::op(0x67, "recall 7"), MachineItem::op(0x49, "store 9"),
+      MachineItem::label("done"), stopped(StopDisposition::Terminal),
+      MachineItem::label("pause"), pause};
+  // A real write makes the skipped error cell observable if the continuation
+  // is off by one; it must not overwrite the charged R7.
+  if (error) items.push_back(MachineItem::op(0x47, "skipped store 7"));
+  items.push_back(MachineItem::op(0x4a, "store entered X"));
+  items.push_back(MachineItem::op(0x52, "return"));
+  return items;
+}
+
+void observed_bank_cannot_supply_flow_selectors() {
+  auto read = MachineItem::op(0xd5, "read selected data");
+  read.indirect_memory_targets = std::vector<int>{6, 7, 8, 9, 10, 11, 12, 13, 14};
+  const std::vector<MachineItem> items{
+      read, MachineItem::op(0x53, "call"), MachineItem::address("twice"),
+      MachineItem::op(0x53, "call"), MachineItem::address("twice"),
+      stopped(StopDisposition::Terminal),
+      MachineItem::label("twice"), MachineItem::op(0x02, "2"),
+      MachineItem::op(0x12, "*"), MachineItem::op(0x52, "return")};
+  CompileOptions options;
+  options.aggressive_post_layout_indirect_flow = true;
+  options.preloaded_indirect_flow = true;
+  options.forward_indirect_flow = true;
+  const auto optimized = core::optimize_post_layout_indirect_flow(items, options, 0);
+  require(optimized.applied == 0 && optimized.preloads.empty(),
+          "every stable flow selector overlaps the observed indirect data window");
+  require(core::build_post_layout_control_flow(items).proved,
+          "the rejected selector layout must have a valid baseline CFG");
+  const auto image = resolve_machine_items(items);
+  require(image.diagnostics.empty(), "observed data-window ROM image must resolve");
+  std::vector<int> codes;
+  for (const auto& step : image.steps) codes.push_back(step.opcode);
+  for (int target = 6; target <= 14; ++target) {
+    emulator::MK61 calc;
+    require(calc.load_program(codes).diagnostics.empty(), "observed data-window ROM image loads");
+    for (int index = 6; index <= 14; ++index) {
+      const std::string reg(1, "0123456789abcde"[index]);
+      calc.set_register(reg, std::to_string(100 + index));
+    }
+    calc.set_register("5", std::to_string(target - 1));
+    calc.press_sequence({"В/О", "С/П"});
+    require(calc.run_until_stable(600, 5).stopped &&
+                std::stoi(calc.read_register("x")) == 4 * (100 + target),
+            "every possible data register affects the visible result and cannot be an address");
+  }
+}
+
+void exact_resume_predecessors() {
+  for (bool error : {false, true}) {
+    const auto items = resume_contexts(error);
+    const auto flow = core::build_post_layout_control_flow(items);
+    require(flow.proved, "both called resume contexts must have an exact CFG");
+    const auto values = core::analyze_stable_register_value_flow(items, {}, flow);
+    const auto done = after_label(items, "done");
+    const auto pause = after_label(items, "pause");
+    require(values.proved && values.before_item.at(done).at(0) == "6" &&
+                values.before_item.at(done).at(1) == "5" &&
+                values.before_item.at(done).at(2) == "6",
+            "a repeated pause must not mix register charges between caller frames");
+    require(!values.before_item.at(done).at(3),
+            "a store of user-entered X must stay unknown after every resume");
+    if (error)
+      require(!values.before_item.contains(pause + 1U),
+              "error padding is not an executed value-flow state");
+
+    auto unlabelled = flow;
+    unlabelled.execution_edges.clear();
+    require(!core::analyze_stable_register_value_flow(items, {}, unlabelled).proved,
+            "resume analysis requires authoritative labelled edges");
+    auto unlinked = flow;
+    for (auto& edges : unlinked.execution_edges)
+      for (auto& edge : edges)
+        if (edge.kind == core::PostLayoutExecutionEdgeKind::Resume)
+          edge.kind = core::PostLayoutExecutionEdgeKind::Fallthrough;
+    require(!core::analyze_stable_register_value_flow(items, {}, unlinked).proved,
+            "a matching physical successor without a Resume edge is not a user boundary");
+    auto missing_root = flow;
+    std::erase_if(missing_root.external_entries, [](const auto& entry) {
+      return entry.kind == core::ExternalEntryKind::ResumableStop;
+    });
+    require(!core::analyze_stable_register_value_flow(items, {}, missing_root).proved,
+            "unclassified resume roots must not preserve a pre-input X value");
+    auto wrong_frame = flow;
+    const auto entry = std::find_if(
+        wrong_frame.external_entries.begin(), wrong_frame.external_entries.end(),
+        [](const auto& root) { return root.kind == core::ExternalEntryKind::ResumableStop; });
+    require(entry != wrong_frame.external_entries.end() && !entry->formal_return_stack.empty(),
+            "the resume fixture must retain a caller return frame");
+    entry->formal_return_stack.front() = 0xff;
+    require(!core::analyze_stable_register_value_flow(items, {}, wrong_frame).proved,
+            "resume matching must preserve formal as well as physical return frames");
+    for (const bool wrong_opcode : {false, true}) {
+      auto stale = items;
+      if (wrong_opcode) stale.at(pause).opcode = 0x54;
+      else stale.at(pause).stop_disposition = StopDisposition::Terminal;
+      require(!core::analyze_stable_register_value_flow(stale, {}, flow).proved,
+              "a stale graph must not invent a resumable stop");
+    }
+
+    const auto resolved = resolve_machine_items(items);
+    require(resolved.diagnostics.empty(), "resume-context ROM fixture must resolve");
+    std::vector<int> codes;
+    for (const auto& step : resolved.steps) codes.push_back(step.opcode);
+    emulator::MK61 calc;
+    require(calc.load_program(codes).diagnostics.empty(), "resume-context ROM fixture must load");
+    calc.press_sequence({"В/О", "С/П"});
+    require(calc.run_until_stable(600, 5).stopped, "the first called pause must stop");
+    require(std::stoi(calc.read_register("7")) == 5, "first pause must retain its charge");
+    calc.input_number("2", true).press("С/П");
+    require(calc.run_until_stable(600, 5).stopped, "the second called pause must stop");
+    require(std::stoi(calc.read_register("7")) == 6 &&
+                std::stoi(calc.read_register("8")) == 5,
+            "the first call must return to its own continuation");
+    calc.input_number("3", true).press("С/П");
+    require(calc.run_until_stable(600, 5).stopped, "the second call must return to final stop");
+    require(std::stoi(calc.read_register("7")) == 6 &&
+                std::stoi(calc.read_register("8")) == 5 &&
+                std::stoi(calc.read_register("9")) == 6 &&
+                std::stoi(calc.read_register("a")) == 3,
+            "ROM resumes must preserve caller contexts and skip exactly the error pad");
+  }
+}
+
 std::string literal(std::string text) {
   std::string result;
   for (char ch : text) {
@@ -119,6 +252,8 @@ std::vector<std::string> run_manual_calls(const std::vector<MachineItem>& items,
 } // namespace
 
 void stable_register_value_flow_preserves_manual_protocol_state() {
+  exact_resume_predecessors();
+  observed_bank_cannot_supply_flow_selectors();
   const auto items = called_protocol();
   const auto flow = core::build_post_layout_control_flow(items);
   require(flow.proved, "called manual protocol must have an authoritative graph");

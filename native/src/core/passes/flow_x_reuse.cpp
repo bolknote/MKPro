@@ -65,9 +65,12 @@ XRegisterSet transfer_x_set(const XRegisterSet& input, const IrOp& op, CfgEdgeKi
   case IrKind::OrphanAddress:
     return input;
   case IrKind::Store:
+    return add_register(input, op.register_name);
   case IrKind::IndirectStore:
-    if (const std::optional<std::string> target = stored_current_x_value_register(op))
-      return add_register(input, *target);
+    // Resolve/write back the selector before storing X. This invalidates its
+    // old alias even in R7..Re; a self-store establishes the new alias again.
+    if (const std::optional<std::string> target = known_indirect_memory_target(op))
+      return add_register(remove_register(input, op.register_name), *target);
     return {};
   case IrKind::Recall:
     return XRegisterSet{op.register_name};

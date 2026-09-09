@@ -220,21 +220,17 @@ transfer_indirect_conditional_register_state(const RegisterDataflowState& input,
 
 RegisterDataflowState transfer_indirect_store_register_state(const RegisterDataflowState& input,
                                                              const IrOp& op) {
+  // Address resolution writes the selector before the data store. Stable
+  // selectors also lose old aliases; a self-store can establish them again.
+  const RegisterDataflowState addressed = drop_mutated_selector_fact(input, op.register_name);
   const std::optional<std::string> target = known_indirect_memory_target(op);
-  if (!target.has_value()) {
-    return mkpro::core::is_stable_indirect_selector(op.register_name)
-               ? clone_register_dataflow_state(input)
-               : drop_mutated_selector_fact(input, op.register_name);
-  }
-
-  RegisterDataflowState output{
-      .x = add_register_value(input.x, *target),
-      .y = transfer_store_y_register_set(input, *target),
-      .x2 = add_stored_x2_alias(input, *target),
+  if (!target.has_value())
+    return empty_register_dataflow_state();
+  return RegisterDataflowState{
+      .x = add_register_value(addressed.x, *target),
+      .y = transfer_store_y_register_set(addressed, *target),
+      .x2 = add_stored_x2_alias(addressed, *target),
   };
-  return mkpro::core::is_stable_indirect_selector(op.register_name)
-             ? output
-             : drop_mutated_selector_fact(output, op.register_name);
 }
 
 RegisterDataflowState transfer_plain_register_dataflow_state(const RegisterDataflowState& input,
@@ -296,7 +292,11 @@ RegisterDataflowState transfer_register_dataflow_state(const RegisterDataflowSta
     const std::optional<std::string> target = known_indirect_memory_target(op);
     const RegisterValueSet registers =
         target.has_value() ? RegisterValueSet{*target} : RegisterValueSet{};
-    return RegisterDataflowState{.x = registers, .y = input.x, .x2 = registers};
+    return RegisterDataflowState{
+        .x = registers,
+        .y = remove_register_value(input.x, op.register_name),
+        .x2 = registers,
+    };
   }
   case IrKind::Plain:
     return transfer_plain_register_dataflow_state(input, op);
@@ -4373,10 +4373,12 @@ transfer_x2_register_state_for_edge(const X2RegisterEdgeState& input, const IrOp
   case IrKind::IndirectStore: {
     const std::optional<std::string> target = known_indirect_memory_target(op);
     if (!target.has_value())
-      return *input.x2;
+      return RegisterValueSet{};
     if (!input.x.has_value())
       return std::nullopt;
-    return add_projected_stored_x2_alias(*input.x2, *input.x, *target);
+    return add_projected_stored_x2_alias(
+        remove_register_value(*input.x2, op.register_name),
+        remove_register_value(*input.x, op.register_name), *target);
   }
   case IrKind::Recall:
     return RegisterValueSet{op.register_name};
@@ -4798,21 +4800,29 @@ X2ValueDataflowState internal_transfer_x2_value_dataflow_state(
     return output;
   }
   case IrKind::IndirectStore: {
-    const bool stable_selector = mkpro::core::is_stable_indirect_selector(op.register_name);
+    const X2ValueDataflowState addressed =
+        internal_drop_mutated_selector_x2_value_fact(
+            internal_close_x2_value_entry(input), op.register_name, track_register_memory);
     const std::optional<std::string> target = known_indirect_memory_target(op);
     if (!target.has_value()) {
       X2ValueDataflowState cleared =
-          x2eval::with_store_vp_splice_source(internal_close_x2_value_entry(input));
+          x2eval::with_store_vp_splice_source(addressed);
+      // An unresolved destination can invalidate any old register dependency,
+      // not merely the cached memory table.
+      for (int index = 0; index <= 14; ++index) {
+        const std::string reg = index < 10
+            ? std::to_string(index)
+            : std::string(1, static_cast<char>('a' + index - 10));
+        cleared = internal_drop_mutated_selector_x2_value_fact(
+            cleared, reg, track_register_memory);
+      }
       if (track_register_memory) {
         cleared.memory = X2ValueMemory{};
         cleared.shapeMemory = X2ShapeMemory{};
       }
-      return stable_selector
-                 ? cleared
-                 : internal_drop_mutated_selector_x2_value_fact(cleared, op.register_name,
-                                                                track_register_memory);
+      return cleared;
     }
-    const X2ValueDataflowState closed = internal_close_x2_value_entry(input);
+    const X2ValueDataflowState& closed = addressed;
     const X2ValueDataflowState stable =
         internal_register_write_preserves_stored_value(closed, *target)
             ? closed
@@ -4845,10 +4855,7 @@ X2ValueDataflowState internal_transfer_x2_value_dataflow_state(
       internal_store_x2_value_memory(output, *target, stable.x);
       internal_store_x2_shape_memory(output, *target, stable.x, stable.xShape);
     }
-    return stable_selector
-               ? output
-               : internal_drop_mutated_selector_x2_value_fact(output, op.register_name,
-                                                              track_register_memory);
+    return output;
   }
   case IrKind::Recall: {
     const X2ValueSet values =
@@ -4884,31 +4891,34 @@ X2ValueDataflowState internal_transfer_x2_value_dataflow_state(
     return output;
   }
   case IrKind::IndirectRecall: {
+    const X2ValueDataflowState addressed =
+        internal_drop_mutated_selector_x2_value_fact(input, op.register_name,
+                                                    track_register_memory);
     const std::optional<std::string> target = known_indirect_memory_target(op);
     const std::optional<X2ShapeSet> memory_shape =
-        target.has_value() && track_register_memory && input.shapeMemory.has_value()
+        target.has_value() && track_register_memory && addressed.shapeMemory.has_value()
             ? [&]() -> std::optional<X2ShapeSet> {
-                const auto found = input.shapeMemory->find(*target);
-                return found == input.shapeMemory->end() ? std::nullopt
+                const auto found = addressed.shapeMemory->find(*target);
+                return found == addressed.shapeMemory->end() ? std::nullopt
                                                          : std::optional<X2ShapeSet>{found->second};
               }()
             : std::nullopt;
     const X2ValueSet values =
         target.has_value()
-            ? internal_recall_x2_values(input, *target, track_register_memory, &op)
+            ? internal_recall_x2_values(addressed, *target, track_register_memory, &op)
             : X2ValueSet{kSameUnknownValue};
     const X2ShapeSet shape = internal_recall_x2_shape_facts(values, &op, memory_shape);
     const X2ShapeSet direct_shape =
         target.has_value() ? internal_recall_direct_shape_facts(&op, memory_shape) : X2ShapeSet{};
-    X2ValueDataflowState output = internal_close_x2_value_entry(input);
+    X2ValueDataflowState output = internal_close_x2_value_entry(addressed);
     output.x = values;
     output.x2 = values;
-    output.y = X2ValueSet{input.x.begin(), input.x.end()};
-    output.yShape = X2ShapeSet{input.xShape.begin(), input.xShape.end()};
+    output.y = X2ValueSet{addressed.x.begin(), addressed.x.end()};
+    output.yShape = X2ShapeSet{addressed.xShape.begin(), addressed.xShape.end()};
     output.xShape = shape;
     output.x2Shape = shape;
     output.xDirectShape = direct_shape;
-    output.yDirectShape = input.xDirectShape;
+    output.yDirectShape = addressed.xDirectShape;
     output.vpContext = X2VpContextState{.kind = X2VpContextState::Kind::None};
     output.structuralEntry = X2StructuralEntryState{.kind = X2StructuralEntryState::Kind::None};
     output.structuralVpContext = X2StructuralEntryState{.kind = X2StructuralEntryState::Kind::None};
@@ -14700,15 +14710,13 @@ bool htr_memory_access_may_overwrite_register(const IrOp& op, const std::string&
   case IrKind::IndirectStore: {
     const std::optional<std::string> target = known_indirect_memory_target(op);
     return !target.has_value() || *target == register_name ||
-           (!mkpro::core::is_stable_indirect_selector(op.register_name) &&
-            op.register_name == register_name);
+           op.register_name == register_name;
   }
   case IrKind::IndirectRecall:
   case IrKind::IndirectJump:
   case IrKind::IndirectCall:
   case IrKind::IndirectCondJump:
-    return !mkpro::core::is_stable_indirect_selector(op.register_name) &&
-           op.register_name == register_name;
+    return op.register_name == register_name;
   case IrKind::Loop:
     return htr_loop_counter_register(op.counter) == register_name;
   default:

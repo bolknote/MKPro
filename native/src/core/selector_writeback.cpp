@@ -62,8 +62,9 @@ bool complete_word_is_preserved(const std::string& before, const std::string& af
     digits.remove_prefix(1);
   // Short integers are rewritten into a denormalized eight-digit word, even
   // though their numerical value is unchanged. Do not confuse that fact with
-  // preservation of an arbitrary raw/bitwise observation.
-  if (digits.size() != 8U ||
+  // preservation of an arbitrary raw/bitwise observation. Leading zeroes in
+  // a numeric literal do not contribute significant mantissa digits.
+  if (digits.size() != 8U || digits.front() == '0' ||
       !std::all_of(digits.begin(), digits.end(), [](unsigned char ch) {
         return std::isdigit(ch) != 0;
       })) {
@@ -74,9 +75,36 @@ bool complete_word_is_preserved(const std::string& before, const std::string& af
   return old_number.has_value() && old_number == new_number;
 }
 
+// Stable indirect flow may denormalize the bank's mantissa. For a positive
+// integer within the eight-digit numeric range, a typed recall normalizes it
+// back to the same complete X word before any subsequent consumer. This is a
+// read projection, not preservation of the retained bank word. Zero is not
+// covered: recalling its denormalized form followed by VP is observably different.
+bool normalized_positive_integer_recall_is_preserved(
+    const std::string& before, const std::string& after) {
+  if (before.starts_with("0x") || after.starts_with("0x"))
+    return false;
+  const auto old_number = numeric(before);
+  const auto new_number = numeric(after);
+  return old_number.has_value() && new_number.has_value() &&
+         *old_number > 0 && *old_number <= 99999999 &&
+         std::trunc(*old_number) == *old_number && old_number == new_number;
+}
+
+bool indirect_recall_projection_is_preserved(
+    const MachineItem& item, const std::string& before,
+    const std::string& after) {
+  return item.kind == MachineItemKind::Op && !item.raw &&
+         !item.manual_interaction.has_value() &&
+         item.opcode >= 0xd0 && item.opcode <= 0xde &&
+         normalized_positive_integer_recall_is_preserved(before, after);
+}
+
 bool recall_projection_is_preserved(const std::vector<MachineItem>& items,
                                     std::size_t recall, const std::string& before,
                                     const std::string& after) {
+  if (normalized_positive_integer_recall_is_preserved(before, after))
+    return true;
   std::size_t next = recall + 1;
   while (next < items.size() && items[next].kind == MachineItemKind::Label)
     ++next;
@@ -118,7 +146,8 @@ bool selector_writeback_is_unobserved(
   try {
     reg = register_index(preload.register_name);
     if (reg < 7 || reg > 14 || preload.setup_expression ||
-        preload.setup_expression_text.has_value() || preload.setup_target_name.has_value())
+        preload.setup_expression_text.has_value() || preload.setup_target_name.has_value() ||
+        preload.setup_source_line.has_value())
       return reject("selector writeback requires a stable literal carrier");
     decoded = evaluate_indirect_address(preload.register_name, *setup_word,
                                         IndirectOperationKind::Flow, model);
@@ -161,7 +190,8 @@ bool selector_writeback_is_unobserved(
     const auto memory = control_flow.indirect_memory_targets.find(index);
     if (memory != control_flow.indirect_memory_targets.end() &&
         (std::find(memory->second.begin(), memory->second.end(), reg) != memory->second.end() ||
-         (item.opcode & 0x0f) == reg)) {
+         (item.opcode & 0x0f) == reg) &&
+        !indirect_recall_projection_is_preserved(item, before, after)) {
       all_projections_preserved = false;
       break;
     }
@@ -201,7 +231,8 @@ bool selector_writeback_is_unobserved(
     const auto memory = control_flow.indirect_memory_targets.find(identity.item_index);
     if (memory != control_flow.indirect_memory_targets.end() &&
         (std::find(memory->second.begin(), memory->second.end(), reg) != memory->second.end() ||
-         (item.opcode & 0x0f) == reg)) {
+         (item.opcode & 0x0f) == reg) &&
+        !indirect_recall_projection_is_preserved(item, before, after)) {
       return reject("selector writeback reaches an indirect data observation");
     }
     if (item.opcode == 0x50 && item.stop_disposition != StopDisposition::Terminal)

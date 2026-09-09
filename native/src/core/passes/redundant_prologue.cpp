@@ -1,5 +1,8 @@
 #include "mkpro/core/passes/redundant_prologue.hpp"
 
+#include "mkpro/core/passes/cfg.hpp"
+#include "mkpro/core/stack_value_equivalence.hpp"
+
 #include <algorithm>
 #include <map>
 #include <optional>
@@ -14,6 +17,8 @@ namespace {
 
 struct PrologueSegment {
   std::vector<IrOp> ops;
+  int start_index = -1;
+  int end_index = -1;
 };
 
 struct BackwardSegment {
@@ -33,7 +38,7 @@ bool is_show_display_op(const IrOp& op) {
   if (op.kind == IrKind::Plain) {
     if (op.opcode == 0x10 || op.opcode == 0x12)
       return true;
-    if (op.opcode <= 0x0a)
+    if (op.opcode >= 0 && op.opcode <= 0x0a)
       return true;
     if (op.opcode == 0x0e)
       return true;
@@ -42,7 +47,17 @@ bool is_show_display_op(const IrOp& op) {
 }
 
 bool is_show_stop(const IrOp& op) {
-  return op.kind == IrKind::Stop && (op.semantic == "show" || op.semantic == "halt");
+  // A resumable stop is an observable interaction, even when both displays
+  // are identical. Moving the backedge before it would skip one user resume
+  // on every iteration. Only source-terminal displays may be shared here.
+  return op.kind == IrKind::Stop && op.opcode == 0x50 &&
+         op.meta.stop_disposition == StopDisposition::Terminal &&
+         op.semantic == "halt";
+}
+
+bool has_display_rewrite_barrier(const IrOp& op) {
+  return has_rewrite_barrier(op) || !op.meta.roles.empty() ||
+         op.procedure_boundary.has_value();
 }
 
 PrologueSegment collect_forward_prologue(const std::vector<IrOp>& ops, int from) {
@@ -53,20 +68,24 @@ PrologueSegment collect_forward_prologue(const std::vector<IrOp>& ops, int from)
     ++index;
   }
 
+  const int start_index = index;
   while (index < static_cast<int>(ops.size())) {
     const IrOp& op = ops.at(static_cast<std::size_t>(index));
+    if (has_display_rewrite_barrier(op))
+      return PrologueSegment{};
     if (op.kind == IrKind::Label) {
       ++index;
       continue;
     }
-    if (is_show_display_op(op) && !has_rewrite_barrier(op)) {
+    if (is_show_display_op(op)) {
       collected.push_back(op);
       ++index;
       continue;
     }
-    if (is_show_stop(op) && !has_rewrite_barrier(op)) {
+    if (is_show_stop(op)) {
       collected.push_back(op);
-      return PrologueSegment{.ops = std::move(collected)};
+      return PrologueSegment{
+          .ops = std::move(collected), .start_index = start_index, .end_index = index + 1};
     }
     return PrologueSegment{};
   }
@@ -80,6 +99,8 @@ BackwardSegment collect_backward_prologue(const std::vector<IrOp>& ops, int befo
 
   while (index >= 0) {
     const IrOp& op = ops.at(static_cast<std::size_t>(index));
+    if (has_display_rewrite_barrier(op))
+      break;
     if (op.kind == IrKind::Label) {
       --index;
       continue;
@@ -137,7 +158,8 @@ bool ops_equivalent(const IrOp& left, const IrOp& right) {
   if (left.kind == IrKind::Plain)
     return left.opcode == right.opcode;
   if (left.kind == IrKind::Stop)
-    return left.semantic == right.semantic;
+    return left.semantic == right.semantic &&
+           left.meta.stop_disposition == right.meta.stop_disposition;
   return false;
 }
 
@@ -149,6 +171,35 @@ bool segments_match(const std::vector<IrOp>& left, const std::vector<IrOp>& righ
       return false;
   }
   return true;
+}
+
+bool virtual_head_preserves_display_state(const std::vector<IrOp>& head) {
+  // Both executions start with X equal to the just-stored register. The
+  // inserted head recall may nevertheless shift all three deeper stack slots
+  // and replace hidden X2. Track equality, not merely source register use.
+  StackValueEqualityState equality;
+  equality.stack_equal = {true, false, false, false};
+  equality.x2_equal = false;
+  bool number_entry_active = false;  // Store and recall both close digit entry.
+  for (std::size_t i = 1; i < head.size(); ++i) {
+    const IrOp& op = head.at(i);
+    if (is_show_stop(op))
+      return stack_values_fully_equal(equality);
+    StackValueEqualityTransfer transfer;
+    if (op.kind == IrKind::Plain && op.opcode >= 0 && op.opcode <= 9) {
+      transfer = transfer_decimal_digit_equality(equality, number_entry_active);
+      number_entry_active = true;
+    } else {
+      transfer = transfer_stack_value_equality(
+          equality, op.opcode,
+          op.kind == IrKind::Recall ? StackValueEqualityStepKind::Recall
+                                   : StackValueEqualityStepKind::Plain);
+      number_entry_active = false;
+    }
+    if (transfer == StackValueEqualityTransfer::Rejected)
+      return false;
+  }
+  return false;
 }
 
 bool ranges_overlap(const std::vector<RemoveRange>& ranges, int start, int end) {
@@ -170,6 +221,8 @@ PassResult redundant_prologue_elimination(const std::vector<IrOp>& ops,
       label_index[op.name] = index;
   }
 
+  std::optional<ControlFlowGraph> control;
+  std::optional<NumericFlowTargetLayoutGuard> numeric_targets;
   std::vector<RemoveRange> remove_ranges;
   int applied = 0;
   for (int index = 0; index < static_cast<int>(ops.size()); ++index) {
@@ -196,8 +249,15 @@ PassResult redundant_prologue_elimination(const std::vector<IrOp>& ops,
       if (first_forward.kind == IrKind::Recall &&
           first_forward.register_name == *head_backward.virtual_head_register) {
         std::vector<IrOp> suffix(head_forward.ops.begin() + 1, head_forward.ops.end());
-        if (segments_match(head_backward.ops, suffix))
+        // Replacing a store-carried X by a fresh recall can change Y/Z/T
+        // and decimal-entry X2 even though the displayed X is unchanged.
+        const int prior_index = head_backward.start_index - 1;
+        if (segments_match(head_backward.ops, suffix) && prior_index >= 0 &&
+            ops.at(static_cast<std::size_t>(prior_index)).kind == IrKind::Store &&
+            !has_display_rewrite_barrier(ops.at(static_cast<std::size_t>(prior_index))) &&
+            virtual_head_preserves_display_state(head_forward.ops)) {
           matched = true;
+        }
       }
     }
     if (!matched)
@@ -205,12 +265,12 @@ PassResult redundant_prologue_elimination(const std::vector<IrOp>& ops,
 
     const int start = head_backward.start_index;
     const int end = index;
-    const int forward_end = label_at->second + static_cast<int>(head_forward.ops.size());
-    if (start <= forward_end)
+    const int forward_end = head_forward.end_index;
+    if (start < forward_end)
       continue;
 
     bool has_intermediate_content = false;
-    for (int scan = forward_end + 1; scan < start; ++scan) {
+    for (int scan = forward_end; scan < start; ++scan) {
       const IrOp& intermediate = ops.at(static_cast<std::size_t>(scan));
       if (intermediate.kind == IrKind::Label)
         continue;
@@ -220,6 +280,37 @@ PassResult redundant_prologue_elimination(const std::vector<IrOp>& ops,
     if (!has_intermediate_content)
       continue;
     if (ranges_overlap(remove_ranges, start, end))
+      continue;
+
+    if (!control.has_value()) {
+      control = build_control_flow_graph(ops);
+      numeric_targets = numeric_flow_target_layout_guard(ops);
+    }
+    if (!control->targets_are_exact() || !numeric_targets.has_value())
+      continue;
+    bool safe = true;
+    for (int scan = start; scan < end; ++scan) {
+      if (ops.at(static_cast<std::size_t>(scan)).kind != IrKind::Label &&
+          !numeric_targets->can_delete_at(scan)) {
+        safe = false;
+      }
+    }
+    // Keeping an inner label does not keep its entry semantics: the label
+    // would now lead to the full head instead of the requested suffix.
+    for (std::size_t source = 0; source < control->edges.size() && safe; ++source) {
+      if (static_cast<int>(source) >= start && static_cast<int>(source) < end)
+        continue;
+      for (const CfgEdge& edge : control->edges.at(source)) {
+        if (edge.target < start || edge.target >= end)
+          continue;
+        if (edge.target != start || static_cast<int>(source) != start - 1 ||
+            edge.kind == CfgEdgeKind::Jump) {
+          safe = false;
+          break;
+        }
+      }
+    }
+    if (!safe)
       continue;
 
     remove_ranges.push_back(RemoveRange{.start = start, .end = end});
@@ -256,7 +347,7 @@ PassResult redundant_prologue_elimination(const std::vector<IrOp>& ops,
               AppliedOptimization{
                   .name = "redundant-prologue-elimination",
                   .detail = "Removed " + std::to_string(applied) +
-                            " display/halt prologue(s) immediately before a jump to their "
+" terminal display prologue(s) immediately before a jump to their "
                             "identical loop head (" +
                             std::to_string(total_cells) + " cells).",
               },

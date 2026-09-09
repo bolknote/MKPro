@@ -816,11 +816,68 @@ void explore_entries_and_return_stacks(const std::vector<MachineItem>& items,
 
 } // namespace
 
+bool has_executable_address_words(const std::vector<MachineItem>& items) {
+  return std::any_of(items.begin(), items.end(), [](const MachineItem& item) {
+    return item.kind == MachineItemKind::Address &&
+           std::find(item.roles.begin(), item.roles.end(), "exec") != item.roles.end();
+  });
+}
+
+std::optional<PostLayoutByteImage> materialize_post_layout_byte_image(
+    const std::vector<MachineItem>& items, const PostLayoutControlFlowOptions& options) {
+  const ArtifactIndex index = index_artifact(items);
+  if (!index.duplicate_labels.empty())
+    return std::nullopt;
+  PostLayoutByteImage image{.items = items, .options = options};
+  for (std::size_t i = 0; i < items.size(); ++i) {
+    const auto& operand = items.at(i);
+    if (operand.kind != MachineItemKind::Address ||
+        std::find(operand.roles.begin(), operand.roles.end(), "exec") == operand.roles.end())
+      continue;
+    // An over-window logical address is not a hardware operand byte.
+    if (index.cells > official_program_step_limit(options.address_space_model))
+      return std::nullopt;
+    std::optional<int> target;
+    if (const int* address = std::get_if<int>(&operand.target)) {
+      target = *address;
+    } else {
+      const auto found = index.label_addresses.find(std::get<std::string>(operand.target));
+      if (found != index.label_addresses.end())
+        target = found->second;
+    }
+    if (!target.has_value() || !index.cell_items.contains(*target))
+      return std::nullopt;
+    try {
+      const int encoded = operand.formal_opcode.has_value()
+          ? *operand.formal_opcode
+          : official_address_to_opcode(*target, options.address_space_model);
+      if (formal_address_info(encoded, options.address_space_model).actual != *target)
+        return std::nullopt;
+      auto& command = image.items.at(i);
+      command.kind = MachineItemKind::Op;
+      command.opcode = encoded;
+      command.mnemonic = opcode_by_code(encoded).name;
+      image.options.opcode_address_words.push_back(i);
+    } catch (const std::exception&) {
+      return std::nullopt;
+    }
+  }
+  return image;
+}
+
 AuthoritativePostLayoutControlFlow
 build_post_layout_control_flow(const std::vector<MachineItem>& items,
                                const PostLayoutControlFlowOptions& options) {
   AuthoritativePostLayoutControlFlow result;
   result.address_space_model = options.address_space_model;
+  if (has_executable_address_words(items)) {
+    const auto image = materialize_post_layout_byte_image(items, options);
+    if (!image.has_value()) {
+      add_reason(result, "executable address operand has no valid final byte image");
+      return result;
+    }
+    return build_post_layout_control_flow(image->items, image->options);
+  }
   if (options.maximum_return_depth < 0 || options.maximum_return_depth > 5) {
     add_reason(result, "maximum return-stack depth must be between zero and five");
     return result;

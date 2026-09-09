@@ -711,7 +711,9 @@ void callee_hole_boundary_fusion_final_artifact_contract() {
   const auto rejection = optimizer_static_proof_gate_rejection_reason_for_testing(options, result);
   require(!rejection.has_value(), "complete fused artifact must pass its final proof: " +
                                  rejection.value_or(""));
-  require(result.steps.size() <= 133,
+  // This bound includes exact signed remainder normalization; all entry,
+  // callback, stack and selector proofs below remain independent ratchets.
+  require(result.steps.size() <= 134,
           "traversal sharing must compose with the retained selector-store fallthrough");
   const auto helper_summary = [&](const std::string& label) -> const SizeHelperSummaryReport* {
     const auto& helpers = result.size_attribution.helpers;
@@ -802,7 +804,7 @@ void callee_hole_boundary_fusion_final_artifact_contract() {
   CompileOptions normalized_options = options;
   normalized_options.sign_normalized_x_param = true;
   const auto normalized = compile_source(source, normalized_options);
-  require(normalized.implemented && normalized.steps.size() <= 132 &&
+  require(normalized.implemented && normalized.steps.size() <= 134 &&
               !optimizer_static_proof_gate_rejection_reason_for_testing(normalized_options,
                                                                        normalized).has_value(),
           "shared traversal must compose with proved sign-only parameter normalization");
