@@ -191,6 +191,103 @@ void emulator_regression_example_loads(const std::string& example_file) {
   require(calc.read_program_codes(static_cast<int>(codes.size())) == codes,
           "example program memory should round-trip after load: " + file.string());
 
+  if (file.filename() == "giants-country.mkpro") {
+    // Source-level state oracle, independent of register allocation and byte
+    // layout. Cover suspended encounters, both replies, floor wrap and death.
+    int deaths = 0;
+    int encounters = 0;
+    int moves = 0;
+    for (long long initial_plans : {81763221LL, 7777777LL, 0LL}) {
+      emulator::MK61 play({.angle_mode = "grad"});
+      require(play.load_program(codes).diagnostics.empty(),
+              "giants-country gameplay must load into the stock ROM");
+      const auto& plans_register = result.registers.at("plans");
+      for (const auto& preload : result.preloads)
+        if (preload.register_name != plans_register)
+          play.set_register(preload.register_name, preload.value);
+      play.set_register(plans_register, std::to_string(initial_plans));
+      play.press_sequence({"В/О", "С/П"});
+      require(play.run_until_stable(4000, 6).stopped,
+              "giants-country must reach its initial hall display");
+      const auto hall_display = play.display_text();
+      long long plans = initial_plans;
+      int floor = 1, slot = 1, strength = 40, score = 0;
+      const auto numeric = [&](const std::string& reg) {
+        auto text = play.read_register(reg);
+        std::replace(text.begin(), text.end(), ',', '.');
+        return std::stod(text);
+      };
+      const auto value = [&](const std::string& name) {
+        return numeric(result.registers.at(name));
+      };
+      const auto submit = [&](int command) {
+        play.input_number(std::to_string(command), true).press("С/П");
+        require(play.run_until_stable(10000, 6).stopped,
+                "giants-country must complete every command");
+      };
+      bool dead = false;
+      for (int turn = 0; turn < 80; ++turn) {
+        const int action = turn % 5 == 0 ? 0 : 1;
+        int tile = 0;
+        if (action == 0) {
+          floor = floor % 3 + 1;
+          strength -= floor;
+        } else {
+          --strength;
+          long long divisor = 1;
+          for (int i = 1; i < slot && i < 10; ++i) divisor *= 10;
+          tile = slot > 9 ? 0 : static_cast<int>((plans / divisor) % 10);
+          if (tile == 8) strength -= 7;
+        }
+        submit(action);
+        if (action != 0 && tile != 0 && tile != 8) {
+          ++encounters;
+          require(numeric("x") == tile && numeric("y") == 70000008,
+                  "giants-country must retain its encounter display and preview");
+          const bool correct = initial_plans == 7777777LL || slot % 3 != 0;
+          if (correct) {
+            if (tile == 1) {
+              floor = floor % 3 + 1;
+              strength += floor;
+            } else {
+              score += tile - 2;
+              strength += 4 - tile;
+              if (tile == 7) {
+                --strength;
+                ++score;
+              }
+            }
+            long long divisor = 1;
+            for (int i = 1; i < slot; ++i) divisor *= 10;
+            plans -= static_cast<long long>(tile) * divisor;
+          } else {
+            strength -= tile;
+            if (tile == 7) --strength;
+          }
+          submit(correct ? tile : 9);
+        }
+        if (action != 0 && tile != 8) ++slot;
+        ++moves;
+        if (strength <= 0) {
+          require(value("score") == score &&
+                      compact(play.display_text()).find("ЕГГ") != std::string::npos,
+                  "giants-country must expose the final score at its death stop");
+          dead = true;
+          ++deaths;
+          break;
+        }
+        require(play.display_text() == hall_display &&
+                    value("strength") == strength && value("slot") == slot &&
+                    value("floor") == floor && value("score") == score &&
+                    value("plans") == static_cast<double>(plans),
+                "giants-country must preserve source state across hall continuations");
+      }
+      require(dead, "giants-country gameplay fixture must reach a terminal death");
+    }
+    require(moves == 55 && encounters == 14 && deaths == 3,
+            "giants-country gameplay coverage must include all scripted paths");
+  }
+
   if (file.filename() == "dangerous-loading.mkpro") {
     // Boot-only checks missed an empty-stack return reached only by wait().
     // Validate UI against source state after both explicit and default commands.

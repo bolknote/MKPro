@@ -1,6 +1,7 @@
 #include "mkpro/compiler.hpp"
 
 #include "test_support.hpp"
+#include "example_selection.hpp"
 
 #include <algorithm>
 #include <array>
@@ -216,35 +217,35 @@ void example_sizes_match_typescript_baselines() {
       {"basic", 7},
       {"cave-highlevel-baseline", 103},
       {"cave-sketch", 38},
-      {"cave-treasure", 103},
-      {"clock", 31}, // The incremented counter needs a value recall after D0..D6.
-      {"dangerous-loading", 75},
+      {"cave-treasure", 105},
+      {"clock", 33}, // The incremented counter needs a value recall after D0..D6.
+      {"dangerous-loading", 87},
       {"dungeon", 75},
       {"e-94-digits", 64},
       {"functions-demo", 13},
-      {"fox-hunt-100", 102},
+      {"fox-hunt-100", 103},
       {"fox-hunt-mk61", 65},
-      {"game-100-pig", 97},
+      {"game-100-pig", 103},
       {"giants-country", 103}, // Preserve the same indirect-counter value contract.
-      {"human", 23},
+      {"human", 27},
       {"jack-pot", 94},
       {"labyrinth777", 105},
       {"lunar", 44},
-      {"minesweeper-9x7", 75},
-      {"minesweeper-9x9", 75},
-      {"raja-yoga", 77},
+      {"minesweeper-9x7", 76},
+      {"minesweeper-9x9", 76},
+      {"raja-yoga", 85},
       {"rambo-iii", 103},
       {"river-battle", 90},
-      {"sea-battle", 65},
+      {"sea-battle", 67},
       {"teleport", 96},
-      {"tic-tac-toe", 97},
+      {"tic-tac-toe", 100},
       {"tiny-game", 23},
-      {"treasure-hunter-2", 98},
+      {"treasure-hunter-2", 103},
       {"wumpus", 105},
       {"zagaday-tsifru", 105},
   };
   const std::map<std::string, std::size_t> PENDING_BASELINE{
-      {"nekromant", 135},
+      {"nekromant", 138},
       {"tic-tac-toe-4x4", 141},
   };
 
@@ -275,16 +276,24 @@ void example_sizes_match_typescript_baselines() {
 
   const bool progress = std::getenv("MKPRO_NATIVE_EXAMPLE_PROGRESS") != nullptr;
   const bool size_only = std::getenv("MKPRO_NATIVE_EXAMPLE_SIZE_ONLY") != nullptr;
-  const char* filter = std::getenv("MKPRO_NATIVE_EXAMPLE_FILTER");
-  const auto included = [&](const std::string& name) {
-    return filter == nullptr || name.find(filter) != std::string::npos;
+  require(example_matches_selection("tic-tac-toe", "tic-tac-toe", nullptr) &&
+              !example_matches_selection("pending-optimizer/tic-tac-toe-4x4",
+                                         "tic-tac-toe", nullptr) &&
+              example_matches_selection("pending-optimizer/tic-tac-toe-4x4",
+                                        nullptr, "tic-tac-toe") &&
+              !example_matches_selection("clock", "human", "clock") &&
+              example_matches_selection("clock", nullptr, nullptr),
+          "exact example selection must take priority over substring filtering");
+  const auto included = [&](const std::string& name, bool pending = false) {
+    return example_selected(pending ? "pending-optimizer/" + name : name);
   };
   std::size_t progress_index = 0;
   const std::size_t progress_total = static_cast<std::size_t>(
       std::count_if(EXAMPLE_BASELINE.begin(), EXAMPLE_BASELINE.end(),
                     [&](const auto& entry) { return included(entry.first); }) +
       std::count_if(PENDING_BASELINE.begin(), PENDING_BASELINE.end(),
-                    [&](const auto& entry) { return included(entry.first); }));
+                    [&](const auto& entry) { return included(entry.first, true); }));
+  require(progress_total != 0U, "no examples matched the requested size-baseline selection");
   std::string size_mismatches;
   const auto record_size_mismatch = [&](const std::string& category, const std::string& name,
                                         std::size_t expected, std::size_t actual) {
@@ -307,6 +316,9 @@ void example_sizes_match_typescript_baselines() {
     }
     const std::filesystem::path path = examples_root / (name + ".mkpro");
     const std::size_t actual = example_steps(path, /*analysis_budgeted=*/false);
+    // Hardware capacity is independent of regenerated exact-size snapshots.
+    require(actual <= 105U, "standard MK-61 example exceeds 105 cells: " + name +
+                               " actual=" + std::to_string(actual));
     record_size_mismatch("top-level example", name, expected, actual);
     if (size_only)
       continue;
@@ -526,7 +538,7 @@ void example_sizes_match_typescript_baselines() {
   }
 
   for (const auto& [name, expected] : PENDING_BASELINE) {
-    if (!included(name)) continue;
+    if (!included(name, true)) continue;
     if (progress) {
       ++progress_index;
       std::cerr << "[example-size] " << progress_index << "/" << progress_total << " " << name

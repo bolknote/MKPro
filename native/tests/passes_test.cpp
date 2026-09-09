@@ -877,6 +877,30 @@ void pass_pipeline_matches_initial_typescript_contract() {
   }
 
   {
+    IrOp shown = stop("halt");
+    shown.meta.stop_disposition = StopDisposition::Terminal;
+    shown.meta.roles = {kTypedDisplayObservationRole};
+    const std::vector<IrOp> program{
+        label("head"), recall("1"), plain(0x10), shown, plain(0x31),
+        recall("1"), plain(0x10), shown, jump_to("head")};
+    const auto shared = run_redundant_prologue(program);
+    require(shared.applied == 1 && shared.ops.at(3).meta.roles == shown.meta.roles,
+            "typed terminal observation metadata must not disable identical prologue sharing");
+    auto different_contracts = program;
+    different_contracts.at(3).meta.roles.clear();
+    require(run_redundant_prologue(different_contracts).applied == 0,
+            "terminal sharing must not replace a full-state stop by a weaker display contract");
+    auto bound = program;
+    bound.at(3).meta.roles.push_back("unknown-layout-contract");
+    require(run_redundant_prologue(bound).applied == 0,
+            "terminal observation metadata must not hide a real layout role");
+    auto misplaced = program;
+    misplaced.at(1).meta.roles = {kTypedDisplayObservationRole};
+    require(run_redundant_prologue(misplaced).applied == 0,
+            "only a typed terminal stop can carry an address-neutral display role here");
+  }
+
+  {
     const core::passes::PassResult result = run_redundant_prologue({
         label("head"),
         recall("1"),

@@ -177,6 +177,29 @@ void exact_decimal_remainder_correction_preserves_observations() {
   require(with_call_contract.applied == 1 &&
               with_call_contract.ops.at(1).meta.roles == ordinary_call.at(1).meta.roles,
           "untouched symbolic calls retain their argument ABI without freezing unrelated code");
+  for (const auto disposition : {StopDisposition::Terminal, StopDisposition::Resumable}) {
+    for (int opcode : {0x50, 0x29}) {
+      auto projected = source;
+      projected.front().opcode = opcode;
+      projected.front().meta.stop_disposition = disposition;
+      projected.front().meta.roles = {kTypedDisplayObservationRole};
+      const auto result = exact_decimal_remainder_correction(projected, context);
+      require(result.applied == 1 &&
+                  ir_ops_to_json({result.ops.front()}) ==
+                      ir_ops_to_json({projected.front()}),
+              "an untouched typed display must not freeze unrelated symbolic remainder code");
+    }
+  }
+  auto unknown_stop_role = source;
+  unknown_stop_role.front().meta.roles = {kTypedDisplayObservationRole};
+  reject(unknown_stop_role, "an untyped stop must not claim address-neutral display semantics");
+  auto non_stop_role = source;
+  non_stop_role.at(1).meta.roles = {kTypedDisplayObservationRole};
+  reject(non_stop_role, "a stop observation role cannot unpin another instruction kind");
+  auto mixed_roles = source;
+  mixed_roles.front().meta.stop_disposition = StopDisposition::Terminal;
+  mixed_roles.front().meta.roles = {kTypedDisplayObservationRole, "unknown-layout-contract"};
+  reject(mixed_roles, "an observation contract cannot hide an additional address-binding role");
   auto protected_call = source;
   protected_call.at(1).meta.roles = {"unknown-layout-contract"};
   reject(protected_call, "unknown command roles remain a conservative geometry barrier");

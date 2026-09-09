@@ -25,6 +25,24 @@ void require_item(const MachineItem& item, MachineItemKind kind, int opcode,
 
 void emitter_matches_initial_typescript_contract() {
   {
+    const auto projected = [](const MachineItem& item) {
+      return std::find(item.roles.begin(), item.roles.end(),
+                       kTypedDisplayObservationRole) != item.roles.end();
+    };
+    MachineEmitter emitter;
+    emitter.emit_stop(StopDisposition::Resumable);
+    emitter.emit_error_stop(StopDisposition::Terminal);
+    emitter.emit_stop(StopDisposition::Unknown);
+    emitter.emit_error_stop(StopDisposition::Resumable, "raw", {}, {}, true);
+    require(projected(emitter.items.at(0)) && projected(emitter.items.at(1)) &&
+                !projected(emitter.items.at(2)) && !projected(emitter.items.at(3)),
+            "only typed source stops may project internal deep-stack values");
+    const auto roundtrip = lower_ir_to_machine(raise_machine_to_ir(emitter.items));
+    require(machine_items_to_json(roundtrip) == machine_items_to_json(emitter.items),
+            "the typed display observation contract must survive IR transport");
+  }
+
+  {
     MachineEmitter emitter;
     emitter.emit_jump(0x51, "BP", 109, "provisional over-window identity");
     while (emitter.items.size() < 110U)

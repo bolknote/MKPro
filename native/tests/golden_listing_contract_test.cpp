@@ -2,6 +2,7 @@
 #include "mkpro/core/format.hpp"
 
 #include "test_support.hpp"
+#include "example_selection.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -262,13 +263,13 @@ void golden_listing_contract_matches_typescript_contract() {
 
   const bool progress = std::getenv("MKPRO_NATIVE_EXAMPLE_PROGRESS") != nullptr;
   const bool bless = std::getenv("MKPRO_NATIVE_BLESS") != nullptr;
-  const char* filter_env = std::getenv("MKPRO_NATIVE_EXAMPLE_FILTER");
-  const std::string filter = filter_env != nullptr ? filter_env : "";
+  std::size_t selected_count = 0;
   std::size_t progress_index = 0;
   for (const std::filesystem::path& source_path : example_files) {
     const std::string name = example_oracle_id(source_path, pending_root);
-    if (!filter.empty() && name.find(filter) == std::string::npos)
+    if (!example_selected(name))
       continue;
+    ++selected_count;
     if (progress) {
       ++progress_index;
       std::cerr << "[golden-listing] " << progress_index << "/" << example_files.size() << " "
@@ -330,6 +331,7 @@ void golden_listing_contract_matches_typescript_contract() {
                   first_different_line(*actual_variants, expected_variants));
     }
   }
+  require(selected_count != 0U, "no examples matched the requested golden-listing selection");
 }
 
 } // namespace mkpro::tests

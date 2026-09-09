@@ -1,6 +1,8 @@
 #include "mkpro/core/passes/x2_hidden_temp_restore.hpp"
 
 #include "mkpro/core/ir.hpp"
+#include "mkpro/core/emit/machine_emitter.hpp"
+#include "mkpro/emulator/mk61.hpp"
 #include "mkpro/core/passes/dead_store_elimination.hpp"
 #include "mkpro/core/passes/helpers.hpp"
 
@@ -613,24 +615,100 @@ void x2_hidden_temp_restore_matches_typescript_contract() {
   }
 
   {
-    // x2-hidden-temp-restore keeps register-dependent expr keys stable across stable indirect selector reads
-    const std::vector<IrOp> program = {
-        recall("8"),
-        plain(0x31, "К |x|"),
-        store("2"),
-        known_target_indirect_store("8", "3"),
-        recall("8"),
-        plain(0x31, "К |x|"),
-        plain(0x0e, "В↑"),
-        recall("2"),
-        halt(),
+    // A stable selector still writes back a different bank word. Only
+    // expressions independent of that word survive the indirect store.
+    const auto observe = [](const std::vector<IrOp>& program,
+                            const std::string& selector = "3.375") {
+      const auto resolved = resolve_machine_items(lower_ir_to_machine(program), {});
+      require(resolved.diagnostics.empty(), "X2 selector fixture must resolve");
+      std::vector<int> codes;
+      for (const auto& step : resolved.steps)
+        codes.push_back(step.opcode);
+      emulator::MK61 calc;
+      require(calc.load_program(codes).diagnostics.empty(), "X2 selector fixture must load");
+      calc.set_register("8", selector);
+      calc.set_register("1", "7.625");
+      calc.press_sequence({"В/О", "С/П"});
+      require(calc.run_until_stable(1000, 6).stopped, "X2 selector fixture must stop");
+      return std::vector<std::string>{calc.read_register("x"), calc.read_register("y")};
     };
-    const auto restored = run(program);
-    const auto dse = run_dse(restored.ops);
-    check_applied(restored.applied, 1, "x2-hidden-temp-restore keeps register-dependent expr keys stable across stable indirect selector reads");
-    check_plain_at(restored.ops, 7, 0x0a, "x2-hidden-temp-restore keeps register-dependent expr keys stable across stable indirect selector reads");
-    check_no_store(dse.ops, "2", "x2-hidden-temp-restore keeps register-dependent expr keys stable across stable indirect selector reads");
-    check_cell_delta(dse.ops, program, 2, "x2-hidden-temp-restore keeps register-dependent expr keys stable across stable indirect selector reads");
+    for (const std::string source : {"8", "1"}) {
+      IrOp indirect = known_target_indirect_store("8", "3");
+      indirect.meta.indirect_memory_targets = std::vector<int>{3};
+      const std::vector<IrOp> program{
+          recall(source), plain(0x31, "abs"), store("2"), indirect,
+          recall(source), plain(0x31, "abs"), plain(0x0e, "Bup"), recall("2"), halt()};
+      const auto restored = run(program);
+      const auto dse = run_dse(restored.ops);
+      auto stale = program;
+      stale.at(7) = dot_restore("2");
+      if (source == "8") {
+        check_applied(restored.applied, 0, "selector writeback invalidates dependent X2 keys");
+        check_ops_equal(restored.ops, program, "selector-dependent scratch recall must remain");
+        check_applied(dse.applied, 0, "DSE must retain an observed selector writeback");
+        require(observe(program).front() != observe(stale).front(),
+                "ROM must expose the old invalid restoration: 3.375 versus 3");
+      } else {
+        check_applied(restored.applied, 1, "independent X2 keys survive selector writeback");
+        check_plain_at(restored.ops, 7, 0x0a, "independent scratch restoration");
+        check_no_store(dse.ops, "2", "independent scratch store remains removable");
+        check_cell_delta(dse.ops, program, 2, "independent scratch and target stores are dead");
+      }
+      require(observe(program) == observe(restored.ops) &&
+                  observe(program) == observe(dse.ops),
+              "X2 restore and DSE composition must preserve visible X and Y");
+    }
+
+    IrOp indirect = known_target_indirect_store("8", "3");
+    indirect.meta.indirect_memory_targets = std::vector<int>{3};
+    const std::vector<IrOp> called_observer{
+        recall("1"), indirect, call("observe_selector"), halt(),
+        label("observe_selector"), recall("8"), plain(0x35, "frac"), ret()};
+    const auto called_dse = run_dse(called_observer);
+    check_applied(called_dse.applied, 0, "selector-writeback DSE follows called observers");
+    require(observe(called_observer).front() == observe(called_dse.ops).front(),
+            "a callee must receive the post-writeback selector value");
+
+    IrOp indirect_read = known_target_indirect_recall("8", "2");
+    indirect_read.meta.indirect_memory_targets = std::vector<int>{2};
+    const std::vector<IrOp> read_then_observe{
+        recall("1"), store("2"), plain(0x35, "frac"), indirect_read,
+        recall("8"), plain(0x35, "frac"), halt()};
+    const auto kept_read = run(read_then_observe);
+    check_applied(kept_read.applied, 0,
+                  "X2 dot replacement must retain an observed indirect-read writeback");
+    check_ops_equal(kept_read.ops, read_then_observe, "observed indirect X2 recall remains");
+    auto stale_read = read_then_observe;
+    stale_read.at(3) = dot_restore("2");
+    require(observe(read_then_observe, "2.375") == observe(kept_read.ops, "2.375") &&
+                observe(read_then_observe, "2.375").front() !=
+                    observe(stale_read, "2.375").front(),
+            "ROM must expose an erased read writeback: zero versus 0.375");
+
+    const std::vector<IrOp> read_then_call{
+        recall("1"), store("2"), plain(0x35, "frac"), indirect_read,
+        call("read_selector"), halt(), label("read_selector"),
+        recall("8"), plain(0x35, "frac"), ret()};
+    const auto kept_called_read = run(read_then_call);
+    check_applied(kept_called_read.applied, 0,
+                  "X2 selector-writeback liveness follows a called observer");
+    require(observe(read_then_call, "2.375") ==
+                observe(kept_called_read.ops, "2.375"),
+            "X2 substitution must preserve called selector observers");
+
+    for (const auto& safe_read : {
+             std::vector<IrOp>{recall("1"), store("2"), plain(0x35, "frac"),
+                              indirect_read, halt()},
+             std::vector<IrOp>{recall("1"), store("2"), plain(0x35, "frac"),
+                              indirect_read, store("8"), recall("8"),
+                              plain(0x35, "frac"), halt()}}) {
+      const auto restored_read = run(safe_read);
+      check_applied(restored_read.applied, 1,
+                    "dead or overwritten selector writeback permits X2 substitution");
+      require(observe(safe_read, "2.375").front() ==
+                  observe(restored_read.ops, "2.375").front(),
+              "proved-dead selector X2 replacement must match ROM");
+    }
   }
 
   {

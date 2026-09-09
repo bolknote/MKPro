@@ -726,6 +726,114 @@ void tail_return_ownership_contract() {
 
 namespace {
 
+void typed_display_indirect_read_liveness_contract() {
+  const auto projected_stop = [](StopDisposition disposition) {
+    auto item = stop(disposition);
+    item.roles.push_back(kTypedDisplayObservationRole);
+    return item;
+  };
+  const auto fixture = [&](const std::vector<int>& suffix) {
+    auto read = op(0xd0);
+    read.discarded_indirect_recall_value = true;
+    read.indirect_memory_targets = std::vector<int>{7};
+    std::vector<MachineItem> items{
+        op(8), op(0x40), read, op(0x62), op(0x0b), op(0x63),
+        projected_stop(StopDisposition::Resumable)};
+    for (int code : suffix) items.push_back(op(code));
+    items.push_back(projected_stop(StopDisposition::Terminal));
+    return items;
+  };
+  const auto proved = [](const std::vector<MachineItem>& items) {
+    const auto flow = core::build_post_layout_control_flow(items);
+    return flow.proved &&
+           core::prove_discarded_indirect_selector_reads_unobserved(items, flow, 7);
+  };
+  const auto observe = [](const std::vector<MachineItem>& items,
+                          const std::string& data, const std::string& input,
+                          bool probe_prompt = false) {
+    const auto resolved = resolve_machine_items(items);
+    require(resolved.diagnostics.empty(), "typed display fixture must resolve");
+    std::vector<int> codes;
+    for (const auto& step : resolved.steps) codes.push_back(step.opcode);
+    emulator::MK61 calc;
+    require(calc.load_program(codes).diagnostics.empty(),
+            "typed display fixture must load into the stock ROM");
+    calc.set_register("7", data).set_register("2", "2.375")
+        .set_register("3", "3").set_register("4", "4")
+        .set_register("5", "5").set_register("6", "6").set_register("1", "1");
+    calc.press_sequence({"В/О", "С/П"});
+    require(calc.run_until_stable(600, 5).stopped, "typed prompt must stop");
+    std::vector<std::string> values;
+    const auto snapshot = [&]() {
+      values.push_back(calc.display_text());
+      for (const char* reg : {"x", "y", "x1", "0"})
+        values.push_back(calc.read_register(reg));
+    };
+    snapshot();
+    if (probe_prompt) {
+      calc.press(".");
+      values.push_back(calc.display_text());
+      return values;
+    }
+    if (!input.empty()) calc.input_number(input, true);
+    calc.press("С/П");
+    require(calc.run_until_stable(600, 5).stopped, "typed continuation must stop");
+    snapshot();
+    calc.press(".");
+    values.push_back(calc.display_text());
+    return values;
+  };
+  // The two internal stack words need not agree at the prompt, but every
+  // continuation must forget them before an ordinary operation reads them.
+  const auto erased = fixture({0x64, 0x65, 0x66, 0x61});
+  require(proved(erased), "a typed display may suspend a proved dead deep-stack value");
+  const auto terminal = fixture({0x64});
+  require(proved(terminal), "a typed terminal display may discard internal Z/T");
+  for (const auto& program : {erased, terminal}) {
+    for (const std::string& seed :
+         {"1", "9", "123.375", "-888", "0.0000025", "99999999"}) {
+      for (const std::string& input : {"", "0", "2.75", "-9"}) {
+        require(observe(program, "17", input) == observe(program, seed, input),
+                "typed display must preserve X/Y/X1/X2 and counter observations");
+      }
+      require(observe(program, "17", "", true) == observe(program, seed, "", true),
+              "fresh recall/sign must synchronize X2 before the prompt");
+    }
+  }
+  const auto exposed = fixture({0x25, 0x25});
+  require(!proved(exposed) &&
+              observe(exposed, "17", "") != observe(exposed, "53", ""),
+          "a continuation that rotates the old Z into X must reject the projection");
+  auto visible_y = terminal;
+  visible_y.erase(visible_y.begin() + 5);
+  require(!proved(visible_y), "preview Y remains observable at typed displays");
+  auto opaque = erased;
+  for (auto& item : opaque) item.roles.clear();
+  require(!proved(opaque), "stop disposition alone cannot invent an observation mask");
+  for (bool manual : {false, true}) {
+    auto protected_prompt = erased;
+    if (manual) protected_prompt.at(6).manual_interaction.emplace();
+    else protected_prompt.at(6).raw = true;
+    require(!proved(protected_prompt), "raw and explicit manual UI remain proof barriers");
+  }
+  auto recovered_error = erased;
+  recovered_error.at(6).opcode = 0x29;
+  const auto recovery_flow = core::build_post_layout_control_flow(recovered_error);
+  require(!core::prove_discarded_indirect_selector_reads_unobserved(
+              recovered_error, recovery_flow, 7),
+          "a typed resumable error cannot inherit the ordinary numeric-input protocol");
+  auto interrupted_sign = erased;
+  interrupted_sign.insert(interrupted_sign.begin() + 4, op(0x54));
+  require(!proved(interrupted_sign),
+          "a fresh recall sign proof must not be inferred across an intervening command");
+  auto stale = core::build_post_layout_control_flow(erased);
+  auto terminal_prompt = erased;
+  terminal_prompt.at(6).stop_disposition = StopDisposition::Terminal;
+  require(!core::prove_discarded_indirect_selector_reads_unobserved(
+              terminal_prompt, stale, 7),
+          "a stale resume edge cannot be erased by a terminal observation contract");
+}
+
 void discarded_indirect_read_chain_contract() {
   const auto fixture = [](std::vector<int> suffix) {
     std::vector<MachineItem> items{
@@ -792,6 +900,7 @@ void discarded_indirect_read_chain_contract() {
 } // namespace
 
 void post_layout_control_flow_matches_typed_contract() {
+  typed_display_indirect_read_liveness_contract();
   discarded_indirect_read_chain_contract();
   executable_operand_image_contract();
   tail_return_ownership_contract();

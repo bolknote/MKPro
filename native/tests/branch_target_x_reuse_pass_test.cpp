@@ -688,8 +688,8 @@ void branch_target_x_reuse_matches_typescript_contract() {
         const std::string target =
             std::string("0123456789abcde").substr(static_cast<std::size_t>(target_index), 1);
         for (const bool write : {false, true}) {
-          for (const std::string initial : {selector, target}) {
-            for (const std::string final : {selector, target}) {
+          for (const std::string& initial : {selector, target}) {
+            for (const std::string& final : {selector, target}) {
               for (const int consumer : {0x35, 0x0f, 0x0c}) {
                 IrOp access = write ? known_target_indirect_store(selector, target)
                                     : known_target_indirect_recall(selector, target);
