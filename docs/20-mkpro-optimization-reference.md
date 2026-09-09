@@ -82,6 +82,18 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   register-entry ABI and may become removable only after a stack-entry function
   ABI proves that the argument expressions can stay in X/Y/Z/T through the call.
 
+- Component split bridges and fallthrough-jump folds preserve entry state as
+  well as numeric stack/X2 values. They do not cut an active mantissa/exponent,
+  cross `В↑` lift inhibition, or replace the immediate predecessor of `.`,
+  `/-/`, or `ВП`. A digit-to-direct-store fold retains its separately proved
+  entry-closing exception. ROM counterexamples pin both wrong numeric output
+  and wrong deeper-stack contents, even when visible X happens to match.
+- Natural-target component traces treat typed `K /` (`0x29`, `ЕГГ0Г`) as a
+  stop, not as ordinary fallthrough into the next helper. Terminal errors close
+  a movable component. Resumable errors retain their physical padding cell and
+  the authoritative CFG's per-caller continuation after that skipped cell;
+  raw or unknown stop dispositions remain ineligible. ROM regressions cover
+  two suspended call frames, entered values, stack/X1/X2 and the skipped store.
 - `split-bridge-donor-reuse` is a zero-cell variant of the generic natural-target
   fallthrough split. If the final CFG already contains a separately addressed,
   one-cell `К БП Rn` component whose sole proved command target is exactly the
@@ -94,6 +106,11 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   same transparent jump; final CFG, command identity, stack/X2, return-stack,
   indirect-memory, preload, and size accounting proofs are then repeated. No
   opcode with fallthrough and no merely numerically equal target is eligible.
+  A common, non-raw direct store immediately after a digit is a proved local
+  exception: it consumes the same X and closes entry itself. Split insertion
+  and jump removal share that predicate. Rejected boundaries are checked
+  before cloning layout components; candidate order and search limits do not
+  change.
 
 - `fallthrough-jump-component-fold` is a generic final-layout block-chaining
   transform. When an ordinary `БП <target>` pair terminates one movable
@@ -323,6 +340,20 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   stops such as input/show/pause/ask keep a fallthrough edge but reset visible
   X/X2 facts.
 
+- Final address/code overlays use a shared exact byte-image view for CFG,
+  selector-value flow, and indirect-transfer relocation. The executable operand
+  is encoded from its final symbolic/numeric target and validated formal alias;
+  numeric address 52 therefore executes opcode `0x52`, not decimal opcode 52.
+  Command identities and operand ownership remain unchanged. Missing targets,
+  inconsistent aliases, unknown opcode effects, and over-window logical images
+  fail closed; an `exec` marker never supplies a guessed instruction.
+  The same byte view is used when refreshing relocated selector annotations,
+  including targets that now enter an operand rather than an ordinary Op item.
+  No-return obligations use the authoritative execution graph with exact
+  nested frames, formal entry counters and resumptions. A resumable `С/П` is
+  not a terminal exit, and a DFS back edge cannot establish that a callee never
+  returns. An unresolved graph conservatively prevents the overlay.
+
 ## 3) Capability families (what the optimizer is able to report)
 
 Below are the public capability IDs from `report.optimizer.capabilities`.
@@ -338,8 +369,9 @@ the same generalized lowering strategy.
 - `dispatch-compare-chain` — compresses long compare-and-branch chains.
 - `computed-dispatch` — lowers eligible exhaustive multi-way `match` dispatch to a single computed indirect jump using a solved affine formula (`op(scale*x + offset)`) after post-layout address resolution.
 - `indirect-flow` — enables indirect jumps/dispatch when preconditions are proven.
-- `indirect-memory-table` — reads the next-cell address through an indirect table instead of long absolute labels.
-- `tail-call-lowering` — lowers tail calls to a shorter jump-based form instead of a full call frame.
+- `stable-indirect-flow` uses the shared post-layout charged-selector rewrite: exact runtime values, complete control flow, and command-identity transport are required before deleting an operand. A forward numeric selector with no retargetable charge is not enough.
+- `indirect-memory-table` — replaces a direct register access with a same-width indirect access through an already charged stable selector. A cheap local scan only locates candidates; the shared execution-state value proof must confirm the exact selector and value-preserving write-back. Selector and accessed logical-register identities remain separate. Stores and recalls end numeric entry; labels do not manufacture a new hardware entry buffer.
+- `tail-call-lowering` — lowers tail calls to a shorter jump-based form instead of a full call frame. Shared return rewrites use CFG-derived frame ownership rather than linear procedure ranges. A jump into a shared tail retains its caller's ownership; a nested call's returns belong to its own frame. Every owner of a changed return must have the same proved continuation, with no main/empty-stack entry, raw/manual barrier, or unresolved materialized transfer. Planned return replacements participate in the same transaction: ordinary tail-call lowering cannot erase a return already assigned a new continuation, directly or through a return label. An unchanged immediate return uses the shorter ordinary tail call instead of an extra jump-to-return.
 - `call-continuation-composition` — when every direct call of a procedure is immediately followed by a call of the same second procedure, removes those continuation calls and redirects every ordinary return of the first procedure into one tail jump to the second. The pass is independent of procedure names and source expressions, rejects mixed continuations, recursion, external body entries, raw/manual barriers, stops, unknown indirect flow, and cross-region exits, and commits only when lowering the rewritten IR uses fewer MK-61 cells.
 - `vo-return-body-reorder` — candidate to move a subroutine return body so a `ПП/В/О` pair can collapse when layout allows.
 - `return-zero-jump` — rewrites `return` as a short jump via cell `0`.
@@ -379,13 +411,47 @@ the same generalized lowering strategy.
 - `jump-thread` — rewires jump chains into one direct jump path.
 - `conditional-branch-trampoline` — retargets a conditional through a later identical conditional with the same destination when a size-rescue layout candidate enables it, exposing middle-entry addresses for selector packing without changing the final branch target.
 - `jump-to-next-threading` — removes intermediate jumps to the next label.
-- `dead-code-after-halt` — removes code unreachable after `HALT`.
+- `dead-code-after-halt` keeps conservative stop-continuation geometry.
+  Typed manual-input anchors and raw NOP cells are preserved as local roots,
+  without freezing unrelated unreachable symbolic blocks. Arbitrary raw code,
+  encoded numeric/indirect targets and error padding remain guarded. Typed
+  symbolic indirect targets may relocate before their selector words are bound;
+  numeric or formal target facts cannot. Physical address 01 stays reachable
+  when an empty-stack return may occur.
+  `exact-terminal-unreachable-code` independently removes unreachable symbolic
+  IR using the exact stop/return CFG, including typed terminal `ЕГГ0Г`.
+  Size-rescue search regenerates this alternative from the finalized incumbent
+  and accepts it only after complete layout and the final proof gate; local
+  deletion alone may forfeit a larger address/code saving.
+  Called helpers and resumable prompt continuations survive. Raw/manual
+  anchors, numeric/indirect geometry and resumable error padding remain
+  outside this erasure pass. Compiler and ROM tests cover full X/Y/Z/T,
+  physical last-X, hidden X2, live returns and distinct option cache keys.
+- Stable-register value flow follows labelled resume edges, including the skipped
+  cell after a resumable error, rather than guessing the preceding instruction.
+  Register charges stay separate for distinct caller return contexts; keyboard
+  input invalidates X and number-entry state, not unrelated registers.
+  Ordinary/error resume and manual-entry roots require exact typed predecessors
+  and physical/formal return frames. Compiler-analysis and ROM tests cover
+  repeated calls, error padding, overwritten input registers and malformed roots.
 - `register-coalesce` — merges separate temporary cells when lifetime ranges do not overlap.
 - `duplicate-failure-tail-merge` — merges identical error/failure tail sequences, including adjacent or separated pause-only tails that display the incoming X value when the removed tail cannot be reached by fallthrough.
 - `shared-terminal-tail` — jumps into an existing identical straight-line suffix that already ends in unconditional terminal flow.
 - `shared-straight-line-helper` — extracts repeated non-terminal straight-line opcode bodies into one helper subroutine when the `ПП`/`В/О` cost is lower than duplicated inline code; a size-gated candidate extends this to bodies with direct `ПП` calls, and `multi-entry-straight-line-helper` can add internal entry labels for repeated suffixes of the same helper body. X2-restoring numeric-entry commands may be shared only when their restore context is wholly inside the helper body; helper calls/returns are not allowed to become the previous command for an adjacent digit/`.`/`/-/`/`ВП`.
 - `arithmetic-if-pass` — a dedicated pass collecting all `arithmetic-if` opportunities.
-- `redundant-prologue-elimination` — removes repeated identical prologues.
+- `redundant-prologue-elimination` — shares identical source-terminal display
+  prologues only with exact CFG entries and unchanged numeric destinations.
+  Resumable stops must remain distinct: equal display contents do not make two
+  user resumes equivalent to one. Unknown stops, external entries into a
+  removed suffix, manual anchors and role-bound cells also block the rewrite;
+  unreferenced labels remain supported. A store-carried first operand needs
+  the shared stack-lift/X2 proof before replacement by the head's recall.
+  ROM regression tests compare state after every resume, not just the first
+  displayed value.
+- Display first-cell splices issue `ВП` once and append exponent digits to
+  that open entry. Repeating `ВП` turns a restored all-zero mantissa into one;
+  avoiding the duplicate preserves zero screens and saves one cell. This
+  rule belongs to the typed display generator, not a global `ВП ВП` rewrite.
 - `step-vs-run-verification` — chooses the more compact step/run verification form.
 - `coord-list-scaled-decimal` — uses scaled coordinate lists for cheaper decimal handling.
 - `dual-constant-sign-digit` — exposes dual-constant sign-digit intent coverage behind negative-zero threshold assumptions.
@@ -441,6 +507,11 @@ implementation and tuning, many of those names fall into broader families:
   `stable-indirect-flow`,
   `preloaded-indirect-flow`, `runtime-indirect-call-flow`,
   `r0-fractional-sentinel`, and `super-dark-*`.
+  A discarded indirect read still changes the physical stack. The borrowing
+  proof propagates every later discarded read without forgetting older unequal
+  Y/Z/T values and accepts only after full X/Y/Z/T/X1/X2 convergence. Stores,
+  controls consuming unequal X, raw/manual commands and stops before convergence
+  remain barriers; a dead source result alone never frees its aliased registers.
 - **Helperization, shared bodies, and tail merging** — extracts or jumps into
   repeated byte sequences when the `ПП`/`В/О` or jump cost is lower than
   duplication. Includes `shared-terminal-tail`, `shared-straight-line-helper`,
@@ -973,6 +1044,11 @@ candidate set, its deterministic ordering, size costs, or any proof gate.
   source-relevant compact bit-mask and dead-source residual variants, so the
   reclaimed-preload result does not depend on whether those variants happened
   to be selected earlier as standalone candidates.
+  A post-cleanup free register is only a proposal: source re-lowering can
+  resurrect its assignments. Both physical shares and logical allocations
+  therefore pass the same regenerated logical interference proof before IR
+  cleanup. In particular, an inner loop whose counter was kept in X cannot
+  reuse a still-live outer counter merely because its old stores disappeared.
 - `logical-register-lifetime-allocation` — when ordinary source allocation runs
   out of registers, lowers once with symbolic register identities, builds the
   complete CFG interference graph, exactly colors it against the target's
@@ -986,6 +1062,10 @@ candidate set, its deterministic ordering, size costs, or any proof gate.
   candidate. Generated `F L0..L3` loops attach their logical counter identity
   to the opcode cell rather than its address operand, so fixed loop registers
   do not appear as conflicting duplicate physical anchors in that graph.
+- Preload-pool exclusions and reserved suppressed slots constrain every search
+  candidate; they do not by themselves select the fixed-lowering path.
+  `disable_candidate_search` or explicit lowering flags still do so. This keeps
+  ordinary automatic optimization available under the same resource policy.
 - `demote-constant-indirect-flow` — recompiles with selective setup-enterable
   numeric constant inlining to free registers for post-layout indirect-flow
   rescue; probe bases include existing-constant dual-use selectors when that
@@ -3379,12 +3459,15 @@ the deferral policy is lifted.
      CLI/debug/regression checks, but is not load-bearing in optimizer candidate
      acceptance.
 
-  Measured, proof-gated wins (`MKPRO_NATIVE_BLESS=1` re-blessed,
-  `git diff` step deltas ≤ 0): `basic` 8→7, `functions-demo` 25→16,
-  `human` 27→23, `tiny-game` 27→23. The `human` shrink is independently checked
-  by `emulator_indirect_flow_equivalence_matches_typescript_contract` (now
-  comparing the default aggressive compile against a `disable_candidate_search`
-  baseline). The gate also **caught a previously-shipped miscompile**: the
+  Historical measurements included `basic` 8→7, `functions-demo` 25→16
+  and `tiny-game` 27→23. The former `human` 27→23 shortcut was subsequently
+  invalidated and removed: it depended on a program name and did not preserve
+  arbitrary function bodies or the complete machine-state contract.
+  `emulator_indirect_flow_equivalence_matches_typescript_contract` now checks
+  renamed and varied source programs against ordinary lowering, including
+  stack and X2 observations. Current sizes are recorded in the size baselines,
+  not these historical measurements. The gate also
+  **caught a previously-shipped miscompile**: the
   committed `fox-hunt-mk61` aggressive form (60 cells) returned
   `--01-- 1,` where the trusted baseline returns `--01-- 2,` on the first input,
   so the gate rejects it and the program settles on the correct 65-cell form
@@ -4732,6 +4815,12 @@ target already bound by the surrounding layout, the proof rejects the candidate
 rather than silently changing the edge. Ordinary `14.375` still loses its
 fractional part. Short negative constants are not fixed points either: `-850`
 becomes `-99999850`, so later display/data reads cannot reuse it unchanged.
+An eight-character integer spelling with leading zeroes is not an eight-significant-digit
+fixed point: numeric setup of `00000010` stores normalized `10`, whereas an
+indirect call writes the denormalized bank word. Complete-word proofs require
+a nonzero leading mantissa digit; numeric projections have their own narrower
+proof. Any computed-setup provenance, including a source-line marker alone,
+excludes a purported stable literal.
 Emulator facts execute setup instructions, not only register injection, to pin
 these distinctions.
 
@@ -4888,3 +4977,61 @@ Stable-register value flow follows validated `entered()` phases from their exact
 A one-cell-over-limit standard-profile artifact may remove a straight-line helper's explicit return when its final command lands at A4 and physical 00 contains a shared return. Besides symbolic direct calls, the proof admits complete indirect call target sets whose labelled command identities remain at exactly the same physical addresses. Indirect jumps, unlabelled interiors, removed-return entries, moved targets and incomplete maps are rejected. Final call-site witnesses are reindexed and checked independently.
 
 The terminal/cyclic pipeline also evaluates this rule without requiring a terminal-report idiom. It can compose a transparent startup return and proved empty-stack main-loop returns with the suffix rewrite, but publishes only a net reduction. It rebuilds the authoritative CFG and resume/return-stack identities and independently derives the delivered stable selector at each indirect call before and after rewriting. ROM tests cover repeated calls and resumptions, X/Y/Z/T/X1 and a decimal-entry X2 probe. The 112-cell MK61S profile never inherits the stock A4-to-00 wrap assumption.
+
+Startup normalization separately proves convergence of the manual-start digit-entry/lift context. An inserted return can make the first digit push the previous X into Y when the original manual entry would overwrite X; dot/exponent entry can even alter X itself. The shared stack-equality domain follows all authoritative paths until X/Y/Z/T/X1/X2 agree, rejects an unequal read/store/stop, and keeps sign/Cx entry context conservative. A ROM negative witness exposes different Z/T despite equal displayed scores. The selected-artifact finalization repeats the suffix proof after late indirect call packing, so a size-neutral startup layout can repay its cost without a source-specific exception.
+
+### Rooted main-prefix placement and recall normalization
+
+Natural-target component placement can keep the main entry at physical 00
+while splitting a safe fallthrough suffix behind a two-cell BP bridge. The
+earliest fixed helper target supplies the split bound; both fixed and bounded
+target identities are remapped before reusing the existing component solver.
+The bridge is charged against the cell-saving budget and the fallback cannot
+recursively split main again. Final CFG, return-stack, stack/X2 and selector
+proofs remain mandatory; active digit entry and observed return continuations
+are not movable merely because their numeric addresses fit.
+
+A configured empty-return destination is not itself an external entry.
+The layout reserves it only when the authoritative labelled execution graph
+contains a reachable return with an empty caller stack. External/manual roots
+and actual return frames remain protected independently. Missing execution
+contexts fail closed.
+
+Stable indirect flow can change a positive integer's retained bank word
+without changing a subsequent typed recall: values in 1..99999999 normalize
+to the same complete X word. The data proof now distinguishes this read
+projection from full bank-word preservation and admits typed direct/indirect
+reads, not indirect writes or opaque/manual observations. Zero, negative
+values, fractions, raw words and computed setup do not inherit this integer
+rule. In particular, zero followed by VP remains a negative ROM witness.
+Tests cover all positive mantissa widths, all selector counter classes,
+stack/X1 and decimal-entry probes, plus numeric setup with leading zeroes.
+
+### Selector writeback in register-alias dataflow
+
+Every indirect memory access resolves and writes back its selector before the
+load/store. The X/X2 alias and value analyses invalidate old selector-dependent
+facts even for R7..Re; stable means no counter increment, not preservation of a
+fractional word. A known self-store then establishes its new X/register equality.
+Unknown store destinations invalidate all potentially stale dependencies.
+
+Branch-target recall removal uses the same ordering. An indirect condition,
+an indirect-store prefix or a called helper cannot preserve the old selector
+alias by the shortcut for an immediately preceding recall. Independent exact
+post-store value proofs can still admit a redundant read. Compiler-pass and ROM
+regressions cover all three counterexamples, the common CFG X-reuse pass,
+unknown destinations and the positive self-store case.
+
+A single flexible selector's preferred old address is only a fast first
+candidate, not a fixed constraint. If that geometry costs padding or a split
+bridge, the planner also evaluates bounded rebinding through the complete
+relocation/data/stack proof transaction. Only a proved strictly smaller result
+replaces the preferred candidate. The alternative cannot recurse again, and
+a failed proof leaves the original candidate available.
+
+The shared recall-removal engine also proves the discarded indirect command's
+selector writeback dead on every CFG continuation. A later read, indirect alias
+or called observer blocks deletion even when X already equals the recalled
+data value. A complete intervening store kills that obligation. Unknown flow
+or memory targets and manual interactions fail closed; direct recalls retain
+their existing path without the extra liveness walk.
