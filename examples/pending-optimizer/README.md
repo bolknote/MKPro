@@ -16,7 +16,7 @@ with a raw listing: the goal is to make the high-level source fit.
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
 | `tic-tac-toe-4x4.mkpro` | 141 | 105 | +36 | pending optimizer |
-| `nekromant.mkpro` | 137 | 105 | +32 | pending optimizer; regression against 135-cell baseline |
+| `nekromant.mkpro` | 138 | 105 | +33 | pending optimizer; +3 after correctness fixes |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
@@ -29,14 +29,25 @@ and ordinary symbolic address caches; continuation proofs track physical X1
 and X2, including nested calls and manual resumes. An unused empty-return
 policy no longer pins an unrelated command identity.
 
-The current 129-cell 4x4 includes full finalization of helper ABI candidates,
+An earlier 129-cell 4x4 included full finalization of helper ABI candidates,
 stable-selector release through proved empty-stack loop returns, and a final
 dead-store erasure with representable companion-selector placement.
-The 135-cell Nekromant additionally benefits from scalar-delta lowering without
+The earlier 135-cell Nekromant additionally benefited from scalar-delta lowering without
 an artificial unit multiplication. Historical measurements below do not
 supersede the current table and do not establish that either program fits yet.
 
-## Live Optimization Notes
+The current 141/138-cell snapshots retain indirect-selector writeback and its
+effects on aliases, stack/X2, and subsequent control flow. Deleting a memory
+operation now requires the selector writeback to be dead as well as the
+loaded/stored value. The exact baselines record these correctness costs; they
+do not mean either pending source fits. All 31 ordinary examples remain within
+the standard 105-cell limit, enforced separately from regenerated snapshots.
+
+## Historical Optimization Notes
+
+The measurements below describe earlier intermediate artifacts and proof
+models. They explain the techniques, not the current sizes in the table.
+Corrections can invalidate a formerly smaller artifact.
 
 - Selector-charge literal sinking reduces the unchanged, behavior-correct 4x4
   port from 143 to 141 cells. The general pass moves a literal through a
@@ -47,8 +58,8 @@ supersede the current table and do not establish that either program fits yet.
   distinguishes a fresh digit after a recall from an Enter-suppressed lift.
 - The target remains 105 cells for a standard MK-61. The MK61S expanded model
   has 112 cells, a separate capacity rather than extra standard storage; 141
-  fits neither profile. Nekromant's 137-cell result is a known regression, not
-  a raised test baseline: its size test still requires 135 cells.
+  fits neither profile. The current Nekromant size is 138 cells; its exact
+  native baseline and the table above now agree.
 
 - Atomic finalization now bounds rebindable companion targets during component
   placement instead of rejecting an unencodable chosen order afterward.
@@ -307,7 +318,7 @@ supersede the current table and do not establish that either program fits yet.
   transactions compose to reduce `tic-tac-toe-4x4.mkpro` from 133 to 125 cells
   without changing its source or recognizing the game.
 
-For `tic-tac-toe-4x4`, the current 133-cell baseline includes the corrected
+For `tic-tac-toe-4x4`, the earlier 133-cell baseline included the corrected
 one-based line update: line 1 changes units, so the coefficient of `pow10(line)`
 is `+/-0.1`, not `+/-1`. The previous 129-cell port changed the adjacent decimal
 digit and is not a valid behavior-preserving size comparison. The compiler
@@ -315,7 +326,7 @@ handles the required computed coefficient through the generic bounded-stack
 pow10-delta lowering; the high-level source retains the original arithmetic
 order and the explicit keyboard-input protocol.
 
-После восстановления исходного поведения 4x4 занимает 164 ячейки: обновления
+На этапе восстановления исходного поведения 4x4 занимала 164 ячейки: обновления
 линий используют коэффициент +/-0.1, ответ хранится отдельно от координат,
 выигрыш не прерывает обход банков, а оценка позиции накапливается от 98
 в исходном порядке. Занятость проверяется по дробной части битовой маски,

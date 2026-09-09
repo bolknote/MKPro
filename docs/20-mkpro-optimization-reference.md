@@ -5035,3 +5035,41 @@ or called observer blocks deletion even when X already equals the recalled
 data value. A complete intervening store kills that obligation. Unknown flow
 or memory targets and manual interactions fail closed; direct recalls retain
 their existing path without the extra liveness walk.
+
+### Indirect selector writeback and dead memory operations
+
+`IndirectSelectorWritebackLiveness` is shared by redundant-recall removal, X2 scratch restoration, and DSE. An indirect load or store cannot disappear merely because its loaded value or destination is dead: the selector writeback must also be unobserved on every CFG continuation, or be completely overwritten before any read. Stable R7-Re selectors are not exempt. Calls, indirect aliases, unresolved targets, and manual interaction barriers are included; the immutable pass input shares one lazily built CFG. ROM regressions cover dependent and independent X2 expressions, DSE composition, and a called selector observer.
+
+
+### Typed display observations and continuation liveness
+
+Source-emitted `show`, `read`, and `halt` stops carry the compiler-owned
+`typed-display-observation:xy` role. It states that X and preview Y are public
+display values; it is not inferred from a comment, a discarded-load flag, or
+the stop disposition alone. The indirect-read proof still requires equal
+physical X1 and hidden X2 at the boundary. Raw instructions and explicit manual
+interaction protocols retain full-state barriers.
+
+The equality analysis carries any remaining Z/T difference through every
+authoritative resume edge, including both stack-lifting and non-lifting equal
+numeric input and plain continuation. It accepts only if the difference is
+erased before use or reaches a genuinely terminal typed display. It does not
+reset taint at a stop, assume input clears the stack, invent return frames, or
+apply this protocol to resumable errors. A rotated deep-stack value, observed
+preview Y, missing role, stale terminal/resume graph, or manual protocol rejects
+the candidate.
+
+The same proof models `/-/` immediately after a register recall: ROM facts
+establish that it signs the recalled X and synchronizes X2, preserving Y/Z/T
+and physical X1. No such fact is inferred across an intervening instruction,
+call, or return. Subsequent numeric entry remains conservative. Synthetic ROM
+cases cover different discarded data, repeated observations, input with and
+without stack lift, a decimal-entry X2 probe, and negative continuation cases.
+
+The display role is address-neutral only on a well-formed typed stop. It must
+not disable exact-decimal remainder correction elsewhere in a symbolic
+program, or identical terminal-display prologue sharing. Those passes retain
+the role unchanged, reject unknown/additional layout roles, and never interpret
+the same spelling on another opcode as permission to move it. Shared terminal
+tails must have identical observation contracts; a stronger full-state stop
+cannot be replaced by a weaker display-only stop.
