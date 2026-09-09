@@ -1,9 +1,4 @@
 #include "mkpro/core/passes/recall_removal.hpp"
-#include "mkpro/core/passes/cfg.hpp"
-#include "mkpro/core/indirect_addressing.hpp"
-#include "mkpro/core/opcodes.hpp"
-
-#include <algorithm>
 
 #include <utility>
 #include <vector>
@@ -11,79 +6,6 @@
 namespace mkpro::core::passes {
 
 namespace {
-
-// Removing an indirect recall also removes selector writeback. Equality of
-// its loaded X value is not enough. Follow all exact CFG continuations until
-// the selector is overwritten, rejecting any intervening read or alias.
-bool indirect_recall_writeback_is_dead(const std::vector<IrOp>& ops, int recall_index) {
-  if (recall_index < 0 || recall_index >= static_cast<int>(ops.size()))
-    return false;
-  const IrOp& recall = ops.at(static_cast<std::size_t>(recall_index));
-  if (recall.kind != IrKind::IndirectRecall)
-    return true;
-  if (!is_stable_indirect_selector(recall.register_name))
-    return false;
-  const std::string& selector = recall.register_name;
-  const int selector_index = register_index(selector);
-  const auto control = build_control_flow_graph(
-      ops, {.terminal_stop_fallthrough = false});
-  if (!control.targets_are_exact())
-    return false;
-  std::vector<int> pending;
-  for (const auto& edge : control.edges.at(static_cast<std::size_t>(recall_index)))
-    pending.push_back(edge.target);
-  std::vector<bool> seen(ops.size(), false);
-  while (!pending.empty()) {
-    const int index = pending.back();
-    pending.pop_back();
-    if (index < 0 || index >= static_cast<int>(ops.size()))
-      return false;
-    if (seen.at(static_cast<std::size_t>(index)))
-      continue;
-    seen.at(static_cast<std::size_t>(index)) = true;
-    const IrOp& op = ops.at(static_cast<std::size_t>(index));
-    if (has_rewrite_barrier(op) || op.meta.manual_interaction.has_value())
-      return false;
-    if (op.kind == IrKind::Store && op.register_name == selector)
-      continue;
-    if ((op.kind == IrKind::Recall && op.register_name == selector) ||
-        (op.kind == IrKind::Loop && loop_counter_register(op.counter) == selector))
-      return false;
-    switch (op.kind) {
-    case IrKind::IndirectStore:
-    case IrKind::IndirectRecall: {
-      if (op.register_name == selector)
-        return false;
-      const auto target = known_indirect_memory_target(op);
-      if (target.has_value() && *target == selector) {
-        if (op.kind == IrKind::IndirectStore)
-          continue; // Independent selector; this complete store kills the old word.
-        return false;
-      }
-      if (!target.has_value()) {
-        if (!op.meta.indirect_memory_targets.has_value() ||
-            op.meta.indirect_memory_targets->empty() ||
-            std::find(op.meta.indirect_memory_targets->begin(),
-                      op.meta.indirect_memory_targets->end(), selector_index) !=
-                op.meta.indirect_memory_targets->end())
-          return false;
-      }
-      break;
-    }
-    case IrKind::IndirectJump:
-    case IrKind::IndirectCall:
-    case IrKind::IndirectCondJump:
-      if (op.register_name == selector)
-        return false;
-      break;
-    default:
-      break;
-    }
-    for (const auto& edge : control.edges.at(static_cast<std::size_t>(index)))
-      pending.push_back(edge.target);
-  }
-  return true;
-}
 
 bool recall_starts_label_entry(const std::vector<IrOp>& ops, int recall_index,
                                const DirectReturnAnalysisContext& context) {
@@ -99,7 +21,8 @@ bool recall_starts_label_entry(const std::vector<IrOp>& ops, int recall_index,
 
 } // namespace
 
-RecallRemovalEngine::RecallRemovalEngine(const std::vector<IrOp>& ops) : ops_(ops) {}
+RecallRemovalEngine::RecallRemovalEngine(const std::vector<IrOp>& ops)
+    : ops_(ops), selector_writeback_liveness_(ops) {}
 
 const std::vector<IrOp>& RecallRemovalEngine::ops() const {
   return ops_;
@@ -138,7 +61,7 @@ const DirectReturnAnalysisContext& RecallRemovalEngine::direct_return_context() 
 
 std::optional<RecallRemovalStackSchedulerPlan>
 RecallRemovalEngine::plan(int recall_index, const RecallRemovalPlanOverrides& overrides) const {
-  if (!indirect_recall_writeback_is_dead(ops_, recall_index))
+  if (!selector_writeback_liveness_.dead_after(recall_index))
     return std::nullopt;
   const DirectReturnAnalysisContext& context = direct_return_context();
   RecallRemovalStackSchedulerOptions options;

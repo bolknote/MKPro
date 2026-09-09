@@ -2,6 +2,7 @@
 
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/passes/cfg.hpp"
+#include "mkpro/core/passes/indirect_selector_liveness.hpp"
 #include "mkpro/core/passes/liveness_analysis.hpp"
 
 #include <deque>
@@ -264,6 +265,7 @@ PassResult eliminate_dead_stores(const std::vector<IrOp>& ops,
   std::optional<ControlFlowGraph> exact_graph;
   std::set<int> exact_uncertain_sources;
   std::set<int> removed;
+  IndirectSelectorWritebackLiveness selector_writeback_liveness(ops);
 
   for (std::size_t index = 0; index < ops.size(); ++index) {
     const IrOp& op = ops.at(index);
@@ -319,6 +321,8 @@ PassResult eliminate_dead_stores(const std::vector<IrOp>& ops,
     if (finalizes_number_entry(ops, static_cast<int>(index)))
       continue;
     if (provides_vp_restore_context(ops, static_cast<int>(index)))
+      continue;
+    if (!selector_writeback_liveness.dead_after(static_cast<int>(index)))
       continue;
     removed.insert(static_cast<int>(index));
   }

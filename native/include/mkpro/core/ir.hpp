@@ -26,6 +26,13 @@ inline constexpr const char* kRetunableNaturalFractionalSelectorRolePrefix =
 // post-layout proof overlays separately addressed code onto it.
 inline constexpr const char* kResumableErrorPaddingRole = "resumable-error-padding";
 
+// Source-emitted show/read/halt observation contract. The public display and
+// preview are X/Y; Z/T are internal temporaries, not an implicit manual UI.
+// A consumer must still prove X1/X2 equality and all later uses after resume.
+// Raw commands and explicit manual protocols never inherit this projection.
+inline constexpr const char* kTypedDisplayObservationRole =
+    "typed-display-observation:xy";
+
 // Compiler-owned interaction semantics.  Comments and mnemonic text are
 // deliberately not part of this channel: post-layout proofs must be able to
 // distinguish a resumable prompt from source-level halt() after comments have

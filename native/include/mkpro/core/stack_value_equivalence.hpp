@@ -83,6 +83,19 @@ inline StackValueEqualityTransfer transfer_decimal_sign_equality(
                                          : StackValueEqualityTransfer::Continue;
 }
 
+// Immediately after an identical register recall, /-/ edits the recalled X,
+// not the previous-X entry shadow. The ROM synchronizes X2 to the signed
+// recalled value; Y/Z/T and physical last-X remain untouched. The caller must
+// prove this immediate recall context, not merely a closed numeric literal.
+inline StackValueEqualityTransfer transfer_recalled_number_sign_equality(
+    StackValueEqualityState& state) {
+  if (!state.stack_equal.at(0))
+    return StackValueEqualityTransfer::Rejected;
+  state.x2_equal = true;
+  return stack_values_fully_equal(state) ? StackValueEqualityTransfer::Converged
+                                         : StackValueEqualityTransfer::Continue;
+}
+
 // Transfer one identical opcode in both executions. `reads_distinct_register`
 // is true when a recall/indirect operation observes the selector register whose
 // hypothetical stable charge differs from the actual mutating charge.

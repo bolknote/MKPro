@@ -196,6 +196,8 @@ void MachineEmitter::emit_stop(StopDisposition disposition,
                                std::optional<int> source_line, bool raw) {
   emit_op(0x50, std::move(mnemonic), std::move(comment), source_line, raw);
   items.back().stop_disposition = disposition;
+  if (!raw && disposition != StopDisposition::Unknown)
+    items.back().roles.push_back(kTypedDisplayObservationRole);
 }
 
 void MachineEmitter::emit_error_stop(StopDisposition disposition,
@@ -204,6 +206,8 @@ void MachineEmitter::emit_error_stop(StopDisposition disposition,
                                      std::optional<int> source_line, bool raw) {
   emit_op(0x29, std::move(mnemonic), std::move(comment), source_line, raw);
   items.back().stop_disposition = disposition;
+  if (!raw && disposition != StopDisposition::Unknown)
+    items.back().roles.push_back(kTypedDisplayObservationRole);
 }
 
 void MachineEmitter::record_label_edge(const std::string& label, std::optional<std::string> fact) {

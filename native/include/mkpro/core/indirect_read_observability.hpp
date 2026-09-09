@@ -75,6 +75,7 @@ inline bool prove_discarded_indirect_selector_reads_unobserved(
     StackValueEqualityState equality;
     bool number_entry_active = false;
     bool digit_lift_proved = true;
+    bool recalled_number_ready = false;
   };
   std::deque<Pending> pending;
   for (std::size_t s = 0; s < flow.execution_states.size(); ++s) {
@@ -93,7 +94,7 @@ inline bool prove_discarded_indirect_selector_reads_unobserved(
     pending.push_back(start);
   }
 
-  std::set<std::tuple<std::size_t, int, bool, bool>> visited;
+  std::set<std::tuple<std::size_t, int, bool, bool, bool>> visited;
   while (!pending.empty()) {
     Pending current = pending.front();
     pending.pop_front();
@@ -104,7 +105,8 @@ inline bool prove_discarded_indirect_selector_reads_unobserved(
     const auto key = std::tuple{current.state,
                                stack_value_equality_key(current.equality),
                                current.number_entry_active,
-                               current.digit_lift_proved};
+                               current.digit_lift_proved,
+                               current.recalled_number_ready};
     if (!visited.insert(key).second)
       continue;  // A closed, observation-free fixed point is harmless.
     if (visited.size() > maximum_equality_states)
@@ -115,9 +117,50 @@ inline bool prove_discarded_indirect_selector_reads_unobserved(
       return false;
     const MachineItem& item = items.at(execution.item_index);
     if (item.kind != MachineItemKind::Op || item.raw ||
-        item.manual_interaction.has_value() ||
-        item.stop_disposition != StopDisposition::Unknown) {
+        item.manual_interaction.has_value()) {
       return false;
+    }
+    if (item.stop_disposition != StopDisposition::Unknown) {
+      const bool typed_display =
+          std::find(item.roles.begin(), item.roles.end(),
+                    kTypedDisplayObservationRole) != item.roles.end();
+      if (!typed_display || !current.equality.stack_equal.at(0) ||
+          !current.equality.stack_equal.at(1) || !current.equality.x1_equal ||
+          !current.equality.x2_equal) {
+        return false;
+      }
+      const auto& resumes = flow.execution_edges.at(current.state);
+      if (item.stop_disposition == StopDisposition::Terminal) {
+        if ((item.opcode != 0x50 && item.opcode != 0x29) || !resumes.empty())
+          return false;
+        // No source continuation can observe the remaining internal Z/T.
+        continue;
+      }
+      // Resumable errors have a separate PC+2/manual recovery protocol.
+      if (item.opcode != 0x50 || resumes.empty())
+        return false;
+      for (const auto& edge : resumes) {
+        if (edge.kind != PostLayoutExecutionEdgeKind::Resume)
+          return false;
+        // Analyze both possible stack effects of equal external numeric
+        // entry. The no-lift case also covers plain R/S without new input.
+        // Do not assume the user input erases deep-stack taint or supplies
+        // a fresh program-side mantissa/exponent-entry context.
+        for (bool lift : {false, true}) {
+          Pending next = current;
+          next.state = edge.target_state;
+          next.equality.x2_equal = true;
+          if (lift) {
+            const auto old = next.equality.stack_equal;
+            next.equality.stack_equal = {true, old.at(0), old.at(1), old.at(2)};
+          }
+          next.number_entry_active = false;
+          next.digit_lift_proved = false;
+          next.recalled_number_ready = false;
+          pending.push_back(next);
+        }
+      }
+      continue;
     }
     const int opcode = item.opcode;
     const int family = opcode & 0xf0;
@@ -137,6 +180,7 @@ inline bool prove_discarded_indirect_selector_reads_unobserved(
       current.equality.x2_equal = old.at(0);
       current.number_entry_active = false;
       current.digit_lift_proved = true;
+      current.recalled_number_ready = false;
       current.state = edges.front().target_state;
       pending.push_back(current);
       continue;
@@ -176,6 +220,7 @@ inline bool prove_discarded_indirect_selector_reads_unobserved(
           next.digit_lift_proved = false;
         }
         next.number_entry_active = false;
+        next.recalled_number_ready = false;
         pending.push_back(next);
       }
       continue;
@@ -185,6 +230,8 @@ inline bool prove_discarded_indirect_selector_reads_unobserved(
         edges.front().kind != PostLayoutExecutionEdgeKind::Fallthrough) {
       return false;
     }
+    const bool recalled_number_ready = current.recalled_number_ready;
+    current.recalled_number_ready = false;
     StackValueEqualityTransfer transfer = StackValueEqualityTransfer::Rejected;
     if (opcode >= 0 && opcode <= 9) {
       if (!current.number_entry_active && !current.digit_lift_proved)
@@ -193,8 +240,13 @@ inline bool prove_discarded_indirect_selector_reads_unobserved(
           current.equality, current.number_entry_active);
       current.number_entry_active = true;
     } else if (opcode == 0x0b) {
-      transfer = transfer_decimal_sign_equality(
-          current.equality, current.number_entry_active);
+      if (recalled_number_ready && !current.number_entry_active) {
+        transfer = transfer_recalled_number_sign_equality(current.equality);
+        current.digit_lift_proved = false;
+      } else {
+        transfer = transfer_decimal_sign_equality(
+            current.equality, current.number_entry_active);
+      }
     } else {
       StackValueEqualityStepKind kind = StackValueEqualityStepKind::Plain;
       if ((opcode >= 0x60 && opcode <= 0x6e) || family == 0xd0)
@@ -206,6 +258,7 @@ inline bool prove_discarded_indirect_selector_reads_unobserved(
         return false;
       }
       transfer = transfer_stack_value_equality(current.equality, opcode, kind);
+      current.recalled_number_ready = kind == StackValueEqualityStepKind::Recall;
       current.number_entry_active = false;
       current.digit_lift_proved =
           kind == StackValueEqualityStepKind::Recall ||

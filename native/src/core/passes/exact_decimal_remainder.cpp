@@ -68,10 +68,15 @@ bool symbolic_geometry(const std::vector<IrOp>& ops) {
          op.kind == IrKind::Call || op.kind == IrKind::Loop) &&
         !std::holds_alternative<std::string>(op.target))
       return false;
+    const bool typed_stop =
+        (op.kind == IrKind::Stop || op.kind == IrKind::Plain) &&
+        (op.opcode == 0x50 || op.opcode == 0x29) &&
+        op.meta.stop_disposition != StopDisposition::Unknown;
     for (const auto& role : op.meta.roles)
       if (!role.starts_with(kRetunableNaturalFractionalSelectorRolePrefix) &&
           !(op.kind == IrKind::Call &&
-            (role == "statement-proc-call" || role == "x-argument-call")))
+            (role == "statement-proc-call" || role == "x-argument-call")) &&
+          !(typed_stop && role == kTypedDisplayObservationRole))
         return false;
   }
   return true;

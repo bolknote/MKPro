@@ -558,9 +558,37 @@ set(MKPRO_NATIVE_TEST_NAMES
   pre_shift_stack_lift_matches_typescript_contract
   redundant_literal_reload_is_generic_and_proof_gated
 )
+# Keep aggregate selectors available in mkpro_tests, but give CTest one timeout
+# and one timing result per source. Otherwise unrelated examples consume the
+# same timeout, and a late failure hides the remaining catalogue contracts.
+set(MKPRO_SHARDED_EXAMPLE_TEST_NAMES
+  example_sizes_match_typescript_baselines
+  golden_listing_contract_matches_typescript_contract
+)
+list(REMOVE_ITEM MKPRO_NATIVE_TEST_NAMES ${MKPRO_SHARDED_EXAMPLE_TEST_NAMES})
+
 foreach(test_name IN LISTS MKPRO_NATIVE_TEST_NAMES)
   add_test(NAME "mkpro.${test_name}" COMMAND mkpro_tests --exact "${test_name}")
   set_tests_properties("mkpro.${test_name}" PROPERTIES WORKING_DIRECTORY "${MKPRO_REPOSITORY_ROOT}")
+endforeach()
+
+file(GLOB MKPRO_BASELINE_EXAMPLE_FILES CONFIGURE_DEPENDS
+  "${MKPRO_REPOSITORY_ROOT}/examples/*.mkpro"
+  "${MKPRO_REPOSITORY_ROOT}/examples/pending-optimizer/*.mkpro"
+)
+foreach(example_file IN LISTS MKPRO_BASELINE_EXAMPLE_FILES)
+  file(RELATIVE_PATH example_id "${MKPRO_REPOSITORY_ROOT}/examples" "${example_file}")
+  string(REGEX REPLACE "\\.mkpro$" "" example_id "${example_id}")
+  foreach(test_name IN LISTS MKPRO_SHARDED_EXAMPLE_TEST_NAMES)
+    set(shard_name "mkpro.${test_name}.${example_id}")
+    add_test(NAME "${shard_name}" COMMAND mkpro_tests --exact "${test_name}")
+    set_tests_properties("${shard_name}" PROPERTIES
+      WORKING_DIRECTORY "${MKPRO_REPOSITORY_ROOT}"
+      ENVIRONMENT "MKPRO_NATIVE_EXAMPLE_EXACT=${example_id}"
+      LABELS "compiler;examples"
+      COST 20
+    )
+  endforeach()
 endforeach()
 
 set(MKPRO_EMULATOR_REGRESSION_TEST_NAMES

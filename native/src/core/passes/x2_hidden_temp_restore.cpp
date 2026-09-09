@@ -1,6 +1,7 @@
 #include "mkpro/core/passes/x2_hidden_temp_restore.hpp"
 
 #include "mkpro/core/passes/helpers.hpp"
+#include "mkpro/core/passes/indirect_selector_liveness.hpp"
 
 #include <map>
 #include <string>
@@ -39,11 +40,17 @@ PassResult x2_hidden_temp_restore(const std::vector<IrOp>& ops, const PassContex
 
   std::map<int, std::string> replacement_registers;
   std::size_t branch_merged = 0;
+  IndirectSelectorWritebackLiveness selector_writeback_liveness(ops);
   for (const X2HiddenTempReplacement& replacement : replacements) {
+    if (!selector_writeback_liveness.dead_after(replacement.index))
+      continue;
     replacement_registers.emplace(replacement.index, replacement.register_name);
     if (replacement.branch_merged)
       ++branch_merged;
   }
+
+  if (replacement_registers.empty())
+    return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
 
   std::vector<IrOp> result;
   result.reserve(ops.size());
@@ -55,7 +62,7 @@ PassResult x2_hidden_temp_restore(const std::vector<IrOp>& ops, const PassContex
       result.push_back(dot_restore_op(found->second, ops.at(index)));
   }
 
-  const std::size_t applied = replacements.size();
+  const std::size_t applied = replacement_registers.size();
   const std::string detail = "Replaced " + std::to_string(applied) + " recall" +
                              (applied == 1U ? std::string{} : std::string{"s"}) +
                              " with . after proving the value already lives in X2 and the recall "

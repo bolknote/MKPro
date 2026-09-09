@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mkpro/core/passes/helpers.hpp"
+#include "mkpro/core/passes/indirect_selector_liveness.hpp"
 
 #include <functional>
 
@@ -39,6 +40,7 @@ public:
 
 private:
   const std::vector<IrOp>& ops_;
+  IndirectSelectorWritebackLiveness selector_writeback_liveness_;
   std::set<int> removed_;
   mutable std::optional<std::vector<std::optional<RegisterValueSet>>> x2_register_states_;
   mutable std::optional<std::vector<std::optional<X2ValueDataflowState>>> x2_value_states_;

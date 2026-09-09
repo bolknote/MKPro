@@ -56,8 +56,11 @@ bool is_show_stop(const IrOp& op) {
 }
 
 bool has_display_rewrite_barrier(const IrOp& op) {
-  return has_rewrite_barrier(op) || !op.meta.roles.empty() ||
-         op.procedure_boundary.has_value();
+  const bool bound_roles =
+      std::any_of(op.meta.roles.begin(), op.meta.roles.end(), [&](const CellRole& role) {
+        return !is_show_stop(op) || role != kTypedDisplayObservationRole;
+      });
+  return has_rewrite_barrier(op) || bound_roles || op.procedure_boundary.has_value();
 }
 
 PrologueSegment collect_forward_prologue(const std::vector<IrOp>& ops, int from) {
@@ -159,7 +162,8 @@ bool ops_equivalent(const IrOp& left, const IrOp& right) {
     return left.opcode == right.opcode;
   if (left.kind == IrKind::Stop)
     return left.semantic == right.semantic &&
-           left.meta.stop_disposition == right.meta.stop_disposition;
+           left.meta.stop_disposition == right.meta.stop_disposition &&
+           left.meta.roles == right.meta.roles;
   return false;
 }
 
