@@ -15,6 +15,7 @@
 #include <array>
 #include <cctype>
 #include <cstdlib>
+#include <deque>
 #include <iostream>
 #include <map>
 #include <optional>

@@ -29,7 +29,9 @@ jobs:
           -DMKPRO_STATIC=ON
           -DMKPRO_WARNINGS_AS_ERRORS=ON
       - name: Build CLI
-        run: cmake --build build --target mkpro_cli -j
+        # compiler.cpp is large enough that an unbounded GNU Make job pool can
+        # exhaust the hosted runner before the first failing job is reaped.
+        run: cmake --build build --target mkpro_cli --parallel 2
       - name: Smoke check
         run: |
           file build/native/mkpro-native

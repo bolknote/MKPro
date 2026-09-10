@@ -97,9 +97,9 @@ inline PassResult rematerialize_zero_underflow_constant(
       predecessors[edge.target_state].push_back({state, edge.kind});
 
   const auto external = [&](std::size_t state) {
-    const int address = flow.execution_states[state].address;
+    const int state_address = flow.execution_states[state].address;
     return std::any_of(flow.external_entries.begin(), flow.external_entries.end(),
-        [&](const auto& entry) { return entry.entry.address == address; });
+        [&](const auto& entry) { return entry.entry.address == state_address; });
   };
 
   // Must information about the delivered X representation, not only its
