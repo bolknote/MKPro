@@ -2048,12 +2048,13 @@ struct TailHelperFallthroughPlan {
   std::size_t helper_end = 0;
 };
 
-std::optional<TailHelperFallthroughPlan> find_tail_helper_fallthrough_plan(
+bool find_tail_helper_fallthrough_plan(
     const std::vector<MachineItem>& items,
     const ArtifactIndex& index,
     const AuthoritativePostLayoutControlFlow& control_flow,
     const std::map<std::size_t, std::size_t>& fused_tail_calls,
-    AddressSpaceModel model) {
+    AddressSpaceModel model,
+    TailHelperFallthroughPlan& plan) {
   for (const auto& [jump, call] : fused_tail_calls) {
     std::optional<std::size_t> call_operand;
     std::optional<std::size_t> helper_entry;
@@ -2119,40 +2120,43 @@ std::optional<TailHelperFallthroughPlan> find_tail_helper_fallthrough_plan(
     }
 
     std::optional<std::size_t> helper_last;
-    std::optional<std::size_t> helper_last_command;
+    std::size_t helper_last_command = items.size();
     const auto refresh_helper_tail = [&]() {
       helper_last = previous_cell_item(items, *helper_end);
-      helper_last_command = helper_last;
+      helper_last_command =
+          helper_last.has_value() ? *helper_last : items.size();
       if (helper_last.has_value() &&
           items.at(*helper_last).kind == MachineItemKind::Address) {
-        helper_last_command = previous_cell_item(items, *helper_last);
-        if (!helper_last_command.has_value() ||
-            items.at(*helper_last_command).kind != MachineItemKind::Op ||
-            next_cell_item(items, *helper_last_command) != helper_last) {
-          helper_last_command.reset();
-        }
+        const std::optional<std::size_t> previous_command =
+            previous_cell_item(items, *helper_last);
+        if (!previous_command.has_value() ||
+            items.at(*previous_command).kind != MachineItemKind::Op ||
+            next_cell_item(items, *previous_command) != helper_last)
+          helper_last_command = items.size();
+        else
+          helper_last_command = *previous_command;
       }
     };
     refresh_helper_tail();
-    while (helper_last.has_value() && helper_last_command.has_value() &&
-           !is_non_fallthrough_command(items.at(*helper_last_command))) {
+    while (helper_last.has_value() && helper_last_command < items.size() &&
+           !is_non_fallthrough_command(items.at(helper_last_command))) {
       const std::optional<std::size_t> next = next_cell_item(items, *helper_last);
       if (!next.has_value()) {
         helper_last.reset();
-        helper_last_command.reset();
+        helper_last_command = items.size();
         break;
       }
       helper_end = *next + 1U;
       refresh_helper_tail();
     }
-    if (helper_last_command.has_value() &&
-        is_op(items, *helper_last_command, kJumpOpcode)) {
+    if (helper_last_command < items.size() &&
+        is_op(items, helper_last_command, kJumpOpcode)) {
       const std::optional<std::size_t> operand =
-          next_cell_item(items, *helper_last_command);
+          next_cell_item(items, helper_last_command);
       if (!operand.has_value() ||
           items.at(*operand).kind != MachineItemKind::Address) {
         helper_last.reset();
-        helper_last_command.reset();
+        helper_last_command = items.size();
       } else {
         helper_last = operand;
         helper_end = *operand + 1U;
@@ -2163,8 +2167,8 @@ std::optional<TailHelperFallthroughPlan> find_tail_helper_fallthrough_plan(
            items.at(*helper_end).procedure_boundary != "start") {
       ++*helper_end;
     }
-    if (!helper_last_command.has_value() ||
-        !is_non_fallthrough_command(items.at(*helper_last_command)))
+    if (helper_last_command >= items.size() ||
+        !is_non_fallthrough_command(items.at(helper_last_command)))
       continue;
     if ((call >= *helper_begin && call < *helper_end) ||
         (jump >= *helper_begin && jump < *helper_end)) {
@@ -2190,7 +2194,7 @@ std::optional<TailHelperFallthroughPlan> find_tail_helper_fallthrough_plan(
     if (externally_addressed)
       continue;
 
-    return TailHelperFallthroughPlan{
+    plan = TailHelperFallthroughPlan{
         .jump = jump,
         .call = call,
         .call_operand = call_operand,
@@ -2198,8 +2202,9 @@ std::optional<TailHelperFallthroughPlan> find_tail_helper_fallthrough_plan(
         .helper_entry = *helper_entry,
         .helper_end = *helper_end,
     };
+    return true;
   }
-  return std::nullopt;
+  return false;
 }
 
 // Manual program start and an executed return do not establish the same
@@ -2593,12 +2598,12 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts_attempt(
       fused_tail_calls.emplace(jump, *call);
     }
   }
-  const std::optional<TailHelperFallthroughPlan> tail_helper_fallthrough =
-      enable_tail_helper_fallthrough
-          ? find_tail_helper_fallthrough_plan(items, input_index, control_flow,
-                                              fused_tail_calls,
-                                              options.address_space_model)
-          : std::nullopt;
+  TailHelperFallthroughPlan tail_helper_fallthrough;
+  const bool has_tail_helper_fallthrough =
+      enable_tail_helper_fallthrough &&
+      find_tail_helper_fallthrough_plan(
+          items, input_index, control_flow, fused_tail_calls,
+          options.address_space_model, tail_helper_fallthrough);
   // Inserting В/О@00 costs one cell regardless of how many independently
   // proved empty-stack loop edges use it. Rewrite every safe BP 00 in one
   // transaction so two or more edges expose the shared size saving instead of
@@ -2622,26 +2627,26 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts_attempt(
       rewritten.push_back(std::move(startup_return));
     }
     for (std::size_t old_item = 0; old_item < items.size(); ++old_item) {
-      if (tail_helper_fallthrough.has_value() &&
-          old_item >= tail_helper_fallthrough->helper_begin &&
-          old_item < tail_helper_fallthrough->helper_end) {
+      if (has_tail_helper_fallthrough &&
+          old_item >= tail_helper_fallthrough.helper_begin &&
+          old_item < tail_helper_fallthrough.helper_end) {
         continue;
       }
-      if (tail_helper_fallthrough.has_value() &&
-          tail_helper_fallthrough->call_operand == old_item) {
+      if (has_tail_helper_fallthrough &&
+          tail_helper_fallthrough.call_operand == old_item) {
         continue;
       }
       if (selected_operands.contains(old_item))
         continue;
       if (fused_tail_calls.contains(old_item))
         continue;
-      if (tail_helper_fallthrough.has_value() &&
-          old_item == tail_helper_fallthrough->call) {
-        for (std::size_t moved = tail_helper_fallthrough->helper_begin;
-             moved < tail_helper_fallthrough->helper_end; ++moved) {
+      if (has_tail_helper_fallthrough &&
+          old_item == tail_helper_fallthrough.call) {
+        for (std::size_t moved = tail_helper_fallthrough.helper_begin;
+             moved < tail_helper_fallthrough.helper_end; ++moved) {
           relocation.at(moved) = rewritten.size();
           MachineItem item = items.at(moved);
-          if (moved == tail_helper_fallthrough->helper_entry) {
+          if (moved == tail_helper_fallthrough.helper_entry) {
             item.roles.push_back("empty-return-tail-helper-fallthrough");
           }
           rewritten.push_back(std::move(item));
@@ -2689,8 +2694,8 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts_attempt(
     bool direct_edges_rebound = true;
     for (std::size_t source = 0; source < items.size(); ++source) {
       if (selected_jumps.contains(source) ||
-          (tail_helper_fallthrough.has_value() &&
-           source == tail_helper_fallthrough->call) ||
+          (has_tail_helper_fallthrough &&
+           source == tail_helper_fallthrough.call) ||
           items.at(source).kind != MachineItemKind::Op ||
           !is_direct_flow_opcode(items.at(source).opcode)) {
         continue;
@@ -2750,8 +2755,8 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts_attempt(
     for (const auto& [old_source, old_targets] : control_flow.indirect_flow_targets) {
       if (empty_stack_indirect_zero_jumps.contains(old_source))
         continue;
-      if (tail_helper_fallthrough.has_value() &&
-          old_source == tail_helper_fallthrough->call) {
+      if (has_tail_helper_fallthrough &&
+          old_source == tail_helper_fallthrough.call) {
         continue;
       }
       if (!relocation.at(old_source).has_value()) {
@@ -2924,16 +2929,16 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts_attempt(
       (void)unused_operand;
       const auto fused = fused_tail_calls.find(old_jump);
       if (fused != fused_tail_calls.end()) {
-        if (tail_helper_fallthrough.has_value() &&
-            old_jump == tail_helper_fallthrough->jump) {
+        if (has_tail_helper_fallthrough &&
+            old_jump == tail_helper_fallthrough.jump) {
           if (relocation.at(old_jump).has_value() ||
               relocation.at(fused->second).has_value() ||
-              !relocation.at(tail_helper_fallthrough->helper_entry).has_value()) {
+              !relocation.at(tail_helper_fallthrough.helper_entry).has_value()) {
             rewritten_edge_states_match = false;
             break;
           }
           const std::size_t new_entry =
-              *relocation.at(tail_helper_fallthrough->helper_entry);
+              *relocation.at(tail_helper_fallthrough.helper_entry);
           bool reached = false;
           for (const PostLayoutExecutionState& state : rewritten_flow.execution_states) {
             if (state.item_index != new_entry)
@@ -3087,9 +3092,9 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts_attempt(
                       [&](std::size_t source) {
                           return control_flow.indirect_flow_targets.contains(source);
                       }));
-    if (tail_helper_fallthrough.has_value() &&
-        is_indirect_call_opcode(items.at(tail_helper_fallthrough->call).opcode) &&
-        control_flow.indirect_flow_targets.contains(tail_helper_fallthrough->call)) {
+    if (has_tail_helper_fallthrough &&
+        is_indirect_call_opcode(items.at(tail_helper_fallthrough.call).opcode) &&
+        control_flow.indirect_flow_targets.contains(tail_helper_fallthrough.call)) {
       ++removed_indirect_flows;
     }
     bool indirect_identities_match =
@@ -3100,8 +3105,8 @@ std::vector<ReboundArtifact> build_empty_return_startup_layouts_attempt(
     for (const auto& [old_source, old_targets] : control_flow.indirect_flow_targets) {
       if (empty_stack_indirect_zero_jumps.contains(old_source))
         continue;
-      if (tail_helper_fallthrough.has_value() &&
-          old_source == tail_helper_fallthrough->call) {
+      if (has_tail_helper_fallthrough &&
+          old_source == tail_helper_fallthrough.call) {
         continue;
       }
       if (!indirect_identities_match || !relocation.at(old_source).has_value()) {
