@@ -163,9 +163,9 @@ std::map<std::string, TailJumpTarget> find_tail_jump_targets(const std::vector<I
         return {};
       if (op.kind == IrKind::Call) {
         const auto continuation = call_continuation(ops, index);
-        calls[*target].push_back(continuation.has_value()
-            ? std::optional(normalize_continuation(ops, labels, *continuation))
-            : std::nullopt);
+        auto& normalized = calls[*target].emplace_back();
+        if (continuation.has_value())
+          normalized.emplace(normalize_continuation(ops, labels, *continuation));
       }
     }
   }
