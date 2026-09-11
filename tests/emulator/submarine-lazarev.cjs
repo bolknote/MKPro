@@ -9,19 +9,23 @@ const { MK61, parseProgramText } = require('./mk61.cjs');
 const game = path.resolve(__dirname, '../../games/simulation/podvodnaya-lodka-lazarev');
 const parsed = parseProgramText(fs.readFileSync(`${game}.txt`, 'utf8'));
 const description = fs.readFileSync(`${game}.md`, 'utf8');
-const setup = description.match(/```text\n(R0=[\s\S]*?)\n```/);
-assert.ok(setup, 'the game card must contain its actual register preloads');
-const initial = Object.fromEntries(
-  [...setup[1].matchAll(/R([0-9A-E])=([^;\n]+)/g)].map(match => [match[1], match[2]]),
-);
-assert.equal(Object.keys(initial).length, 15);
+const preparation = description.split('## Подготовка\n')[1]?.split('## Экран\n')[0];
+assert.ok(preparation, 'the game card must contain keyboard preparation');
+const setup = [...preparation.matchAll(/```text\n([\s\S]*?)\n```/g)].map(match => match[1]);
+assert.equal(setup.length, 3, 'preparation, error recovery and launch must all be documented');
+const initial = {
+  0: '20', 1: '8,-----8-E2', 2: '1,------0E-3',
+  3: '2,------0E-6', 4: '3,------0E-11', 5: '3,141592E-1',
+  6: '0', 7: '1', 8: '10000000', 9: '-50',
+  A: '-20', B: '-40000000', C: '0', D: '4001', E: 'Е0000082',
+};
 assert.deepEqual(parsed.diagnostics, []);
 assert.equal(parsed.codes.length, 105);
 
 // These checkpoints bound fragments of the delivered listing. Only checkpoint
 // instructions are replaced with STOP; all arithmetic, branches, RNG and display
 // work under test execute on the unchanged calculator ROM.
-const entry = { frame: 0, control: 26, air: 44, random: 56, enemy: 62 };
+const entry = { frame: 0, control: 28, air: 45, random: 57, enemy: 63 };
 const modes = { rad: 10, deg: 11, grad: 12 };
 const mask = position => position === 0 ? 0 : position === 1 ? -40000000 : 4 * 10 ** (8 - position);
 let checks = 0;
@@ -61,6 +65,60 @@ function number(calc, register) {
 // next display loop, which consumes it. Both must agree at a frame boundary.
 const oxygenState = air => ({ 0: air, A: -air });
 const oxygen = calc => 0 - number(calc, 'A');
+
+function pressOperations(calc, text) {
+  const registers = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '/-/', 'ВП', 'Cx', 'В↑'];
+  const operations = {
+    КИНВ: ['K', 'Cx'], 'К∨': ['K', '/-/'], 'К{x}': ['K', '8'], 'К-': ['K', '-'],
+  };
+  const keys = [];
+  for (const token of text.trim().split(/\s+/)) {
+    if (/^\d+(?:,\d+)?$/.test(token)) keys.push(...token);
+    else if (/^П[0-9A-E]$/.test(token)) keys.push('П', registers[parseInt(token[1], 16)]);
+    else if (operations[token]) keys.push(...operations[token]);
+    else {
+      assert.ok(['В↑', 'ВП', '/-/', 'В/О', 'БП', 'С/П'].includes(token), `unsupported key: ${token}`);
+      keys.push(token);
+    }
+  }
+  calc.pressSequence(keys);
+}
+
+function prepareRegisters(calc) {
+  calc.pressSequence(['F', '/-/']);
+  pressOperations(calc, setup[0]);
+  // The real keyboard must finish displaying the intentional error before ВП.
+  calc.runFrames(20);
+  assert.equal(calc.displayText(), 'ЕГГ0Г');
+  pressOperations(calc, setup[1]);
+  assert.deepEqual(calc.readProgramCodes(parsed.codes.length), parsed.codes,
+    'manual preparation must not change any program cell');
+}
+
+{
+  const reference = calculator();
+  const expected = Object.fromEntries(Object.keys(initial).map(register => [register, reference.readRegister(register)]));
+  for (const mode of Object.keys(modes)) {
+    const calc = new MK61({ angleMode: mode });
+    calc.loadProgram(parsed.codes);
+    // No setRegister calls: both the first game and its restart use only the
+    // key sequences printed in the card, including recovery of the E word.
+    for (let restart = 0; restart < 2; restart++) {
+      prepareRegisters(calc);
+      for (const [register, value] of Object.entries(expected)) {
+        assert.equal(calc.readRegister(register), value, `manual R${register}, mode=${mode}, restart=${restart}`);
+      }
+      pressOperations(calc, setup[2]);
+      calc.runFrames(1500);
+      assert.equal(calc.displayText(), 'ЕГГ0Г', `manual game: mode=${mode}, restart=${restart}`);
+      assert.equal(number(calc, '7'), mode === 'rad' ? 4 : 1);
+      if (mode === 'rad') assert.ok(oxygen(calc) <= 0);
+      assert.deepEqual(calc.readProgramCodes(parsed.codes.length), parsed.codes);
+      checks++;
+    }
+  }
+}
+console.log('Submarine: documented keyboard preparation and restart work in all angle modes.');
 
 function screen(depth, position, air) {
   const horizon = Array(8).fill('-');
@@ -195,6 +253,8 @@ for (const [mode, depth] of [['deg', 0], ['rad', 3], ['deg', 1], ['rad', 2], ['g
 console.log('Submarine: detection distinguishes reaching a limit from a blocked step.');
 
 function checkEnemy(position, depth, movement, q, render = false) {
+  // At cell 5, RD=4001 makes the square-root argument
+  // -1 + 2*frac(q) + abs(movement)/2: zero is safe, negative means a hit.
   const calc = calculator({ C: movement, 5: q, 6: mask(position), 7: 1 + depth },
     'grad', render ? entry.control : entry.frame);
   let next = position === 0 ? (q < 0.5 ? 1 : 0) : position + 1 + Math.trunc(q);
@@ -209,7 +269,7 @@ function checkEnemy(position, depth, movement, q, render = false) {
   assert.equal(number(calc, '8'), 10000000, 'flow selector must remain constant');
   assert.equal(calc.readRegister('E'), `${initial.E},`, 'glyph/address word must survive indirect flow');
   if (!hit) {
-    assert.equal(calc.programCounter(), render ? '27' : '01', context);
+    assert.equal(calc.programCounter(), render ? '29' : '01', context);
     if (render) assert.equal(display, screen(depth, next, 20), context);
   }
 }
