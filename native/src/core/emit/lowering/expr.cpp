@@ -1,5 +1,6 @@
 #include "mkpro/core/emit/lowering/expr.hpp"
 
+#include "mkpro/core/builtin_stack_effects.hpp"
 #include "mkpro/core/emit/lowering_helpers.hpp"
 #include "mkpro/core/rules.hpp"
 #include "mkpro/core/state_banks.hpp"
@@ -16,6 +17,29 @@
 namespace mkpro::core::emit {
 
 namespace {
+
+bool lower_isolated_binary(ExpressionEmitApi& api, LoweringContext& context,
+                           const Expression& left, const Expression& right,
+                           int opcode, const std::string& display) {
+  // A distinct temporary at every nesting level prevents a nested expression
+  // or a callee from overwriting its caller's saved operand.
+  const std::string temporary = api.emitter.fresh_label("operand_stack");
+  if (!api.ensure_hidden_register(temporary) || !api.lower_expression_to_x(left))
+    return false;
+  api.emit_store(temporary, "preserve pending operand");
+  if (!api.lower_expression_to_x(right))
+    return false;
+  api.emit_recall(temporary);
+  api.emitter.emit_op(0x14, "<->", "restore binary operand order");
+  api.emitter.emit_op(opcode, display, "expr " + display);
+  api.emitter.current_x_variable.reset();
+  api.emitter.current_x_aliases.clear();
+  api.emitter.current_x_expression.reset();
+  api.emitter.current_x_known_zero = false;
+  context.current_x_memory_aliases.clear();
+  context.current_y_variable.reset();
+  return true;
+}
 
 std::string trim_ascii(std::string value) {
   while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front())) != 0)
@@ -1208,6 +1232,13 @@ bool lower_binary_expression_to_x(ExpressionEmitApi& api, LoweringContext& conte
 
   if (const auto opcode = arithmetic_opcodes.find(expression.op);
       opcode != arithmetic_opcodes.end() &&
+      BuiltinStackEffects(&context.rules, context.isolate_pending_user_call_operands)
+          .clobbers_pending_operands(*expression.right))
+    return lower_isolated_binary(api, context, *expression.left, *expression.right,
+                                 opcode->second, expression.op);
+
+  if (const auto opcode = arithmetic_opcodes.find(expression.op);
+      opcode != arithmetic_opcodes.end() &&
       lower_cached_expression_operand(api, context, *expression.left, *expression.right,
                                       opcode->second, expression.op,
                                       expression.op == "+" || expression.op == "*"))
@@ -1857,6 +1888,12 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
       });
       return false;
     }
+    const Expression& first = expression.args.at(callee == "pow" ? 1 : 0);
+    const Expression& second = expression.args.at(callee == "pow" ? 0 : 1);
+    if (BuiltinStackEffects(&context.rules, context.isolate_pending_user_call_operands)
+            .clobbers_pending_operands(second))
+      return lower_isolated_binary(api, context, first, second,
+                                   binary_it->second.first, binary_it->second.second);
     if ((callee == "bit_and" || callee == "bit_or" || callee == "bit_xor") &&
         lower_cached_expression_operand(api, context, expression.args.at(0), expression.args.at(1),
                                         binary_it->second.first, binary_it->second.second, true))

@@ -2,12 +2,15 @@
 
 #include "mkpro/core/emit/lowering_helpers.hpp"
 #include "mkpro/core/machine_profile.hpp"
+#include "mkpro/core/parser.hpp"
 #include "mkpro/core/state_banks.hpp"
+#include "mkpro/core/v2_const.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -70,6 +73,92 @@ std::optional<std::pair<int, int>> decimal_display_field_bounds(const LoweringCo
   if (field.min.has_value() && field.max.has_value())
     return std::pair<int, int>{*field.min, *field.max};
   return coord_field_bounds(context, field);
+}
+
+// A bounded set, rather than just an interval, preserves holes in selectors
+// such as k * (1 - sign(x)). Values are used only to specialize painting;
+// the original position expression is still evaluated exactly once.
+std::optional<std::set<int>> frame_integer_values(const LoweringContext& context,
+                                                  const Expression& expression,
+                                                  unsigned depth = 0) {
+  if (depth > 16)
+    return std::nullopt;
+  if (expression.kind == "number") {
+    const auto value = numeric_value_of_expression(expression, {});
+    if (!value.has_value() || !std::isfinite(*value) || std::trunc(*value) != *value ||
+        std::abs(*value) > 99999999)
+      return std::nullopt;
+    return std::set<int>{static_cast<int>(*value)};
+  }
+  if (expression.kind == "identifier") {
+    if (const auto constant = context.constants.find(expression.name);
+        constant != context.constants.end())
+      return frame_integer_values(context, constant->second, depth + 1);
+    const auto field = context.state_fields.find(expression.name);
+    if (field == context.state_fields.end() ||
+        (field->second->type != "counter" && field->second->type != "coord"))
+      return std::nullopt;
+    const auto bounds = decimal_display_field_bounds(context, expression.name);
+    if (!bounds.has_value() || bounds->second < bounds->first ||
+        static_cast<long long>(bounds->second) - bounds->first > 31 ||
+        bounds->first < -99999999 || bounds->second > 99999999)
+      return std::nullopt;
+    std::set<int> values;
+    for (int value = bounds->first; value <= bounds->second; ++value)
+      values.insert(value);
+    return values;
+  }
+  const Expression* operand = nullptr;
+  std::string operation;
+  if (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr) {
+    operand = expression.expr.get();
+    operation = "negate";
+  } else if (expression.kind == "call" && expression.args.size() == 1U &&
+             !context.rules.contains(expression.callee)) {
+    operation = expression.callee;
+    std::transform(operation.begin(), operation.end(), operation.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (operation != "sign" && operation != "abs" && operation != "int")
+      return std::nullopt;
+    operand = &expression.args.front();
+  }
+  if (operand != nullptr) {
+    const auto inputs = frame_integer_values(context, *operand, depth + 1);
+    if (!inputs.has_value()) {
+      if (operation == "sign")
+        return std::set<int>{-1, 0, 1};
+      return std::nullopt;
+    }
+    std::set<int> values;
+    for (const int input : *inputs)
+      values.insert(operation == "sign" ? (input > 0) - (input < 0)
+                    : operation == "negate" ? -input
+                    : operation == "abs" ? std::abs(input) : input);
+    return values;
+  }
+  if (expression.kind != "binary" || expression.left == nullptr ||
+      expression.right == nullptr ||
+      (expression.op != "+" && expression.op != "-" && expression.op != "*"))
+    return std::nullopt;
+  const auto left = frame_integer_values(context, *expression.left, depth + 1);
+  const auto right = frame_integer_values(context, *expression.right, depth + 1);
+  if (!left.has_value() || !right.has_value())
+    return std::nullopt;
+  std::set<int> values;
+  for (const long long a : *left) {
+    for (const long long b : *right) {
+      const long long value = expression.op == "+" ? a + b
+                           : expression.op == "-" ? a - b : a * b;
+      // At most eight integer digits: every result is exactly representable
+      // on the calculator, so host arithmetic cannot invent a selector.
+      if (value < -99999999 || value > 99999999)
+        return std::nullopt;
+      values.insert(static_cast<int>(value));
+      if (values.size() > 32U)
+        return std::nullopt;
+    }
+  }
+  return values;
 }
 
 bool display_field_fits_unsigned_width(const LoweringContext& context, const DisplayItem& item,
@@ -659,6 +748,16 @@ bool literal_needs_first_splice_scratch(const std::string& literal) {
 
 void collect_display_scratch_register_names(const V2Statement& statement,
                                             std::vector<std::string>& names) {
+  if (statement.kind == "v2_preview" && statement.expr.has_value()) {
+    const Expression expression = parse_expression(*statement.expr, statement.line);
+    if (expression.kind == "call" && expression.callee == "frame") {
+      const std::string suffix = std::to_string(statement.line);
+      names.push_back(display_template_value_scratch_name(suffix));
+      names.push_back(display_template_loop_scratch_name(suffix));
+      names.push_back("__display_leader_" + suffix);
+      names.push_back("__display_position_" + suffix);
+    }
+  }
   const bool display_statement = statement.kind == "v2_show" || statement.kind == "v2_stop";
   if (display_statement && statement.items.has_value() &&
       looks_like_mantissa_exponent_display_template(*statement.items)) {
@@ -711,9 +810,35 @@ void collect_display_template_mask_scratch_register_names(const V2Statement& sta
     collect_display_template_mask_scratch_register_names(*statement.otherwise, names);
 }
 
+std::optional<std::string> running_frame_background_preload(const Expression& frame) {
+  if (frame.kind != "call" || frame.callee != "frame" || frame.args.size() < 2U ||
+      frame.args.front().kind != "string")
+    return std::nullopt;
+  const auto cells = display_literal_mantissa_cells(frame.args.front().text);
+  if (!cells.has_value() || cells->size() != 8U || cells->front() == 15)
+    return std::nullopt;
+  // Register literals use Cyrillic E for nibble 14; Latin E is reserved for
+  // the exponent marker. Keep the numeric anchor and the order explicit.
+  static const std::string glyphs[] = {
+      "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "-", "L", "С", "Г", "Е", "_"};
+  std::string value = "8,";
+  for (std::size_t i = 1; i < cells->size(); ++i) {
+    const int cell = cells->at(i);
+    if (cell < 0 || cell > 15)
+      return std::nullopt;
+    value += glyphs[cell];
+  }
+  return value;
+}
+
 void collect_display_constant_preload_values(const LoweringContext& context,
                                              const V2Statement& statement,
                                              std::vector<std::string>& values) {
+  if (statement.kind == "v2_preview" && statement.expr.has_value()) {
+    if (const auto value = running_frame_background_preload(
+            parse_expression(*statement.expr, statement.line)))
+      values.push_back(*value);
+  }
   const bool display_statement = statement.kind == "v2_show" || statement.kind == "v2_stop";
   if (display_statement && statement.items.has_value()) {
     if (plan_mantissa_exponent_template(context, *statement.items).has_value()) {
@@ -1402,6 +1527,331 @@ bool lower_formatted_coord_report_display_statement(DisplayEmitApi& api, Lowerin
   context.optimizations.push_back(OptimizationReport{
       .name = "formatted-coord-report-lowering",
       .detail = "Lowered screen " + display_name + " as --CC-- N calculator video output.",
+  });
+  return true;
+}
+
+bool lower_running_frame(DisplayEmitApi& api, LoweringContext& context,
+                         const Expression& frame, int source_line) {
+  const auto reject = [&](const std::string& message) {
+    context.diagnostics.push_back(Diagnostic{
+        .severity = DiagnosticSeverity::Error,
+        .code = "running-frame",
+        .message = message,
+    });
+    return false;
+  };
+  if (frame.args.size() < 2U || frame.args.front().kind != "string")
+    return reject("frame() expects an eight-cell background, an order and optional at(position, glyph) overlays");
+  const auto background = display_literal_mantissa_cells(frame.args.front().text);
+  if (!background.has_value() || background->size() != 8U || background->front() == 15)
+    return reject("frame() background must contain exactly eight supported display cells, without a decimal point");
+  // A literal order has no runtime effects or rounding ambiguity. Enter it
+  // directly rather than reserving an FL counter and incrementing the order.
+  std::optional<int> fixed_order;
+  if (frame.args.at(1).kind == "number") {
+    const auto value = numeric_value_of_expression(frame.args.at(1), {});
+    if (!value.has_value() || !std::isfinite(*value) || std::trunc(*value) < 0 ||
+        std::trunc(*value) > 99)
+      return reject("frame() order must be between 0 and 99");
+    fixed_order = static_cast<int>(std::trunc(*value));
+  }
+  for (std::size_t i = 2; i < frame.args.size(); ++i) {
+    const Expression& overlay = frame.args.at(i);
+    if (overlay.kind != "call" || overlay.callee != "at" || overlay.args.size() != 2U)
+      return reject("A frame overlay must be at(position, glyph)");
+    if (overlay.args.at(1).kind == "string") {
+      const auto glyph = display_literal_mantissa_cells(overlay.args.at(1).text);
+      if (!glyph.has_value() || glyph->size() != 1U || glyph->front() == 15)
+        return reject("at() expects one display character, or a numeric digit");
+    }
+  }
+
+  const std::string suffix = std::to_string(source_line);
+  const std::string body = display_template_value_scratch_name(suffix);
+  const std::string counter = display_template_loop_scratch_name(suffix);
+  const std::string leader = "__display_leader_" + suffix;
+  const std::string position = "__display_position_" + suffix;
+  for (const auto& name : {body, counter, leader, position}) {
+    if (!api.ensure_hidden_register(name))
+      return false;
+  }
+  const auto loop_opcode = display_loop_opcode(api.register_text_for(counter));
+  if (!fixed_order.has_value() && !loop_opcode.has_value())
+    return reject("The running frame order counter needs an available register R0..R3");
+
+  const std::size_t begin = api.emitter.items.size();
+  const std::string invalid = api.emitter.fresh_label("frame_invalid");
+  const std::string done = api.emitter.fresh_label("frame_done");
+  std::vector<int> body_cells = *background;
+  body_cells.front() = 8;
+  const auto background_value = running_frame_background_preload(frame);
+  const auto background_preload = background_value.has_value() && api.ensure_preloaded_number
+      ? api.ensure_preloaded_number(*background_value) : std::nullopt;
+  if (background_preload.has_value()) {
+    api.emit_recall(*background_preload);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "running-frame-background-preload",
+        .detail = "Reused a compiler-owned order-zero background word; preserved its display nibbles without arithmetic.",
+    });
+  } else {
+    const auto body_program = display_literal_program_from_cells(body_cells, false);
+    if (!body_program.has_value() ||
+        !emit_display_literal_program_to_x(api.emitter, *body_program, source_line, "frame background"))
+      return reject("Cannot encode the frame background");
+    api.emitter.emit_op(0x0e, "В↑", "commit frame background to X2", source_line, true);
+    emit_display_exponent(api.emitter, 0, source_line, "frame body order");
+  }
+  api.emit_store(body, "frame body");
+  if (!emit_display_first_digit(context, background->front(), source_line, "frame first cell"))
+    return false;
+  api.emit_store(leader, "frame first cell");
+
+  const auto load_integer = [&](const Expression& expression, const std::string& target) {
+    if (!api.lower_expression_to_x(expression))
+      return false;
+    api.emitter.emit_op(0x34, "К [x]", "frame integer field", source_line);
+    api.emit_store(target, "frame field");
+    return true;
+  };
+  const auto upper_guard = [&](const std::string& name, int exclusive) {
+    api.emit_recall(name);
+    api.emitter.emit_number(std::to_string(exclusive));
+    api.emitter.emit_op(0x11, "-", "frame field bound", source_line);
+    api.emitter.emit_jump(0x5c, "F x<0", invalid, "frame field out of range", source_line);
+  };
+
+  // Track possible nibbles, not just the initial background: an earlier
+  // conditional overlay may have changed any one of its reachable cells.
+  std::vector<std::set<int>> cell_values;
+  for (const int cell : *background)
+    cell_values.push_back({cell});
+
+  for (std::size_t i = 2; i < frame.args.size(); ++i) {
+    const Expression& overlay = frame.args.at(i);
+    const Expression& glyph = overlay.args.at(1);
+    const std::string skip = api.emitter.fresh_label("frame_overlay_skip");
+    const std::string first = api.emitter.fresh_label("frame_overlay_first");
+    const auto positions = frame_integer_values(context, overlay.args.front());
+    std::set<int> visible_positions;
+    if (positions.has_value()) {
+      for (const int cell : *positions) {
+        if (cell >= 1 && cell <= 8)
+          visible_positions.insert(cell);
+      }
+    } else {
+      for (int cell = 1; cell <= 8; ++cell)
+        visible_positions.insert(cell);
+    }
+    const std::optional<int> fixed_cell = visible_positions.size() == 1U
+        ? std::optional<int>(*visible_positions.begin()) : std::nullopt;
+    if (!load_integer(overlay.args.front(), position))
+      return false;
+    if (positions.has_value() && visible_positions.empty()) {
+      // Even an invisible overlay can have an effectful position expression.
+      // Do not evaluate its glyph, matching the ordinary clipping path.
+      api.emitter.emit_label(skip, {.hidden = true});
+      continue;
+    }
+    if (fixed_cell.has_value()) {
+      if (positions->size() != 1U) {
+        api.emitter.emit_number(std::to_string(*fixed_cell));
+        api.emitter.emit_op(0x11, "-", "frame visible-position test", source_line);
+        api.emitter.emit_jump(0x5e, "F x=0", skip, "off-screen overlay", source_line);
+      }
+      context.optimizations.push_back(OptimizationReport{
+          .name = "running-frame-finite-position",
+          .detail = "Specialized an overlay with one proved visible cell; preserved selector evaluation and clipping.",
+      });
+    } else {
+      api.emitter.emit_jump(0x57, "F x!=0", skip, "off-screen overlay", source_line);
+      api.emitter.emit_jump(0x59, "F x>=0", skip, "off-screen overlay", source_line);
+      api.emitter.emit_number("9");
+      api.emitter.emit_op(0x11, "-", "frame position bound", source_line);
+      api.emitter.emit_jump(0x5c, "F x<0", skip, "off-screen overlay", source_line);
+    }
+
+    std::optional<int> literal_glyph;
+    std::set<int> glyph_values;
+    if (glyph.kind == "string") {
+      literal_glyph = display_literal_mantissa_cells(glyph.text)->front();
+      glyph_values.insert(*literal_glyph);
+    } else {
+      if (!load_integer(glyph, counter))
+        return false;
+      const auto digits = frame_integer_values(context, glyph);
+      if (!digits.has_value() || *digits->begin() < 0 || *digits->rbegin() > 9) {
+        api.emitter.emit_jump(0x59, "F x>=0", invalid, "negative frame digit", source_line);
+        upper_guard(counter, 10);
+        for (int digit = 0; digit <= 9; ++digit)
+          glyph_values.insert(digit);
+      } else {
+        glyph_values = *digits;
+      }
+    }
+
+    // If all old nibbles are subsets of the new glyph, OR only its missing
+    // bits. Dually, if they all contain the new glyph, AND away excess bits.
+    // The intersection/union makes this proof valid for every reachable cell
+    // and every earlier layer, without assuming correlations between them.
+    std::optional<std::pair<int, int>> bit_update;
+    if (literal_glyph.has_value()) {
+      int possible_bits = 0;
+      int common_bits = 15;
+      bool has_body_cell = false;
+      for (const int cell : visible_positions) {
+        if (cell == 1)
+          continue;
+        has_body_cell = true;
+        for (const int old : cell_values.at(static_cast<std::size_t>(cell - 1))) {
+          possible_bits |= old;
+          common_bits &= old;
+        }
+      }
+      if (has_body_cell && (possible_bits & *literal_glyph) == possible_bits)
+        bit_update = std::pair{0x38, *literal_glyph & ~common_bits};
+      else if (has_body_cell && (common_bits & *literal_glyph) == *literal_glyph)
+        bit_update = std::pair{0x37, possible_bits & ~*literal_glyph};
+    }
+    for (const int cell : visible_positions) {
+      auto& values = cell_values.at(static_cast<std::size_t>(cell - 1));
+      if (positions.has_value() && positions->size() == 1U)
+        values = glyph_values;
+      else
+        values.insert(glyph_values.begin(), glyph_values.end());
+    }
+    if (fixed_cell == 1) {
+      if (literal_glyph.has_value()) {
+        if (!emit_display_first_digit(context, *literal_glyph, source_line, "frame overlay first cell"))
+          return false;
+      } else {
+        api.emit_recall(counter);
+      }
+      api.emit_store(leader, "frame overlay first cell");
+      api.emitter.emit_label(skip, {.hidden = true});
+      continue;
+    }
+    // For positions 2..8 the scale is 10^(1-position). The anchor digit
+    // stays 8 throughout the bitwise operations; no hexadecimal arithmetic
+    // or normalization is applied to the seven stored character cells.
+    if (fixed_cell.has_value()) {
+      api.emitter.emit_number(std::to_string(1 - *fixed_cell));
+    } else {
+      api.emit_recall(position);
+      api.emitter.emit_number("1");
+      api.emitter.emit_op(0x11, "-", "frame first-cell test", source_line);
+      api.emitter.emit_jump(0x57, "F x!=0", first, "frame first-cell overlay", source_line);
+      api.emitter.emit_op(0x0b, "/-/", "frame position scale", source_line);
+    }
+    api.emitter.emit_op(0x15, "F 10^x", "frame position scale", source_line);
+    api.emit_store(position, "frame position scale");
+    const auto scaled = [&](int anchor, Expression digit) {
+      return add_expression(number_expression(std::to_string(anchor)),
+                            multiply_expression(std::move(digit), identifier_expression(position)));
+    };
+    const auto constant_mask = [&](int anchor, int bits) {
+      if (bits >= 10) {
+        return call_expression("bit_or", {
+            scaled(anchor, number_expression("8")),
+            scaled(anchor, number_expression(std::to_string(bits - 8)))});
+      }
+      return scaled(anchor, number_expression(std::to_string(bits)));
+    };
+    if (bit_update.has_value()) {
+      const auto [opcode, bits] = *bit_update;
+      if (bits != 0) {
+        Expression mask = constant_mask(opcode == 0x37 ? 7 : 8, bits);
+        if (opcode == 0x37)
+          mask = call_expression("bit_not", {std::move(mask)});
+        if (!api.lower_expression_to_x(mask))
+          return false;
+        api.emit_recall(body);
+        api.emitter.emit_op(opcode, opcode == 0x37 ? "К ∧" : "К ∨",
+                            "replace frame cell using known bits", source_line);
+        api.emit_store(body, "frame body with overlay");
+      }
+      context.optimizations.push_back(OptimizationReport{
+          .name = "running-frame-known-cell-bits",
+          .detail = "Replaced generic cell clearing with " +
+                    std::string(opcode == 0x37 ? "AND" : "OR") + " mask " +
+                    std::to_string(bits) + " proved for all possible prior cell values.",
+      });
+    } else {
+      const Expression clear = call_expression("bit_not", {call_expression("bit_or", {
+          scaled(7, number_expression("7")), scaled(7, number_expression("8"))})});
+      if (!api.lower_expression_to_x(clear))
+        return false;
+      api.emit_recall(body);
+      api.emitter.emit_op(0x37, "К ∧", "clear frame cell", source_line);
+      api.emit_store(body, "frame body without overlay cell");
+      const Expression mask = literal_glyph.has_value()
+          ? constant_mask(8, *literal_glyph) : scaled(8, identifier_expression(counter));
+      if (!api.lower_expression_to_x(mask))
+        return false;
+      api.emit_recall(body);
+      api.emitter.emit_op(0x38, "К ∨", "paint frame cell", source_line);
+      api.emit_store(body, "frame body with overlay");
+    }
+    if (!fixed_cell.has_value()) {
+      api.emitter.emit_jump(0x51, "БП", skip, "frame overlay complete", source_line);
+      api.emitter.emit_label(first, {.hidden = true});
+      if (literal_glyph.has_value()) {
+        if (!emit_display_first_digit(context, *literal_glyph, source_line, "frame overlay first cell"))
+          return false;
+      } else {
+        api.emit_recall(counter);
+      }
+      api.emit_store(leader, "frame overlay first cell");
+    }
+    api.emitter.emit_label(skip, {.hidden = true});
+  }
+
+  // The order is edited while running, not formatted by STOP. In particular,
+  // orders 01..07 must not shift the mantissa's point or hide the order field.
+  if (fixed_order.has_value()) {
+    api.emit_recall(body);
+    api.emitter.emit_op(0x0e, "В↑", "frame order entry", source_line, true);
+    emit_display_exponent(api.emitter, *fixed_order, source_line, "frame literal order");
+    api.emit_store(body, "frame body with order");
+  } else {
+    if (!load_integer(frame.args.at(1), counter))
+      return false;
+    api.emitter.emit_jump(0x59, "F x>=0", invalid, "negative frame order", source_line);
+    upper_guard(counter, 100);
+    const std::string zero = api.emitter.fresh_label("frame_zero_order");
+    api.emit_recall(counter);
+    api.emitter.emit_jump(0x57, "F x!=0", zero, "zero frame order", source_line);
+    api.emit_recall(body);
+    api.emitter.emit_op(0x0e, "В↑", "frame order entry", source_line, true);
+    const std::string loop = api.emitter.fresh_label("frame_order_loop");
+    api.emitter.emit_label(loop, {.hidden = true});
+    api.emitter.emit_op(0x0c, "ВП", "frame order entry", source_line, true);
+    api.emitter.emit_op(0x01, "1", "frame order increment", source_line, true);
+    api.emitter.emit_jump(loop_opcode->first, loop_opcode->second, loop,
+                          "frame order loop", source_line);
+    api.emitter.items.back().logical_register_name = counter;
+    api.emit_store(body, "frame body with order");
+    api.emitter.emit_label(zero, {.hidden = true});
+  }
+  api.emit_recall(leader);
+  api.emit_recall(body);
+  emit_first_digit_splice(api.emitter, source_line);
+  for (int i = 0; i < 3; ++i)
+    api.emitter.emit_op(0x0e, "В↑", "running frame presentation", source_line, true);
+  api.emitter.emit_jump(0x51, "БП", done, "frame complete", source_line);
+  api.emitter.emit_label(invalid, {.hidden = true});
+  api.emitter.emit_error_stop(StopDisposition::Terminal, "К ÷", "invalid frame field", source_line, true);
+  api.emitter.emit_label(done, {.hidden = true});
+  // The live indicator and entry state are observable inside this sequence.
+  // Keep its internal instruction order until there is a dedicated proof
+  // that a replacement preserves the complete live-frame contract.
+  for (std::size_t i = begin; i < api.emitter.items.size(); ++i) {
+    if (api.emitter.items.at(i).kind != MachineItemKind::Label)
+      api.emitter.items.at(i).raw = true;
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = "running-frame-lowering",
+      .detail = "Built an eight-cell live frame with ordered overlays and a separate order field.",
   });
   return true;
 }

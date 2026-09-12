@@ -17,9 +17,16 @@ with a raw listing: the goal is to make the high-level source fit.
 | --- | ---: | ---: | ---: | --- |
 | `tic-tac-toe-4x4.mkpro` | 139 | 105 | +34 | pending optimizer |
 | `nekromant.mkpro` | 138 | 105 | +33 | pending optimizer; +3 after correctness fixes |
+| `podvodnaya-lodka-lazarev.mkpro` | 246 | 105 | +141 | pending optimizer; continuous symbolic display |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
+
+The high-level Lazarev submarine port uses `preview(frame(...))` for its live
+indicator and `random(min, max, seed)` for explicit generator input. Its separate
+setup program takes 46 cells. The 246-cell main program is not loadable on a
+standard MK-61 yet; the original 105-cell listing and Russian game instructions
+remain in `games/simulation/podvodnaya-lodka-lazarev.*`.
 
 The earlier 125-cell 4x4 and 133-cell Nekromant results are invalidated by
 correctness fixes: logical over-window operands must not be decoded from

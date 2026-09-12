@@ -118,12 +118,12 @@
    44 |  32  | К ЗН                    | sign()
    45 |  5C  | F x<0                   | false branch for <
    46 |  54  | 54                      | false branch for <
-   47 |  6D  | П→X d                   | recall floor
-   48 |  01  | 1                       |
-   49 |  11  | −                       | expr -
-   50 |  01  | 1                       |
-   51 |  36  | К max                   | max()
-   52 |  4D  | X→П d                   | arithmetic-if-max floor
+   47 |  01  | 1                       |
+   48 |  6D  | П→X d                   | recall floor
+   49 |  11  | −                       | condition compare
+   50 |  CA  | К x<0 a                 | false branch for >; preloaded Ra=00 indirect-target=0 indirect flow
+   51 |  0B  | /-/                     | reverse comparison residual
+   52 |  4D  | X→П d                   | set floor
    53 |  8A  | К БП a                  | if end; preloaded Ra=00 indirect-target=0 indirect flow
    54 |  DD  | К П→X d                 | indexed recall floors; indirect-memory-targets=1,2,3,4
    55 |  68  | П→X 8                   | recall room

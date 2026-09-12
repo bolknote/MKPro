@@ -6601,6 +6601,22 @@ bool guarded_statement_list_terminates_statically(const V2Program& program,
 }
 
 int guarded_estimate_number_cost(const std::string& raw) {
+  // An opaque, normalized display word is not a one-digit decimal constant.
+  // Cost its actual byte construction, including the order-zero entry, so
+  // the shared preload planner can compare it with ordinary constants.
+  if (raw.size() > 2U && raw.front() == '8' && raw.at(1) == ',') {
+    const auto cells = core::emit::display_literal_mantissa_cells(
+        raw.substr(0, 1) + raw.substr(2));
+    if (cells.has_value() && cells->size() == 8U &&
+        std::any_of(cells->begin(), cells->end(), [](int cell) { return cell >= 10; })) {
+      const auto program = core::emit::display_literal_program_from_cells(cells, false);
+      if (program.has_value() && program->kind == "kinv")
+        return guarded_estimate_number_cost(program->digits) + 4;
+      if (program.has_value() && program->kind == "xor")
+        return guarded_estimate_number_cost(program->left) +
+               guarded_estimate_number_cost(program->right) + 5;
+    }
+  }
   std::string normalized;
   normalized.reserve(raw.size());
   for (const char ch : raw) {
@@ -24423,6 +24439,36 @@ Expression random_range_expression(const Expression& min, const Expression& max)
 }
 
 bool lower_random_call_to_x(LoweringContext& context, const Expression& expression) {
+  if (expression.args.size() == 3U) {
+    const auto minimum = numeric_value_of_expression(context, expression.args.at(0));
+    const auto maximum = numeric_value_of_expression(context, expression.args.at(1));
+    if (!minimum.has_value() || !maximum.has_value() || !std::isfinite(*minimum) ||
+        !std::isfinite(*maximum) || *maximum < *minimum ||
+        !std::isfinite(*maximum - *minimum)) {
+      context.diagnostics.push_back(diagnostic(
+          DiagnosticSeverity::Error, "random-seed-range",
+          "random(min, max, seed) currently requires finite constant bounds with min <= max"));
+      return false;
+    }
+    if (!lower_expression_to_x(context, expression.args.at(2)))
+      return false;
+    context.emitter.emit_op(0x0e, "В↑", "explicit random seed in Y", std::nullopt, true);
+    context.emitter.emit_op(0x3b, "К СЧ", "random(min, max, seed)");
+    if (*maximum - *minimum != 1.0) {
+      emit_number_or_preload(context, format_number_literal(*maximum - *minimum), "random range");
+      context.emitter.emit_op(0x12, "*", "random range");
+    }
+    if (*minimum != 0.0) {
+      emit_number_or_preload(context, format_number_literal(*minimum), "random minimum");
+      context.emitter.emit_op(0x10, "+", "random minimum");
+    }
+    clear_current_x_facts(context);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "explicit-random-seed",
+        .detail = "Evaluated the seed once and supplied it to the calculator RNG before range scaling.",
+    });
+    return true;
+  }
   if (expression.args.empty()) {
     context.emitter.emit_op(0x3b, "К СЧ", "random()");
     return true;
@@ -24450,7 +24496,7 @@ bool lower_random_call_to_x(LoweringContext& context, const Expression& expressi
 
   if (expression.args.size() != 1) {
     context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
-                                             "random() expects zero, one, or two arguments, got " +
+                                             "random() expects zero to three arguments, got " +
                                                  std::to_string(expression.args.size())));
     return false;
   }
@@ -24489,7 +24535,7 @@ bool expression_contains_valid_random(const Expression& expression) {
            (expression.right != nullptr && expression_contains_valid_random(*expression.right));
   }
   if (expression.kind == "call") {
-    if (lower_ascii(expression.callee) == "random" && expression.args.size() <= 2)
+    if (lower_ascii(expression.callee) == "random" && expression.args.size() <= 3)
       return true;
     return std::any_of(expression.args.begin(), expression.args.end(),
                        [](const Expression& arg) { return expression_contains_valid_random(arg); });
@@ -28676,6 +28722,7 @@ struct ResidualGuardedUpdateMatch {
   std::string target;
   double bound = 0.0;
   double delta = 0.0;
+  bool reversed_residual = false;
 };
 
 std::optional<ResidualGuardedUpdateMatch>
@@ -28683,7 +28730,9 @@ match_residual_guarded_update(const V2Statement& statement) {
   if (statement.kind != "v2_if" || !statement.predicate.has_value() || statement.negated)
     return std::nullopt;
   const V2Predicate& condition = *statement.predicate;
-  if (condition.kind != "v2_compare" || (condition.op != "<" && condition.op != ">="))
+  if (condition.kind != "v2_compare" ||
+      (condition.op != "<" && condition.op != ">=" &&
+       condition.op != ">" && condition.op != "<="))
     return std::nullopt;
 
   const Expression left = parse_expression(condition.left, statement.line);
@@ -28693,6 +28742,7 @@ match_residual_guarded_update(const V2Statement& statement) {
   const std::optional<double> bound = numeric_literal_value(right);
   if (!bound.has_value())
     return std::nullopt;
+  const bool reversed_residual = condition.op == ">" || condition.op == "<=";
 
   for (std::size_t index = 0; index < statement.then_body.size(); ++index) {
     const V2Statement& candidate = statement.then_body.at(index);
@@ -28702,6 +28752,10 @@ match_residual_guarded_update(const V2Statement& statement) {
       return std::nullopt;
 
     if (*candidate.target != left.name) {
+      // Do not extend delayed-update scheduling to reversed comparisons
+      // without a separate proof for intervening effects.
+      if (reversed_residual)
+        return std::nullopt;
       const Expression expression = parse_expression(*candidate.expr, candidate.line);
       if (expression_contains_identifier(expression, left.name))
         return std::nullopt;
@@ -28724,6 +28778,7 @@ match_residual_guarded_update(const V2Statement& statement) {
         .target = left.name,
         .bound = *bound,
         .delta = *delta,
+        .reversed_residual = reversed_residual,
     };
   }
 
@@ -28733,6 +28788,28 @@ match_residual_guarded_update(const V2Statement& statement) {
 bool residual_guarded_update_saves(LoweringContext& context,
                                    const ResidualGuardedUpdateMatch& update) {
   const double correction = update.bound + update.delta;
+  if (update.reversed_residual) {
+    const auto field = context.state_fields.find(update.target);
+    const auto range = numeric_range_for_name(context, update.target);
+    const auto exact_integer = [](double value) {
+      return std::isfinite(value) && std::trunc(value) == value &&
+             std::fabs(value) <= 99999999.0;
+    };
+    // Reassociation must be exact in the eight-digit decimal machine, not
+    // just in host arithmetic. Unknown/fractional/overflowing domains keep
+    // the ordinary update, including its original rounding behavior.
+    if (field == context.state_fields.end() || field->second == nullptr ||
+        (field->second->type != "counter" && field->second->type != "flag") ||
+        !range.has_value() || !range->min.has_value() || !range->max.has_value() ||
+        !exact_integer(update.bound) || !exact_integer(update.delta) ||
+        !exact_integer(correction) || !exact_integer(*range->min) ||
+        !exact_integer(*range->max) ||
+        !exact_integer(*range->min - update.bound) ||
+        !exact_integer(*range->max - update.bound) ||
+        !exact_integer(*range->min + update.delta) ||
+        !exact_integer(*range->max + update.delta))
+      return false;
+  }
   const std::string correction_raw = format_number_literal(correction);
   int ordinary_update_cost = guarded_estimate_expression_cost(parse_expression(
                                  *update.assignment.expr, update.assignment.line)) +
@@ -28746,7 +28823,16 @@ bool residual_guarded_update_saves(LoweringContext& context,
                                parse_expression(*update.assignment.expr, update.assignment.line)) +
                            1 + 1;
   }
+  if (std::fabs(update.delta) == 1.0 &&
+      stack_carried_update_persists_in_register(context, update.target, number_expression("1"),
+                                               update.delta < 0.0 ? "-" : "+",
+                                               update.assignment.line)) {
+    // The normal lowering can mutate a suitable counter in one indirect
+    // recall. Compare against that implementation, not load/literal/op/store.
+    ordinary_update_cost = 1;
+  }
   const int residual_update_cost =
+      (update.reversed_residual ? 1 : 0) +
       (std::fabs(correction) < 1e-12
            ? 0
            : estimate_number_or_preload_cost(context, correction_raw) + 1) +
@@ -28757,13 +28843,18 @@ bool residual_guarded_update_saves(LoweringContext& context,
 bool compile_residual_guarded_condition(LoweringContext& context,
                                         const ResidualGuardedUpdateMatch& update,
                                         const std::string& false_label, int line) {
-  if (!lower_expression_to_x(context, parse_expression(update.condition.left, line)))
+  const auto& first = update.reversed_residual ? update.condition.right : update.condition.left;
+  const auto& second = update.reversed_residual ? update.condition.left : update.condition.right;
+  if (!lower_expression_to_x(context, parse_expression(first, line)))
     return false;
-  if (!lower_expression_to_x(context, parse_expression(update.condition.right, line)))
+  if (!lower_expression_to_x(context, parse_expression(second, line)))
     return false;
   context.emitter.emit_op(0x11, "-", "condition compare", line);
-  const int false_opcode = update.condition.op == "<" ? 0x5c : 0x59;
-  const std::string false_mnemonic = update.condition.op == "<" ? "F x<0" : "F x>=0";
+  if (update.reversed_residual)
+    clear_current_x_facts(context);
+  const bool strict = update.condition.op == "<" || update.condition.op == ">";
+  const int false_opcode = strict ? 0x5c : 0x59;
+  const std::string false_mnemonic = strict ? "F x<0" : "F x>=0";
   context.emitter.emit_jump(false_opcode, false_mnemonic, false_label,
                             "false branch for " + update.condition.op, line);
   return true;
@@ -28772,6 +28863,10 @@ bool compile_residual_guarded_condition(LoweringContext& context,
 void emit_residual_guarded_update(LoweringContext& context,
                                   const ResidualGuardedUpdateMatch& update) {
   const double correction = update.bound + update.delta;
+  if (update.reversed_residual) {
+    context.emitter.emit_op(0x0b, "/-/", "reverse comparison residual", update.assignment.line);
+    clear_current_x_facts(context);
+  }
   if (std::fabs(correction) >= 1e-12) {
     emit_number_or_preload(context, format_number_literal(correction));
     context.emitter.emit_op(0x10, "+", "residual guarded update " + update.target,
@@ -28780,7 +28875,10 @@ void emit_residual_guarded_update(LoweringContext& context,
   emit_store(context, update.target, "set " + update.target);
   context.optimizations.push_back(OptimizationReport{
       .name = "residual-guarded-update",
-      .detail = "Reused " + update.target + " - " + format_number_literal(update.bound) +
+      .detail = "Reused " +
+                (update.reversed_residual
+                     ? format_number_literal(update.bound) + " - " + update.target
+                     : update.target + " - " + format_number_literal(update.bound)) +
                 " while updating " + update.target + " at line " +
                 std::to_string(update.assignment.line) + ".",
   });
@@ -28791,8 +28889,11 @@ residual_expression_for_guarded_update_display(const V2Statement& statement) {
   const std::optional<ResidualGuardedUpdateMatch> match = match_residual_guarded_update(statement);
   if (!match.has_value())
     return std::nullopt;
-  return subtract_expression(parse_expression(match->condition.left, statement.line),
-                             parse_expression(match->condition.right, statement.line));
+  return subtract_expression(
+      parse_expression(match->reversed_residual ? match->condition.right : match->condition.left,
+                       statement.line),
+      parse_expression(match->reversed_residual ? match->condition.left : match->condition.right,
+                       statement.line));
 }
 
 std::optional<Expression> branch_residual_expression(LoweringContext& context,
@@ -30168,9 +30269,36 @@ ArithmeticIfCandidate arithmetic_if_abs_candidate(std::string target, Expression
   };
 }
 
-ArithmeticIfCandidate
-arithmetic_if_max_candidate(std::string target, Expression left, Expression right,
+bool arithmetic_if_minmax_zero_safe(const LoweringContext& context,
+                                    const Expression& left, const Expression& right,
+                                    bool minimum) {
+  // K max considers zero greater than every nonzero number. min-via-max
+  // inherits the dual quirk. A source-level comparison has neither quirk.
+  // Generated builtin calls must not bind to a user function of that name.
+  if (context.rules.contains("max"))
+    return false;
+  const auto left_range = numeric_range_for_expression(context, left);
+  const auto right_range = numeric_range_for_expression(context, right);
+  const auto excludes_zero = [](const std::optional<NumericRange>& range) {
+    return range.has_value() &&
+           ((range->min.has_value() && *range->min > 0) ||
+            (range->max.has_value() && *range->max < 0));
+  };
+  const auto zero_is_correct_extreme = [&](const std::optional<NumericRange>& other) {
+    return other.has_value() &&
+           (minimum ? other->min.has_value() && *other->min >= 0
+                    : other->max.has_value() && *other->max <= 0);
+  };
+  return (excludes_zero(left_range) || zero_is_correct_extreme(right_range)) &&
+         (excludes_zero(right_range) || zero_is_correct_extreme(left_range));
+}
+
+std::optional<ArithmeticIfCandidate>
+arithmetic_if_max_candidate(const LoweringContext& context,
+                            std::string target, Expression left, Expression right,
                             std::string detail = "Replaced max branch with К max") {
+  if (!arithmetic_if_minmax_zero_safe(context, left, right, false))
+    return std::nullopt;
   return ArithmeticIfCandidate{
       .target = std::move(target),
       .expression = max_expression(std::move(left), std::move(right)),
@@ -30179,9 +30307,12 @@ arithmetic_if_max_candidate(std::string target, Expression left, Expression righ
   };
 }
 
-ArithmeticIfCandidate
-arithmetic_if_min_candidate(std::string target, const Expression& left, const Expression& right,
+std::optional<ArithmeticIfCandidate>
+arithmetic_if_min_candidate(const LoweringContext& context,
+                            std::string target, const Expression& left, const Expression& right,
                             std::string detail = "Replaced min branch with min-via-max()") {
+  if (!arithmetic_if_minmax_zero_safe(context, left, right, true))
+    return std::nullopt;
   return ArithmeticIfCandidate{
       .target = std::move(target),
       .expression = min_expression(left, right),
@@ -30378,11 +30509,13 @@ std::optional<ArithmeticIfCandidate> build_arithmetic_if_boolean_algebra_candida
     };
   }
   if (then_value.has_value() && std::fabs(*then_value - 1.0) < 1e-12 && other_else.has_value()) {
+    if (context.rules.contains("sign"))
+      return std::nullopt;
     return ArithmeticIfCandidate{
-        .target = then_assign->first,
-        .expression = max_expression(std::move(*selector), *other_else),
+      .target = then_assign->first,
+        .expression = sign_expression(add_expression(std::move(*selector), *other_else)),
         .name = "arithmetic-if-boolean-algebra",
-        .detail = "Replaced boolean OR branch with arithmetic expression",
+        .detail = "Replaced boolean OR branch with sign(a+b) for proved boolean operands",
     };
   }
   if (other_then.has_value() && other_else.has_value() &&
@@ -30420,18 +30553,18 @@ build_arithmetic_if_max_min_candidate(const LoweringContext& context, const V2St
   if (predicate.op == ">" || predicate.op == ">=") {
     if (expression_equals(then_assign->second, left) &&
         expression_equals(else_assign->second, right))
-      return arithmetic_if_max_candidate(then_assign->first, left, right);
+      return arithmetic_if_max_candidate(context, then_assign->first, left, right);
     if (expression_equals(then_assign->second, right) &&
         expression_equals(else_assign->second, left))
-      return arithmetic_if_min_candidate(then_assign->first, left, right);
+      return arithmetic_if_min_candidate(context, then_assign->first, left, right);
   }
   if (predicate.op == "<" || predicate.op == "<=") {
     if (expression_equals(then_assign->second, right) &&
         expression_equals(else_assign->second, left))
-      return arithmetic_if_max_candidate(then_assign->first, left, right);
+      return arithmetic_if_max_candidate(context, then_assign->first, left, right);
     if (expression_equals(then_assign->second, left) &&
         expression_equals(else_assign->second, right))
-      return arithmetic_if_min_candidate(then_assign->first, left, right);
+      return arithmetic_if_min_candidate(context, then_assign->first, left, right);
   }
   return std::nullopt;
 }
@@ -30450,11 +30583,11 @@ build_arithmetic_if_clamp_candidate(const LoweringContext& context, const V2Stat
     return std::nullopt;
 
   if (predicate.op == "<" || predicate.op == "<=") {
-    return arithmetic_if_max_candidate(assign->first, target, right,
+    return arithmetic_if_max_candidate(context, assign->first, target, right,
                                        "Replaced lower clamp branch with max()");
   }
   if (predicate.op == ">" || predicate.op == ">=") {
-    return arithmetic_if_min_candidate(assign->first, target, right,
+    return arithmetic_if_min_candidate(context, assign->first, target, right,
                                        "Replaced upper clamp branch with min-via-max()");
   }
   return std::nullopt;
@@ -30486,7 +30619,7 @@ std::optional<ArithmeticIfCandidate> build_arithmetic_if_saturating_update_candi
   if (decrement.has_value() && predicate.op == ">" &&
       expression_is_numeric_value(context, *decrement, 1.0) &&
       expression_is_numeric_value(context, right, *range->min)) {
-    return arithmetic_if_max_candidate(assign->first, assign->second, right,
+    return arithmetic_if_max_candidate(context, assign->first, assign->second, right,
                                        "Replaced saturating decrement branch with max()");
   }
 
@@ -30495,7 +30628,7 @@ std::optional<ArithmeticIfCandidate> build_arithmetic_if_saturating_update_candi
   if (increment.has_value() && predicate.op == "<" &&
       expression_is_numeric_value(context, *increment, 1.0) &&
       expression_is_numeric_value(context, right, *range->max)) {
-    return arithmetic_if_min_candidate(assign->first, assign->second, right,
+    return arithmetic_if_min_candidate(context, assign->first, assign->second, right,
                                        "Replaced saturating increment branch with min-via-max()");
   }
 
@@ -30729,8 +30862,13 @@ bool lower_arithmetic_if_double_clamp(LoweringContext& context, const V2Statemen
       arithmetic_clamp_bound(context, second, "upper");
   if (!lower.has_value() || !upper.has_value() || lower->target != upper->target)
     return false;
-  Expression expression = min_expression(
-      max_expression(identifier_expression(lower->target), lower->bound), upper->bound);
+  const Expression target = identifier_expression(lower->target);
+  if (!arithmetic_if_minmax_zero_safe(context, target, lower->bound, false))
+    return false;
+  const Expression lower_clamped = max_expression(target, lower->bound);
+  if (!arithmetic_if_minmax_zero_safe(context, lower_clamped, upper->bound, true))
+    return false;
+  Expression expression = min_expression(lower_clamped, upper->bound);
   const int ordinary_cost = estimate_branch_order_statement_cost(context, first) +
                             estimate_branch_order_statement_cost(context, second);
   if (ordinary_cost >= branch_order_infinite_cost())
@@ -30782,9 +30920,7 @@ bool lower_residual_guarded_update(LoweringContext& context, const V2Statement& 
     if (end_label.has_value())
       context.emitter.emit_jump(0x51, "БП", *end_label, "if end", statement.line);
     context.emitter.emit_label(false_label, {.hidden = true});
-    const Expression residual =
-        subtract_expression(parse_expression(update->condition.left, statement.line),
-                            parse_expression(update->condition.right, statement.line));
+    const Expression residual = *residual_expression_for_guarded_update_display(statement);
     if (!statement.else_body.empty() &&
         display_statement_is_single_expression(statement.else_body.front(), residual)) {
       mark_branch_residual_reuse(context, residual, statement.line, "false branch");
@@ -34127,6 +34263,17 @@ bool lower_preview_statement(LoweringContext& context, const V2Statement& statem
   if (statement.kind != "v2_preview" || !statement.expr.has_value())
     return false;
   const Expression expression = parse_expression(*statement.expr, statement.line);
+  if (expression.kind == "call" && expression.callee == "frame") {
+    struct RestoreCallIsolation {
+      bool& target;
+      bool previous;
+      ~RestoreCallIsolation() { target = previous; }
+    } restore{context.isolate_pending_user_call_operands,
+              context.isolate_pending_user_call_operands};
+    context.isolate_pending_user_call_operands = true;
+    auto api = display_emit_api(context);
+    return core::emit::lower_running_frame(api, context, expression, statement.line);
+  }
   if (!lower_expression_to_x(context, expression))
     return false;
   context.optimizations.push_back(OptimizationReport{
@@ -48168,8 +48315,19 @@ std::vector<V2Statement> lift_function_calls_in_statement(const V2Statement& sta
     state.in_stack_entry_return_expression = true;
     lift_function_calls_in_expression_text(rebuilt.expr, prelude, true, rebuilt.line, state);
     state.in_stack_entry_return_expression = previous_return_expression;
-  } else if (rebuilt.kind == "v2_assign" || rebuilt.kind == "v2_preview") {
+  } else if (rebuilt.kind == "v2_assign") {
     lift_function_calls_in_expression_text(rebuilt.expr, prelude, true, rebuilt.line, state);
+  } else if (rebuilt.kind == "v2_preview") {
+    bool guarded_frame = false;
+    if (rebuilt.expr.has_value()) {
+      const Expression expression = parse_expression(*rebuilt.expr, rebuilt.line);
+      guarded_frame = expression.kind == "call" && expression.callee == "frame";
+    }
+    // frame() evaluates layers in order, glyphs only after their visibility
+    // guard, and the display order last. Hoisting any nested call here would
+    // move its side effects outside that control-dependent evaluation region.
+    if (!guarded_frame)
+      lift_function_calls_in_expression_text(rebuilt.expr, prelude, true, rebuilt.line, state);
   } else if (rebuilt.kind == "v2_stop") {
     if (!rebuilt.items.has_value())
       lift_function_calls_in_expression_text(rebuilt.target, prelude, true, rebuilt.line, state);
@@ -53386,7 +53544,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
           .name = "grd-angle-mode-assumption",
           .detail = "Folded " +
                     std::to_string(early_folded_constants.grd_angle_assumptions) +
-                    " ГРД-only trigonometric identity node(s) under expected_mode(\"grd\").",
+                    " ГРД-only trigonometric identity node(s) under expected_mode_only(\"grd\").",
       });
     }
     if (const std::optional<core::emit::lowering::DecimalSeriesProgram> decimal_series =
@@ -53458,7 +53616,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
         context.optimizations.push_back(OptimizationReport{
             .name = "grd-angle-mode-assumption",
             .detail = "Folded " + std::to_string(folded_constants.grd_angle_assumptions) +
-                      " ГРД-only trigonometric identity node(s) under expected_mode(\"grd\").",
+                      " ГРД-only trigonometric identity node(s) under expected_mode_only(\"grd\").",
         });
       }
       if (!context.setup_only_counted_loop_init) {
@@ -53493,7 +53651,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
           context.optimizations.push_back(OptimizationReport{
               .name = "grd-angle-mode-assumption",
               .detail = "Folded " + std::to_string(refolded_constants.grd_angle_assumptions) +
-                        " ГРД-only trigonometric identity node(s) under expected_mode(\"grd\").",
+                        " ГРД-only trigonometric identity node(s) under expected_mode_only(\"grd\").",
           });
         }
       }
@@ -56714,9 +56872,16 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
       (setup_program_expected_mode.has_value() ||
        needs_generated_setup_program(context, setup_program_preloads))) {
     trace_stage("setup-program");
-    result.setup_program = core::emit::lowering::compile_setup_program_with_preloads(
-        context.boards, context.registers, setup_program_preloads, options,
-        setup_program_expected_mode);
+    try {
+      result.setup_program = core::emit::lowering::compile_setup_program_with_preloads(
+          context.boards, context.registers, setup_program_preloads, options,
+          setup_program_expected_mode);
+    } catch (const std::invalid_argument& error) {
+      result.implemented = false;
+      result.diagnostics.push_back(
+          diagnostic(DiagnosticSeverity::Error, "setup-initializer", error.what()));
+      return result;
+    }
     result.optimizations.push_back(OptimizationReport{
         .name = "generated-setup-program",
         .detail = setup_program_expected_mode.has_value() && setup_program_preloads.empty()

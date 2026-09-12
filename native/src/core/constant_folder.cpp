@@ -1322,7 +1322,10 @@ class ConstantFolder {
 ConstantFoldResult fold_program_constants(V2Program& program,
                                           const std::map<std::string, Expression>& constants,
                                           ConstantFoldMode mode) {
-  return ConstantFolder(program.expected_mode.has_value() && program.expected_mode->mode == "grd",
+  // A setup check is not a promise that the operator will leave the switch
+  // unchanged. Only the stronger whole-run contract permits trig folding.
+  return ConstantFolder(program.expected_mode.has_value() && program.expected_mode->only &&
+                            program.expected_mode->mode == "grd",
                         constants, mode)
       .fold_program(program);
 }

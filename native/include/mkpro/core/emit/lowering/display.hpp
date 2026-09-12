@@ -72,5 +72,7 @@ bool lower_formatted_coord_report_display_statement(DisplayEmitApi& api, Lowerin
                                                     const std::vector<DisplayItem>& items,
                                                     const std::string& display_name,
                                                     int source_line);
+bool lower_running_frame(DisplayEmitApi& api, LoweringContext& context,
+                         const Expression& frame, int source_line);
 
 } // namespace mkpro::core::emit

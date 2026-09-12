@@ -6,6 +6,7 @@
 - Источник реконструкции: переписка Евгения Степанищева с Феликсом Лазаревым от 10 сентября 2026 года
 - Модель: МК-61, 105 команд
 - Программа: [podvodnaya-lodka-lazarev.txt](podvodnaya-lodka-lazarev.txt)
+- Порт MK-Pro (pending): [podvodnaya-lodka-lazarev.mkpro](../../examples/pending-optimizer/podvodnaya-lodka-lazarev.mkpro)
 
 ## Статус реконструкции
 

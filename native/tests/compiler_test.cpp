@@ -5196,8 +5196,8 @@ program MaxAssignEqualityBranch {
   const CompileResult arithmetic_max = compile_source(R"mkpro(
 program ArithmeticIfMax {
   state {
-    left: packed = 3
-    right: packed = 5
+    left: counter 1..99 = 3
+    right: counter 1..99 = 5
     result: packed = 0
   }
   loop {
@@ -5227,8 +5227,8 @@ program ArithmeticIfMax {
   const CompileResult arithmetic_min = compile_source(R"mkpro(
 program ArithmeticIfMin {
   state {
-    left: packed = 3
-    right: packed = 5
+    left: counter 1..99 = 3
+    right: counter 1..99 = 5
     result: packed = 0
   }
   loop {
@@ -5277,7 +5277,7 @@ program ArithmeticIfAbs {
   const CompileResult arithmetic_clamp = compile_source(R"mkpro(
 program ArithmeticIfClamp {
   state {
-    value: packed = -3
+    value: counter -9..0 = -3
   }
   loop {
     if value < 0 {
@@ -5298,11 +5298,11 @@ program ArithmeticIfClamp {
   const CompileResult arithmetic_double_clamp = compile_source(R"mkpro(
 program ArithmeticIfDoubleClamp {
   state {
-    value: packed = 12
+    value: counter 1..99 = 12
   }
   loop {
-    if value < 0 {
-      value = 0
+    if value < 3 {
+      value = 3
     }
     if value > 9 {
       value = 9
@@ -8816,13 +8816,13 @@ program EqualityZeroFallthroughReuse {
   const CompileResult residual_guarded_update = compile_source(R"mkpro(
 program ResidualGuardedUpdate {
   state {
-    room: counter 0..6 = 0
+    room: counter 0..99 = 0
     shown: packed = 0
   }
 
   loop {
     if room < 6 {
-      room++
+      room += 2
       shown = room
     }
     else {
@@ -10182,7 +10182,7 @@ program ConstantPow10Synthesis {
   const CompileResult guarded_trig = compile_source(R"mkpro(
 program GrdTrigConstants {
   state {
-    expected_mode("gradient")
+    expected_mode_only("gradient")
   }
 
   loop {
@@ -10199,6 +10199,39 @@ program GrdTrigConstants {
                          return step.mnemonic.find("cos") != std::string::npos;
                        }),
           "GRD guarded trig constants should fold away cos/acos opcodes");
+
+  const CompileResult startup_trig = compile_source(R"mkpro(
+program RuntimeAngleSwitch {
+  state {
+    expected_mode("grd")
+  }
+  halt(sign(cos(100)))
+}
+)mkpro", trig_options);
+  require(startup_trig.implemented &&
+              !has_optimization(startup_trig, "grd-angle-mode-assumption"),
+          "a setup-only angle check must not imply a constant runtime angle mode");
+  require(std::any_of(startup_trig.steps.begin(), startup_trig.steps.end(),
+                      [](const ResolvedStep& step) { return step.opcode == 0x1d; }),
+          "a switch-controlled expression must retain its runtime cosine");
+  std::vector<int> steering_codes;
+  for (const ResolvedStep& step : startup_trig.steps)
+    steering_codes.push_back(step.opcode);
+  for (const std::string mode : {"rad", "deg", "grad"}) {
+    // The operator may change the switch after the initial setup check.
+    // Run the generated body, not a new setup check in the changed mode.
+    emulator::MK61 calc({.angle_mode = mode});
+    require(calc.load_program(steering_codes).diagnostics.empty(),
+            "runtime angle-switch test must fit and load without truncation");
+    for (const PreloadReport& preload : startup_trig.preloads)
+      calc.set_register(preload.register_name, preload.value);
+    calc.press_sequence({"В/О", "БП", "0", "0", "С/П"});
+    require(calc.run_until_stable(300, 6).stopped,
+            "runtime angle-switch test must stop in " + mode);
+    const double expected = mode == "rad" ? 1.0 : mode == "deg" ? -1.0 : 0.0;
+    require(std::stod(calc.display_text()) == expected,
+            "runtime angle-switch result must follow the operator's mode: " + mode);
+  }
 
   const CompileResult plain_trig = compile_source(R"mkpro(
 program PlainTrigConstants {

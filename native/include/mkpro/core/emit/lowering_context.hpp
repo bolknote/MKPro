@@ -381,6 +381,9 @@ struct LoweringContext {
   bool emitting_random_cell_helper = false;
   bool emitting_expression_helper = false;
   bool emitting_near_any_helper = false;
+  // Guarded expression regions retain calls at their evaluation point rather
+  // than lifting them to unconditional statements. Protect pending operands.
+  bool isolate_pending_user_call_operands = false;
   bool share_random_cell = false;
   bool hoist_shared_helpers = false;
   bool hoist_procs = false;
