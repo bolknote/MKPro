@@ -56,6 +56,9 @@ struct NaturalTargetDeferredSelectorReconciliation {
 struct NaturalTargetComponentLayoutOptions {
   AddressSpaceModel address_space_model = AddressSpaceModel::Standard;
   std::size_t maximum_subset_states = 20000;
+  // Pure geometry cache, scoped to this invocation. Disabling it is useful
+  // for differential tests; it never changes candidate/proof search limits.
+  bool memoize_layout_geometry = true;
   // Anchor assignment and component-placement DP are different search
   // spaces. Zero preserves the historical behavior (reuse the subset-state
   // cap); compiler candidate search can bound only the already ranked anchor

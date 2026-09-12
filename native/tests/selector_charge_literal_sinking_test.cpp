@@ -2,6 +2,7 @@
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
 #include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
+#include "mkpro/core/search_frontier.hpp"
 #include "mkpro/emulator/mk61.hpp"
 #include "test_support.hpp"
 
@@ -80,7 +81,7 @@ std::vector<IrOp> fixture(const std::string& prefix, int literal, bool other_inp
 }
 
 std::vector<int> bytes(const std::vector<IrOp>& ops) {
-  const auto bound = core::bind_late_bound_decimal_selectors(
+  const auto bound = core::rebind_late_bound_decimal_selectors(
       lower_ir_to_machine(ops), {.minimum_target_address = 0});
   require(bound.diagnostics.empty(), "synthetic selector charge must bind");
   std::map<std::string, int> labels;
@@ -117,7 +118,7 @@ std::vector<std::string> run(const std::vector<int>& program, const std::string&
 }
 
 void final_sunk_literal_proof(const std::vector<IrOp>& ops, const std::string& prefix) {
-  const auto bound = core::bind_late_bound_decimal_selectors(
+  const auto bound = core::rebind_late_bound_decimal_selectors(
       lower_ir_to_machine(ops), {.minimum_target_address = 0});
   require(bound.diagnostics.empty(), "final sunk literal must bind");
   const auto verify = [&](const std::vector<MachineItem>& items) {
@@ -164,6 +165,141 @@ void final_sunk_literal_proof(const std::vector<IrOp>& ops, const std::string& p
       break;
     }
   require(!verify(changed), "an alternative that now observes the input must reject the final proof");
+}
+
+
+std::vector<IrOp> fallthrough_fixture(const std::string& prefix, int literal,
+                                      bool other_input_live = false) {
+  auto ops = fixture(prefix, literal, other_input_live);
+  ops.erase(std::remove_if(ops.begin(), ops.end(), [&](const IrOp& op) {
+    return op.kind == IrKind::Label && op.name == prefix + "last-digit";
+  }), ops.end());
+  const auto position = [&](const std::string& suffix) {
+    const auto found = std::find_if(ops.begin(), ops.end(), [&](const IrOp& op) {
+      return op.kind == IrKind::Label && op.name == prefix + suffix;
+    });
+    require(found != ops.end(), "synthetic region must exist");
+    return static_cast<std::size_t>(found - ops.begin());
+  };
+  const auto data = position("data");
+  const auto discarded = position("discarded");
+  const auto shared = position("shared");
+  const auto sum = position("sum");
+  require(ops[discarded - 2].kind == IrKind::Call &&
+              ops[discarded - 1].kind == IrKind::Return,
+          "fixture tail call must have its ordinary return");
+  std::vector<IrOp> result;
+  const auto append = [&](std::size_t begin, std::size_t end) {
+    result.insert(result.end(), ops.begin() + static_cast<std::ptrdiff_t>(begin),
+                  ops.begin() + static_cast<std::ptrdiff_t>(end));
+  };
+  append(0, data);
+  append(discarded, shared);
+  // Keep every indirect destination before the rewritten entry. A post-layout
+  // rewrite may not silently change a selector's physical address.
+  append(sum, ops.size());
+  append(data, discarded - 2);
+  append(shared, sum);
+  const auto transfer = std::find_if(result.begin(), result.end(), [&](const IrOp& op) {
+    return op.kind == IrKind::Call &&
+           op.target == IrTarget(prefix + "shared");
+  });
+  require(transfer != result.end(), "alternative entry must keep its explicit transfer");
+  IrOp alias;
+  alias.kind = IrKind::Label;
+  alias.name = prefix + "unused-transfer";
+  result.insert(transfer, std::move(alias));
+  return result;
+}
+
+std::vector<MachineItem> concrete_fixture(const std::vector<IrOp>& ops) {
+  const auto bound = core::rebind_late_bound_decimal_selectors(
+      lower_ir_to_machine(ops), {.minimum_target_address = 0});
+  require(bound.diagnostics.empty(), "post-layout fixture must bind");
+  std::map<std::string, int> labels;
+  int address = 0;
+  for (const auto& item : bound.items) {
+    if (item.kind == MachineItemKind::Label) labels[item.name] = address;
+    else ++address;
+  }
+  auto result = bound.items;
+  for (auto& item : result) {
+    const auto numeric = [&](IrTarget& target) {
+      if (const auto* name = std::get_if<std::string>(&target))
+        target = labels.at(*name);
+    };
+    if (item.kind == MachineItemKind::Address) numeric(item.target);
+    if (item.indirect_flow_targets)
+      for (auto& target : *item.indirect_flow_targets) numeric(target);
+  }
+  return result;
+}
+
+void fallthrough_and_final_layout_contracts() {
+  for (const int literal : {7, 42, 98}) {
+    const std::string prefix = "entry-" + std::to_string(literal) + "/";
+    const auto source = fallthrough_fixture(prefix, literal);
+    const CompileOptions options;
+    const auto early = core::passes::selector_charge_literal_sinking(source, {.options = options});
+    require(early.applied == 1, "fallthrough and unused labels must not hide a valid entry");
+    final_sunk_literal_proof(early.ops, prefix);
+    const auto final = core::passes::optimize_post_layout_selector_charge_literal_sinking(
+        concrete_fixture(source));
+    require(final.applied == 1 && final.removed_cells == 2 &&
+                final.final_control_flow.proved,
+            "the final artifact must preserve exact indirect addresses and save two cells");
+    const auto final_ir = raise_machine_to_ir(final.items);
+    final_sunk_literal_proof(final_ir, prefix);
+    require(core::passes::optimize_post_layout_selector_charge_literal_sinking(final.items)
+                .applied == 0, "final entry closure must reach a fixed point");
+    for (const auto& seed : {"0", "-7", "3.25"}) {
+      const auto expected = run(bytes(source), seed);
+      require(run(bytes(early.ops), seed) == expected &&
+                  run(bytes(final_ir), seed) == expected,
+              "both entry forms must preserve ROM stack, X1/X2 and returned results");
+    }
+  }
+  const CompileOptions options;
+  const auto live = fallthrough_fixture("live-tail/", 42, true);
+  require(core::passes::selector_charge_literal_sinking(live, {.options = options}).applied == 0 &&
+              core::passes::optimize_post_layout_selector_charge_literal_sinking(
+                  concrete_fixture(live)).applied == 0,
+          "a live alternate input must reject both early and late entry rewrites");
+  auto entered = fallthrough_fixture("side-entry/", 7);
+  IrOp side_call;
+  side_call.kind = IrKind::Call;
+  side_call.opcode = 0x53;
+  side_call.target = "side-entry/unused-transfer";
+  entered.insert(entered.begin(), std::move(side_call));
+  require(core::passes::selector_charge_literal_sinking(entered, {.options = options}).applied == 0,
+          "a genuinely addressed transfer cannot inherit the preceding charge");
+  auto raw = concrete_fixture(fallthrough_fixture("raw-tail/", 7));
+  raw.front().raw = true;
+  require(core::passes::optimize_post_layout_selector_charge_literal_sinking(raw).applied == 0,
+          "raw code must not acquire a symbolic final-layout proof");
+  auto moving = fixture("moving-target/", 7);
+  require(core::passes::optimize_post_layout_selector_charge_literal_sinking(
+              concrete_fixture(moving)).applied == 0,
+          "moving a runtime indirect destination requires a separate layout transaction");
+
+  auto empty = fallthrough_fixture("empty-return/", 7);
+  IrOp ret;
+  ret.kind = IrKind::Return;
+  ret.opcode = 0x52;
+  empty.insert(empty.begin(), ret);
+  const auto concrete = concrete_fixture(empty);
+  require(core::passes::optimize_post_layout_selector_charge_literal_sinking(concrete).applied == 0,
+          "empty-stack return behavior must not be inferred from an opcode");
+  const auto explicit_policy =
+      core::passes::optimize_post_layout_selector_charge_literal_sinking(
+          concrete, {.empty_return_target = 1});
+  require(explicit_policy.applied == 1 &&
+              explicit_policy.final_control_flow.empty_return_target &&
+              explicit_policy.final_control_flow.empty_return_target->address == 1,
+          "an explicit hardware policy must preserve the same physical continuation");
+  require(run(bytes(raise_machine_to_ir(explicit_policy.items)), "3.25") ==
+              run(bytes(empty), "3.25"),
+          "ROM must confirm unchanged empty-return startup and later caller returns");
 }
 
 void decimal_entry_proof_requires_known_phase() {
@@ -217,7 +353,26 @@ void decimal_entry_proof_requires_known_phase() {
 } // namespace
 
 void selector_charge_literal_sinking_is_generic_and_proof_gated() {
+struct Candidate {
+    int cells;
+    bool proved;
+  };
+  std::optional<Candidate> incumbent;
+  const auto retain = [&](Candidate candidate) {
+    return core::retain_proved_search_incumbent(
+        incumbent, candidate,
+        [](const Candidate& left, const Candidate& right) { return left.cells < right.cells; },
+        [](const Candidate& value) { return value.proved; });
+  };
+  require(retain({41, true}), "initial proved artifact must be retained");
+  require(!retain({35, false}) && incumbent->cells == 41,
+          "a smaller invalid intermediate must not discard the valid incumbent");
+  require(retain({39, true}) && incumbent->cells == 39,
+          "a later valid closure must be allowed to improve the incumbent");
+  require(!retain({39, true}) && !retain({40, true}) && incumbent->cells == 39,
+          "equal or larger artifacts must not replace the deterministic incumbent");
   decimal_entry_proof_requires_known_phase();
+  fallthrough_and_final_layout_contracts();
   CompileOptions options;
   PassContext context{.options = options};
   for (const int literal : {7, 42, 98}) {

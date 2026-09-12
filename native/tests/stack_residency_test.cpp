@@ -2341,7 +2341,7 @@ program RuleStackInputDelayedAssignmentEntryProbe {
   state {
     x: packed = 0
     seed: packed = 2
-    guard: flag = false
+    guard: flag = 0
     score: packed = 0
     scratch: packed = 0
   }
@@ -2476,7 +2476,7 @@ program RuleStackInputEntryProbe {
 program StackBitMaskHelperArg {
   state {
     index: counter 0..7 = 3
-    guard: flag = false
+    guard: flag = 0
     tmp: counter 0..7 = 0
     out: packed = 0
   }
@@ -2519,7 +2519,7 @@ program StackPackedScoreHelperIndexArg {
   state {
     line: packed = 44444.4
     index: counter 0..7 = 3
-    guard: flag = false
+    guard: flag = 0
     tmp: counter 0..7 = 0
     out: packed = 0
   }
@@ -2563,7 +2563,7 @@ program StackPackedScoreInlineCurrentXIndexArg {
   state {
     line: packed = 44444.4
     index: counter 0..7 = 3
-    guard: flag = false
+    guard: flag = 0
     tmp: counter 0..7 = 0
     out: packed = 0
   }
@@ -2610,7 +2610,7 @@ program StackPackedScoreCurrentXSumAccumulator {
     line: packed = 44444.4
     index: counter 0..7 = 3
     other: counter 0..7 = 4
-    guard: flag = false
+    guard: flag = 0
     tmp: counter 0..7 = 0
     warm: packed = 0
     out: packed = 0
@@ -2661,7 +2661,7 @@ program StackPackedScoreInlineCurrentXLineArg {
   state {
     line: packed = 44444.4
     index: counter 0..7 = 3
-    guard: flag = false
+    guard: flag = 0
     tmp_line: packed = 0
     out: packed = 0
   }
@@ -2703,7 +2703,7 @@ program StackPackedScoreInlineCurrentXLineArg {
 program StackCarriedPowAlias {
   state {
     index: counter 0..7 = 3
-    guard: flag = false
+    guard: flag = 0
     tmp: counter 0..7 = 0
     out: packed = 0
   }
@@ -2737,7 +2737,7 @@ program StackResidentRepeatedSum {
     y: packed = 3
     tmp: packed = 0
     out: packed = 0
-    guard: flag = false
+    guard: flag = 0
   }
 
   loop {

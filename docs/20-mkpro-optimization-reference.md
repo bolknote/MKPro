@@ -28,6 +28,21 @@ The optimizer works in multiple passes, not in a single “on/off” mode.
 
 For over-budget programs, compile retries include candidate demotions (constant demotion, helper-shape changes) that can free a selector register and enable stronger indirect flow lowering.
 
+### Natural-layout search cost
+
+Component placement uses a suffix subset-sum lower bound on unavoidable gap
+padding. Each physical gap independently receives the best subset of remaining
+component lengths, so sharing a hypothetical component between gaps only makes
+the bound optimistic. A state is rejected only when even that lower bound exceeds
+its padding budget. Passing the bound is never a placement or semantic proof.
+
+Within one natural-layout invocation, identical geometry queries reuse their
+deterministic result (including failure). The key includes ordered component
+lengths, main component, fixed and bounded placement constraints, padding budget,
+bounded-address limit, and DP state cap. The cache does not reuse command
+identities or CFG/stack/X2/selector proofs. Reaching its entry cap merely stops
+new cache insertions; candidate enumeration continues unchanged.
+
 ## 2) Sources of reported information
 
 Use `mk-pro --out json` or `mk-pro explain` to inspect:
@@ -1216,6 +1231,37 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
   modified digits and missing/duplicated provenance reject the candidate.
   It must beat the incumbent on final size (then runtime cost on a tie), in the same selected
   105/112-cell memory model. A smaller IR alone never authorizes replacement.
+  Both explicit transfers and fallthrough into the shared store are supported.
+  Zero-cell labels between charge digits and a transfer are not barriers by
+  themselves: the exact predecessor graph must exclude independent entries.
+  `post-layout-selector-charge-literal-sinking` retries the same proof after
+  entry-ABI and tail-layout choices. It preserves the physical address and
+  command identity of every indirect destination, as well as external entries,
+  return frames and the explicit empty-return policy; it never silently
+  changes a preload. Numeric direct targets are carried as opaque identities.
+  Every delivered selector entry re-proves the literal and stack/X1/X2
+  convergence. Candidates requiring simultaneous selector retuning fail closed
+  and remain work for a separate joint-layout transaction.
+  Finalization keeps its exploratory candidate separate from the best artifact
+  that has passed the complete static proof. A rejected smaller intermediate
+  cannot evict that incumbent; later valid closures may still improve it.
+  The final entry verifier shares the compiler's explicit empty-return policy
+  between the rotation and sunk-literal ABIs.
+- `callee-hole-region-final-selection` retains the independently proved
+  entry-erasing, entry-preserving and normalized-call-boundary implementations
+  of a shared region instead of discarding the latter two solely by IR size.
+  The provider records each form's input/output size and opaque decimal-target
+  obligations; these are local certificates, not permission to emit unresolved
+  addresses. Every selected form still passes exact final layout, selector,
+  CFG, stack/X1/X2 and bounded-return verification. The ordinary local-minimum
+  policy remains the incumbent. Automatic refinement runs only on a finalized
+  over-budget program that already uses shared call-hole regions, considers
+  at most three forms on that same option seed, and deduplicates identical
+  final-layout inputs before running the expensive placement stages. A larger
+  intermediate is allowed; only a smaller final result (or a cheaper equal-size
+  result) may replace the incumbent. This is a bounded region-interface
+  frontier, not yet an arbitrary joint search over all register assignments
+  and region combinations.
 - `formal-program-counter-context` keeps the encoded hardware counter separate
   from its physical command identity. Sequential execution follows decimal
   counter carry, including A4 -> A5, B1 -> B2, F9 -> 00 and FA..FF -> 01..06.

@@ -20,4 +20,21 @@ bool prove_selector_charge_sunk_literal_entry(
     const AuthoritativePostLayoutControlFlow& flow,
     std::size_t store, std::size_t charge_start, int leaf);
 
+struct SelectorChargeLiteralLayoutResult {
+  std::vector<MachineItem> items;
+  AuthoritativePostLayoutControlFlow final_control_flow;
+  std::vector<AppliedOptimization> optimizations;
+  int applied = 0;
+  int removed_cells = 0;
+  std::vector<std::string> reasons;
+};
+
+// Retry the same IR proof after tail-entry/fallthrough layout. Numeric targets
+// become opaque command identities; every indirect destination must keep its
+// physical address, so no preload or runtime selector is silently retuned.
+// Empty-stack return semantics require an explicit caller-supplied policy.
+SelectorChargeLiteralLayoutResult optimize_post_layout_selector_charge_literal_sinking(
+    const std::vector<MachineItem>& items,
+    const PostLayoutControlFlowOptions& options = {});
+
 } // namespace mkpro::core::passes

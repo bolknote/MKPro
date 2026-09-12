@@ -336,6 +336,15 @@ enum class OutputFormat {
   All,
 };
 
+// Internal region choices. LocalMinimum preserves the ordinary pass policy;
+// the other forms are independent candidates, never publication permissions.
+enum class CalleeHoleRegionChoice {
+  LocalMinimum,
+  ErasedEntry,
+  PreservedEntry,
+  NormalizedBoundaries,
+};
+
 struct CompileOptions {
   DeliveryMode delivery = DeliveryMode::Manual;
   OutputFormat output = OutputFormat::Listing;
@@ -370,6 +379,11 @@ struct CompileOptions {
   // tails and proving an X/Y/Z-preserving selector-charge ABI. The complete
   // candidate, not an expanded intermediate, competes on final size.
   bool callee_hole_boundary_normalization = false;
+  // Keep one proof-valid region form through the later layout stages even
+  // when another form is locally smaller. Automatic search compares at most
+  // three forms of its finalized, over-budget incumbent, not every root.
+  CalleeHoleRegionChoice callee_hole_region_choice =
+      CalleeHoleRegionChoice::LocalMinimum;
   // Move a proved dead/common literal across a selector charge only in an
   // independently finalized candidate. Local savings can disturb anchors.
   bool selector_charge_literal_sinking = false;

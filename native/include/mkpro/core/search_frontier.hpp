@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -35,6 +36,19 @@ std::vector<Node> select_unexpanded_search_frontier(
   if (candidates.size() > width)
     candidates.resize(width);
   return candidates;
+}
+
+// Exploration may carry an incomplete candidate while a later transaction
+// repairs its layout. It must not displace the publishable incumbent until
+// the caller's complete-artifact proof succeeds. A failed proof sees only a
+// private candidate copy; deterministic ties retain the existing incumbent.
+template <class Node, class Better, class Prove>
+bool retain_proved_search_incumbent(std::optional<Node>& incumbent,
+                                    Node candidate, Better better, Prove prove) {
+  if ((incumbent.has_value() && !better(candidate, *incumbent)) || !prove(candidate))
+    return false;
+  incumbent = std::move(candidate);
+  return true;
 }
 
 } // namespace mkpro::core

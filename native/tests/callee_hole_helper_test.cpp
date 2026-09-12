@@ -1,6 +1,7 @@
 #include "mkpro/compiler.hpp"
 #include "mkpro/core/compiler_static_proof_gate.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
+#include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/passes/shared_straight_line_helper.hpp"
 #include "mkpro/core/register_allocator.hpp"
 #include "mkpro/core/stack_value_equivalence.hpp"
@@ -10,6 +11,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -181,6 +183,116 @@ void callee_hole_helper_matches_direct_call_semantics() {
   require(hole_display == baseline_display,
           "callee-hole variant should match the direct-call baseline: hole=" + hole_display +
               " baseline=" + baseline_display);
+
+  // Independent region forms must preserve the source contract even when
+  // they lose the ordinary local-size comparison.
+  for (const auto choice : {CalleeHoleRegionChoice::ErasedEntry,
+                            CalleeHoleRegionChoice::PreservedEntry,
+                            CalleeHoleRegionChoice::NormalizedBoundaries}) {
+    CompileOptions variant_options = hole_options;
+    variant_options.callee_hole_boundary_normalization = true;
+    variant_options.callee_hole_region_choice = choice;
+    const auto variant = compile_source(kCalleeHoleSource, variant_options);
+    require(run_display(variant, "independent region form") == baseline_display,
+            "every selected region form should preserve the ROM display contract");
+    const auto variant_rejection =
+        optimizer_static_proof_gate_rejection_reason_for_testing(variant_options, variant);
+    if (has_optimization(variant, "callee-hole-straight-line-helper"))
+      require(!variant_rejection.has_value(),
+              "applied region form " + std::to_string(static_cast<int>(choice)) +
+                  " should discharge its static proof: " +
+                  variant_rejection.value_or("none"));
+  }
+
+  std::vector<IrOp> region_ir;
+  const auto append_frontier_region = [&](const std::string& target) {
+    for (int i = 0; i < 14; ++i) {
+      IrOp recall = plain(0x61);
+      recall.kind = IrKind::Recall;
+      recall.register_name = "1";
+      region_ir.push_back(std::move(recall));
+    }
+    region_ir.push_back(call(target));
+  };
+  append_frontier_region("sum_leaf");
+  append_frontier_region("difference_leaf");
+  auto done = terminal(IrKind::Stop, 0x50);
+  done.meta.stop_disposition = StopDisposition::Terminal;
+  region_ir.push_back(std::move(done));
+  region_ir.push_back(label("sum_leaf"));
+  region_ir.push_back(plain(0x10));
+  region_ir.push_back(terminal(IrKind::Return, 0x52));
+  region_ir.push_back(label("difference_leaf"));
+  region_ir.push_back(plain(0x11));
+  region_ir.push_back(terminal(IrKind::Return, 0x52));
+  const auto regions = core::passes::callee_hole_region_alternatives(
+      region_ir, core::passes::PassContext{.options = hole_options});
+  const auto run_region = [&](const std::vector<IrOp>& ir, const std::string& seed) {
+    const auto bound = core::rebind_late_bound_decimal_selectors(
+        lower_ir_to_machine(ir), {.minimum_target_address = 0});
+    require(bound.diagnostics.empty(), "each region's decimal targets should bind");
+    std::map<std::string, int> labels;
+    int address = 0;
+    for (const auto& item : bound.items) {
+      if (item.kind == MachineItemKind::Label)
+        labels.emplace(item.name, address);
+      else
+        ++address;
+    }
+    std::vector<int> codes;
+    for (const auto& item : bound.items) {
+      if (item.kind == MachineItemKind::Label)
+        continue;
+      if (item.kind == MachineItemKind::Op) {
+        codes.push_back(item.opcode);
+      } else {
+        const auto target = labels.at(std::get<std::string>(item.target));
+        codes.push_back(16 * (target / 10) + target % 10);
+      }
+    }
+    emulator::MK61 calc;
+    require(calc.load_program(codes).diagnostics.empty(), "region fixture should fit stock MK-61");
+    for (const auto& reg : {"X", "Y", "Z", "T", "1"})
+      calc.set_register(reg, seed);
+    calc.press_sequence({"В/О", "С/П"});
+    require(calc.run_until_stable(5000, 6).stopped, "region fixture should stop");
+    std::vector<std::string> observations;
+    for (const auto& reg : {"X", "Y", "Z", "T", "X1", "1"})
+      observations.push_back(calc.read_register(reg));
+    calc.press(".");
+    observations.push_back(calc.display_text(true));
+    return observations;
+  };
+  for (const std::string seed : {"0", "-11.25", "77777777"}) {
+    const auto expected = run_region(region_ir, seed);
+    for (const auto& region : regions)
+      require(run_region(region.lowering.ops, seed) == expected,
+              "every retained interface must preserve data, stack, X1 and decimal-X2 on ROM");
+  }
+  auto opaque_region = region_ir;
+  opaque_region.front().meta.raw = true;
+  require(core::passes::callee_hole_region_alternatives(
+              opaque_region, core::passes::PassContext{.options = hole_options}).empty(),
+          "an unresolved raw entry must not inherit a region return-stack certificate");
+  const auto erased = std::find_if(regions.begin(), regions.end(), [](const auto& region) {
+    return region.choice == CalleeHoleRegionChoice::ErasedEntry;
+  });
+  const auto preserved = std::find_if(regions.begin(), regions.end(), [](const auto& region) {
+    return region.choice == CalleeHoleRegionChoice::PreservedEntry;
+  });
+  require(erased != regions.end() && preserved != regions.end(),
+          "the region frontier should retain both independently proved entry interfaces");
+  require(preserved->output_cells > erased->output_cells,
+          "a locally larger entry-preserving region must not be discarded");
+  require(core::passes::callee_hole_region_alternatives(
+              region_ir, core::passes::PassContext{.options = options}).empty(),
+          "disabled outlining should not manufacture region alternatives");
+  CompileOptions unavailable_choice = hole_options;
+  unavailable_choice.callee_hole_region_choice = CalleeHoleRegionChoice::NormalizedBoundaries;
+  const auto unavailable = core::passes::callee_hole_straight_line_helper(
+      region_ir, core::passes::PassContext{.options = unavailable_choice});
+  require(unavailable.applied == 0,
+          "a normalized-boundary request without its proof path should fail closed");
 
   core::StackValueEqualityState equality;
   for (int index = 0; index < 4; ++index) {

@@ -1781,8 +1781,69 @@ PassResult callee_hole_straight_line_helper_impl(const std::vector<IrOp>& ops, c
   };
 }
 
+std::vector<CalleeHoleRegionAlternative> callee_hole_region_alternatives(
+    const std::vector<IrOp>& ops, const PassContext& context) {
+  std::vector<CalleeHoleRegionAlternative> alternatives;
+  if (!context.options.callee_hole_straight_line_helper ||
+      has_numeric_outline_flow_target(ops))
+    return alternatives;
+  const auto cells = [](const std::vector<IrOp>& value) {
+    int count = 0;
+    for (const IrOp& op : value)
+      count += cells_per_op(op);
+    return count;
+  };
+  const int input_cells = cells(ops);
+  const auto retain = [&](CalleeHoleRegionChoice choice, PassResult candidate) {
+    if (candidate.applied <= 0 || !callee_hole_return_stack_fits(candidate.ops))
+      return;
+    const auto targets =
+        late_bound_decimal_selector_target_labels(lower_ir_to_machine(candidate.ops));
+    if (!targets.has_value())
+      return;
+    const int output_cells = cells(candidate.ops);
+    alternatives.push_back(CalleeHoleRegionAlternative{
+        .choice = choice,
+        .lowering = std::move(candidate),
+        .input_cells = input_cells,
+        .output_cells = output_cells,
+        .required_decimal_targets = *targets,
+    });
+  };
+  retain(CalleeHoleRegionChoice::ErasedEntry,
+         callee_hole_straight_line_helper_impl(ops, context, false));
+  retain(CalleeHoleRegionChoice::PreservedEntry,
+         callee_hole_straight_line_helper_impl(ops, context, true));
+  if (context.options.callee_hole_boundary_normalization) {
+    const auto normalized = normalize_callee_hole_boundaries(ops);
+    if (normalized.expanded_calls > 0) {
+      auto candidate =
+          callee_hole_straight_line_helper_impl(normalized.ops, context, true);
+      if (candidate.applied > 0)
+        candidate.optimizations.push_back(AppliedOptimization{
+            .name = "callee-hole-boundary-normalization",
+            .detail = "Exposed " + std::to_string(normalized.expanded_calls) +
+                      " symbolic call boundaries for a proved region alternative; "
+                      "deferred size selection until complete machine layout.",
+        });
+      retain(CalleeHoleRegionChoice::NormalizedBoundaries, std::move(candidate));
+    }
+  }
+  return alternatives;
+}
+
 PassResult callee_hole_straight_line_helper(const std::vector<IrOp>& ops,
                                            const PassContext& context) {
+  if (context.options.callee_hole_region_choice != CalleeHoleRegionChoice::LocalMinimum) {
+    auto alternatives = callee_hole_region_alternatives(ops, context);
+    const auto selected = std::find_if(
+        alternatives.begin(), alternatives.end(), [&](const auto& alternative) {
+          return alternative.choice == context.options.callee_hole_region_choice;
+        });
+    if (selected == alternatives.end())
+      return PassResult{.ops = ops};
+    return std::move(selected->lowering);
+  }
   const auto cells = [](const std::vector<IrOp>& value) {
     int size = 0;
     for (const IrOp& op : value) size += cells_per_op(op);

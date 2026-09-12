@@ -3,6 +3,7 @@
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/indirect_read_observability.hpp"
 #include "mkpro/core/late_bound_decimal_selector.hpp"
+#include "mkpro/core/layout_gap_capacity_bound.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/passes/helpers.hpp"
 #include "mkpro/core/stable_register_value_flow.hpp"
@@ -1849,7 +1850,20 @@ std::optional<std::vector<Cell>> convert_direct_flows(
   return cells;
 }
 
-std::optional<NaturalTargetLayoutOrder> layout_order_for_targets(
+// Cache only the pure geometry problem. Command payloads, origins, selector
+// writeback, and CFG/stack proofs belong to each candidate and are never reused.
+// Lifetime is one natural-layout invocation; reaching the memory cap disables
+// new insertions, not candidate exploration.
+struct LayoutOrderCache {
+  using PlacementKey = std::tuple<std::size_t, int, int>;
+  using Key = std::tuple<std::size_t, std::size_t, int, int,
+                         std::vector<int>, std::vector<PlacementKey>,
+                         std::vector<PlacementKey>>;
+  std::size_t maximum_entries = 0;
+  std::map<Key, std::optional<NaturalTargetLayoutOrder>> entries;
+};
+
+std::optional<NaturalTargetLayoutOrder> compute_layout_order_for_targets(
     const std::vector<Segment>& segments, std::size_t main_segment,
     const std::vector<NaturalTargetPlacement>& placements,
     std::size_t maximum_states, int maximum_padding,
@@ -1936,6 +1950,18 @@ std::optional<NaturalTargetLayoutOrder> layout_order_for_targets(
         static_cast<int>(rank);
   }
 
+  std::vector<int> eligible_lengths;
+  eligible_lengths.reserve(eligible.size());
+  for (const std::size_t segment : eligible)
+    eligible_lengths.push_back(segment_cells(segments.at(segment)));
+  const int maximum_gap = gap_capacities.empty()
+                              ? 0
+                              : *std::max_element(gap_capacities.begin(),
+                                                  gap_capacities.end());
+  const LayoutGapCapacityBound capacity_bound(eligible_lengths, maximum_gap);
+  if (capacity_bound.minimum_padding(0U, gap_capacities) > maximum_padding)
+    return std::nullopt;
+
   struct GapAssignmentNode {
     std::size_t parent = std::numeric_limits<std::size_t>::max();
     std::size_t eligible_index = std::numeric_limits<std::size_t>::max();
@@ -1968,7 +1994,9 @@ std::optional<NaturalTargetLayoutOrder> layout_order_for_targets(
                             const std::optional<std::pair<std::size_t, int>>&
                                 assignment) {
       const int filled = std::accumulate(totals.begin(), totals.end(), 0);
-      if (filled + remaining_cells < minimum_required_fill)
+      if (filled + remaining_cells < minimum_required_fill ||
+          capacity_bound.minimum_padding(eligible_index + 1U, gap_capacities,
+                                         totals) > maximum_padding)
         return true;
 
       std::vector<int> deadline_rank =
@@ -2158,6 +2186,46 @@ std::optional<NaturalTargetLayoutOrder> layout_order_for_targets(
              : std::nullopt;
 }
 
+std::optional<NaturalTargetLayoutOrder> layout_order_for_targets(
+    LayoutOrderCache& gap_layout_cache,
+    const std::vector<Segment>& segments, std::size_t main_segment,
+    const std::vector<NaturalTargetPlacement>& placements,
+    std::size_t maximum_states, int maximum_padding,
+    const std::vector<NaturalTargetPlacement>& bounded_placements = {},
+    int maximum_bounded_target = std::numeric_limits<int>::max()) {
+  if (gap_layout_cache.maximum_entries == 0U) {
+    return compute_layout_order_for_targets(
+        segments, main_segment, placements, maximum_states, maximum_padding,
+        bounded_placements, maximum_bounded_target);
+  }
+  std::vector<int> lengths;
+  lengths.reserve(segments.size());
+  for (const Segment& segment : segments)
+    lengths.push_back(segment_cells(segment));
+  const auto placement_key = [](const auto& values) {
+    std::vector<LayoutOrderCache::PlacementKey> keys;
+    keys.reserve(values.size());
+    for (const NaturalTargetPlacement& placement : values) {
+      keys.emplace_back(placement.target_segment, placement.target_offset,
+                        placement.natural_target);
+    }
+    return keys;
+  };
+  LayoutOrderCache::Key key{
+      main_segment, maximum_states, maximum_padding, maximum_bounded_target,
+      std::move(lengths), placement_key(placements),
+      placement_key(bounded_placements)};
+  const auto found = gap_layout_cache.entries.find(key);
+  if (found != gap_layout_cache.entries.end())
+    return found->second;
+  auto result = compute_layout_order_for_targets(
+      segments, main_segment, placements, maximum_states, maximum_padding,
+      bounded_placements, maximum_bounded_target);
+  if (gap_layout_cache.entries.size() < gap_layout_cache.maximum_entries)
+    gap_layout_cache.entries.emplace(std::move(key), result);
+  return result;
+}
+
 struct NaturalTargetLayoutVariant {
   std::vector<Segment> segments;
   NaturalTargetLayoutOrder order;
@@ -2167,6 +2235,7 @@ struct NaturalTargetLayoutVariant {
 
 std::optional<NaturalTargetLayoutVariant>
 layout_order_with_optional_split(
+    LayoutOrderCache& gap_layout_cache,
     const std::vector<Segment>& segments, std::size_t main_segment,
     const std::vector<NaturalTargetPlacement>& placements,
     std::size_t maximum_states, int maximum_padding,
@@ -2238,7 +2307,7 @@ layout_order_with_optional_split(
       return values;
     };
     auto trial = layout_order_with_optional_split(
-        trial_segments, main_segment, remap(placements), maximum_states,
+        gap_layout_cache, trial_segments, main_segment, remap(placements), maximum_states,
         maximum_padding - 2, bridge_command_origin + 2U, maximum_layout_cells,
         remap(bounded_placements), maximum_bounded_target, bridge_donors,
         allow_transactional_trailing_split, false);
@@ -2430,7 +2499,7 @@ layout_order_with_optional_split(
               placement.target_offset -= cut;
             }
             const auto trial_order = layout_order_for_targets(
-                trial_segments, main_segment, trial_placements, maximum_states,
+                gap_layout_cache, trial_segments, main_segment, trial_placements, maximum_states,
                 maximum_padding - existing_bridge_cells - 2,
                 trial_bounded_placements, maximum_bounded_target);
             if (!trial_order.has_value())
@@ -2449,7 +2518,7 @@ layout_order_with_optional_split(
       };
 
   const auto ordinary = layout_order_for_targets(
-      segments, main_segment, placements, maximum_states, maximum_padding,
+      gap_layout_cache, segments, main_segment, placements, maximum_states, maximum_padding,
       bounded_placements, maximum_bounded_target);
   if (ordinary.has_value()) {
     consider(segments, *ordinary, {});
@@ -2542,7 +2611,7 @@ layout_order_with_optional_split(
         placement.target_offset -= static_cast<int>(prefix_cells);
       }
       const auto trial_order = layout_order_for_targets(
-          trial_segments, trial_main, trial_placements, maximum_states,
+          gap_layout_cache, trial_segments, trial_main, trial_placements, maximum_states,
           maximum_padding, trial_bounded_placements,
           maximum_bounded_target);
       if (trial_order.has_value())
@@ -2609,7 +2678,7 @@ layout_order_with_optional_split(
         placement.target_offset -= static_cast<int>(prefix_cells);
       }
       const auto trial_order = layout_order_for_targets(
-          trial_segments, main_segment, trial_placements, maximum_states,
+          gap_layout_cache, trial_segments, main_segment, trial_placements, maximum_states,
           maximum_padding - 1, trial_bounded_placements,
           maximum_bounded_target);
       if (trial_order.has_value())
@@ -2683,7 +2752,7 @@ layout_order_with_optional_split(
       placement.target_offset -= static_cast<int>(prefix_cells);
     }
     const auto trial_order = layout_order_for_targets(
-        trial_segments, main_segment, trial_placements, maximum_states,
+        gap_layout_cache, trial_segments, main_segment, trial_placements, maximum_states,
         maximum_padding - 2);
     if (trial_order.has_value())
       consider(std::move(trial_segments), *trial_order, {bridge});
@@ -4678,6 +4747,7 @@ bool transparent_split_bridges_proved(
 }
 
 std::optional<CandidateArtifact> try_candidate(
+    LayoutOrderCache& gap_layout_cache,
     const std::vector<MachineItem>& items,
     const std::vector<PreloadReport>& preloads,
     const AuthoritativePostLayoutControlFlow& control_flow,
@@ -5029,7 +5099,7 @@ std::optional<CandidateArtifact> try_candidate(
   std::optional<NaturalTargetLayoutVariant> selected_layout;
   if (layout_only) {
     selected_layout = layout_order_with_optional_split(
-        segments, main_location->first, placements, options.maximum_subset_states,
+        gap_layout_cache, segments, main_location->first, placements, options.maximum_subset_states,
         maximum_padding, next_synthetic_origin,
         official_program_step_limit(options.address_space_model), bounded_placements,
         options.maximum_bounded_target_address, split_bridge_donors,
@@ -5054,7 +5124,7 @@ std::optional<CandidateArtifact> try_candidate(
       std::vector<NaturalTargetPlacement> preferred = placements;
       preferred.push_back(preferred_flexible);
       selected_layout = layout_order_with_optional_split(
-          segments, main_location->first, preferred,
+          gap_layout_cache, segments, main_location->first, preferred,
           options.maximum_subset_states, maximum_padding,
           next_synthetic_origin,
           official_program_step_limit(options.address_space_model), bounded_placements,
@@ -5064,7 +5134,7 @@ std::optional<CandidateArtifact> try_candidate(
       std::vector<NaturalTargetPlacement> all_bounded = bounded_placements;
       all_bounded.push_back(flexible_placements.front());
       selected_layout = layout_order_with_optional_split(
-          segments, main_location->first, placements,
+          gap_layout_cache, segments, main_location->first, placements,
           options.maximum_subset_states, maximum_padding,
           next_synthetic_origin,
           official_program_step_limit(options.address_space_model), all_bounded,
@@ -5084,7 +5154,7 @@ std::optional<CandidateArtifact> try_candidate(
     all_bounded.insert(all_bounded.end(), flexible_placements.begin(),
                        flexible_placements.end());
     selected_layout = layout_order_with_optional_split(
-        segments, main_location->first, placements,
+        gap_layout_cache, segments, main_location->first, placements,
         options.maximum_subset_states, maximum_padding,
         next_synthetic_origin,
         official_program_step_limit(options.address_space_model), all_bounded,
@@ -5093,7 +5163,7 @@ std::optional<CandidateArtifact> try_candidate(
         split_bridge_donors);
   } else {
     selected_layout = layout_order_with_optional_split(
-        segments, main_location->first, placements,
+        gap_layout_cache, segments, main_location->first, placements,
         options.maximum_subset_states, maximum_padding, next_synthetic_origin,
         official_program_step_limit(options.address_space_model), bounded_placements,
         options.maximum_bounded_target_address, split_bridge_donors);
@@ -5106,7 +5176,7 @@ std::optional<CandidateArtifact> try_candidate(
   if (prefer_existing_flexible_target && flexible_placements.size() == 1U &&
       selected_layout.has_value() && selected_layout->layout_cost > 0) {
     auto alternative = try_candidate(
-        items, preloads, control_flow, options, references, flows, selectors,
+        gap_layout_cache, items, preloads, control_flow, options, references, flows, selectors,
         anchors, bounded_target_origins, original_trace, flow_effect_proof_context,
         original_external, attempt_jump_folds, preserved_jump_command,
         rejection_reasons, false);
@@ -5794,6 +5864,10 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   NaturalTargetComponentLayoutResult result{
       .items = items,
       .preloads = preloads,
+  };
+  LayoutOrderCache gap_layout_cache{
+      .maximum_entries = options.memoize_layout_geometry
+                             ? options.maximum_subset_states : 0U,
   };
   result.plan.input_cells = index_artifact(items).cells;
   result.plan.output_cells = result.plan.input_cells;
@@ -6506,7 +6580,7 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
       return required_flows_proved;
     };
     std::optional<CandidateArtifact> candidate = try_candidate(
-        logical_items, preloads, *logical_flow, options, *references, flows,
+        gap_layout_cache, logical_items, preloads, *logical_flow, options, *references, flows,
         selectors, *complete_trial, bounded_target_origins, *original_trace,
         flow_effect_proof_context, *original_external, false, std::nullopt,
         &result.plan.reasons);
@@ -6600,7 +6674,7 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     if (complete_trial.has_value()) {
       for (const std::size_t command : direct_jump_fold_seeds) {
         std::optional<CandidateArtifact> candidate = try_candidate(
-            logical_items, preloads, *logical_flow, options, *references, flows,
+            gap_layout_cache, logical_items, preloads, *logical_flow, options, *references, flows,
             selectors, *complete_trial, bounded_target_origins, *original_trace,
             flow_effect_proof_context, *original_external, true, command,
             &result.plan.reasons);
@@ -6613,7 +6687,7 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
       }
       if (has_displaced_jump_fold_seed) {
         std::optional<CandidateArtifact> candidate = try_candidate(
-            logical_items, preloads, *logical_flow, options, *references, flows,
+            gap_layout_cache, logical_items, preloads, *logical_flow, options, *references, flows,
             selectors, *complete_trial, bounded_target_origins, *original_trace,
             flow_effect_proof_context, *original_external, true, std::nullopt,
             &result.plan.reasons);
@@ -6660,7 +6734,7 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
       for (const std::optional<std::size_t> preserved_jump : fold_requests) {
         std::vector<std::string> attempt_rejections;
         std::optional<CandidateArtifact> candidate = try_candidate(
-            logical_items, preloads, *logical_flow, options, *references, flows,
+            gap_layout_cache, logical_items, preloads, *logical_flow, options, *references, flows,
             selectors, frontier.anchors, bounded_target_origins, *original_trace,
             flow_effect_proof_context, *original_external, true, preserved_jump,
             &attempt_rejections);

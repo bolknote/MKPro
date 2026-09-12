@@ -57681,6 +57681,8 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";empty_stack_loop_return=" << options.empty_stack_loop_return
       << ";callee_hole_straight_line_helper=" << options.callee_hole_straight_line_helper
       << ";callee_hole_boundary_normalization=" << options.callee_hole_boundary_normalization
+      << ";callee_hole_region_choice="
+      << static_cast<int>(options.callee_hole_region_choice)
       << ";selector_charge_literal_sinking=" << options.selector_charge_literal_sinking
       << ";compact_logical_register_allocation=" << options.compact_logical_register_allocation
       << ";zero_underflow_constant_rematerialization="
@@ -59220,6 +59222,17 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
   const CalleeHoleResolvedFlow resolved_flow =
       callee_hole_resolved_flow(steps, items_by_step, options);
   std::optional<core::AuthoritativePostLayoutControlFlow> repaired_entry_flow;
+  const auto exact_entry_flow = [&]() -> const core::AuthoritativePostLayoutControlFlow& {
+    if (!repaired_entry_flow.has_value()) {
+      core::PostLayoutControlFlowOptions flow_options;
+      flow_options.address_space_model = address_space_model_for_options(options);
+      // The compiler's selected-layout proofs use the pinned hardware
+      // empty-return continuation. Both entry ABIs must use that same policy.
+      flow_options.empty_return_target = 1;
+      repaired_entry_flow = core::build_post_layout_control_flow(items, flow_options);
+    }
+    return *repaired_entry_flow;
+  };
   const auto repaired_entry_converges = [&](std::size_t start) {
     const bool prefix_proved = core::prove_stack_entry_equality(
         [&](std::size_t index) -> std::optional<core::StackEntryProofNode> {
@@ -59249,13 +59262,8 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
         }, start, core::xyz_preserving_selector_charge_state());
     if (prefix_proved)
       return true;
-    if (!repaired_entry_flow.has_value()) {
-      core::PostLayoutControlFlowOptions flow_options;
-      flow_options.address_space_model = address_space_model_for_options(options);
-      repaired_entry_flow = core::build_post_layout_control_flow(items, flow_options);
-    }
     return start < steps.size() && core::prove_post_layout_stack_entry_equality(
-        items, *repaired_entry_flow, steps[start].address,
+        items, exact_entry_flow(), steps[start].address,
         core::xyz_preserving_selector_charge_state());
   };
   std::map<std::string, std::map<int, std::set<int>>> charged_values;
@@ -59400,13 +59408,8 @@ bool callee_hole_indirect_call_targets_proved(const std::vector<OptimizationRepo
               items_by_step.at(entry->second.first) == nullptr ||
               items_by_step.at(digit) == nullptr)
             return reject("sunk selector literal has no final proof artifact");
-          if (!repaired_entry_flow.has_value()) {
-            core::PostLayoutControlFlowOptions flow_options;
-            flow_options.address_space_model = address_space_model_for_options(options);
-            repaired_entry_flow = core::build_post_layout_control_flow(items, flow_options);
-          }
           if (!core::passes::prove_selector_charge_sunk_literal_entry(
-                  items, *repaired_entry_flow,
+                  items, exact_entry_flow(),
                   static_cast<std::size_t>(items_by_step.at(entry->second.first) - items.data()),
                   static_cast<std::size_t>(items_by_step.at(digit) - items.data()), charge->target))
             return reject("sunk selector literal does not preserve its final continuation");
@@ -74210,6 +74213,20 @@ select_absolute_dark_layout_for_final_artifact(const CompileResult& selected,
       });
     }
 
+    // Tail/fallthrough layout can expose an entry ABI that was absent in the
+    // original IR candidate. Retry the same proof without changing any
+    // runtime indirect address or delivered preload.
+    for (int round = 0; round < 8; ++round) {
+      const auto sunk = core::passes::optimize_post_layout_selector_charge_literal_sinking(
+          active_items, control_options);
+      if (sunk.applied == 0 || !sunk.final_control_flow.proved)
+        break;
+      active_items = sunk.items;
+      active_control = sunk.final_control_flow;
+      prefix_optimizations.insert(prefix_optimizations.end(),
+                                  sunk.optimizations.begin(), sunk.optimizations.end());
+    }
+
     // Final DSE and absolute relayout preserve machine addresses but can
     // change MachineItem identities.  Flow-sensitive proofs must never reuse
     // an execution graph keyed by the pre-relayout item sequence.
@@ -74922,6 +74939,23 @@ CompileResult apply_finalization_fixed_point_to_selected_result(
     return selected;
   }
 
+const CompileResult initial = selected;
+  std::optional<CompileResult> proved_incumbent;
+  const auto retain_proved = [&] {
+    CompileResult candidate = selected;
+    refresh_callee_hole_late_selector_charge_comments(candidate, candidate_options);
+    core::retain_proved_search_incumbent(
+        proved_incumbent, std::move(candidate),
+        [&](const CompileResult& left, const CompileResult& right) {
+          return candidate_beats_best(left, right, comparison_options);
+        },
+        [&](const CompileResult& value) {
+          return !candidate_needs_static_proof_gate(candidate_options) ||
+                 !optimizer_static_gate_rejection_reason(candidate_options, value).has_value();
+        });
+  };
+  retain_proved();
+
   // Geometry-changing erasures can expose another dead store, literal reload,
   // component fold, or absolute helper layout. Apply exactly the same bounded,
   // monotone pipeline to every late candidate before comparing it with the
@@ -74933,6 +74967,7 @@ CompileResult apply_finalization_fixed_point_to_selected_result(
       if (candidate.has_value() &&
           candidate_beats_best(*candidate, selected, comparison_options)) {
         selected = *candidate;
+        retain_proved();
       }
     };
 
@@ -74964,7 +74999,8 @@ CompileResult apply_finalization_fixed_point_to_selected_result(
   }
   refresh_callee_hole_late_selector_charge_comments(selected,
                                                      candidate_options);
-  return selected;
+  retain_proved();
+  return proved_incumbent.has_value() ? std::move(*proved_incumbent) : initial;
 }
 
 std::optional<CompileResult> entered_contract_failure(const std::string& source,
@@ -79807,6 +79843,92 @@ CompileResult compile_source_for_optimizer_profile(
       if (trace_candidates)
         std::cerr << "[candidate-trace] selector-literal-sinking exception: "
                   << error.what() << '\n';
+    }
+  }
+
+  // Region interfaces are not interchangeable merely because their local
+  // instruction counts coincide. Keep the independently proved entry forms
+  // alive through full layout. This bounded refinement runs only on the final
+  // over-budget seed, with identical machine-input fingerprints deduplicated.
+  if (best.implemented && allow_aggressive_post_layout &&
+      best.steps.size() > static_cast<std::size_t>(
+          feature_profile_program_step_limit(optimizer_feature_profile_for_options(options))) &&
+      best_options.callee_hole_straight_line_helper &&
+      has_optimization_named(best.optimizations, "callee-hole-straight-line-helper")) {
+    const CompileOptions region_base = best_options;
+    std::set<std::string> finalized_region_inputs;
+    const auto remember_input = [&](const CompileOptions& variant) {
+      const auto found = final_layout_input_fingerprints.find(
+          compile_once_cache_key(variant));
+      return found == final_layout_input_fingerprints.end() || found->second.empty() ||
+             finalized_region_inputs.insert(found->second).second;
+    };
+    (void)cached_compile_source_once(region_base);
+    (void)remember_input(region_base);
+    for (const auto choice : {CalleeHoleRegionChoice::ErasedEntry,
+                              CalleeHoleRegionChoice::PreservedEntry,
+                              CalleeHoleRegionChoice::NormalizedBoundaries}) {
+      if (choice == region_base.callee_hole_region_choice ||
+          (choice == CalleeHoleRegionChoice::NormalizedBoundaries &&
+           !region_base.callee_hole_boundary_normalization))
+        continue;
+      try {
+        CompileOptions region_options = region_base;
+        region_options.callee_hole_region_choice = choice;
+        const CompileResult ordinary = cached_compile_source_once(region_options);
+        if (!has_optimization_named(ordinary.optimizations,
+                                    "callee-hole-straight-line-helper")) {
+          if (trace_candidates)
+            std::cerr << "[candidate-trace] region-alternative unavailable choice="
+                      << static_cast<int>(choice) << '\n';
+          continue;
+        }
+        if (!remember_input(region_options)) {
+          if (trace_candidates)
+            std::cerr << "[candidate-trace] region-alternative deduplicated choice="
+                      << static_cast<int>(choice) << '\n';
+          continue;
+        }
+        CompileOptions compile_options = region_options;
+        CompileResult candidate = compile_source_once(
+            source, compile_options, source_has_entered,
+            /*apply_final_layout_size_rescue=*/true);
+        if (!candidate.implemented &&
+            can_retry_lowering_attempt_in_analysis(candidate, compile_options)) {
+          compile_options.analysis = true;
+          candidate = compile_source_once(
+              source, compile_options, source_has_entered,
+              /*apply_final_layout_size_rescue=*/true);
+        }
+        if (candidate.implemented &&
+            !optimizer_static_gate_rejection_reason(compile_options, candidate).has_value())
+          candidate = apply_finalization_fixed_point_to_selected_result(
+              source, std::move(candidate), compile_options, options);
+        const auto rejection =
+            optimizer_static_gate_rejection_reason(compile_options, candidate);
+        const bool proved = candidate.implemented && !rejection.has_value();
+        if (trace_candidates)
+          std::cerr << "[candidate-trace] region-alternative choice="
+                    << static_cast<int>(choice) << " ordinary=" << ordinary.steps.size()
+                    << " final=" << candidate.steps.size() << " incumbent=" << best.steps.size()
+                    << " proved=" << proved << " rejection="
+                    << rejection.value_or("none") << '\n';
+        if (!proved || !candidate_beats_best(candidate, best, options))
+          continue;
+        candidate.optimizations.push_back(OptimizationReport{
+            .name = "callee-hole-region-final-selection",
+            .detail = "Retained a distinct proved entry interface through full layout "
+                      "instead of discarding it by local size; selected " +
+                      std::to_string(candidate.steps.size()) + " rather than " +
+                      std::to_string(best.steps.size()) + " cells.",
+        });
+        best_options = std::move(region_options);
+        best = std::move(candidate);
+      } catch (const std::exception& error) {
+        if (trace_candidates)
+          std::cerr << "[candidate-trace] region-alternative exception: "
+                    << error.what() << '\n';
+      }
     }
   }
 

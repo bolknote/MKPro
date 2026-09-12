@@ -4,6 +4,7 @@
 #include "mkpro/core/emit/lowering/proc_raw_setup.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/late_bound_decimal_selector.hpp"
+#include "mkpro/core/layout_gap_capacity_bound.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/selector_writeback.hpp"
 #include "mkpro/emulator/mk61.hpp"
@@ -860,6 +861,96 @@ bool reason_contains(const core::NaturalTargetComponentLayoutPlan& plan,
 } // namespace
 
 void natural_target_component_layout_is_generic_and_proof_gated() {
+  {
+    // Exhaustively compare the optimistic independent-gap bound with the
+    // true disjoint assignment problem, including trailing unused components.
+    const auto exact_padding = [](const std::vector<int>& lengths,
+                                  std::size_t first, std::vector<int> gaps) {
+      const auto visit = [&](auto&& self, std::size_t index) -> int {
+        if (index == lengths.size())
+          return gaps.at(0) + gaps.at(1);
+        int best = self(self, index + 1U);
+        for (std::size_t gap = 0; gap < gaps.size(); ++gap) {
+          if (lengths.at(index) > gaps.at(gap))
+            continue;
+          gaps.at(gap) -= lengths.at(index);
+          best = std::min(best, self(self, index + 1U));
+          gaps.at(gap) += lengths.at(index);
+        }
+        return best;
+      };
+      return visit(visit, first);
+    };
+    for (int a = 1; a <= 4; ++a) {
+      for (int b = 1; b <= 4; ++b) {
+        for (int c = 1; c <= 4; ++c) {
+          const std::vector<int> lengths{a, b, c};
+          const core::LayoutGapCapacityBound bound(lengths, 8);
+          for (std::size_t first = 0; first <= lengths.size(); ++first) {
+            for (int left = 0; left <= 8; ++left) {
+              for (int right = 0; right <= 8; ++right) {
+                const std::vector<int> gaps{left, right};
+                const auto lower = bound.minimum_padding(first, gaps);
+                const int exact = exact_padding(lengths, first, gaps);
+                require(lower <= exact,
+                        "gap-capacity bound must not discard a feasible assignment");
+                if (right == 0)
+                  require(lower == exact, "single-gap subset bound must be exact");
+                const std::vector<int> capacities{left + 2, right + 3};
+                const std::vector<int> filled{2, 3};
+                require(bound.minimum_padding(first, capacities, filled) == lower,
+                        "partially filled gaps must use only their residual capacity");
+              }
+            }
+          }
+        }
+      }
+    }
+    const std::vector<int> lengths(20U, 6);
+    const std::vector<int> gaps{11, 11, 11, 11};
+    require(core::LayoutGapCapacityBound(lengths, 11).minimum_padding(0U, gaps) == 20,
+            "enough total cells cannot fill incompatible indivisible gap sizes");
+    const std::vector<int> shared{3};
+    const std::vector<int> two_gaps{3, 3};
+    require(core::LayoutGapCapacityBound(shared, 3).minimum_padding(0U, two_gaps) == 0 &&
+                exact_padding(shared, 0U, two_gaps) == 3,
+            "an optimistic gap bound must never be used as a feasibility proof");
+    const std::vector<int> empty;
+    require(core::LayoutGapCapacityBound(empty, 11).minimum_padding(0U, gaps) == 44 &&
+                core::LayoutGapCapacityBound(lengths, 0).minimum_padding(0U, empty) == 0,
+            "empty suffixes and zero gaps must remain valid bound inputs");
+  }
+  {
+    const auto codes = [](const std::vector<MachineItem>& items) {
+      const ResolvedProgram resolved = resolve_machine_items(items, {});
+      require(resolved.diagnostics.empty(), "memoized layout must resolve");
+      std::vector<int> result;
+      for (const ResolvedStep& step : resolved.steps)
+        result.push_back(step.opcode);
+      return result;
+    };
+    const auto values = [](const std::vector<PreloadReport>& preloads) {
+      std::map<std::string, std::string> result;
+      for (const PreloadReport& preload : preloads)
+        result.emplace(preload.register_name, preload.value);
+      return result;
+    };
+    for (const Fixture& input : {fixture(2, 3, true), multi_anchor_fixture(),
+                                 overlapping_fixed_targets_fixture()}) {
+      core::NaturalTargetComponentLayoutOptions options;
+      const auto input_flow = flow(input);
+      const auto cached = core::optimize_natural_target_component_layout(
+          input.items, input.preloads, input_flow, options);
+      options.memoize_layout_geometry = false;
+      const auto uncached = core::optimize_natural_target_component_layout(
+          input.items, input.preloads, input_flow, options);
+      require(cached.plan.proved && uncached.plan.proved &&
+                  cached.removed_cells == uncached.removed_cells &&
+                  codes(cached.items) == codes(uncached.items) &&
+                  values(cached.preloads) == values(uncached.preloads),
+              "geometry memoization must preserve the exact proved artifact");
+    }
+  }
   {
     // Literal setup enters a number; leading zeroes are not a raw BCD-word
     // injection. The retained bank word is observable even if an ordinary

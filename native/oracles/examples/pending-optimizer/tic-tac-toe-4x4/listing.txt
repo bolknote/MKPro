@@ -176,7 +176,7 @@
    A3 | 48    | X→П 8                   | set display_x
    A4 | 01 08 | 18                      | callee-hole selector-value=18 indirect-target=18
   >6A | 51    | БП                      | callee-hole charge-entry tail transfer; proof=__callee_hole_helper_0; selector=a
-  >6B | @122  | @122                    | callee-hole skeleton; logical address; requires final physical layout
+  >6B | @119  | @119                    | callee-hole skeleton; logical address; requires final physical layout
   >6C | 68    | П→X 8                   | recall best_y
   >6D | 42    | X→П 2                   | set y
   >6E | 60    | П→X 0                   | recall slot
@@ -186,25 +186,23 @@
   >72 | 49    | X→П 9                   | set occupied
   >73 | 01    | 1                       |
   >74 | 8C    | К ПП c                  | empty-stack tail call through shared physical-00 return; preloaded Rc=-99999999 indirect-target=99 indirect flow
-  >75 | 09 08 | 98                      |
-  >77 | 0E    | B-up                    | callee-hole selector stack preservation
-  >78 | 06 08 | 68                      | callee-hole selector-value=68 indirect-target=68
-  >7A | 4A    | X→П a                   | callee-hole charge-entry store; proof=__callee_hole_helper_0; selector=a; entry-repair=preserve-xyz
-  >7B | 25    | F reverse               | callee-hole restored X/Y/Z after selector charge
-  >7C | 67    | П→X 7                   | preload indexed value lines_7 for mark_one
-  >7D | 61    | П→X 1                   | recall x
-  >7E | AA    | К ПП a                  | callee-hole indirect call; proof=__callee_hole_helper_0; leaf-targets=18:__fn_mark_one,68:__packed_score_accumulator
-  >7F | 66    | П→X 6                   | preload indexed value lines_6 for mark_one
-  >80 | 62    | П→X 2                   | recall y
-  >81 | AA    | К ПП a                  | callee-hole indirect call; proof=__callee_hole_helper_0; leaf-targets=18:__fn_mark_one,68:__packed_score_accumulator
-  >82 | 65    | П→X 5                   | preload indexed value lines_5 for mark_one
-  >83 | 62    | П→X 2                   | recall y
-  >84 | 53    | ПП                      | proc call return suffix gadget
-  >85 | @137  | @137                    | return suffix gadget target; logical address; requires final physical layout
-  >86 | 64    | П→X 4                   | preload indexed value lines_4 for mark_one
-  >87 | 62    | П→X 2                   | recall y
-  >88 | 0B    | /-/                     | sum/difference tail canonicalization
-  >89 | 61    | П→X 1                   | recall x
-  >8A | 10    | +                       | sum/difference tail canonicalization
-  >8B | AE    | К ПП e                  | call function normalize; preloaded Re=4.1200076E-1 indirect-target=76 indirect flow
-  >8C | 8A    | К БП a                  | callee-hole indirect call; proof=__callee_hole_helper_0; leaf-targets=18:__fn_mark_one,68:__packed_score_accumulator
+  >75 | 06 08 | 68                      | callee-hole selector-value=68 indirect-target=68
+  >77 | 4A    | X→П a                   | callee-hole charge-entry store; proof=__callee_hole_helper_0; selector=a; entry-repair=sunk-literal
+  >78 | 09 08 | 98                      |
+  >7A | 67    | П→X 7                   | preload indexed value lines_7 for mark_one
+  >7B | 61    | П→X 1                   | recall x
+  >7C | AA    | К ПП a                  | callee-hole indirect call; proof=__callee_hole_helper_0; leaf-targets=18:__fn_mark_one,68:__packed_score_accumulator
+  >7D | 66    | П→X 6                   | preload indexed value lines_6 for mark_one
+  >7E | 62    | П→X 2                   | recall y
+  >7F | AA    | К ПП a                  | callee-hole indirect call; proof=__callee_hole_helper_0; leaf-targets=18:__fn_mark_one,68:__packed_score_accumulator
+  >80 | 65    | П→X 5                   | preload indexed value lines_5 for mark_one
+  >81 | 62    | П→X 2                   | recall y
+  >82 | 53    | ПП                      | proc call return suffix gadget
+  >83 | @135  | @135                    | return suffix gadget target; logical address; requires final physical layout
+  >84 | 64    | П→X 4                   | preload indexed value lines_4 for mark_one
+  >85 | 62    | П→X 2                   | recall y
+  >86 | 0B    | /-/                     | sum/difference tail canonicalization
+  >87 | 61    | П→X 1                   | recall x
+  >88 | 10    | +                       | sum/difference tail canonicalization
+  >89 | AE    | К ПП e                  | call function normalize; preloaded Re=4.1200076E-1 indirect-target=76 indirect flow
+  >8A | 8A    | К БП a                  | callee-hole indirect call; proof=__callee_hole_helper_0; leaf-targets=18:__fn_mark_one,68:__packed_score_accumulator
