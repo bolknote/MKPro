@@ -119,8 +119,11 @@ struct Copy {
 
 } // namespace
 
-PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
-                                      const PassContext& context) {
+static PassResult process_register_webs(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const std::vector<RegisterWebRecoloringRequest>* recoloring_requests,
+    const RegisterWebRecoloringConsumer* consume) {
+  const bool recolor_only = recoloring_requests != nullptr;
   const bool trace = std::getenv("MKPRO_NATIVE_TRACE_REGISTER_WEBS") != nullptr;
   const auto unchanged = [&](const char* reason = "no admissible copy merge") {
     if (trace && context.options.coalesce_copies)
@@ -133,7 +136,7 @@ PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
   for (std::size_t i = 1; i < ops.size(); ++i)
     has_copy = has_copy || (ops[i - 1].kind == IrKind::Recall &&
                             ops[i].kind == IrKind::Store);
-  if (!has_copy)
+  if (!has_copy && !recolor_only)
     return unchanged("no adjacent recall/store");
 
   std::vector<RegisterEffects> effects;
@@ -149,6 +152,12 @@ PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
     }
     if (!op.register_name.empty() && !physical(op.register_name).has_value())
       return unchanged("nonstandard register operand");
+    if (recolor_only && (op.kind == IrKind::Store || op.kind == IrKind::Recall)) {
+      const auto reg = physical(op.register_name);
+      if (!reg.has_value() ||
+          op.opcode != (op.kind == IrKind::Store ? 0x40 : 0x60) + *reg)
+        return unchanged("inconsistent direct register operand");
+    }
     if (op.kind == IrKind::Loop && !counter_register(op).has_value())
       return unchanged("inconsistent loop counter operand");
     effects.push_back(register_effects(op));
@@ -183,6 +192,7 @@ PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
       return unchanged();
     sites.push_back(found->second);
   }
+  const std::set<std::size_t> reachable(sites.begin(), sites.end());
 
   Webs webs;
   for (int reg = 0; reg < kRegisters; ++reg)
@@ -262,6 +272,9 @@ PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
   };
   const auto anchored = [&](std::size_t site) {
     const auto& op = ops[site];
+    if (recolor_only && (!reachable.contains(site) || !op.meta.roles.empty() ||
+                        !op.target_meta.roles.empty()))
+      return true;
     if (movable_counter(site))
       return false;
     return (op.kind != IrKind::Store && op.kind != IrKind::Recall) ||
@@ -318,7 +331,7 @@ PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
       copies.push_back({site, webs.root(*uses[site - 1][source].begin()),
                         webs.root(definitions[site].at(destination))});
   }
-  if (copies.empty())
+  if (copies.empty() && !recolor_only)
     return unchanged("no exact movable copy predecessor");
 
   std::vector<Nodes> live_in(sites.size()), live_out(sites.size());
@@ -504,6 +517,105 @@ PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
     }
     return true;
   };
+  const auto emit_recolored = [&](int& relocated_counters) {
+    std::vector<IrOp> result;
+    result.reserve(ops.size() - removed.size());
+    for (std::size_t site = 0; site < ops.size(); ++site) {
+      if (removed.contains(site))
+        continue;
+      IrOp op = ops[site];
+      if (op.kind == IrKind::Store || op.kind == IrKind::Recall) {
+        const int reg = *physical(op.register_name);
+        std::optional<Node> node;
+        if (op.kind == IrKind::Store)
+          node = definitions[site].at(reg);
+        else if (!uses[site][reg].empty())
+          node = *uses[site][reg].begin();
+        if (node.has_value()) {
+          const int color = webs.colors[webs.root(*node)];
+          op.register_name = std::string(1, "0123456789abcde"[color]);
+          op.opcode = (op.kind == IrKind::Store ? 0x40 : 0x60) + color;
+          op.meta.mnemonic = opcode_by_code(op.opcode).name;
+        }
+      }
+      if (const auto original = counter_register(op)) {
+        const Node node = definitions[site].at(*original);
+        const int color = webs.colors[webs.root(node)];
+        if (color != *original) {
+          op.counter = "L" + std::to_string(color);
+          op.opcode = kLoopOpcodes[static_cast<std::size_t>(color)];
+          op.meta.mnemonic = opcode_by_code(op.opcode).name;
+          ++relocated_counters;
+        }
+      }
+      result.push_back(std::move(op));
+    }
+    return result;
+  };
+
+  if (recolor_only) {
+    // Retain the same exact execution graph for all independent requests.
+    // Joining operands expresses a common physical home, not value equality
+    // and not permission to erase either defining instruction.
+    const Webs original_webs = webs;
+    const auto operand_web = [&](std::size_t site) -> std::optional<Node> {
+      if (site >= ops.size() || !reachable.contains(site))
+        return std::nullopt;
+      const auto reg = physical(ops[site].register_name);
+      if (!reg.has_value())
+        return std::nullopt;
+      if (ops[site].kind == IrKind::Store)
+        return webs.root(definitions[site].at(*reg));
+      if (ops[site].kind == IrKind::Recall) {
+        const auto found = uses[site].find(*reg);
+        if (found != uses[site].end() && !found->second.empty())
+          return webs.root(*found->second.begin());
+      }
+      return std::nullopt;
+    };
+    for (const auto& request : *recoloring_requests) {
+      if (request.empty())
+        continue;
+      webs = original_webs;
+      bool valid = true;
+      for (const auto& [left, right] : request) {
+        const auto a = operand_web(left), b = operand_web(right);
+        if (!a.has_value() || !b.has_value() ||
+            (webs.fixed[*a] && webs.fixed[*b] && webs.colors[*a] != webs.colors[*b])) {
+          valid = false;
+          break;
+        }
+        const int color = webs.fixed[*b] ? webs.colors[*b] : webs.colors[*a];
+        const Node joined = webs.join(*a, *b, color);
+        if (webs.allowed[joined].empty()) {
+          valid = false;
+          break;
+        }
+      }
+      if (!valid)
+        continue;
+      // The coloring solver cannot see an edge after its endpoints have
+      // become one node. Reject these contradictions before building it.
+      for (const auto& [left, right] : interference)
+        if (webs.root(left) == webs.root(right)) {
+          valid = false;
+          break;
+        }
+      if (!valid)
+        continue;
+      // All equalities are already joined. A self-pair adds no new binding;
+      // ops.size() omits no definition from the immutable-pool proof.
+      const Node anchor = webs.root(0);
+      auto colors = joint_coloring(anchor, anchor, ops.size());
+      if (!colors.has_value())
+        continue;
+      webs.colors = std::move(*colors);
+      int relocated_counters = 0;
+      (*consume)(emit_recolored(relocated_counters));
+    }
+    return unchanged("region recolorings delivered without copy deletion");
+  }
+
   for (const auto& copy : copies) {
     const Node source = webs.root(copy.source);
     const Node destination = webs.root(copy.destination);
@@ -532,38 +644,8 @@ PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
   if (removed.empty())
     return unchanged();
 
-  std::vector<IrOp> result;
   int relocated_counters = 0;
-  for (std::size_t site = 0; site < ops.size(); ++site) {
-    if (removed.contains(site))
-      continue;
-    IrOp op = ops[site];
-    if (op.kind == IrKind::Store || op.kind == IrKind::Recall) {
-      const int reg = *physical(op.register_name);
-      std::optional<Node> node;
-      if (op.kind == IrKind::Store)
-        node = definitions[site].at(reg);
-      else if (!uses[site][reg].empty())
-        node = *uses[site][reg].begin();
-      if (node.has_value()) {
-        const int color = webs.colors[webs.root(*node)];
-        op.register_name = std::string(1, "0123456789abcde"[color]);
-        op.opcode = (op.kind == IrKind::Store ? 0x40 : 0x60) + color;
-        op.meta.mnemonic = opcode_by_code(op.opcode).name;
-      }
-    }
-    if (const auto original = counter_register(op)) {
-      const Node node = definitions[site].at(*original);
-      const int color = webs.colors[webs.root(node)];
-      if (color != *original) {
-        op.counter = "L" + std::to_string(color);
-        op.opcode = kLoopOpcodes[static_cast<std::size_t>(color)];
-        op.meta.mnemonic = opcode_by_code(op.opcode).name;
-        ++relocated_counters;
-      }
-    }
-    result.push_back(std::move(op));
-  }
+  std::vector<IrOp> result = emit_recolored(relocated_counters);
   if (trace)
     std::cerr << "[register-web-copy-coalesce] removed=" << removed.size()
               << " definitions=" << webs.parents.size()
@@ -587,6 +669,19 @@ PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
         "operands and manual/hardware anchors without spills or Rf."});
   return {.ops = std::move(result), .applied = static_cast<int>(removed.size()),
           .optimizations = std::move(optimizations)};
+}
+
+PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
+                                      const PassContext& context) {
+  return process_register_webs(ops, context, nullptr, nullptr);
+}
+
+void for_each_register_web_recoloring(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const std::vector<RegisterWebRecoloringRequest>& requests,
+    const RegisterWebRecoloringConsumer& consume) {
+  if (!requests.empty() && consume)
+    (void)process_register_webs(ops, context, &requests, &consume);
 }
 
 IrPass register_web_copy_coalesce_pass() {

@@ -42,6 +42,9 @@ struct HelperInvariantRecallCall {
   // helper takes no arguments or that a commutative join kills the whole stack.
   std::vector<std::size_t> argument_preparation_items;
   std::vector<std::size_t> join_permutation_items;
+  // A local output-ABI repair before the commutative join. Unlike a helper
+  // return swap, this costs a cell only at callers which observe retained Y.
+  bool insert_swap_before_join = false;
 };
 
 struct HelperInvariantRecallHoistOptions {
@@ -75,6 +78,11 @@ struct HelperInvariantRecallHoistOptions {
   // apply another proved rewrite to the tail plan and compare the complete
   // result against the original artifact. It never weakens either proof.
   bool prefer_before_return_plan = false;
+
+  // Try one independently proved caller-side swap when a plain tail recall
+  // cannot preserve a before-call operand's retained-Y continuation. Every
+  // repair is charged to the final size and rechecked after relocation.
+  bool allow_callsite_operand_swap = false;
 
   // Optional proof input for an atomic composition: every listed call is
   // independently proved to enter with this direct-register value already in

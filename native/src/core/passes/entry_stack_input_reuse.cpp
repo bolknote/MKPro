@@ -680,6 +680,7 @@ PassResult call_entry_materialization_order(const std::vector<IrOp>& ops,
     if (!hoist_options.has_value())
       continue;
     HelperInvariantRecallHoistOptions composed_options = *hoist_options;
+    composed_options.allow_callsite_operand_swap = context.options.helper_callsite_operand_repair;
     const HelperInvariantRecallHoistProof preliminary =
         verify_helper_invariant_recall_hoist(machine, helper_label, composed_options);
     const std::optional<std::set<std::size_t>> entry_x_calls =

@@ -1,7 +1,9 @@
 #include "mkpro/core/passes/shared_terminal_tail.hpp"
 
 #include "mkpro/core/passes/outline.hpp"
+#include "mkpro/core/passes/register_coalesce.hpp"
 
+#include <algorithm>
 #include <map>
 #include <set>
 #include <string>
@@ -96,7 +98,8 @@ IrOp shared_tail_jump(const std::string& label, const IrOp& source) {
 
 } // namespace
 
-PassResult shared_terminal_tail(const std::vector<IrOp>& ops, const PassContext& context) {
+static PassResult share_identical_terminal_tails(const std::vector<IrOp>& ops,
+                                                 const PassContext& context) {
   (void)context;
   if (has_numeric_outline_flow_target(ops))
     return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
@@ -171,6 +174,111 @@ PassResult shared_terminal_tail(const std::vector<IrOp>& ops, const PassContext&
               },
           },
   };
+}
+
+PassResult shared_terminal_tail(const std::vector<IrOp>& ops, const PassContext& context) {
+  PassResult best = share_identical_terminal_tails(ops, context);
+  if (!context.options.register_aware_tail_sharing || !context.options.coalesce_copies ||
+      context.options.disable_interprocedural_opts || has_numeric_outline_flow_target(ops))
+    return best;
+
+  // Abstract direct operands only. Calls, indirect selectors and terminal
+  // destinations must still match exactly; protected observations stay out.
+  const auto movable_region_op = [](const IrOp& op) {
+    return !has_rewrite_barrier(op) && !is_display_focus_sensitive(op) &&
+           op.meta.roles.empty() && op.target_meta.roles.empty() &&
+           op.kind != IrKind::Stop;
+  };
+  const auto candidates = collect_suffix_candidates(ops, SuffixCollectionConfig{
+      .is_terminal = [&](const IrOp& op) {
+        return movable_region_op(op) && is_shareable_terminal(op);
+      },
+      .is_body_op = [&](const IrOp& op) {
+        return movable_region_op(op) && is_shareable_body_op(op);
+      },
+      .op_key = [](const IrOp& op) {
+        if (op.kind == IrKind::Store)
+          return std::string("store:$");
+        if (op.kind == IrKind::Recall)
+          return std::string("recall:$");
+        return op_key(op);
+      },
+  });
+  std::set<RegisterWebRecoloringRequest> unique_requests;
+  for (const auto& candidate : candidates) {
+    if (candidate.occurrences.size() < 2)
+      continue;
+    RegisterWebRecoloringRequest group;
+    bool group_differs = false;
+    for (std::size_t left = 0; left < candidate.occurrences.size(); ++left) {
+      const auto& a = candidate.occurrences[left];
+      for (std::size_t right = left + 1; right < candidate.occurrences.size(); ++right) {
+        const auto& b = candidate.occurrences[right];
+        if (a.end - a.start != b.end - b.start || a.end >= b.start)
+          continue;
+        RegisterWebRecoloringRequest request;
+        bool differs = false;
+        for (int offset = 0; offset <= a.end - a.start; ++offset) {
+          const auto first = static_cast<std::size_t>(a.start + offset);
+          const auto second = static_cast<std::size_t>(b.start + offset);
+          if (ops[first].kind != IrKind::Store && ops[first].kind != IrKind::Recall)
+            continue;
+          request.emplace_back(first, second);
+          differs = differs || ops[first].register_name != ops[second].register_name;
+        }
+        // Equal-looking operands belong in the constraints too: recoloring
+        // a different operand must not destroy an already matching suffix.
+        if (left == 0) {
+          group.insert(group.end(), request.begin(), request.end());
+          group_differs = group_differs || differs;
+        }
+        if (differs)
+          unique_requests.insert(std::move(request));
+      }
+    }
+    if (group_differs) {
+      std::sort(group.begin(), group.end());
+      group.erase(std::unique(group.begin(), group.end()), group.end());
+      unique_requests.insert(std::move(group));
+    }
+  }
+  if (unique_requests.empty())
+    return best;
+
+  const auto cell_count = [](const std::vector<IrOp>& input) {
+    int cells = 0;
+    for (const auto& op : input)
+      cells += cells_per_op(op);
+    return cells;
+  };
+  int best_cells = cell_count(best.ops);
+  const int baseline_cells = best_cells;
+  const std::vector<RegisterWebRecoloringRequest> requests(unique_requests.begin(),
+                                                         unique_requests.end());
+  std::set<std::vector<int>> seen_inputs;
+  for_each_register_web_recoloring(ops, context, requests, [&](std::vector<IrOp> recolored) {
+    // The producer changes only register opcodes and their matching operands.
+    // All labels, instruction positions, other metadata and targets are fixed.
+    std::vector<int> fingerprint;
+    fingerprint.reserve(recolored.size());
+    for (const auto& op : recolored)
+      fingerprint.push_back(op.opcode);
+    if (!seen_inputs.insert(std::move(fingerprint)).second)
+      return;
+    PassResult candidate = share_identical_terminal_tails(recolored, context);
+    const int cells = cell_count(candidate.ops);
+    if (candidate.applied <= 0 || cells >= best_cells)
+      return;
+    candidate.optimizations.push_back({
+        "register-aware-tail-sharing",
+        "Shared terminal regions after jointly constraining reaching-definition web "
+        "homes; retained all entry, manual, hardware and immutable-pool anchors. "
+        "The combined IR uses " + std::to_string(cells) + " rather than " +
+        std::to_string(baseline_cells) + " cells; final-layout selection remains separate."});
+    best_cells = cells;
+    best = std::move(candidate);
+  });
+  return best;
 }
 
 IrPass shared_terminal_tail_pass() {

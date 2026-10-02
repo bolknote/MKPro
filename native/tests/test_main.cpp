@@ -184,6 +184,9 @@ void return_stack_script_matches_mk61_strategy_contract();
 void runtime_cost_model_prefers_faster_equal_size_candidates();
 void register_allocator_matches_typescript_contract();
 void register_coalesce_matches_typescript_contract();
+void register_aware_tail_sharing_preserves_web_contracts();
+void emulator_register_aware_tail_sharing_matches_original();
+void shared_call_tail_preserves_protected_occurrences();
 void rules_match_typescript_contract();
 void safe_minmax_matches_typescript_contract();
 void alternating_sign_toggle_arg_matches_literal_semantics();
@@ -242,6 +245,8 @@ void x2_preloaded_constant_matches_typescript_contract();
 void vp_x2_peephole_matches_typescript_contract();
 void vp_splice_matches_typescript_contract();
 void pre_shift_stack_lift_matches_typescript_contract();
+void matched_return_stack_lift_preserves_contracts();
+void emulator_matched_return_stack_lift_matches_original();
 void redundant_literal_reload_is_generic_and_proof_gated();
 
 } // namespace mkpro::tests
@@ -463,6 +468,9 @@ int main(int argc, char** argv) {
       MKPRO_TEST(runtime_cost_model_prefers_faster_equal_size_candidates),
       MKPRO_TEST(register_allocator_matches_typescript_contract),
       MKPRO_TEST(register_coalesce_matches_typescript_contract),
+      MKPRO_TEST(register_aware_tail_sharing_preserves_web_contracts),
+      MKPRO_TEST(emulator_register_aware_tail_sharing_matches_original),
+      MKPRO_TEST(shared_call_tail_preserves_protected_occurrences),
       MKPRO_TEST(rules_match_typescript_contract),
       MKPRO_TEST(safe_minmax_matches_typescript_contract),
       MKPRO_TEST(alternating_sign_toggle_arg_matches_literal_semantics),
@@ -522,6 +530,8 @@ int main(int argc, char** argv) {
       MKPRO_TEST(vp_x2_peephole_matches_typescript_contract),
       MKPRO_TEST(vp_splice_matches_typescript_contract),
       MKPRO_TEST(pre_shift_stack_lift_matches_typescript_contract),
+      MKPRO_TEST(matched_return_stack_lift_preserves_contracts),
+      MKPRO_TEST(emulator_matched_return_stack_lift_matches_original),
       MKPRO_TEST(redundant_literal_reload_is_generic_and_proof_gated),
   };
 #undef MKPRO_TEST

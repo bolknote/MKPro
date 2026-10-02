@@ -52479,6 +52479,7 @@ core::HelperInvariantRecallHoistResult choose_helper_invariant_recall_hoist(
     const CompileOptions& options) {
   core::HelperInvariantRecallHoistOptions abi_options = hoist_options;
   abi_options.allow_swapped_return = true;
+  abi_options.allow_callsite_operand_swap = options.helper_callsite_operand_repair;
   core::HelperInvariantRecallHoistResult ordinary =
       core::optimize_helper_invariant_recall_hoist(items, abi_options);
   core::HelperInvariantRecallHoistResult entry_x =
@@ -54139,8 +54140,9 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
       const auto hoist = choose_helper_invariant_recall_hoist(
           post_layout_items,
           core::HelperInvariantRecallHoistOptions{
-              .allow_before_call_commutative_tail = false,
+              .allow_before_call_commutative_tail = options.helper_callsite_operand_repair,
               .allow_x_preserving_root = true,
+              .prefer_before_return_plan = options.helper_callsite_operand_repair,
               .proved_indirect_flow_targets = indirect->targets,
               .fixed_indirect_flow_targets = indirect->fixed_numeric_targets,
               .fixed_direct_address_targets = direct->targets,
@@ -54148,7 +54150,10 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
           },
           options);
       if (hoist.applied <= 0 || !hoist.proof.final_artifact_proved ||
-          hoist.proof.insertion != core::HelperInvariantRecallInsertion::HelperRoot ||
+          hoist.proof.insertion !=
+              (options.helper_callsite_operand_repair
+                   ? core::HelperInvariantRecallInsertion::BeforeReturn
+                   : core::HelperInvariantRecallInsertion::HelperRoot) ||
           !helper_hoist_preserves_fixed_indirect_targets(*indirect, hoist.proof) ||
           core::machine_cell_count(hoist.items) >= core::machine_cell_count(post_layout_items))
         break;
@@ -54156,9 +54161,11 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
       post_layout_optimizations.insert(post_layout_optimizations.end(),
                                       hoist.optimizations.begin(), hoist.optimizations.end());
       post_layout_optimizations.push_back(core::passes::AppliedOptimization{
-          .name = "pre-layout-helper-entry-operand-abi",
+          .name = options.helper_callsite_operand_repair
+                      ? "pre-layout-helper-tail-operand-abi"
+                      : "pre-layout-helper-entry-operand-abi",
           .detail = "Proved the complete common-operand call family before natural target "
-                    "binding, preserving the helper's X argument and independently "
+                    "binding, preserving caller operand contracts and independently "
                     "reconverging stack/X1/X2. The full indexed-prefix layout competes "
                     "against ordinary scheduling.",
       });
@@ -56924,7 +56931,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.callee_hole_straight_line_helper ||
          options.disable_interprocedural_opts || options.coalesce_copies ||
          options.disable_return_suffix_gadget ||
-         options.defer_return_suffix_until_callee_hole ||
+         options.defer_return_suffix_until_callee_hole || options.register_aware_tail_sharing ||
          options.allow_size_neutral_selector_seed_reuse ||
          options.exact_terminal_dead_code_elimination ||
          options.aggressive_indirect_call_threshold || options.aggressive_indirect_call ||
@@ -56948,6 +56955,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.alternating_sign_toggle_args ||
          options.x_param_value_functions ||
          options.preloaded_indexed_update_prefix ||
+         options.helper_callsite_operand_repair ||
          options.selector_charge_literal_sinking ||
          options.cached_expression_operand_forwarding ||
          options.sign_normalized_x_param ||
@@ -57849,6 +57857,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";callee_hole_region_choice="
       << static_cast<int>(options.callee_hole_region_choice)
       << ";selector_charge_literal_sinking=" << options.selector_charge_literal_sinking
+      << ";register_aware_tail_sharing=" << options.register_aware_tail_sharing
       << ";compact_logical_register_allocation=" << options.compact_logical_register_allocation
       << ";zero_underflow_constant_rematerialization="
       << options.zero_underflow_constant_rematerialization
@@ -57858,6 +57867,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";logical_register_dead_store_elimination=" << options.logical_register_dead_store_elimination
       << ";x_param_value_functions=" << options.x_param_value_functions
       << ";preloaded_indexed_update_prefix=" << options.preloaded_indexed_update_prefix
+      << ";helper_callsite_operand_repair=" << options.helper_callsite_operand_repair
       << ";cached_expression_operand_forwarding=" << options.cached_expression_operand_forwarding
       << ";sign_normalized_x_param=" << options.sign_normalized_x_param
       << ";x_param_y_stack_stored_entry=" << options.x_param_y_stack_stored_entry
@@ -79965,6 +79975,59 @@ CompileResult compile_source_for_optimizer_profile(
     }
   }
 
+  // Revisit the common-operand ABI on the finalized winner, not every member
+  // of the entry-ABI Cartesian product. A repaired tail can have the same
+  // local cost as a root recall/swap while exposing a different helper length
+  // to component placement. Preserve the independently finalized incumbent.
+  if (best.implemented && best.steps.size() > rescue_threshold &&
+      !best_options.helper_callsite_operand_repair &&
+      allow_aggressive_post_layout && !options.disable_interprocedural_opts) {
+    try {
+      CompileOptions repaired_options = best_options;
+      repaired_options.helper_callsite_operand_repair = true;
+      // The operand proof can become available only after component placement
+      // exposes complete indirect-call targets. An early optimization report
+      // therefore cannot decide whether this independently bounded probe runs.
+      CompileResult repaired = compile_source_once(
+          source, repaired_options, source_has_entered,
+          /*apply_final_layout_size_rescue=*/true);
+      if (!repaired.implemented &&
+          can_retry_lowering_attempt_in_analysis(repaired, repaired_options)) {
+        repaired_options.analysis = true;
+        repaired = compile_source_once(
+            source, repaired_options, source_has_entered,
+            /*apply_final_layout_size_rescue=*/true);
+      }
+      if (repaired.implemented &&
+          (!candidate_needs_static_proof_gate(repaired_options) ||
+           !optimizer_static_gate_rejection_reason(repaired_options, repaired).has_value())) {
+        repaired = apply_finalization_fixed_point_to_selected_result(
+            source, std::move(repaired), repaired_options, options);
+      }
+      const bool proved = repaired.implemented &&
+            (!candidate_needs_static_proof_gate(repaired_options) ||
+             !optimizer_static_gate_rejection_reason(repaired_options, repaired).has_value());
+      if (trace_candidates)
+        std::cerr << "[candidate-trace] repaired-helper-abi steps=" << repaired.steps.size()
+                  << " incumbent=" << best.steps.size() << " proved=" << proved << '\n';
+      if (proved && candidate_beats_best(repaired, best, options)) {
+        repaired.optimizations.push_back(OptimizationReport{
+            .name = "helper-callsite-operand-repair-final-selection",
+            .detail = "Compared a common-operand helper tail with local caller repairs "
+                      "against the independently finalized root ABI; selected the "
+                      "proof-valid size-first result (" +
+                      std::to_string(repaired.steps.size()) + " vs " +
+                      std::to_string(best.steps.size()) + " cells).",
+        });
+        best_options = std::move(repaired_options);
+        best = std::move(repaired);
+      }
+    } catch (const std::exception& error) {
+      if (trace_candidates)
+        std::cerr << "[candidate-trace] repaired-helper-abi exception: " << error.what() << '\n';
+    }
+  }
+
   // Moving a literal through a selector charge can save cells locally while
   // losing a better physical anchor. Preserve the finalized incumbent and
   // regenerate only this one ABI alternative, with the same target profile.
@@ -80007,6 +80070,61 @@ CompileResult compile_source_for_optimizer_profile(
     } catch (const std::exception& error) {
       if (trace_candidates)
         std::cerr << "[candidate-trace] selector-literal-sinking exception: "
+                  << error.what() << '\n';
+    }
+  }
+
+  // A neutral register reassignment may expose an entire common region, but
+  // its smaller IR must not evict the old physical layout. Try one independent
+  // package on the finalized over-budget seed, never on every search root.
+  if (best.implemented && allow_aggressive_post_layout &&
+      !best_options.register_aware_tail_sharing && !best_options.disable_interprocedural_opts &&
+      best.steps.size() > static_cast<std::size_t>(
+          feature_profile_program_step_limit(optimizer_feature_profile_for_options(options)))) {
+    try {
+      CompileOptions sharing_options = best_options;
+      sharing_options.register_aware_tail_sharing = true;
+      sharing_options.coalesce_copies = true;
+      const CompileResult ordinary = cached_compile_source_once(sharing_options);
+      if (has_optimization_named(ordinary.optimizations, "register-aware-tail-sharing")) {
+        CompileOptions compile_options = sharing_options;
+        CompileResult candidate = compile_source_once(
+            source, compile_options, source_has_entered,
+            /*apply_final_layout_size_rescue=*/true);
+        if (!candidate.implemented &&
+            can_retry_lowering_attempt_in_analysis(candidate, compile_options)) {
+          compile_options.analysis = true;
+          candidate = compile_source_once(source, compile_options, source_has_entered,
+                                          /*apply_final_layout_size_rescue=*/true);
+        }
+        if (candidate.implemented &&
+            !optimizer_static_gate_rejection_reason(compile_options, candidate).has_value())
+          candidate = apply_finalization_fixed_point_to_selected_result(
+              source, std::move(candidate), compile_options, options);
+        const auto rejection =
+            optimizer_static_gate_rejection_reason(compile_options, candidate);
+        const bool proved = candidate.implemented && !rejection.has_value();
+        if (trace_candidates)
+          std::cerr << "[candidate-trace] register-aware-tail-sharing ordinary="
+                    << ordinary.steps.size() << " final=" << candidate.steps.size()
+                    << " incumbent=" << best.steps.size() << " proved=" << proved
+                    << " rejection=" << rejection.value_or("none") << '\n';
+        if (proved && candidate_beats_best(candidate, best, options)) {
+          candidate.optimizations.push_back(OptimizationReport{
+              .name = "register-aware-tail-sharing-final-selection",
+              .detail = "Selected a jointly recolored/shared region only after complete "
+                        "proof-valid layout: " + std::to_string(best.steps.size()) + " -> " +
+                        std::to_string(candidate.steps.size()) + " cells.",
+          });
+          best_options = std::move(sharing_options);
+          best = std::move(candidate);
+        }
+      } else if (trace_candidates) {
+        std::cerr << "[candidate-trace] register-aware-tail-sharing unavailable\n";
+      }
+    } catch (const std::exception& error) {
+      if (trace_candidates)
+        std::cerr << "[candidate-trace] register-aware-tail-sharing exception: "
                   << error.what() << '\n';
     }
   }

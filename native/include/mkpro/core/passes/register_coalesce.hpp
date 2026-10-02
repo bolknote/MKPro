@@ -3,10 +3,14 @@
 #include "mkpro/core/passes/helpers.hpp"
 #include "mkpro/core/passes/liveness_analysis.hpp"
 
+#include <cstddef>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace mkpro::core::passes {
 
@@ -62,6 +66,16 @@ PassResult register_coalesce(const std::vector<IrOp>& ops, const PassContext& co
 // ordinary FL counter epochs may use any of the four counter registers.
 PassResult register_web_copy_coalesce(const std::vector<IrOp>& ops,
                                       const PassContext& context);
+// Equalities refer to static direct Store/Recall operands, not source names.
+// Analyze the immutable input once; independently recolor each request without
+// deleting instructions. The consumer must prove and price its own rewrite.
+using RegisterWebRecoloringRequest =
+    std::vector<std::pair<std::size_t, std::size_t>>;
+using RegisterWebRecoloringConsumer = std::function<void(std::vector<IrOp>)>;
+void for_each_register_web_recoloring(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const std::vector<RegisterWebRecoloringRequest>& requests,
+    const RegisterWebRecoloringConsumer& consume);
 IrPass register_web_copy_coalesce_pass();
 IrPass register_coalesce_pass();
 

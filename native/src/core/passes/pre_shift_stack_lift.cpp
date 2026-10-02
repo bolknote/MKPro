@@ -1,5 +1,6 @@
 #include "mkpro/core/passes/pre_shift_stack_lift.hpp"
 
+#include "mkpro/core/callee_hole_boundary_normalization.hpp"
 #include "mkpro/core/opcodes.hpp"
 
 #include <optional>
@@ -86,6 +87,85 @@ IrOp y_to_x_copy_op(const IrOp& source) {
   replacement.meta.comment.reset();
   replacement.meta.roles.clear();
   return replacement;
+}
+
+// This pass runs before layout and does not own a selector-retargeting
+// transaction. A successful value proof cannot authorize moving an already
+// materialized numeric target or an executable address operand.
+bool has_relocatable_lift_control_flow(const std::vector<IrOp>& ops) {
+  for (const IrOp& op : ops) {
+    if (op.meta.raw || op.target_meta.formal_opcode.has_value())
+      return false;
+    switch (op.kind) {
+    case IrKind::Call:
+    case IrKind::Jump:
+    case IrKind::CondJump:
+    case IrKind::Loop:
+      if (!std::holds_alternative<std::string>(op.target))
+        return false;
+      break;
+    case IrKind::IndirectCall:
+    case IrKind::IndirectJump:
+    case IrKind::IndirectCondJump:
+    case IrKind::OrphanAddress:
+      return false;
+    default:
+      break;
+    }
+  }
+  return true;
+}
+
+// Restrict the expensive matched-return proof to lifts followed by a store
+// chain and a return. The old depth-only scan joins unrelated continuations
+// at precisely this boundary. The first ordinary direct store also closes
+// decimal entry in both executions: skipping Enter must not silently change
+// the automatic lift performed by the next numeric literal.
+bool is_stored_return_lift(const std::vector<IrOp>& ops, std::size_t index) {
+  const IrOp& lift = ops.at(index);
+  if (!is_stack_lift(lift) || !lift.meta.roles.empty() ||
+      is_display_focus_sensitive(lift))
+    return false;
+  bool stored = false;
+  for (std::size_t next = index + 1; next < ops.size(); ++next) {
+    const IrOp& op = ops.at(next);
+    if (has_rewrite_barrier(op) || is_display_focus_sensitive(op) ||
+        !op.meta.roles.empty())
+      return false;
+    if (op.kind == IrKind::Store && op.opcode >= 0x40 && op.opcode <= 0x4e) {
+      stored = true;
+      continue;
+    }
+    return stored && op.kind == IrKind::Return && op.opcode == 0x52;
+  }
+  return false;
+}
+
+int remove_matched_return_lifts(std::vector<IrOp>& ops, const PassContext& context) {
+  if (context.options.disable_interprocedural_opts ||
+      !has_relocatable_lift_control_flow(ops))
+    return 0;
+
+  int removed = 0;
+  for (std::size_t index = 0; index < ops.size(); ++index) {
+    if (!is_stored_return_lift(ops, index))
+      continue;
+    StackValueEqualityState equality;
+    equality.stack_equal = {true, false, false, false};
+    equality.x1_equal = true;
+    equality.x2_equal = false;
+    // Reuse the authoritative execution graph: every admitted return frame,
+    // both branch successors, full X/Y/Z/T, last-X1 and hidden X2 participate.
+    // Unknown flow, a consumer of a differing value or a stop before full
+    // convergence rejects the rewrite. No display projection is invented.
+    if (!prove_ir_stack_entry_equality(ops, index + 1, equality))
+      continue;
+    // Prove each deletion against the current artifact, not several mutually
+    // dependent deletions against one stale snapshot.
+    ops.erase(ops.begin() + static_cast<std::vector<IrOp>::difference_type>(index));
+    ++removed;
+  }
+  return removed;
 }
 
 } // namespace
@@ -204,18 +284,29 @@ PassResult pre_shift_stack_lift(const std::vector<IrOp>& ops, const PassContext&
     mark_remove();
   }
 
-  const int applied = removed_lifts + folded_3e;
-  if (applied == 0)
-    return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
-
+  const int local_applied = removed_lifts + folded_3e;
   std::vector<IrOp> result;
-  result.reserve(ops.size() - static_cast<std::size_t>(applied));
+  result.reserve(ops.size() - static_cast<std::size_t>(local_applied));
   for (std::size_t index = 0; index < ops.size(); ++index) {
     if (!remove.at(index))
       result.push_back(replace.at(index).value_or(ops.at(index)));
   }
 
+  const int matched_return_lifts = remove_matched_return_lifts(result, context);
+  const int applied = local_applied + matched_return_lifts;
+  if (applied == 0)
+    return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
+
   std::vector<AppliedOptimization> optimizations;
+  if (matched_return_lifts > 0) {
+    optimizations.push_back(AppliedOptimization{
+        .name = "matched-return-stack-lift",
+        .detail = "Removed " + std::to_string(matched_return_lifts) +
+                  " stored-result Enter lift(s) after proving full stack/X1/X2 "
+                  "convergence through every exact caller continuation. "
+                  "Each deletion uses the current relocatable artifact.",
+    });
+  }
   if (removed_lifts > 0) {
     optimizations.push_back(AppliedOptimization{
         .name = "pre-shift-stack-lift",

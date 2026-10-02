@@ -73,6 +73,12 @@ int inserted_recall_cells(const HelperInvariantRecallHoistProof& proof) {
   return 1 + (proof.swap_return_operands ? 1 : 0) + (proof.preserve_entry_x ? 1 : 0);
 }
 
+int inserted_callsite_swap_cells(const HelperInvariantRecallHoistProof& proof) {
+  return static_cast<int>(std::count_if(
+      proof.calls.begin(), proof.calls.end(),
+      [](const HelperInvariantRecallCall& call) { return call.insert_swap_before_join; }));
+}
+
 bool is_direct_recall(int opcode) {
   return opcode >= kFirstDirectRecallOpcode && opcode <= kLastDirectRecallOpcode;
 }
@@ -824,6 +830,11 @@ bool prove_call_transfer(const std::vector<MachineItem>& items,
       !execute_symbolic_op(original, recall, false, rejection)) {
     return false;
   }
+  if (call.insert_swap_before_join &&
+      !execute_symbolic_op(rewritten, MachineItem::op(0x14, "caller operand repair"),
+                           false, rejection)) {
+    return false;
+  }
   for (const std::size_t permutation : call.join_permutation_items) {
     if (helper.erased_permutation_items.contains(permutation)) {
       if (!execute_symbolic_op(original, items.at(permutation), false, rejection))
@@ -841,7 +852,11 @@ bool prove_call_transfer(const std::vector<MachineItem>& items,
     }
   }
 
-  if (helper.swap_return_operands || helper.preserve_entry_x) {
+  const bool erased_caller_permutation = std::any_of(
+      call.join_permutation_items.begin(), call.join_permutation_items.end(),
+      [&](std::size_t item) { return helper.erased_permutation_items.contains(item); });
+  if (helper.swap_return_operands || helper.preserve_entry_x || call.insert_swap_before_join ||
+      erased_caller_permutation) {
     // Equal numeric X at V/O is not enough to equate the hidden decimal-entry
     // context. In particular, caller recall/swap/join/VP and tail recall/swap/
     // V/O/join/VP can restore different mantissa shapes. Keep that component
@@ -1112,7 +1127,7 @@ bool verify_final_artifact(const std::vector<MachineItem>& original,
   const int expected_cells =
       proof.input_cells - static_cast<int>(proof.erased_recall_items.size()) -
       static_cast<int>(proof.erased_permutation_items.size()) +
-      inserted_recall_cells(proof) -
+      inserted_recall_cells(proof) + inserted_callsite_swap_cells(proof) -
       (proof.erased_helper_entry_recall_item.has_value() ? 1 : 0);
   proof.output_cells = index.cells;
   if (index.cells != expected_cells) {
@@ -1166,11 +1181,31 @@ bool verify_final_artifact(const std::vector<MachineItem>& original,
         return item.kind == MachineItemKind::Op && item.opcode == 0x14;
       }));
   if (candidate_swaps != original_swaps -
-                             static_cast<int>(proof.erased_permutation_items.size()) +
-                             (proof.swap_return_operands ? 1 : 0) +
-                             (proof.preserve_entry_x ? 1 : 0)) {
+                              static_cast<int>(proof.erased_permutation_items.size()) +
+                              (proof.swap_return_operands ? 1 : 0) +
+                              (proof.preserve_entry_x ? 1 : 0) +
+                              inserted_callsite_swap_cells(proof)) {
     add_reason(proof, "final artifact changed an unproved stack permutation");
     return false;
+  }
+  for (const HelperInvariantRecallCall& call : proof.calls) {
+    if (!call.insert_swap_before_join)
+      continue;
+    const std::size_t old_join = call.continuation_item_index - 1U;
+    if (old_join >= proof.old_to_new_item_indices.size() ||
+        !proof.old_to_new_item_indices.at(old_join).has_value()) {
+      add_reason(proof, "final artifact lost a repaired call continuation");
+      return false;
+    }
+    const std::size_t join = *proof.old_to_new_item_indices.at(old_join);
+    if (join == 0 || join >= candidate.size() ||
+        candidate.at(join - 1U).kind != MachineItemKind::Op ||
+        candidate.at(join - 1U).opcode != 0x14 ||
+        candidate.at(join).kind != MachineItemKind::Op ||
+        candidate.at(join).opcode != call.commutative_opcode) {
+      add_reason(proof, "final artifact lost a proved caller-side operand repair");
+      return false;
+    }
   }
   const int final_helper_start_address = index.item_addresses.at(root->second);
   const int final_helper_return_address = index.item_addresses.at(*final_helper_return);
@@ -1354,8 +1389,14 @@ void plan_fixed_target_recall_erasure(const ArtifactIndex& index,
   int previous_target = -1;
   for (const int target : fixed_targets) {
     int required_deletions = target > helper_start
-                                 ? inserted_recall_cells(proof)
-                                 : 0;
+                                  ? inserted_recall_cells(proof)
+                                  : 0;
+    for (const HelperInvariantRecallCall& call : proof.calls) {
+      if (call.insert_swap_before_join &&
+          index.item_addresses.at(call.continuation_item_index - 1U) <= target) {
+        ++required_deletions;
+      }
+    }
     for (const std::size_t permutation : proof.erased_permutation_items) {
       if (index.item_addresses.at(permutation) < target)
         --required_deletions;
@@ -1603,7 +1644,46 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
     if (candidate.reasons.empty()) {
       for (HelperInvariantRecallCall& call : candidate.calls) {
         std::string rejection;
-        if (!prove_call_transfer(items, candidate, call, options, rejection)) {
+        bool proved = prove_call_transfer(items, candidate, call, options, rejection);
+        if (options.allow_callsite_operand_swap &&
+            candidate.insertion == HelperInvariantRecallInsertion::BeforeReturn &&
+            !candidate.swap_return_operands && !candidate.preserve_entry_x &&
+            !call.join_permutation_items.empty()) {
+          const std::size_t permutation = call.join_permutation_items.front();
+          if (items.at(permutation).opcode == 0x14 &&
+              items.at(permutation).roles.empty() &&
+              !candidate.erased_permutation_items.contains(permutation)) {
+            // Choose each caller's cheapest proved continuation independently.
+            // A commutative result alone does not make its retained Y or X2 dead.
+            candidate.erased_permutation_items.insert(permutation);
+            HelperInvariantRecallCall without_swap = call;
+            without_swap.proved_continuation_cells = 0;
+            std::string erasure_rejection;
+            if (prove_call_transfer(items, candidate, without_swap, options,
+                                    erasure_rejection)) {
+              call = std::move(without_swap);
+              proved = true;
+              rejection.clear();
+            } else {
+              candidate.erased_permutation_items.erase(permutation);
+            }
+          }
+        }
+        if (!proved && options.allow_callsite_operand_swap &&
+            candidate.insertion == HelperInvariantRecallInsertion::BeforeReturn &&
+            !candidate.swap_return_operands && !candidate.preserve_entry_x &&
+            call.placement == HelperInvariantRecallPlacement::BeforeCallBeforeCommutative &&
+            call.join_permutation_items.empty() &&
+            items.at(call.continuation_item_index - 1U).roles.empty()) {
+          // Only this caller is changed. Replay the complete original/final
+          // transfer, including hidden entry context, rather than assuming
+          // commutativity also preserves the operand retained in Y.
+          call.insert_swap_before_join = true;
+          call.proved_continuation_cells = 0;
+          rejection.clear();
+          proved = prove_call_transfer(items, candidate, call, options, rejection);
+        }
+        if (!proved) {
           add_reason(candidate, "call-site " +
                                 std::to_string(index.item_addresses.at(call.call_item_index)) +
                                 " symbolic proof failed: " + rejection);
@@ -1611,12 +1691,20 @@ verify_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
       }
     }
   
+    if (candidate.reasons.empty() &&
+        std::any_of(candidate.erased_permutation_items.begin(),
+                    candidate.erased_permutation_items.end(),
+                    [&](std::size_t item) { return !removed_recall_items.contains(item); })) {
+      removed_recall_items.insert(candidate.erased_permutation_items.begin(),
+                                  candidate.erased_permutation_items.end());
+      validate_pre_artifact_flow(items, index, removed_recall_items, options, candidate);
+    }
     if (candidate.reasons.empty())
       plan_fixed_target_recall_erasure(index, options, candidate);
     candidate.output_cells =
         candidate.input_cells - static_cast<int>(candidate.erased_recall_items.size()) -
         static_cast<int>(candidate.erased_permutation_items.size()) +
-        inserted_recall_cells(candidate) -
+        inserted_recall_cells(candidate) + inserted_callsite_swap_cells(candidate) -
         (candidate.erased_helper_entry_recall_item.has_value() ? 1 : 0);
     if (candidate.output_cells >= candidate.input_cells)
       add_reason(candidate, "recall hoist is not cell-profitable");
@@ -1743,6 +1831,10 @@ rewrite_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
 
   std::vector<MachineItem> candidate;
   candidate.reserve(items.size() - result.proof.erased_recall_items.size() + 2U);
+  std::set<std::size_t> repaired_join_items;
+  for (const HelperInvariantRecallCall& call : result.proof.calls)
+    if (call.insert_swap_before_join)
+      repaired_join_items.insert(call.continuation_item_index - 1U);
   std::vector<std::optional<std::size_t>> old_to_new_item(items.size());
   for (std::size_t item_index = 0; item_index < items.size(); ++item_index) {
     if (result.proof.erased_recall_items.contains(item_index) ||
@@ -1758,6 +1850,12 @@ rewrite_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
         swap.roles.push_back("helper-invariant-recall-hoist:return-swap");
         candidate.push_back(std::move(swap));
       }
+    }
+    if (repaired_join_items.contains(item_index)) {
+      MachineItem swap = MachineItem::op(0x14, "X<->Y");
+      swap.comment = "caller-side retained-operand ABI repair; stack/X1/X2 proved";
+      swap.roles.push_back("helper-invariant-recall-hoist:caller-swap");
+      candidate.push_back(std::move(swap));
     }
     old_to_new_item.at(item_index) = candidate.size();
     if (result.proof.nop_recall_items.contains(item_index)) {
@@ -1823,6 +1921,20 @@ rewrite_helper_invariant_recall_hoist(const std::vector<MachineItem>& items,
                 "; saved " +
                 std::to_string(result.proof.input_cells - result.proof.output_cells) + " cells.",
   });
+  const std::size_t erased_caller_swaps =
+      !result.proof.swap_return_operands && !result.proof.preserve_entry_x
+          ? result.proof.erased_permutation_items.size()
+          : 0U;
+  if (!repaired_join_items.empty() || erased_caller_swaps != 0U) {
+    result.optimizations.push_back(passes::AppliedOptimization{
+        .name = "helper-callsite-operand-repair",
+        .detail = "Selected a plain common-operand helper tail with " +
+                  std::to_string(repaired_join_items.size()) +
+                  " inserted and " + std::to_string(erased_caller_swaps) +
+                  " erased caller-side swap(s), independently proved through each retained-Y "
+                  "continuation and charged to the final relocated artifact.",
+    });
+  }
   return result;
 }
 

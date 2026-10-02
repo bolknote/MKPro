@@ -387,6 +387,9 @@ struct CompileOptions {
   // Move a proved dead/common literal across a selector charge only in an
   // independently finalized candidate. Local savings can disturb anchors.
   bool selector_charge_literal_sinking = false;
+  // Recolor equal-shaped terminal regions as one allocation/sharing package.
+  // Automatic search retains the ordinary finalized incumbent independently.
+  bool register_aware_tail_sharing = false;
   bool disable_interprocedural_opts = false;
   bool coalesce_copies = false;
   // Run a dedicated first IR phase that uses a bounded exact-return-stack
@@ -468,6 +471,9 @@ struct CompileOptions {
   // selector placement changes the whole layout, so retain the ordinary ABI
   // as a separately finalized competitor instead of trusting local savings.
   bool preloaded_indexed_update_prefix = false;
+  // A helper-tail operand ABI with independently proved caller-side repairs.
+  // Compare its complete final layout with the ordinary helper-root ABI.
+  bool helper_callsite_operand_repair = false;
   // Reuse anonymous expression operands already proved to be in X. A local
   // saving may disturb final layout, so keep the ordinary scheduler candidate.
   bool cached_expression_operand_forwarding = false;

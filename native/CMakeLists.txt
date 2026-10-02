@@ -282,6 +282,7 @@ add_executable(mkpro_tests
   tests/runtime_cost_test.cpp
   tests/register_allocator_test.cpp
   tests/register_coalesce_pass_test.cpp
+  tests/register_aware_tail_test.cpp
   tests/rules_test.cpp
   tests/safe_minmax_test.cpp
   tests/segmented_bitplane_test.cpp
@@ -330,6 +331,7 @@ add_executable(mkpro_tests
   tests/vp_x2_peephole_test.cpp
   tests/vp_splice_pass_test.cpp
   tests/pre_shift_stack_lift_pass_test.cpp
+  tests/matched_return_stack_lift_test.cpp
   tests/redundant_literal_reload_test.cpp
 )
 target_link_libraries(mkpro_tests PRIVATE mkpro_debug)
@@ -497,6 +499,9 @@ set(MKPRO_NATIVE_TEST_NAMES
   runtime_cost_model_prefers_faster_equal_size_candidates
   register_allocator_matches_typescript_contract
   register_coalesce_matches_typescript_contract
+  register_aware_tail_sharing_preserves_web_contracts
+  emulator_register_aware_tail_sharing_matches_original
+  shared_call_tail_preserves_protected_occurrences
   rules_match_typescript_contract
   safe_minmax_matches_typescript_contract
   alternating_sign_toggle_arg_matches_literal_semantics
@@ -556,6 +561,8 @@ set(MKPRO_NATIVE_TEST_NAMES
   vp_x2_peephole_matches_typescript_contract
   vp_splice_matches_typescript_contract
   pre_shift_stack_lift_matches_typescript_contract
+  matched_return_stack_lift_preserves_contracts
+  emulator_matched_return_stack_lift_matches_original
   redundant_literal_reload_is_generic_and_proof_gated
 )
 # Keep aggregate selectors available in mkpro_tests, but give CTest one timeout

@@ -417,6 +417,134 @@ void helper_invariant_recall_hoist_rewrites_only_proved_calls() {
             "a sign edit must not consume different visible values");
   }
 
+  {
+    auto original = staged_operand_fixture(1, {});
+    const auto first_join = std::find_if(original.begin(), original.end(),
+                                       [](const MachineItem& item) {
+      return item.kind == MachineItemKind::Op && item.opcode == 0x38;
+    });
+    require(first_join != original.end(), "local repair fixture needs a join");
+    const std::size_t continuation =
+        static_cast<std::size_t>(first_join - original.begin()) + 1U;
+    original.insert(original.begin() + static_cast<std::ptrdiff_t>(continuation),
+                    MachineItem::op(0x10, "observe retained Y"));
+    core::HelperInvariantRecallHoistOptions options;
+    options.prefer_before_return_plan = true;
+    require(core::rewrite_helper_invariant_recall_hoist(
+                original, std::string(kRoot), options).applied == 0,
+            "plain tail cannot discard a caller's live retained operand");
+    options.allow_callsite_operand_swap = true;
+    const auto repaired = core::rewrite_helper_invariant_recall_hoist(
+        original, std::string(kRoot), options);
+    require(repaired.applied == 1 && repaired.proof.final_artifact_proved &&
+                cell_count(repaired.items) == cell_count(original) - 1 &&
+                std::count_if(repaired.proof.calls.begin(), repaired.proof.calls.end(),
+                              [](const auto& call) { return call.insert_swap_before_join; }) == 1 &&
+                !repaired.proof.swap_return_operands,
+            "repair only the live-Y caller rather than permuting every return");
+    for (const auto& common : {"0", "4", "7.7777777", "8.1234567", "-0.25"})
+      require(observe_staged_operand(original, common) ==
+                  observe_staged_operand(repaired.items, common),
+              "local repair must preserve stock stack, registers, X1 and resumed VP");
+    for (const auto& call : repaired.proof.calls) {
+      if (!call.insert_swap_before_join)
+        continue;
+      const auto mapped = repaired.proof.old_to_new_item_indices.at(
+          call.continuation_item_index - 1U);
+      require(mapped.has_value() && *mapped > 0 &&
+                  repaired.items.at(*mapped - 1U).opcode == 0x14 &&
+                  repaired.items.at(*mapped).opcode == call.commutative_opcode,
+              "relocation must distinguish the inserted repair from the original join");
+    }
+    auto live_x2 = original;
+    live_x2.insert(live_x2.begin() + static_cast<std::ptrdiff_t>(continuation),
+                   {MachineItem::op(0x0c, "observe unsynchronized X2"),
+                    MachineItem::op(2, "exponent")});
+    require(core::rewrite_helper_invariant_recall_hoist(
+                live_x2, std::string(kRoot), options).applied == 0,
+            "caller repair cannot infer hidden-entry equality from visible operands");
+    auto protected_join = original;
+    protected_join.at(continuation - 1U).roles.push_back("protected-continuation");
+    require(core::rewrite_helper_invariant_recall_hoist(
+                protected_join, std::string(kRoot), options).applied == 0,
+            "caller repair must not cross a protected join");
+  }
+
+  {
+    const auto live_x1 = staged_operand_fixture(1);
+    core::HelperInvariantRecallHoistOptions options;
+    options.prefer_before_return_plan = true;
+    options.allow_callsite_operand_swap = true;
+    const auto retained = core::rewrite_helper_invariant_recall_hoist(
+        live_x1, std::string(kRoot), options);
+    require(retained.applied == 1 && retained.proof.erased_permutation_items.empty(),
+            "discarding visible Y does not make physical last-X dead");
+    auto unsafe = retained.items;
+    const auto live_swap = std::find_if(unsafe.begin(), unsafe.end(),
+                                       [](const MachineItem& item) {
+      return item.kind == MachineItemKind::Op && item.opcode == 0x14;
+    });
+    require(live_swap != unsafe.end(), "the live-X1 fixture must retain its swap");
+    unsafe.erase(live_swap);
+    const auto original_observation = observe_staged_operand(live_x1, "4");
+    const auto unsafe_observation = observe_staged_operand(unsafe, "4");
+    require(original_observation.front() == unsafe_observation.front() &&
+                original_observation.at(5) != unsafe_observation.at(5),
+            "ROM must expose different physical X1 despite equal visible result");
+
+    auto original = live_x1;
+    const auto final_store = std::find_if(original.begin(), original.end(),
+                                         [](const MachineItem& item) {
+      return item.kind == MachineItemKind::Op && item.opcode == 0x4b;
+    });
+    require(final_store != original.end(), "fixture needs its final result store");
+    // Flush the reordered stack first, then overwrite X1 from an independent
+    // ordinary register value. Do not assume the preceding bitwise result is
+    // an ordinary decimal operand for the arithmetic overwrite.
+    original.insert(final_store, {MachineItem::op(0x61, "independent X1 source"),
+                                  MachineItem::op(0x22, "overwrite physical X1")});
+    const auto baseline = core::rewrite_helper_invariant_recall_hoist(
+        original, std::string(kRoot));
+    const auto simplified = core::rewrite_helper_invariant_recall_hoist(
+        original, std::string(kRoot), options);
+    require(baseline.applied == 1 && simplified.applied == 1 &&
+                simplified.proof.final_artifact_proved &&
+                cell_count(simplified.items) == cell_count(baseline.items) - 1 &&
+                cell_count(simplified.items) == cell_count(original) - 3 &&
+                simplified.proof.erased_permutation_items.size() == 1U &&
+                opcode_count(simplified.items, 0x14) == 0,
+            "a proved dead caller swap must disappear together with common recalls");
+    for (const auto& common : {"0", "4", "7.7777777", "8.1234567", "-0.25"})
+      require(observe_staged_operand(original, common) ==
+                  observe_staged_operand(simplified.items, common),
+              "caller swap erasure must preserve full stock-MK61 observations");
+    const std::size_t erased = *simplified.proof.erased_permutation_items.begin();
+    require(!simplified.proof.old_to_new_item_indices.at(erased).has_value(),
+            "deleted swaps must not acquire the following command's identity");
+    auto protected_swap = original;
+    protected_swap.at(erased).roles.push_back("protected-permutation");
+    const auto protected_result = core::rewrite_helper_invariant_recall_hoist(
+        protected_swap, std::string(kRoot), options);
+    require(protected_result.applied == 0 ||
+                !protected_result.proof.erased_permutation_items.contains(erased),
+            "a protected caller permutation must not be erased");
+
+    auto external = original;
+    const std::size_t root = label_index(external, kRoot);
+    external.insert(external.begin() + static_cast<std::ptrdiff_t>(root),
+                    {MachineItem::op(0x51, "independent entry"),
+                     MachineItem::address(item_address(original, erased))});
+    auto external_options = options;
+    external_options.fixed_direct_address_targets.emplace(
+        root + 1U, item_address(original, erased));
+    external_options.retargetable_direct_address_items.insert(root + 1U);
+    const auto external_result = core::rewrite_helper_invariant_recall_hoist(
+        external, std::string(kRoot), external_options);
+    require(external_result.applied == 0 ||
+                !external_result.proof.erased_permutation_items.contains(erased),
+            "late-selected erasures must repeat the independent-entry proof");
+  }
+
   for (const bool signed_literals : {false, true}) {
     const auto original = entry_operand_fixture(signed_literals);
     core::HelperInvariantRecallHoistOptions options;

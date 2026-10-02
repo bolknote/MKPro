@@ -5119,3 +5119,88 @@ the role unchanged, reject unknown/additional layout roles, and never interpret
 the same spelling on another opcode as permission to move it. Shared terminal
 tails must have identical observation contracts; a stronger full-state stop
 cannot be replaced by a weaker display-only stop.
+
+### Register-aware terminal region sharing
+
+`register-aware-tail-sharing` couples register allocation to terminal-region
+extraction. Candidate keys abstract direct Store/Recall operands, but keep all
+other instructions, indirect selectors, call targets and terminal destinations
+exact. Matching never depends on a program name or a source-level formula.
+Manual interactions, display-focus operations, stops and layout roles cannot
+become abstract region operands.
+
+The register-web analysis builds its exact matched-call execution graph once
+for a batch of requests. Each request joins all corresponding static operand
+webs before coloring. These joins constrain physical homes; they do not assert
+equal values or authorize deleting stores. An interference edge inside a joined
+group rejects the request. Entry values, manual/hardware operands, unreachable
+definitions, immutable pools and the R0-R3 FL domains remain anchored or
+constrained. Unknown register effects, non-symbolic flow and raw operations
+fail closed. No Rf register, spill, extra call or arithmetic rewrite is used.
+
+Group and pair requests are deterministic and deduplicated. Each coloring uses
+the existing bounded greedy witness solver, not exponential fallback search.
+Identical recolored opcode streams are outlined only once. The local consumer
+accepts a recoloring only together with a strictly smaller shared-tail result;
+recoloring alone is never reported as a size improvement.
+
+Automatic search tries this package on one finalized over-budget incumbent.
+The ordinary candidate remains intact. Full layout and the ordinary static
+proof gate must succeed before size-first/runtime-cost comparison can select
+the new artifact. The option is part of the compile cache key, and JSON/explain
+reports distinguish local sharing from `register-aware-tail-sharing-final-selection`.
+
+The separate `shared-call-tail` rewrite checks raw/manual barriers both when
+collecting candidates and when replacing occurrences. A protected occurrence
+cannot be rewritten merely because other unprotected occurrences share its key.
+
+### `matched-return-stack-lift`
+
+The pre-layout stack-lift pass can remove an ordinary `Enter` before a direct
+store chain and return when its only effect is dead stack materialization.
+Unlike the depth-only scan, the relational proof follows the authoritative
+execution graph with exact caller return frames rather than merging unrelated
+call continuations.
+
+The initial relation preserves X and physical last-X1, conservatively marks
+Y/Z/T and hidden X2 unequal, and requires full equality before any observable
+stop. Every evaluating instruction must receive equal operands; all branch
+successors and admitted caller contexts participate. The first direct store
+closes decimal entry in both executions. Raw/manual commands, protected cell
+roles and display-sensitive lift/store/return sites are not candidates.
+
+This is a symbolic pre-layout transformation, not a numeric-address relocation
+pass: materialized indirect control flow, numeric/formal direct targets and
+orphan operands block it. It respects the interprocedural optimization opt-out
+and re-proves each deletion against the current artifact. Unknown execution
+contexts and exhausted proof bounds fail closed. No game names, constants or
+source formula recognizers participate.
+
+### `helper-callsite-operand-repair`
+
+A common register recall may move from every call site into a helper tail,
+with a caller-local swap only where the continuation needs the original
+operand retained in Y. Commutativity alone is insufficient: K AND/OR preserve
+one operand, and later arithmetic can observe which operand it was.
+
+The bounded relational verifier first tries each caller unchanged. With a
+plain helper tail it can replay one leading caller swap as deleted, retaining
+the deletion only if the entire continuation proves it dead. If an ordinary
+before-call recall instead requires an unpermuted, unprotected commutative
+join to retain its old Y operand, the verifier may insert one local swap.
+The complete continuation must prove stack, memory, physical X1 and independent
+hidden-X2 convergence. All call sites must pass; there is no Cartesian
+enumeration of caller subsets. Deleted swaps are checked again for independent
+entries, while inserted and deleted cells both participate in fixed-target
+accounting and final command-identity checks. Raw/manual and protected
+permutations cannot be deleted.
+
+`helper_callsite_operand_repair` is a separate lowering/layout candidate.
+The size-rescue search probes it once on the finalized winner after ordinary
+entry-ABI refinement. It completes layout before judging applicability:
+an early report cannot rule out a proof that needs later resolved call targets.
+The complete proof-valid layout competes with the unchanged incumbent under
+the existing size-first/runtime-cost ordering. Candidate tracing records the
+final size and proof verdict even when the ordinary incumbent wins.
+Both the candidate key and explicit-lowering classification include the flag.
+The search does not identify games, procedure names or source formulas.

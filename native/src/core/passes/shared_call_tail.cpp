@@ -132,7 +132,8 @@ PassResult shared_call_tail(const std::vector<IrOp>& ops, const PassContext& con
     const IrOp* next =
         index + 1 < static_cast<int>(ops.size()) ? &ops.at(static_cast<std::size_t>(index + 1))
                                                  : nullptr;
-    if (op.kind == IrKind::Call && next != nullptr && next->kind == IrKind::Jump) {
+    if (op.kind == IrKind::Call && next != nullptr && next->kind == IrKind::Jump &&
+        !has_rewrite_barrier(op) && !has_rewrite_barrier(*next)) {
       const std::string key = call_tail_key(op, *next, ops, label_indexes);
       const auto candidate = candidates.find(key);
       if (candidate != candidates.end()) {
