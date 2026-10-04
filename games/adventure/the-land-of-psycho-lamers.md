@@ -1,18 +1,18 @@
-# The Land of Psycho Lamers
+# Страна психоламеров
 
-- Author: illi4
-- Source: [mk61.narod.ru/game2.htm](https://mk61.narod.ru/game2.htm)
-- Program: [the-land-of-psycho-lamers.txt](the-land-of-psycho-lamers.txt)
+- Автор: illi4
+- Источник: [mk61.narod.ru/game2.htm](https://mk61.narod.ru/game2.htm)
+- Программа: [the-land-of-psycho-lamers.txt](the-land-of-psycho-lamers.txt)
 
-## Description
+## Описание
 
-The original program by illi4 has survived only as a short description and map; the listing was lost. This is a completed reconstruction from the preserved page text and map. The restored shape follows the page instruction literally: each map cell is a program address, and the player moves by pressing `БП`, entering the cell number, and pressing `С/П`.
+От оригинальной программы illi4 сохранились лишь краткое описание и карта — сам листинг был утрачен. Здесь представлена законченная реконструкция, выполненная по уцелевшим тексту страницы и карте. Устройство восстановленной программы буквально следует исходной инструкции: каждой клетке карты соответствует адрес программы, а для перехода игрок нажимает `БП`, вводит номер клетки и нажимает `С/П`.
 
-You are an adventurer looking for enough parts to build a computer. The calculator shows codes from the places and items list. Move only to adjacent cells on the paper map. Because movement is manual `БП address` control, the calculator does not enforce adjacency or prevent deliberately jumping across the map.
+Вы — искатель приключений, которому предстоит собрать достаточно деталей для компьютера. Калькулятор выводит коды из списка мест и предметов. По бумажной карте можно переходить только в соседние клетки. Поскольку переход выполняется вручную командой `БП адрес`, калькулятор не проверяет соседство клеток и не мешает намеренно перескочить через карту.
 
-## Setup
+## Подготовка
 
-Before starting, load the program and initialize registers:
+Перед началом введите программу и заполните регистры:
 
 ```text
 0  XП0
@@ -31,25 +31,25 @@ Before starting, load the program and initialize registers:
 0  XПe
 ```
 
-Register `d` is health. Register `e` is the number of computer parts found.
+В регистре `d` хранится запас здоровья, в регистре `e` — число найденных деталей компьютера.
 
-## Controls
+## Управление
 
-Start at cell `00`:
+Начните с клетки `00`:
 
 ```text
 БП 00 С/П
 ```
 
-To move, choose an adjacent cell from the map:
+Для перехода выберите на карте соседнюю клетку:
 
 ```text
 БП NN С/П
 ```
 
-If you enter a computer-part cell, the display shows the new number of collected parts. Mark that part on paper and do not collect it again. If you enter a lamer cell, the display shows remaining health. At `0` health the game is lost. Cell `91` is the exit: it shows `30` when at least three parts have been found, otherwise `20`.
+В клетке с деталью компьютера на индикаторе появится новое число собранных деталей. Отметьте находку на бумаге и больше её не подбирайте. При встрече с психоламером индикатор покажет оставшийся запас здоровья. Если он упал до `0`, игра проиграна. Клетка `91` — выход: если собрано не менее трёх деталей, она выводит `30`, иначе — `20`.
 
-## Map
+## Карта
 
 ```text
                   82  85
@@ -60,39 +60,39 @@ If you enter a computer-part cell, the display shows the new number of collected
 12  15  44  49  76
 ```
 
-Special cells:
+Особые клетки:
 
 ```text
-21, 44, 62  computer parts
-35, 73, 82  psycho lamers
-91          final computer assembly point
-49, 50      same place code; 49 falls through to 50
+21, 44, 62  детали компьютера
+35, 73, 82  психоламеры
+91          место окончательной сборки компьютера
+49, 50      один и тот же код места; из 49 выполнение переходит в 50
 ```
 
-## Places And Items List
+## Список мест и предметов
 
 ```text
-0   start / safe cell
-11  green street
-12  broken house
-13  junk passage
-14  empty workshop
-15  old terminal room
-16  road with tracks
-17  cellar
-18  radio tower
-19  concrete yard
+0   начало / безопасная клетка
+11  зелёная улица
+12  полуразрушенный дом
+13  проход среди хлама
+14  пустая мастерская
+15  зал старых терминалов
+16  дорога со следами
+17  подвал
+18  радиовышка
+19  бетонный двор
 
-1   one computer part found
-2   two computer parts found
-3   all computer parts found
+1   найдена одна деталь компьютера
+2   найдены две детали компьютера
+3   найдены все детали компьютера
 
-5..1 health after a fight
-0   no health left
-20  not enough parts at the final cell
-30  computer assembled; victory
+5..1 запас здоровья после боя
+0   здоровье закончилось
+20  в конечной клетке не хватает деталей
+30  компьютер собран — победа
 ```
 
-## Notes
+## Примечание
 
-This reconstruction uses the MK-61 map-address style implied by the surviving page. It is intentionally compact enough to fit the original 105-step memory window and leaves the paper-map discipline to the player, just as the `БП NN С/П` control scheme suggests.
+В этой реконструкции используется подсказанный сохранившейся страницей принцип «клетка карты — адрес программы», характерный для игр на МК-61. Программа намеренно сделана достаточно компактной, чтобы уместиться в исходные 105 шагов памяти. Следить за соблюдением маршрута по бумажной карте должен сам игрок — именно это подразумевает управление командой `БП NN С/П`.
