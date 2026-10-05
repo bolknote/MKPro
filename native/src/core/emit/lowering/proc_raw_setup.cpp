@@ -2096,13 +2096,42 @@ std::string segmented_bitplane_random_unique_value(const std::string& collection
 SetupProgramReport
 compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>& boards,
                                     const std::map<std::string, std::string>& registers,
-                                    const std::vector<PreloadReport>& preloads,
+                                    const std::vector<PreloadReport>& requested_preloads,
                                     const CompileOptions& options,
                                     std::optional<std::string> expected_mode) {
   MachineEmitter setup;
   setup.address_space_model =
       address_space_model_for_feature_profile(effective_optimizer_feature_profile(options));
   std::vector<OptimizationReport> optimizations;
+  std::vector<PreloadReport> preloads = requested_preloads;
+  for (PreloadReport& preload : preloads) {
+    if (preload.setup_expression)
+      continue;
+    const std::string value = normalized_v2_text(preload.value);
+    if (value.size() != 2U)
+      continue;
+    const std::optional<int> formal = parse_formal_address_opcode(value);
+    if (!formal.has_value() || *formal < 0xa0)
+      continue;
+    const int target = formal_address_info(*formal, setup.address_space_model).actual;
+    if (target < 100) {
+      if (target != formal_address_info(*formal).actual)
+        preload.value = std::to_string(target);
+      continue;
+    }
+    // An indirect transfer consumes two BCD digits, not the decimal ordinal:
+    // numeric 100 targets 00, while the A0 word targets physical cell 100.
+    // Keep reports/provenance unchanged and synthesize the executable word
+    // through the existing display-literal lowerer. The leading zero prevents
+    // a leading A digit ('-') from being mistaken for a numeric sign.
+    const int encoded = official_address_to_opcode(target, setup.address_space_model);
+    preload.value = display_cells_literal({0, encoded >> 4, encoded & 0x0f});
+    optimizations.push_back(OptimizationReport{
+        .name = "formal-address-preload-encoding",
+        .detail = "Preserved the BCD selector for physical address " +
+                  std::to_string(target) + " in R" + preload.register_name + ".",
+    });
+  }
   std::set<std::size_t> consumed;
   bool setup_r0_dirty = false;
   std::optional<std::string> setup_r0_current_value;

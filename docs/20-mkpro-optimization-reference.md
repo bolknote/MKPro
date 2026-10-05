@@ -8,6 +8,35 @@ the MK-Pro language reference keeps only the source-level optimizer contract.
 
 The translator runs on MK-Pro source and emits MK-61 program bytes. Optimizations are selected only when semantics are preserved under the selected MK-61 exact-machine profile. If an optimization is skipped, it is usually because the prerequisite constraints, control-flow shape, or machine feature preconditions were not met.
 
+### Resumable input and immutable constants
+
+`resumable-input-constant-reuse` lowers a one-digit nonzero literal immediately
+after a resumable input boundary to a recall of an already initialized,
+immutable state register with the same value. It allocates no additional
+register and does not identify programs or game-specific expressions.
+
+The proof checks all source bodies and rules for writes, rejects unsupported
+effects, stack initializers and pre-existing physical aliases, and emits an
+ordinary register use for subsequent liveness and coalescing. Mutable values
+remain ineligible. The rule applies only to ordinary literals, not proof-owned
+addresses or reserved stack literals.
+
+A resumed `S/P` does not finalize numeric input. DSE therefore preserves a
+seemingly dead store when it is the required separator before digit entry,
+including fused `show`/`read` stops. A proved constant recall finalizes entry
+without that extra separator. ROM tests cover multi-digit and fractional input,
+mutable-state rejection, and the independent gameplay contracts of Labyrinth777
+and Tic-Tac-Toe in normal and fast compilation modes.
+
+Executable setup preserves non-decimal address selectors through the existing
+BCD display-literal synthesis (`formal-address-preload-encoding`). Physical
+addresses 100-104 require A0-A4 words, not decimal 100-104, whose last two digits
+would redirect indirect flow to 00-04. The selected address-space model also
+governs A5-B1 in the 112-cell profile. Ordinary numeric data and the original
+preload reports/provenance are unchanged. ROM coverage checks repeated indirect
+transfers through the synthesized stock-model words and separately checks the
+expanded-profile words.
+
 ## 1) Compilation flow and optimization scope
 
 The optimizer works in multiple passes, not in a single “on/off” mode.
@@ -5204,3 +5233,27 @@ the existing size-first/runtime-cost ordering. Candidate tracing records the
 final size and proof verdict even when the ordinary incumbent wins.
 Both the candidate key and explicit-lowering classification include the flag.
 The search does not identify games, procedure names or source formulas.
+
+### Stable-selector continuation refinement
+
+Relational stack proofs use a bounded product of the authoritative execution
+graph and stable R7-Re selector choices. Taking an indirect edge constrains that
+register's next indirect uses to the same encoded target until a possible write.
+This excludes impossible sequences of different callees through an unchanged
+selector. A conditional's untaken edge establishes no choice. R0-R6 mutating
+selectors are never tracked; Rf is not assumed to exist.
+
+Direct and may-alias indirect writes invalidate the affected fact. Raw,
+dangerous and manual instructions, stops, and external resume entries forget
+choices. Distinct formal counters remain distinct even when they name the same
+physical cell; unplaced logical targets use a separate identity domain. Exact
+return frames, every admitted external entry, and ordinary stack/X1/X2
+observation barriers remain part of the proof.
+
+The product is deterministic and capped at 20,000 states. Exhaustion or invalid
+edge metadata publishes no partial proof and falls back to the original
+conservative graph. The product is a private data-proof view, not a replacement
+for the unique command-identity graph used by relocation. Existing outlining
+and stack-transfer optimizations benefit without a game or formula recognizer.
+`MKPRO_NATIVE_TRACE_STACK_ENTRY_EQUALITY` reports pruned inconsistent edges;
+pruning alone is not reported as a reduction in delivered program cells.

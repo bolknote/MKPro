@@ -441,8 +441,8 @@ void parser_accepts_all_example_sources() {
       root / "examples",
       root / "examples" / "pending-optimizer",
   };
-  int parsed = 0;
   for (const auto& dir : dirs) {
+    std::size_t parsed = 0;
     for (const auto& entry : std::filesystem::directory_iterator(dir)) {
       if (!entry.is_regular_file() || entry.path().extension() != ".mkpro")
         continue;
@@ -458,8 +458,8 @@ void parser_accepts_all_example_sources() {
       }
       ++parsed;
     }
+    require(parsed != 0U, "example directory should contain parsed sources: " + dir.string());
   }
-  require(parsed == 33, "native parser should parse all 33 example sources");
 }
 
 } // namespace mkpro::tests

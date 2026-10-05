@@ -382,17 +382,32 @@ void compiler_examples_match_typescript_contract() {
   }
 
   {
+    const std::string source = read_text(root / "examples" / "labyrinth777.mkpro");
     CompileOptions fast_labyrinth_options;
     fast_labyrinth_options.fast_candidate_search = true;
-    const CompileResult result =
-        compile_source(read_text(root / "examples" / "labyrinth777.mkpro"), fast_labyrinth_options);
+    const CompileResult result = compile_source(source, fast_labyrinth_options);
     require(result.implemented, "fast labyrinth777 compile should implement the program");
+    require(result.diagnostics.empty(), "fast labyrinth777 compile should have no diagnostics");
     require(result.steps.size() <= 105,
             "fast labyrinth777 compile should fit the MK-61 budget");
-    require(has_optimization(result, "call-count-proc-layout") ||
+
+    // A better primary lowering must not fail this contract merely because it
+    // no longer needs the cheap layout rescue. Keep requiring that rescue when
+    // the primary really is oversized, and never accept a larger fast result.
+    CompileOptions primary_options;
+    primary_options.disable_candidate_search = true;
+    primary_options.analysis = true;
+    primary_options.budget = 999999;
+    const CompileResult primary = compile_source(source, primary_options);
+    require(primary.implemented && primary.diagnostics.empty(),
+            "labyrinth777 primary lowering should be available for the rescue contract");
+    require(result.steps.size() <= primary.steps.size(),
+            "fast labyrinth777 search should not increase the primary size");
+    require(primary.steps.size() <= 105 ||
+                has_optimization(result, "call-count-proc-layout") ||
                 has_optimization(result, "size-desc-proc-layout") ||
                 has_optimization(result, "reverse-proc-layout"),
-            "fast labyrinth777 compile should use a cheap proc-layout rescue");
+            "oversized labyrinth777 primary should use a cheap proc-layout rescue");
     require(has_optimization(result, "fast-candidate-search"),
             "fast labyrinth777 compile should report fast candidate search");
   }

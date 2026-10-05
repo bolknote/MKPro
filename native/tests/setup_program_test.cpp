@@ -200,6 +200,79 @@ void setup_program_matches_typescript_contract() {
   require(stored_z == "33,", "stack.Z setup should store initial Z, got " + stored_z);
   require(stored_t == "44,", "stack.T setup should store initial T, got " + stored_t);
   require(calc.read_register("5") == "99,", "numeric setup should still run after stack setup");
+
+  // Address words A0-A4 are not the decimal values 100-104. Exercise the
+  // executable setup and two subsequent indirect transfers on the real ROM.
+  for (const int target : {14, 99, 100, 101, 102, 103, 104}) {
+    const std::string selector = target == 14 ? "C6" :
+        target == 99 ? "99" : "A" + std::to_string(target - 100);
+    const std::vector<PreloadReport> preloads{
+        {.register_name = "7", .value = selector},
+        {.register_name = "8", .value = "42"},
+    };
+    const SetupProgramReport address_setup =
+        core::emit::lowering::compile_setup_program_with_preloads({}, {}, preloads, options);
+    require(preloads.front().value == selector,
+            "executable address encoding must not mutate preload provenance");
+    emulator::MK61 address_calc;
+    require(address_calc.load_program(step_opcodes(address_setup.steps)).diagnostics.empty(),
+            "address setup should fit hardware");
+    address_calc.press_sequence({"В/О", "С/П"});
+    require(address_calc.run_until_stable(2000, 6).stopped, "address setup should stop");
+    require(address_calc.read_register("8") == "42,",
+            "address synthesis must preserve other setup registers");
+    require(has_setup_optimization_detail(address_setup, "formal-address-preload-encoding",
+                                          std::to_string(target)) == (target >= 100),
+            "only non-decimal physical selectors require BCD synthesis");
+    std::vector<int> main(105, 0x54);
+    main[0] = 0x07;
+    main[1] = 0x87;
+    main[2] = 0x50;
+    main.at(static_cast<std::size_t>(target)) = 0x50;
+    require(address_calc.load_program(main).diagnostics.empty(),
+            "indirect-address probe should fit hardware");
+    const std::string expected_pc = target < 99 ? std::to_string(target + 1) :
+        "-" + std::to_string(target - 99);
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      address_calc.press_sequence({"В/О", "С/П"});
+      require(address_calc.run_until_stable(2000, 6).stopped &&
+                  address_calc.display_text() == "7," &&
+                  address_calc.program_counter() == expected_pc,
+              "setup selector " + selector + " should repeatedly reach its physical target");
+    }
+  }
+
+  const SetupProgramReport decimal_setup =
+      core::emit::lowering::compile_setup_program_with_preloads(
+          {}, {}, {{.register_name = "7", .value = "100"}}, options);
+  emulator::MK61 decimal_calc;
+  decimal_calc.load_program(step_opcodes(decimal_setup.steps));
+  decimal_calc.press_sequence({"В/О", "С/П"});
+  require(decimal_calc.run_until_stable(2000, 6).stopped &&
+              decimal_calc.read_register("7") == "100,",
+          "ordinary decimal 100 must not be reinterpreted as an address word");
+
+  CompileOptions expanded_options;
+  expanded_options.feature_profile = FeatureProfile::Mk61SMiniExpanded;
+  for (int target = 105; target <= 111; ++target) {
+    const std::string selector = target < 110 ? "A" + std::to_string(target - 100) :
+        "B" + std::to_string(target - 110);
+    const SetupProgramReport expanded_setup =
+        core::emit::lowering::compile_setup_program_with_preloads(
+            {}, {}, {{.register_name = "7", .value = selector}}, expanded_options);
+    emulator::MK61 word_calc;
+    word_calc.load_program(step_opcodes(expanded_setup.steps));
+    word_calc.press_sequence({"В/О", "С/П"});
+    const std::string expected_word = target < 110 ? "-" + std::to_string(target - 100) :
+        "L" + std::to_string(target - 110);
+    const bool stopped = word_calc.run_until_stable(2000, 6).stopped;
+    std::string actual_word = word_calc.read_register("7");
+    while (!actual_word.empty() && actual_word.back() == ' ')
+      actual_word.pop_back();
+    require(stopped && actual_word == expected_word + ",",
+            "expanded setup must preserve " + selector + ", not a stock-model alias: expected " +
+                expected_word + ", got " + actual_word);
+  }
 }
 
 } // namespace mkpro::tests

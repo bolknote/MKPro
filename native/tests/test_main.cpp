@@ -80,8 +80,10 @@ void emulator_function_equivalence_matches_typescript_contract();
 void emulator_fl_dead_flag_branch_matches_source_contract();
 void emulator_functions_demo_inlined_calls_preserve_results();
 void emulator_jack_pot_random_digits_keep_advancing();
+void emulator_labyrinth777_preserves_gameplay_contract();
 void emulator_procedure_stack_carried_assignment_persists_state();
 void emulator_teleport_dependent_floor_update_preserves_value();
+void emulator_tic_tac_toe_preserves_gameplay_contract();
 void emulator_wumpus_winning_shot_reaches_terminal_display();
 void emulator_fl_counter_facts_match_typescript_contract();
 void emulator_if_chain_dispatch_matches_typescript_contract();
@@ -172,6 +174,8 @@ void expression_parser_matches_initial_contract();
 void parser_accepts_all_example_sources();
 void pass_pipeline_matches_initial_typescript_contract();
 void post_layout_control_flow_matches_typed_contract();
+void stable_selector_continuations_preserve_contracts();
+void emulator_stable_selector_continuations_match_rom();
 void stable_register_value_flow_preserves_manual_protocol_state();
 void post_layout_indirect_flow_matches_typescript_contract();
 void raw_bcd_unary_selector_matches_emulator_oracle();
@@ -368,8 +372,10 @@ int main(int argc, char** argv) {
       MKPRO_TEST(emulator_fl_dead_flag_branch_matches_source_contract),
       MKPRO_TEST(emulator_functions_demo_inlined_calls_preserve_results),
       MKPRO_TEST(emulator_jack_pot_random_digits_keep_advancing),
+      MKPRO_TEST(emulator_labyrinth777_preserves_gameplay_contract),
       MKPRO_TEST(emulator_procedure_stack_carried_assignment_persists_state),
       MKPRO_TEST(emulator_teleport_dependent_floor_update_preserves_value),
+      MKPRO_TEST(emulator_tic_tac_toe_preserves_gameplay_contract),
       MKPRO_TEST(emulator_wumpus_winning_shot_reaches_terminal_display),
       MKPRO_TEST(emulator_fl_counter_facts_match_typescript_contract),
       MKPRO_TEST(emulator_if_chain_dispatch_matches_typescript_contract),
@@ -456,6 +462,8 @@ int main(int argc, char** argv) {
       MKPRO_TEST(parser_accepts_all_example_sources),
       MKPRO_TEST(pass_pipeline_matches_initial_typescript_contract),
       MKPRO_TEST(post_layout_control_flow_matches_typed_contract),
+      MKPRO_TEST(stable_selector_continuations_preserve_contracts),
+      MKPRO_TEST(emulator_stable_selector_continuations_match_rom),
       MKPRO_TEST(stable_register_value_flow_preserves_manual_protocol_state),
       MKPRO_TEST(post_layout_indirect_flow_matches_typescript_contract),
       MKPRO_TEST(raw_bcd_unary_selector_matches_emulator_oracle),

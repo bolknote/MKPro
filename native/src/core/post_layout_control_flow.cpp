@@ -5,6 +5,7 @@
 #include "mkpro/core/register_allocator.hpp"
 
 #include <algorithm>
+#include <array>
 #include <compare>
 #include <deque>
 #include <exception>
@@ -1114,6 +1115,146 @@ void prove_one_borrowed_register(const std::vector<MachineItem>& items,
 }
 
 } // namespace
+
+SelectorConsistentExecutionGraph build_selector_consistent_execution_graph(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& control,
+    std::size_t maximum_states) {
+  SelectorConsistentExecutionGraph result;
+  const std::size_t count = control.execution_states.size();
+  if (!control.proved || count == 0 || count > maximum_states ||
+      control.execution_successors.size() != count || control.execution_edges.size() != count)
+    return result;
+
+  // A hardware counter and a logical layout address are different domains.
+  // Distinct hardware aliases of one physical cell must remain distinct too.
+  struct Choice {
+    std::optional<int> formal;
+    int logical = -1;
+    auto operator<=>(const Choice&) const = default;
+  };
+  const auto choice_for = [&](const PostLayoutExecutionEdge& edge) {
+    return Choice{edge.indirect_formal_opcode,
+                  edge.indirect_formal_opcode.has_value()
+                      ? -1 : control.execution_states[edge.target_state].address};
+  };
+  std::array<std::set<Choice>, 8> alternatives;
+  using ExactState = std::tuple<std::size_t, std::optional<int>, std::vector<int>,
+                                std::vector<std::optional<int>>>;
+  std::map<ExactState, std::size_t> original_ids;
+  for (std::size_t i = 0; i < count; ++i) {
+    const auto& state = control.execution_states[i];
+    if (state.item_index >= items.size() ||
+        !original_ids.emplace(ExactState{state.item_index, state.formal_opcode,
+                                        state.return_stack, state.formal_return_stack}, i).second)
+      return {};
+    std::set<std::size_t> labelled;
+    const auto reg = stable_indirect_flow_register(items[state.item_index]);
+    for (const auto& edge : control.execution_edges[i]) {
+      if (edge.target_state >= count ||
+          (edge.kind != PostLayoutExecutionEdgeKind::IndirectTarget &&
+           edge.indirect_formal_opcode.has_value()))
+        return {};
+      labelled.insert(edge.target_state);
+      if (reg && edge.kind == PostLayoutExecutionEdgeKind::IndirectTarget)
+        alternatives[static_cast<std::size_t>(register_index(*reg) - 7)].insert(choice_for(edge));
+    }
+    const auto& projected = control.execution_successors[i];
+    if (labelled != std::set<std::size_t>(projected.begin(), projected.end()))
+      return {};
+  }
+  std::array<bool, 8> tracked{};
+  for (std::size_t i = 0; i < tracked.size(); ++i)
+    tracked[i] = alternatives[i].size() > 1;
+  if (std::none_of(tracked.begin(), tracked.end(), [](bool value) { return value; })) {
+    result.original_states.reserve(count);
+    for (std::size_t i = 0; i < count; ++i)
+      result.original_states.push_back(i);
+    result.successors = control.execution_successors;
+    result.proved = true;
+    return result;
+  }
+
+  struct ProductState {
+    std::size_t original = 0;
+    std::array<std::optional<Choice>, 8> choices;
+    auto operator<=>(const ProductState&) const = default;
+  };
+  std::map<ProductState, std::size_t> ids;
+  std::vector<ProductState> states;
+  const auto intern = [&](const ProductState& state) -> std::optional<std::size_t> {
+    const auto found = ids.find(state);
+    if (found != ids.end())
+      return found->second;
+    if (states.size() >= maximum_states)
+      return std::nullopt;
+    const std::size_t id = states.size();
+    ids.emplace(state, id);
+    states.push_back(state);
+    result.original_states.push_back(state.original);
+    result.successors.emplace_back();
+    return id;
+  };
+  bool has_main = false;
+  for (const auto& entry : control.external_entries) {
+    const auto found = original_ids.find(ExactState{
+        entry.entry.item_index, entry.formal_opcode, stack_addresses(entry.return_stack),
+        entry.formal_return_stack});
+    if (found == original_ids.end() || !intern(ProductState{.original = found->second}))
+      return {};
+    has_main = has_main || entry.kind == ExternalEntryKind::Main;
+  }
+  if (!has_main)
+    return {};
+
+  for (std::size_t i = 0; i < states.size(); ++i) {
+    // intern() may grow states: never retain a reference to its elements.
+    const ProductState input = states[i];
+    const auto& execution = control.execution_states[input.original];
+    const auto& item = items[execution.item_index];
+    auto after = input.choices;
+    const bool opaque = item.kind != MachineItemKind::Op || item.raw ||
+        item.manual_interaction.has_value() || item.opcode == kStopOpcode ||
+        item.opcode == kErrorStopOpcode || item.opcode < 0 || item.opcode >= 0xf0 ||
+        (item.opcode >= 0x40 && (item.opcode & 15) == 15) ||
+        opcode_by_code(item.opcode).risk == OpcodeRisk::Dangerous;
+    if (opaque) {
+      after = {};
+    } else {
+      for (std::size_t slot = 0; slot < tracked.size(); ++slot) {
+        if (tracked[slot] && register_access_effect(
+                item, register_name_for_index(static_cast<int>(slot) + 7)).writes !=
+                RegisterWriteEffect::None)
+          after[slot].reset();
+      }
+    }
+    const auto reg = opaque ? std::nullopt : stable_indirect_flow_register(item);
+    for (const auto& edge : control.execution_edges[input.original]) {
+      ProductState next{.original = edge.target_state, .choices = after};
+      if (edge.kind == PostLayoutExecutionEdgeKind::Resume)
+        next.choices = {};
+      if (reg && edge.kind == PostLayoutExecutionEdgeKind::IndirectTarget) {
+        const auto slot = static_cast<std::size_t>(register_index(*reg) - 7);
+        if (tracked[slot]) {
+          const Choice selected = choice_for(edge);
+          if (next.choices[slot] && *next.choices[slot] != selected) {
+            ++result.pruned_edges;
+            continue;
+          }
+          next.choices[slot] = selected;
+        }
+      }
+      const auto target = intern(next);
+      if (!target)
+        return {};
+      auto& successors = result.successors[i];
+      if (std::find(successors.begin(), successors.end(), *target) == successors.end())
+        successors.push_back(*target);
+    }
+  }
+  result.proved = true;
+  return result;
+}
 
 PostLayoutExecutionRelocationProof prove_post_layout_execution_relocation(
     const std::vector<MachineItem>& before,

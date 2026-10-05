@@ -25,7 +25,12 @@ bool is_number_entry(const IrOp& op) {
 bool leaves_entry_open(const IrOp& op) {
   if (is_number_entry(op))
     return true;
-  return op.kind == IrKind::Stop && op.semantic == "input";
+  // A fused show/read still looks like a display stop in the IR. After any
+  // resumable (or unclassified) stop, manual digits can leave number entry
+  // open. A following dead store may be the only instruction preventing the
+  // next literal from being appended to that input. Do not infer this machine
+  // effect from the comment-derived "input"/"display" semantic tag.
+  return op.kind == IrKind::Stop && op.meta.stop_disposition != StopDisposition::Terminal;
 }
 
 const IrOp* previous_effective_op(const std::vector<IrOp>& ops, int index) {

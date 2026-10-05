@@ -199,8 +199,10 @@ add_executable(mkpro_tests
   tests/emulator_function_equivalence_test.cpp
   tests/emulator_functions_demo_test.cpp
   tests/emulator_jack_pot_test.cpp
+  tests/emulator_labyrinth777_test.cpp
   tests/emulator_procedure_state_store_test.cpp
   tests/emulator_teleport_test.cpp
+  tests/emulator_tic_tac_toe_test.cpp
   tests/emulator_wumpus_test.cpp
   tests/emulator_fl_counter_test.cpp
   tests/emulator_if_chain_dispatch_test.cpp
@@ -270,6 +272,7 @@ add_executable(mkpro_tests
   tests/exact_decimal_remainder_test.cpp
   tests/passes_test.cpp
   tests/post_layout_control_flow_test.cpp
+  tests/stable_selector_continuations_test.cpp
   tests/stable_register_value_flow_test.cpp
   tests/post_layout_indirect_flow_test.cpp
   tests/raw_bcd_unary_selector_test.cpp
@@ -417,6 +420,8 @@ set(MKPRO_NATIVE_TEST_NAMES
   emulator_packed_bcd_partial_horner_preserves_threshold
   emulator_binary_call_shared_operand_matches_rom
   emulator_log_selector_premise_matches_typescript_contract
+  emulator_labyrinth777_preserves_gameplay_contract
+  emulator_tic_tac_toe_preserves_gameplay_contract
   emulator_mk61_execution_matches_typescript_contract
   emulator_nekromant_reference_and_source_contract
   emulator_near_any_helper_matches_typescript_contract
@@ -488,6 +493,8 @@ set(MKPRO_NATIVE_TEST_NAMES
   parser_accepts_all_example_sources
   pass_pipeline_matches_initial_typescript_contract
   post_layout_control_flow_matches_typed_contract
+  stable_selector_continuations_preserve_contracts
+  emulator_stable_selector_continuations_match_rom
   stable_register_value_flow_preserves_manual_protocol_state
   post_layout_indirect_flow_matches_typescript_contract
   raw_bcd_unary_selector_matches_emulator_oracle

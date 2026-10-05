@@ -194,6 +194,21 @@ AuthoritativePostLayoutControlFlow
 build_post_layout_control_flow(const std::vector<MachineItem>& items,
                                const PostLayoutControlFlowOptions& options = {});
 
+// A separate product graph for relational data proofs. Several product nodes
+// may refer to the same exact PC/return context with different stable-selector
+// choices. Do not substitute this view for the command-identity relocation CFG.
+struct SelectorConsistentExecutionGraph {
+  bool proved = false;
+  std::vector<std::size_t> original_states;
+  std::vector<std::vector<std::size_t>> successors;
+  std::size_t pruned_edges = 0;
+};
+
+SelectorConsistentExecutionGraph build_selector_consistent_execution_graph(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& control,
+    std::size_t maximum_states = 20000);
+
 PostLayoutBorrowedSelectorProof
 prove_post_layout_borrowed_entry_selectors(const std::vector<MachineItem>& items,
                                            const PostLayoutControlFlowOptions& options = {});

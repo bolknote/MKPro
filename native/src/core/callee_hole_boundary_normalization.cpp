@@ -139,6 +139,17 @@ bool prove_post_layout_stack_entry_equality(
       flow.execution_states.size() != flow.execution_successors.size())
     return reject("exact execution graph is unavailable");
 
+  auto graph = build_selector_consistent_execution_graph(items, flow);
+  if (!graph.proved) {
+    // A bounded refinement must never weaken the ordinary conservative proof.
+    graph.successors = flow.execution_successors;
+    for (std::size_t i = 0; i < flow.execution_states.size(); ++i)
+      graph.original_states.push_back(i);
+  }
+  if (trace && graph.pruned_edges != 0)
+    std::cerr << "[stack-entry-equality] selector-inconsistent edges removed="
+              << graph.pruned_edges << '\n';
+
   const auto merge = [](StackValueEqualityState& into,
                         const StackValueEqualityState& from) {
     const int before = stack_value_equality_key(into);
@@ -152,11 +163,11 @@ bool prove_post_layout_stack_entry_equality(
   // Unknown is the join of equal-open and equal-closed states. Never infer
   // a fresh-number lift after Enter or an unproved control boundary.
   enum class DecimalEntry { Unknown, Closed, Open };
-  std::vector<DecimalEntry> entry_modes(flow.execution_states.size(), DecimalEntry::Unknown);
-  std::vector<std::optional<StackValueEqualityState>> incoming(flow.execution_states.size());
+  std::vector<DecimalEntry> entry_modes(graph.original_states.size(), DecimalEntry::Unknown);
+  std::vector<std::optional<StackValueEqualityState>> incoming(graph.original_states.size());
   std::deque<std::size_t> pending;
-  for (std::size_t index = 0; index < flow.execution_states.size(); ++index) {
-    if (flow.execution_states[index].address == entry_address) {
+  for (std::size_t index = 0; index < graph.original_states.size(); ++index) {
+    if (flow.execution_states[graph.original_states[index]].address == entry_address) {
       incoming[index] = initial;
       pending.push_back(index);
     }
@@ -173,7 +184,7 @@ bool prove_post_layout_stack_entry_equality(
     if (stack_values_fully_equal(state))
       continue;
     ++explored;
-    const auto& execution = flow.execution_states[index];
+    const auto& execution = flow.execution_states[graph.original_states[index]];
     if (execution.item_index >= items.size())
       return reject("execution state is outside the artifact");
     const auto& item = items[execution.item_index];
@@ -245,7 +256,7 @@ bool prove_post_layout_stack_entry_equality(
       entry_mode = DecimalEntry::Unknown;
     if (stack_values_fully_equal(state))
       continue;
-    const auto& successors = flow.execution_successors[index];
+    const auto& successors = graph.successors[index];
     if (successors.empty())
       return reject("unequal stack reaches an unknown continuation");
     for (const auto successor : successors) {

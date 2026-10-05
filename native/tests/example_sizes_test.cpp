@@ -238,7 +238,7 @@ void example_sizes_match_typescript_baselines() {
       {"river-battle", 90},
       {"sea-battle", 67},
       {"teleport", 96},
-      {"tic-tac-toe", 100},
+      {"tic-tac-toe", 105},
       {"tiny-game", 23},
       {"treasure-hunter-2", 103},
       {"wumpus", 105},

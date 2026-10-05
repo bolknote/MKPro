@@ -12805,6 +12805,106 @@ unique_normalized_fractional_selector_values(const std::vector<std::string>& val
   return result;
 }
 
+bool try_emit_resumable_input_constant(LoweringContext& context, const std::string& key,
+                                       const std::optional<std::string>& comment,
+                                       std::optional<int> source_line) {
+  if (context.program == nullptr || key.size() != 1U || key.front() < '1' || key.front() > '9')
+    return false;
+  const auto& items = context.emitter.items;
+  if (items.empty())
+    return false;
+  std::size_t boundary = items.size() - 1U;
+  if (items.at(boundary).kind == MachineItemKind::Op &&
+      items.at(boundary).opcode >= 0x40 && items.at(boundary).opcode <= 0x4e &&
+      !items.at(boundary).raw && !items.at(boundary).manual_interaction.has_value()) {
+    if (boundary == 0U)
+      return false;
+    --boundary;
+  }
+  const MachineItem& stop = items.at(boundary);
+  if (stop.kind != MachineItemKind::Op || stop.opcode != 0x50 || stop.raw ||
+      stop.manual_interaction.has_value() || stop.stop_disposition != StopDisposition::Resumable)
+    return false;
+
+  const V2Program& program = *context.program;
+  if (std::any_of(program.state.begin(), program.state.end(),
+                  [](const V2StateField& field) { return field.initial_stack.has_value(); }))
+    return false;
+
+  // Prove source immutability before introducing an additional register use.
+  // The new recall then participates in the ordinary IR liveness/coalescing
+  // passes. Unknown effects and explicit manual protocols are not eligible.
+  const auto preserves = [&](const V2Statement& statement, const std::string& name,
+                             const auto& self) -> bool {
+    static const std::set<std::string> supported{
+      "v2_assign", "v2_update", "v2_read", "v2_show", "v2_halt", "v2_stop", "v2_return",
+        "v2_if", "v2_match", "v2_loop", "v2_while", "v2_invoke", "v2_block",
+        "v2_break", "v2_continue"};
+    if (!supported.contains(statement.kind))
+      return false;
+    if ((statement.kind == "v2_assign" || statement.kind == "v2_update" ||
+         statement.kind == "v2_read") && statement.target.has_value() &&
+        expression_contains_identifier(parse_expression(*statement.target, statement.line), name))
+      return false;
+    if (statement.kind == "v2_invoke" &&
+        (!statement.name.has_value() ||
+         std::none_of(program.rules.begin(), program.rules.end(), [&](const V2Rule& rule) {
+           return rule.name == *statement.name;
+         })))
+      return false;
+    if (statement.expr.has_value()) {
+      const Expression expression = parse_expression(*statement.expr, statement.line);
+      std::vector<const Expression*> calls;
+      collect_expression_calls(expression, calls);
+      if (std::any_of(calls.begin(), calls.end(), [](const Expression* call) {
+            return lower_ascii(call->callee) == "entered";
+          }))
+        return false;
+    }
+    for (const auto* body : {&statement.body, &statement.then_body, &statement.else_body})
+      for (const V2Statement& child : *body)
+        if (!self(child, name, self))
+          return false;
+    for (const V2MatchCase& match_case : statement.cases)
+      if (match_case.action != nullptr && !self(*match_case.action, name, self))
+        return false;
+    return statement.otherwise == nullptr || self(*statement.otherwise, name, self);
+  };
+  for (const V2StateField& field : program.state) {
+    if (!field.initial.has_value() || field.bank.has_value() || field.implicit ||
+        normalize_number_key(*field.initial) != key ||
+        !context.register_index_by_name.contains(field.name))
+      continue;
+    const int index = context.register_index_by_name.at(field.name);
+    if (std::any_of(context.register_index_by_name.begin(), context.register_index_by_name.end(),
+                    [&](const auto& binding) {
+                      return binding.first != field.name && binding.second == index;
+                    }))
+      continue;
+    const auto block_preserves = [&](const std::vector<V2Statement>& body) {
+      return std::all_of(body.begin(), body.end(), [&](const V2Statement& statement) {
+        return preserves(statement, field.name, preserves);
+      });
+    };
+    if (!block_preserves(program.body) ||
+        std::any_of(program.rules.begin(), program.rules.end(), [&](const V2Rule& rule) {
+          return std::find(rule.params.begin(), rule.params.end(), field.name) != rule.params.end() ||
+                 !block_preserves(rule.body);
+        }))
+      continue;
+    emit_recall(context, field.name);
+    context.emitter.items.back().comment = comment.value_or("input-boundary constant " + key);
+    context.emitter.items.back().source_line = source_line;
+    context.optimizations.push_back(OptimizationReport{
+        .name = "resumable-input-constant-reuse",
+        .detail = "Reused immutable initialized state " + field.name + " for constant " + key +
+                  " after a resumable input boundary; numeric entry closes without a separator.",
+    });
+    return true;
+  }
+  return false;
+}
+
 void emit_number_or_preload(LoweringContext& context, const std::string& value,
                             std::optional<std::string> comment = std::nullopt,
                             std::optional<int> source_line = std::nullopt,
@@ -12843,6 +12943,9 @@ void emit_number_or_preload(LoweringContext& context, const std::string& value,
       selector_value.has_value() ? normalize_number_key(*selector_value) : key;
   const bool stack_literal = comment.has_value() && comment->starts_with("preload stack const ") &&
                              is_stack_literal_preload_only_constant(key);
+  if (!proof_role.has_value() && !stack_literal &&
+      try_emit_resumable_input_constant(context, key, comment, source_line))
+    return;
   const auto preload_it = context.preloaded_numbers.find(preload_key);
   if (preload_it != context.preloaded_numbers.end() &&
       (!is_stack_literal_preload_only_constant(key) || stack_literal)) {

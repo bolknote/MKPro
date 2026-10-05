@@ -73,45 +73,45 @@
    03 | 25    | F reverse               | display packed row preserve
    04 | 0C    | ВП                      | display packed row restore
    05 | 50    | С/П                     | show __inline_show_36_0
-   06 | 05    | 5                       |
-   07 | 11    | −                       | expr -
-   08 | 40    | X→П 0                   | set action
-   09 | AD    | К ПП d                  | proc call generate_row; preloaded Rd=86 indirect-target=86 shifted-forward indirect flow
-   10 | 01    | 1                       |
-   11 | 63    | П→X 3                   | recall energy
-   12 | 10    | +                       | expr +
-   13 | AE    | К ПП e                  | expr digit_at(row_view, room); preloaded Re=96 indirect-target=96 shifted-forward indirect flow
-   14 | 11    | −                       | expr -
-   15 | 43    | X→П 3                   | set energy
-   16 | 5C    | F x<0                   | false branch for <
-   17 | 19    | 19                      | false branch for <
-   18 | 50    | С/П                     | halt
-   19 | 60    | П→X 0                   | recall action
-   20 | 31    | К |x|                   | abs()
-   21 | 5E    | F x=0                   | case mismatch
-   22 | 46    | 46                      | case mismatch
-   23 | AE    | К ПП e                  | expr digit_at(row_view, room); preloaded Re=96 indirect-target=96 shifted-forward indirect flow
-   24 | 04    | 4                       |
-   25 | 11    | −                       | dispatch compare
-   26 | 5E    | F x=0                   | case mismatch
-   27 | 36    | 36                      | case mismatch
-   28 | 62    | П→X 2                   | recall floor
-   29 | 07    | 7                       |
-   30 | 11    | −                       | condition compare
-   31 | C9    | К x<0 9                 | false branch for <; preloaded R9=80 indirect-target=80 shifted-forward indirect flow
-   32 | 08    | 8                       |
-   33 | 10    | +                       | residual guarded update floor
-   34 | 42    | X→П 2                   | set floor
-   35 | 89    | К БП 9                  | dispatch end; preloaded R9=80 indirect-target=80 shifted-forward indirect flow
-   36 | 01    | 1                       |
-   37 | 11    | −                       | dispatch residual compare
-   38 | E9    | К x=0 9                 | case mismatch; preloaded R9=80 indirect-target=80 shifted-forward indirect flow
-   39 | 62    | П→X 2                   | recall floor
+   06 | 40    | X→П 0                   | read action
+   07 | 05    | 5                       |
+   08 | 11    | −                       | expr -
+   09 | 40    | X→П 0                   | set action
+   10 | AD    | К ПП d                  | proc call generate_row; preloaded Rd=86 indirect-target=86 shifted-forward indirect flow
+   11 | 01    | 1                       |
+   12 | 63    | П→X 3                   | recall energy
+   13 | 10    | +                       | expr +
+   14 | AE    | К ПП e                  | expr digit_at(row_view, room); preloaded Re=96 indirect-target=96 shifted-forward indirect flow
+   15 | 11    | −                       | expr -
+   16 | 43    | X→П 3                   | set energy
+   17 | 5C    | F x<0                   | false branch for <
+   18 | 20    | 20                      | false branch for <
+   19 | 50    | С/П                     | halt
+   20 | 60    | П→X 0                   | recall action
+   21 | 31    | К |x|                   | abs()
+   22 | 5E    | F x=0                   | case mismatch
+   23 | 46    | 46                      | case mismatch
+   24 | AE    | К ПП e                  | expr digit_at(row_view, room); preloaded Re=96 indirect-target=96 shifted-forward indirect flow
+   25 | 04    | 4                       |
+   26 | 11    | −                       | dispatch compare
+   27 | 5E    | F x=0                   | case mismatch
+   28 | 37    | 37                      | case mismatch
+   29 | 62    | П→X 2                   | recall floor
+   30 | 07    | 7                       |
+   31 | 11    | −                       | condition compare
+   32 | C9    | К x<0 9                 | false branch for <; preloaded R9=80 indirect-target=80 shifted-forward indirect flow
+   33 | 08    | 8                       |
+   34 | 10    | +                       | residual guarded update floor
+   35 | 42    | X→П 2                   | set floor
+   36 | 89    | К БП 9                  | dispatch end; preloaded R9=80 indirect-target=80 shifted-forward indirect flow
+   37 | 01    | 1                       |
+   38 | 11    | −                       | dispatch residual compare
+   39 | E9    | К x=0 9                 | case mismatch; preloaded R9=80 indirect-target=80 shifted-forward indirect flow
    40 | 01    | 1                       |
-   41 | 11    | −                       | expr -
-   42 | 01    | 1                       |
-   43 | 36    | К max                   | max()
-   44 | 42    | X→П 2                   | arithmetic-if-max floor
+   41 | 62    | П→X 2                   | recall floor
+   42 | 11    | −                       | condition compare
+   43 | C9    | К x<0 9                 | false branch for >; preloaded R9=80 indirect-target=80 shifted-forward indirect flow
+   44 | D2    | К П→X 2                 | decrement floor
    45 | 89    | К БП 9                  | tail jump inspect_room; preloaded R9=80 indirect-target=80 shifted-forward indirect flow
    46 | 01    | 1                       |
    47 | 11    | −                       | dispatch residual compare
@@ -148,9 +148,9 @@
    80 | AD    | К ПП d                  | proc call generate_row; preloaded Rd=86 indirect-target=86 shifted-forward indirect flow
    81 | 64    | П→X 4                   | recall exit_view
    82 | 11    | −                       | condition compare
-   83 | EA    | К x=0 a                 | false branch for ==; preloaded Ra=B2 indirect-target=0 indirect flow
+   83 | EA    | К x=0 a                 | false branch for ==; preloaded Ra=00 indirect-target=0 indirect flow
    84 | 50    | С/П                     | halt
-   85 | 8A    | К БП a                  | tail continuation; preloaded Ra=B2 indirect-target=0 indirect flow
+   85 | 8A    | К БП a                  | tail continuation; preloaded Ra=00 indirect-target=0 indirect flow
    86 | 68    | П→X 8                   | recall seed
    87 | 62    | П→X 2                   | recall floor
    88 | 1C    | F sin                   | sin()
