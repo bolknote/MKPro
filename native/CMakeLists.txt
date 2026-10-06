@@ -31,6 +31,7 @@ add_library(mkpro_core STATIC
   src/core/passes/selector_charge_literal_sinking.cpp
   src/core/compiler.cpp
   src/core/constant_folder.cpp
+  src/core/constant_synthesis.cpp
   src/core/cyclic_end_return.cpp
   src/core/dark_side_suffix_helper.cpp
   src/core/flow_sensitive_call_domains.cpp
@@ -749,3 +750,13 @@ target_link_libraries(mkpro_helper_entry_store_factoring_tests PRIVATE mkpro_deb
 mkpro_configure_target(mkpro_helper_entry_store_factoring_tests)
 add_test(NAME mkpro.helper_entry_store_factoring_compiler_and_rom
   COMMAND mkpro_helper_entry_store_factoring_tests)
+
+add_executable(mkpro_finite_mode_multirole_tests tests/finite_mode_multirole_test.cpp)
+target_link_libraries(mkpro_finite_mode_multirole_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_finite_mode_multirole_tests)
+add_test(NAME mkpro.finite_mode_multirole_compiler_and_rom COMMAND mkpro_finite_mode_multirole_tests)
+
+add_executable(mkpro_constant_synthesis_tests tests/constant_synthesis_test.cpp)
+target_link_libraries(mkpro_constant_synthesis_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_constant_synthesis_tests)
+add_test(NAME mkpro.constant_synthesis_compiler_and_rom COMMAND mkpro_constant_synthesis_tests)

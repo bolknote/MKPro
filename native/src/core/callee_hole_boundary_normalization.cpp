@@ -533,6 +533,78 @@ bool selector_charge_entry_closer_opcode(int opcode) {
          (opcode >= 0xa7 && opcode <= 0xae);
 }
 
+std::optional<std::vector<bool>> analyze_post_layout_automatic_entry_lift(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow,
+    std::size_t maximum_work) {
+  const std::size_t count = flow.execution_states.size();
+  if (!flow.proved || count == 0 || count > maximum_work ||
+      flow.execution_successors.size() != count)
+    return std::nullopt;
+  constexpr unsigned unknown = 1U;
+  constexpr unsigned enabled = 2U;
+  // May-state union distinguishes unreachable, enabled, unknown and mixed.
+  // It converges monotonically even when a transparent loop has a back edge;
+  // a single unknown path is never erased by an optimistic initial fact.
+  std::vector<unsigned> incoming(count, 0U);
+  std::vector<bool> queued(count, false);
+  std::vector<std::size_t> pending;
+  std::set<std::size_t> external;
+  for (const auto& entry : flow.external_entries)
+    external.insert(entry.entry.item_index);
+  for (std::size_t state = 0; state < count; ++state) {
+    const auto item = flow.execution_states[state].item_index;
+    if (item >= items.size())
+      return std::nullopt;
+    // Conservatively seed every context of an externally enterable command.
+    if (external.contains(item)) {
+      incoming[state] = unknown;
+      queued[state] = true;
+      pending.push_back(state);
+    }
+  }
+  if (pending.empty())
+    return std::nullopt;
+  std::size_t work = 0;
+  while (!pending.empty()) {
+    if (work++ >= maximum_work)
+      return std::nullopt;
+    const auto state = pending.back();
+    pending.pop_back();
+    queued[state] = false;
+    const auto& context = flow.execution_states[state];
+    const auto& item = items[context.item_index];
+    unsigned outgoing = unknown;
+    if (item.kind == MachineItemKind::Op && !item.raw && !item.manual_interaction) {
+      if (selector_charge_entry_closer_opcode(item.opcode)) {
+        outgoing = enabled;
+      } else if (item.opcode == 0x51 || item.opcode == 0x54 ||
+                 (item.opcode == 0x52 && !context.return_stack.empty())) {
+        // Return to this exact caller, not a syntactic call-site shortcut.
+        // Empty-stack hardware returns have a separate, deliberately absent
+        // entry-state certificate.
+        outgoing = incoming[state];
+      }
+    }
+    for (const auto next : flow.execution_successors[state]) {
+      if (work++ >= maximum_work || next >= count)
+        return std::nullopt;
+      const unsigned joined = incoming[next] | outgoing;
+      if (joined == incoming[next])
+        continue;
+      incoming[next] = joined;
+      if (!queued[next]) {
+        queued[next] = true;
+        pending.push_back(next);
+      }
+    }
+  }
+  std::vector<bool> proved(count, false);
+  for (std::size_t state = 0; state < count; ++state)
+    proved[state] = incoming[state] == enabled;
+  return proved;
+}
+
 bool selector_charge_has_automatic_entry_lift(const std::vector<IrOp>& ops,
                                              std::size_t entry, AddressSpaceModel model) {
   if (entry == 0 || entry >= ops.size() || passes::has_rewrite_barrier(ops[entry]))

@@ -1,0 +1,272 @@
+#include "mkpro/core/constant_synthesis.hpp"
+#include "mkpro/core/callee_hole_boundary_normalization.hpp"
+#include "mkpro/core/emit/machine_emitter.hpp"
+#include "mkpro/core/passes/finite_mode_representation.hpp"
+#include "mkpro/core/post_layout_control_flow.hpp"
+#include "mkpro/emulator/mk61.hpp"
+
+#include "test_support.hpp"
+
+#include <algorithm>
+#include <array>
+#include <exception>
+#include <iostream>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace {
+using namespace mkpro;
+using namespace mkpro::core;
+using mkpro::tests::require;
+using Kind = ConstantObservationKind;
+
+void solver_contracts() {
+  ConstantSynthesisRequest request;
+  request.observations = {{Kind::Integer, "3"}, {Kind::Fraction, "0.25"}};
+  const auto pair = synthesize_constant(request);
+  require(pair.status == ConstantSynthesisStatus::Solved && pair.value == "3.25",
+          "joint preimages must construct a new word, not pick an observed output");
+  require(constant_satisfies_observations(*pair.value, request), "certificate must replay");
+  require(!constant_satisfies_observations("3.26", request), "corrupted fractional digit");
+  request.observations = {{Kind::Integer, "-3"}, {Kind::Fraction, "-0.25"}};
+  require(synthesize_constant(request).value == "-3.25", "negative truncation is toward zero");
+  request.observations = {{Kind::Integer, "-3"}, {Kind::Fraction, "0.25"}};
+  require(synthesize_constant(request).status == ConstantSynthesisStatus::Unsatisfiable,
+          "integer and fraction cannot have opposite nonzero signs");
+  request.observations = {{Kind::Integer, "3.25"}};
+  require(synthesize_constant(request).status == ConstantSynthesisStatus::Unsatisfiable,
+          "nonintegral integer observation is impossible");
+  request.observations = {{Kind::Identity, "0.226"}, {Kind::Negate, "-0.226"}};
+  require(synthesize_constant(request).value == "0.226", "identical observations must intersect");
+  request.observations.push_back({Kind::Sign, "-1"});
+  require(!synthesize_constant(request).value, "all observations, not a sample, must hold");
+  request.observations = {{Kind::Identity, "0.00000001"}};
+  require(synthesize_constant(request).status == ConstantSynthesisStatus::Unsupported,
+          "the keyboard leading zero counts against the eight-digit limit");
+  request.observations = {{Kind::Identity, "-0"}};
+  require(!synthesize_constant(request).value, "signed zero needs a separate representation proof");
+  request.observations = {{Kind::Sign, "1"}};
+  request.maximum_work = 0;
+  require(synthesize_constant(request).status == ConstantSynthesisStatus::Exhausted,
+          "search exhaustion must not be reported as impossibility");
+  request.maximum_work = 4096;
+  request.address = ConstantAddressConstraint{"b", 37};
+  require(synthesize_constant(request).value == "37", "address participates in synthesis");
+  request.address->target = 0;
+  require(synthesize_constant(request).value == "100",
+          "positive sign plus target zero requires a newly synthesized nonzero carrier");
+  request.observations = {{Kind::Integer, "38"}};
+  request.address->target = 37;
+  require(!synthesize_constant(request).value, "numeric data and address must agree");
+  request.observations = {{Kind::Fraction, "0.25"}};
+  require(!synthesize_constant(request).value, "fractional write-back must not be ignored");
+  request.observations = {{Kind::Sign, "1"}};
+  for (const char* reg : {"0", "4", "f", "invalid"}) {
+    request.address->selector = reg;
+    require(synthesize_constant(request).status == ConstantSynthesisStatus::Unsupported,
+            "unsupported or mutating selector must fail closed");
+  }
+  request.address->selector = "e";
+  for (const auto model : {AddressSpaceModel::Standard, AddressSpaceModel::Mk61SMiniExpanded}) {
+    request.address->model = model;
+    for (int target = 0; target < 100; ++target) {
+      request.address->target = target;
+      const auto result = synthesize_constant(request);
+      require(result.value && constant_satisfies_observations(*result.value, request),
+              "every ordinary target must have a proved positive stable carrier");
+    }
+  }
+}
+
+void finite_tables() {
+  const auto lattice = synthesize_finite_constant_encodings(
+      {{"100", "200", "300", "400"}, {"1000", "2000", "3000", "4000"}});
+  const std::vector<std::string> compact{"1", "2", "3", "4"};
+  require(std::find(lattice.encodings.begin(), lattice.encodings.end(), compact) !=
+              lattice.encodings.end(), "lattice unit must be derived from all rows");
+  const auto packed = synthesize_finite_constant_encodings({{"3", "5"}, {"0.25", "0.75"}});
+  const std::vector<std::string> merged{"3.25", "5.75"};
+  require(std::find(packed.encodings.begin(), packed.encodings.end(), merged) !=
+              packed.encodings.end(), "independent projections must synthesize joint words");
+  require(synthesize_finite_constant_encodings({{"1"}, {"1", "2"}}).encodings.empty(),
+          "incomplete truth tables must not be synthesized");
+  const auto exhausted = synthesize_finite_constant_encodings(
+      {{"100", "200"}, {"1000", "2000"}}, {.maximum_work = 0});
+  require(exhausted.exhausted && exhausted.encodings.empty(),
+          "bounded enumeration must report exhaustion deterministically");
+  require(lattice.encodings == synthesize_finite_constant_encodings(
+      {{"100", "200", "300", "400"}, {"1000", "2000", "3000", "4000"}}).encodings,
+      "representation enumeration must be deterministic");
+
+  // Independent small-domain enumeration checks minimum keyboard cost, not
+  // only whether a constructed answer satisfies its own search predicate.
+  for (int whole = -4; whole <= 4; ++whole) {
+    for (int fraction = -3; fraction <= 3; ++fraction) {
+      ConstantSynthesisRequest request;
+      const std::string part = fraction < 0 ? "-0." + std::to_string(-fraction)
+                                           : "0." + std::to_string(fraction);
+      request.observations = {{Kind::Integer, std::to_string(whole)}, {Kind::Fraction, part}};
+      std::optional<std::string> best;
+      for (int tenth = -49; tenth <= 49; ++tenth) {
+        if (tenth / 10 != whole || tenth % 10 != fraction)
+          continue;
+        const int magnitude = tenth < 0 ? -tenth : tenth;
+        std::string value = (tenth < 0 ? "-" : "") + std::to_string(magnitude / 10);
+        if (magnitude % 10 != 0)
+          value += "." + std::to_string(magnitude % 10);
+        if (!best || value.size() < best->size() ||
+            (value.size() == best->size() && value < *best))
+          best = value;
+      }
+      require(synthesize_constant(request).value == best,
+              "projection synthesis disagrees with exhaustive decimal enumeration");
+    }
+  }
+}
+
+void append(std::vector<MachineItem>& items, std::initializer_list<int> codes) {
+  for (int code : codes)
+    items.push_back(MachineItem::op(code, "constant synthesis fixture"));
+}
+
+std::vector<MachineItem> fixture(bool unknown = false, bool last_x = false,
+                                 bool alias = false, bool bare_read = false) {
+  std::vector<MachineItem> items;
+  // Store enables automatic stack lift; recall does not certify it.
+  append(items, {0x4b});
+  for (int mode = 1; mode <= 8; ++mode) {
+    if (unknown && mode == 1)
+      append(items, {0x6b});
+    else
+      append(items, {mode, 0});
+    append(items, {0x53});
+    items.push_back(MachineItem::address("worker"));
+  }
+  append(items, {0x6b, 0x6c, 0x6d, 0x6e, 0x6b, 0x10, 0x50});
+  items.back().stop_disposition = StopDisposition::Terminal;
+  items.push_back(MachineItem::label("worker"));
+  append(items, {0x48, 0x68, 1, 0, 0x12, 0x49});
+  if (last_x)
+    append(items, {0x0f, 0x46});
+  if (bare_read)
+    append(items, {0x68, 0x46});
+  if (alias) {
+    append(items, {0xd7, 0x46});
+    items[items.size() - 2U].indirect_memory_targets = std::vector<int>{8};
+  }
+  append(items, {0x68, 1, 0, 0, 0x12, 0x4a, 0x52});
+  return items;
+}
+
+core::passes::PassResult optimize(const std::vector<MachineItem>& items) {
+  CompileOptions options;
+  options.defer_return_suffix_until_callee_hole = true;
+  return core::passes::finite_mode_representation(raise_machine_to_ir(items), {options});
+}
+
+std::size_t cells(const std::vector<MachineItem>& items) {
+  return static_cast<std::size_t>(std::count_if(items.begin(), items.end(), [](const auto& item) {
+    return item.kind != MachineItemKind::Label;
+  }));
+}
+
+std::vector<std::string> observe_program(const std::vector<MachineItem>& items) {
+  const auto resolved = resolve_machine_items(items);
+  require(resolved.diagnostics.empty(), "synthesized fixture must resolve");
+  std::vector<int> codes;
+  for (const auto& step : resolved.steps)
+    codes.push_back(step.opcode);
+  emulator::MK61 calc;
+  require(calc.load_program(codes).diagnostics.empty(), "synthesized fixture must fit MK-61");
+  for (const char* reg : {"0", "1", "2", "3", "4", "5", "6", "7", "9", "a", "b", "c", "d", "e"})
+    calc.set_register(reg, "7");
+  calc.press_sequence({"В/О", "С/П"});
+  require(calc.run_until_stable(6000, 8).stopped, "synthesized fixture must terminate");
+  std::vector<std::string> result{calc.display_text(true)};
+  // Observe entry state before diagnostic reads can change it.
+  calc.press(".");
+  result.push_back(calc.display_text(true));
+  for (const char* reg : {"X", "Y", "Z", "T", "X1", "0", "1", "2", "3", "4",
+                          "5", "6", "7", "9", "a", "b", "c", "d", "e"})
+    result.push_back(calc.read_register(reg));
+  return result;
+}
+
+void compiler_and_rom() {
+  const auto check = [](const std::vector<MachineItem>& original) {
+  const auto optimized = optimize(original);
+  require(optimized.applied == 1, "constraint-generated encoding must reach the compiler pass");
+  const auto output = lower_ir_to_machine(optimized.ops);
+  require(cells(output) + 6U == cells(original), "synthesis must save six cells");
+  require(std::any_of(optimized.optimizations.begin(), optimized.optimizations.end(),
+                      [](const auto& report) {
+                        return report.name == "finite-mode-constraint-synthesis";
+                      }), "explain must distinguish synthesized words from observed seeds");
+  require(build_post_layout_control_flow(output).proved, "synthesis must preserve final CFG");
+  require(observe_program(original) == observe_program(output),
+          "new constants must preserve ROM outputs, stack, X1, X2 and returns");
+  };
+  const auto original = fixture();
+  check(original);
+  auto nested = original;
+  for (auto& item : nested)
+    if (item.kind == MachineItemKind::Address &&
+        std::holds_alternative<std::string>(item.target) &&
+        std::get<std::string>(item.target) == "worker")
+      item.target = std::string{"wrapper"};
+  nested.push_back(MachineItem::label("wrapper"));
+  append(nested, {0x53});
+  nested.push_back(MachineItem::address("worker"));
+  append(nested, {0x52});
+  check(nested);
+
+  const auto branch_return = [&](bool open_path) {
+    auto items = original;
+    items.pop_back();
+    append(items, {0x57});
+    items.push_back(MachineItem::address("other_return"));
+    append(items, {0x4d, 0x51});
+    items.push_back(MachineItem::address("return_join"));
+    items.push_back(MachineItem::label("other_return"));
+    append(items, {open_path ? 2 : 0x4d});
+    items.push_back(MachineItem::label("return_join"));
+    append(items, {0x52});
+    return items;
+  };
+  check(branch_return(false));
+  auto open_entry = original;
+  open_entry.front() = MachineItem::op(0x6b, "unproved recall entry");
+  auto open_return = original;
+  open_return.insert(open_return.end() - 1, MachineItem::op(2, "returned open entry"));
+  for (const auto& bad : {fixture(true), fixture(false, true), fixture(false, false, true),
+                           fixture(false, false, false, true), open_entry, open_return,
+                           branch_return(true)}) {
+    const auto rejected = optimize(bad);
+    require(rejected.applied == 0, "unknown/observable/aliased representation must not change");
+  }
+  const auto flow = build_post_layout_control_flow(original);
+  const auto facts = analyze_post_layout_automatic_entry_lift(original, flow);
+  require(facts.has_value(), "exact return-context entry analysis must converge");
+  require(!analyze_post_layout_automatic_entry_lift(original, flow, 0),
+          "entry analysis must fail closed on work exhaustion");
+  auto unproved = flow;
+  unproved.proved = false;
+  require(!analyze_post_layout_automatic_entry_lift(original, unproved),
+          "entry analysis requires an authoritative execution graph");
+}
+
+} // namespace
+
+int main() {
+  try {
+    solver_contracts();
+    finite_tables();
+    compiler_and_rom();
+    std::cout << "constraint-synthesized constants: solver, compiler and ROM passed\n";
+    return 0;
+  } catch (const std::exception& error) {
+    std::cerr << error.what() << '\n';
+    return 1;
+  }
+}

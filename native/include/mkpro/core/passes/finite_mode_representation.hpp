@@ -5,8 +5,10 @@
 namespace mkpro::core::passes {
 
 // Select the stored representation of a finite, internal mode from its uses.
-// Every reaching definition must be an ordinary literal and every read must
-// apply the same supported projection. Calls are followed with their exact
+// Definitions may receive finite literal inputs through exact call/return
+// contexts. A shared encoding is selected jointly with separately synthesized
+// arithmetic consumer decoders and stable indirect-address constraints.
+// Unsupported or unprojected observations fail closed. Calls retain their exact
 // return contexts; aliases, external entries and hidden stack state are proof
 // obligations, not assumptions based on source names.
 PassResult finite_mode_representation(const std::vector<IrOp>& ops,

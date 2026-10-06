@@ -47,6 +47,14 @@ StackValueEqualityState xyz_preserving_selector_charge_state();
 // These entry-closing commands let the first decimal digit supply the lift.
 // A literal/Enter/manual-input predecessor is deliberately not such a proof.
 bool selector_charge_entry_closer_opcode(int opcode);
+// A fact for each exact execution context, immediately before its command.
+// Follow normal jumps and matched returns without inventing a fresh entry at
+// the caller. Every external entry and unsupported operation is unknown.
+// Mixed paths remain unproved; exhaustion returns no facts.
+std::optional<std::vector<bool>> analyze_post_layout_automatic_entry_lift(
+    const std::vector<MachineItem>& items,
+    const AuthoritativePostLayoutControlFlow& flow,
+    std::size_t maximum_work = 100000);
 bool selector_charge_has_automatic_entry_lift(const std::vector<IrOp>& ops,
                                              std::size_t entry,
                                              AddressSpaceModel model = AddressSpaceModel::Standard);
