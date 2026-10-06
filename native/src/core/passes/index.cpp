@@ -17,6 +17,8 @@
 #include "mkpro/core/passes/duplicate_failure_tail.hpp"
 #include "mkpro/core/passes/entry_stack_input_reuse.hpp"
 #include "mkpro/core/passes/flow_x_reuse.hpp"
+#include "mkpro/core/passes/finite_mode_representation.hpp"
+#include "mkpro/core/passes/helper_entry_store_factoring.hpp"
 #include "mkpro/core/passes/indirect_addressing.hpp"
 #include "mkpro/core/passes/indirect_selector_integer_part.hpp"
 #include "mkpro/core/passes/indirect_selector_seed_reuse.hpp"
@@ -256,6 +258,8 @@ RunOnIrResult run_passes_on_ir(std::vector<IrOp> initial, const CompileOptions& 
     // cell early can forfeit a later address/code coincidence, so the unchanged
     // ordinary-order candidate must continue to compete on final artifact size.
     static const std::vector<IrPass> cleanup = {
+      finite_mode_representation_pass(),
+      helper_entry_store_factoring_pass(),
         early_exact_stack_dead_store_elimination_pass(),
         store_recall_peephole_pass(),
         pre_shift_stack_lift_pass(),

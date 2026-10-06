@@ -78,6 +78,8 @@ add_library(mkpro_core STATIC
   src/core/passes/indirect_addressing.cpp
   src/core/passes/indirect_selector_integer_part.cpp
   src/core/passes/indirect_selector_seed_reuse.cpp
+  src/core/passes/finite_mode_representation.cpp
+  src/core/passes/helper_entry_store_factoring.cpp
   src/core/passes/index.cpp
   src/core/passes/jump_thread.cpp
   src/core/passes/jump_to_next.cpp
@@ -733,3 +735,17 @@ if(MKPRO_BUILD_TOOLS)
   target_link_libraries(mkpro_address_solver PRIVATE mkpro_core)
   target_include_directories(mkpro_address_solver PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 endif()
+
+add_executable(mkpro_finite_mode_representation_tests
+  tests/finite_mode_representation_test.cpp)
+target_link_libraries(mkpro_finite_mode_representation_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_finite_mode_representation_tests)
+add_test(NAME mkpro.finite_mode_representation_compiler_and_rom
+  COMMAND mkpro_finite_mode_representation_tests)
+
+add_executable(mkpro_helper_entry_store_factoring_tests
+  tests/helper_entry_store_factoring_test.cpp)
+target_link_libraries(mkpro_helper_entry_store_factoring_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_helper_entry_store_factoring_tests)
+add_test(NAME mkpro.helper_entry_store_factoring_compiler_and_rom
+  COMMAND mkpro_helper_entry_store_factoring_tests)
