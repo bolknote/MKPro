@@ -33,6 +33,7 @@ add_library(mkpro_core STATIC
   src/core/constant_folder.cpp
   src/core/constant_synthesis.cpp
   src/core/multirole_word_synthesis.cpp
+  src/core/raw_bcd_word.cpp
   src/core/joint_representation_search.cpp
   src/core/passes/semantic_region_folding.cpp
   src/core/cyclic_end_return.cpp
@@ -803,3 +804,8 @@ add_executable(mkpro_finite_mode_transition_tests tests/finite_mode_transition_t
 target_link_libraries(mkpro_finite_mode_transition_tests PRIVATE mkpro_debug)
 mkpro_configure_target(mkpro_finite_mode_transition_tests)
 add_test(NAME mkpro.finite_mode_transitions_compiler_and_rom COMMAND mkpro_finite_mode_transition_tests)
+
+add_executable(mkpro_raw_multirole_word_tests tests/raw_multirole_word_test.cpp)
+target_link_libraries(mkpro_raw_multirole_word_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_raw_multirole_word_tests)
+add_test(NAME mkpro.raw_multirole_word_compiler_and_rom COMMAND mkpro_raw_multirole_word_tests)

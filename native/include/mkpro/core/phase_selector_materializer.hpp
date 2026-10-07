@@ -139,4 +139,15 @@ PhaseSelectorMaterializerResult rewrite_phase_selector_materializer(
     const PackedDeltaFactorProof& factor, const PhaseSelectorRelocationProof& relocation,
     const PhaseSelectorMaterializerOptions& options = {});
 
+// Solve the seed from the required destination and factor phase instead of
+// requiring a hand-selected word. Environment claims must establish the same
+// CFG, lifetime and stack obligations as rewrite_phase_selector_materializer.
+// Each result's seed_preload_value MUST be delivered by the caller's setup;
+// program-side seed stores are rejected rather than silently left stale.
+// This chooses representation only; it does not waive the existing proof.
+std::vector<PhaseSelectorMaterializerResult> synthesize_phase_selector_materializers(
+    const std::vector<MachineItem>& items, const RawPhaseSelectorProof& environment,
+    const PackedDeltaFactorProof& factor, const PhaseSelectorRelocationProof& relocation,
+    int initial_factor = 1, const PhaseSelectorMaterializerOptions& options = {});
+
 } // namespace mkpro::core

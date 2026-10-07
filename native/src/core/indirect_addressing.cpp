@@ -2,6 +2,7 @@
 
 #include "mkpro/core/int128.hpp"
 #include "mkpro/core/opcodes.hpp"
+#include "mkpro/core/raw_bcd_word.hpp"
 
 #include <algorithm>
 #include <array>
@@ -156,6 +157,17 @@ bool contains_hex_alpha(std::string_view value) {
 
 std::optional<SelectorProjection> transform_selector_value(
     std::string_view value, IndirectSelectorMutation mutation) {
+  // A raw single-hex mantissa is not an ordinary decimal scientific literal.
+  // For stable selectors, orders -1..-3 retain all eight mantissa nibbles,
+  // including the sign and order, and address their low pair (00). Order -4
+  // shifts/sign-fills the word; do not claim preservation for that family.
+  if (const auto word = decode_raw_single_hex_word(value)) {
+    if (mutation != IndirectSelectorMutation::Stable || word->exponent < -3)
+      return std::nullopt;
+    const auto digit = static_cast<char>('a' + word->digit - 10);
+    return SelectorProjection{std::string(1, digit) + "0000000",
+                              trim_ascii(std::string(value)), true};
+  }
   const bool explicit_hex = lower_ascii(trim_ascii(std::string(value))).starts_with("0x");
   const std::string normalized = normalize_selector_value(value);
   // Scientific notation must be recognized before hexadecimal mantissa

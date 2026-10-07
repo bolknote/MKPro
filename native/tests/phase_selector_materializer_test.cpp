@@ -185,7 +185,8 @@ struct PhaseObservation {
   std::string selected_marker;
 };
 
-std::vector<PhaseObservation> run_two_phases(const std::vector<MachineItem>& items) {
+std::vector<PhaseObservation> run_two_phases(const std::vector<MachineItem>& items,
+                                           const std::string& seed = "ГE-2") {
   const ResolvedProgram resolved = resolve_machine_items(items, {});
   require(resolved.diagnostics.empty(), "phase selector fixture should resolve");
   std::vector<int> codes;
@@ -196,7 +197,7 @@ std::vector<PhaseObservation> run_two_phases(const std::vector<MachineItem>& ite
   const emulator::ProgramLoadResult loaded = calc.load_program(codes);
   require(loaded.diagnostics.empty(), "executable phase selector fixture should fit memory");
   calc.set_register("8", "1");
-  calc.set_register("b", "ГE-2");
+  calc.set_register("b", seed);
   calc.set_register("e", "0");
   calc.set_register("0", "0");
 
@@ -258,6 +259,36 @@ void phase_selector_materializer_requires_proved_raw_phase_and_factor() {
               expected_rewritten.verification.final_artifact_proved &&
               cell_count(expected_rewritten.items) == 120,
           "proved K-sign phase materializer should rewrite the expected artifact");
+
+  // A destination constraint, not a hard-coded seed, drives synthesis.
+  // Use different geometries to prevent a reference-program seed recognizer.
+  for (const int target : {65, 88, 98}) {
+    const auto input = materializer_fixture(target + 2, target - 1);
+    const auto placement = relocation_proof(input, derived.materialization);
+    auto environment = raw;
+    environment.initial_seed.clear();
+    environment.facts.clear();
+    const auto candidates = core::synthesize_phase_selector_materializers(
+        input, environment, derived, placement);
+    require(!candidates.empty(), "phase seed should be synthesized for target " + std::to_string(target));
+    for (const auto& candidate : candidates) {
+      const auto phases = run_two_phases(candidate.items, candidate.verification.seed_preload_value);
+      require(phases.size() == 2U && phases[0].stopped && phases[1].stopped &&
+                  phases[0].factor == "-1," && phases[1].factor == "1," &&
+                  phases[0].selected_marker == "4," && phases[1].selected_marker == "4,",
+              "synthesized word must preserve both ROM phases and selected destination");
+    }
+    environment.seed_preload_store_item_indices = {0};
+    require(core::synthesize_phase_selector_materializers(
+                input, environment, derived, placement).empty(),
+            "seed synthesis must not leave a program-side seed preload stale");
+    environment.seed_preload_store_item_indices.clear();
+    auto unsafe = placement;
+    unsafe.replacement_stack_effect_is_proved_compatible = false;
+    require(core::synthesize_phase_selector_materializers(
+                input, environment, derived, unsafe).empty(),
+            "seed synthesis must retain the materializer's hidden-state proof gate");
+  }
 
   // The packed factor is direct-only state, so R0 is valid even though it is
   // not a stable indirect selector register.

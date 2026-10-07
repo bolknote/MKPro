@@ -1,6 +1,7 @@
 #include "mkpro/core/phase_selector_materializer.hpp"
 
 #include "mkpro/core/indirect_addressing.hpp"
+#include "mkpro/core/multirole_word_synthesis.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/raw_bcd_unary_selector.hpp"
 
@@ -666,6 +667,56 @@ PhaseSelectorMaterializerResult rewrite_phase_selector_materializer(
   result.verification.final_artifact_proved = true;
   result.applied = 1;
   return result;
+}
+
+std::vector<PhaseSelectorMaterializerResult> synthesize_phase_selector_materializers(
+    const std::vector<MachineItem>& items, const RawPhaseSelectorProof& environment,
+    const PackedDeltaFactorProof& factor, const PhaseSelectorRelocationProof& relocation,
+    int initial_factor, const PhaseSelectorMaterializerOptions& options) {
+  std::vector<PhaseSelectorMaterializerResult> results;
+  if ((initial_factor != -1 && initial_factor != 1) ||
+      !environment.seed_preload_store_item_indices.empty() ||
+      environment.unary_operation != mk61_trig::Function::Tg)
+    return results;
+  const auto selector = normalized_register(environment.selector_register);
+  if (!selector)
+    return results;
+  RawWordSynthesisRequest request;
+  request.angle_mode = environment.angle_mode;
+  for (const int sign : {initial_factor, -initial_factor}) {
+    RawWordMode mode;
+    mode.sign = sign;
+    mode.control.push_back({RawWordControlView::DegreeTangent,
+                           {"phase-destination", *selector,
+                            {relocation.expected_output_target_address}, options.address_space_model},
+                           sign});
+    request.modes.push_back(std::move(mode));
+  }
+  request.transitions = {{0, 1, RawWordTransitionKind::Negate},
+                         {1, 0, RawWordTransitionKind::Negate}};
+  const auto seeds = synthesize_raw_multirole_words(request);
+  for (const auto& encoding : seeds.encodings) {
+    if (!certify_raw_multirole_words(encoding, request))
+      continue;
+    RawPhaseSelectorProof proof = environment;
+    proof.initial_seed = encoding.words[0];
+    proof.facts.clear();
+    for (std::size_t phase = 0; phase < 2U; ++phase) {
+      const auto next = 1U - phase;
+      const auto observed = evaluate_raw_bcd_unary_indirect_selector(
+          environment.angle_mode, environment.unary_operation, encoding.words[next],
+          *selector, options.address_space_model);
+      if (!observed) break;
+      proof.facts.push_back({encoding.words[phase], encoding.words[next], observed->raw_result,
+                             observed->actual_flow_target,
+                             phase == 0U ? -initial_factor : initial_factor});
+    }
+    auto candidate = rewrite_phase_selector_materializer(items, proof, factor, relocation, options);
+    if (candidate.applied > 0 && candidate.verification.proved &&
+        candidate.verification.final_artifact_proved)
+      results.push_back(std::move(candidate));
+  }
+  return results;
 }
 
 } // namespace mkpro::core
