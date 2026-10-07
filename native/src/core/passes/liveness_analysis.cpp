@@ -2,6 +2,7 @@
 
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/passes/cfg.hpp"
+#include "mkpro/core/post_layout_control_flow.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -122,16 +123,22 @@ void add_clique(RegisterInterferenceGraph& graph, const RegisterValueSet& regist
 // observe its OLD value. On that graph a conditional select can retain its
 // previous input, exposing a constant guard that rules out the remaining read.
 // No IR instruction, stack effect or condition is rewritten here.
-std::set<std::pair<std::string, std::string>> guarded_equal_entry_pairs(
+struct GuardedLifetimeProof {
+  std::set<std::pair<std::string, std::string>> disjoint_pairs;
+  std::set<GuardedDefinitionUseQuery> excluded_uses;
+};
+
+GuardedLifetimeProof guarded_register_lifetimes(
     const std::vector<IrOp>& ops, const std::vector<RegisterEffects>& effects,
     const std::vector<std::size_t>& instructions,
     const std::vector<std::vector<std::size_t>>& successors,
     const std::vector<std::vector<std::size_t>>& predecessors,
-    const std::vector<std::size_t>& roots, const LivenessOptions& options) {
+    const std::vector<std::size_t>& roots, const LivenessOptions& options,
+    const std::vector<GuardedDefinitionUseQuery>& queries = {}) {
   using Id = std::size_t;
   using Pair = std::pair<std::string, std::string>;
-  std::set<Pair> proved;
-  if (options.equal_entry_value_classes.size() < 2U || instructions.empty() ||
+  GuardedLifetimeProof proved;
+  if ((options.equal_entry_value_classes.size() < 2U && queries.empty()) || instructions.empty() ||
       std::any_of(effects.begin(), effects.end(), [](const RegisterEffects& effect) {
         return effect.uses_all_registers || effect.may_define_any_register;
       }))
@@ -147,6 +154,17 @@ std::set<std::pair<std::string, std::string>> guarded_equal_entry_pairs(
   std::vector<SelectWindow> windows;
   RegisterValueSet guards;
   const auto op_at = [&](Id id) -> const IrOp& { return ops.at(instructions.at(id)); };
+  const auto fallthrough_edge = [&](Id from, Id to) {
+    // The IR liveness graph includes labels; the authoritative physical graph
+    // skips them. Both describe the same fallthrough command.
+    for (Id site = instructions.at(from) + 1U; site < ops.size(); ++site) {
+      if (site == instructions.at(to))
+        return true;
+      if (ops.at(site).kind != IrKind::Label)
+        break;
+    }
+    return false;
+  };
   const auto unique_next = [&](Id id) -> std::optional<Id> {
     for (int labels = 0; labels < 16; ++labels) {
       if (successors.at(id).size() != 1U)
@@ -181,7 +199,7 @@ std::set<std::pair<std::string, std::string>> guarded_equal_entry_pairs(
       continue;
     const auto& edges = successors.at(*branch);
     const auto fallthrough = std::find_if(edges.begin(), edges.end(), [&](Id to) {
-      return instructions.at(to) == instructions.at(*branch) + 1U;
+      return fallthrough_edge(*branch, to);
     });
     if (fallthrough == edges.end())
       continue;
@@ -224,7 +242,7 @@ std::set<std::pair<std::string, std::string>> guarded_equal_entry_pairs(
         pairs.emplace_back(left->first, right->first);
     }
   }
-  if (pairs.empty())
+  if (pairs.empty() && queries.empty())
     return proved;
 
   enum class Entry { Unknown, Closed, Digits };
@@ -330,16 +348,17 @@ std::set<std::pair<std::string, std::string>> guarded_equal_entry_pairs(
       default: return true;
     }
     const bool has_fallthrough = std::any_of(successors.at(from).begin(), successors.at(from).end(),
-        [&](Id edge) { return instructions.at(edge) == instructions.at(from) + 1U; });
+        [&](Id edge) { return fallthrough_edge(from, edge); });
     return !has_fallthrough ||
-        ((instructions.at(to) == instructions.at(from) + 1U) == *predicate);
+        (fallthrough_edge(from, to) == *predicate);
   };
   using StateTable = std::vector<std::optional<Facts>>;
   using Seed = std::pair<Id, Facts>;
   std::size_t remaining_work = 400000U;
   bool exhausted = false;
   const auto propagate = [&](const std::vector<Seed>& seeds, const std::vector<bool>* relevant,
-                             const RegisterValueSet* payload, const std::set<Id>& retain)
+                             const RegisterValueSet* payload, const std::set<Id>& retain,
+                             std::optional<Id> observed_use = std::nullopt)
       -> std::optional<StateTable> {
     StateTable states(instructions.size());
     std::deque<Id> work;
@@ -384,7 +403,8 @@ std::set<std::pair<std::string, std::string>> guarded_equal_entry_pairs(
       const auto& effect = effects.at(instructions.at(id));
       if (payload != nullptr) {
         const std::string& name = *payload->begin();
-        if (effect.uses.contains(name)) {
+        if (effect.uses.contains(name) &&
+            (!observed_use.has_value() || instructions.at(id) == *observed_use)) {
           if (std::getenv("MKPRO_NATIVE_TRACE_GUARDED_LIFETIME_DETAILS") != nullptr) {
             std::cerr << "[guarded-register-lifetime] old read " << name << " at "
                       << instructions.at(id) << " facts:";
@@ -440,14 +460,18 @@ std::set<std::pair<std::string, std::string>> guarded_equal_entry_pairs(
     std::vector<bool> relevant;
     std::set<Id> retain;
   };
-  std::map<std::string, Slice> slices;
-  const auto get_slice = [&](const std::string& payload) -> const Slice& {
-    if (const auto found = slices.find(payload); found != slices.end())
+  using SliceKey = std::pair<std::string, std::optional<Id>>;
+  std::map<SliceKey, Slice> slices;
+  const auto get_slice = [&](const std::string& payload,
+                             std::optional<Id> observed_use = std::nullopt) -> const Slice& {
+    const SliceKey key{payload, observed_use};
+    if (const auto found = slices.find(key); found != slices.end())
       return found->second;
     Slice slice{std::vector<bool>(instructions.size(), false), {}};
     std::deque<Id> work;
     for (Id id = 0; id < instructions.size(); ++id)
-      if (effects.at(instructions.at(id)).uses.contains(payload)) {
+      if (effects.at(instructions.at(id)).uses.contains(payload) &&
+          (!observed_use.has_value() || instructions.at(id) == *observed_use)) {
         slice.relevant.at(id) = true;
         work.push_back(id);
       }
@@ -465,7 +489,7 @@ std::set<std::pair<std::string, std::string>> guarded_equal_entry_pairs(
       if (slice.relevant.at(window.branch) && !slice.relevant.at(window.zero) &&
           slice.relevant.at(window.nonzero))
         slice.retain.insert(window.store);
-    return slices.emplace(payload, std::move(slice)).first->second;
+    return slices.emplace(key, std::move(slice)).first->second;
   };
   const auto dead_after_other_writes = [&](const std::string& payload, const std::string& other) {
     const Slice& slice = get_slice(payload);
@@ -490,13 +514,40 @@ std::set<std::pair<std::string, std::string>> guarded_equal_entry_pairs(
       break;
     if (dead_after_other_writes(pair.first, pair.second) &&
         dead_after_other_writes(pair.second, pair.first))
-      proved.insert(pair);
+      proved.disjoint_pairs.insert(pair);
+  }
+  for (const GuardedDefinitionUseQuery& query : queries) {
+    if (exhausted)
+      break;
+    if (query.definition >= ops.size() || query.use >= ops.size() ||
+        query.register_name.empty() ||
+        !effects.at(query.definition).must_defs.contains(query.register_name) ||
+        !effects.at(query.use).uses.contains(query.register_name) ||
+        ops.at(query.definition).meta.manual_interaction.has_value() ||
+        ops.at(query.use).meta.manual_interaction.has_value())
+      continue;
+    const Slice& slice = get_slice(query.register_name, query.use);
+    std::vector<Seed> starts;
+    for (Id id = 0; id < instructions.size(); ++id) {
+      if (instructions.at(id) != query.definition || !global->at(id).has_value())
+        continue;
+      const Facts after = transfer(*global->at(id), id, false);
+      for (const Id to : successors.at(id))
+        if (permits(id, to, *global->at(id)))
+          starts.emplace_back(to, after);
+    }
+    const RegisterValueSet payload{query.register_name};
+    if (!starts.empty() &&
+        propagate(starts, &slice.relevant, &payload, slice.retain, query.use).has_value())
+      proved.excluded_uses.insert(query);
   }
   if (std::getenv("MKPRO_NATIVE_TRACE_GUARDED_LIFETIMES") != nullptr) {
     std::cerr << "[guarded-register-lifetime] states=" << instructions.size()
               << " select-windows=" << windows.size() << " pairs=" << pairs.size()
-              << " proved=" << proved.size() << " exhausted=" << exhausted << '\n';
-    for (const auto& [left, right] : proved)
+              << " proved=" << proved.disjoint_pairs.size()
+              << " excluded-uses=" << proved.excluded_uses.size()
+              << " exhausted=" << exhausted << '\n';
+    for (const auto& [left, right] : proved.disjoint_pairs)
       std::cerr << "[guarded-register-lifetime] disjoint " << left << " / " << right << '\n';
   }
   return proved;
@@ -703,8 +754,8 @@ std::optional<LivenessInfo> matched_call_liveness(const std::vector<IrOp>& ops,
   instructions.reserve(states.size());
   for (const ExecutionState& state : states)
     instructions.push_back(state.instruction);
-  result.guarded_disjoint_pairs = guarded_equal_entry_pairs(
-      ops, effects, instructions, successors, predecessors, root_states, options);
+  result.guarded_disjoint_pairs = guarded_register_lifetimes(
+      ops, effects, instructions, successors, predecessors, root_states, options).disjoint_pairs;
   result.call_context_lifetimes.reserve(states.size());
   for (std::size_t id = 0; id < states.size(); ++id) {
     const std::size_t instruction = states.at(id).instruction;
@@ -720,6 +771,58 @@ std::optional<LivenessInfo> matched_call_liveness(const std::vector<IrOp>& ops,
 }
 
 } // namespace
+
+std::set<GuardedDefinitionUseQuery> prove_unreachable_definition_uses(
+    const std::vector<IrOp>& ops, const core::AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<GuardedDefinitionUseQuery>& queries, LivenessOptions options) {
+  if (queries.empty() || queries.size() > 64U || !flow.proved ||
+      flow.execution_states.empty() ||
+      flow.execution_states.size() != flow.execution_successors.size())
+    return {};
+  std::vector<RegisterEffects> effects;
+  std::map<int, std::size_t> instruction_at;
+  int address = 0;
+  for (std::size_t i = 0; i < ops.size(); ++i) {
+    if (ops[i].meta.raw || ops[i].meta.logical_register_analysis)
+      return {};
+    if (ops[i].kind != IrKind::Label)
+      instruction_at.emplace(address, i);
+    address += cells_per_op(ops[i]);
+    effects.push_back(register_effects(ops[i]));
+  }
+  std::vector<std::size_t> instructions;
+  std::vector<std::vector<std::size_t>> predecessors(flow.execution_states.size());
+  std::vector<std::size_t> roots{0};
+  for (std::size_t id = 0; id < flow.execution_states.size(); ++id) {
+    const auto& state = flow.execution_states[id];
+    const auto found = instruction_at.find(state.address);
+    if (found == instruction_at.end())
+      return {};
+    instructions.push_back(found->second);
+    for (const auto next : flow.execution_successors[id]) {
+      if (next >= predecessors.size())
+        return {};
+      predecessors[next].push_back(id);
+    }
+    // Include every externally admissible return context. Resumed/manual
+    // entries have only invariant setup facts, never a presumed old X value.
+    for (const auto& entry : flow.external_entries) {
+      if (entry.entry.address != state.address ||
+          entry.return_stack.size() != state.return_stack.size())
+        continue;
+      bool same = true;
+      for (std::size_t frame = 0; frame < state.return_stack.size(); ++frame)
+        same = same && entry.return_stack[frame].address == state.return_stack[frame];
+      if (same && id != 0U) {
+        roots.push_back(id);
+        break;
+      }
+    }
+  }
+  options.closed_program_entry = false;
+  return guarded_register_lifetimes(ops, effects, instructions, flow.execution_successors,
+      predecessors, roots, options, queries).excluded_uses;
+}
 
 RegisterEffects register_effects(const IrOp& op) {
   switch (op.kind) {

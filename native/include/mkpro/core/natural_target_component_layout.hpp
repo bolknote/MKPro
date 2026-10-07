@@ -74,6 +74,10 @@ struct NaturalTargetComponentLayoutOptions {
   std::vector<std::string> required_bounded_target_labels;
   int maximum_bounded_target_address = 99;
   bool allow_size_neutral_bounded_layout = false;
+  // Atomic clients can temporarily widen runtime-charge placement while
+  // stable preloaded companions still require their own decimal domain.
+  // Derive those independent bounds from the existing relocation proof.
+  bool constrain_rebindable_selector_targets = false;
   // Run the separately bounded late-runtime-selector search after the best
   // ordinary geometry has been selected.  Callers enable this only for the
   // final publishable layout, never while evaluating speculative descendants.

@@ -3,6 +3,8 @@
 #include "mkpro/core/passes/helpers.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
 
+namespace mkpro::core { struct NaturalTargetComponentLayoutOptions; }
+
 namespace mkpro::core::passes {
 
 // Move a caller's literal behind a shared selector store instead of restoring
@@ -22,6 +24,7 @@ bool prove_selector_charge_sunk_literal_entry(
 
 struct SelectorChargeLiteralLayoutResult {
   std::vector<MachineItem> items;
+  std::vector<PreloadReport> preloads;
   AuthoritativePostLayoutControlFlow final_control_flow;
   std::vector<AppliedOptimization> optimizations;
   int applied = 0;
@@ -36,5 +39,28 @@ struct SelectorChargeLiteralLayoutResult {
 SelectorChargeLiteralLayoutResult optimize_post_layout_selector_charge_literal_sinking(
     const std::vector<MachineItem>& items,
     const PostLayoutControlFlowOptions& options = {});
+
+// Joint data/control materialization: place the literal-consuming leaf at
+// the literal's value, then reuse its selector as the data input. Other
+// modes must independently discard that input. Compare only final layouts.
+SelectorChargeLiteralLayoutResult optimize_selector_data_literal_coalescing(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control,
+    const NaturalTargetComponentLayoutOptions& layout_options);
+
+struct SelectorDataLiteralLayoutFrontier {
+  std::vector<SelectorChargeLiteralLayoutResult> alternatives;
+  std::vector<std::string> reasons;
+};
+
+// Keep independently proved alternatives, including neutral or bounded-debt
+// transactions which release a conflicting immutable flow selector.
+// Only the caller's complete downstream result may replace the incumbent.
+SelectorDataLiteralLayoutFrontier selector_data_literal_layout_frontier(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control,
+    const NaturalTargetComponentLayoutOptions& layout_options);
 
 } // namespace mkpro::core::passes

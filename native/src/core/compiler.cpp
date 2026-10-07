@@ -25,6 +25,9 @@
 #include "mkpro/core/indirect_read_observability.hpp"
 #include "mkpro/core/selector_writeback.hpp"
 #include "mkpro/core/search_frontier.hpp"
+#include "mkpro/core/layout_search_artifact.hpp"
+#include "mkpro/core/joint_representation_search.hpp"
+#include "mkpro/core/hardware_allocation_opportunities.hpp"
 #include "mkpro/core/interprocedural_dse.hpp"
 #include "mkpro/core/interprocedural_value_propagation.hpp"
 #include "mkpro/core/late_bound_decimal_selector.hpp"
@@ -46879,6 +46882,11 @@ solve_logical_register_allocation(const LoweringContext& context, const V2Progra
   // rejecting by owner count, but keep this formerly rejected case bounded.
   const bool many_entry_owners =
       model.preload_owners.size() > static_cast<std::size_t>(color_count);
+  const auto fixed_colors = core::merge_logical_register_pins(
+      model.fixed_colors, context.forced_logical_register_indices,
+      model.logical_names, color_count);
+  if (!fixed_colors.has_value())
+    return std::nullopt;
   std::map<std::string, std::set<int>> allowed_colors;
   if (preserve_instruction_classes) {
     const auto domains = core::passes::logical_register_instruction_class_domains(
@@ -46893,7 +46901,7 @@ solve_logical_register_allocation(const LoweringContext& context, const V2Progra
       core::passes::color_precolored_register_graph(
           model.graph, core::passes::PrecoloredRegisterAllocationOptions{
                            .color_count = color_count,
-                           .fixed_colors = model.fixed_colors,
+                           .fixed_colors = *fixed_colors,
                            .preferred_colors = compact ? std::map<std::string, int>{}
                                                        : model.preferred_colors,
                            .greedy_only = compact || preserve_instruction_classes || many_entry_owners,
@@ -53480,9 +53488,13 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
                                   bool source_has_entered,
                                   bool apply_final_layout_size_rescue = false,
                                   bool apply_atomic_absolute_dark_rescue = false,
-                                  std::string* final_layout_input_fingerprint = nullptr) {
+                                  std::string* final_layout_input_fingerprint = nullptr,
+                                  std::vector<core::HardwareAllocationOpportunity>*
+                                      hardware_opportunities = nullptr) {
   if (final_layout_input_fingerprint != nullptr)
     final_layout_input_fingerprint->clear();
+  if (hardware_opportunities != nullptr)
+    hardware_opportunities->clear();
   CompileOptions options = requested_options;
   CompileResult result;
   result.implemented = true;
@@ -53974,6 +53986,9 @@ CompileResult compile_source_once(std::string source, const CompileOptions& requ
 
   if (!has_errors(context.diagnostics) && ast.v2.has_value() &&
       options.collect_logical_register_allocation) {
+    if (hardware_opportunities != nullptr)
+      *hardware_opportunities = core::hardware_allocation_opportunities(
+          context.emitter.items, planned_preloaded_constant_registers(context));
     std::size_t instruction_class_values = 0;
     const std::optional<std::vector<LogicalRegisterAssignment>> assignment =
         solve_logical_register_allocation(context, *ast.v2, context.emitter.items,
@@ -63546,12 +63561,13 @@ SizeAttributionReport build_size_attribution_report(
   // call per possible leaf. Keep its may-call relation separate: treating one
   // arbitrary target as certain would invent a callee stack-preservation proof.
   std::map<std::size_t, std::set<std::string>> possible_callees_by_index;
+  std::map<std::size_t, std::set<int>> possible_callee_targets_by_index;
   const auto add_called_region = [&](int target, const std::string& label) {
     if (!index_by_address.contains(target) || label.empty())
       return;
     CalledRegion& region = called_regions[target];
     region.target = target;
-    if (region.label.empty())
+    if (region.label.empty() || label < region.label)
       region.label = label;
     ++region.calls;
   };
@@ -63588,7 +63604,7 @@ SizeAttributionReport build_size_attribution_report(
             }
           }
           add_called_region(target, leaf_label);
-          possible_callees_by_index[index].insert(called_regions.at(target).label);
+          possible_callee_targets_by_index[index].insert(target);
         }
         continue;
       }
@@ -63624,6 +63640,20 @@ SizeAttributionReport build_size_attribution_report(
       }
     }
   }
+
+  // A wrapper, ordinary call and tail transfer can name the same entry
+  // differently. Physical layout must not decide which alias owns its body:
+  // canonicalize every use only after collecting all aliases of each target.
+  // Otherwise the body and its persistent input stores disappear from the
+  // report under whichever call-site name happened to be encountered second.
+  for (CallSite& site : call_sites) {
+    if (const auto region = called_regions.find(site.target);
+        region != called_regions.end())
+      site.label = region->second.label;
+  }
+  for (const auto& [index, targets] : possible_callee_targets_by_index)
+    for (const int target : targets)
+      possible_callees_by_index[index].insert(called_regions.at(target).label);
 
   std::vector<bool> covered(steps.size(), false);
   std::vector<SizeReportAccumulator> entries;
@@ -74599,6 +74629,10 @@ select_absolute_dark_layout_for_final_artifact(const CompileResult& selected,
     // Re-run the source-agnostic two-plus-one helper transaction on the final
     // artifact.  Earlier candidates can lose to later DSE and relayout even
     // though the same dual-mode composition wins after those erasures.
+    if (core::machine_cell_count(active_items) < static_cast<int>(selected.steps.size()) &&
+        (!best || core::machine_cell_count(active_items) < core::machine_cell_count(best->items)))
+      best = SelectedAbsoluteDarkLayout{.items = active_items, .preloads = active_preloads,
+                                        .optimizations = prefix_optimizations};
     for (int exchange_round = 0; exchange_round < 8; ++exchange_round) {
       const core::SharedHelperDualModeSelectorExchangeResult call_exchange =
           core::exchange_profitable_direct_indirect_call_families(
@@ -75148,12 +75182,26 @@ std::optional<CompileResult>
 apply_absolute_dark_layout_to_selected_result(const std::string& source,
                                                const CompileResult& selected,
                                                const CompileOptions& options) {
+  using LayoutArtifact = core::LayoutSearchArtifact;
+  using LayoutEdge = core::ProvedSearchTransition<LayoutArtifact>;
+  const auto artifact = [](const CompileResult& value) {
+    return LayoutArtifact{value.items, value.preloads, value.optimizations};
+  };
+  std::vector<LayoutEdge> composition_seeds;
+  std::vector<LayoutArtifact> already_expanded;
+  const auto remember = [&](const CompileResult& value, const char* rule) {
+    composition_seeds.push_back({artifact(value), rule, true});
+  };
   std::optional<CompileResult> best =
       apply_absolute_dark_layout_once(source, selected, options);
+  if (best)
+    remember(*best, "final-layout");
   auto seeds = underflow_selector_split_layout_seeds(selected, options);
   for (const CompileResult& seed : seeds) {
     const std::optional<CompileResult> candidate =
         apply_absolute_dark_layout_once(source, seed, options);
+    if (candidate)
+      remember(*candidate, "final-layout");
     if (candidate.has_value() &&
         (!best.has_value() || candidate_beats_best(*candidate, *best, options))) {
       best = *candidate;
@@ -75162,6 +75210,7 @@ apply_absolute_dark_layout_to_selected_result(const std::string& source,
   {
     seeds.insert(seeds.begin(), selected);
     for (const CompileResult& seed : seeds) {
+      already_expanded.push_back(artifact(seed));
       const auto model = address_space_model_for_options(options);
       const auto normalized = core::normalize_natural_target_overflow_formals(seed.items, model);
       if (!normalized.has_value())
@@ -75183,6 +75232,22 @@ apply_absolute_dark_layout_to_selected_result(const std::string& source,
       layout_options.required_bounded_target_labels.assign(bounded->begin(), bounded->end());
       layout_options.maximum_bounded_target_address = 99;
       layout_options.allow_size_neutral_bounded_layout = true;
+      const auto literal_frontier = core::passes::selector_data_literal_layout_frontier(
+          *normalized, seed.preloads, control, layout_options);
+      for (const auto& transaction : literal_frontier.alternatives) {
+        CompileResult alternative = seed;
+        alternative.items = transaction.items;
+        alternative.preloads = transaction.preloads;
+        for (const auto& optimization : transaction.optimizations)
+          alternative.optimizations.push_back({.name = optimization.name,
+                                               .detail = optimization.detail});
+        remember(alternative, "selector-data-literal");
+        const auto candidate = apply_absolute_dark_layout_once(
+            source, alternative, options, /*allow_proved_prefix_repayment=*/true);
+        if (candidate && candidate->steps.size() < selected.steps.size() &&
+            (!best || candidate_beats_best(*candidate, *best, options)))
+          best = *candidate;
+      }
       for (const auto& reassigned : core::reassign_stable_indirect_selector_families(
                *normalized, seed.preloads, control, layout_options)) {
         const auto rebound = core::rebind_late_bound_decimal_selectors(
@@ -75195,6 +75260,7 @@ apply_absolute_dark_layout_to_selected_result(const std::string& source,
         for (const auto& optimization : reassigned.optimizations)
           alternative.optimizations.push_back({.name = optimization.name,
                                                  .detail = optimization.detail});
+        remember(alternative, "selector-reassignment");
         const auto candidate = apply_absolute_dark_layout_once(
             source, alternative, options, /*allow_proved_prefix_repayment=*/true);
         if (candidate.has_value() && candidate->steps.size() < selected.steps.size() &&
@@ -75203,6 +75269,115 @@ apply_absolute_dark_layout_to_selected_result(const std::string& source,
       }
     }
   }
+  // The ordinary first generation above remains an independent incumbent.
+  // Its enabling alternatives now feed back through *all* layout families,
+  // rather than only through the dark-layout suffix of the pipeline.
+  const auto model = address_space_model_for_options(options);
+  const auto expand = [&](const LayoutArtifact& parent) {
+    std::vector<LayoutEdge> children;
+    const auto normalized = core::normalize_natural_target_overflow_formals(parent.items, model);
+    if (!normalized)
+      return children;
+    core::PostLayoutControlFlowOptions flow_options;
+    flow_options.address_space_model = model;
+    flow_options.empty_return_target = 1;
+    const auto control = core::build_post_layout_control_flow(*normalized, flow_options);
+    if (!control.proved)
+      return children;
+    const auto bounded = core::late_bound_decimal_selector_target_labels(*normalized);
+    if (!bounded)
+      return children;
+    core::NaturalTargetComponentLayoutOptions layout_options;
+    layout_options.address_space_model = model;
+    layout_options.maximum_subset_states = 512;
+    layout_options.maximum_anchor_combinations = 32;
+    layout_options.maximum_anchors = options.maximum_natural_target_anchors;
+    layout_options.required_bounded_target_labels.assign(bounded->begin(), bounded->end());
+    layout_options.maximum_bounded_target_address = 99;
+    layout_options.allow_size_neutral_bounded_layout = true;
+    const auto append = [&](const auto& transaction, const char* rule) {
+      LayoutArtifact child{transaction.items, transaction.preloads, parent.optimizations};
+      for (const auto& optimization : transaction.optimizations)
+        child.optimizations.push_back({.name = optimization.name, .detail = optimization.detail});
+      children.push_back({std::move(child), rule, true});
+    };
+    const auto literal = core::passes::selector_data_literal_layout_frontier(
+        *normalized, parent.preloads, control, layout_options);
+    for (const auto& transaction : literal.alternatives)
+      if (transaction.final_control_flow.proved)
+        append(transaction, "selector-data-literal");
+    for (const auto& transaction : core::reassign_stable_indirect_selector_families(
+             *normalized, parent.preloads, control, layout_options)) {
+      const auto rebound = core::rebind_late_bound_decimal_selectors(
+          transaction.items, {.minimum_target_address = 0, .maximum_target_address = 99});
+      if (!rebound.diagnostics.empty())
+        continue;
+      append(transaction, "selector-reassignment");
+      children.back().node.items = rebound.items;
+    }
+    // Geometry may be an enabling step without a locally profitable selector
+    // exchange. Keep this independently proved order, instead of making it
+    // overwrite either of the semantic alternatives above.
+    layout_options.allow_size_neutral_flow_rebind = true;
+    layout_options.allow_standalone_fallthrough_jump_fold = true;
+    const auto placed = core::optimize_natural_target_component_layout(
+        *normalized, parent.preloads, control, layout_options);
+    if (placed.applied > 0 && placed.plan.proved && placed.plan.final_artifact_proved &&
+        placed.plan.final_control_flow.proved) {
+      auto child = core::rebind_layout_search_artifact(
+          LayoutArtifact{placed.items, placed.preloads, parent.optimizations});
+      if (child) {
+        child->optimizations.push_back({.name = "joint-neutral-component-layout",
+            .detail = "Retained a proof-valid component order for subsequent selector and data reuse."});
+        children.push_back({std::move(*child), "component-layout", true});
+      }
+    }
+    return children;
+  };
+  const auto finalize = [&](const LayoutArtifact& parent,
+                            const std::vector<std::string>& path) -> std::optional<LayoutArtifact> {
+    CompileResult alternative = selected;
+    alternative.items = parent.items;
+    alternative.preloads = parent.preloads;
+    alternative.optimizations = parent.optimizations;
+    auto candidate = apply_absolute_dark_layout_once(
+        source, alternative, options, /*allow_proved_prefix_repayment=*/true);
+    if (!candidate || candidate->steps.size() >= selected.steps.size() ||
+        (candidate_needs_static_proof_gate(options) &&
+         optimizer_static_gate_rejection_reason(options, *candidate).has_value()))
+      return std::nullopt;
+    std::string chain;
+    for (const auto& rule : path) {
+      if (!chain.empty()) chain += " -> ";
+      chain += rule;
+    }
+    candidate->optimizations.push_back({.name = "joint-layout-transaction-search",
+        .detail = "Composed equivalence-proved transactions (" + chain +
+                  ") and accepted only the complete smaller artifact: " +
+                  std::to_string(selected.steps.size()) + " -> " +
+                  std::to_string(candidate->steps.size()) + " cells."});
+    if (!best || candidate_beats_best(*candidate, *best, options))
+      best = *candidate;
+    return artifact(*candidate);
+  };
+  const auto search = core::search_proved_transactions(
+      std::move(composition_seeds), already_expanded,
+      core::machine_cell_count(selected.items), core::TransactionSearchLimits{},
+      [](const LayoutArtifact& value) { return core::machine_cell_count(value.items); },
+      core::same_layout_search_artifact,
+      [&](const LayoutArtifact& node) {
+        auto transitions = expand(node);
+        auto semantic = core::expand_joint_representation_transactions(node, options);
+        transitions.insert(transitions.end(), std::make_move_iterator(semantic.begin()),
+                           std::make_move_iterator(semantic.end()));
+        return transitions;
+      }, finalize);
+  if (std::getenv("MKPRO_NATIVE_TRACE_JOINT_LAYOUT_SEARCH"))
+    std::cerr << "[joint-layout-search] expanded=" << search.expanded
+              << " admitted=" << search.admitted << " duplicate=" << search.duplicate
+              << " rejected=" << search.rejected << " bounded=" << search.budget_exhausted
+              << " input=" << selected.steps.size()
+              << " best=" << (best ? best->steps.size() : selected.steps.size()) << '\n';
   return best;
 }
 
@@ -79976,18 +80151,23 @@ CompileResult compile_source_for_optimizer_profile(
         std::vector<std::string> entries;
         if ((mask & 1U) != 0) {
           abi_options.stack_argument_helper_entries = true;
-          abi_options.single_x_expression_helper_entries = true;
-          entries.push_back("one-X expression entry");
+          abi_options.single_x_expression_helper_entries =
+              !explore_abi_subsets || !abi_base_options.single_x_expression_helper_entries;
+          entries.push_back(abi_options.single_x_expression_helper_entries
+                                ? "one-X expression entry" : "ordinary expression entry");
         }
         if ((mask & 2U) != 0) {
           abi_options.x_param_value_functions = true;
-          abi_options.sign_normalized_x_param = true;
-          entries.push_back("sign-normalized parameter");
+          abi_options.sign_normalized_x_param = !abi_base_options.sign_normalized_x_param;
+          entries.push_back(abi_options.sign_normalized_x_param
+                                ? "sign-normalized parameter" : "ordinary X parameter");
         }
         if ((mask & 4U) != 0) {
           abi_options.x_param_value_functions = true;
-          abi_options.x_param_y_stack_stored_entry = true;
-          entries.push_back("stored X/Y parameter entry");
+          abi_options.x_param_y_stack_stored_entry =
+              !abi_base_options.x_param_y_stack_stored_entry;
+          entries.push_back(abi_options.x_param_y_stack_stored_entry
+                                ? "stored X/Y parameter entry" : "ordinary parameter entry");
         }
         if ((mask & 8U) != 0) {
           abi_options.preloaded_indexed_update_prefix =
@@ -80477,6 +80657,140 @@ CompileResult compile_source_for_optimizer_profile(
                       << error.what() << '\n';
         }
       }
+    }
+  }
+
+  // Instruction selection can require a different physical home, rather than
+  // merely benefit from fewer colors. Discover requests in the logical trace,
+  // color the complete graph with one additional hardware constraint, then
+  // regenerate and finalize the *combined* allocation/rematerialization/layout
+  // candidate. Neither a successful coloring nor a locally cheaper sequence
+  // may replace the unchanged incumbent on its own.
+  if (best.implemented && allow_aggressive_post_layout &&
+      best.steps.size() > static_cast<std::size_t>(official_program_step_limit(
+          address_space_model_for_options(options))) &&
+      std::any_of(best.preloads.begin(), best.preloads.end(),
+                  [](const PreloadReport& preload) { return preload.value == "-99999999"; })) {
+    const CompileOptions hardware_base = best_options;
+    CompileOptions probe_options = hardware_base;
+    probe_options.analysis = true;
+    probe_options.collect_coalesce_shares = false;
+    probe_options.collect_logical_register_allocation = true;
+    probe_options.compact_logical_register_allocation = false;
+    probe_options.preserve_logical_register_instruction_classes = true;
+    probe_options.forced_register_shares.clear();
+    probe_options.forced_logical_register_assignments.clear();
+    std::vector<core::HardwareAllocationOpportunity> opportunities;
+    (void)compile_source_once(source, probe_options, source_has_entered,
+                             false, false, nullptr, &opportunities);
+    std::set<std::string> tried_assignments;
+    for (const auto& opportunity : opportunities) {
+      try {
+        probe_options.forced_logical_register_assignments = {{
+            .name = opportunity.logical_name,
+            .register_name = core::register_name_for_index(opportunity.register_index),
+        }};
+        const CompileResult allocation = compile_source_once(
+            source, probe_options, source_has_entered, false, false);
+        if (!allocation.implemented || allocation.logical_register_assignments.empty())
+          continue;
+        std::string assignment_key;
+        for (const auto& assignment : allocation.logical_register_assignments)
+          assignment_key += assignment.name + "=" + assignment.register_name +
+                            (assignment.preload_owner ? ":entry;" : ";");
+        if (!tried_assignments.insert(assignment_key).second)
+          continue;
+        CompileOptions candidate_options = hardware_base;
+        candidate_options.collect_coalesce_shares = false;
+        candidate_options.collect_logical_register_allocation = false;
+        candidate_options.forced_register_shares.clear();
+        candidate_options.forced_logical_register_assignments =
+            allocation.logical_register_assignments;
+        candidate_options.zero_underflow_constant_rematerialization = true;
+        CompileOptions compile_options = candidate_options;
+        compile_options.analysis = true;
+        CompileResult candidate = compile_source_once(
+            source, compile_options, source_has_entered, true);
+        if (!candidate.implemented || !has_optimization_named(
+                candidate.optimizations, opportunity.rule))
+          continue;
+        if (!optimizer_static_gate_rejection_reason(compile_options, candidate).has_value())
+          candidate = apply_finalization_fixed_point_to_selected_result(
+              source, std::move(candidate), compile_options, options);
+        const auto rejection = optimizer_static_gate_rejection_reason(compile_options, candidate);
+        if (trace_candidates)
+          std::cerr << "[candidate-trace] hardware-allocation " << opportunity.rule
+                    << " R" << opportunity.register_index << " cells=" << candidate.steps.size()
+                    << " incumbent=" << best.steps.size()
+                    << " rejection=" << rejection.value_or("none") << '\n';
+        if (!candidate.implemented || rejection.has_value() ||
+            !candidate_beats_best(candidate, best, options))
+          continue;
+        candidate.optimizations.push_back(OptimizationReport{
+            .name = "hardware-allocation-layout-cooptimization",
+            .detail = "Recolored logical lifetimes for a proved hardware rematerialization, "
+                      "regenerated source/setup and solved the released data/selector geometry "
+                      "as one final-artifact candidate: " + std::to_string(best.steps.size()) +
+                      " -> " + std::to_string(candidate.steps.size()) + " cells.",
+        });
+        best_options = std::move(candidate_options);
+        best = std::move(candidate);
+      } catch (const std::exception& error) {
+        if (trace_candidates)
+          std::cerr << "[candidate-trace] hardware-allocation exception: " << error.what() << '\n';
+      }
+    }
+  }
+
+  // Allocation and constant rematerialization can change which helper entry
+  // exposes a useful code window. Revisit the ordinary register ABI as one
+  // complete alternative, not a local instruction-count rollback. This is
+  // deliberately outside the earlier ABI sweep: its physical homes and
+  // immutable-selector constraints did not exist there yet.
+  if (best.implemented && allow_aggressive_post_layout &&
+      !options.disable_interprocedural_opts &&
+      best.steps.size() > static_cast<std::size_t>(official_program_step_limit(
+          address_space_model_for_options(options))) &&
+      best_options.single_x_expression_helper_entries) {
+    try {
+      CompileOptions ordinary_options = best_options;
+      ordinary_options.single_x_expression_helper_entries = false;
+      ordinary_options.stack_argument_helper_entries = false;
+      CompileResult candidate = compile_source_once(
+          source, ordinary_options, source_has_entered, true);
+      if (!candidate.implemented &&
+          can_retry_lowering_attempt_in_analysis(candidate, ordinary_options)) {
+        ordinary_options.analysis = true;
+        candidate = compile_source_once(
+            source, ordinary_options, source_has_entered, true);
+      }
+      if (candidate.implemented &&
+          !optimizer_static_gate_rejection_reason(ordinary_options, candidate)) {
+        candidate = apply_finalization_fixed_point_to_selected_result(
+            source, std::move(candidate), ordinary_options, options);
+      }
+      const auto rejection =
+          optimizer_static_gate_rejection_reason(ordinary_options, candidate);
+      if (trace_candidates)
+        std::cerr << "[candidate-trace] ordinary-entry-layout cells="
+                  << candidate.steps.size() << " incumbent=" << best.steps.size()
+                  << " rejection=" << rejection.value_or("none") << '\n';
+      if (candidate.implemented && !rejection &&
+          candidate_beats_best(candidate, best, options)) {
+        candidate.optimizations.push_back({
+            .name = "call-entry-layout-cooptimization",
+            .detail = "Reconsidered the ordinary register entry after physical "
+                      "allocation and selector rebinding; accepted the complete "
+                      "proof-valid artifact: " + std::to_string(best.steps.size()) +
+                      " -> " + std::to_string(candidate.steps.size()) + " cells.",
+        });
+        best_options = std::move(ordinary_options);
+        best = std::move(candidate);
+      }
+    } catch (const std::exception& error) {
+      if (trace_candidates)
+        std::cerr << "[candidate-trace] ordinary-entry-layout exception: "
+                  << error.what() << '\n';
     }
   }
 

@@ -2,6 +2,8 @@
 
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
 #include "mkpro/core/constant_synthesis.hpp"
+#include "mkpro/core/multirole_word_synthesis.hpp"
+#include "mkpro/core/passes/semantic_region_folding.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
@@ -278,6 +280,9 @@ struct Macro {
   bool input_store = false;
   std::vector<int> replacement_projection;
   bool replacement_binary = false;
+  // A complete read/transform/write of the encoded carrier. The transition
+  // table, rather than equality of its intermediate X, certifies the update.
+  bool transition = false;
 };
 
 struct Plan {
@@ -290,6 +295,7 @@ struct Plan {
   std::string encoding_summary;
   std::set<std::size_t> flow_reads;
   std::map<std::string, int> fixed_targets;
+  std::size_t transition_count = 0;
 };
 
 // A physical register is not a single source value. Build reaching definitions
@@ -561,6 +567,7 @@ std::map<std::size_t, std::vector<Literal>> literal_inputs(
       const auto& op = ops[index];
       const bool transparent = op.kind == IrKind::Store ||
           op.kind == IrKind::Call || op.kind == IrKind::Jump ||
+          op.kind == IrKind::IndirectCall || op.kind == IrKind::IndirectJump ||
           op.kind == IrKind::Return || (op.kind == IrKind::Plain && op.opcode == 0x54);
       if (!transparent || op.meta.raw || op.meta.manual_interaction ||
           op.target_meta.formal_opcode || predecessors[state].empty()) {
@@ -637,6 +644,265 @@ std::optional<Decoder> choose_decoder(
   return best;
 }
 
+struct StateTransition {
+  std::size_t read = 0;
+  std::size_t store = 0;
+  Projection function;
+};
+
+// Discover a closed finite transition system before selecting its physical
+// encoding. Reaching definitions alone cannot do this: the first backedge
+// looks like a dynamic definition, even for an exact two-cycle such as -v.
+// No source names, distinguished constants or presumed iteration count enter
+// the proof. Closure over all admitted transitions is an overapproximation of
+// the reachable states, so a path correlation is never silently assumed.
+std::vector<Plan> discover_state_machine(
+    const std::vector<IrOp>& ops, int reg,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<std::size_t>& machine,
+    const FiniteModeCandidateOptions& candidate_options) {
+  std::map<std::size_t, StateTransition> transitions;
+  std::map<std::size_t, std::size_t> transition_reads;
+  for (std::size_t i = 0; i < ops.size(); ++i) {
+    if (!ordinary(ops[i]) || ops[i].kind != IrKind::Recall ||
+        ops[i].opcode != 0x60 + reg)
+      continue;
+    const auto projection = projection_after(ops, i);
+    if (!projection || projection->end >= ops.size())
+      continue;
+    const auto& store = ops[projection->end];
+    if (!ordinary(store) || store.kind != IrKind::Store || store.opcode != 0x40 + reg)
+      continue;
+    transitions.emplace(projection->end, StateTransition{i, projection->end, *projection});
+    transition_reads.emplace(i, projection->end);
+  }
+  if (transitions.empty())
+    return {};
+  const auto uses = analyze_mode_uses(ops, reg, flow, machine, true);
+  if (!uses)
+    return {};
+  const auto inputs = literal_inputs(ops, flow, machine, *uses);
+  if (inputs.empty())
+    return {};
+
+  std::vector<Plan> plans;
+  std::set<std::size_t> visited;
+  for (const auto& [seed, unused_literals] : inputs) {
+    (void)unused_literals;
+    if (visited.contains(seed))
+      continue;
+    std::set<std::size_t> stores, reads;
+    std::deque<std::size_t> pending{seed};
+    bool complete = true;
+    while (!pending.empty()) {
+      const auto store = pending.front();
+      pending.pop_front();
+      if (!stores.insert(store).second)
+        continue;
+      visited.insert(store);
+      if (!inputs.contains(store) && !transitions.contains(store))
+        complete = false;
+      const auto found = uses->definition_reads.find(store);
+      if (found == uses->definition_reads.end()) {
+        complete = false;
+        continue;
+      }
+      for (const auto read : found->second) {
+        if (!reads.insert(read).second)
+          continue;
+        const auto& definitions = uses->read_definitions.at(read);
+        pending.insert(pending.end(), definitions.begin(), definitions.end());
+        // Include a transition's output even if its last definition is dead.
+        // The changed input cannot be left flowing into an ordinary store.
+        if (const auto next = transition_reads.find(read); next != transition_reads.end())
+          pending.push_back(next->second);
+      }
+    }
+    if (!complete)
+      continue;
+
+    std::map<std::size_t, Literal> literals;
+    std::map<std::size_t, StateTransition> updates;
+    std::map<std::size_t, Projection> consumers;
+    std::vector<Projection> functions;
+    std::set<std::string> values;
+    for (const auto store : stores) {
+      if (const auto transition = transitions.find(store); transition != transitions.end()) {
+        updates.emplace(transition->second.read, transition->second);
+      } else {
+        for (const auto& literal : inputs.at(store)) {
+          literals.emplace(literal.begin, literal);
+          values.insert(literal.value);
+        }
+      }
+    }
+    for (const auto read : reads) {
+      if (updates.contains(read))
+        continue;
+      if (flow_read(ops[read], reg)) {
+        // A destructive control observation needs its own transition table.
+        // In particular, stable-address decoding must not be assumed to keep
+        // the sign/fraction of an arbitrary representation unchanged.
+        complete = false;
+        break;
+      }
+      const auto projection = projection_after(ops, read);
+      if (!ordinary(ops[read]) || !projection) {
+        complete = false;
+        break;
+      }
+      consumers.emplace(read, *projection);
+      if (std::none_of(functions.begin(), functions.end(), [&](const Projection& other) {
+            return other.same_function(*projection);
+          }))
+        functions.push_back(*projection);
+    }
+    if (!complete || updates.empty() || consumers.empty() || values.empty() ||
+        values.size() > kMaximumModeValues)
+      continue;
+
+    // A deterministic finite work bound, not a time limit. An open recurrence
+    // is unsupported, not incorrectly truncated to its first eight values.
+    std::deque<std::string> closure(values.begin(), values.end());
+    while (complete && !closure.empty()) {
+      const auto value = closure.front();
+      closure.pop_front();
+      for (const auto& [unused_read, update] : updates) {
+        (void)unused_read;
+        const auto next = update.function.apply(value);
+        if (!next || !encode_decimal(*next)) {
+          complete = false;
+          break;
+        }
+        if (values.insert(*next).second) {
+          if (values.size() > kMaximumModeValues) {
+            complete = false;
+            break;
+          }
+          closure.push_back(*next);
+        }
+      }
+    }
+    if (!complete)
+      continue;
+    std::vector<std::vector<std::string>> columns;
+    for (const auto& function : functions) {
+      std::vector<std::string> column;
+      for (const auto& value : values) {
+        const auto output = function.apply(value);
+        if (!output) {
+          complete = false;
+          break;
+        }
+        column.push_back(*output);
+      }
+      columns.push_back(std::move(column));
+    }
+    if (!complete)
+      continue;
+    const auto proposed = synthesize_finite_constant_encodings(columns);
+    for (const auto& encoded : proposed.encodings) {
+      if (encoded.size() != values.size())
+        continue;
+      Plan plan;
+      plan.reg = reg;
+      plan.joint = true;
+      plan.synthesized = true;
+      plan.value_count = values.size();
+      plan.transition_count = updates.size();
+      std::map<std::string, std::string> codebook;
+      std::size_t row = 0;
+      bool valid = true;
+      for (const auto& value : values) {
+        const auto& word = encoded[row++];
+        if (!encode_decimal(word)) {
+          valid = false;
+          break;
+        }
+        codebook.emplace(value, word);
+        if (!plan.encoding_summary.empty())
+          plan.encoding_summary += ", ";
+        plan.encoding_summary += value + " -> " + word;
+      }
+      if (!valid)
+        continue;
+      for (const auto& [begin, literal] : literals) {
+        Macro definition;
+        definition.end = literal.end;
+        definition.input_literal = true;
+        definition.identical_value = literal.value == codebook.at(literal.value);
+        definition.replacement_literal = *encode_decimal(codebook.at(literal.value));
+        plan.saved_cells += static_cast<int>(literal.end - begin) -
+                            static_cast<int>(definition.replacement_literal.size());
+        plan.macros.emplace(begin, std::move(definition));
+      }
+      for (const auto store : stores) {
+        if (transitions.contains(store))
+          continue;
+        Macro definition;
+        definition.end = store + 1U;
+        definition.input_store = true;
+        plan.macros.emplace(store, std::move(definition));
+      }
+      for (const auto& [read, projection] : consumers) {
+        std::vector<std::string> wanted;
+        for (const auto& value : values)
+          wanted.push_back(*projection.apply(value));
+        const auto decoder = choose_decoder(encoded, wanted, functions);
+        if (!decoder) {
+          valid = false;
+          break;
+        }
+        Macro consumer;
+        consumer.end = projection.end;
+        consumer.binary_projection = projection.operand.has_value();
+        consumer.replacement_projection = decoder->code;
+        consumer.replacement_binary = decoder->binary;
+        plan.saved_cells += static_cast<int>(projection.end - read - 1U) -
+                            static_cast<int>(decoder->code.size());
+        plan.macros.emplace(read, std::move(consumer));
+      }
+      for (const auto& [read, update] : updates) {
+        if (!valid)
+          break;
+        std::vector<std::string> wanted;
+        bool identical = true;
+        for (const auto& value : values) {
+          const auto next = *update.function.apply(value);
+          wanted.push_back(codebook.at(next));
+          identical = identical && next == codebook.at(next);
+        }
+        auto available = functions;
+        available.push_back(update.function);
+        const auto decoder = choose_decoder(encoded, wanted, available);
+        if (!decoder) {
+          valid = false;
+          break;
+        }
+        Macro transition;
+        transition.end = update.store + 1U;
+        transition.transition = true;
+        transition.identical_value = identical;
+        transition.binary_projection = update.function.operand.has_value();
+        transition.replacement_projection = decoder->code;
+        transition.replacement_binary = decoder->binary;
+        plan.saved_cells += static_cast<int>(update.store - read - 1U) -
+                            static_cast<int>(decoder->code.size());
+        plan.macros.emplace(read, std::move(transition));
+      }
+      std::size_t last_end = 0;
+      for (const auto& [begin, macro] : plan.macros) {
+        valid = valid && begin >= last_end;
+        last_end = macro.end;
+      }
+      if (valid && plan.saved_cells >= -candidate_options.maximum_growth_cells &&
+          (candidate_options.maximum_growth_cells > 0 || plan.saved_cells > 0))
+        plans.push_back(std::move(plan));
+    }
+  }
+  return plans;
+}
+
 std::map<std::string, int> label_positions(const std::vector<IrOp>& ops) {
   std::map<std::string, int> positions;
   int address = 0;
@@ -651,7 +917,8 @@ std::map<std::string, int> label_positions(const std::vector<IrOp>& ops) {
 std::vector<Plan> discover_joint(
     const std::vector<IrOp>& ops, int reg,
     const AuthoritativePostLayoutControlFlow& flow,
-    const std::vector<std::size_t>& machine, AddressSpaceModel model) {
+    const std::vector<std::size_t>& machine, AddressSpaceModel model,
+    const FiniteModeCandidateOptions& candidate_options) {
   std::vector<Plan> plans;
   const auto uses = analyze_mode_uses(ops, reg, flow, machine, true);
   if (!uses)
@@ -721,6 +988,41 @@ std::vector<Plan> discover_joint(
     }
     if (!complete || functions.empty())
       continue;
+    std::vector<FiniteWordAddressDomain> address_domains;
+    std::vector<std::string> destination_labels;
+    if (candidate_options.allow_target_relayout && !flow_reads.empty()) {
+      for (const auto& value : values) {
+        const auto decoded = evaluate_indirect_address(register_name_for_index(reg), value,
+                                                       IndirectOperationKind::Flow, model);
+        if (!decoded || !decoded->actual_flow_target ||
+            decoded->flow_target != decoded->actual_flow_target ||
+            !indirect_writeback_preserves_literal_value(*decoded, value)) {
+          complete = false;
+          break;
+        }
+        const int target = *decoded->actual_flow_target;
+        std::string identity;
+        for (const auto read : flow_reads) {
+          bool found = false;
+          for (const auto& advertised : *ops[read].meta.indirect_flow_targets) {
+            const auto* label = std::get_if<std::string>(&advertised);
+            if (label && positions.contains(*label) && positions.at(*label) == target) {
+              found = true;
+              if (identity.empty())
+                identity = *label;
+            }
+          }
+          complete = complete && found;
+        }
+        if (!complete || identity.empty())
+          break;
+        address_domains.push_back({std::to_string(target), register_name_for_index(reg),
+                                   {target}, model});
+        destination_labels.push_back(identity);
+      }
+      if (!complete || address_domains.size() != values.size())
+        continue;
+    }
     // Preserve observed representations as incumbents, but do not restrict
     // the search to them. Derive new words jointly from all consumer tables.
     std::vector<std::vector<std::string>> encodings;
@@ -758,8 +1060,24 @@ std::vector<Plan> discover_joint(
         if (std::find(encodings.begin(), encodings.end(), encoded) == encodings.end())
           encodings.push_back(encoded);
     }
+    std::size_t address_synthesis_rounds = 0;
+    const auto append_address_solutions = [&](const std::vector<FiniteWordAddressDomain>& domains) {
+      if (domains.empty() || address_synthesis_rounds >= 3U)
+        return;
+      ++address_synthesis_rounds;
+      const auto synthesized = synthesize_multirole_words(
+          consumer_values, domains, {.maximum_work = 4096, .maximum_candidates = 16});
+      for (const auto& proposal : synthesized.encodings)
+        if (encodings.size() < 64U &&
+            std::find(encodings.begin(), encodings.end(), proposal.words) == encodings.end())
+          encodings.push_back(proposal.words);
+    };
+    if (complete)
+      append_address_solutions(address_domains);
     for (std::size_t encoding_index = 0; encoding_index < encodings.size(); ++encoding_index) {
-      const auto& encoded = encodings[encoding_index];
+      // Layout-guided synthesis may append alternatives; do not retain a
+      // reference into the proposal vector across that operation.
+      const auto encoded = encodings[encoding_index];
       Plan plan;
       plan.reg = reg;
       plan.joint = true;
@@ -825,6 +1143,42 @@ std::vector<Plan> discover_joint(
         plan.saved_cells += static_cast<int>(projection.end - read - 1U) -
                             static_cast<int>(decoder->code.size());
       }
+      if (valid && !address_domains.empty() && address_synthesis_rounds < 3U) {
+        // The shorter decoder/literal geometry proposes new physical entries.
+        // Solve the data and address equations again, rather than freezing the
+        // original digits or blindly patching an address-shaped data constant.
+        std::map<std::string, int> proposed_positions;
+        int at = 0;
+        for (std::size_t i = 0; i < ops.size();) {
+          const auto macro = plan.macros.find(i);
+          if (macro != plan.macros.end()) {
+            const auto& replacement = macro->second;
+            if (replacement.definition || replacement.input_literal)
+              at += static_cast<int>(replacement.replacement_literal.size()) +
+                    (replacement.definition ? 1 : 0);
+            else
+              at += cells_per_op(ops[i]) +
+                    static_cast<int>(replacement.replacement_projection.size());
+            i = replacement.end;
+          } else {
+            if (ops[i].kind == IrKind::Label)
+              proposed_positions.emplace(ops[i].name, at);
+            at += cells_per_op(ops[i++]);
+          }
+        }
+        auto domains = address_domains;
+        bool supported = true;
+        for (std::size_t row_index = 0; row_index < domains.size(); ++row_index) {
+          const auto position = proposed_positions.find(destination_labels[row_index]);
+          if (position == proposed_positions.end() || position->second < 0 || position->second > 99) {
+            supported = false;
+            break;
+          }
+          domains[row_index].targets = {position->second};
+        }
+        if (supported)
+          append_address_solutions(domains);
+      }
       for (const auto read : flow_reads) {
         if (!valid)
           break;
@@ -836,7 +1190,8 @@ std::vector<Plan> discover_joint(
             break;
           }
           declared.insert(positions.at(*label));
-          plan.fixed_targets.emplace(*label, positions.at(*label));
+          if (!candidate_options.allow_target_relayout)
+            plan.fixed_targets.emplace(*label, positions.at(*label));
         }
         for (const auto& [original, replacement] : codebook) {
           const auto before = evaluate_indirect_address(register_name_for_index(reg), original,
@@ -844,7 +1199,8 @@ std::vector<Plan> discover_joint(
           const auto after = evaluate_indirect_address(register_name_for_index(reg), replacement,
                                                        IndirectOperationKind::Flow, model);
           if (!before || !after || !before->actual_flow_target || !after->actual_flow_target ||
-              before->actual_flow_target != after->actual_flow_target ||
+              (!candidate_options.allow_target_relayout &&
+               before->actual_flow_target != after->actual_flow_target) ||
               before->flow_target != before->actual_flow_target ||
               after->flow_target != after->actual_flow_target ||
               !declared.contains(*before->actual_flow_target) ||
@@ -852,6 +1208,15 @@ std::vector<Plan> discover_joint(
               !indirect_writeback_preserves_literal_value(*after, replacement)) {
             valid = false;
             break;
+          }
+          for (const auto& target : *ops[read].meta.indirect_flow_targets) {
+            const auto& label = std::get<std::string>(target);
+            if (positions.at(label) != *before->actual_flow_target)
+              continue;
+            const auto [binding, inserted] =
+                plan.fixed_targets.emplace(label, *after->actual_flow_target);
+            if (!inserted && binding->second != *after->actual_flow_target)
+              valid = false;
           }
         }
         plan.flow_reads.insert(machine[read]);
@@ -861,7 +1226,8 @@ std::vector<Plan> discover_joint(
         valid = valid && begin >= end;
         end = macro.end;
       }
-      if (valid && plan.saved_cells > 0)
+      if (valid && plan.saved_cells >= -candidate_options.maximum_growth_cells &&
+          (candidate_options.maximum_growth_cells > 0 || plan.saved_cells > 0))
         plans.push_back(std::move(plan));
     }
   }
@@ -987,7 +1353,18 @@ bool prove(const std::vector<MachineItem>& items,
       const auto& macro = *found->second;
       reached_macros.insert(item_index);
       const auto old = state.stack.stack_equal;
-      if (macro.input_store) {
+      if (macro.transition) {
+        if (!state.initialized)
+          return fail("transition has an entry-live or unproved mode definition");
+        // The independently checked full transition table preserves the
+        // relation between the two carrier values, not their bit patterns.
+        state.stack.stack_equal = {macro.identical_value, old[0], old[1],
+            macro.binary_projection == macro.replacement_binary
+                ? old[macro.binary_projection ? 1U : 2U] : false};
+        state.stack.x1_equal = false;
+        state.stack.x2_equal = false;
+        state.encoded_input = false;
+      } else if (macro.input_store) {
         if (!state.encoded_input)
           return fail("callee store has no proved encoded literal input");
         state.initialized = true;
@@ -1026,7 +1403,8 @@ bool prove(const std::vector<MachineItem>& items,
           !plan.flow_reads.contains(item_index))
         return fail("indirect consumer has no joint encoding/address certificate");
       const bool transports_input = (opcode >= 0x40 && opcode <= 0x4e) ||
-          opcode == 0x51 || opcode == 0x52 || opcode == 0x53 || opcode == 0x54;
+          opcode == 0x51 || opcode == 0x52 || opcode == 0x53 || opcode == 0x54 ||
+          family == 0x80 || family == 0xa0;
       if (!transports_input)
         state.encoded_input = false;
       if (item.manual_interaction &&
@@ -1056,7 +1434,11 @@ bool prove(const std::vector<MachineItem>& items,
                   (opcode & 0xf0) != 0xb0 && (opcode & 0xf0) != 0xd0)) {
         const bool unconditional = opcode == 0x51 || opcode == 0x52 || opcode == 0x53 ||
                                    (opcode & 0xf0) == 0x80 || (opcode & 0xf0) == 0xa0;
-        if (!unconditional && !state.stack.stack_equal[0])
+        // FL tests its own equal counter, not X. The carrier/counter alias
+        // was independently excluded before entering the product proof.
+        const bool counter_condition = opcode == 0x5d || opcode == 0x5b ||
+                                       opcode == 0x58 || opcode == 0x5a;
+        if (!unconditional && !counter_condition && !state.stack.stack_equal[0])
           return fail("conditional flow observes a different value");
         // Preserve an unequal entry shadow conservatively on both edges.
         if (!unconditional && !stack_values_fully_equal(state.stack))
@@ -1094,9 +1476,14 @@ bool prove(const std::vector<MachineItem>& items,
 
 } // namespace
 
-PassResult finite_mode_representation(const std::vector<IrOp>& ops,
-                                      const PassContext& context) {
-  const auto unchanged = [&] { return PassResult{.ops = ops}; };
+std::vector<PassResult> finite_mode_representation_candidates(
+    const std::vector<IrOp>& ops, const PassContext& context,
+    const FiniteModeCandidateOptions& candidate_options) {
+  const auto unchanged = [] { return std::vector<PassResult>{}; };
+  std::vector<PassResult> alternatives;
+  if (candidate_options.maximum_candidates == 0 ||
+      candidate_options.maximum_growth_cells < 0 || candidate_options.maximum_growth_cells > 4)
+    return unchanged();
   // This is part of the separately regenerated shared-region candidate. The
   // ordinary lowering remains an incumbent: a local win can lose address
   // coincidences, so final layout, not this pass, chooses the program.
@@ -1129,9 +1516,12 @@ PassResult finite_mode_representation(const std::vector<IrOp>& ops,
   for (int reg = 0; reg < 15; ++reg) {
     if (auto plan = discover(ops, reg, flow, machine))
       plans.push_back(std::move(*plan));
-    auto joint = discover_joint(ops, reg, flow, machine, options.address_space_model);
+    auto joint = discover_joint(ops, reg, flow, machine, options.address_space_model, candidate_options);
     plans.insert(plans.end(), std::make_move_iterator(joint.begin()),
                  std::make_move_iterator(joint.end()));
+    auto state_machines = discover_state_machine(ops, reg, flow, machine, candidate_options);
+    plans.insert(plans.end(), std::make_move_iterator(state_machines.begin()),
+                 std::make_move_iterator(state_machines.end()));
   }
   std::stable_sort(plans.begin(), plans.end(), [](const Plan& a, const Plan& b) {
     return a.saved_cells > b.saved_cells;
@@ -1175,22 +1565,52 @@ PassResult finite_mode_representation(const std::vector<IrOp>& ops,
           decoder.meta.comment = "finite mode consumer decoder";
           rewritten.push_back(std::move(decoder));
         }
+        if (macro.transition)
+          rewritten.push_back(ops[macro.end - 1U]);
       }
       i = macro.end;
     }
-    const auto positions = label_positions(rewritten);
-    if (std::any_of(plan.fixed_targets.begin(), plan.fixed_targets.end(),
-                    [&](const auto& target) {
-                      const auto at = positions.find(target.first);
-                      return at == positions.end() || at->second != target.second;
-                    }))
+    auto required_targets = plan.fixed_targets;
+    const auto original_positions = label_positions(ops);
+    bool compatible = true;
+    // A changed web has no authority over any other runtime selector.
+    for (std::size_t i = 0; i < ops.size(); ++i)
+      if (ops[i].meta.indirect_flow_targets && !plan.flow_reads.contains(machine[i]))
+        for (const auto& target : *ops[i].meta.indirect_flow_targets) {
+          const auto& label = std::get<std::string>(target);
+          const auto old = original_positions.find(label);
+          if (old == original_positions.end()) {
+            compatible = false;
+            break;
+          }
+          const auto [binding, inserted] = required_targets.emplace(label, old->second);
+          compatible = compatible && (inserted || binding->second == old->second);
+        }
+    if (!compatible)
       continue;
+    const auto positions = label_positions(rewritten);
+    const bool needs_layout = std::any_of(
+        required_targets.begin(), required_targets.end(), [&](const auto& target) {
+          const auto at = positions.find(target.first);
+          return at == positions.end() || at->second != target.second;
+        });
+    if (needs_layout) {
+      if (!candidate_options.allow_target_relayout)
+        continue;
+      auto layout = layout_symbolic_regions(rewritten, required_targets, context);
+      if (!layout)
+        continue;
+      rewritten = std::move(layout->ops);
+    }
     if (!build_post_layout_control_flow(lower_ir_to_machine(rewritten), options).proved)
       continue;
-    return PassResult{
+    alternatives.push_back(PassResult{
         .ops = std::move(rewritten), .applied = 1,
         .optimizations = {{
-            .name = plan.synthesized ? "finite-mode-constraint-synthesis" :
+            .name = plan.transition_count > 0 ? "finite-mode-state-machine" :
+                    candidate_options.allow_target_relayout && !plan.flow_reads.empty()
+                        ? "finite-mode-data-address-synthesis" :
+                    plan.synthesized ? "finite-mode-constraint-synthesis" :
                     plan.joint ? "finite-mode-multirole-representation" : "finite-mode-representation",
             .detail = std::string(plan.joint
                 ? "Synthesized a shared encoding and independently certified consumer decoders for "
@@ -1202,11 +1622,25 @@ PassResult finite_mode_representation(const std::vector<IrOp>& ops,
                       std::to_string(plan.saved_cells) + " local cells. The complete "
                       "shared-region candidate still competes on final layout size." +
                       (plan.synthesized ? " Constructed constants: " + plan.encoding_summary + "."
-                                        : std::string{}),
+                                        : std::string{}) +
+                      (plan.transition_count > 0
+                          ? " Certified closure and synthesized " +
+                                std::to_string(plan.transition_count) +
+                                " state transitions over the complete finite domain."
+                          : std::string{}),
         }},
-    };
+    });
+    if (alternatives.size() >= candidate_options.maximum_candidates)
+      break;
   }
-  return unchanged();
+  return alternatives;
+}
+
+PassResult finite_mode_representation(const std::vector<IrOp>& ops,
+                                      const PassContext& context) {
+  auto alternatives = finite_mode_representation_candidates(
+      ops, context, {.maximum_growth_cells = 0, .maximum_candidates = 1});
+  return alternatives.empty() ? PassResult{.ops = ops} : std::move(alternatives.front());
 }
 
 IrPass finite_mode_representation_pass() {

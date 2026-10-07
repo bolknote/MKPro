@@ -444,14 +444,59 @@ bool prove_selector_charge_sunk_literal_entry(
     return index;
   };
   std::size_t previous = store;
-  for (const char digit : *literal) {
-    const std::size_t current = next(previous);
-    if (current >= items.size() || items[current].kind != MachineItemKind::Op ||
-        items[current].opcode != digit - '0' || items[current].raw ||
-        items[current].manual_interaction.has_value() ||
-        !incoming_only_from(flow, current, {previous}))
+  const bool coalesced = std::find(items[store].roles.begin(), items[store].roles.end(),
+      "selector-sunk-literal-coalesced") != items[store].roles.end();
+  if (coalesced) {
+    // This is a final-artifact obligation, not a trusted historical marker.
+    // The unique data-producing charge must actually name this numeric value
+    // and the same command at that address after every later layout change.
+    const std::size_t source_low = next(*origin);
+    const auto source_target = role_suffix(items[*origin], "late-decimal-selector-high:");
+    if (!source_target || source_low >= items.size() || literal->size() > 2 ||
+        items[*origin].kind != MachineItemKind::Op ||
+        items[source_low].kind != MachineItemKind::Op ||
+        items[*origin].opcode < 0 || items[*origin].opcode > 9 ||
+        items[source_low].opcode < 0 || items[source_low].opcode > 9 ||
+        role_suffix(items[source_low], "late-decimal-selector-low:") != source_target ||
+        items[*origin].opcode * 10 + items[source_low].opcode != std::stoi(*literal))
       return false;
-    previous = current;
+    int address = 0;
+    std::optional<int> target_address;
+    for (const auto& item : items) {
+      if (item.kind == MachineItemKind::Label) {
+        if (item.name == *source_target) {
+          if (target_address) return false;
+          target_address = address;
+        }
+      } else {
+        ++address;
+      }
+    }
+    if (target_address != std::optional<int>(std::stoi(*literal))) return false;
+    // Relocation changes the private selector's numeric value. It must not
+    // acquire an ordinary data use, including an indirect memory alias.
+    for (std::size_t index = 0; index < items.size(); ++index) {
+      const auto& item = items[index];
+      if (item.kind != MachineItemKind::Op) continue;
+      if (item.opcode == 0x60 + reg) return false;
+      const bool memory = (item.opcode >= 0xb0 && item.opcode <= 0xbe) ||
+                          (item.opcode >= 0xd0 && item.opcode <= 0xde);
+      if (!memory) continue;
+      const auto targets = flow.indirect_memory_targets.find(index);
+      if ((item.opcode & 15) == reg || targets == flow.indirect_memory_targets.end() ||
+          std::find(targets->second.begin(), targets->second.end(), reg) !=
+              targets->second.end()) return false;
+    }
+  } else {
+    for (const char digit : *literal) {
+      const std::size_t current = next(previous);
+      if (current >= items.size() || items[current].kind != MachineItemKind::Op ||
+          items[current].opcode != digit - '0' || items[current].raw ||
+          items[current].manual_interaction.has_value() ||
+          !incoming_only_from(flow, current, {previous}))
+        return false;
+      previous = current;
+    }
   }
   const std::size_t body = next(previous);
   if (body >= items.size() || items[body].kind != MachineItemKind::Op ||

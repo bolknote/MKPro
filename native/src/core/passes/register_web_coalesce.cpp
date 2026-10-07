@@ -238,6 +238,50 @@ static PassResult process_register_webs(
     }
   }
 
+  // Prune proved-infeasible definition/use edges before unioning static
+  // operands. Otherwise a dead hardware epoch permanently anchors a later
+  // ordinary value, and no amount of graph coloring can undo that union.
+  std::map<Node, std::pair<std::size_t, int>> definition_sites;
+  for (std::size_t site = 0; site < definitions.size(); ++site)
+    for (const auto& [reg, node] : definitions[site])
+      definition_sites.emplace(node, std::pair{site, reg});
+  std::map<std::size_t, Nodes> recall_sources;
+  for (std::size_t state = 0; state < sites.size(); ++state) {
+    const auto site = sites[state];
+    const auto& op = ops[site];
+    if (op.kind == IrKind::Recall && !has_rewrite_barrier(op) &&
+        !is_display_focus_sensitive(op))
+      append(recall_sources[site], incoming[state][static_cast<std::size_t>(*physical(op.register_name))]);
+  }
+  std::set<GuardedDefinitionUseQuery> query_set;
+  for (const auto& [use, nodes] : recall_sources) {
+    if (nodes.size() < 2U)
+      continue;
+    for (const Node node : nodes) {
+      const auto definition = definition_sites.find(node);
+      if (definition == definition_sites.end() || query_set.size() >= 64U)
+        continue;
+      const auto site = definition->second.first;
+      const auto& name = ops[use].register_name;
+      if (effects[site].must_defs.contains(name))
+        query_set.insert({site, use, name});
+    }
+  }
+  LivenessOptions guarded_options;
+  for (const auto& [reg, value] : context.options.preloaded_constant_registers)
+    guarded_options.equal_entry_value_classes.emplace(reg, "literal:" + value);
+  const auto excluded = prove_unreachable_definition_uses(
+      ops, flow, {query_set.begin(), query_set.end()}, guarded_options);
+  for (const auto& edge : excluded) {
+    const int reg = *physical(edge.register_name);
+    const Node node = definitions[edge.definition].at(reg);
+    for (std::size_t state = 0; state < sites.size(); ++state)
+      if (sites[state] == edge.use)
+        incoming[state][static_cast<std::size_t>(reg)].erase(node);
+  }
+  if (trace && !excluded.empty())
+    std::cerr << "[register-web-copy-coalesce] guarded exclusions=" << excluded.size() << '\n';
+
   // An emitted instruction has one physical operand, even when reached from
   // different callers. Join all definitions that can reach that static use.
   std::vector<std::map<int, Nodes>> uses(ops.size());
@@ -654,6 +698,12 @@ static PassResult process_register_webs(
       "Removed " + std::to_string(removed.size()) +
       " copy store(s) by coalescing exact reaching-definition webs; preserved "
       "entry values, hardware-sensitive epochs and matched caller lifetimes."}};
+  if (!excluded.empty())
+    optimizations.push_back({"guarded-definition-webs",
+        "Excluded " + std::to_string(excluded.size()) +
+        " infeasible definition/use edge(s) before web union. Guarded demand proofs "
+        "preserve all other reads, definitions, caller contexts and hardware anchors; "
+        "ordinary interference/coloring independently proves the resulting copy removal."});
   if (joint_merges > 0)
     optimizations.push_back({"register-web-joint-coloring",
         "Removed " + std::to_string(joint_merges) +

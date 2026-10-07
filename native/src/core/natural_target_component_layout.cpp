@@ -4,6 +4,7 @@
 #include "mkpro/core/indirect_read_observability.hpp"
 #include "mkpro/core/late_bound_decimal_selector.hpp"
 #include "mkpro/core/layout_gap_capacity_bound.hpp"
+#include "mkpro/core/layout_deadline_packing.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/passes/helpers.hpp"
 #include "mkpro/core/stable_register_value_flow.hpp"
@@ -54,6 +55,11 @@ struct ArtifactIndex {
   std::map<int, std::size_t> cell_items;
   std::map<std::string, int> label_addresses;
   int cells = 0;
+};
+
+struct BoundedTarget {
+  std::size_t origin = 0;
+  int maximum_address = 99;
 };
 
 // Layout branches copy geometry frequently, but command payloads (including
@@ -197,6 +203,7 @@ struct NaturalTargetPlacement {
   int target_offset = 0;
   int natural_target = -1;
   int selector_register = -1;
+  int maximum_address = std::numeric_limits<int>::max();
 };
 
 struct NaturalTargetLayoutOrder {
@@ -1855,7 +1862,7 @@ std::optional<std::vector<Cell>> convert_direct_flows(
 // Lifetime is one natural-layout invocation; reaching the memory cap disables
 // new insertions, not candidate exploration.
 struct LayoutOrderCache {
-  using PlacementKey = std::tuple<std::size_t, int, int>;
+  using PlacementKey = std::tuple<std::size_t, int, int, int>;
   using Key = std::tuple<std::size_t, std::size_t, int, int,
                          std::vector<int>, std::vector<PlacementKey>,
                          std::vector<PlacementKey>>;
@@ -1919,11 +1926,12 @@ std::optional<NaturalTargetLayoutOrder> compute_layout_order_for_targets(
 
   std::map<std::size_t, int> bounded_deadline_by_segment;
   for (const NaturalTargetPlacement& placement : bounded_placements) {
+    const int maximum = std::min(maximum_bounded_target, placement.maximum_address);
     if (placement.target_segment >= segments.size() || placement.target_offset < 0 ||
-        placement.target_offset > maximum_bounded_target) {
+        placement.target_offset > maximum) {
       return std::nullopt;
     }
-    const int deadline = maximum_bounded_target - placement.target_offset;
+    const int deadline = maximum - placement.target_offset;
     const auto [found, inserted] =
         bounded_deadline_by_segment.emplace(placement.target_segment, deadline);
     if (!inserted)
@@ -1935,8 +1943,18 @@ std::optional<NaturalTargetLayoutOrder> compute_layout_order_for_targets(
 
   using GapTotals = std::vector<int>;
   using GapAssignment = std::vector<int>;
-  std::vector<std::tuple<int, std::size_t, std::size_t>> ranked_bounded;
+  // Constraints name an interior entry, not the end of its component.
+  // Convert latest starts to completion deadlines before applying EDF.
+  const auto completion_deadline = [&](std::size_t segment) -> long long {
+    const auto bound = bounded_deadline_by_segment.find(segment);
+    return bound == bounded_deadline_by_segment.end()
+        ? std::numeric_limits<long long>::max()
+        : static_cast<long long>(bound->second) +
+              segment_cells(segments.at(segment));
+  };
+  std::vector<std::tuple<long long, std::size_t, std::size_t>> ranked_bounded;
   for (const auto& [segment, deadline] : bounded_deadline_by_segment) {
+    (void)deadline;
     const auto eligible_index = eligible_index_by_segment.find(segment);
     if (eligible_index != eligible_index_by_segment.end()) {
       ranked_bounded.emplace_back(deadline, segment,
@@ -2063,48 +2081,37 @@ std::optional<NaturalTargetLayoutOrder> compute_layout_order_for_targets(
   };
 
   if (!bounded_placements.empty()) {
-    std::optional<NaturalTargetLayoutOrder> best;
-    int best_filled = -1;
-    for (const auto& [totals, assignment_node] : states) {
-      int filled = 0;
-      for (const int total : totals)
-        filled += total;
-      const int padding_cells = total_gap_capacity - filled;
-      if (padding_cells < 0 || padding_cells > maximum_padding || filled < best_filled)
-        continue;
-      const GapAssignment assignment = assignment_for_node(assignment_node);
-
+    const auto make_layout = [&](const GapAssignment& assignment,
+                                  const GapTotals& totals, int padding_cells,
+                                  bool use_completion_deadlines)
+        -> std::optional<NaturalTargetLayoutOrder> {
       const auto append_ordered = [&](NaturalTargetLayoutOrder& layout,
-                                      const std::vector<std::size_t>& indexes) {
-        std::vector<std::size_t> ordered = indexes;
+                                      std::vector<std::size_t> ordered) {
         std::stable_sort(ordered.begin(), ordered.end(), [&](std::size_t left,
                                                              std::size_t right) {
-          const auto left_deadline = bounded_deadline_by_segment.find(eligible.at(left));
-          const auto right_deadline = bounded_deadline_by_segment.find(eligible.at(right));
-          const int left_value = left_deadline == bounded_deadline_by_segment.end()
-                                     ? std::numeric_limits<int>::max()
-                                     : left_deadline->second;
-          const int right_value = right_deadline == bounded_deadline_by_segment.end()
-                                      ? std::numeric_limits<int>::max()
-                                      : right_deadline->second;
-          return std::tie(left_value, eligible.at(left)) <
-                 std::tie(right_value, eligible.at(right));
+          const auto deadline = [&](std::size_t segment) -> long long {
+            if (use_completion_deadlines)
+              return completion_deadline(segment);
+            const auto bound = bounded_deadline_by_segment.find(segment);
+            return bound == bounded_deadline_by_segment.end()
+                ? std::numeric_limits<long long>::max() : bound->second;
+          };
+          return std::pair{deadline(eligible.at(left)), eligible.at(left)} <
+                 std::pair{deadline(eligible.at(right)), eligible.at(right)};
         });
         for (const std::size_t index : ordered)
           layout.segments.push_back(eligible.at(index));
       };
-
       NaturalTargetLayoutOrder layout;
       layout.padding_cells = padding_cells;
       layout.segments.reserve(segments.size());
       layout.segments.push_back(main_segment);
       for (std::size_t gap = 0; gap < fixed_segments.size(); ++gap) {
         std::vector<std::size_t> assigned;
-        for (std::size_t index = 0; index < eligible.size(); ++index) {
+        for (std::size_t index = 0; index < eligible.size(); ++index)
           if (assignment.at(index) == static_cast<int>(gap))
             assigned.push_back(index);
-        }
-        append_ordered(layout, assigned);
+        append_ordered(layout, std::move(assigned));
         const std::size_t fixed_segment = fixed_segments.at(gap).second;
         const int padding = gap_capacities.at(gap) - totals.at(gap);
         if (padding > 0)
@@ -2112,13 +2119,12 @@ std::optional<NaturalTargetLayoutOrder> compute_layout_order_for_targets(
         layout.segments.push_back(fixed_segment);
       }
       std::vector<std::size_t> trailing;
-      for (std::size_t index = 0; index < eligible.size(); ++index) {
+      for (std::size_t index = 0; index < eligible.size(); ++index)
         if (assignment.at(index) < 0)
           trailing.push_back(index);
-      }
-      append_ordered(layout, trailing);
+      append_ordered(layout, std::move(trailing));
       if (layout.segments.size() != segments.size())
-        continue;
+        return std::nullopt;
 
       std::map<std::size_t, int> start_by_segment;
       int address = 0;
@@ -2132,15 +2138,73 @@ std::optional<NaturalTargetLayoutOrder> compute_layout_order_for_targets(
       const bool bounded = std::all_of(
           bounded_placements.begin(), bounded_placements.end(),
           [&](const NaturalTargetPlacement& placement) {
-            const auto start = start_by_segment.find(placement.target_segment);
-            return start != start_by_segment.end() &&
-                   start->second + placement.target_offset <= maximum_bounded_target;
+            const auto at = start_by_segment.find(placement.target_segment);
+            return at != start_by_segment.end() &&
+                   at->second + placement.target_offset <=
+                       std::min(maximum_bounded_target, placement.maximum_address);
           });
-      if (!bounded)
+      return bounded ? std::optional<NaturalTargetLayoutOrder>{std::move(layout)}
+                     : std::nullopt;
+    };
+
+    std::optional<NaturalTargetLayoutOrder> best;
+    const auto consider = [&](std::optional<NaturalTargetLayoutOrder> trial) {
+      if (trial && (!best ||
+          std::pair{trial->padding_cells, trial->segments} <
+              std::pair{best->padding_cells, best->segments}))
+        best = std::move(trial);
+    };
+    for (const auto& [totals, assignment_node] : states) {
+      const int filled = std::accumulate(totals.begin(), totals.end(), 0);
+      const int padding = total_gap_capacity - filled;
+      if (padding < 0 || padding > maximum_padding ||
+          (best && padding > best->padding_cells))
         continue;
-      if (!best.has_value() || filled > best_filled || layout.segments < best->segments) {
-        best_filled = filled;
-        best = std::move(layout);
+      consider(make_layout(assignment_for_node(assignment_node), totals, padding, false));
+    }
+
+    // Preserve a proved incumbent on equal cost. EDF repairs infeasible
+    // assignments or removes padding; arbitrary equal-cost reordering is not
+    // a saving and needlessly perturbs downstream layout/tie-break decisions.
+    if (!best || best->padding_cells > 0) {
+      for (const auto& [totals, assignment_node] : states) {
+        const int padding = total_gap_capacity -
+            std::accumulate(totals.begin(), totals.end(), 0);
+        if (padding < 0 || padding > maximum_padding ||
+            (best && padding >= best->padding_cells))
+          continue;
+        consider(make_layout(assignment_for_node(assignment_node), totals, padding, true));
+      }
+    }
+
+    // A single lexicographic witness per gap fill is not a dominance proof:
+    // different bounded workloads leave different room for future components.
+    // Keep the cheap incumbent, and only rescue a failed/padded placement with
+    // a bounded Pareto frontier of cumulative completion-deadline demand.
+    if (!best || best->padding_cells > 0) {
+      std::vector<DeadlinePackingComponent> components;
+      for (const std::size_t segment : eligible) {
+        const auto bound = bounded_deadline_by_segment.find(segment);
+        components.push_back({segment_cells(segments.at(segment)),
+            bound == bounded_deadline_by_segment.end()
+                ? std::nullopt : std::optional<int>{bound->second}});
+      }
+      std::vector<DeadlinePackingGap> gaps;
+      int gap_start = segment_cells(segments.at(main_segment));
+      for (const auto& [base, segment] : fixed_segments) {
+        gaps.push_back({gap_start, base - gap_start});
+        gap_start = base + segment_cells(segments.at(segment));
+      }
+      const auto packed = pack_components_with_deadlines(
+          components, gaps, gap_start,
+          best ? best->padding_cells - 1 : maximum_padding, maximum_states);
+      if (packed.proved && !packed.exhausted) {
+        GapTotals totals(gaps.size(), 0);
+        for (std::size_t index = 0; index < eligible.size(); ++index)
+          if (packed.assignment.at(index) >= 0)
+            totals.at(static_cast<std::size_t>(packed.assignment.at(index))) +=
+                components.at(index).cells;
+        consider(make_layout(packed.assignment, totals, packed.padding, true));
       }
     }
     return best;
@@ -2207,7 +2271,7 @@ std::optional<NaturalTargetLayoutOrder> layout_order_for_targets(
     keys.reserve(values.size());
     for (const NaturalTargetPlacement& placement : values) {
       keys.emplace_back(placement.target_segment, placement.target_offset,
-                        placement.natural_target);
+                        placement.natural_target, placement.maximum_address);
     }
     return keys;
   };
@@ -2396,7 +2460,8 @@ layout_order_with_optional_split(
             if (placement.target_segment == segment) {
               deadline = std::min(
                   deadline,
-                  maximum_bounded_target - placement.target_offset);
+                  std::min(maximum_bounded_target, placement.maximum_address) -
+                      placement.target_offset);
             }
           }
           return deadline;
@@ -4756,7 +4821,7 @@ std::optional<CandidateArtifact> try_candidate(
     const std::vector<DirectFlowSite>& flows,
     const std::vector<SelectorCandidate>& selectors,
     const std::vector<NaturalTargetAnchorCandidate>& anchors,
-    const std::vector<std::size_t>& bounded_target_origins,
+    const std::vector<BoundedTarget>& bounded_target_origins,
     const TraceGraph& original_trace,
     ConvertedFlowEffectProofContext& flow_effect_proof_context,
     const std::vector<ExternalIdentity>& original_external,
@@ -4965,13 +5030,14 @@ std::optional<CandidateArtifact> try_candidate(
 
   std::vector<NaturalTargetPlacement> bounded_placements;
   bounded_placements.reserve(bounded_target_origins.size());
-  for (const std::size_t target_origin : bounded_target_origins) {
-    const auto target_location = locate_origin(segments, target_origin);
+  for (const BoundedTarget& target : bounded_target_origins) {
+    const auto target_location = locate_origin(segments, target.origin);
     if (!target_location.has_value())
       return reject("bounded target component identity cannot be located");
     bounded_placements.push_back(NaturalTargetPlacement{
         .target_segment = target_location->first,
         .target_offset = target_location->second,
+        .maximum_address = target.maximum_address,
     });
   }
 
@@ -5249,12 +5315,13 @@ std::optional<CandidateArtifact> try_candidate(
       origin_addresses(candidate.items, candidate.new_item_by_origin);
   const bool bounded_targets_proved =
       std::all_of(bounded_target_origins.begin(), bounded_target_origins.end(),
-                  [&](const std::size_t target_origin) {
-                    const auto target_address = new_address_by_origin.find(target_origin);
+                  [&](const BoundedTarget& target) {
+                    const auto target_address = new_address_by_origin.find(target.origin);
                     return target_address != new_address_by_origin.end() &&
                            target_address->second >= 0 &&
                            target_address->second <=
-                               options.maximum_bounded_target_address;
+                               std::min(options.maximum_bounded_target_address,
+                                        target.maximum_address);
                   });
   if (!bounded_targets_proved)
     return reject("flattened component order missed a bounded target deadline");
@@ -5912,17 +5979,18 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     return result;
   }
   const ArtifactIndex index = index_artifact(logical_items);
-  std::vector<std::size_t> bounded_target_origins;
+  std::map<std::size_t, int> bounded_target_limits;
   // An atomic erasure can displace an immutable data selector while moving
   // its address-only or certified fractional companions freely. Their decimal
   // rebindings still have a two-digit target domain. Include that domain in
   // placement, rather than selecting an unencodable order and abandoning the
   // whole reconciliation when the final runtime proof rejects it.
-  // Keep this constraint local to completed reconciliation transactions:
-  // speculative neutral layouts retain their independent candidate frontier.
-  if (!options.deferred_selector_reconciliations.empty() &&
-      options.maximum_bounded_target_address >= 0 &&
-      options.maximum_bounded_target_address <= 99) {
+  // A provisional runtime charge can extend past 99 before erasure. That
+  // does not widen the independently decoded domain of a preloaded selector.
+  if ((options.constrain_rebindable_selector_targets ||
+       !options.deferred_selector_reconciliations.empty()) &&
+      options.maximum_bounded_target_address >= 0) {
+    const int companion_maximum = std::min(99, options.maximum_bounded_target_address);
     std::set<int> examined_registers;
     for (const auto& [source_item, targets] : control_flow.indirect_flow_targets) {
       if (targets.size() != 1U || source_item >= items.size())
@@ -5943,7 +6011,7 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
       // deciding that a companion selector is fixed.
       bool rebindable = false;
       for (int probe_target = 0;
-           probe_target <= options.maximum_bounded_target_address; ++probe_target) {
+           probe_target <= companion_maximum; ++probe_target) {
         if (probe_target == target.address)
           continue;
         if (rebind_stable_preloaded_indirect_flow_selector(
@@ -5953,13 +6021,9 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
           break;
         }
       }
-      if (rebindable &&
-          std::find(bounded_target_origins.begin(), bounded_target_origins.end(),
-                    target.item_index) == bounded_target_origins.end()) {
-        bounded_target_origins.push_back(target.item_index);
-      }
+      if (rebindable)
+        bounded_target_limits.emplace(target.item_index, companion_maximum);
     }
-    std::sort(bounded_target_origins.begin(), bounded_target_origins.end());
   }
   if (!options.required_bounded_target_labels.empty()) {
     if (options.maximum_bounded_target_address < 0) {
@@ -5984,13 +6048,15 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
         add_reason(result.plan, "bounded target label has no executable cell: " + label);
         return result;
       }
-      bounded_target_origins.push_back(cell_item->second);
+      const auto [bound, inserted] = bounded_target_limits.emplace(
+          cell_item->second, options.maximum_bounded_target_address);
+      if (!inserted)
+        bound->second = std::min(bound->second, options.maximum_bounded_target_address);
     }
-    std::sort(bounded_target_origins.begin(), bounded_target_origins.end());
-    bounded_target_origins.erase(
-        std::unique(bounded_target_origins.begin(), bounded_target_origins.end()),
-        bounded_target_origins.end());
   }
+  std::vector<BoundedTarget> bounded_target_origins;
+  for (const auto& [origin, maximum] : bounded_target_limits)
+    bounded_target_origins.push_back({origin, maximum});
   const std::optional<std::vector<DirectReference>> references =
       collect_direct_references(logical_items, index, options.address_space_model);
   if (!references.has_value()) {

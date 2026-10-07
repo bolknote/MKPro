@@ -1,6 +1,8 @@
 #include "mkpro/core/passes/index.hpp"
 
 #include "mkpro/core/formal_address.hpp"
+#include "mkpro/core/joint_representation_search.hpp"
+#include "mkpro/core/passes/semantic_region_folding.hpp"
 
 #include "mkpro/core/passes/redundant_literal_reload.hpp"
 
@@ -213,10 +215,11 @@ RunOnIrResult run_passes_on_ir(std::vector<IrOp> initial, const CompileOptions& 
                                bool layout_only) {
   std::vector<IrOp> current = std::move(initial);
   RunOnIrResult aggregate;
-  const auto run_pipeline = [&](const std::vector<IrPass>& pipeline) {
+  const auto run_pipeline = [&](const std::vector<IrPass>& pipeline,
+                                int maximum_iterations = kMaxFixpointIterations) {
     bool changed_in_iteration = true;
     int iteration = 0;
-    while (changed_in_iteration && iteration < kMaxFixpointIterations) {
+    while (changed_in_iteration && iteration < maximum_iterations) {
       changed_in_iteration = false;
       ++iteration;
 
@@ -250,6 +253,12 @@ RunOnIrResult run_passes_on_ir(std::vector<IrOp> initial, const CompileOptions& 
   };
 
   if (!layout_only && options.defer_return_suffix_until_callee_hole) {
+    int cells = 0;
+    for (const auto& op : current)
+      cells += cells_per_op(op);
+    if (cells > official_program_step_limit(address_space_model_for_feature_profile(
+                    effective_optimizer_feature_profile(options))))
+      run_pipeline({joint_representation_search_pass()}, 1);
     // Region extraction needs the registers and stack values exposed by the
     // cleanup fixed point, not just those visible at the start of iteration 1.
     // None of these passes creates physical flow selectors or rewrites the
@@ -258,6 +267,7 @@ RunOnIrResult run_passes_on_ir(std::vector<IrOp> initial, const CompileOptions& 
     // cell early can forfeit a later address/code coincidence, so the unchanged
     // ordinary-order candidate must continue to compete on final artifact size.
     static const std::vector<IrPass> cleanup = {
+      semantic_region_folding_pass(),
       finite_mode_representation_pass(),
       helper_entry_store_factoring_pass(),
         early_exact_stack_dead_store_elimination_pass(),
@@ -276,6 +286,10 @@ RunOnIrResult run_passes_on_ir(std::vector<IrOp> initial, const CompileOptions& 
         register_coalesce_pass(),
     };
     run_pipeline(cleanup);
+    // Cleanup can expose the definition webs and common regions absent at the
+    // first probe. Give the same bounded transaction search that cleaned root;
+    // do not increase its depth or run it to an unbounded search fixed point.
+    run_pipeline({joint_representation_search_pass()}, 1);
     if (aggregate.applied > 0) {
       aggregate.optimizations.insert(
           aggregate.optimizations.begin(),

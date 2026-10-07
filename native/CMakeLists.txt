@@ -32,6 +32,9 @@ add_library(mkpro_core STATIC
   src/core/compiler.cpp
   src/core/constant_folder.cpp
   src/core/constant_synthesis.cpp
+  src/core/multirole_word_synthesis.cpp
+  src/core/joint_representation_search.cpp
+  src/core/passes/semantic_region_folding.cpp
   src/core/cyclic_end_return.cpp
   src/core/dark_side_suffix_helper.cpp
   src/core/flow_sensitive_call_domains.cpp
@@ -81,6 +84,7 @@ add_library(mkpro_core STATIC
   src/core/passes/indirect_selector_seed_reuse.cpp
   src/core/passes/finite_mode_representation.cpp
   src/core/passes/helper_entry_store_factoring.cpp
+  src/core/passes/selector_data_literal_coalescing.cpp
   src/core/passes/index.cpp
   src/core/passes/jump_thread.cpp
   src/core/passes/jump_to_next.cpp
@@ -751,12 +755,51 @@ mkpro_configure_target(mkpro_helper_entry_store_factoring_tests)
 add_test(NAME mkpro.helper_entry_store_factoring_compiler_and_rom
   COMMAND mkpro_helper_entry_store_factoring_tests)
 
+add_executable(mkpro_selector_data_literal_coalescing_tests
+  tests/selector_data_literal_coalescing_test.cpp)
+target_link_libraries(mkpro_selector_data_literal_coalescing_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_selector_data_literal_coalescing_tests)
+add_test(NAME mkpro.selector_data_literal_coalescing_compiler_and_rom
+  COMMAND mkpro_selector_data_literal_coalescing_tests)
+
+add_executable(mkpro_joint_layout_search_tests tests/joint_layout_search_test.cpp)
+target_link_libraries(mkpro_joint_layout_search_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_joint_layout_search_tests)
+add_test(NAME mkpro.joint_layout_transaction_search COMMAND mkpro_joint_layout_search_tests)
+
 add_executable(mkpro_finite_mode_multirole_tests tests/finite_mode_multirole_test.cpp)
 target_link_libraries(mkpro_finite_mode_multirole_tests PRIVATE mkpro_debug)
 mkpro_configure_target(mkpro_finite_mode_multirole_tests)
 add_test(NAME mkpro.finite_mode_multirole_compiler_and_rom COMMAND mkpro_finite_mode_multirole_tests)
 
+add_executable(mkpro_hardware_allocation_tests tests/hardware_allocation_test.cpp)
+target_link_libraries(mkpro_hardware_allocation_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_hardware_allocation_tests)
+add_test(NAME mkpro.hardware_allocation_compiler_and_rom COMMAND mkpro_hardware_allocation_tests)
+add_test(NAME mkpro.hardware_allocation_pending_reduction COMMAND mkpro_hardware_allocation_tests
+  "${CMAKE_CURRENT_SOURCE_DIR}/../examples/pending-optimizer/tic-tac-toe-4x4.mkpro")
+
+add_executable(mkpro_guarded_definition_web_tests tests/guarded_definition_web_test.cpp)
+target_link_libraries(mkpro_guarded_definition_web_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_guarded_definition_web_tests)
+add_test(NAME mkpro.guarded_definition_webs_compiler_and_rom COMMAND mkpro_guarded_definition_web_tests)
+
+add_executable(mkpro_layout_deadline_scheduling_tests tests/layout_deadline_scheduling_test.cpp)
+target_link_libraries(mkpro_layout_deadline_scheduling_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_layout_deadline_scheduling_tests)
+add_test(NAME mkpro.layout_deadline_scheduling COMMAND mkpro_layout_deadline_scheduling_tests)
+
 add_executable(mkpro_constant_synthesis_tests tests/constant_synthesis_test.cpp)
 target_link_libraries(mkpro_constant_synthesis_tests PRIVATE mkpro_debug)
 mkpro_configure_target(mkpro_constant_synthesis_tests)
 add_test(NAME mkpro.constant_synthesis_compiler_and_rom COMMAND mkpro_constant_synthesis_tests)
+
+add_executable(mkpro_joint_representation_tests tests/joint_representation_test.cpp)
+target_link_libraries(mkpro_joint_representation_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_joint_representation_tests)
+add_test(NAME mkpro.joint_representation_compiler_and_rom COMMAND mkpro_joint_representation_tests)
+
+add_executable(mkpro_finite_mode_transition_tests tests/finite_mode_transition_test.cpp)
+target_link_libraries(mkpro_finite_mode_transition_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_finite_mode_transition_tests)
+add_test(NAME mkpro.finite_mode_transitions_compiler_and_rom COMMAND mkpro_finite_mode_transition_tests)

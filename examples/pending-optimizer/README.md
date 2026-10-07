@@ -15,7 +15,7 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 139 | 105 | +34 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 137 | 105 | +32 | pending optimizer |
 | `nekromant.mkpro` | 138 | 105 | +33 | pending optimizer; +3 after correctness fixes |
 | `podvodnaya-lodka-lazarev.mkpro` | 246 | 105 | +141 | pending optimizer; continuous symbolic display |
 
@@ -43,7 +43,7 @@ The earlier 135-cell Nekromant additionally benefited from scalar-delta lowering
 an artificial unit multiplication. Historical measurements below do not
 supersede the current table and do not establish that either program fits yet.
 
-The current 141/138-cell snapshots retain indirect-selector writeback and its
+The earlier 141/138-cell snapshots retain indirect-selector writeback and its
 effects on aliases, stack/X2, and subsequent control flow. Deleting a memory
 operation now requires the selector writeback to be dead as well as the
 loaded/stored value. The exact baselines record these correctness costs; they

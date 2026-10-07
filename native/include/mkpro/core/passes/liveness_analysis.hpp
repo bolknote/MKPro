@@ -2,7 +2,12 @@
 
 #include "mkpro/core/passes/helpers.hpp"
 
+#include <compare>
 #include <utility>
+
+namespace mkpro::core {
+struct AuthoritativePostLayoutControlFlow;
+}
 
 namespace mkpro::core::passes {
 
@@ -52,6 +57,26 @@ struct LivenessOptions {
   // disconnected fragments. Standalone IR fragments keep arbitrary entries.
   bool closed_program_entry = false;
 };
+
+// A static definition/use relation, evaluated in every matched execution
+// context. A proved exclusion removes only this edge, not the instruction,
+// register, other reads, or a control-flow alternative.
+struct GuardedDefinitionUseQuery {
+  std::size_t definition = 0;
+  std::size_t use = 0;
+  std::string register_name;
+  auto operator<=>(const GuardedDefinitionUseQuery&) const = default;
+};
+
+// Reuse the caller's authoritative graph of these exact ops. Unknown entries,
+// effects and exhausted work budgets fail closed. This is the same demand
+// proof used for guarded equal-entry lifetime sharing, applied before webs
+// are irreversibly united by conservative reaching definitions.
+std::set<GuardedDefinitionUseQuery> prove_unreachable_definition_uses(
+    const std::vector<IrOp>& ops,
+    const core::AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<GuardedDefinitionUseQuery>& queries,
+    LivenessOptions options = {});
 
 struct RegisterInterferenceGraph {
   std::map<std::string, RegisterValueSet> neighbors;
