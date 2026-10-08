@@ -75184,6 +75184,14 @@ apply_absolute_dark_layout_to_selected_result(const std::string& source,
                                                const CompileOptions& options) {
   using LayoutArtifact = core::LayoutSearchArtifact;
   using LayoutEdge = core::ProvedSearchTransition<LayoutArtifact>;
+  const core::TransactionSearchLimits search_limits;
+  const int original_cells = core::machine_cell_count(selected.items);
+  int growth_origin_cells = original_cells;
+  const auto remaining_growth = [&](const std::vector<MachineItem>& items) {
+    // Debt belongs to the entire search path, not to each individual pass.
+    return search_limits.maximum_growth_cells -
+        (core::machine_cell_count(items) - growth_origin_cells);
+  };
   const auto artifact = [](const CompileResult& value) {
     return LayoutArtifact{value.items, value.preloads, value.optimizations};
   };
@@ -75248,8 +75256,10 @@ apply_absolute_dark_layout_to_selected_result(const std::string& source,
             (!best || candidate_beats_best(*candidate, *best, options)))
           best = *candidate;
       }
+      auto family_options = layout_options;
+      family_options.maximum_transactional_growth_cells = remaining_growth(*normalized);
       for (const auto& reassigned : core::reassign_stable_indirect_selector_families(
-               *normalized, seed.preloads, control, layout_options)) {
+               *normalized, seed.preloads, control, family_options)) {
         const auto rebound = core::rebind_late_bound_decimal_selectors(
             reassigned.items, {.minimum_target_address = 0, .maximum_target_address = 99});
         if (!rebound.diagnostics.empty())
@@ -75306,8 +75316,10 @@ apply_absolute_dark_layout_to_selected_result(const std::string& source,
     for (const auto& transaction : literal.alternatives)
       if (transaction.final_control_flow.proved)
         append(transaction, "selector-data-literal");
+    auto family_options = layout_options;
+    family_options.maximum_transactional_growth_cells = remaining_growth(*normalized);
     for (const auto& transaction : core::reassign_stable_indirect_selector_families(
-             *normalized, parent.preloads, control, layout_options)) {
+             *normalized, parent.preloads, control, family_options)) {
       const auto rebound = core::rebind_late_bound_decimal_selectors(
           transaction.items, {.minimum_target_address = 0, .maximum_target_address = 99});
       if (!rebound.diagnostics.empty())
@@ -75360,24 +75372,79 @@ apply_absolute_dark_layout_to_selected_result(const std::string& source,
       best = *candidate;
     return artifact(*candidate);
   };
-  const auto search = core::search_proved_transactions(
-      std::move(composition_seeds), already_expanded,
-      core::machine_cell_count(selected.items), core::TransactionSearchLimits{},
-      [](const LayoutArtifact& value) { return core::machine_cell_count(value.items); },
-      core::same_layout_search_artifact,
-      [&](const LayoutArtifact& node) {
+  const auto expand_all = [&](const LayoutArtifact& node) {
         auto transitions = expand(node);
         auto semantic = core::expand_joint_representation_transactions(node, options);
         transitions.insert(transitions.end(), std::make_move_iterator(semantic.begin()),
                            std::make_move_iterator(semantic.end()));
         return transitions;
-      }, finalize);
+  };
+  const auto search = core::search_proved_transactions(
+      std::move(composition_seeds), already_expanded,
+      original_cells, search_limits,
+      [](const LayoutArtifact& value) { return core::machine_cell_count(value.items); },
+      core::same_layout_search_artifact, expand_all, finalize);
   if (std::getenv("MKPRO_NATIVE_TRACE_JOINT_LAYOUT_SEARCH"))
     std::cerr << "[joint-layout-search] expanded=" << search.expanded
               << " admitted=" << search.admitted << " duplicate=" << search.duplicate
               << " rejected=" << search.rejected << " bounded=" << search.budget_exhausted
               << " input=" << selected.steps.size()
               << " best=" << (best ? best->steps.size() : selected.steps.size()) << '\n';
+
+  // An added enabling family must not evict an older winning path from a
+  // bounded beam. Complete the established search first, retain its proved
+  // winner, then spend a separate small extension budget from that artifact.
+  const CompileResult release_root = best && best->steps.size() <= selected.steps.size()
+      ? *best : selected;
+  growth_origin_cells = core::machine_cell_count(release_root.items);
+  const auto normalized = core::normalize_natural_target_overflow_formals(release_root.items, model);
+  if (normalized) {
+    core::PostLayoutControlFlowOptions flow_options;
+    flow_options.address_space_model = model;
+    flow_options.empty_return_target = 1;
+    const auto control = core::build_post_layout_control_flow(*normalized, flow_options);
+    const auto bounded = core::late_bound_decimal_selector_target_labels(*normalized);
+    if (control.proved && bounded) {
+      core::NaturalTargetComponentLayoutOptions layout_options;
+      layout_options.address_space_model = model;
+      layout_options.maximum_subset_states = 512;
+      layout_options.maximum_anchor_combinations = 32;
+      layout_options.maximum_anchors = options.maximum_natural_target_anchors;
+      layout_options.required_bounded_target_labels.assign(bounded->begin(), bounded->end());
+      layout_options.maximum_bounded_target_address = 99;
+      layout_options.allow_size_neutral_bounded_layout = true;
+      layout_options.constrain_rebindable_selector_targets = true;
+      layout_options.maximum_transactional_growth_cells = remaining_growth(*normalized);
+      std::vector<LayoutEdge> release_seeds;
+      for (const auto& released : core::release_stable_indirect_selector_families(
+               *normalized, release_root.preloads, control, layout_options)) {
+        auto child = core::rebind_layout_search_artifact(
+            LayoutArtifact{released.items, released.preloads, release_root.optimizations});
+        if (!child)
+          continue;
+        for (const auto& applied : released.optimizations)
+          child->optimizations.push_back({.name = applied.name, .detail = applied.detail});
+        release_seeds.push_back({std::move(*child), "selector-family-release", true});
+      }
+      if (!release_seeds.empty()) {
+        auto release_limits = search_limits;
+        release_limits.maximum_expansions = 4;
+        release_limits.maximum_candidates = 24;
+        release_limits.maximum_depth = 3;
+        const auto extended = core::search_proved_transactions(
+            std::move(release_seeds), std::vector<LayoutArtifact>{artifact(release_root)},
+            growth_origin_cells, release_limits,
+            [](const LayoutArtifact& value) { return core::machine_cell_count(value.items); },
+            core::same_layout_search_artifact, expand_all, finalize);
+        if (std::getenv("MKPRO_NATIVE_TRACE_JOINT_LAYOUT_SEARCH"))
+          std::cerr << "[selector-release-search] expanded=" << extended.expanded
+                    << " admitted=" << extended.admitted
+                    << " bounded=" << extended.budget_exhausted
+                    << " input=" << release_root.steps.size()
+                    << " best=" << (best ? best->steps.size() : selected.steps.size()) << '\n';
+      }
+    }
+  }
   return best;
 }
 

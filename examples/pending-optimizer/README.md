@@ -15,12 +15,30 @@ with a raw listing: the goal is to make the high-level source fit.
 
 | File | Current | Target | Gap | Status |
 | --- | ---: | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 137 | 105 | +32 | pending optimizer |
+| `tic-tac-toe-4x4.mkpro` | 135 | 105 | +30 | pending optimizer |
 | `nekromant.mkpro` | 138 | 105 | +33 | pending optimizer; +3 after correctness fixes |
 | `podvodnaya-lodka-lazarev.mkpro` | 246 | 105 | +141 | pending optimizer; continuous symbolic display |
 
 The `Current` number is the local `--analysis` size. Strict `mk-pro compile`
 mode may reject over-window programs earlier than the analysis path.
+
+The earlier 4x4 reduction from 137 to 136 uses the general entry-aware
+conditional-branch proof: a fresh literal after a proved call/store boundary
+can erase a hidden X2 difference, including across component boundaries.
+The natural-target solver can therefore consider more one-cell indirect
+branches without changing the source or weakening the final CFG/stack proofs.
+See [the proof contract](../../docs/entry-aware-selector-branches.md).
+
+The current reduction from 136 to 135 lets natural-target layout fold a tail
+jump carrying only descriptive call-provenance annotations into fallthrough.
+Address-binding and proof-sensitive annotations still block that rewrite;
+the final CFG, selector, return-stack, data-stack and X2 proofs remain mandatory.
+The accompanying continuation proof follows compiler-typed manual input across
+resumes instead of treating every prompt as an unconditional full-stack barrier.
+It does not assume that the user necessarily enters a new number or that deeper
+stack slots are dead. Unrelated synthetic compiler/ROM tests cover both accepted
+and rejected cases. The game source is unchanged; the remaining gap is 30 cells.
+See [typed continuations and tail provenance](../../docs/typed-interaction-continuations.md).
 
 The high-level Lazarev submarine port uses `preview(frame(...))` for its live
 indicator and `random(min, max, seed)` for explicit generator input. Its separate

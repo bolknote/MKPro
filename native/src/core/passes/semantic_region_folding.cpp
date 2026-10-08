@@ -25,7 +25,7 @@ bool ends_chain(const IrOp& op) {
          (op.kind == IrKind::Stop && op.meta.stop_disposition == StopDisposition::Terminal);
 }
 
-bool symbolic(const std::vector<IrOp>& ops) {
+bool symbolic(const std::vector<IrOp>& ops, bool preserve_compiler_selector_charges = false) {
   if (ops.empty() || ops.size() > 640U)
     return false;
   for (const auto& op : ops) {
@@ -43,7 +43,7 @@ bool symbolic(const std::vector<IrOp>& ops) {
           return false;
     for (const auto& role : op.meta.roles)
       if (role == kResumableErrorPaddingRole || role == "exec" ||
-          role.starts_with("late-decimal-selector-") ||
+          (!preserve_compiler_selector_charges && role.starts_with("late-decimal-selector-")) ||
           role.starts_with("finalization-cell-origin:"))
         return false;
   }
@@ -90,7 +90,8 @@ std::vector<std::size_t> machine_indexes(const std::vector<IrOp>& ops) {
 }
 
 bool relocated(const std::vector<IrOp>& before, const std::vector<IrOp>& after,
-               const std::vector<std::size_t>& mapping, const PassContext& context) {
+               const std::vector<std::size_t>& mapping, const PassContext& context,
+               const PostLayoutControlFlowOptions* control_options = nullptr) {
   const auto input = lower_ir_to_machine(before);
   const auto output = lower_ir_to_machine(after);
   const auto old_machine = machine_indexes(before);
@@ -104,7 +105,7 @@ bool relocated(const std::vector<IrOp>& before, const std::vector<IrOp>& after,
     for (std::size_t cell = 0; cell < count; ++cell)
       items[old_machine[i] + cell] = new_machine[mapping[i]] + cell;
   }
-  const auto options = flow_options(context);
+  const auto options = control_options ? *control_options : flow_options(context);
   const auto old_flow = build_post_layout_control_flow(input, options);
   const auto new_flow = build_post_layout_control_flow(output, options);
   return old_flow.proved && new_flow.proved &&
@@ -150,8 +151,10 @@ bool fixed_indirect_targets(const std::vector<IrOp>& before, const std::vector<I
 
 std::optional<SymbolicRegionLayout> layout_symbolic_regions(
     const std::vector<IrOp>& ops, const std::map<std::string, int>& required_targets,
-    const PassContext& context, std::size_t maximum_work) {
-  if (!symbolic(ops))
+    const PassContext& context, std::size_t maximum_work,
+    const PostLayoutControlFlowOptions* control_options,
+    bool preserve_compiler_selector_charges) {
+  if (!symbolic(ops, preserve_compiler_selector_charges))
     return std::nullopt;
   const auto parts = components(ops);
   if (parts.empty() || parts.size() > 24U)
@@ -237,7 +240,7 @@ std::optional<SymbolicRegionLayout> layout_symbolic_regions(
       result.changed = result.changed || mapping[i] != i;
       result.ops.push_back(ops[i]);
     }
-  if (!relocated(ops, result.ops, mapping, context))
+  if (!relocated(ops, result.ops, mapping, context, control_options))
     return std::nullopt;
   return result;
 }

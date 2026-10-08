@@ -1,5 +1,6 @@
 #include "mkpro/core/natural_target_component_layout.hpp"
 
+#include "mkpro/core/callee_hole_boundary_normalization.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/indirect_read_observability.hpp"
 #include "mkpro/core/late_bound_decimal_selector.hpp"
@@ -918,12 +919,21 @@ bool apply_transparent_fallthrough_jump_fold(
             .value.item->manual_interaction.has_value() &&
        source_segment.cells.at(static_cast<std::size_t>(operand->second))
             .value.item->roles.empty());
+  // These roles record why lowering emitted a call/tail call. They do not
+  // pin an address or expose a machine action. Removing the jump still
+  // requires the independent entry-mode, write-back, complete trace and
+  // return-context proofs below; provenance never supplies those facts.
+  const bool call_provenance_only = std::all_of(
+      command.roles.begin(), command.roles.end(), [](const CellRole& role) {
+        return role == "statement-proc-call" || role == "x-argument-call" ||
+               role == "empty-return-startup-tail-call";
+      });
   if (!command_cell.labels.empty() || !operand_is_transparent ||
       command.kind != MachineItemKind::Op ||
       (!direct_jump && !stable_indirect_jump) ||
       (direct_jump && command.opcode != kJumpOpcode) ||
       command.raw || command.manual_interaction.has_value() ||
-      !command.roles.empty() ||
+      !call_provenance_only ||
       jump.stack_effect != StackEffect::Preserves ||
       jump.x2_effect != X2Effect::Preserves) {
     return fail("jump-fold source is not an unlabelled transparent БП flow"
@@ -1688,7 +1698,8 @@ std::optional<std::vector<Cell>> convert_direct_flows(
     const std::set<std::size_t>& excluded_commands,
     std::vector<NaturalTargetFlowRewrite>& rewrites,
     std::vector<DisplacedIndirectFlowRewrite>& displaced_flows,
-    std::vector<TransparentTrampoline>& trampolines) {
+    std::vector<TransparentTrampoline>& trampolines,
+    const std::vector<int>& released_registers) {
   const std::optional<std::vector<Cell>> original_cells = make_cells(items);
   if (!original_cells.has_value())
     return std::nullopt;
@@ -1719,7 +1730,7 @@ std::optional<std::vector<Cell>> convert_direct_flows(
         .original_opcode = direct_flow.direct_opcode,
     });
   }
-  if (converted_commands.empty() ||
+  if ((converted_commands.empty() && released_registers.empty()) ||
       std::any_of(anchors.begin(), anchors.end(), [&](const auto& anchor) {
         if (anchor.flow_sites == 0)
           return false;
@@ -1771,6 +1782,29 @@ std::optional<std::vector<Cell>> convert_direct_flows(
     }
     if (displaced_count != anchor.displaced_flow_uses)
       return std::nullopt;
+  }
+
+  // Explicit releases do not assign the selector to another destination.
+  // Their complete, stable preload families were checked before enumeration.
+  for (const int reg : released_registers) {
+    if (selected_registers.contains(reg))
+      return std::nullopt;
+    for (const std::size_t command : indirect_flow_uses(items, reg)) {
+      const auto targets = flow.indirect_flow_targets.find(command);
+      const auto direct = direct_opcode_for_indirect_flow(items.at(command).opcode);
+      if (targets == flow.indirect_flow_targets.end() ||
+          targets->second.size() != 1U || !direct.has_value())
+        return std::nullopt;
+      DisplacedIndirectFlowRewrite rewrite{
+          .command_origin = command,
+          .operand_origin = next_synthetic_origin++,
+          .target_origin = targets->second.front().item_index,
+          .direct_opcode = *direct,
+      };
+      if (!displaced_by_command.emplace(command, rewrite).second)
+        return std::nullopt;
+      displaced_flows.push_back(rewrite);
+    }
   }
 
   std::vector<Cell> cells;
@@ -3800,6 +3834,7 @@ bool converted_flow_effects_equivalent(
     const std::vector<NaturalTargetFlowRewrite>& flows,
     const std::vector<DisplacedIndirectFlowRewrite>& displaced_flows,
     const TraceGraph& trace, ConvertedFlowEffectProofContext& proof_context,
+    const std::vector<int>& released_registers,
     std::string* failure_reason = nullptr,
     std::size_t* failure_command = nullptr,
     int* x2_reconvergence_flows = nullptr) {
@@ -3847,6 +3882,9 @@ bool converted_flow_effects_equivalent(
           *family + anchor->selector.register_index);
     }
   }
+
+  for (const DisplacedIndirectFlowRewrite& flow : displaced_flows)
+    converted_opcode_by_command.emplace(flow.command_origin, flow.direct_opcode);
 
   const auto symbolic_entry_has_x2_equal_x = [&](std::size_t command) {
     bool found = false;
@@ -4109,125 +4147,155 @@ bool converted_flow_effects_equivalent(
 
   const auto x2_difference_reconverges = [&](std::size_t command,
                                               bool fallthrough_only) {
-    // This is a safety property, not a termination proof. A preserving loop is
-    // valid while the hidden X2 difference cannot escape to an observer; a DFS
-    // that rejects every back-edge therefore loses valid loop-heavy layouts.
-    // Build the preserving dependency graph and compute its greatest fixed
-    // point instead. Any unsafe exit removes its whole predecessor SCC, while a
-    // closed preserving SCC remains valid because both programs take the same
-    // control-flow edges and never observe the hidden difference.
-    std::set<TraceState> seeds;
+    // This is a safety property, not a termination proof. Keep the exact return
+    // context and a path-local fresh-entry certificate. A call/store can close
+    // number entry before a literal in another component; its first digit then
+    // overwrites the hidden X2 difference instead of restoring it.
+    struct ReconvergenceState {
+      TraceState trace_state;
+      bool automatic_entry = false;
+      auto operator<=>(const ReconvergenceState&) const = default;
+    };
+    std::set<ReconvergenceState> seeds;
     for (const auto& [state, edges] : trace) {
       if (state.command != command)
         continue;
       for (const TraceEdge& edge : edges) {
         if (fallthrough_only && edge.kind != TraceEdgeKind::Fallthrough)
           continue;
-        seeds.insert(edge.target);
+        seeds.insert({edge.target, false});
       }
     }
     if (seeds.empty())
       return false;
 
-    std::set<TraceState> reachable;
-    std::set<TraceState> intrinsically_unsafe;
-    std::map<TraceState, std::set<TraceState>> preserving_successors;
-    std::deque<TraceState> pending(seeds.begin(), seeds.end());
+    std::set<ReconvergenceState> reachable;
+    std::set<ReconvergenceState> intrinsically_unsafe;
+    std::map<ReconvergenceState, std::set<ReconvergenceState>> preserving_successors;
+    std::deque<ReconvergenceState> pending(seeds.begin(), seeds.end());
     while (!pending.empty()) {
-      const TraceState state = pending.front();
+      const ReconvergenceState state = pending.front();
       pending.pop_front();
       if (!reachable.insert(state).second)
         continue;
-      if (state.command >= original_items.size()) {
+      const TraceState& context = state.trace_state;
+      if (context.command >= original_items.size()) {
         intrinsically_unsafe.insert(state);
         continue;
       }
-      const MachineItem& item = original_items.at(state.command);
-      if (item.kind != MachineItemKind::Op) {
+      const MachineItem& item = original_items.at(context.command);
+      if (item.kind != MachineItemKind::Op || item.raw ||
+          item.manual_interaction.has_value()) {
         intrinsically_unsafe.insert(state);
         continue;
       }
-      // The paired executions still have identical visible X and differ only
-      // in hidden X2. A compiler-proved terminal stop has no admitted resume
-      // edge, so that hidden difference is unobservable and is a safe sink,
-      // not a failed convergence. Resumable and unknown stops remain subject
-      // to the ordinary successor/restore proof below.
+      // A terminal stop admits no continuation that could expose hidden X2.
+      // Resumable stops and manual interactions are deliberately not sinks.
       if (item.opcode == 0x50 &&
           item.stop_disposition == StopDisposition::Terminal) {
         continue;
       }
-      const OpcodeInfo& info = opcode_by_code(item.opcode);
+      const auto rewritten = converted_opcode_by_command.find(context.command);
+      const int final_opcode = rewritten == converted_opcode_by_command.end()
+                                   ? item.opcode
+                                   : rewritten->second;
+      if (state.automatic_entry && item.opcode >= 0 && item.opcode <= 9 &&
+          final_opcode == item.opcode) {
+        // Only a fresh mantissa digit is an overwrite. Dot, sign and VP remain
+        // context-sensitive restores and must pass the ordinary proof.
+        continue;
+      }
+
+      const OpcodeInfo& before = opcode_by_code(item.opcode);
+      const OpcodeInfo& after = opcode_by_code(final_opcode);
       const bool conditional =
           is_direct_conditional(item.opcode) || is_indirect_conditional(item.opcode);
       if (!conditional) {
-        if (info.x2_effect == X2Effect::Affects)
+        if (before.x2_effect == X2Effect::Affects &&
+            after.x2_effect == X2Effect::Affects)
           continue;
-        if (info.x2_effect != X2Effect::Preserves) {
+        if (before.x2_effect != X2Effect::Preserves ||
+            after.x2_effect != X2Effect::Preserves) {
           intrinsically_unsafe.insert(state);
           continue;
         }
-      } else if (!info.conditional_x2_effect.has_value()) {
+      } else if (!before.conditional_x2_effect.has_value() ||
+                 !after.conditional_x2_effect.has_value()) {
         intrinsically_unsafe.insert(state);
         continue;
       }
 
-      const auto outgoing = trace.find(state);
+      const auto outgoing = trace.find(context);
       if (outgoing == trace.end() || outgoing->second.empty()) {
         intrinsically_unsafe.insert(state);
         continue;
       }
+      const auto entry_after = [&](int opcode) {
+        if (selector_charge_entry_closer_opcode(opcode))
+          return true;
+        return state.automatic_entry &&
+               (opcode == 0x51 || opcode == 0x54 ||
+                (opcode == 0x52 && !context.returns.empty()));
+      };
+      const bool automatic_entry =
+          entry_after(item.opcode) && entry_after(final_opcode);
       for (const TraceEdge& edge : outgoing->second) {
-        X2Effect edge_effect = info.x2_effect;
-        if (conditional) {
-          const bool converted_direct =
-              is_direct_conditional(item.opcode) &&
-              converted_commands.contains(state.command);
-          if (converted_direct || is_indirect_conditional(item.opcode)) {
-            edge_effect = X2Effect::Preserves;
-          } else {
-            edge_effect = edge.kind == TraceEdgeKind::Fallthrough
-                              ? info.conditional_x2_effect->fallthrough
-                              : info.conditional_x2_effect->jump;
-          }
-        }
-        if (edge_effect == X2Effect::Affects)
+        const auto effect = [&](const OpcodeInfo& info) {
+          if (!conditional)
+            return info.x2_effect;
+          return edge.kind == TraceEdgeKind::Fallthrough
+                     ? info.conditional_x2_effect->fallthrough
+                     : info.conditional_x2_effect->jump;
+        };
+        const X2Effect before_effect = effect(before);
+        const X2Effect after_effect = effect(after);
+        if (before_effect == X2Effect::Affects &&
+            after_effect == X2Effect::Affects)
           continue;
-        if (edge_effect != X2Effect::Preserves) {
+        const auto preserves_or_syncs = [](X2Effect value) {
+          return value == X2Effect::Preserves || value == X2Effect::Affects;
+        };
+        if (!preserves_or_syncs(before_effect) ||
+            !preserves_or_syncs(after_effect)) {
           intrinsically_unsafe.insert(state);
           continue;
         }
-        preserving_successors[state].insert(edge.target);
-        pending.push_back(edge.target);
+        // A one-sided sync still leaves at most the hidden X2 difference.
+        // Do not call it convergence merely because one execution writes X2.
+        const ReconvergenceState successor{edge.target, automatic_entry};
+        preserving_successors[state].insert(successor);
+        pending.push_back(successor);
       }
     }
 
-    std::set<TraceState> proved;
-    for (const TraceState& state : reachable) {
+    // Greatest fixed point: a closed preserving SCC is safe; any observable
+    // exit invalidates every predecessor, including paths with stale entry.
+    std::set<ReconvergenceState> proved;
+    for (const ReconvergenceState& state : reachable)
       if (!intrinsically_unsafe.contains(state))
         proved.insert(state);
-    }
     bool changed = true;
     while (changed) {
       changed = false;
-      std::vector<TraceState> rejected;
-      for (const TraceState& state : proved) {
+      std::vector<ReconvergenceState> rejected;
+      for (const ReconvergenceState& state : proved) {
         const auto successors = preserving_successors.find(state);
         if (successors == preserving_successors.end())
           continue;
         if (std::any_of(successors->second.begin(), successors->second.end(),
-                        [&](const TraceState& successor) {
+                        [&](const ReconvergenceState& successor) {
                           return !proved.contains(successor);
                         })) {
           rejected.push_back(state);
         }
       }
-      for (const TraceState& state : rejected)
+      for (const ReconvergenceState& state : rejected)
         changed = proved.erase(state) > 0U || changed;
     }
-    const bool result = std::all_of(
-        seeds.begin(), seeds.end(),
-        [&](const TraceState& seed) { return proved.contains(seed); });
-    return result;
+    return std::all_of(seeds.begin(), seeds.end(),
+                       [&](const ReconvergenceState& seed) {
+                         return proved.contains(seed);
+                       });
   };
 
   for (const NaturalTargetFlowRewrite& flow : flows) {
@@ -4324,7 +4392,9 @@ bool converted_flow_effects_equivalent(
           return candidate.selector.register_index ==
                  encoded_register(original.opcode);
         });
-    if (anchor == anchors.end())
+    if (anchor == anchors.end() &&
+        std::find(released_registers.begin(), released_registers.end(),
+                  encoded_register(original.opcode)) == released_registers.end())
       return fail("displaced-flow-anchor@" +
                   std::to_string(displaced.command_origin));
     const OpcodeInfo& before = opcode_by_code(original.opcode);
@@ -4872,9 +4942,10 @@ std::optional<CandidateArtifact> try_candidate(
   const bool jump_fold_only =
       !has_flow_anchor && attempt_jump_folds &&
       options.allow_standalone_fallthrough_jump_fold;
-  const bool layout_only =
-      bounded_only || absolute_only || selector_target_only || jump_fold_only;
-  if (!has_flow_anchor && !layout_only)
+  const bool releases_family = !options.released_flow_selector_registers.empty();
+  const bool layout_only = !releases_family &&
+      (bounded_only || absolute_only || selector_target_only || jump_fold_only);
+  if (!has_flow_anchor && !layout_only && !releases_family)
     return reject("candidate has no natural-target anchors");
   std::vector<NaturalTargetFlowRewrite> rewrites;
   std::vector<DisplacedIndirectFlowRewrite> displaced_flows;
@@ -4895,8 +4966,9 @@ std::optional<CandidateArtifact> try_candidate(
       trampolines.clear();
       converted = convert_direct_flows(items, flows, control_flow, anchors,
                                        excluded_direct_commands, rewrites,
-                                       displaced_flows, trampolines);
-      if (!converted.has_value() || rewrites.empty()) {
+                                       displaced_flows, trampolines,
+                                       options.released_flow_selector_registers);
+      if (!converted.has_value() || (rewrites.empty() && displaced_flows.empty())) {
         std::string reason = "direct-flow conversion failed";
         if (!excluded_direct_commands.empty()) {
           reason += " after excluding";
@@ -4911,7 +4983,7 @@ std::optional<CandidateArtifact> try_candidate(
       std::size_t failure_command = std::numeric_limits<std::size_t>::max();
       if (converted_flow_effects_equivalent(
               items, anchors, rewrites, displaced_flows, original_trace,
-              flow_effect_proof_context, &failure,
+              flow_effect_proof_context, options.released_flow_selector_registers, &failure,
               &failure_command)) {
         break;
       }
@@ -5150,13 +5222,13 @@ std::optional<CandidateArtifact> try_candidate(
       2 * static_cast<int>(trampolines.size()) -
       split_bridge_cells(split_bridges) + jump_fold_savings;
   const bool transactional_absolute_layout =
-      !options.required_absolute_targets.empty() &&
+      (releases_family || !options.required_absolute_targets.empty()) &&
       options.maximum_transactional_growth_cells > 0;
   const int maximum_padding =
       layout_only
           ? std::max(0, options.maximum_transactional_growth_cells) +
                 jump_fold_savings
-      : transactional_absolute_layout
+      : transactional_absolute_layout || releases_family
           ? converted_flow_budget + options.maximum_transactional_growth_cells
           : converted_flow_budget -
                 (options.allow_size_neutral_flow_rebind ? 0 : 1);
@@ -5594,17 +5666,18 @@ std::optional<CandidateArtifact> try_candidate(
   const bool converted_flow_effects_proved =
       layout_only || converted_flow_effects_equivalent(
                           items, anchors, plan.flows, displaced_flows,
-                          *comparison_original_trace,
-                          flow_effect_proof_context, &converted_flow_failure,
+                           *comparison_original_trace,
+                           flow_effect_proof_context, options.released_flow_selector_registers,
+                           &converted_flow_failure,
                           nullptr, &x2_reconvergence_flows);
   plan.x2_reconvergence_flows = x2_reconvergence_flows;
   plan.bounded_targets = static_cast<int>(bounded_target_origins.size());
   plan.bounded_targets_proved = bounded_targets_proved;
-  plan.size_neutral_bounded_layout = bounded_only;
+  plan.size_neutral_bounded_layout = bounded_only && !releases_family;
   plan.absolute_targets =
       static_cast<int>(options.required_absolute_targets.size());
   plan.absolute_targets_proved = absolute_targets_proved;
-  plan.size_neutral_absolute_layout = absolute_only;
+  plan.size_neutral_absolute_layout = absolute_only && !releases_family;
   plan.transactional_selector_target_layout = selector_target_only;
   plan.transactional_growth_cells = std::max(0, -plan.removed_cells);
   plan.size_neutral_selector_target_layout =
@@ -5648,7 +5721,7 @@ std::optional<CandidateArtifact> try_candidate(
   const bool size_goal_proved =
       layout_only
           ? plan.removed_cells >= -maximum_padding
-      : transactional_absolute_layout
+      : transactional_absolute_layout || releases_family
           ? plan.removed_cells >= -options.maximum_transactional_growth_cells
           : plan.removed_cells > 0 || plan.size_neutral_flow_rebind;
   plan.proved = plan.removed_cells == expected_removed_cells &&
@@ -5971,6 +6044,11 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     add_reason(result.plan, "proof search cap is not positive");
     return result;
   }
+  if (!options.released_flow_selector_registers.empty() &&
+      options.maximum_transactional_growth_cells < 0) {
+    add_reason(result.plan, "selector release has an exhausted growth allowance");
+    return result;
+  }
   if (options.require_size_neutral_absolute_layout &&
       (!options.allow_size_neutral_absolute_layout ||
        options.required_absolute_targets.empty())) {
@@ -6158,7 +6236,8 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
   }
   if (flows.empty() && bounded_target_origins.empty() &&
       options.required_absolute_targets.empty() &&
-      options.required_selector_targets.empty()) {
+      options.required_selector_targets.empty() &&
+      options.released_flow_selector_registers.empty()) {
     add_reason(result.plan, "artifact contains no direct flow to shorten");
     return result;
   }
@@ -6212,6 +6291,47 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
 
   std::vector<SelectorCandidate> selectors = selector_candidates(
       logical_items, preloads, *logical_flow, options);
+
+  std::set<int> released_registers;
+  bool unique_preloads = false;
+  const auto preload_by_register = preload_index(preloads, unique_preloads);
+  for (const int reg : options.released_flow_selector_registers) {
+    if (reg < 7 || reg > 14 || !unique_preloads ||
+        !released_registers.insert(reg).second ||
+        register_is_written(logical_items, *logical_flow, reg) ||
+        std::any_of(required_selector_by_flow.begin(), required_selector_by_flow.end(),
+                    [&](const auto& binding) { return binding.second == reg; })) {
+      add_reason(result.plan, "selector release requires unique, unwritten stable families");
+      return result;
+    }
+    const auto preload = preload_by_register.find(register_name(reg));
+    if (preload == preload_by_register.end() ||
+        !is_literal_runtime_preload(preloads.at(preload->second))) {
+      add_reason(result.plan, "selector release requires a delivered literal preload");
+      return result;
+    }
+    const auto uses = indirect_flow_uses(logical_items, reg);
+    std::optional<std::size_t> target;
+    for (const std::size_t use : uses) {
+      const auto found = logical_flow->indirect_flow_targets.find(use);
+      if (logical_items.at(use).raw || is_proved_dynamic_selector_consumer(logical_items.at(use)) ||
+          found == logical_flow->indirect_flow_targets.end() || found->second.size() != 1U ||
+          (target && *target != found->second.front().item_index) ||
+          !preload_value_targets(register_name(reg), preloads.at(preload->second).value,
+                                 found->second.front().address, options.address_space_model)) {
+        add_reason(result.plan, "selector release has an incomplete or stale target family");
+        return result;
+      }
+      target = found->second.front().item_index;
+    }
+    if (!target) {
+      add_reason(result.plan, "selector release has no flow consumers");
+      return result;
+    }
+  }
+  selectors.erase(std::remove_if(selectors.begin(), selectors.end(), [&](const auto& selector) {
+                    return released_registers.contains(selector.register_index);
+                  }), selectors.end());
 
   std::vector<NaturalTargetAnchorCandidate> required_target_anchors;
   std::map<int, std::size_t> required_target_by_selector;
@@ -6723,8 +6843,9 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
         !bounded_target_origins.empty()) ||
        (options.allow_size_neutral_absolute_layout &&
         !options.required_absolute_targets.empty()) ||
-       (options.allow_size_neutral_selector_target_layout &&
-        !options.required_selector_targets.empty()))) {
+        (options.allow_size_neutral_selector_target_layout &&
+         !options.required_selector_targets.empty()) ||
+        !options.released_flow_selector_registers.empty())) {
     consider_trial({}, false);
   }
   // A transparent terminal `BP <target>` pair is independently profitable:
@@ -6857,6 +6978,7 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
       });
   const bool standard_composition =
       options.required_flow_selectors.empty() &&
+      options.released_flow_selector_registers.empty() &&
       options.required_selector_targets.empty() &&
       options.required_absolute_targets.empty() &&
       options.deferred_selector_reconciliations.empty() &&
@@ -6952,7 +7074,8 @@ NaturalTargetComponentLayoutResult optimize_natural_target_component_layout(
     add_reason(result.plan, std::move(reason));
   }
   result.applied =
-      (result.plan.size_neutral_bounded_layout ||
+      (!options.released_flow_selector_registers.empty() ||
+       result.plan.size_neutral_bounded_layout ||
        result.plan.size_neutral_absolute_layout ||
        result.plan.transactional_selector_target_layout)
                        ? std::max(1, result.plan.moved_segments)

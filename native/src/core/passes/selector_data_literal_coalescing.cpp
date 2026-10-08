@@ -356,6 +356,174 @@ SelectorChargeLiteralLayoutResult close_literal_layout(
   return result;
 }
 
+// Erase first, but publish only after exact layout has discharged every debt.
+// The provisional artifact is not executable output: its private selector may
+// not yet equal the removed literal, and immutable companion selectors can
+// temporarily point past their typed targets.
+SelectorChargeLiteralLayoutResult layout_after_literal_erasure(
+    const std::vector<MachineItem>& items, const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& before,
+    const PostLayoutControlFlowOptions& flow_options, const Family& family,
+    const NaturalTargetComponentLayoutOptions& layout_options) {
+  SelectorChargeLiteralLayoutResult best;
+  if (!layout_options.deferred_selector_reconciliations.empty()) return best;
+  std::vector<MachineItem> erased;
+  std::vector<std::optional<std::size_t>> mapping(items.size());
+  for (std::size_t i = 0; i < items.size(); ++i) {
+    if (family.digits.contains(i)) continue;
+    mapping[i] = erased.size();
+    erased.push_back(items[i]);
+    if (i == family.store)
+      erased.back().roles.push_back("selector-sunk-literal-coalesced");
+  }
+  const auto rebound = rebind_late_bound_decimal_selectors(
+      erased, {.minimum_target_address = 0, .maximum_target_address = 99});
+  if (!rebound.diagnostics.empty()) return best;
+  erased = rebound.items;
+  const auto provisional = build_post_layout_control_flow(erased, flow_options);
+  if (!provisional.proved) return best;
+  const auto index = index_of(erased);
+  const int reg = items[family.store].opcode & 15;
+  const int data_address = std::stoi(family.literal);
+  if (data_address > official_program_last_address(layout_options.address_space_model))
+    return best;
+  auto options = layout_options;
+  options.maximum_subset_states = std::min<std::size_t>(options.maximum_subset_states, 512);
+  options.maximum_anchor_combinations = 32;
+  options.required_absolute_targets = {
+      {.target_item = *mapping[family.leaf], .target_address = data_address}};
+  std::map<std::size_t, int> fixed{{*mapping[family.leaf], data_address}};
+  auto delivered_preloads = preloads;
+  std::map<int, std::pair<int, int>> moved_targets;
+  std::set<std::size_t> staged_companions;
+  for (const auto& [source, targets] : before.indirect_flow_targets) {
+    const int selector = items[source].opcode & 15;
+    if (selector == reg) continue;
+    for (const auto& target : targets) {
+      if (target.item_index >= mapping.size() || !mapping[target.item_index])
+        return best;
+      const auto output = *mapping[target.item_index];
+      const int temporary_address = index.addresses[output];
+      if (temporary_address == target.address) continue;
+      if (targets.size() != 1 || selector < 7 || selector > 14) return best;
+      const auto [found, inserted] = moved_targets.emplace(
+          selector, std::pair{target.address, temporary_address});
+      if (!inserted && found->second != std::pair{target.address, temporary_address})
+        return best;
+      const std::string name(1, "0123456789abcde"[selector]);
+      std::optional<std::size_t> preload_index;
+      for (std::size_t i = 0; i < preloads.size(); ++i) {
+        if (register_from_text(preloads[i].register_name) != name) continue;
+        if (preload_index) return best;
+        preload_index = i;
+      }
+      if (!preload_index) return best;
+      const auto value = rebind_stable_preloaded_indirect_flow_selector(
+          items, preloads[*preload_index], before, target.address,
+          temporary_address, layout_options.address_space_model);
+      if (value) {
+        delivered_preloads[*preload_index].value = *value;
+      } else {
+        // Do not retune observable data. The final geometry must restore its
+        // original command identity at the unchanged decoded address.
+        const auto [position, added] = fixed.emplace(output, target.address);
+        if (!added && position->second != target.address) return best;
+        if (added) options.required_absolute_targets.push_back({
+            .target_item = output, .target_address = target.address});
+        options.deferred_selector_reconciliations.push_back({
+            .source_item = *mapping[source], .target_item = output,
+            .final_target_address = target.address});
+      }
+      staged_companions.insert(source);
+    }
+  }
+  // This first proof transports identities, aliases, observations and return
+  // frames. It does not discharge the deliberately staged address/data debts.
+  if (!transport_is_exact(before, provisional, mapping, &items, reg, staged_companions))
+    return best;
+  const auto bounded = late_bound_decimal_selector_target_labels(erased);
+  if (!bounded) return best;
+  options.required_bounded_target_labels = *bounded;
+  options.maximum_bounded_target_address = 99;
+  options.allow_size_neutral_bounded_layout = true;
+  options.constrain_rebindable_selector_targets = true;
+  options.allow_size_neutral_absolute_layout = true;
+  options.allow_size_neutral_flow_rebind = true;
+  // Spend at most one less cell than the erasure earned. Even a bridge must
+  // be repaid inside this transaction; the caller never receives a larger IR.
+  options.maximum_transactional_growth_cells =
+      static_cast<int>(family.digits.size()) - 1;
+  const int input_cells = index_of(items).cells;
+  for (const bool neutral : {false, true}) {
+    options.require_size_neutral_absolute_layout = neutral;
+    const auto placed = optimize_natural_target_component_layout(
+        erased, delivered_preloads, provisional, options);
+    if (placed.applied <= 0 || !placed.plan.proved ||
+        !placed.plan.absolute_targets_proved ||
+        !placed.plan.deferred_selector_reconciliations_proved ||
+        !placed.plan.final_artifact_proved || !placed.plan.final_control_flow.proved) {
+      if (!placed.plan.reasons.empty())
+        best.reasons.push_back("erasure-aware layout: " + placed.plan.reasons.back());
+      continue;
+    }
+    const int saved = input_cells - index_of(placed.items).cells;
+    if (saved <= 0 || (best.applied > 0 && saved <= best.removed_cells)) continue;
+    const auto delivered = rebind_late_bound_decimal_selectors(
+        placed.items, {.minimum_target_address = 0, .maximum_target_address = 99});
+    if (!delivered.diagnostics.empty()) continue;
+    const auto final_flow = build_post_layout_control_flow(delivered.items, flow_options);
+    std::vector<std::optional<std::size_t>> identity(placed.items.size());
+    for (std::size_t i = 0; i < identity.size(); ++i) identity[i] = i;
+    if (!final_flow.proved || !transport_is_exact(
+        placed.plan.final_control_flow, final_flow, identity)) continue;
+    const auto& final_items = delivered.items;
+    std::optional<std::size_t> store;
+    bool unique_store = true;
+    std::set<std::size_t> charges;
+    for (std::size_t i = 0; i < final_items.size(); ++i) {
+      if (role(final_items[i], "selector-sunk-literal-id:") == family.identity) {
+        if (store) unique_store = false;
+        store = i;
+      }
+      if (role(final_items[i], "late-decimal-selector-high:") &&
+          role(final_items[i], "late-decimal-selector-register:") ==
+              std::string(1, "0123456789abcde"[reg]))
+        charges.insert(i);
+    }
+    if (!unique_store || !store || charges.size() != family.charges.size()) continue;
+    bool entries_proved = true;
+    for (const auto high : charges) {
+      const auto low = next(final_items, high);
+      if (low >= final_items.size() || !prove_selector_charge_sunk_literal_entry(
+          final_items, final_flow, *store, high,
+          final_items[high].opcode * 10 + final_items[low].opcode)) {
+        entries_proved = false;
+        break;
+      }
+    }
+    if (!entries_proved) {
+      best.reasons.push_back("erasure-aware layout: final data/selector/stack contract failed");
+      continue;
+    }
+    best.items = final_items;
+    best.preloads = placed.preloads;
+    best.final_control_flow = final_flow;
+    best.applied = 1;
+    best.removed_cells = saved;
+    best.optimizations = {{
+        .name = "selector-data-literal-coalescing",
+        .detail = "Reused a private selector as ordinary data; independently proved all final "
+                  "entries, stack/X1/X2 and return contexts."}, {
+        .name = "selector-data-literal-erasure-layout",
+        .detail = "Solved exact layout after removing " +
+            std::to_string(family.digits.size()) +
+            " literal cells, reconciling immutable companion targets without changing their data. "
+            "Complete artifact: " + std::to_string(input_cells) + " -> " +
+            std::to_string(input_cells - saved) + " cells."}};
+  }
+  return best;
+}
+
 } // namespace
 
 SelectorChargeLiteralLayoutResult optimize_selector_data_literal_coalescing(
@@ -418,6 +586,15 @@ SelectorChargeLiteralLayoutResult optimize_selector_data_literal_coalescing(
     else if (!closed.reasons.empty() && best.reasons.size() < 8)
       best.reasons.push_back(closed.reasons.front());
     }
+    }
+    if (best.applied == 0 || best.removed_cells < static_cast<int>(family->digits.size())) {
+      auto erased = layout_after_literal_erasure(
+          *symbolic, preloads, flow, flow_options, *family, layout_options);
+      if (erased.applied > 0 &&
+          (best.applied == 0 || erased.removed_cells > best.removed_cells))
+        best = std::move(erased);
+      else for (const auto& reason : erased.reasons)
+        if (best.reasons.size() < 8) best.reasons.push_back(reason);
     }
   }
   return best;

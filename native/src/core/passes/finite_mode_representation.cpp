@@ -7,6 +7,7 @@
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/post_layout_control_flow.hpp"
+#include "mkpro/core/post_layout_numeric_ranges.hpp"
 #include "mkpro/core/register_allocator.hpp"
 #include "mkpro/core/stack_value_equivalence.hpp"
 
@@ -22,6 +23,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -283,6 +285,12 @@ struct Macro {
   // A complete read/transform/write of the encoded carrier. The transition
   // table, rather than equality of its intermediate X, certifies the update.
   bool transition = false;
+  bool coefficient_definition = false;
+  bool coefficient_product = false;
+  bool state_identity = false;
+  bool inline_product = false;
+  bool normalizing_max = false;
+  std::optional<int> replacement_recall;
 };
 
 struct Plan {
@@ -296,6 +304,12 @@ struct Plan {
   std::set<std::size_t> flow_reads;
   std::map<std::string, int> fixed_targets;
   std::size_t transition_count = 0;
+  std::optional<int> coefficient_reg;
+  bool raw_coefficient = false;
+  std::vector<PreloadReport> preloads;
+  bool inline_coefficient = false;
+  std::optional<int> seed_reg;
+  std::size_t normalizing_max_count = 0;
 };
 
 // A physical register is not a single source value. Build reaching definitions
@@ -587,6 +601,387 @@ std::map<std::size_t, std::vector<Literal>> literal_inputs(
   return result;
 }
 
+
+// Prove a right-multiplication operand domain on the matched return-context
+// graph. This is a backwards must proof, not sampling or a guessed loop bound.
+// Unknown roots, number-entry state and destructive register aliases reject.
+bool power10_input(const std::vector<IrOp>& ops,
+                   const AuthoritativePostLayoutControlFlow& flow,
+                   const std::vector<std::size_t>& machine,
+                   const std::vector<bool>& automatic_entry_lift,
+                   std::size_t read, const std::vector<PreloadReport>& preloads) {
+  enum class Property { Power, Exponent };
+  struct Demand {
+    std::size_t state;
+    int reg; // -1 is X immediately before this instruction.
+    Property property;
+  };
+  const auto satisfies = [](const std::string& value, Property property) {
+    const auto number = exact_decimal(value);
+    if (!number)
+      return false;
+    if (property == Property::Exponent)
+      return number->numerator % number->denominator == 0 &&
+             number->numerator / number->denominator >= -8 &&
+             number->numerator / number->denominator <= 8;
+    auto numerator = number->numerator;
+    auto denominator = number->denominator;
+    if (numerator <= 0)
+      return false;
+    const auto common = std::gcd(numerator, denominator);
+    numerator /= common;
+    denominator /= common;
+    int exponent = 0;
+    while (numerator > 1 && numerator % 10 == 0) {
+      numerator /= 10;
+      ++exponent;
+    }
+    while (denominator > 1 && denominator % 10 == 0) {
+      denominator /= 10;
+      --exponent;
+    }
+    return numerator == 1 && denominator == 1 && exponent >= -8 && exponent <= 8;
+  };
+  std::map<std::size_t, std::size_t> ir_at;
+  std::map<std::size_t, Literal> ending;
+  for (std::size_t i = 0; i < ops.size(); ++i)
+    ir_at.emplace(machine[i], i);
+  for (std::size_t i = 0; i < ops.size();) {
+    if (const auto literal = literal_at(ops, i)) {
+      ending.emplace(literal->end - 1U, *literal);
+      i = literal->end;
+    } else {
+      ++i;
+    }
+  }
+  std::vector<std::vector<std::size_t>> predecessors(flow.execution_states.size());
+  for (std::size_t i = 0; i < flow.execution_successors.size(); ++i)
+    for (const auto next : flow.execution_successors[i])
+      predecessors[next].push_back(i);
+  std::set<std::size_t> external;
+  for (const auto& entry : flow.external_entries)
+    external.insert(entry.entry.item_index);
+  std::deque<Demand> pending;
+  for (std::size_t i = 0; i < flow.execution_states.size(); ++i)
+    if (flow.execution_states[i].item_index == machine[read])
+      pending.push_back({i, -1, Property::Power});
+  if (pending.empty())
+    return false;
+  std::set<std::tuple<std::size_t, int, Property>> seen;
+  std::size_t work = 0;
+  bool grounded = false;
+  while (!pending.empty()) {
+    const auto demand = pending.front();
+    pending.pop_front();
+    if (!seen.emplace(demand.state, demand.reg, demand.property).second)
+      continue;
+    if (++work > kMaximumProofStates)
+      return false;
+    const auto item = flow.execution_states[demand.state].item_index;
+    // A preload is only an entry fact at the actual main entry, never at a
+    // resume/manual entry where the player may have changed the registers.
+    if (external.contains(item) || predecessors[demand.state].empty()) {
+      if (item != machine.front() || demand.reg < 0)
+        return false;
+      const auto name = register_name_for_index(demand.reg);
+      const auto preload = std::find_if(preloads.begin(), preloads.end(),
+          [&](const auto& value) { return value.register_name == name; });
+      if (preload == preloads.end() || preload->setup_expression ||
+          preload->setup_target_name || !satisfies(preload->value, demand.property))
+        return false;
+      grounded = true;
+    }
+    for (const auto before : predecessors[demand.state]) {
+      const auto found = ir_at.find(flow.execution_states[before].item_index);
+      if (found == ir_at.end())
+        return false;
+      const auto index = found->second;
+      const auto& op = ops[index];
+      if (!ordinary(op) || op.target_meta.formal_opcode)
+        return false;
+      const int opcode = op.opcode;
+      const int family = opcode & 0xf0;
+      if (demand.reg >= 0) {
+        constexpr std::array<int, 4> loops{0x5d, 0x5b, 0x58, 0x5a};
+        if (op.kind == IrKind::Store && opcode == 0x40 + demand.reg) {
+          pending.push_back({before, -1, demand.property});
+          continue;
+        }
+        if ((family >= 0x70 && family <= 0xe0 && (opcode & 15) == demand.reg) ||
+            (demand.reg < 4 && opcode == loops[static_cast<std::size_t>(demand.reg)]) ||
+            opcode == 0x4f || opcode == 0x6f || opcode == 0x50)
+          return false;
+        if (family == 0xb0) {
+          const auto aliases = flow.indirect_memory_targets.find(machine[index]);
+          if (aliases == flow.indirect_memory_targets.end() ||
+              std::find(aliases->second.begin(), aliases->second.end(), demand.reg) !=
+                  aliases->second.end())
+            return false;
+        }
+        pending.push_back({before, demand.reg, demand.property});
+        continue;
+      }
+      if (const auto literal = ending.find(index); literal != ending.end()) {
+        if (!satisfies(literal->second.value, demand.property))
+          return false;
+        auto start = before;
+        for (std::size_t i = index; i > literal->second.begin; --i) {
+          if (external.contains(machine[i]) || predecessors[start].size() != 1U)
+            return false;
+          start = predecessors[start].front();
+          if (flow.execution_states[start].item_index != machine[i - 1U])
+            return false;
+        }
+        if (!automatic_entry_lift[start])
+          return false;
+        grounded = true;
+      } else if (op.kind == IrKind::Recall) {
+        pending.push_back({before, opcode - 0x60, demand.property});
+      } else if (op.kind == IrKind::Plain && opcode == 0x15 &&
+                 demand.property == Property::Power) {
+        pending.push_back({before, -1, Property::Exponent});
+      } else if (op.kind == IrKind::Plain && opcode == 0x0d &&
+                 demand.property == Property::Exponent) {
+        grounded = true;
+      } else if (op.kind == IrKind::Store || op.kind == IrKind::Call ||
+                 op.kind == IrKind::Return || op.kind == IrKind::Jump ||
+                 op.kind == IrKind::CondJump || op.kind == IrKind::Loop ||
+                 (op.kind == IrKind::Plain && opcode == 0x54)) {
+        pending.push_back({before, -1, demand.property});
+      } else {
+        return false;
+      }
+    }
+  }
+  return grounded;
+}
+
+// Fuse an immutable projection cache with its finite carrier. The relation
+// between the two registers is versioned in the product proof below: a new
+// phase invalidates the cache, even when both values still belong to the same
+// finite set. The raw alternative additionally needs an exhaustive operand
+// domain and a delivered seed in the eliminated cache register.
+std::vector<Plan> discover_coefficient_carriers(
+    const std::vector<IrOp>& ops, int reg,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<std::size_t>& machine,
+    const std::vector<bool>& automatic_entry_lift,
+    const FiniteModeCandidateOptions& options) {
+  std::set<int> coefficients;
+  for (std::size_t i = 0; i < ops.size(); ++i) {
+    if (ops[i].kind != IrKind::Recall || ops[i].opcode != 0x60 + reg || !ordinary(ops[i]))
+      continue;
+    const auto projection = projection_after(ops, i);
+    if (projection && projection->end < ops.size() &&
+        ops[projection->end].kind == IrKind::Store && ordinary(ops[projection->end]) &&
+        ops[projection->end].opcode != 0x40 + reg)
+      coefficients.insert(ops[projection->end].opcode - 0x40);
+  }
+  if (coefficients.empty())
+    return {};
+  const auto uses = analyze_mode_uses(ops, reg, flow, machine, false);
+  if (!uses)
+    return {};
+  const auto inputs = literal_inputs(ops, flow, machine, *uses);
+  std::map<std::size_t, Literal> literals;
+  std::set<std::size_t> stores, transitions;
+  for (std::size_t i = 0; i < ops.size(); ++i) {
+    if (ops[i].kind != IrKind::Store || ops[i].opcode != 0x40 + reg)
+      continue;
+    if (!ordinary(ops[i]))
+      return {};
+    if (i >= 2U && ordinary(ops[i - 2U]) && ordinary(ops[i - 1U]) &&
+        ops[i - 2U].kind == IrKind::Recall && ops[i - 2U].opcode == 0x60 + reg &&
+        ops[i - 1U].kind == IrKind::Plain && ops[i - 1U].opcode == 0x0b) {
+      transitions.insert(i - 2U);
+    } else {
+      const auto sources = inputs.find(i);
+      if (sources == inputs.end())
+        return {};
+      stores.insert(i);
+      for (const auto& literal : sources->second) {
+        if (literal.value != "1" && literal.value != "-1")
+          return {};
+        literals.emplace(literal.begin, literal);
+      }
+    }
+  }
+  if (literals.empty())
+    return {};
+  std::vector<Plan> plans;
+  for (const int coefficient : coefficients) {
+    if (coefficient < 0 || coefficient >= 15)
+      continue;
+    std::map<std::size_t, Projection> producers;
+    std::set<std::size_t> producer_stores, products, identities;
+    std::optional<int> exponent;
+    bool complete = true;
+    for (std::size_t i = 0; i < ops.size(); ++i) {
+      if (ops[i].kind == IrKind::Recall && ops[i].opcode == 0x60 + reg) {
+        if (!ordinary(ops[i])) {
+          complete = false;
+          break;
+        }
+        if (transitions.contains(i))
+          continue;
+        const auto projection = projection_after(ops, i);
+        if (projection && projection->end < ops.size() &&
+            ops[projection->end].kind == IrKind::Store &&
+            ops[projection->end].opcode == 0x40 + coefficient &&
+            ordinary(ops[projection->end])) {
+          const auto positive = projection->apply("1");
+          const auto negative = projection->apply("-1");
+          constexpr std::array<const char*, 4> powers{"0.001", "0.01", "0.1", "1"};
+          const auto found = std::find_if(powers.begin(), powers.end(),
+              [&](const char* power) { return positive && *positive == power; });
+          if (found == powers.end() || !negative || *negative != "-" + *positive) {
+            complete = false;
+            break;
+          }
+          const int power = static_cast<int>(found - powers.begin()) - 3;
+          if (exponent && *exponent != power) {
+            complete = false;
+            break;
+          }
+          exponent = power;
+          producers.emplace(i, *projection);
+          producer_stores.insert(projection->end);
+        } else {
+          identities.insert(i);
+        }
+      }
+      if (ops[i].kind == IrKind::Recall && ops[i].opcode == 0x60 + coefficient) {
+        if (!ordinary(ops[i]) || i + 1U >= ops.size() || !ordinary(ops[i + 1U]) ||
+            ops[i + 1U].kind != IrKind::Plain || ops[i + 1U].opcode != 0x12) {
+          complete = false;
+          break;
+        }
+        products.insert(i);
+      }
+    }
+    for (std::size_t i = 0; i < ops.size(); ++i)
+      if (ops[i].kind == IrKind::Store && ops[i].opcode == 0x40 + coefficient &&
+          !producer_stores.contains(i))
+        complete = false;
+    if (!complete || producers.empty() || products.empty() || !exponent)
+      continue;
+    const auto positive = *producers.begin()->second.apply("1");
+    std::vector<std::pair<bool, std::string>> encodings{{false, positive}};
+    const auto preload_conflict = [&] {
+      const auto name = register_name_for_index(coefficient);
+      return std::any_of(options.runtime_preloads->begin(), options.runtime_preloads->end(),
+          [&](const auto& preload) {
+            std::string old = preload.register_name;
+            for (char& c : old)
+              if (c >= 'A' && c <= 'F')
+                c = static_cast<char>(c - 'A' + 'a');
+            return old == name;
+          });
+    };
+    if (options.runtime_preloads && !preload_conflict() &&
+        std::all_of(products.begin(), products.end(), [&](std::size_t read) {
+          return power10_input(ops, flow, machine, automatic_entry_lift, read,
+                               *options.runtime_preloads);
+        })) {
+      RawWordSynthesisRequest request;
+      for (const int sign : {1, -1}) {
+        RawWordMode mode;
+        mode.sign = sign;
+        for (int input = -8; input <= 8; ++input)
+          mode.right_products.push_back({input, input + *exponent, sign});
+        request.modes.push_back(std::move(mode));
+      }
+      request.transitions = {{0, 1, RawWordTransitionKind::Negate},
+                             {1, 0, RawWordTransitionKind::Negate}};
+      const auto proposed = synthesize_raw_multirole_words(
+          request, {.maximum_work = 4096, .maximum_candidates = 1});
+      for (const auto& encoding : proposed.encodings)
+        if (certify_raw_multirole_words(encoding, request))
+          encodings.emplace_back(true, encoding.words.front());
+    }
+    for (const auto& [raw, word] : encodings) {
+      Plan plan;
+      plan.reg = reg;
+      plan.coefficient_reg = coefficient;
+      plan.raw_coefficient = raw;
+      plan.synthesized = true;
+      plan.value_count = 2;
+      plan.transition_count = transitions.size();
+      plan.encoding_summary = "1 -> " + word + ", -1 -> -" + word;
+      if (raw)
+        plan.preloads.push_back({.register_name = register_name_for_index(coefficient),
+                                 .value = word, .lowered_data_value = word});
+      for (const auto& [begin, literal] : literals) {
+        Macro definition;
+        definition.end = literal.end;
+        definition.input_literal = true;
+        definition.identical_value = !raw && positive == "1";
+        if (raw) {
+          definition.replacement_literal = {0x60 + coefficient};
+          if (literal.value == "-1")
+            definition.replacement_literal.push_back(0x0b);
+        } else {
+          definition.replacement_literal =
+              *encode_decimal(literal.value == "1" ? positive : "-" + positive);
+        }
+        plan.saved_cells += static_cast<int>(literal.end - begin) -
+                            static_cast<int>(definition.replacement_literal.size());
+        plan.macros.emplace(begin, std::move(definition));
+      }
+      for (const auto store : stores) {
+        Macro definition;
+        definition.end = store + 1U;
+        definition.input_store = true;
+        plan.macros.emplace(store, std::move(definition));
+      }
+      for (const auto read : transitions) {
+        Macro update;
+        update.end = read + 3U;
+        update.transition = true;
+        update.identical_value = !raw && positive == "1";
+        update.replacement_projection = {0x0b};
+        plan.macros.emplace(read, std::move(update));
+      }
+      for (const auto& [read, projection] : producers) {
+        Macro producer;
+        producer.end = projection.end + 1U;
+        producer.coefficient_definition = true;
+        plan.saved_cells += static_cast<int>(producer.end - read) - 1;
+        plan.macros.emplace(read, std::move(producer));
+      }
+      for (const auto read : products) {
+        Macro product;
+        product.end = read + 2U;
+        product.coefficient_product = true;
+        product.replacement_recall = reg;
+        product.replacement_projection = {0x12};
+        plan.macros.emplace(read, std::move(product));
+      }
+      for (const auto read : identities) {
+        Macro identity;
+        identity.end = read + 1U;
+        identity.state_identity = true;
+        identity.replacement_projection = {0x32};
+        if (identity.end < ops.size() && ordinary(ops[identity.end]) &&
+            ops[identity.end].kind == IrKind::Plain && ops[identity.end].opcode == 0x32)
+          ++identity.end;
+        plan.saved_cells += static_cast<int>(identity.end - read) - 2;
+        plan.macros.emplace(read, std::move(identity));
+      }
+      std::size_t end = 0;
+      bool disjoint = true;
+      for (const auto& [begin, macro] : plan.macros) {
+        disjoint = disjoint && begin >= end;
+        end = macro.end;
+      }
+      if (disjoint && plan.saved_cells >= -options.maximum_growth_cells &&
+          (options.maximum_growth_cells > 0 || plan.saved_cells > 0))
+        plans.push_back(std::move(plan));
+    }
+  }
+  return plans;
+}
+
 std::optional<std::vector<int>> projection_code(const Projection& projection) {
   if (projection.opcode < 0)
     return std::vector<int>{};
@@ -649,6 +1044,466 @@ struct StateTransition {
   std::size_t store = 0;
   Projection function;
 };
+
+
+// A physical register can have several unrelated epochs. Close only the
+// def/use component reached from one finite literal seed, including transition
+// outputs and every incoming definition at a merged read. Dynamic definitions
+// in another component are not a reason to reject this one.
+struct FiniteCarrierWeb {
+  std::map<std::size_t, Literal> literals;
+  std::set<std::size_t> seeds;
+  std::map<std::size_t, StateTransition> updates;
+  std::set<std::size_t> reads;
+  std::set<std::string> values;
+  std::map<std::size_t, std::size_t> normalizers;
+};
+
+std::vector<FiniteCarrierWeb> finite_carrier_webs(
+    const std::vector<IrOp>& ops, int reg,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<std::size_t>& machine) {
+  const auto uses = analyze_mode_uses(ops, reg, flow, machine, true);
+  if (!uses)
+    return {};
+  const auto inputs = literal_inputs(ops, flow, machine, *uses);
+  std::map<std::size_t, StateTransition> transitions;
+  std::map<std::size_t, std::size_t> transition_reads;
+  for (std::size_t i = 0; i < ops.size(); ++i) {
+    if (ops[i].kind != IrKind::Recall || ops[i].opcode != 0x60 + reg || !ordinary(ops[i]))
+      continue;
+    const auto projection = projection_after(ops, i);
+    if (projection && projection->end < ops.size() &&
+        ops[projection->end].kind == IrKind::Store &&
+        ops[projection->end].opcode == 0x40 + reg && ordinary(ops[projection->end])) {
+      transitions.emplace(projection->end, StateTransition{i, projection->end, *projection});
+      transition_reads.emplace(i, projection->end);
+    }
+  }
+  // A reduction write can end an encoded epoch rather than extending its
+  // finite state table. Other reaching definitions of this particular read
+  // may be ordinary dynamic values. Admission still needs an independent
+  // numeric absorption certificate and the relational continuation proof.
+  std::map<std::size_t, std::size_t> normalizers;
+  for (std::size_t i = 0; i + 2U < ops.size(); ++i)
+    if (ops[i].kind == IrKind::Recall && ops[i].opcode == 0x60 + reg &&
+        ops[i + 1U].kind == IrKind::Plain && ops[i + 1U].opcode == 0x36 &&
+        ops[i + 2U].kind == IrKind::Store && ops[i + 2U].opcode == 0x40 + reg &&
+        ordinary(ops[i]) && ordinary(ops[i + 1U]) && ordinary(ops[i + 2U]))
+      normalizers.emplace(i, i + 2U);
+  std::vector<FiniteCarrierWeb> result;
+  std::set<std::size_t> visited;
+  for (const auto& [seed, unused_literals] : inputs) {
+    (void)unused_literals;
+    if (visited.contains(seed))
+      continue;
+    FiniteCarrierWeb web;
+    std::set<std::size_t> stores;
+    std::deque<std::size_t> pending{seed};
+    bool complete = true;
+    while (!pending.empty()) {
+      const auto store = pending.front();
+      pending.pop_front();
+      if (!stores.insert(store).second)
+        continue;
+      visited.insert(store);
+      const auto consumers = uses->definition_reads.find(store);
+      if (store >= ops.size() || !ordinary(ops[store]) ||
+          (!inputs.contains(store) && !transitions.contains(store)) ||
+          consumers == uses->definition_reads.end()) {
+        complete = false;
+        continue;
+      }
+      for (const auto read : consumers->second) {
+        if (!web.reads.insert(read).second)
+          continue;
+        if (const auto sink = normalizers.find(read); sink != normalizers.end()) {
+          web.normalizers.emplace(read, sink->second);
+          continue;
+        }
+        const auto& definitions = uses->read_definitions.at(read);
+        pending.insert(pending.end(), definitions.begin(), definitions.end());
+        if (const auto update = transition_reads.find(read); update != transition_reads.end())
+          pending.push_back(update->second);
+      }
+    }
+    if (!complete)
+      continue;
+    for (const auto store : stores) {
+      if (const auto update = transitions.find(store); update != transitions.end()) {
+        web.updates.emplace(update->second.read, update->second);
+      } else {
+        web.seeds.insert(store);
+        for (const auto& literal : inputs.at(store)) {
+          web.literals.emplace(literal.begin, literal);
+          web.values.insert(literal.value);
+        }
+      }
+    }
+    if (web.values.empty() || web.values.size() > kMaximumModeValues)
+      continue;
+    std::deque<std::string> closure(web.values.begin(), web.values.end());
+    while (complete && !closure.empty()) {
+      const auto value = closure.front();
+      closure.pop_front();
+      for (const auto& [unused_read, update] : web.updates) {
+        (void)unused_read;
+        const auto next = update.function.apply(value);
+        if (!next || !encode_decimal(*next)) {
+          complete = false;
+          break;
+        }
+        if (web.values.insert(*next).second) {
+          if (web.values.size() > kMaximumModeValues) {
+            complete = false;
+            break;
+          }
+          closure.push_back(*next);
+        }
+      }
+    }
+    if (complete)
+      result.push_back(std::move(web));
+  }
+  return result;
+}
+
+// A new preload may use only a globally untouched stock-machine register.
+// All indirect targets are read from the authoritative CFG, never inferred
+// from a conveniently named variable or a partial preload map.
+std::optional<int> free_carrier_seed(
+    const std::vector<IrOp>& ops, const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<PreloadReport>* preloads) {
+  if (!preloads)
+    return std::nullopt;
+  std::array<bool, 15> used{};
+  for (const auto& preload : *preloads) {
+    std::string name = preload.register_name;
+    for (char& c : name)
+      if (c >= 'A' && c <= 'F')
+        c = static_cast<char>(c - 'A' + 'a');
+    bool recognized = false;
+    for (int reg = 0; reg < 15; ++reg)
+      if (name == register_name_for_index(reg)) {
+        used[static_cast<std::size_t>(reg)] = true;
+        recognized = true;
+      }
+    if (!recognized)
+      return std::nullopt;
+  }
+  for (const auto& op : ops) {
+    if (op.meta.raw || op.meta.manual_interaction || op.kind == IrKind::OrphanAddress)
+      return std::nullopt;
+    const int family = op.opcode & 0xf0;
+    if (op.kind != IrKind::Label &&
+        (family == 0x40 || (family >= 0x60 && family <= 0xe0))) {
+      const int reg = op.opcode & 15;
+      if (reg == 15)
+        return std::nullopt;
+      used[static_cast<std::size_t>(reg)] = true;
+    }
+    constexpr std::array<int, 4> loops{0x5d, 0x5b, 0x58, 0x5a};
+    for (std::size_t reg = 0; reg < loops.size(); ++reg)
+      if (op.opcode == loops[reg])
+        used[reg] = true;
+  }
+  for (const auto& [unused_item, targets] : flow.indirect_memory_targets) {
+    (void)unused_item;
+    for (const int target : targets) {
+      if (target < 0 || target >= 15)
+        return std::nullopt;
+      used[static_cast<std::size_t>(target)] = true;
+    }
+  }
+  for (int reg = 0; reg < 15; ++reg)
+    if (!used[static_cast<std::size_t>(reg)])
+      return reg;
+  return std::nullopt;
+}
+
+// Inline consumers need no materialized coefficient register. Select their
+// finite projection as the state representation and synthesize all remaining
+// observations/transitions from the same table. The whole inline product is
+// one proof macro, because erasing a binary projection also changes Z and T.
+std::vector<Plan> discover_inline_coefficient_carriers(
+    const std::vector<IrOp>& ops, int reg,
+    const AuthoritativePostLayoutControlFlow& flow,
+    const std::vector<std::size_t>& machine,
+    const std::vector<bool>& automatic_entry_lift,
+    const FiniteModeCandidateOptions& options) {
+  bool has_product = false;
+  for (std::size_t i = 0; i < ops.size() && !has_product; ++i) {
+    if (ops[i].kind != IrKind::Recall || ops[i].opcode != 0x60 + reg)
+      continue;
+    const auto projection = projection_after(ops, i);
+    has_product = projection && projection->end < ops.size() &&
+        ordinary(ops[projection->end]) && ops[projection->end].kind == IrKind::Plain &&
+        ops[projection->end].opcode == 0x12;
+  }
+  if (!has_product)
+    return {};
+  std::vector<Plan> plans;
+  const auto free_seed = free_carrier_seed(ops, flow, options.runtime_preloads);
+  const auto webs = finite_carrier_webs(ops, reg, flow, machine);
+  std::vector<std::size_t> reduction_items;
+  for (const auto& web : webs)
+    for (const auto& [read, unused_store] : web.normalizers) {
+      (void)unused_store;
+      reduction_items.push_back(machine[read]);
+    }
+  std::sort(reduction_items.begin(), reduction_items.end());
+  reduction_items.erase(std::unique(reduction_items.begin(), reduction_items.end()),
+                        reduction_items.end());
+  const auto numeric = reduction_items.empty() ? PostLayoutNumericRangeProof{}
+      : prove_post_layout_numeric_ranges(lower_ir_to_machine(ops), flow,
+            automatic_entry_lift, reduction_items, options.runtime_preloads,
+             kMaximumProofStates);
+  if (std::getenv("MKPRO_NATIVE_TRACE_FINITE_MODE_REPRESENTATION") && !webs.empty())
+    std::cerr << "[finite-mode-discovery] R" << register_name_for_index(reg)
+              << " webs=" << webs.size() << " reductions=" << reduction_items.size()
+              << " ranges=" << numeric.x_before.size() << '\n';
+  for (const auto& web : webs) {
+    std::map<std::size_t, Projection> observations;
+    std::set<std::size_t> products;
+    std::vector<Projection> encoders, functions;
+    bool complete = true;
+    for (const auto read : web.reads) {
+      if (web.updates.contains(read) || web.normalizers.contains(read))
+        continue;
+      if (!ordinary(ops[read]) || flow_read(ops[read], reg)) {
+        complete = false;
+        break;
+      }
+      auto projection = projection_after(ops, read);
+      if (!projection)
+        projection = Projection{-1, std::nullopt, read + 1U}; // logical identity
+      const bool product = projection->opcode >= 0 && projection->end < ops.size() &&
+          ordinary(ops[projection->end]) && ops[projection->end].kind == IrKind::Plain &&
+          ops[projection->end].opcode == 0x12;
+      observations.emplace(read, *projection);
+      functions.push_back(*projection);
+      if (product) {
+        products.insert(read);
+        if (std::none_of(encoders.begin(), encoders.end(), [&](const auto& old) {
+              return old.same_function(*projection);
+            }))
+          encoders.push_back(*projection);
+      }
+    }
+    if (!complete || products.empty())
+      continue;
+    for (const auto& [unused_read, update] : web.updates) {
+      (void)unused_read;
+      functions.push_back(update.function);
+    }
+    const std::vector<std::string> values(web.values.begin(), web.values.end());
+    for (const auto& encoder : encoders) {
+      std::vector<std::string> encoded;
+      for (const auto& value : values) {
+        const auto word = encoder.apply(value);
+        if (!word)
+          break;
+        encoded.push_back(*word);
+      }
+      if (encoded.size() != values.size())
+        continue;
+      struct Encoding {
+        std::vector<std::string> words;
+        bool raw = false;
+        bool preload = false;
+      };
+      std::vector<Encoding> alternatives{{encoded, false, false}};
+      const bool unit_signs = web.values == std::set<std::string>{"-1", "1"};
+      const bool symmetric = unit_signs && encoded[0] == "-" + encoded[1];
+      if (free_seed && symmetric)
+        alternatives.push_back({encoded, false, true});
+      if (free_seed && symmetric && web.normalizers.empty() &&
+          std::all_of(web.updates.begin(), web.updates.end(), [](const auto& update) {
+            return update.second.function.opcode == 0x0b && !update.second.function.operand;
+          }) &&
+          std::all_of(products.begin(), products.end(), [&](const auto read) {
+            return encoder.same_function(observations.at(read)) &&
+                power10_input(ops, flow, machine, automatic_entry_lift, read,
+                              *options.runtime_preloads);
+          })) {
+        constexpr std::array<const char*, 4> powers{"0.001", "0.01", "0.1", "1"};
+        const auto power = std::find_if(powers.begin(), powers.end(),
+            [&](const char* word) { return encoded[1] == word; });
+        if (power != powers.end()) {
+          const int exponent = static_cast<int>(power - powers.begin()) - 3;
+          RawWordSynthesisRequest request;
+          for (const int sign : {-1, 1}) {
+            RawWordMode mode;
+            mode.sign = sign;
+            for (int input = -8; input <= 8; ++input)
+              mode.right_products.push_back({input, input + exponent, sign});
+            request.modes.push_back(std::move(mode));
+          }
+          request.transitions = {{0, 1, RawWordTransitionKind::Negate},
+                                 {1, 0, RawWordTransitionKind::Negate}};
+          const auto proposed = synthesize_raw_multirole_words(
+              request, {.maximum_work = 4096, .maximum_candidates = 1});
+          for (const auto& encoding : proposed.encodings)
+            if (certify_raw_multirole_words(encoding, request))
+              alternatives.push_back({encoding.words, true, true});
+        }
+      }
+      for (const auto& encoding : alternatives) {
+        Plan plan;
+        plan.reg = reg;
+        plan.inline_coefficient = true;
+        plan.raw_coefficient = encoding.raw;
+        plan.synthesized = true;
+        plan.value_count = values.size();
+        plan.transition_count = web.updates.size();
+        std::map<std::string, std::string> codebook;
+        for (std::size_t row = 0; row < values.size(); ++row) {
+          codebook.emplace(values[row], encoding.words[row]);
+          if (!plan.encoding_summary.empty())
+            plan.encoding_summary += ", ";
+          plan.encoding_summary += values[row] + " -> " + encoding.words[row];
+        }
+        if (encoding.preload) {
+          plan.seed_reg = free_seed;
+          plan.preloads.push_back({.register_name = register_name_for_index(*free_seed),
+              .value = encoding.words[1], .lowered_data_value = encoding.words[1]});
+        }
+        bool valid = true;
+        for (const auto& [begin, literal] : web.literals) {
+          Macro definition;
+          definition.end = literal.end;
+          definition.input_literal = true;
+          definition.identical_value = !encoding.raw && literal.value == codebook.at(literal.value);
+          if (encoding.preload) {
+            definition.replacement_literal = {0x60 + *free_seed};
+            if (literal.value == "-1")
+              definition.replacement_literal.push_back(0x0b);
+          } else {
+            const auto code = encode_decimal(codebook.at(literal.value));
+            if (!code) {
+              valid = false;
+              break;
+            }
+            definition.replacement_literal = *code;
+          }
+          plan.saved_cells += static_cast<int>(literal.end - begin) -
+                              static_cast<int>(definition.replacement_literal.size());
+          plan.macros.emplace(begin, std::move(definition));
+        }
+        for (const auto store : web.seeds) {
+          Macro definition;
+          definition.end = store + 1U;
+          definition.input_store = true;
+          plan.macros.emplace(store, std::move(definition));
+        }
+        for (const auto& [read, projection] : observations) {
+          std::vector<std::string> wanted;
+          for (const auto& value : values) {
+            const auto output = projection.opcode < 0
+                ? std::optional<std::string>{value} : projection.apply(value);
+            if (!output)
+              break;
+            wanted.push_back(*output);
+          }
+          if (!valid || wanted.size() != values.size()) {
+            valid = false;
+            break;
+          }
+          const bool product = products.contains(read);
+          std::optional<Decoder> decoder;
+          if (!encoding.raw) {
+            decoder = choose_decoder(encoding.words, wanted, functions);
+          } else if (product) {
+            decoder = Decoder{};
+          } else if (const auto suffix = projection_code(projection)) {
+            decoder = Decoder{{0x32}, projection.operand.has_value()};
+            decoder->code.insert(decoder->code.end(), suffix->begin(), suffix->end());
+          }
+          if (!decoder) {
+            valid = false;
+            break;
+          }
+          Macro consumer;
+          consumer.end = projection.end + (product ? 1U : 0U);
+          consumer.binary_projection = projection.operand.has_value();
+          consumer.replacement_projection = decoder->code;
+          consumer.replacement_binary = decoder->binary;
+          consumer.inline_product = product;
+          if (product)
+            consumer.replacement_projection.push_back(0x12);
+          plan.saved_cells += static_cast<int>(consumer.end - read - 1U) -
+                              static_cast<int>(consumer.replacement_projection.size());
+          plan.macros.emplace(read, std::move(consumer));
+        }
+        for (const auto& [read, update] : web.updates) {
+          std::vector<std::string> wanted;
+          bool identical = !encoding.raw;
+          for (const auto& value : values) {
+            const auto next = update.function.apply(value);
+            if (!next || !codebook.contains(*next)) {
+              valid = false;
+              break;
+            }
+            wanted.push_back(codebook.at(*next));
+            identical = identical && *next == codebook.at(*next);
+          }
+          if (!valid)
+            break;
+          const auto decoder = encoding.raw ? std::optional<Decoder>{Decoder{{0x0b}, false}}
+              : choose_decoder(encoding.words, wanted, functions);
+          if (!decoder) {
+            valid = false;
+            break;
+          }
+          Macro transition;
+          transition.end = update.store + 1U;
+          transition.transition = true;
+          transition.identical_value = identical;
+          transition.binary_projection = update.function.operand.has_value();
+          transition.replacement_projection = decoder->code;
+          transition.replacement_binary = decoder->binary;
+          plan.saved_cells += static_cast<int>(update.store - read - 1U) -
+                              static_cast<int>(decoder->code.size());
+          plan.macros.emplace(read, std::move(transition));
+        }
+        for (const auto& [read, store] : web.normalizers) {
+          const auto domain = numeric.x_before.find(machine[read]);
+          // Exclude zero explicitly: Kmax does not implement the ordinary
+          // real-number ordering at zero. Raw words need a different theorem.
+          bool absorbs = !encoding.raw && domain != numeric.x_before.end() &&
+                         domain->second.lower > 0;
+          for (std::size_t row = 0; absorbs && row < values.size(); ++row) {
+            const auto original = bound_ordinary_decimal(values[row]);
+            const auto encoded_value = bound_ordinary_decimal(encoding.words[row]);
+            absorbs = original && encoded_value &&
+                (original->lower != 0 || original->upper != 0) &&
+                (encoded_value->lower != 0 || encoded_value->upper != 0) &&
+                domain->second.lower > original->upper &&
+                domain->second.lower > encoded_value->upper;
+          }
+          if (!absorbs) {
+            valid = false;
+            break;
+          }
+          Macro reduction;
+          reduction.end = store + 1U;
+          reduction.normalizing_max = true;
+          plan.macros.emplace(read, std::move(reduction));
+          ++plan.normalizing_max_count;
+        }
+        std::size_t end = 0;
+        for (const auto& [begin, macro] : plan.macros) {
+          valid = valid && begin >= end;
+          end = macro.end;
+        }
+        if (valid && plan.saved_cells >= -options.maximum_growth_cells &&
+            (options.maximum_growth_cells > 0 || plan.saved_cells > 0))
+          plans.push_back(std::move(plan));
+      }
+    }
+  }
+  return plans;
+}
 
 // Discover a closed finite transition system before selecting its physical
 // encoding. Reaching definitions alone cannot do this: the first backedge
@@ -1234,7 +2089,7 @@ std::vector<Plan> discover_joint(
   return plans;
 }
 
-bool symbolic(const std::vector<IrOp>& ops) {
+bool symbolic(const std::vector<IrOp>& ops, bool preserve_compiler_selector_charges) {
   for (const auto& op : ops) {
     if (op.meta.raw || op.meta.logical_register_analysis ||
         op.kind == IrKind::OrphanAddress || op.target_meta.formal_opcode ||
@@ -1249,7 +2104,7 @@ bool symbolic(const std::vector<IrOp>& ops) {
         if (!std::holds_alternative<std::string>(target))
           return false;
     for (const auto& role : op.meta.roles)
-      if (role.starts_with("late-decimal-selector-") ||
+      if ((!preserve_compiler_selector_charges && role.starts_with("late-decimal-selector-")) ||
           role.starts_with("finalization-cell-origin:") ||
           role == kResumableErrorPaddingRole)
         return false;
@@ -1262,10 +2117,12 @@ struct Equality {
   bool initialized = false;
   bool entry = false;
   bool encoded_input = false;
+  bool coefficient_ready = false;
 
   int key() const {
     return stack_value_equality_key(stack) | (initialized ? 64 : 0) |
-           (entry ? 128 : 0) | (encoded_input ? 256 : 0);
+           (entry ? 128 : 0) | (encoded_input ? 256 : 0) |
+           (coefficient_ready ? 512 : 0);
   }
 };
 
@@ -1325,6 +2182,20 @@ bool prove(const std::vector<MachineItem>& items,
     constexpr std::array<int, 4> loops{0x5d, 0x5b, 0x58, 0x5a};
     if (plan.reg < 4 && item.opcode == loops[static_cast<std::size_t>(plan.reg)])
       return fail("mode is a destructive loop counter");
+    if (plan.coefficient_reg) {
+      const int coefficient = *plan.coefficient_reg;
+      if (family >= 0x70 && family <= 0xe0 && (item.opcode & 15) == coefficient)
+        return fail("coefficient cache is also an indirect selector");
+      if (coefficient < 4 && item.opcode == loops[static_cast<std::size_t>(coefficient)])
+        return fail("coefficient cache is a destructive loop counter");
+      if (family == 0xb0 || family == 0xd0) {
+        const auto targets = flow.indirect_memory_targets.find(i);
+        if (targets == flow.indirect_memory_targets.end() ||
+            std::find(targets->second.begin(), targets->second.end(), coefficient) !=
+                targets->second.end())
+          return fail("coefficient cache has an indirect memory alias");
+      }
+    }
     if (item.opcode == 0x4f || item.opcode == 0x6f)
       return fail("extended register alias is outside this proof");
   }
@@ -1353,7 +2224,58 @@ bool prove(const std::vector<MachineItem>& items,
       const auto& macro = *found->second;
       reached_macros.insert(item_index);
       const auto old = state.stack.stack_equal;
-      if (macro.transition) {
+      if (macro.normalizing_max) {
+        if (!old[0])
+          return fail("max epoch boundary has unequal dynamic operands");
+        // In an encoded epoch the independent range certificate proves Y
+        // absorbs both carrier spellings. In an ordinary epoch both inputs
+        // already agree. Kmax keeps Y; it does not pop the stack like +.
+        state.stack.stack_equal = {true, old[0], old[1], old[2]};
+        state.stack.x1_equal = !state.initialized;
+        state.stack.x2_equal = old[0]; // recall saves old X; Kmax preserves X2
+        state.initialized = false;
+        state.coefficient_ready = false;
+        state.encoded_input = false;
+      } else if (macro.inline_product) {
+        if (!state.initialized || !old[0])
+          return fail("inline coefficient has an unproved state or unequal left operand");
+        if (macro.binary_projection && macro.replacement_binary)
+          state.stack.stack_equal = {true, old[1], old[1], old[1]};
+        else if (!macro.binary_projection && !macro.replacement_binary)
+          state.stack.stack_equal = {true, old[1], old[2], old[2]};
+        else
+          state.stack.stack_equal = {true, old[1], false, false};
+        // Both multiplies save the equal ordinary coefficient in last-X.
+        // A raw coefficient has only an equal product, not an equal last-X.
+        state.stack.x1_equal = !plan.raw_coefficient;
+        state.stack.x2_equal = false;
+        state.encoded_input = false;
+      } else if (macro.coefficient_definition) {
+        if (!state.initialized)
+          return fail("coefficient projection has an unproved state input");
+        state.stack.stack_equal = {!plan.raw_coefficient, old[0], old[1], false};
+        state.stack.x1_equal = false;
+        state.stack.x2_equal = false;
+        state.encoded_input = false;
+        state.coefficient_ready = true;
+      } else if (macro.coefficient_product) {
+        if (!state.initialized || !state.coefficient_ready || !old[0])
+          return fail("coefficient read has a stale state version or unequal multiplicand");
+        // Value equality uses either the identical ordinary coefficient or
+        // the exhaustive, independently certified raw right-product domain.
+        state.stack.stack_equal = {true, old[1], old[2], old[2]};
+        state.stack.x1_equal = false;
+        state.stack.x2_equal = false;
+        state.encoded_input = false;
+      } else if (macro.state_identity) {
+        if (!state.initialized)
+          return fail("state decoder has an unproved finite input");
+        state.stack.stack_equal = {true, old[0], old[1], old[2]};
+        state.stack.x1_equal = false;
+        state.stack.x2_equal = false;
+        state.encoded_input = false;
+      } else if (macro.transition) {
+        state.coefficient_ready = false;
         if (!state.initialized)
           return fail("transition has an entry-live or unproved mode definition");
         // The independently checked full transition table preserves the
@@ -1365,10 +2287,14 @@ bool prove(const std::vector<MachineItem>& items,
         state.stack.x2_equal = false;
         state.encoded_input = false;
       } else if (macro.input_store) {
+        state.coefficient_ready = false;
         if (!state.encoded_input)
           return fail("callee store has no proved encoded literal input");
         state.initialized = true;
       } else if (macro.definition || macro.input_literal) {
+        state.coefficient_ready = false;
+        if (plan.raw_coefficient)
+          state.stack.x1_equal = false;
         state.stack.stack_equal = {macro.identical_value, old[0], old[1], old[2]};
         state.stack.x2_equal = macro.identical_value;
         if (macro.definition)
@@ -1416,6 +2342,7 @@ bool prove(const std::vector<MachineItem>& items,
         if (!state.stack.stack_equal[0])
           return fail("ordinary definition observes an encoded stack value");
         state.initialized = false;
+        state.coefficient_ready = false;
       }
       if (opcode == 0x50) {
         if (state.initialized && item.stop_disposition != StopDisposition::Terminal)
@@ -1487,8 +2414,13 @@ std::vector<PassResult> finite_mode_representation_candidates(
   // This is part of the separately regenerated shared-region candidate. The
   // ordinary lowering remains an incumbent: a local win can lose address
   // coincidences, so final layout, not this pass, chooses the program.
-  if (!context.options.defer_return_suffix_until_callee_hole || !symbolic(ops))
+  if (!context.options.defer_return_suffix_until_callee_hole ||
+      !symbolic(ops, candidate_options.preserve_compiler_selector_charges)) {
+    if (std::getenv("MKPRO_NATIVE_TRACE_FINITE_MODE_REPRESENTATION"))
+      std::cerr << "[finite-mode-discovery] unsupported IR/phase; late-context="
+                << candidate_options.preserve_compiler_selector_charges << '\n';
     return unchanged();
+  }
   // Avoid constructing the context graph for programs with no projected reads.
   bool has_projection = false;
   for (std::size_t i = 0; i < ops.size() && !has_projection; ++i)
@@ -1499,9 +2431,26 @@ std::vector<PassResult> finite_mode_representation_candidates(
   PostLayoutControlFlowOptions options;
   options.address_space_model = address_space_model_for_feature_profile(
       effective_optimizer_feature_profile(context.options));
-  const auto flow = build_post_layout_control_flow(items, options);
-  if (!flow.proved || flow.execution_states.size() != flow.execution_successors.size())
+  if (candidate_options.preserve_compiler_selector_charges)
+    options.empty_return_target = 1;
+  auto flow = build_post_layout_control_flow(items, options);
+  if (!flow.proved || flow.execution_states.size() != flow.execution_successors.size()) {
+    if (std::getenv("MKPRO_NATIVE_TRACE_FINITE_MODE_REPRESENTATION"))
+      for (const auto& reason : flow.reasons)
+        std::cerr << "[finite-mode-discovery] CFG: " << reason << '\n';
     return unchanged();
+  }
+  // Relational data proofs may distinguish actual runtime selector values.
+  // Keep the authoritative, unpruned graph for all later relocation checks.
+  const auto selector_graph = build_selector_consistent_execution_graph(items, flow);
+  if (selector_graph.proved && selector_graph.pruned_edges != 0) {
+    const auto original = flow.execution_states;
+    flow.execution_states.clear();
+    for (const auto state : selector_graph.original_states)
+      flow.execution_states.push_back(original[state]);
+    flow.execution_successors = selector_graph.successors;
+    flow.execution_edges.clear();
+  }
   const auto automatic_entry_lift =
       analyze_post_layout_automatic_entry_lift(items, flow, kMaximumProofStates);
   if (!automatic_entry_lift)
@@ -1519,6 +2468,14 @@ std::vector<PassResult> finite_mode_representation_candidates(
     auto joint = discover_joint(ops, reg, flow, machine, options.address_space_model, candidate_options);
     plans.insert(plans.end(), std::make_move_iterator(joint.begin()),
                  std::make_move_iterator(joint.end()));
+    auto carriers = discover_coefficient_carriers(
+        ops, reg, flow, machine, *automatic_entry_lift, candidate_options);
+    plans.insert(plans.end(), std::make_move_iterator(carriers.begin()),
+                 std::make_move_iterator(carriers.end()));
+    auto inline_carriers = discover_inline_coefficient_carriers(
+        ops, reg, flow, machine, *automatic_entry_lift, candidate_options);
+    plans.insert(plans.end(), std::make_move_iterator(inline_carriers.begin()),
+                 std::make_move_iterator(inline_carriers.end()));
     auto state_machines = discover_state_machine(ops, reg, flow, machine, candidate_options);
     plans.insert(plans.end(), std::make_move_iterator(state_machines.begin()),
                  std::make_move_iterator(state_machines.end()));
@@ -1543,9 +2500,19 @@ std::vector<PassResult> finite_mode_representation_candidates(
         continue;
       }
       const auto& macro = found->second;
+      if (macro.normalizing_max) {
+        // The boundary's machine code is unchanged, including typed store
+        // and provenance metadata needed by subsequent lifetime passes.
+        rewritten.insert(rewritten.end(), ops.begin() + static_cast<std::ptrdiff_t>(i),
+                         ops.begin() + static_cast<std::ptrdiff_t>(macro.end));
+        i = macro.end;
+        continue;
+      }
+      const auto output_begin = rewritten.size();
       if (macro.definition || macro.input_literal) {
         for (const int opcode : macro.replacement_literal) {
-          auto literal = ops[i];
+          auto literal = opcode >= 0x60 && opcode <= 0x6e
+              ? make_recall(register_name_for_index(opcode - 0x60), ops[i].meta) : ops[i];
           literal.opcode = opcode;
           literal.meta.mnemonic = opcode_by_code(opcode).name;
           literal.meta.comment = "finite mode projected representation";
@@ -1555,7 +2522,8 @@ std::vector<PassResult> finite_mode_representation_candidates(
         if (macro.definition)
           rewritten.push_back(ops[macro.end - 1U]);
       } else {
-        rewritten.push_back(ops[i]);
+        rewritten.push_back(macro.replacement_recall
+            ? make_recall(register_name_for_index(*macro.replacement_recall), ops[i].meta) : ops[i]);
         for (const int opcode : macro.replacement_projection) {
           IrOp decoder;
           decoder.kind = IrKind::Plain;
@@ -1568,6 +2536,9 @@ std::vector<PassResult> finite_mode_representation_candidates(
         if (macro.transition)
           rewritten.push_back(ops[macro.end - 1U]);
       }
+      if (plan.raw_coefficient)
+        for (std::size_t emitted = output_begin; emitted < rewritten.size(); ++emitted)
+          rewritten[emitted].meta.raw = true;
       i = macro.end;
     }
     auto required_targets = plan.fixed_targets;
@@ -1597,7 +2568,8 @@ std::vector<PassResult> finite_mode_representation_candidates(
     if (needs_layout) {
       if (!candidate_options.allow_target_relayout)
         continue;
-      auto layout = layout_symbolic_regions(rewritten, required_targets, context);
+      auto layout = layout_symbolic_regions(rewritten, required_targets, context, 4096,
+          &options, candidate_options.preserve_compiler_selector_charges);
       if (!layout)
         continue;
       rewritten = std::move(layout->ops);
@@ -1607,7 +2579,14 @@ std::vector<PassResult> finite_mode_representation_candidates(
     alternatives.push_back(PassResult{
         .ops = std::move(rewritten), .applied = 1,
         .optimizations = {{
-            .name = plan.transition_count > 0 ? "finite-mode-state-machine" :
+            .name = plan.normalizing_max_count > 0 ? "mixed-epoch-coefficient-state-carrier" :
+                    plan.inline_coefficient
+                        ? (plan.raw_coefficient ? "raw-inline-coefficient-state-carrier"
+                                                : "inline-coefficient-state-carrier") :
+                    plan.coefficient_reg
+                        ? (plan.raw_coefficient ? "raw-coefficient-state-carrier"
+                                                : "coefficient-state-carrier") :
+                    plan.transition_count > 0 ? "finite-mode-state-machine" :
                     candidate_options.allow_target_relayout && !plan.flow_reads.empty()
                         ? "finite-mode-data-address-synthesis" :
                     plan.synthesized ? "finite-mode-constraint-synthesis" :
@@ -1627,8 +2606,31 @@ std::vector<PassResult> finite_mode_representation_candidates(
                           ? " Certified closure and synthesized " +
                                 std::to_string(plan.transition_count) +
                                 " state transitions over the complete finite domain."
+                          : std::string{}) +
+                      (plan.coefficient_reg
+                          ? " Fused coefficient cache R" + register_name_for_index(*plan.coefficient_reg) +
+                                " with the finite carrier; proved cache-version dominance on every path" +
+                                (plan.raw_coefficient
+                                    ? ", exhaustive positive-power right operands and explicit raw seed delivery."
+                                    : " and identical ordinary coefficient values.")
+                          : std::string{}) +
+                      (plan.inline_coefficient
+                          ? " Fused inline coefficient products without a materialized cache; "
+                            "proved the complete finite def/use epoch, unchanged multiplication order "
+                            "and every transition/observation. " +
+                                (plan.seed_reg
+                                    ? "Explicit immutable seed in unused R" +
+                                          register_name_for_index(*plan.seed_reg) + "."
+                                    : "No extra register or preload.")
+                          : std::string{}) +
+                      (plan.normalizing_max_count > 0
+                          ? " Proved " + std::to_string(plan.normalizing_max_count) +
+                                " max epoch boundaries: an ordinary strictly positive operand "
+                                "dominates every original and encoded finite value. Dynamic "
+                                "epochs are unchanged; last-X remains unequal until independently erased."
                           : std::string{}),
         }},
+        .preloads = plan.preloads,
     });
     if (alternatives.size() >= candidate_options.maximum_candidates)
       break;

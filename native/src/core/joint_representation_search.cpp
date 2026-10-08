@@ -1,6 +1,7 @@
 #include "mkpro/core/joint_representation_search.hpp"
 
 #include "mkpro/core/callee_hole_boundary_normalization.hpp"
+#include "mkpro/core/natural_target_component_layout.hpp"
 #include "mkpro/core/passes/finite_mode_representation.hpp"
 #include "mkpro/core/passes/register_coalesce.hpp"
 #include "mkpro/core/passes/semantic_region_folding.hpp"
@@ -8,6 +9,11 @@
 #include "mkpro/core/post_layout_control_flow.hpp"
 
 #include <algorithm>
+#include <cstdlib>
+#include <iostream>
+#include <map>
+#include <set>
+#include <string_view>
 #include <utility>
 
 namespace mkpro::core {
@@ -16,6 +22,84 @@ namespace {
 int cells(const LayoutSearchArtifact& artifact) {
   return static_cast<int>(std::count_if(artifact.items.begin(), artifact.items.end(),
       [](const MachineItem& item) { return item.kind != MachineItemKind::Label; }));
+}
+
+// Re-enter symbolic data optimization without erasing real layout contracts.
+// Only obsolete per-pass cell-number provenance is discarded. Executable
+// operands, raw instructions, dark aliases and malformed/stale charges remain
+// unsupported; compiler selector roles themselves are never removed.
+std::optional<std::vector<IrOp>> representation_view(
+    const LayoutSearchArtifact& artifact, const CompileOptions& options) {
+  const auto reject = [](std::string_view reason) -> std::optional<std::vector<IrOp>> {
+    if (std::getenv("MKPRO_NATIVE_TRACE_FINITE_MODE_REPRESENTATION"))
+      std::cerr << "[finite-mode-discovery] representation-view rejected: " << reason << '\n';
+    return std::nullopt;
+  };
+  const auto model = address_space_model_for_feature_profile(effective_optimizer_feature_profile(options));
+  auto normalized = normalize_natural_target_overflow_formals(artifact.items, model);
+  if (!normalized || has_executable_address_words(*normalized))
+    return reject("unsupported overflow or executable address contract");
+  const auto bound = rebind_late_bound_decimal_selectors(
+      *normalized, {.minimum_target_address = 0, .maximum_target_address = 99});
+  if (!bound.diagnostics.empty() || bound.items.size() != normalized->size())
+    return reject(bound.diagnostics.empty() ? "selector binding changed item count"
+                                            : bound.diagnostics.front().message);
+  for (std::size_t i = 0; i < bound.items.size(); ++i)
+    if (bound.items[i].opcode != (*normalized)[i].opcode)
+      return reject("stale executable selector charge");
+  std::map<int, std::size_t> commands;
+  std::map<int, std::string> aliases;
+  std::set<std::string> names;
+  int address = 0;
+  for (std::size_t i = 0; i < normalized->size(); ++i) {
+    const auto& item = (*normalized)[i];
+    if (item.kind == MachineItemKind::Label) {
+      if (!names.insert(item.name).second)
+        return reject("duplicate command label");
+      aliases.try_emplace(address, item.name);
+    } else {
+      if (item.kind == MachineItemKind::Op)
+        commands.emplace(address, i);
+      ++address;
+    }
+  }
+  std::map<std::size_t, std::string> generated;
+  const auto symbolize = [&](IrTarget& target) {
+    const auto* numeric = std::get_if<int>(&target);
+    if (!numeric)
+      return true;
+    const auto found = commands.find(*numeric);
+    if (found == commands.end())
+      return false;
+    auto alias = aliases.find(*numeric);
+    if (alias == aliases.end()) {
+      std::string name = "__representation_entry_" + std::to_string(*numeric);
+      while (names.contains(name)) name += '_';
+      names.insert(name);
+      generated.emplace(found->second, name);
+      alias = aliases.emplace(*numeric, std::move(name)).first;
+    }
+    target = alias->second;
+    return true;
+  };
+  for (auto& item : *normalized) {
+    if (item.kind == MachineItemKind::Address && !symbolize(item.target))
+      return reject("direct target is not an executable command");
+    if (item.indirect_flow_targets)
+      for (auto& target : *item.indirect_flow_targets)
+        if (!symbolize(target))
+          return reject("indirect target is not an executable command");
+    std::erase_if(item.roles, [](const auto& role) {
+      return role.starts_with("finalization-cell-origin:");
+    });
+  }
+  std::vector<MachineItem> symbolic;
+  for (std::size_t i = 0; i < normalized->size(); ++i) {
+    if (const auto label = generated.find(i); label != generated.end())
+      symbolic.push_back(MachineItem::label(label->second));
+    symbolic.push_back(std::move((*normalized)[i]));
+  }
+  return raise_machine_to_ir(symbolic, effective_optimizer_feature_profile(options));
 }
 
 std::optional<LayoutSearchArtifact> apply(const LayoutSearchArtifact& parent,
@@ -40,7 +124,8 @@ std::optional<LayoutSearchArtifact> apply(const LayoutSearchArtifact& parent,
 
 std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
 expand_joint_representation_transactions(const LayoutSearchArtifact& artifact,
-                                         const CompileOptions& options) {
+                                         const CompileOptions& options,
+                                         bool preload_environment_complete) {
   using Edge = ProvedSearchTransition<LayoutSearchArtifact>;
   std::vector<Edge> result;
   CompileOptions context_options = options;
@@ -66,9 +151,19 @@ expand_joint_representation_transactions(const LayoutSearchArtifact& artifact,
                           "kept the equal-size enabling alternative until composition."}}},
             "semantic-region-web-recolor");
       });
+  // Keep the original IR search unchanged. A complete artifact can additionally
+  // carry late-bound callback charges and physical-01 empty-return edges.
+  const auto laid_out = preload_environment_complete ? representation_view(artifact, options)
+      : std::optional<std::vector<IrOp>>{};
+  if (std::getenv("MKPRO_NATIVE_TRACE_FINITE_MODE_REPRESENTATION"))
+    std::cerr << "[finite-mode-discovery] complete=" << preload_environment_complete
+              << " representation-view=" << laid_out.has_value() << '\n';
   for (auto& alternative : passes::finite_mode_representation_candidates(
-           ops, context, {.maximum_growth_cells = 2, .maximum_candidates = 6,
-                          .allow_target_relayout = true}))
+           laid_out ? *laid_out : ops, context, {.maximum_growth_cells = 2, .maximum_candidates = 6,
+                          .allow_target_relayout = true,
+                          .runtime_preloads = preload_environment_complete
+                              ? &artifact.preloads : nullptr,
+                          .preserve_compiler_selector_charges = laid_out.has_value()}))
     add(std::move(alternative), "joint-word-and-target-synthesis");
   return result;
 }
@@ -90,7 +185,7 @@ PassResult joint_representation_search(const std::vector<IrOp>& ops,
       std::vector<LayoutSearchArtifact>{}, cells(root), limits, cells,
       same_layout_search_artifact,
       [&](const LayoutSearchArtifact& node) {
-        auto edges = expand_joint_representation_transactions(node, context.options);
+        auto edges = expand_joint_representation_transactions(node, context.options, false);
         // Region extraction can repay a neutral/larger representation or a
         // register recoloring. It must see each node, not only the local winner.
         if (auto child = apply(node, callee_hole_straight_line_helper(

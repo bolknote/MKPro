@@ -130,8 +130,10 @@ bool is_stored_return_lift(const std::vector<IrOp>& ops, std::size_t index) {
   for (std::size_t next = index + 1; next < ops.size(); ++next) {
     const IrOp& op = ops.at(next);
     if (has_rewrite_barrier(op) || is_display_focus_sensitive(op) ||
-        !op.meta.roles.empty())
+        !op.meta.roles.empty() || op.procedure_boundary.has_value())
       return false;
+    if (op.kind == IrKind::Label)
+      continue;
     if (op.kind == IrKind::Store && op.opcode >= 0x40 && op.opcode <= 0x4e) {
       stored = true;
       continue;
@@ -156,8 +158,8 @@ int remove_matched_return_lifts(std::vector<IrOp>& ops, const PassContext& conte
     equality.x2_equal = false;
     // Reuse the authoritative execution graph: every admitted return frame,
     // both branch successors, full X/Y/Z/T, last-X1 and hidden X2 participate.
-    // Unknown flow, a consumer of a differing value or a stop before full
-    // convergence rejects the rewrite. No display projection is invented.
+    // Only a source-typed display may project X/Y; differences remain live
+    // through resume and every later use. No projection is invented here.
     if (!prove_ir_stack_entry_equality(ops, index + 1, equality))
       continue;
     // Prove each deletion against the current artifact, not several mutually
@@ -302,7 +304,7 @@ PassResult pre_shift_stack_lift(const std::vector<IrOp>& ops, const PassContext&
     optimizations.push_back(AppliedOptimization{
         .name = "matched-return-stack-lift",
         .detail = "Removed " + std::to_string(matched_return_lifts) +
-                  " stored-result Enter lift(s) after proving full stack/X1/X2 "
+                  " stored-result Enter lift(s) after proving observed stack/X1/X2 "
                   "convergence through every exact caller continuation. "
                   "Each deletion uses the current relocatable artifact.",
     });

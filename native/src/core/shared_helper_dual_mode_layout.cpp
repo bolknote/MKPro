@@ -669,8 +669,9 @@ reassign_stable_indirect_selector_families(
     const NaturalTargetComponentLayoutOptions& options) {
   std::vector<SharedHelperDualModeSelectorExchangeResult> result;
   const bool trace = std::getenv("MKPRO_NATIVE_TRACE_SELECTOR_FAMILIES") != nullptr;
-  if (!control_flow.proved)
+  if (!control_flow.proved || options.maximum_transactional_growth_cells < 0)
     return result;
+  const int input_cells = cell_count(items);
   const auto is_flow = [](int opcode) {
     const int family = opcode & 0xf0;
     return family == 0x70 || family == 0x80 || family == 0x90 ||
@@ -798,6 +799,12 @@ reassign_stable_indirect_selector_families(
             seed_control.execution_states != control_flow.execution_states ||
             seed_control.indirect_memory_targets != control_flow.indirect_memory_targets)
           continue;
+        // Keep the original non-growing frontier independently. A wider
+        // geometric allowance may choose a different order at the same cost;
+        // it must not replace an enabling order already proved at zero debt.
+        const int attempts = options.maximum_transactional_growth_cells > 0 ? 2 : 1;
+        for (int attempt = 0; attempt < attempts; ++attempt) {
+        const int growth_limit = attempt == 0 ? 0 : options.maximum_transactional_growth_cells;
         auto layout_options = options;
         if (!release) {
           layout_options.required_absolute_targets.push_back({
@@ -813,7 +820,7 @@ reassign_stable_indirect_selector_families(
         }
         layout_options.allow_size_neutral_absolute_layout = true;
         layout_options.allow_size_neutral_flow_rebind = true;
-        layout_options.maximum_transactional_growth_cells = 0;
+        layout_options.maximum_transactional_growth_cells = growth_limit;
         const auto placed = optimize_natural_target_component_layout(
             seed_items, seed_preloads, seed_control, layout_options);
         if (trace)
@@ -825,12 +832,27 @@ reassign_stable_indirect_selector_families(
         if (placed.applied <= 0 || !placed.plan.proved || !placed.plan.final_artifact_proved ||
             (!layout_options.deferred_selector_reconciliations.empty() &&
              !placed.plan.deferred_selector_reconciliations_proved) ||
-            !placed.plan.final_control_flow.proved || cell_count(placed.items) > cell_count(items)) {
+            !placed.plan.final_control_flow.proved ||
+            cell_count(placed.items) - input_cells > growth_limit) {
           if (trace)
             for (const auto& reason : placed.plan.reasons)
               std::cerr << "[selector-families] " << reason << '\n';
           continue;
         }
+        const bool duplicate = std::any_of(result.begin(), result.end(), [&](const auto& earlier) {
+          return earlier.items.size() == placed.items.size() &&
+              std::equal(earlier.items.begin(), earlier.items.end(), placed.items.begin(),
+                         machine_items_equal) &&
+              earlier.preloads.size() == placed.preloads.size() &&
+              std::equal(earlier.preloads.begin(), earlier.preloads.end(), placed.preloads.begin(),
+                         [](const auto& left, const auto& right) {
+                // Reassignment changes only these fields of the original
+                // preload reports; data/setup provenance is retained intact.
+                return left.register_name == right.register_name && left.value == right.value;
+              });
+        });
+        if (duplicate)
+          continue;
         SharedHelperDualModeSelectorExchangeResult alternative;
         alternative.items = placed.items;
         alternative.preloads = placed.preloads;
@@ -845,11 +867,77 @@ reassign_stable_indirect_selector_families(
                       preloads.at(flexible.preload).register_name +
                       (release ? " after eliminating the latter's empty-stack loop jumps" : " by exchange") +
                       "; preserved data projections and re-proved final runtime selector "
-                      "decoding, CFG, call/return and stack/X2 identities after exact placement.",
+                      "decoding, CFG, call/return and stack/X2 identities after exact placement. "
+                      "Intermediate cell delta: " +
+                      std::to_string(cell_count(placed.items) - input_cells) +
+                      "; caller-authorized growth allowance: " + std::to_string(growth_limit) +
+                      ". Only a smaller fully proved downstream artifact may be published.",
         });
         result.push_back(std::move(alternative));
+        }
       }
     }
+  }
+  return result;
+}
+
+std::vector<SharedHelperDualModeSelectorExchangeResult>
+release_stable_indirect_selector_families(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const NaturalTargetComponentLayoutOptions& options) {
+  std::vector<SharedHelperDualModeSelectorExchangeResult> result;
+  if (!control_flow.proved || options.maximum_transactional_growth_cells <= 0 ||
+      !options.released_flow_selector_registers.empty())
+    return result;
+  const int input_cells = cell_count(items);
+  for (int reg = 7; reg <= 14; ++reg) {
+    const auto preload = preload_for_register(preloads, reg);
+    if (!preload)
+      continue;
+    int uses = 0;
+    std::optional<int> address;
+    for (const auto& [command, targets] : control_flow.indirect_flow_targets) {
+      if (command >= items.size() || (items.at(command).opcode & 15) != reg)
+        continue;
+      ++uses;
+      if (targets.size() == 1U)
+        address = targets.front().address;
+    }
+    // At most eight complete families, each within the caller's residual
+    // debt. Flexible selectors already have cheaper relocation alternatives.
+    if (!address || uses == 0 || uses > options.maximum_transactional_growth_cells ||
+        rebind_stable_preloaded_indirect_flow_selector(
+            items, preloads.at(*preload), control_flow, *address,
+            *address == 99 ? 98 : *address + 1, options.address_space_model))
+      continue;
+    auto release_options = options;
+    release_options.released_flow_selector_registers = {reg};
+    release_options.allow_standalone_fallthrough_jump_fold = true;
+    const auto placed = optimize_natural_target_component_layout(
+        items, preloads, control_flow, release_options);
+    if (placed.applied <= 0 || !placed.plan.proved || !placed.plan.final_artifact_proved ||
+        !placed.plan.final_control_flow.proved ||
+        cell_count(placed.items) - input_cells > options.maximum_transactional_growth_cells)
+      continue;
+    SharedHelperDualModeSelectorExchangeResult alternative;
+    alternative.items = placed.items;
+    alternative.preloads = placed.preloads;
+    alternative.control_flow = placed.plan.final_control_flow;
+    alternative.applied = 1;
+    alternative.optimizations.push_back({
+        .name = "stable-indirect-selector-family-release",
+        .detail = "Released all " + std::to_string(uses) + " flow consumers of R" +
+                  preloads.at(*preload).register_name +
+                  " to direct command identities without changing its data word. "
+                  "Re-proved final CFG, stack/X2, returns, aliases and companion selectors. "
+                  "Intermediate cell delta: " + std::to_string(cell_count(placed.items) - input_cells) +
+                  "; caller-authorized growth allowance: " +
+                  std::to_string(options.maximum_transactional_growth_cells) +
+                  ". Only a smaller fully proved downstream artifact may be published.",
+    });
+    result.push_back(std::move(alternative));
   }
   return result;
 }

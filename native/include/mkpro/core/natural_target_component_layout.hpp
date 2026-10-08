@@ -106,6 +106,11 @@ struct NaturalTargetComponentLayoutOptions {
   // bridge/padding cells. The caller must consume that growth immediately in
   // a separately proved downstream rewrite and publish only a net reduction.
   int maximum_transactional_growth_cells = 0;
+  // Expand complete stable, literal-preloaded R7..Re flow families to direct
+  // commands. Their data words remain unchanged, but no longer pin targets.
+  // This is a bounded transaction; partial families and hidden-state changes
+  // fail closed under the ordinary final-artifact proof.
+  std::vector<int> released_flow_selector_registers;
   // A larger atomic layout transaction may require an executable command
   // identity at one exact physical address before applying a separately
   // proved size-reducing machine rewrite. This mode never claims savings on

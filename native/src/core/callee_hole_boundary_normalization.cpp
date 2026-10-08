@@ -150,6 +150,18 @@ bool prove_post_layout_stack_entry_equality(
     std::cerr << "[stack-entry-equality] selector-inconsistent edges removed="
               << graph.pruned_edges << '\n';
 
+  // Only compiler-typed show/entered protocols have the X/Y observation
+  // contract. The authoritative graph has already checked their prompt,
+  // contiguous input phases and single-step stores. An arbitrary manual
+  // command or an unannotated STOP remains a full-state barrier.
+  std::set<int> typed_protocols;
+  for (const auto& item : items)
+    if (!item.raw && item.manual_interaction &&
+        item.manual_interaction->kind == ManualInteractionAnchorKind::PromptStop &&
+        std::find(item.roles.begin(), item.roles.end(), kTypedDisplayObservationRole) !=
+            item.roles.end())
+      typed_protocols.insert(item.manual_interaction->protocol_id);
+
   const auto merge = [](StackValueEqualityState& into,
                         const StackValueEqualityState& from) {
     const int before = stack_value_equality_key(into);
@@ -162,7 +174,16 @@ bool prove_post_layout_stack_entry_equality(
   // This is the common entry mode of both executions, not an equality bit.
   // Unknown is the join of equal-open and equal-closed states. Never infer
   // a fresh-number lift after Enter or an unproved control boundary.
-  enum class DecimalEntry { Unknown, Closed, Open };
+  enum class DecimalEntry { Unknown, Closed, Open, Recalled };
+  const auto join_entry = [](DecimalEntry a, DecimalEntry b) {
+    if (a == b) return a;
+    const auto closed = [](DecimalEntry mode) {
+      return mode == DecimalEntry::Closed || mode == DecimalEntry::Recalled;
+    };
+    // Recalled refines Closed. Losing the immediate-recall fact must not
+    // also lose the previously proved fresh-number entry state.
+    return closed(a) && closed(b) ? DecimalEntry::Closed : DecimalEntry::Unknown;
+  };
   std::vector<DecimalEntry> entry_modes(graph.original_states.size(), DecimalEntry::Unknown);
   std::vector<std::optional<StackValueEqualityState>> incoming(graph.original_states.size());
   std::deque<std::size_t> pending;
@@ -188,8 +209,30 @@ bool prove_post_layout_stack_entry_equality(
     if (execution.item_index >= items.size())
       return reject("execution state is outside the artifact");
     const auto& item = items[execution.item_index];
-    if (item.kind != MachineItemKind::Op || item.raw || item.manual_interaction.has_value())
+    if (item.kind != MachineItemKind::Op || item.raw)
       return reject("opaque or externally observed instruction");
+
+    const bool typed_manual = item.manual_interaction &&
+        typed_protocols.contains(item.manual_interaction->protocol_id);
+    const bool projected_stop = item.opcode == 0x50 &&
+        std::find(item.roles.begin(), item.roles.end(), kTypedDisplayObservationRole) !=
+            item.roles.end() &&
+        (item.stop_disposition == StopDisposition::Terminal || typed_manual);
+    if (item.manual_interaction && !typed_manual)
+      return reject("untyped manual interaction");
+    if (typed_manual || projected_stop) {
+      if (!state.stack_equal[0] || !state.stack_equal[1] ||
+          !state.x1_equal || !state.x2_equal)
+        return reject("typed interaction observes a differing value");
+      if (projected_stop && item.stop_disposition == StopDisposition::Terminal)
+        continue;
+      // Equal operator input may keep the current stack or lift it. Join
+      // both possibilities; never erase a deeper-slot difference at a
+      // prompt. Every later read must still pass the continuation proof.
+      state.stack_equal[3] = state.stack_equal[3] && state.stack_equal[2];
+      state.stack_equal[2] = state.stack_equal[2] && state.stack_equal[1];
+      entry_mode = DecimalEntry::Unknown;
+    }
 
     // Classify a complete instruction: an address-taking opcode without its
     // operand is raised as an orphan, not as the branch/call it represents.
@@ -205,14 +248,16 @@ bool prove_post_layout_stack_entry_equality(
     if (classified.empty())
       return reject("instruction has no typed effect");
     const IrKind kind = classified.front().kind;
-    if (kind == IrKind::Stop || item.opcode == 0x29)
+    if ((kind == IrKind::Stop && !projected_stop) || item.opcode == 0x29)
       return reject("unequal stack reaches an observable stop");
 
     const bool control = kind == IrKind::Jump || kind == IrKind::CondJump ||
         kind == IrKind::Loop || kind == IrKind::Call || kind == IrKind::Return ||
         kind == IrKind::IndirectJump || kind == IrKind::IndirectCondJump ||
         kind == IrKind::IndirectCall;
-    if (control) {
+    if (projected_stop) {
+      // Keep the live differences and follow the exact resume edge below.
+    } else if (control) {
       if ((kind == IrKind::CondJump || kind == IrKind::IndirectCondJump) &&
           !state.stack_equal[0])
         return reject("branch observes a differing X");
@@ -235,6 +280,11 @@ bool prove_post_layout_stack_entry_equality(
                  StackValueEqualityTransfer::Rejected) {
         return reject("decimal entry observes a differing value");
       }
+    } else if (kind == IrKind::Plain && item.opcode == 0x0b &&
+               entry_mode == DecimalEntry::Recalled) {
+      if (transfer_recalled_number_sign_equality(state) ==
+          StackValueEqualityTransfer::Rejected)
+        return reject("sign change observes a differing recalled value");
     } else {
       StackValueEqualityStepKind effect = StackValueEqualityStepKind::Plain;
       if (kind == IrKind::Recall || kind == IrKind::IndirectRecall)
@@ -249,8 +299,9 @@ bool prove_post_layout_stack_entry_equality(
     }
     if (kind == IrKind::Plain && item.opcode >= 0 && item.opcode <= 9)
       entry_mode = DecimalEntry::Open;
-    else if ((kind == IrKind::Recall && item.opcode >= 0x60 && item.opcode <= 0x6e) ||
-             selector_charge_entry_closer_opcode(item.opcode))
+    else if (kind == IrKind::Recall && item.opcode >= 0x60 && item.opcode <= 0x6e)
+      entry_mode = DecimalEntry::Recalled;
+    else if (selector_charge_entry_closer_opcode(item.opcode))
       entry_mode = DecimalEntry::Closed;
     else
       entry_mode = DecimalEntry::Unknown;
@@ -268,8 +319,7 @@ bool prove_post_layout_stack_entry_equality(
         pending.push_back(successor);
       } else {
         const bool values_changed = merge(*incoming[successor], state);
-        const auto joined = entry_modes[successor] == entry_mode
-                                ? entry_mode : DecimalEntry::Unknown;
+        const auto joined = join_entry(entry_modes[successor], entry_mode);
         const bool mode_changed = joined != entry_modes[successor];
         entry_modes[successor] = joined;
         if (values_changed || mode_changed)
@@ -529,7 +579,12 @@ bool callee_hole_return_stack_fits(const std::vector<IrOp>& ops) {
 }
 
 bool selector_charge_entry_closer_opcode(int opcode) {
-  return opcode == 0x53 || (opcode >= 0x40 && opcode <= 0x4e) ||
+  // These arithmetic commands finish numeric entry and enable the next
+  // digit's automatic lift. ROM facts cover recalled, open, Enter-suppressed
+  // and stored inputs. Do not infer this property from X2Effect alone.
+  return (opcode >= 0x10 && opcode <= 0x13) || opcode == 0x15 ||
+         opcode == 0x22 || opcode == 0x31 || opcode == 0x34 || opcode == 0x35 ||
+         opcode == 0x53 || (opcode >= 0x40 && opcode <= 0x4e) ||
          (opcode >= 0xa7 && opcode <= 0xae);
 }
 

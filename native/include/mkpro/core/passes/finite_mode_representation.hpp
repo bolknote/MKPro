@@ -17,6 +17,14 @@ struct FiniteModeCandidateOptions {
   int maximum_growth_cells = 0;
   std::size_t maximum_candidates = 8;
   bool allow_target_relayout = false;
+  // Non-null means the complete delivered preload environment, even if empty.
+  // IR-only callers must leave it null: absence of metadata is not free storage.
+  const std::vector<PreloadReport>* runtime_preloads = nullptr;
+  // The caller has symbolized physical references and validated all existing
+  // compiler-owned decimal charges. These charges stay rewrite barriers and
+  // every unchanged indirect target retains its exact address. The policy for
+  // an observed stock-machine empty return is physical 01 in this context.
+  bool preserve_compiler_selector_charges = false;
 };
 
 // Each alternative is independently proved. A neutral/larger representation

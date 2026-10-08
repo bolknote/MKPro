@@ -281,6 +281,66 @@ int main() {
         core::build_post_layout_control_flow(written), {}).alternatives.empty(),
         "a runtime-written selector is not an immutable call family");
     }
+    // Erasing the literal shifts an immutable, data-observed selector target.
+    // The final order can restore that address without padding, but laying out
+    // the larger pre-erasure components cannot meet the same constraints.
+    for (const int prefix : {0, 1}) {
+      auto original = fixture(23 + prefix, 'a');
+      const auto sum = std::find_if(original.begin(), original.end(), [](const auto& item) {
+        return item.kind == MachineItemKind::Label && item.name == "sum";
+      });
+      const auto discard = std::find_if(sum, original.end(), [](const auto& item) {
+        return item.kind == MachineItemKind::Label && item.name == "discard";
+      });
+      std::vector<MachineItem> sum_body(sum, discard);
+      original.erase(sum, discard);
+      const auto producer = std::find_if(original.begin(), original.end(), [](const auto& item) {
+        return item.kind == MachineItemKind::Label && item.name == "producer";
+      });
+      original.insert(producer, {MachineItem::label("spare_return"),
+                                 MachineItem::op(0x52, "return")});
+      original.push_back(MachineItem::label("fixed_return"));
+      original.push_back(MachineItem::op(0x52, "return"));
+      original.insert(original.end(), sum_body.begin(), sum_body.end());
+      auto fixed_call = MachineItem::op(0xa7, "KPP7");
+      fixed_call.indirect_flow_targets = std::vector<IrTarget>{"fixed_return"};
+      original.insert(original.begin(), {MachineItem::op(0x67, "R7"),
+          MachineItem::op(0x48, "R8"), fixed_call});
+      for (int i = 0; i < prefix; ++i)
+        original.insert(original.begin(), MachineItem::op(0x54, "NOP"));
+      const auto bound = core::rebind_late_bound_decimal_selectors(
+          original, {.minimum_target_address = 0});
+      require(bound.diagnostics.empty(), "erasure-aware fixture must bind");
+      original = bound.items;
+      const std::vector<PreloadReport> preloads{
+          {.register_name = "7", .value = std::to_string(45 + prefix)}};
+      const auto result = core::passes::optimize_selector_data_literal_coalescing(
+          original, preloads, core::build_post_layout_control_flow(original), {});
+      if (result.applied <= 0 || result.removed_cells < 2) {
+        std::string message = "erasure-aware layout must save both literal cells";
+        for (const auto& reason : result.reasons) message += "; " + reason;
+        throw std::runtime_error(message);
+      }
+      require(std::any_of(result.optimizations.begin(), result.optimizations.end(),
+          [](const auto& report) {
+            return report.name == "selector-data-literal-erasure-layout";
+          }), "regression must exercise deletion-aware placement");
+      require(result.preloads.size() == 1 && result.preloads.front().value == preloads.front().value,
+              "observable companion data must remain unchanged");
+      for (const std::string seed : {"0", "-7", "3.25"})
+        require(run(original, seed, preloads) == run(result.items, seed, result.preloads),
+                "erasure-aware layout must preserve ROM stack, X1/X2, data and return contexts");
+      auto stale = preloads;
+      stale.front().value = "104";
+      require(core::passes::optimize_selector_data_literal_coalescing(
+          original, stale, core::build_post_layout_control_flow(original), {}).applied == 0,
+          "deferred reconciliation must reject a stale immutable preload");
+      auto duplicate = preloads;
+      duplicate.push_back(preloads.front());
+      require(core::passes::optimize_selector_data_literal_coalescing(
+          original, duplicate, core::build_post_layout_control_flow(original), {}).applied == 0,
+          "ambiguous immutable preload provenance must reject");
+    }
     std::cout << "selector data/literal coalescing compiler and ROM tests passed\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n'; return 1;

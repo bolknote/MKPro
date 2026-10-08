@@ -2,6 +2,7 @@
 
 #include "mkpro/core/passes/helpers.hpp"
 #include "mkpro/core/passes/register_coalesce.hpp"
+#include "mkpro/core/post_layout_control_flow.hpp"
 
 #include <cstddef>
 #include <map>
@@ -24,7 +25,9 @@ struct SymbolicRegionLayout {
 // transport. Every unchanged selector must also appear among required targets.
 std::optional<SymbolicRegionLayout> layout_symbolic_regions(
     const std::vector<IrOp>& ops, const std::map<std::string, int>& required_targets,
-    const PassContext& context, std::size_t maximum_work = 4096);
+    const PassContext& context, std::size_t maximum_work = 4096,
+    const PostLayoutControlFlowOptions* control_options = nullptr,
+    bool preserve_compiler_selector_charges = false);
 
 // Operand equalities are only allocator requests. The existing web allocator
 // proves interference, aliases and entry values; folding rechecks the result.

@@ -1,5 +1,6 @@
 #include "mkpro/core/post_layout_control_flow.hpp"
 
+#include "mkpro/core/callee_hole_boundary_normalization.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/register_allocator.hpp"
@@ -1175,9 +1176,53 @@ SelectorConsistentExecutionGraph build_selector_consistent_execution_graph(
     return result;
   }
 
+  // A literal delivered to a selector is stronger than remembering which
+  // alternative its previous invocation took. Keep this as a value proof,
+  // not a promise inferred from the target set or from compiler role names.
+  // Only fresh, uninterrupted, one/two-digit ordinary entries are admitted.
+  // In particular, a digit appended to an unknown mantissa/exponent is NOT
+  // the corresponding small integer. Calls and jumps may transport a proved
+  // value to a shared store; all other unsupported producers forget it.
+  const auto entry_lift = analyze_post_layout_automatic_entry_lift(
+      items, control, maximum_states * 8U);
+  std::vector<std::vector<std::size_t>> predecessors(count);
+  std::set<std::size_t> external_items;
+  for (const auto& entry : control.external_entries)
+    external_items.insert(entry.entry.item_index);
+  for (std::size_t state = 0; state < count; ++state)
+    for (const auto next : control.execution_successors[state])
+      predecessors[next].push_back(state);
+  const auto plain_digit = [&](std::size_t state) {
+    const auto& item = items[control.execution_states[state].item_index];
+    return item.kind == MachineItemKind::Op && !item.raw && !item.manual_interaction &&
+           item.opcode >= 0 && item.opcode <= 9;
+  };
+  std::vector<std::optional<int>> literal_after(count);
+  if (entry_lift) {
+    for (std::size_t state = 0; state < count; ++state) {
+      if (!plain_digit(state))
+        continue;
+      const int low = items[control.execution_states[state].item_index].opcode;
+      if ((*entry_lift)[state]) {
+        literal_after[state] = low;
+      } else if (!external_items.contains(control.execution_states[state].item_index) &&
+                 predecessors[state].size() == 1U) {
+        const auto high = predecessors[state].front();
+        if (plain_digit(high) && (*entry_lift)[high] &&
+            control.execution_successors[high].size() == 1U &&
+            control.execution_states[high].address + 1 == control.execution_states[state].address)
+          literal_after[state] = items[control.execution_states[high].item_index].opcode * 10 + low;
+      }
+    }
+  }
+
   struct ProductState {
     std::size_t original = 0;
     std::array<std::optional<Choice>, 8> choices;
+    // Unlike Choice, these are proved ordinary numeric values, not just
+    // hardware target aliases. A taken call never manufactures such a value.
+    std::array<std::optional<int>, 8> literals;
+    std::optional<int> x_literal;
     auto operator<=>(const ProductState&) const = default;
   };
   std::map<ProductState, std::size_t> ids;
@@ -1213,6 +1258,8 @@ SelectorConsistentExecutionGraph build_selector_consistent_execution_graph(
     const auto& execution = control.execution_states[input.original];
     const auto& item = items[execution.item_index];
     auto after = input.choices;
+    auto literals = input.literals;
+    auto x_literal = input.x_literal;
     const bool opaque = item.kind != MachineItemKind::Op || item.raw ||
         item.manual_interaction.has_value() || item.opcode == kStopOpcode ||
         item.opcode == kErrorStopOpcode || item.opcode < 0 || item.opcode >= 0xf0 ||
@@ -1220,23 +1267,57 @@ SelectorConsistentExecutionGraph build_selector_consistent_execution_graph(
         opcode_by_code(item.opcode).risk == OpcodeRisk::Dangerous;
     if (opaque) {
       after = {};
+      literals = {};
+      x_literal.reset();
     } else {
       for (std::size_t slot = 0; slot < tracked.size(); ++slot) {
         if (tracked[slot] && register_access_effect(
                 item, register_name_for_index(static_cast<int>(slot) + 7)).writes !=
-                RegisterWriteEffect::None)
+                RegisterWriteEffect::None) {
           after[slot].reset();
+          literals[slot].reset();
+        }
+      }
+      const int code = item.opcode;
+      if (code >= 0x47 && code <= 0x4e && tracked[static_cast<std::size_t>(code - 0x47)])
+        literals[static_cast<std::size_t>(code - 0x47)] = x_literal;
+      if (literal_after[input.original]) {
+        x_literal = literal_after[input.original];
+      } else if (code >= 0x67 && code <= 0x6e) {
+        x_literal = input.literals[static_cast<std::size_t>(code - 0x67)];
+      } else if (!((code >= 0x40 && code <= 0x4e) || code == kJumpOpcode ||
+                   code == kCallOpcode || code == kReturnOpcode || code == 0x54 ||
+                   is_direct_conditional_opcode(code) || is_indirect_flow_opcode(code))) {
+        x_literal.reset();
       }
     }
     const auto reg = opaque ? std::nullopt : stable_indirect_flow_register(item);
     for (const auto& edge : control.execution_edges[input.original]) {
-      ProductState next{.original = edge.target_state, .choices = after};
-      if (edge.kind == PostLayoutExecutionEdgeKind::Resume)
+      ProductState next{.original = edge.target_state, .choices = after,
+                        .literals = literals, .x_literal = x_literal};
+      if (edge.kind == PostLayoutExecutionEdgeKind::Resume) {
         next.choices = {};
+        next.literals = {};
+        next.x_literal.reset();
+      }
       if (reg && edge.kind == PostLayoutExecutionEdgeKind::IndirectTarget) {
         const auto slot = static_cast<std::size_t>(register_index(*reg) - 7);
         if (tracked[slot]) {
           const Choice selected = choice_for(edge);
+          // An oversized intermediate uses logical command addresses rather
+          // than hardware counters. A proved ordinary 00..99 literal names
+          // that same logical address; the absence of a hardware counter is
+          // not evidence that the edge is impossible. In a hardware context
+          // keep comparing exact counters: dark aliases of one physical cell
+          // can have different continuations.
+          if (next.literals[slot] &&
+              (selected.formal
+                   ? *selected.formal != address_to_opcode(
+                         *next.literals[slot], control.address_space_model)
+                   : selected.logical != *next.literals[slot])) {
+            ++result.pruned_edges;
+            continue;
+          }
           if (next.choices[slot] && *next.choices[slot] != selected) {
             ++result.pruned_edges;
             continue;
@@ -1251,6 +1332,11 @@ SelectorConsistentExecutionGraph build_selector_consistent_execution_graph(
       if (std::find(successors.begin(), successors.end(), *target) == successors.end())
         successors.push_back(*target);
     }
+    // Refinement is not a license to turn a reachable call into an exit.
+    // Contradictory selector and target facts must fall back to the complete
+    // conservative graph, not supply a vacuous continuation proof.
+    if (result.successors[i].empty() && !control.execution_edges[input.original].empty())
+      return {};
   }
   result.proved = true;
   return result;

@@ -687,10 +687,118 @@ void indirect_selector_seed_reuse_preserves_observations() {
                       ": expected " + expected.at(index) + ", got " + actual.at(index) + artifact);
       }
     }
+    // Release the immutable conditional address, but retain its data word.
+    core::NaturalTargetComponentLayoutOptions release_options;
+    release_options.released_flow_selector_registers = {12};
+    release_options.required_absolute_targets = {{.target_item = 6, .target_address = 10}};
+    release_options.allow_size_neutral_absolute_layout = true;
+    const auto release_control = core::build_post_layout_control_flow(items);
+    for (const int allowance : {-1, 0}) {
+      release_options.maximum_transactional_growth_cells = allowance;
+      require(core::optimize_natural_target_component_layout(
+                  items, preloads, release_control, release_options).applied == 0,
+              "a complete release cannot exceed the residual growth allowance");
+    }
+    release_options.maximum_transactional_growth_cells = 1;
+    const auto released = core::optimize_natural_target_component_layout(
+        items, preloads, release_control, release_options);
+    std::string release_reasons;
+    for (const auto& reason : released.plan.reasons)
+      release_reasons += "\n" + reason;
+    require(released.applied > 0 && released.plan.proved && released.plan.final_artifact_proved,
+            "complete conditional family release must free its target: " + release_reasons);
+    require(codes(raise_machine_to_ir(released.items)).size() ==
+                codes(raise_machine_to_ir(items)).size() + 1U,
+            "selector release baseline is 19 -> 20 intermediate cells, not a claimed saving");
+    for (const std::string branch : {"-2", "0", "1"})
+      require(play(items, preloads, branch) == play(released.items, released.preloads, branch),
+              "released conditional must preserve both paths, data, stack and nested returns");
+    const auto rejects_release = [&](const std::vector<MachineItem>& bad,
+                                     const std::vector<PreloadReport>& setup,
+                                     const std::string& why) {
+      require(core::optimize_natural_target_component_layout(
+                  bad, setup, core::build_post_layout_control_flow(bad), release_options).applied == 0,
+              "selector release must reject " + why);
+    };
+    auto exposed_x2 = items;
+    exposed_x2.insert(exposed_x2.begin() + 19, {op(2), op(0x12)});
+    exposed_x2.insert(exposed_x2.begin() + 22, {op(0x0a), op(0x45)});
+    auto unsafe_direct = exposed_x2;
+    unsafe_direct.at(21) = op(0x5e);
+    unsafe_direct.insert(unsafe_direct.begin() + 22, MachineItem::address("a"));
+    bool observes_x2_difference = false;
+    for (const std::string branch : {"-2", "0", "1"})
+      observes_x2_difference = observes_x2_difference ||
+          play(exposed_x2, preloads, branch) != play(unsafe_direct, preloads, branch);
+    require(observes_x2_difference,
+            "the negative release fixture must expose a real ROM X2 difference");
+    rejects_release(exposed_x2, preloads, "a decimal-entry observer of changed X2");
+    auto written_release = items;
+    written_release.at(9) = op(0x4c);
+    rejects_release(written_release, preloads, "a runtime-written selector");
+    auto aliased_release = items;
+    aliased_release.at(9) = op(0xb0);
+    rejects_release(aliased_release, preloads, "an unknown indirect-store alias");
+    auto stale_release = preloads;
+    stale_release.at(0).value = "4";
+    rejects_release(items, stale_release, "a stale preload/target identity");
+    auto generated_release = preloads;
+    generated_release.at(0).setup_target_name = "generated";
+    rejects_release(items, generated_release, "an unproved generated setup value");
+    for (const auto& registers : std::vector<std::vector<int>>{{6}, {15}, {12, 12}}) {
+      auto invalid_release = release_options;
+      invalid_release.released_flow_selector_registers = registers;
+      require(core::optimize_natural_target_component_layout(
+                  items, preloads, release_control, invalid_release).applied == 0,
+              "release must reject unstable, unsupported or duplicated selector registers");
+    }
+    core::NaturalTargetComponentLayoutOptions frontier_options;
+    frontier_options.maximum_transactional_growth_cells = 1;
+    const auto frontier = core::release_stable_indirect_selector_families(
+        items, preloads, release_control, frontier_options);
+    require(std::any_of(frontier.begin(), frontier.end(), [](const auto& candidate) {
+              return std::any_of(candidate.optimizations.begin(), candidate.optimizations.end(),
+                                 [](const auto& report) {
+                return report.name == "stable-indirect-selector-family-release";
+              });
+            }), "complete release must participate in the production selector frontier");
+
+    // The same complete families can be an enabling transaction with one
+    // skipped padding cell. B must replace A at 05, while the independent
+    // downstream placement obligation moves A to 11. No component fits 10.
+    core::NaturalTargetComponentLayoutOptions growing_options;
+    growing_options.required_absolute_targets = {{.target_item = 6, .target_address = 11}};
+    const auto family_control = core::build_post_layout_control_flow(items);
+    for (const int allowance : {-1, 0}) {
+      growing_options.maximum_transactional_growth_cells = allowance;
+      require(core::reassign_stable_indirect_selector_families(
+                  items, preloads, family_control, growing_options).empty(),
+              "selector reassignment must not spend an absent or exhausted growth allowance");
+    }
+    growing_options.maximum_transactional_growth_cells = 1;
+    const auto growing = core::reassign_stable_indirect_selector_families(
+        items, preloads, family_control, growing_options);
+    require(!growing.empty(), "an explicit one-cell debt must admit the enabling selector order");
+    for (const auto& variant : growing) {
+      require(variant.control_flow.proved &&
+                  codes(raise_machine_to_ir(variant.items)).size() ==
+                      codes(raise_machine_to_ir(items)).size() + 1U,
+              "the enabling layout must spend exactly its one-cell allowance");
+      for (const std::string branch : {"0", "1", "-2"})
+        require(play(items, preloads, branch) == play(variant.items, variant.preloads, branch),
+                "temporary layout growth must preserve data, stack, hidden state and returns");
+      require(std::any_of(variant.optimizations.begin(), variant.optimizations.end(),
+                         [](const auto& applied) {
+                return applied.detail.find("Intermediate cell delta: 1") != std::string::npos;
+              }), "explain must identify the intermediate cell debt rather than claim a saving");
+    }
     const auto rejects_family = [&](const std::vector<MachineItem>& bad, const std::string& why) {
       require(core::reassign_stable_indirect_selector_families(
                   bad, preloads, core::build_post_layout_control_flow(bad)).empty(),
               "selector-family exchange must reject " + why);
+      require(core::reassign_stable_indirect_selector_families(
+                  bad, preloads, core::build_post_layout_control_flow(bad), growing_options).empty(),
+              "a growth allowance must not weaken the selector proof for " + why);
     };
     auto written = items;
     written.at(9) = op(0x4b);

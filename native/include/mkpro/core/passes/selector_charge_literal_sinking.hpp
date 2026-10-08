@@ -43,6 +43,8 @@ SelectorChargeLiteralLayoutResult optimize_post_layout_selector_charge_literal_s
 // Joint data/control materialization: place the literal-consuming leaf at
 // the literal's value, then reuse its selector as the data input. Other
 // modes must independently discard that input. Compare only final layouts.
+// Geometry is also solved after literal erasure; immutable companion addresses
+// are explicit deferred obligations, never permission to change observed data.
 SelectorChargeLiteralLayoutResult optimize_selector_data_literal_coalescing(
     const std::vector<MachineItem>& items,
     const std::vector<PreloadReport>& preloads,

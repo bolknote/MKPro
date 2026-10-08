@@ -12,7 +12,8 @@ namespace mkpro::core {
 // finalizer, not a local cell delta, decides whether to publish a candidate.
 std::vector<ProvedSearchTransition<LayoutSearchArtifact>>
 expand_joint_representation_transactions(const LayoutSearchArtifact& artifact,
-                                         const CompileOptions& options);
+                                         const CompileOptions& options,
+                                         bool preload_environment_complete = true);
 
 namespace passes {
 PassResult joint_representation_search(const std::vector<IrOp>& ops,

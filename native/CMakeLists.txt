@@ -33,6 +33,7 @@ add_library(mkpro_core STATIC
   src/core/constant_folder.cpp
   src/core/constant_synthesis.cpp
   src/core/multirole_word_synthesis.cpp
+  src/core/post_layout_numeric_ranges.cpp
   src/core/raw_bcd_word.cpp
   src/core/joint_representation_search.cpp
   src/core/passes/semantic_region_folding.cpp
@@ -809,3 +810,37 @@ add_executable(mkpro_raw_multirole_word_tests tests/raw_multirole_word_test.cpp)
 target_link_libraries(mkpro_raw_multirole_word_tests PRIVATE mkpro_debug)
 mkpro_configure_target(mkpro_raw_multirole_word_tests)
 add_test(NAME mkpro.raw_multirole_word_compiler_and_rom COMMAND mkpro_raw_multirole_word_tests)
+
+add_executable(mkpro_coefficient_state_carrier_tests tests/coefficient_state_carrier_test.cpp)
+target_link_libraries(mkpro_coefficient_state_carrier_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_coefficient_state_carrier_tests)
+add_test(NAME mkpro.coefficient_state_carrier_compiler_and_rom COMMAND mkpro_coefficient_state_carrier_tests)
+
+add_executable(mkpro_inline_coefficient_carrier_tests tests/inline_coefficient_carrier_test.cpp)
+target_link_libraries(mkpro_inline_coefficient_carrier_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_inline_coefficient_carrier_tests)
+add_test(NAME mkpro.inline_coefficient_carrier_compiler_and_rom COMMAND mkpro_inline_coefficient_carrier_tests)
+
+add_executable(mkpro_mixed_epoch_carrier_tests tests/mixed_epoch_carrier_test.cpp)
+target_link_libraries(mkpro_mixed_epoch_carrier_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_mixed_epoch_carrier_tests)
+add_test(NAME mkpro.mixed_epoch_carrier_compiler_and_rom COMMAND mkpro_mixed_epoch_carrier_tests)
+
+add_executable(mkpro_selector_literal_address_domains_tests
+  tests/selector_literal_address_domains_test.cpp)
+target_link_libraries(mkpro_selector_literal_address_domains_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_selector_literal_address_domains_tests)
+add_test(NAME mkpro.selector_literal_address_domains_compiler_and_rom
+  COMMAND mkpro_selector_literal_address_domains_tests)
+
+add_executable(mkpro_typed_continuation_tests tests/typed_continuation_test.cpp)
+target_link_libraries(mkpro_typed_continuation_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_typed_continuation_tests)
+add_test(NAME mkpro.typed_continuation_compiler_and_rom
+  COMMAND mkpro_typed_continuation_tests)
+
+add_executable(mkpro_tail_provenance_layout_tests tests/tail_provenance_layout_test.cpp)
+target_link_libraries(mkpro_tail_provenance_layout_tests PRIVATE mkpro_debug)
+mkpro_configure_target(mkpro_tail_provenance_layout_tests)
+add_test(NAME mkpro.tail_provenance_layout_compiler_and_rom
+  COMMAND mkpro_tail_provenance_layout_tests)

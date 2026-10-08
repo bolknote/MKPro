@@ -3097,6 +3097,127 @@ void natural_target_component_layout_is_generic_and_proof_gated() {
             "late-bound multi-target selector charges should follow their typed identities at "
             "the final generic binding stage");
   }
+
+  {
+    // A literal in a called component kills hidden X2 only after a proved
+    // fresh-entry boundary. No program names, constants or helper shapes are
+    // used by the optimization.
+    for (const int selector : {7, 10, 13}) {
+      for (const bool through_jump : {false, true}) {
+        for (const bool observes_x2 : {false, true}) {
+          std::vector<MachineItem> items;
+          const auto emit = [&](int code) {
+            items.push_back(MachineItem::op(code, "entry-aware branch fixture"));
+          };
+          const auto direct = [&](int code, const std::string& target) {
+            emit(code);
+            items.push_back(MachineItem::address(target));
+          };
+          std::vector<std::size_t> branches;
+          for (int repeat = 0; repeat < 2; ++repeat) {
+            emit(0x60);
+            emit(0x22);
+            branches.push_back(items.size());
+            direct(0x5e, "entry_branch_done");
+            direct(0x53, "entry_branch_helper");
+          }
+          emit(0xe0 + selector);
+          items.back().indirect_flow_targets =
+              std::vector<IrTarget>{"entry_branch_done"};
+          emit(0x60);
+          emit(0x50);
+          items.back().stop_disposition = StopDisposition::Terminal;
+          const int destination = static_cast<int>(std::count_if(
+              items.begin(), items.end(), [](const MachineItem& item) {
+                return item.kind != MachineItemKind::Label;
+              }));
+          items.push_back(MachineItem::label("entry_branch_done"));
+          emit(0x61);
+          emit(0x50);
+          items.back().stop_disposition = StopDisposition::Terminal;
+          items.push_back(MachineItem::label("entry_branch_helper"));
+          if (through_jump) {
+            direct(0x51, "entry_branch_literal");
+            items.push_back(MachineItem::label("entry_branch_literal"));
+          }
+          if (observes_x2)
+            emit(0x0c);
+          emit(through_jump ? 2 : 9);
+          emit(through_jump ? 4 : 6);
+          emit(0x42);
+          emit(0x52);
+          const std::string reg =
+              selector < 10 ? std::to_string(selector)
+                            : std::string(1, static_cast<char>('a' + selector - 10));
+          const std::vector<PreloadReport> preloads{
+              PreloadReport{.register_name = reg,
+                            .value = std::to_string(destination)}};
+          const auto original_flow = core::build_post_layout_control_flow(items);
+          require(original_flow.proved, "entry-aware fixture must have an exact CFG");
+          core::NaturalTargetComponentLayoutOptions options;
+          options.maximum_anchors = 1;
+          for (const std::size_t branch : branches)
+            options.required_flow_selectors.push_back({branch, reg});
+          const auto changed = core::optimize_natural_target_component_layout(
+              items, preloads, original_flow, options);
+          if (observes_x2) {
+            require(changed.applied == 0,
+                    "VP before a fresh digit must prevent hidden-X2 branch conversion");
+            continue;
+          }
+          require(changed.plan.proved && changed.removed_cells == 2 &&
+                      changed.plan.x2_reconvergence_flows == 2 &&
+                      changed.plan.stack_and_x2_equivalent &&
+                      changed.plan.call_return_equivalent &&
+                      changed.plan.final_control_flow.proved,
+                  "fresh literals across calls/jumps must prove both shorter branches");
+          const auto run = [&](const std::vector<MachineItem>& program,
+                               const std::vector<PreloadReport>& setup,
+                               const std::string& input) {
+            const auto resolved = resolve_machine_items(program);
+            require(resolved.diagnostics.empty(), "entry-aware fixture must resolve");
+            std::vector<int> codes;
+            for (const auto& step : resolved.steps)
+              codes.push_back(step.opcode);
+            emulator::MK61 calc;
+            require(calc.load_program(codes).diagnostics.empty(),
+                    "entry-aware fixture must fit ROM");
+            for (int index = 0; index < 15; ++index) {
+              const std::string name =
+                  index < 10 ? std::to_string(index)
+                             : std::string(1, static_cast<char>('a' + index - 10));
+              calc.set_register(name, std::to_string(index + 2));
+            }
+            for (const auto& preload : setup)
+              calc.set_register(preload.register_name, preload.value);
+            calc.set_register("0", input);
+            calc.press_sequence({"В/О", "С/П"});
+            require(calc.run_until_stable(12000, 8).stopped,
+                    "entry-aware fixture must stop");
+            std::vector<std::string> state{calc.display_text(true)};
+            for (const char* name : {"X", "Y", "Z", "T", "X1"})
+              state.push_back(calc.read_register(name));
+            for (int index = 0; index < 15; ++index) {
+              if (index == selector)
+                continue; // Address-only preload follows the moved target.
+              const std::string name =
+                  index < 10 ? std::to_string(index)
+                             : std::string(1, static_cast<char>('a' + index - 10));
+              state.push_back(calc.read_register(name));
+            }
+            calc.press(".");
+            state.push_back(calc.display_text(true));
+            return state;
+          };
+          for (const std::string input : {"-2", "0", "2", "0.5"})
+            require(run(items, preloads, input) ==
+                        run(changed.items, changed.preloads, input),
+                    "entry-aware branches must preserve registers, stack, X1 and hidden entry");
+        }
+      }
+    }
+  }
+
 }
 
 } // namespace mkpro::tests

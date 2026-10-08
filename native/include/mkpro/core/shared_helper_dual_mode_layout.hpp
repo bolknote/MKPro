@@ -60,17 +60,32 @@ struct SharedHelperDualModeSelectorExchangeResult {
   std::vector<std::string> reasons;
 };
 
-// Independently proved, non-growing selector-allocation alternatives. A fixed
+// Independently proved selector-allocation alternatives. A fixed
 // data constant can serve a different complete flow family while a retunable
 // selector follows the displaced family. Calls and conditional/unconditional
 // jumps are treated uniformly; R0-R6 and runtime-written selectors are excluded.
 // These are transaction seeds, not standalone size wins. The caller must rank
 // the complete downstream artifact against its original incumbent.
+// Non-growing alternatives are retained independently. An explicit positive
+// maximum_transactional_growth_cells also admits bounded temporary growth;
+// the caller must repay it before publication. Zero is the standalone default,
+// and a negative remaining allowance rejects the transaction.
 // A stable selector whose complete family consists of proved empty-stack loop
 // jumps also supplies a release alternative: those jumps become same-width
 // returns, and the selector can adopt another family without an inverse swap.
 std::vector<SharedHelperDualModeSelectorExchangeResult>
 reassign_stable_indirect_selector_families(
+    const std::vector<MachineItem>& items,
+    const std::vector<PreloadReport>& preloads,
+    const AuthoritativePostLayoutControlFlow& control_flow,
+    const NaturalTargetComponentLayoutOptions& options = {});
+
+// Release complete immutable selector families through proved direct flows
+// within the caller's residual growth allowance. Run as an extension after
+// retaining the existing search winner, never competing for its beam slots.
+// Only a smaller complete downstream artifact may be published.
+std::vector<SharedHelperDualModeSelectorExchangeResult>
+release_stable_indirect_selector_families(
     const std::vector<MachineItem>& items,
     const std::vector<PreloadReport>& preloads,
     const AuthoritativePostLayoutControlFlow& control_flow,

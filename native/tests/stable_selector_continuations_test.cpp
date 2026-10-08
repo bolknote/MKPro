@@ -95,9 +95,81 @@ std::vector<std::string> observe(const std::vector<IrOp>& ops,
   return observations;
 }
 
+enum class ChargeCase { Direct, ThroughCall, UnknownEntry, UnknownWrite, Resume, Raw };
+
+std::vector<IrOp> charged_fixture(ChargeCase kind = ChargeCase::Direct,
+                                  const std::string& reg = "a", bool shortened = false) {
+  std::vector<IrOp> ops{recall("e"), store("0"), label("charge_digits"), op(0), op(0)};
+  if (kind == ChargeCase::UnknownEntry)
+    ops.erase(ops.begin() + 1);
+  if (kind == ChargeCase::UnknownWrite)
+    ops.push_back(recall("e"));
+  ops.push_back(kind == ChargeCase::ThroughCall ? call("charge_store") : store(reg));
+  if (kind == ChargeCase::Resume)
+    ops.push_back(stop(false));
+  if (kind == ChargeCase::Raw) {
+    auto opaque = op(0x54);
+    opaque.meta.raw = true;
+    ops.push_back(std::move(opaque));
+  }
+  ops.push_back(label("charged_lift"));
+  if (!shortened)
+    ops.push_back(op(0x0e));
+  ops.push_back(dispatch(reg));
+  for (const char* r : {"1", "2", "3", "4", "5"}) ops.push_back(recall(r));
+  ops.insert(ops.end(), {op(0x10), stop(false), op(0x0c), op(2), stop(true),
+                         label("safe"), recall("1"), recall("2"), recall("3"),
+                         recall("4"), op(0x10), ret(), label("observer"),
+                         op(0x25), op(0x25), op(0x10), store("9"), ret()});
+  if (kind == ChargeCase::ThroughCall)
+    ops.insert(ops.end(), {label("charge_store"), store(reg), ret()});
+  const int target = label_address(lower_ir_to_machine(ops), "safe");
+  const auto digits = std::find_if(ops.begin(), ops.end(),
+      [](const auto& value) { return value.kind == IrKind::Label && value.name == "charge_digits"; });
+  require(digits != ops.end() && target >= 10 && target < 100, "charged fixture needs two digits");
+  *(digits + 1) = op(target / 10);
+  *(digits + 2) = op(target % 10);
+  return ops;
+}
+
+bool charged_lift_is_unobserved(const std::vector<IrOp>& ops) {
+  const auto items = lower_ir_to_machine(ops);
+  const auto flow = core::build_post_layout_control_flow(items);
+  core::StackValueEqualityState difference;
+  difference.stack_equal = {true, false, false, false};
+  difference.x1_equal = true;
+  difference.x2_equal = false;
+  return core::prove_post_layout_stack_entry_equality(
+      items, flow, label_address(items, "charged_lift") + 1, difference);
+}
+
+void literal_selector_contracts() {
+  for (const auto kind : {ChargeCase::Direct, ChargeCase::ThroughCall})
+    for (const char* reg : {"7", "a", "c", "e"}) {
+      const auto source = charged_fixture(kind, reg);
+      require(charged_lift_is_unobserved(source),
+              "a proved selector charge must exclude an impossible FIRST callback");
+      const auto items = lower_ir_to_machine(source);
+      const auto flow = core::build_post_layout_control_flow(items);
+      const auto graph = core::build_selector_consistent_execution_graph(items, flow);
+      require(graph.proved && graph.pruned_edges > 0, "literal charge must refine runtime flow");
+      const int observer = label_address(items, "observer");
+      require(std::none_of(graph.original_states.begin(), graph.original_states.end(),
+                          [&](auto state) { return flow.execution_states[state].address == observer; }),
+              "a literal proof must eliminate the unreachable callback, not merely later mixed sequences");
+    }
+  for (const auto kind : {ChargeCase::UnknownEntry, ChargeCase::UnknownWrite,
+                         ChargeCase::Resume, ChargeCase::Raw})
+    require(!charged_lift_is_unobserved(charged_fixture(kind)),
+            "unknown entry/write, user resume and opaque effects must forget the numeric selector");
+  require(!charged_lift_is_unobserved(charged_fixture(ChargeCase::Direct, "0")),
+          "a delivered literal does not make an auto-mutating selector stable");
+}
+
 } // namespace
 
 void stable_selector_continuations_preserve_contracts() {
+  literal_selector_contracts();
   const auto original = fixture();
   const auto items = lower_ir_to_machine(original);
   const auto flow = core::build_post_layout_control_flow(items);
@@ -196,6 +268,18 @@ void stable_selector_continuations_preserve_contracts() {
 }
 
 void emulator_stable_selector_continuations_match_rom() {
+  for (const auto kind : {ChargeCase::Direct, ChargeCase::ThroughCall}) {
+    const auto source = charged_fixture(kind);
+    const auto shorter = charged_fixture(kind, "a", true);
+    require(charged_lift_is_unobserved(source), "literal-directed deletion must have a data proof");
+    require(resolve_machine_items(lower_ir_to_machine(source), {}).steps.size() ==
+                resolve_machine_items(lower_ir_to_machine(shorter), {}).steps.size() + 1U,
+            "literal-directed stack baseline must remove one real cell");
+    for (const char* seed : {"0", "-11.25", "777.7777"})
+      require(observe(source, "observer", seed) == observe(shorter, "observer", seed),
+              "runtime literal, including a shared callee store, must override the initial selector; "
+              "the proved deletion must preserve full stack, X1, VP/X2, memory and returns");
+  }
   const auto original = fixture();
   require(lift_is_unobserved(original), "ROM test must exercise the refined relational proof");
   auto shortened = original;

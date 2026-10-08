@@ -32,7 +32,10 @@ bool prove_stack_entry_equality(const StackEntryProofReader& reader,
 // Continue the equality proof through exact caller/return contexts. Both
 // executions have equal memory and decimal-entry modes at entry; every
 // reachable instance of the entry address must hide the differing stack
-// components before a consumer or externally observable stop.
+// components before a consumer. A compiler-typed display observes X/Y and
+// requires X1/X2 equality; deeper differences remain live across its proved
+// entered() protocol and must be hidden before every subsequent use. Untyped
+// stops, raw cells and independent manual commands remain full-state barriers.
 bool prove_post_layout_stack_entry_equality(
     const std::vector<MachineItem>& items,
     const AuthoritativePostLayoutControlFlow& flow, int entry_address,
@@ -44,8 +47,10 @@ bool prove_ir_stack_entry_equality(const std::vector<IrOp>& ops,
 // last-X1 are clobbered, and X2 is conservatively unknown until synchronized.
 StackValueEqualityState xyz_preserving_selector_charge_state();
 
-// These entry-closing commands let the first decimal digit supply the lift.
-// A literal/Enter/manual-input predecessor is deliberately not such a proof.
+// These ROM-certified entry-closing commands let the first decimal digit
+// supply the lift. Arithmetic is an explicit opcode whitelist, not inferred
+// from visible stack effects. A literal/Enter/manual-input predecessor is
+// deliberately not such a proof.
 bool selector_charge_entry_closer_opcode(int opcode);
 // A fact for each exact execution context, immediately before its command.
 // Follow normal jumps and matched returns without inventing a fresh entry at
